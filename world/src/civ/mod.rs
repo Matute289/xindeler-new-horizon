@@ -499,35 +499,6 @@ impl Civs {
                 SiteKind::GliderCourse => (0, 0.0),
                 SiteKind::Myrmidon => (64i32, 35.0),
             };
-
-            // Flatten ground
-            if let Some(center_alt) = ctx.sim.get_alt_approx(wpos) {
-                for offs in Spiral2d::new().take(radius.pow(2) as usize) {
-                    let pos = site.center + offs;
-                    let factor = ((1.0
-                        - (site.center - pos).map(|e| e as f32).magnitude()
-                            / f32::max(flatten_radius, 0.01))
-                        * 1.25)
-                        .min(1.0);
-                    let rng = &mut ctx.rng;
-                    ctx.sim
-                        .get_mut(pos)
-                        // Don't disrupt chunks that are near water
-                        .filter(|chunk| !chunk.river.near_water())
-                        .map(|chunk| {
-                            let diff = Lerp::lerp_precise(chunk.alt, center_alt, factor) - chunk.alt;
-                            // Make sure we don't fall below sea level (fortunately, we don't have
-                            // to worry about the case where water_alt is already set to a correct
-                            // value higher than alt, since this chunk should have been filtered
-                            // out in that case).
-                            chunk.water_alt = CONFIG.sea_level.max(chunk.water_alt + diff);
-                            chunk.alt += diff;
-                            chunk.basement += diff;
-                            chunk.rockiness = 0.0;
-                            chunk.surface_veg *= 1.0 - factor * rng.random_range(0.25..0.9);
-                        });
-                }
-            }
         }
         drop(guard);
 

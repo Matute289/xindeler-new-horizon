@@ -109,11 +109,6 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 let neighbor_chunk = sim.get(neighbor_pos)?;
                 Some((neighbor_pos, neighbor_chunk, &neighbor_chunk.river))
             });
-        let spawn_rules = sim_chunk
-            .sites
-            .iter()
-            .map(|site| index.sites[*site].spawn_rules(wpos))
-            .fold(SpawnRules::default(), |a, b| a.combine(b));
 
         const SAMP_RES: i32 = 8;
         let altx0 = sim.get_interpolated(wpos - Vec2::new(1, 0) * SAMP_RES, |chunk| chunk.alt);
@@ -640,6 +635,16 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         }
         .max(base_sea_level);
 
+        let spawn_rules = sim_chunk
+            .sites
+            .iter()
+            .map(|site| index.sites[*site].spawn_rules(wpos))
+            .fold(SpawnRules::default(), |a, b| a.combine(b));
+        let alt = alt
+            + spawn_rules
+                .preferred_alt
+                .map_or(0.0, |(a, factor)| (a - alt) * factor.clamped(0.0, 1.0));
+
         let riverless_alt = alt;
 
         // What's going on here?
@@ -855,21 +860,23 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let basement_sub_alt =
             sim.get_interpolated_monotone(wpos, |chunk| chunk.basement.sub(chunk.alt))?;
 
-        let warp_factor = water_dist.map_or(1.0, |d| ((d - 0.0) / 64.0).clamped(0.0, 1.0));
-
-        // NOTE: To disable warp, uncomment this line.
-        // let warp_factor = 0.0;
-
-        let warp_factor = warp_factor * spawn_rules.max_warp;
-
         let surface_rigidity = 1.0 - temp.max(0.0) * (1.0 - tree_density);
         let surface_rigidity =
             surface_rigidity.max(((basement_sub_alt + 3.0) / 1.5).clamped(0.0, 2.0));
         let warp = ((marble_mid * 0.2 + marble * 0.8) * 2.0 - 1.0)
             * (10.0 + rockiness * 15.0)
             * gradient.unwrap_or(0.0).min(1.0)
-            * surface_rigidity
-            * warp_factor;
+            * surface_rigidity;
+
+        let warp_factor = water_dist.map_or(1.0, |d| ((d - 0.0) / 64.0).clamped(0.0, 1.0));
+        let warp_factor = warp_factor * spawn_rules.max_warp;
+        // NOTE: To disable warp, uncomment this line.
+        // let warp_factor = 0.0;
+        let riverless_alt_delta = Lerp::lerp(0.0, riverless_alt_delta, warp_factor);
+        let alt = alt + riverless_alt_delta;
+        let alt = alt + warp * warp_factor;
+
+        let basement = alt + basement_sub_alt;
 
         let mesa = 1.0f32
             .min(30.0 / (1.0 + -basement_sub_alt.min(0.0)))
@@ -878,9 +885,6 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             .min(Lerp::lerp(-0.4, 1.0, gradient.unwrap_or(0.0)).max(0.0))
             .max(0.0);
 
-        let riverless_alt_delta = Lerp::lerp(0.0, riverless_alt_delta, warp_factor);
-        let alt = alt + riverless_alt_delta + warp;
-        let basement = alt + basement_sub_alt;
         // Adjust this to make rock placement better
         let rock_density = rockiness
             + water_dist

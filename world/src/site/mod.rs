@@ -59,6 +59,10 @@ pub struct SpawnRules {
     pub max_warp: f32,
     pub paths: bool,
     pub waypoints: bool,
+    // (alt, factor)
+    // factor = 0.0: no effect
+    // factor = 1.0: exact alt
+    pub preferred_alt: Option<(f32, f32)>,
 }
 
 impl SpawnRules {
@@ -70,6 +74,12 @@ impl SpawnRules {
             max_warp: self.max_warp.min(other.max_warp),
             paths: self.paths && other.paths,
             waypoints: self.waypoints && other.waypoints,
+            preferred_alt: self
+                .preferred_alt
+                .zip(other.preferred_alt)
+                .map(|(a, b)| if a.1 > b.1 { a } else { b })
+                .or(self.preferred_alt)
+                .or(other.preferred_alt),
         }
     }
 }
@@ -81,6 +91,7 @@ impl Default for SpawnRules {
             max_warp: 1.0,
             paths: true,
             waypoints: true,
+            preferred_alt: None,
         }
     }
 }
@@ -264,14 +275,39 @@ impl Site {
             .min_by_key(|d2| *d2 as i32)
             .map(|d2| d2.sqrt() / TILE_SIZE as f32)
             .unwrap_or(1.0);
+        let preferred_alt = SQUARE_9
+            .iter()
+            .filter_map(|rpos| {
+                let tile_pos = tile_pos + rpos;
+                if let PlotKind::Plaza(plaza) = &self.plot(self.tiles.get(tile_pos).plot?).kind {
+                    let clamped =
+                        wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
+                    let weight = (1.0
+                        - clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32)
+                        .max(0.01);
+                    Some(((plaza.alt as f32 + 0.5) * weight, weight))
+                } else {
+                    None
+                }
+            })
+            .fold(None, |a: Option<(f32, f32, f32)>, (alt, w)| {
+                if let Some((a_alt, a_w, a_w_max)) = a {
+                    Some((a_alt + alt, a_w + w, a_w_max.max(w)))
+                } else {
+                    Some((alt, w, w))
+                }
+            })
+            .map(|(a, w, w_max)| (a / w, w));
         let base_spawn_rules = SpawnRules {
             trees: max_warp == 1.0,
+            preferred_alt,
             max_warp,
             paths: max_warp > f32::EPSILON,
             waypoints: true,
         };
-        self.plots
-            .values()
+        SQUARE_9
+            .iter()
+            .filter_map(|rpos| Some(self.plot(self.tiles.get(tile_pos + rpos).plot?)))
             .filter_map(|plot| match &plot.kind {
                 PlotKind::Gnarling(g) => Some(g.spawn_rules(wpos)),
                 PlotKind::Adlet(ad) => Some(ad.spawn_rules(wpos)),
@@ -419,7 +455,7 @@ impl Site {
                     .find(|dir| self.tiles.get(center + *dir).is_road())?;
                 let hard_alt = self.tiles.get(center + *dir).plot.and_then(|plot| {
                     if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
-                        p.hard_alt
+                        Some(p.hard_alt.unwrap_or(p.alt))
                     } else {
                         None
                     }
@@ -554,7 +590,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         generator_stats.attempt(site_name, GenStatPlotKind::Plaza);
-        let plaza_radius = rng.random_range(1..4);
+        let plaza_radius = rng.random_range(1..3);
         let plaza_dist = 6.5 + plaza_radius as f32 * 3.0;
         let aabr = attempt(32, || {
             self.plazas
@@ -734,7 +770,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         // The plaza radius can be 1, 2, or 3.
-        let plaza_radius = rng.random_range(1..4);
+        let plaza_radius = rng.random_range(1..3);
         // look for plaza locations within a ring with an outer dimension
         // of 24 tiles and an inner dimension that will offset the plaza from the town
         // center.

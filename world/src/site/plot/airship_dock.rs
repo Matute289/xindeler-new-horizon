@@ -162,6 +162,17 @@ impl AirshipDock {
                 const AIRSHIP_MIN_TREE_DIST2: i32 = 100;
                 !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST2)
             },
+            preferred_alt: {
+                const MIN_FLAT_DIST: f32 = 12.0;
+                const SLOPE_LENGTH: f32 = 16.0;
+                let dist = wpos.as_::<f32>().distance(self.center.as_());
+                let factor = (1.0 - (dist - MIN_FLAT_DIST).max(0.0) / SLOPE_LENGTH).max(0.0);
+                if factor > 0.0 {
+                    Some((self.alt as f32, factor))
+                } else {
+                    None
+                }
+            },
             waypoints: false,
             ..SpawnRules::default()
         }

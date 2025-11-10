@@ -77,6 +77,7 @@ pub struct Plaza {
     pub aabr: Aabr<i32>,
     pub kind: RoadKind,
     corner_meta: EnumMap<Dir2, CornerMeta>,
+    pub alt: i32,
     pub hard_alt: Option<i32>,
     dir: Dir2,
     decoration: Option<PlazaKind>,
@@ -120,6 +121,7 @@ impl Plaza {
             .collect();
 
         let any_water = center.water() || corner_meta.values().any(|c| c.water());
+        let alt = land.get_alt_approx(aabr.center()) as i32;
 
         let hard_alt = if any_water {
             Some((land.get_alt_approx(aabr.center()) as i32).max(center.water_alt + 1))
@@ -359,6 +361,7 @@ impl Plaza {
             aabr,
             kind,
             corner_meta,
+            alt,
             hard_alt,
             dir: *RandomField::new(51)
                 .choose(aabr.center().with_z(center.alt), &Dir2::ALL)
@@ -427,10 +430,7 @@ impl Structure for Plaza {
                     let wpos = site.tile_center_wpos(tpos);
 
                     // TODO: Not sure if this is always correct
-                    let alt = self
-                        .hard_alt
-                        .unwrap_or_else(|| land.get_alt_approx(wpos) as i32)
-                        + 1;
+                    let alt = self.hard_alt.unwrap_or(self.alt) + 1;
                     let wpos = wpos.with_z(alt);
                     self.kind.place_light(wpos, -dir, painter);
                 }
@@ -438,20 +438,21 @@ impl Structure for Plaza {
         }
 
         let rng = &mut rand::rng();
-        if rng.random_bool(0.05) {
+        if rng.random_bool(0.5) {
             let spec = [
                 "common.entity.wild.peaceful.cat",
                 "common.entity.wild.peaceful.dog",
             ]
             .choose(rng)
             .unwrap();
-            let center = self.aabr.center();
+            let wpos_2d = Vec2::new(
+                rng.random_range(self.aabr.min.x..self.aabr.max.x),
+                rng.random_range(self.aabr.min.y..self.aabr.max.y),
+            );
             painter.spawn(
-                EntityInfo::at(
-                    Vec3::new(center.x, center.y, land.get_alt_approx(center) as i32).as_(),
-                )
-                .with_asset_expect(spec, rng, None)
-                .with_alignment(Alignment::Tame),
+                EntityInfo::at(wpos_2d.with_z(self.hard_alt.unwrap_or(self.alt)).as_())
+                    .with_asset_expect(spec, rng, None)
+                    .with_alignment(Alignment::Tame),
             );
         }
 
