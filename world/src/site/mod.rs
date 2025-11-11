@@ -66,6 +66,15 @@ pub struct SpawnRules {
 }
 
 impl SpawnRules {
+    /// Specify that the column these rules relates to should prefer to use the
+    /// given `alt` as an altitude (causing the terrain to shift up or down).
+    ///
+    /// The `weight` parameter indicates how strong this pull should be: 0.0
+    /// indicates no change, >= 1.0 indicates *exactly* the given altitude.
+    ///
+    /// Successive calls to this method will collect a weighted average. If you
+    /// wish to strongly override the preferred altitude, a weight > 1.0 might
+    /// be desirable.
     pub fn prefer_alt(&mut self, alt: f32, weight: f32) {
         self.preferred_alt.0 += alt * weight;
         self.preferred_alt.1 += weight;
@@ -79,18 +88,6 @@ impl SpawnRules {
             self.preferred_alt.0 / self.preferred_alt.1.max(0.0001) + 0.1,
             self.preferred_alt.2,
         )
-    }
-
-    #[inline]
-    pub fn combine(&mut self, other: Self) {
-        // Should be commutative
-        self.trees &= other.trees;
-        self.max_warp = self.max_warp.min(other.max_warp);
-        self.paths &= other.paths;
-        self.waypoints &= other.waypoints;
-        self.preferred_alt.0 += other.preferred_alt.0;
-        self.preferred_alt.1 += other.preferred_alt.1;
-        self.preferred_alt.2 = self.preferred_alt.2.max(other.preferred_alt.2);
     }
 }
 
@@ -285,23 +282,22 @@ impl Site {
             .min_by_key(|d2| *d2 as i32)
             .map(|d2| d2.sqrt() / TILE_SIZE as f32)
             .unwrap_or(1.0);
-        SQUARE_9
-            .iter()
-            .for_each(|rpos| {
-                let tile_pos = tile_pos + rpos;
-                let tile = self.tiles.get(tile_pos);
-                let clamped =
-                    wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
-                let dist = clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32;
-                let weight = (1.0 - dist).clamped(0.001, 1.0);
-                // Special case: roads get their altitude from the tile, not the plot
-                // TODO: Should this be true of all tiles?
-                if let TileKind::Road { .. } = &tile.kind && let Some(hard_alt) = tile.hard_alt {
-                    spawn_rules.prefer_alt(hard_alt as f32, weight);
-                } else if let Some(plot_id) = tile.plot {
-                    foreach_plot!(&self.plot(plot_id).kind, plot => plot.spawn_rules(spawn_rules, wpos, weight));
-                }
-            });
+        SQUARE_9.iter().for_each(|rpos| {
+            let tile_pos = tile_pos + rpos;
+            let tile = self.tiles.get(tile_pos);
+            let clamped = wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
+            let dist = clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32;
+            let weight = (1.0 - dist).clamped(0.001, 1.0);
+            // Special case: roads get their altitude from the tile, not the plot
+            // TODO: Should this be true of all tiles?
+            if let TileKind::Road { .. } = &tile.kind
+                && let Some(hard_alt) = tile.hard_alt
+            {
+                spawn_rules.prefer_alt(hard_alt as f32, weight);
+            } else if let Some(plot) = tile.plot {
+                self.plot(plot).spawn_rules(spawn_rules, wpos, weight);
+            }
+        });
 
         spawn_rules.trees &= max_warp == 1.0;
         spawn_rules.max_warp = spawn_rules.max_warp.min(max_warp);
@@ -2516,7 +2512,7 @@ impl Site {
             // their size. They need a relatively flat area.
             let gradient_avg = get_gradient_average(bounds, land);
 
-            if gradient_avg > 0.05 {
+            if gradient_avg > 0.5 {
                 false
             } else {
                 let barn = plot::Barn::generate(
@@ -3132,25 +3128,12 @@ impl Site {
         canvas.foreach_col(|canvas, wpos2d, col| {
             let tile = self.wpos_tile(wpos2d);
             for z_off in (-2..4).rev() {
-                if let Some(plot) = tile.plot.map(|p| &self.plots[p]) {
+                if let Some(plot) = tile.plot.map(|p| self.plot(p)) {
                     canvas.map_resource(
-                        Vec3::new(
-                            wpos2d.x,
-                            wpos2d.y,
-                            foreach_plot!(&plot.kind, plot => plot.rel_terrain_offset(col)) + z_off,
-                        ),
+                        wpos2d.with_z(plot.rel_terrain_offset(col) + z_off),
                         |block| {
-                            foreach_plot!(
-                                &plot.kind,
-                                plot => plot.terrain_surface_at(
-                                    wpos2d,
-                                    block,
-                                    dynamic_rng,
-                                    col,
-                                    z_off,
-                                    self,
-                                ).unwrap_or(block),
-                            )
+                            plot.terrain_surface_at(wpos2d, block, dynamic_rng, col, z_off, self)
+                                .unwrap_or(block)
                         },
                     );
                 }

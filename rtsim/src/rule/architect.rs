@@ -413,7 +413,6 @@ fn spawn_profession(
             rng,
             body,
             personality,
-            // Counts as a house if it has a door
             |_, _, p| p.is_house(),
         ),
     }

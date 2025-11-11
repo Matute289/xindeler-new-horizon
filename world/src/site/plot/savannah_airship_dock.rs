@@ -111,18 +111,13 @@ impl Structure for SavannahAirshipDock {
     }
 
     fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
-        spawn_rules.combine(SpawnRules {
-            trees: {
-                // dock is 5 tiles = 30 blocks in radius
-                // airships are 39 blocks wide.
-                // Tree can be up to 20 blocks in radius.
-                // Don't allow trees within 30 + 39 + 20 = 89 blocks of the dock center
-                const AIRSHIP_MIN_TREE_DIST2: i32 = 89;
-                !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST2)
-            },
-            waypoints: false,
-            ..SpawnRules::default()
-        });
+        // dock is 5 tiles = 30 blocks in radius
+        // airships are 39 blocks wide.
+        // Tree can be up to 20 blocks in radius.
+        // Don't allow trees within 30 + 39 + 20 = 89 blocks of the dock center
+        const AIRSHIP_MIN_TREE_DIST: i32 = 89;
+        spawn_rules.trees &= !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST);
+        spawn_rules.waypoints = false;
     }
 
     fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> {

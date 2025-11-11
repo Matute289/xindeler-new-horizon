@@ -135,18 +135,13 @@ impl Structure for CliffTownAirshipDock {
     }
 
     fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
-        spawn_rules.combine(SpawnRules {
-            trees: {
-                // dock is 3 tiles = 18 blocks in radius
-                // airships are 20 blocks wide.
-                // Leave extra space for tree width (at lease 15 extra).
-                // Don't allow trees within 18 + 20 + 15 = 53 blocks of the dock center
-                const AIRSHIP_MIN_TREE_DIST2: i32 = 53;
-                !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST2)
-            },
-            waypoints: false,
-            ..SpawnRules::default()
-        });
+        // dock is 3 tiles = 18 blocks in radius
+        // airships are 20 blocks wide.
+        // Leave extra space for tree width (at lease 15 extra).
+        // Don't allow trees within 18 + 20 + 15 = 53 blocks of the dock center
+        const AIRSHIP_MIN_TREE_DIST: i32 = 53;
+        spawn_rules.trees &= !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST);
+        spawn_rules.waypoints = false;
     }
 
     fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> {

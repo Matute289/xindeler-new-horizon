@@ -63,6 +63,10 @@ impl Structure for Barn {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_barn"))
     }
 
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        spawn_rules.prefer_alt(self.alt as f32, weight.powi(4) * 25.0);
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let base = self.alt;
         let plot_center = self.bounds.center();
