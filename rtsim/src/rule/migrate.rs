@@ -11,7 +11,7 @@ use crate::{
 use rand::prelude::*;
 use rand_chacha::ChaChaRng;
 use tracing::warn;
-use world::site::plot::PlotKindMeta;
+use world::site::Structure;
 
 /// This rule runs at rtsim startup and broadly acts to perform some primitive
 /// migration/sanitisation in order to ensure that the state of rtsim is mostly
@@ -102,9 +102,11 @@ impl Rule for Migrate {
 
                             // See if there is at least one house in this site.
                             let has_house = site.world_site.is_some_and(|ws| {
-                                ctx.index.sites.get(ws).any_plot(|p| {
-                                    matches!(p.meta(), Some(PlotKindMeta::House { .. }))
-                                })
+                                // TODO: Better identification of plot kinds
+                                ctx.index
+                                    .sites
+                                    .get(ws)
+                                    .any_plot(|p| p.door_tile().is_some())
                             });
 
                             ally_faction && has_house

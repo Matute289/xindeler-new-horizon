@@ -994,6 +994,8 @@ impl Structure for Bridge {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_bridge"))
     }
 
+    fn render_ordering(&self) -> u32 { 1 }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         match &self.kind {
             BridgeKind::Flat => render_flat(self, painter),

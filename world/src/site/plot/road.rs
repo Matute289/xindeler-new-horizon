@@ -88,6 +88,8 @@ impl Structure for Road {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_road"))
     }
 
+    fn render_ordering(&self) -> u32 { 2 }
+
     fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
         let field = RandomField::new(76237);
 

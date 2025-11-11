@@ -79,10 +79,7 @@ use vek::*;
 use world::{
     IndexRef, World,
     civ::{self, Track},
-    site::{
-        self, PlotKind, Site as WorldSite, SiteKind, TileKind,
-        plot::{PlotKindMeta, tavern},
-    },
+    site::{self, PlotKind, Site as WorldSite, SiteKind, Structure, TileKind, plot::tavern},
     util::NEIGHBORS,
 };
 
@@ -576,7 +573,7 @@ fn adventure() -> impl Action<DefaultState> {
             .sites
             .iter()
             .filter(|(site_id, site)| {
-                site.world_site.is_some_and(|ws| ctx.index.sites.get(ws).any_plot(|plot| matches!(plot.meta(), Some(PlotKindMeta::Workshop { .. })))) && (ctx.npc.current_site != Some(*site_id))
+                site.world_site.is_some_and(|ws| ctx.index.sites.get(ws).any_plot(|p| p.is_workshop())) && (ctx.npc.current_site != Some(*site_id))
                     && ctx.rng.random_bool(0.25)
             })
             .min_by_key(|(_, site)| site.wpos.as_().distance(ctx.npc.wpos.xy()) as i32)
@@ -739,7 +736,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
             && Some(home) == ctx.npc.current_site
             && let Some(home_pop_ratio) = ctx.data.sites.get(home)
                 .and_then(|site| Some((site, ctx.index.sites.get(site.world_site?))))
-                .and_then(|(site, world_site)| { let houses = world_site.filter_plots(|p| matches!(p.meta(), Some(PlotKindMeta::House { .. }))).count(); if houses == 0 { return None } Some(site.population.len() as f32 / houses as f32) } )
+                .and_then(|(site, world_site)| { let houses = world_site.filter_plots(|p| p.is_house()).count(); if houses == 0 { return None } Some(site.population.len() as f32 / houses as f32) } )
                 // Only consider moving if the population is more than 1.5x the number of homes
                 .filter(|pop_ratio| *pop_ratio > 1.5)
             && let Some(new_home) = ctx.data
@@ -750,7 +747,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                 // Only consider towns as potential homes
                 .filter_map(|(site_id, site)| {
                     let world_site = site.world_site.map(|ws| ctx.index.sites.get(ws))?;
-                    let house_count = world_site.filter_plots(|p| matches!(p.meta(), Some(PlotKindMeta::House { .. }))).count();
+                    let house_count = world_site.filter_plots(|p| p.is_house()).count();
 
                     if house_count == 0 {
                         return None;
@@ -795,7 +792,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                             // Find a house in the site we're visiting
                             let house = site
                                 .plots()
-                                .filter(|p| matches!(p.kind().meta(), Some(PlotKindMeta::House { .. })))
+                                .filter(|p| p.is_house())
                                 .choose(&mut ctx.rng)?;
                             Some(site.tile_center_wpos(house.root_tile()).as_())
                         })
@@ -834,7 +831,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                             // Find a house in the site we're visiting
                             let house = site
                                 .plots()
-                                .filter(|p| matches!(p.kind().meta(), Some(PlotKindMeta::House { .. })))
+                                .filter(|p| p.is_house())
                                 .choose(&mut ctx.rng)?;
                             Some(site.tile_center_wpos(house.root_tile()).as_())
                         })
@@ -1171,10 +1168,8 @@ fn pilot<S: State>(ship: common::comp::ship::Body) -> impl Action<S> {
             .filter(|(id, _)| Some(*id) != ctx.npc.current_site)
             .filter_map(|(_, site)| Some(ctx.index.sites.get(site.world_site?)))
             .flat_map(|site| {
-                site.filter_plots(|plot| {
-                    matches!(plot.kind().meta(), Some(PlotKindMeta::AirshipDock { .. }))
-                })
-                .map(|plot| site.tile_center_wpos(plot.root_tile()))
+                site.filter_plots(|p| p.airship_dock_info().is_some())
+                    .map(|plot| site.tile_center_wpos(plot.root_tile()))
             })
             .choose(&mut ctx.rng);
         if let Some(station_wpos) = station_wpos {

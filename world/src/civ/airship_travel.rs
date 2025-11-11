@@ -1,7 +1,7 @@
 use crate::{
     Index,
     sim::WorldSim,
-    site::{self, Site, plot::PlotKindMeta},
+    site::{self, Site, Structure as _},
     util::{DHashMap, DHashSet, seed_expan},
 };
 use common::{
@@ -558,13 +558,8 @@ impl Airships {
             .iter()
             .flat_map(|(site_id, site)| {
                 site.plots().flat_map(move |plot| {
-                    if let Some(PlotKindMeta::AirshipDock {
-                        center,
-                        docking_positions,
-                        ..
-                    }) = plot.kind().meta()
-                    {
-                        Some((center, docking_positions, site_id))
+                    if let Some(info) = plot.airship_dock_info() {
+                        Some((info.center, info.docking_positions, site_id))
                     } else {
                         None
                     }

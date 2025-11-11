@@ -51,6 +51,8 @@ impl Structure for DesertCityTemple {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_desertcitytemple"))
     }
 
+    fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let sandstone = Fill::Sampling(Arc::new(|center| {
             Some(match (RandomField::new(0).get(center)) % 37 {

@@ -149,6 +149,14 @@ impl Structure for CliffTownAirshipDock {
         });
     }
 
+    fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> {
+        Some(AirshipDockInfo {
+            door_tile: self.door_tile,
+            center: self.center,
+            docking_positions: &self.docking_positions,
+        })
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let base = self.alt;
         let plot_center = self.center;

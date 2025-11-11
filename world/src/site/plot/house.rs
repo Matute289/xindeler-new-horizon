@@ -175,6 +175,8 @@ impl Structure for House {
         spawn_rules.prefer_alt(self.alt as f32, weight * 2.0);
     }
 
+    fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
+
     fn render_inner(&self, site: &Site, _land: &Land, painter: &Painter) {
         let storey = STOREY;
         let roof = storey * self.levels as i32 - 1;

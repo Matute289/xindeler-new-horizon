@@ -3065,8 +3065,7 @@ impl Site {
                     TileKind::Bridge | TileKind::Plaza => Some(tile_aabr),
                     _ => tile
                         .plot
-                        .and_then(|plot| self.plot(plot).kind().meta())
-                        .and_then(|meta| meta.door_tile())
+                        .and_then(|plot| self.plot(plot).door_tile())
                         .is_some_and(|door_tile| door_tile == npos)
                         .then_some(tile_aabr),
                 }
@@ -3167,8 +3166,7 @@ impl Site {
 
         let mut plots_to_render = plots.into_iter().collect::<Vec<_>>();
         // First sort by priority, then id.
-        plots_to_render
-            .sort_unstable_by_key(|plot| (self.plots[*plot].kind.render_ordering(), *plot));
+        plots_to_render.sort_unstable_by_key(|plot| (self.plot(*plot).render_ordering(), *plot));
 
         let wpos2d = canvas.info().wpos();
         let chunk_aabr = Aabr {
@@ -3179,8 +3177,7 @@ impl Site {
         let info = canvas.info();
 
         for plot in plots_to_render {
-            let (prim_tree, fills, mut entities) =
-                foreach_plot!(&self.plots[plot].kind, plot => plot.render_collect(self, canvas));
+            let (prim_tree, fills, mut entities) = self.plot(plot).render_collect(self, canvas);
 
             let mut spawn = |pos, last_block| {
                 if let Some(entity) = match &self.plots[plot].kind {

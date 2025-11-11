@@ -52,6 +52,8 @@ impl Structure for CoastalHouse {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_coastalhouse"))
     }
 
+    fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let base = self.alt + 1;
         let center = self.bounds.center();

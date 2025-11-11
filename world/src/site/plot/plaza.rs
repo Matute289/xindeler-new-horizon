@@ -384,6 +384,8 @@ impl Structure for Plaza {
         spawn_rules.prefer_alt(self.alt as f32, weight * 4.0);
     }
 
+    fn render_ordering(&self) -> u32 { 2 }
+
     fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
         if let Some(alt) = self.hard_alt {
             let wood_corner = Fill::Brick(BlockKind::Wood, Rgb::new(86, 50, 50), 10);

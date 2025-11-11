@@ -2,6 +2,7 @@ mod adlet;
 mod airship_dock;
 mod barn;
 mod bridge;
+mod building;
 mod camp;
 mod castle;
 mod citadel;
@@ -50,6 +51,7 @@ pub use self::{
     airship_dock::AirshipDock,
     barn::Barn,
     bridge::Bridge,
+    building::Building,
     camp::Camp,
     castle::Castle,
     citadel::Citadel,
@@ -95,7 +97,7 @@ pub use self::{
 };
 
 use super::*;
-use crate::util::DHashSet;
+use crate::{ColumnSample, util::DHashSet};
 use common::{match_some, path::Path};
 use rand_chacha::ChaCha8Rng;
 use vek::*;
@@ -121,43 +123,23 @@ impl Plot {
 
     pub fn kind(&self) -> &PlotKind { &self.kind }
 
-    pub fn meta(&self) -> Option<PlotKindMeta<'_>> { self.kind.meta() }
-
     pub fn root_tile(&self) -> Vec2<i32> { self.root_tile }
 
     pub fn tiles(&self) -> impl ExactSizeIterator<Item = Vec2<i32>> + '_ {
         self.tiles.iter().copied()
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum PlotKindMeta<'plot> {
-    AirshipDock {
-        door_tile: Vec2<i32>,
-        center: Vec2<i32>,
-        docking_positions: &'plot Vec<Vec3<i32>>,
-    },
-    Workshop {
-        door_tile: Option<Vec2<i32>>,
-    },
-    House {
-        door_tile: Vec2<i32>,
-    },
-    Other {
-        door_tile: Vec2<i32>,
-    },
-    Dungeon,
-}
+    pub fn is_house(&self) -> bool {
+        // TODO: Better than this
+        self.door_tile().is_some()
+    }
 
-impl PlotKindMeta<'_> {
-    pub fn door_tile(&self) -> Option<Vec2<i32>> {
-        match self {
-            PlotKindMeta::AirshipDock { door_tile, .. }
-            | PlotKindMeta::House { door_tile }
-            | PlotKindMeta::Other { door_tile } => Some(*door_tile),
-            PlotKindMeta::Workshop { door_tile } => *door_tile,
-            PlotKindMeta::Dungeon => None,
-        }
+    pub fn is_workshop(&self) -> bool {
+        // TODO: Better than this
+        matches!(
+            &self.kind,
+            PlotKind::Workshop(_) | PlotKind::CoastalWorkshop(_) | PlotKind::SavannahWorkshop(_)
+        )
     }
 }
 
@@ -209,117 +191,7 @@ pub enum PlotKind {
     VampireCastle(VampireCastle),
     MyrmidonArena(MyrmidonArena),
     MyrmidonHouse(MyrmidonHouse),
-}
-
-impl PlotKind {
-    pub fn render_ordering(&self) -> u32 {
-        match self {
-            PlotKind::Bridge(_) => 1,
-            PlotKind::Road(_) | PlotKind::Plaza(_) => 2,
-            _ => 0,
-        }
-    }
-
-    pub fn meta(&self) -> Option<PlotKindMeta<'_>> {
-        match self {
-            PlotKind::SavannahAirshipDock(d) => Some(PlotKindMeta::AirshipDock {
-                door_tile: d.door_tile,
-                docking_positions: &d.docking_positions,
-                center: d.center,
-            }),
-            PlotKind::AirshipDock(d) => Some(PlotKindMeta::AirshipDock {
-                door_tile: d.door_tile,
-                docking_positions: &d.docking_positions,
-                center: d.center,
-            }),
-            PlotKind::CoastalAirshipDock(d) => Some(PlotKindMeta::AirshipDock {
-                door_tile: d.door_tile,
-                docking_positions: &d.docking_positions,
-                center: d.center,
-            }),
-            PlotKind::DesertCityAirshipDock(d) => Some(PlotKindMeta::AirshipDock {
-                door_tile: d.door_tile,
-                docking_positions: &d.docking_positions,
-                center: d.center,
-            }),
-            PlotKind::CliffTownAirshipDock(d) => Some(PlotKindMeta::AirshipDock {
-                door_tile: d.door_tile,
-                docking_positions: &d.docking_positions,
-                center: d.center,
-            }),
-            PlotKind::House(h) => Some(PlotKindMeta::House {
-                door_tile: h.door_tile,
-            }),
-            PlotKind::CoastalHouse(h) => Some(PlotKindMeta::House {
-                door_tile: h.door_tile,
-            }),
-            PlotKind::DesertCityTemple(h) => Some(PlotKindMeta::House {
-                door_tile: h.door_tile,
-            }),
-            PlotKind::Sahagin(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::SavannahHut(h) => Some(PlotKindMeta::House {
-                door_tile: h.door_tile,
-            }),
-            PlotKind::SavannahGuardHut(h) => Some(PlotKindMeta::House {
-                door_tile: h.door_tile,
-            }),
-            PlotKind::CoastalWorkshop(w) => Some(PlotKindMeta::Workshop {
-                door_tile: Some(w.door_tile),
-            }),
-            PlotKind::Workshop(_) => Some(PlotKindMeta::Workshop { door_tile: None }),
-            PlotKind::SavannahWorkshop(w) => Some(PlotKindMeta::Workshop {
-                door_tile: Some(w.door_tile),
-            }),
-            // TODO: Support one plot being many things?
-            PlotKind::DesertCityMultiPlot(plot) => match &plot.plot_kind {
-                desert_city_multiplot::PlotKind::MarketHall { .. } => None,
-                desert_city_multiplot::PlotKind::Multiple { subplots } => {
-                    subplots.iter().find_map(|p| match &p.0 {
-                        desert_city_multiplot::SubPlotKind::WorkshopHouse { .. } => {
-                            Some(PlotKindMeta::Workshop { door_tile: None })
-                        },
-                        desert_city_multiplot::SubPlotKind::Library => None,
-                        desert_city_multiplot::SubPlotKind::WatchTower(_) => None,
-                        desert_city_multiplot::SubPlotKind::PalmTree => None,
-                        desert_city_multiplot::SubPlotKind::AnimalShed => None,
-                    })
-                },
-            },
-            PlotKind::Tavern(t) => Some(PlotKindMeta::Other {
-                door_tile: t.door_tile,
-            }),
-            PlotKind::SeaChapel(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::Cultist(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::Gnarling(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::Adlet(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::Haniwa(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::DwarvenMine(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::TerracottaPalace(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::VampireCastle(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::MyrmidonArena(_) => Some(PlotKindMeta::Dungeon),
-            PlotKind::GliderRing(_)
-            | PlotKind::GliderPlatform(_)
-            | PlotKind::GliderFinish(_)
-            | PlotKind::JungleRuin(_)
-            | PlotKind::DesertCityArena(_)
-            | PlotKind::Plaza(_)
-            | PlotKind::Castle(_)
-            | PlotKind::Road(_)
-            | PlotKind::GiantTree(_)
-            | PlotKind::CliffTower(_)
-            | PlotKind::Citadel(_)
-            | PlotKind::Barn(_)
-            | PlotKind::Bridge(_)
-            | PlotKind::PirateHideout(_)
-            | PlotKind::RockCircle(_)
-            | PlotKind::TrollCave(_)
-            | PlotKind::Camp(_)
-            | PlotKind::TerracottaHouse(_)
-            | PlotKind::TerracottaYard(_)
-            | PlotKind::FarmField(_)
-            | PlotKind::MyrmidonHouse(_) => None,
-        }
-    }
+    Building(Building),
 }
 
 /// # Syntax
@@ -376,8 +248,55 @@ macro_rules! foreach_plot {
             PlotKind::GliderFinish($x) => $y,
             PlotKind::MyrmidonArena($x) => $y,
             PlotKind::MyrmidonHouse($x) => $y,
+            PlotKind::Building($x) => $y,
         }
     };
 }
 
 pub use foreach_plot;
+
+impl Structure for Plot {
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_plot")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_plot"))
+    }
+
+    fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
+        foreach_plot!(&self.kind, plot => plot.render(site, land, painter))
+    }
+
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        foreach_plot!(&self.kind, plot => plot.spawn_rules(spawn_rules, wpos, weight))
+    }
+
+    fn rel_terrain_offset(&self, col: &ColumnSample) -> i32 {
+        foreach_plot!(&self.kind, plot => plot.rel_terrain_offset(col))
+    }
+
+    fn terrain_surface_at_inner(
+        &self,
+        wpos: Vec2<i32>,
+        old: Block,
+        rng: &mut ChaCha8Rng,
+        col: &ColumnSample,
+        z_off: i32,
+        site: &Site,
+    ) -> Option<Block> {
+        foreach_plot!(&self.kind, plot => plot.terrain_surface_at(wpos, old, rng, col, z_off, site))
+    }
+
+    fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> {
+        foreach_plot!(&self.kind, plot => plot.airship_dock_info())
+    }
+
+    fn door_tile(&self) -> Option<Vec2<i32>> { foreach_plot!(&self.kind, plot => plot.door_tile()) }
+
+    fn render_ordering(&self) -> u32 { foreach_plot!(&self.kind, plot => plot.render_ordering()) }
+}
+
+pub struct AirshipDockInfo<'plot> {
+    pub door_tile: Vec2<i32>,
+    pub center: Vec2<i32>,
+    pub docking_positions: &'plot [Vec3<i32>],
+}

@@ -1,6 +1,6 @@
 #[cfg(feature = "use-dyn-lib")] use crate::LIB;
 
-use super::*;
+use super::{plot::*, *};
 use crate::{
     CanvasInfo, ColumnSample,
     block::block_from_structure,
@@ -1795,6 +1795,13 @@ pub trait Structure: core::any::Any {
         self.as_dyn()
             .terrain_surface_at_inner(wpos, old, rng, col, z_off, site)
     }
+
+    fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> { None }
+
+    fn door_tile(&self) -> Option<Vec2<i32>> { None }
+
+    // TODO: Something more principled than this
+    fn render_ordering(&self) -> u32 { 0 }
 }
 
 /// Extend a 2d AABR to a 3d AABB

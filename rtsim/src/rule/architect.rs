@@ -413,12 +413,8 @@ fn spawn_profession(
             rng,
             body,
             personality,
-            |_, _, p| {
-                matches!(
-                    p.kind().meta(),
-                    Some(world::site::plot::PlotKindMeta::House { .. })
-                )
-            },
+            // Counts as a house if it has a door
+            |_, _, p| p.is_house(),
         ),
     }
 }
