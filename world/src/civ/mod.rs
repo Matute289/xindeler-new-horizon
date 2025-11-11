@@ -840,6 +840,8 @@ impl Civs {
                         .map(|town_attrs| (loc, town_attrs.score()))
                 })
             })
+            // Compare just a few different potential locations (produces diversity)
+            .take(4)
             .reduce(|a, b| if a.1 > b.1 { a } else { b })?
             .0;
 
@@ -1660,11 +1662,11 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
                         if c.river.is_ocean() {
                             ocean_chunks += 1;
                         }
-                        if c.tree_density > 0.7 {
+                        if c.tree_density > 0.3 {
                             tree_chunks += 1;
                         }
-                        if c.rockiness < 0.3 && c.temp > CONFIG.snow_temp {
-                            if c.surface_veg > 0.5 {
+                        if c.rockiness < 0.4 && c.temp > CONFIG.snow_temp {
+                            if c.surface_veg > 0.35 {
                                 farmable_chunks += 1;
                             } else {
                                 match c.get_biome() {
@@ -1691,7 +1693,7 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
         }
         let has_river = river_chunks > 1;
         let has_lake = lake_chunks > 1;
-        let vegetation_implies_potable_water = chunk.tree_density > 0.4
+        let vegetation_implies_potable_water = chunk.tree_density > 0.3
             && !matches!(chunk.get_biome(), common::terrain::BiomeKind::Swamp);
         let has_many_rocks = chunk.rockiness > 1.2;
         let warm_or_firewood = chunk.temp > CONFIG.snow_temp || tree_chunks > 2;
@@ -1744,7 +1746,7 @@ pub struct TownSiteAttributes {
 
 impl TownSiteAttributes {
     pub fn score(&self) -> f32 {
-        3.0 * (self.food_score as f32 + 1.0).log2()
+        1.5 * (self.food_score as f32 + 1.0).log2()
             + 2.0 * (self.forestry_score as f32 + 1.0).log2()
             + (self.mining_score as f32 + 1.0).log2()
             + (self.trading_score as f32 + 1.0).log2()

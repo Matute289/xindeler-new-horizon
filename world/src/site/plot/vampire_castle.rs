@@ -90,21 +90,20 @@ impl VampireCastle {
             castle_data,
         }
     }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            waypoints: false,
-            trees: !within_distance(wpos, self.bounds.center(), 75),
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for VampireCastle {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_vampire_castle\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_vampirecastle")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_vampirecastle"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_vampire_castle"))]
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        spawn_rules.trees &= !within_distance(wpos, self.bounds.center(), 75);
+        spawn_rules.waypoints = false;
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let mut rng = rand::rng();
         let brick = Fill::Brick(BlockKind::Rock, Rgb::new(80, 75, 85), 24);

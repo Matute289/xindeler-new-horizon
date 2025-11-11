@@ -374,10 +374,16 @@ impl Plaza {
 }
 
 impl Structure for Plaza {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_plaza\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_plaza")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_plaza"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_plaza"))]
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        spawn_rules.prefer_alt(self.alt as f32, weight * 4.0);
+    }
+
     fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
         if let Some(alt) = self.hard_alt {
             let wood_corner = Fill::Brick(BlockKind::Wood, Rgb::new(86, 50, 50), 10);
@@ -822,11 +828,11 @@ impl Structure for Plaza {
 
     fn rel_terrain_offset(&self, col: &ColumnSample) -> i32 { col.riverless_alt as i32 }
 
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         wpos: Vec2<i32>,
         old: Block,
-        _rng: &mut R,
+        _rng: &mut ChaCha8Rng,
         col: &ColumnSample,
         z_off: i32,
         _site: &Site,

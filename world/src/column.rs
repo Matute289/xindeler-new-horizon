@@ -635,15 +635,13 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         }
         .max(base_sea_level);
 
-        let spawn_rules = sim_chunk
-            .sites
-            .iter()
-            .map(|site| index.sites[*site].spawn_rules(wpos))
-            .fold(SpawnRules::default(), |a, b| a.combine(b));
+        let mut spawn_rules = SpawnRules::default();
+        for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
+            site.spawn_rules(&mut spawn_rules, wpos);
+        }
         let alt = alt
-            + spawn_rules
-                .preferred_alt
-                .map_or(0.0, |(a, factor)| (a - alt) * factor.clamped(0.0, 1.0));
+            + (spawn_rules.get_preferred_alt().0 - alt)
+                * spawn_rules.get_preferred_alt().1.clamped(0.0, 1.0);
 
         let riverless_alt = alt;
 

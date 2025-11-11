@@ -312,14 +312,6 @@ impl GnarlingFortification {
 
     pub fn radius(&self) -> i32 { self.radius }
 
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            trees: !within_distance(wpos, self.origin, self.wall_radius),
-            waypoints: false,
-            ..SpawnRules::default()
-        }
-    }
-
     // TODO: Find a better way of spawning entities in site
     pub fn apply_supplement(
         &self,
@@ -535,13 +527,20 @@ impl GnarlingFortification {
 }
 
 impl Structure for GnarlingFortification {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_gnarlingfortification\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_gnarlingfortification")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((
+            Self::as_dyn_impl(self),
+            "as_dyn_structure_gnarlingfortification",
+        ))
+    }
 
-    #[cfg_attr(
-        feature = "be-dyn-lib",
-        unsafe(export_name = "render_gnarlingfortification")
-    )]
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        spawn_rules.trees &= !within_distance(wpos, self.origin, self.wall_radius);
+        spawn_rules.waypoints = false;
+    }
+
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         // Create outer wall
         for (point, next_point) in self.wall_segments.iter() {

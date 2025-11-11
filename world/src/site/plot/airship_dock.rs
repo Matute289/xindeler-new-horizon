@@ -150,40 +150,31 @@ impl AirshipDock {
             campfire_pos,
         }
     }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            trees: {
-                // dock is 5 tiles = 30 blocks in radius
-                // airships are 37 blocks wide.
-                // Some trees are 20 to 30 blocks in radius.
-                // Leave extra space for tree width.
-                // Don't allow trees within 30 + 37 + 30 = 97 blocks of the dock center
-                const AIRSHIP_MIN_TREE_DIST2: i32 = 100;
-                !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST2)
-            },
-            preferred_alt: {
-                const MIN_FLAT_DIST: f32 = 12.0;
-                const SLOPE_LENGTH: f32 = 16.0;
-                let dist = wpos.as_::<f32>().distance(self.center.as_());
-                let factor = (1.0 - (dist - MIN_FLAT_DIST).max(0.0) / SLOPE_LENGTH).max(0.0);
-                if factor > 0.0 {
-                    Some((self.alt as f32, factor))
-                } else {
-                    None
-                }
-            },
-            waypoints: false,
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for AirshipDock {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_airshipdock\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_airshipdock")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_airshipdock"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_airshipdock"))]
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        // dock is 5 tiles = 30 blocks in radius
+        // airships are 37 blocks wide.
+        // Some trees are 20 to 30 blocks in radius.
+        // Leave extra space for tree width.
+        // Don't allow trees within 30 + 37 + 30 = 97 blocks of the dock center
+        const AIRSHIP_MIN_TREE_DIST2: i32 = 100;
+        spawn_rules.trees &= !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST2);
+
+        const MIN_FLAT_DIST: f32 = 12.0;
+        const SLOPE_LENGTH: f32 = 16.0;
+        let dist = wpos.as_::<f32>().distance(self.center.as_());
+        let weight = (1.0 - (dist - MIN_FLAT_DIST).max(0.0) / SLOPE_LENGTH).max(0.0);
+        spawn_rules.prefer_alt(self.alt as f32, weight);
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let brick = Fill::Brick(BlockKind::Rock, Rgb::new(80, 75, 85), 24);
         let wood = Fill::Brick(BlockKind::Rock, Rgb::new(45, 28, 21), 24);

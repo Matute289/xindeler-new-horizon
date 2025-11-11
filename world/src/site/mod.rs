@@ -39,7 +39,7 @@ use common::{
 use hashbrown::DefaultHashBuilder;
 use namegen::NameGen;
 use rand::{SeedableRng, prelude::*, seq::IndexedRandom};
-use rand_chacha::ChaChaRng;
+use rand_chacha::{ChaCha8Rng, ChaChaRng};
 use std::ops::Range;
 use vek::*;
 
@@ -59,28 +59,38 @@ pub struct SpawnRules {
     pub max_warp: f32,
     pub paths: bool,
     pub waypoints: bool,
-    // (alt, factor)
+    // (alt, total_weight, max_factor)
     // factor = 0.0: no effect
     // factor = 1.0: exact alt
-    pub preferred_alt: Option<(f32, f32)>,
+    pub preferred_alt: (f32, f32, f32),
 }
 
 impl SpawnRules {
-    #[must_use]
-    pub fn combine(self, other: Self) -> Self {
+    pub fn prefer_alt(&mut self, alt: f32, weight: f32) {
+        self.preferred_alt.0 += alt * weight;
+        self.preferred_alt.1 += weight;
+        self.preferred_alt.2 = self.preferred_alt.2.max(weight);
+    }
+
+    // Returns (alt, factor)
+    pub fn get_preferred_alt(&self) -> (f32, f32) {
+        // + 0.1 is a hack, prevents precision issues
+        (
+            self.preferred_alt.0 / self.preferred_alt.1.max(0.0001) + 0.1,
+            self.preferred_alt.2,
+        )
+    }
+
+    #[inline]
+    pub fn combine(&mut self, other: Self) {
         // Should be commutative
-        Self {
-            trees: self.trees && other.trees,
-            max_warp: self.max_warp.min(other.max_warp),
-            paths: self.paths && other.paths,
-            waypoints: self.waypoints && other.waypoints,
-            preferred_alt: self
-                .preferred_alt
-                .zip(other.preferred_alt)
-                .map(|(a, b)| if a.1 > b.1 { a } else { b })
-                .or(self.preferred_alt)
-                .or(other.preferred_alt),
-        }
+        self.trees &= other.trees;
+        self.max_warp = self.max_warp.min(other.max_warp);
+        self.paths &= other.paths;
+        self.waypoints &= other.waypoints;
+        self.preferred_alt.0 += other.preferred_alt.0;
+        self.preferred_alt.1 += other.preferred_alt.1;
+        self.preferred_alt.2 = self.preferred_alt.2.max(other.preferred_alt.2);
     }
 }
 
@@ -91,7 +101,7 @@ impl Default for SpawnRules {
             max_warp: 1.0,
             paths: true,
             waypoints: true,
-            preferred_alt: None,
+            preferred_alt: (0.0, 0.0, f32::NEG_INFINITY),
         }
     }
 }
@@ -258,7 +268,7 @@ impl Site {
             * TILE_SIZE as i32) as f32
     }
 
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
+    pub fn spawn_rules(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>) {
         let tile_pos = self.wpos_tile_pos(wpos);
         let max_warp = SQUARE_9
             .iter()
@@ -275,61 +285,27 @@ impl Site {
             .min_by_key(|d2| *d2 as i32)
             .map(|d2| d2.sqrt() / TILE_SIZE as f32)
             .unwrap_or(1.0);
-        let preferred_alt = SQUARE_9
-            .iter()
-            .filter_map(|rpos| {
-                let tile_pos = tile_pos + rpos;
-                if let PlotKind::Plaza(plaza) = &self.plot(self.tiles.get(tile_pos).plot?).kind {
-                    let clamped =
-                        wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
-                    let weight = (1.0
-                        - clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32)
-                        .max(0.01);
-                    Some(((plaza.alt as f32 + 0.5) * weight, weight))
-                } else {
-                    None
-                }
-            })
-            .fold(None, |a: Option<(f32, f32, f32)>, (alt, w)| {
-                if let Some((a_alt, a_w, a_w_max)) = a {
-                    Some((a_alt + alt, a_w + w, a_w_max.max(w)))
-                } else {
-                    Some((alt, w, w))
-                }
-            })
-            .map(|(a, w, w_max)| (a / w, w));
-        let base_spawn_rules = SpawnRules {
-            trees: max_warp == 1.0,
-            preferred_alt,
-            max_warp,
-            paths: max_warp > f32::EPSILON,
-            waypoints: true,
-        };
         SQUARE_9
             .iter()
-            .filter_map(|rpos| Some(self.plot(self.tiles.get(tile_pos + rpos).plot?)))
-            .filter_map(|plot| match &plot.kind {
-                PlotKind::Gnarling(g) => Some(g.spawn_rules(wpos)),
-                PlotKind::Adlet(ad) => Some(ad.spawn_rules(wpos)),
-                PlotKind::SeaChapel(p) => Some(p.spawn_rules(wpos)),
-                PlotKind::Haniwa(ha) => Some(ha.spawn_rules(wpos)),
-                PlotKind::TerracottaPalace(tp) => Some(tp.spawn_rules(wpos)),
-                PlotKind::TerracottaHouse(th) => Some(th.spawn_rules(wpos)),
-                PlotKind::TerracottaYard(ty) => Some(ty.spawn_rules(wpos)),
-                PlotKind::Cultist(cl) => Some(cl.spawn_rules(wpos)),
-                PlotKind::Sahagin(sg) => Some(sg.spawn_rules(wpos)),
-                PlotKind::DwarvenMine(dm) => Some(dm.spawn_rules(wpos)),
-                PlotKind::VampireCastle(vc) => Some(vc.spawn_rules(wpos)),
-                PlotKind::MyrmidonArena(ma) => Some(ma.spawn_rules(wpos)),
-                PlotKind::MyrmidonHouse(mh) => Some(mh.spawn_rules(wpos)),
-                PlotKind::AirshipDock(ad) => Some(ad.spawn_rules(wpos)),
-                PlotKind::CoastalAirshipDock(cad) => Some(cad.spawn_rules(wpos)),
-                PlotKind::CliffTownAirshipDock(clad) => Some(clad.spawn_rules(wpos)),
-                PlotKind::DesertCityAirshipDock(dcad) => Some(dcad.spawn_rules(wpos)),
-                PlotKind::SavannahAirshipDock(sad) => Some(sad.spawn_rules(wpos)),
-                _ => None,
-            })
-            .fold(base_spawn_rules, |a, b| a.combine(b))
+            .for_each(|rpos| {
+                let tile_pos = tile_pos + rpos;
+                let tile = self.tiles.get(tile_pos);
+                let clamped =
+                    wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
+                let dist = clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32;
+                let weight = (1.0 - dist).clamped(0.001, 1.0);
+                // Special case: roads get their altitude from the tile, not the plot
+                // TODO: Should this be true of all tiles?
+                if let TileKind::Road { .. } = &tile.kind && let Some(hard_alt) = tile.hard_alt {
+                    spawn_rules.prefer_alt(hard_alt as f32, weight);
+                } else if let Some(plot_id) = tile.plot {
+                    foreach_plot!(&self.plot(plot_id).kind, plot => plot.spawn_rules(spawn_rules, wpos, weight));
+                }
+            });
+
+        spawn_rules.trees &= max_warp == 1.0;
+        spawn_rules.max_warp = spawn_rules.max_warp.min(max_warp);
+        spawn_rules.paths &= max_warp > f32::EPSILON;
     }
 
     pub fn bounds(&self) -> Aabr<i32> {
@@ -3133,7 +3109,7 @@ impl Site {
         }
     }
 
-    pub fn render(&self, canvas: &mut Canvas, dynamic_rng: &mut impl Rng) {
+    pub fn render(&self, canvas: &mut Canvas, dynamic_rng: &mut ChaCha8Rng) {
         let tile_aabr = Aabr {
             min: self.wpos_tile_pos(canvas.wpos()) - 1,
             max: self

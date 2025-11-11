@@ -160,17 +160,17 @@ impl FarmField {
 }
 
 impl Structure for FarmField {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_farmfield\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_farmfield")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_farmfield"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_farmfield"))]
-    fn render_inner(&self, _site: &Site, _land: &Land, _painter: &Painter) {}
-
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         wpos: Vec2<i32>,
         old: Block,
-        rng: &mut R,
+        rng: &mut ChaCha8Rng,
         col: &ColumnSample,
         z_off: i32,
         _site: &Site,

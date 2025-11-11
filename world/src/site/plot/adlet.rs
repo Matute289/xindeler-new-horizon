@@ -396,14 +396,6 @@ impl AdletStronghold {
         (cavern_aabr, surface_aabr)
     }
 
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            waypoints: false,
-            trees: !within_distance(wpos, self.entrance, self.surface_radius * 5 / 4),
-            ..SpawnRules::default()
-        }
-    }
-
     // TODO: Find a better way of spawning entities in site
     pub fn apply_supplement(
         &self,
@@ -421,10 +413,17 @@ impl AdletStronghold {
 }
 
 impl Structure for AdletStronghold {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_adletstronghold\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_adletstronghold")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_adletstronghold"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_adletstronghold"))]
+    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+        spawn_rules.waypoints = false;
+        spawn_rules.trees &= !within_distance(wpos, self.entrance, self.surface_radius * 5 / 4);
+    }
+
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         let snow_ice_fill = Fill::Sampling(Arc::new(|wpos| {
             Some(match (RandomField::new(0).get(wpos)) % 250 {

@@ -97,6 +97,7 @@ pub use self::{
 use super::*;
 use crate::util::DHashSet;
 use common::{match_some, path::Path};
+use rand_chacha::ChaCha8Rng;
 use vek::*;
 
 pub struct Plot {

@@ -988,10 +988,12 @@ impl Bridge {
 }
 
 impl Structure for Bridge {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_bridge\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_bridge")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_bridge"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_bridge"))]
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         match &self.kind {
             BridgeKind::Flat => render_flat(self, painter),
