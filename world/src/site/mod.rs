@@ -27,6 +27,7 @@ use common::{
     generation::{EntityInfo, EntitySpawn},
     lottery::Lottery,
     map::MarkerKind,
+    match_some,
     spiral::Spiral2d,
     store::{Id, Store},
     terrain::{
@@ -290,10 +291,8 @@ impl Site {
             let weight = (1.0 - dist).clamped(0.001, 1.0);
             // Special case: roads get their altitude from the tile, not the plot
             // TODO: Should this be true of all tiles?
-            if let TileKind::Road { .. } = &tile.kind
-                && let Some(hard_alt) = tile.hard_alt
-            {
-                spawn_rules.prefer_alt(hard_alt as f32, weight);
+            if let TileKind::Road { alt, .. } = &tile.kind {
+                spawn_rules.prefer_alt(*alt, weight.powi(1) * 45.0);
             } else if let Some(plot) = tile.plot {
                 self.plot(plot).spawn_rules(spawn_rules, land, wpos, weight);
             }
@@ -337,46 +336,69 @@ impl Site {
         b: Vec2<i32>,
         w: u16,
         kind: plot::RoadKind,
-    ) -> Option<Id<Plot>> {
+        (src, src_alt): (Id<Plot>, f32),
+        (dst, dst_alt): (Id<Plot>, f32),
+    ) {
         const MAX_ITERS: usize = 4096;
         let range = &(-(w as i32) / 2..w as i32 - (w as i32 + 1) / 2);
         // Manhattan distance.
         let heuristic =
             |(tile, _): &(Vec2<i32>, Vec2<i32>)| (tile - b).map(|e| e.abs()).sum() as f32;
-        let (path, _cost) = Astar::new(MAX_ITERS, (a, Vec2::zero()), DefaultHashBuilder::default())
-            .poll(
-                MAX_ITERS,
-                &heuristic,
-                |(tile, prev_dir)| {
-                    let tile = *tile;
-                    let prev_dir = *prev_dir;
-                    let this = &self;
-                    CARDINALS.iter().map(move |dir| {
-                        let neighbor = (tile + *dir, *dir);
+        let Some((path, _cost)) =
+            Astar::new(MAX_ITERS, (a, Vec2::zero()), DefaultHashBuilder::default())
+                .poll(
+                    MAX_ITERS,
+                    &heuristic,
+                    |(tile, prev_dir)| {
+                        let tile = *tile;
+                        let prev_dir = *prev_dir;
+                        let this = &self;
+                        CARDINALS.iter().map(move |dir| {
+                            let neighbor = (tile + *dir, *dir);
 
-                        // Transition cost
-                        let alt_a = land.get_alt_approx(this.tile_center_wpos(tile));
-                        let alt_b = land.get_alt_approx(this.tile_center_wpos(neighbor.0));
-                        let mut cost = 1.0
-                            + (alt_a - alt_b).abs() / TILE_SIZE as f32
-                            + (prev_dir != *dir) as i32 as f32;
+                            // Transition cost
+                            let alt_a = land.get_alt_approx(this.tile_center_wpos(tile));
+                            let alt_b = land.get_alt_approx(this.tile_center_wpos(neighbor.0));
+                            let mut cost = 1.0
+                                + (alt_a - alt_b).abs() / TILE_SIZE as f32
+                                + (prev_dir != *dir) as i32 as f32;
 
-                        for i in range.clone() {
-                            let orth = dir.yx() * i;
-                            let tile = this.tiles.get(neighbor.0 + orth);
-                            if tile.is_obstacle() {
-                                cost += 1000.0;
-                            } else if !tile.is_empty() && !tile.is_road() {
-                                cost += 25.0;
+                            for i in range.clone() {
+                                let orth = dir.yx() * i;
+                                let tile = this.tiles.get(neighbor.0 + orth);
+                                if tile.is_obstacle() {
+                                    cost += 1000.0;
+                                } else if !tile.is_empty() && !tile.is_road() {
+                                    cost += 25.0;
+                                }
                             }
-                        }
 
-                        (neighbor, cost)
-                    })
-                },
-                |(tile, _)| *tile == b,
-            )
-            .into_path()?;
+                            (neighbor, cost)
+                        })
+                    },
+                    |(tile, _)| self.tiles.get(*tile).plot == Some(dst),
+                )
+                .into_path()
+        else {
+            return;
+        };
+
+        // Skip tiles in the src plot
+        let mut path = path.nodes();
+        while let Some((tile, _)) = path.first()
+            && self.tiles.get(*tile).plot == Some(src)
+        {
+            path = &path[1..];
+        }
+        let Some((a, _)) = path.first().copied() else {
+            return;
+        };
+
+        // Start and end altitudes, to clamp road tile altitudes relative to
+        // let [alt_a, alt_b] = [a, b].map(|tile_pos|
+        //     match_some!(&self.tiles.get(tile_pos).kind, TileKind::Road { alt, .. } =>
+        // *alt)     .unwrap_or_else(||
+        // land.get_alt_approx(self.tile_center_wpos(tile_pos))));
 
         let plot = self.create_plot(Plot {
             kind: PlotKind::Road(plot::Road {
@@ -393,25 +415,34 @@ impl Site {
             for y in range.clone() {
                 for x in range.clone() {
                     let tile = tile + Vec2::new(x, y);
+                    let old_tile = self.tiles.get(tile);
                     if matches!(
-                        self.tiles.get(tile).kind,
-                        TileKind::Empty | TileKind::Path { .. }
+                        old_tile.kind,
+                        TileKind::Empty | TileKind::Path { .. } /* | TileKind::Road { .. } */
                     ) {
                         self.tiles.set(tile, Tile {
                             kind: TileKind::Road {
                                 a: i.saturating_sub(1) as u16,
                                 b: (i + 1).min(path.len() - 1) as u16,
                                 w,
+                                alt: land.get_alt_approx(self.tile_center_wpos(tile))
+                                    // Clamp roads to an altitude that means they can always reach their destination with less than a 45 degree slope
+                                    .clamp(
+                                        src_alt - i as f32 * tile::TILE_SIZE as f32,
+                                        src_alt + i as f32 * tile::TILE_SIZE as f32,
+                                    )
+                                    .clamp(
+                                        dst_alt - path.len().saturating_sub(i + 1) as f32 * tile::TILE_SIZE as f32,
+                                        dst_alt + path.len().saturating_sub(i + 1) as f32 * tile::TILE_SIZE as f32,
+                                    ),//Lerp::lerp(alt_a, alt_b, i as f32 / path.len() as f32),
                             },
-                            plot: Some(plot),
+                            plot: old_tile.plot.or(Some(plot)),
                             hard_alt: Some(land.get_alt_approx(self.tile_center_wpos(tile)) as i32),
                         });
                     }
                 }
             }
         }
-
-        Some(plot)
     }
 
     pub fn find_aabr(
@@ -449,19 +480,29 @@ impl Site {
         let dir = Vec2::<f32>::zero()
             .map(|_| rng.random_range(-1.0..1.0))
             .normalized();
-        let search_pos = if rng.random() {
-            let plaza = self.plot(*self.plazas.choose(rng)?);
-            let sz = plaza.find_bounds().size();
-            plaza.root_tile + dir.map(|e: f32| e.round() as i32) * (sz + 1)
+        let search_pos = if rng.random()
+            && let plot = self.plot(*self.plazas.choose(rng)?)
+        {
+            let sz = plot.find_bounds().size();
+            plot.root_tile + dir.map(|e: f32| e.round() as i32) * (sz + 1)
         } else if let PlotKind::Road(plot::Road { path, .. }) =
             &self.plot(*self.roads.choose(rng)?).kind
         {
             *path.nodes().choose(rng)? + (dir * 1.0).map(|e: f32| e.round() as i32)
         } else {
-            unreachable!()
+            return None;
         };
 
-        self.find_aabr(search_pos, area_range, min_dims)
+        let (aabr, door_pos, door_dir, hard_alt) =
+            self.find_aabr(search_pos, area_range, min_dims)?;
+
+        let alt = if let TileKind::Road { alt, .. } = &self.tiles.get(door_pos + door_dir).kind {
+            Some(*alt as i32 - 1)
+        } else {
+            None
+        };
+
+        Some((aabr, door_pos, door_dir, hard_alt.or(alt)))
     }
 
     pub fn find_rural_aabr(
@@ -508,7 +549,12 @@ impl Site {
         });
         self.plazas.push(plaza);
         self.blit_aabr(tile_aabr, Tile {
-            kind: TileKind::Plaza,
+            kind: TileKind::Road {
+                a: 0,
+                b: 0,
+                w: 0,
+                alt: plaza_alt as f32,
+            },
             plot: Some(plaza),
             hard_alt: Some(plaza_alt),
         });
@@ -535,6 +581,8 @@ impl Site {
                         })
                 })
                 .min_by_key(|&&p| self.plot(p).root_tile.distance_squared(tpos))
+                && let PlotKind::Plaza(src_plaza) = &self.plot(p).kind
+                && let PlotKind::Plaza(dst_plaza) = &self.plot(plaza).kind
             {
                 self.create_road(
                     land,
@@ -542,6 +590,8 @@ impl Site {
                     tpos,
                     2, /* + i */
                     road_kind,
+                    (p, src_plaza.alt as f32),
+                    (plaza, dst_plaza.alt as f32),
                 );
                 already_pathed.push(p);
             } else {
@@ -1424,7 +1474,12 @@ impl Site {
                                 max: aabr.max - 1,
                             },
                             Tile {
-                                kind: TileKind::Road { a: 0, b: 0, w: 0 },
+                                kind: TileKind::Road {
+                                    a: 0,
+                                    b: 0,
+                                    w: 0,
+                                    alt: castle_alt as f32,
+                                },
                                 plot: Some(plot),
                                 hard_alt: Some(castle_alt),
                             },
@@ -3037,7 +3092,7 @@ impl Site {
                     max: self.tile_wpos(tpos + 1).map(|e| e as f32) - 1.0,
                 };
                 match tile.kind {
-                    TileKind::Road { a, b, w } => {
+                    TileKind::Road { a, b, w, .. } => {
                         if let Some(PlotKind::Road(road)) = tile.plot.map(|p| &self.plot(p).kind) {
                             let start = road.path.nodes[a as usize];
                             let end = road.path.nodes[b as usize];
@@ -3055,7 +3110,7 @@ impl Site {
                             .as_();
                             Some(aabr)
                         } else {
-                            None
+                            Some(tile_aabr)
                         }
                     },
                     TileKind::Bridge | TileKind::Plaza => Some(tile_aabr),

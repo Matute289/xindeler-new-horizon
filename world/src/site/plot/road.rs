@@ -36,7 +36,7 @@ impl RoadKind {
         let wood_corner = Fill::Brick(BlockKind::Wood, Rgb::new(86, 50, 50), 10);
         painter
             .column(pos.xy(), pos.z - 4..pos.z)
-            .sample_with_column(|p, col| p.z > col.riverless_alt as i32)
+            .sample_with_column(|p, col| p.z >= col.alt as i32)
             .fill(wood_corner);
         match self.lights {
             RoadLights::Default => painter.lanternpost_wood(pos, dir),
@@ -103,7 +103,7 @@ impl Structure for Road {
                 w,
                 a: this_a,
                 b: this_b,
-                ..
+                alt,
             } = current_tile.kind
             else {
                 continue;
@@ -142,12 +142,7 @@ impl Structure for Road {
 
             let wpos = light_wpos(dir);
 
-            // TODO: Not sure if this is always correct
-            let alt =
-                land.get_alt_approx(wpos)
-                    .max(land.get_interpolated(wpos, |c| c.water_alt) + 1.0) as i32
-                    + 1;
-            let wpos = wpos.with_z(alt);
+            let wpos = wpos.with_z(alt as i32);
             self.kind.place_light(wpos, -dir, painter);
         }
     }
@@ -174,7 +169,7 @@ impl Structure for Road {
             let tpos = site.wpos_tile_pos(wpos);
             let mut near_roads = LOCALITY.iter().filter_map(|rpos| {
                 let tile = site.tiles.get(tpos + rpos);
-                if let TileKind::Road { a, b, w } = &tile.kind {
+                if let TileKind::Road { a, b, w, .. } = &tile.kind {
                     if let Some(PlotKind::Road(Road { path, .. })) =
                         tile.plot.map(|p| &site.plot(p).kind)
                     {
@@ -213,8 +208,12 @@ impl Structure for Road {
             if let Some((line, _)) =
                 near_roads.find(|(line, w)| line.distance_to_point(wposf) < *w as f32 * 2.0)
             {
-                let dir = Dir2::from_vec2((line.start - line.end).as_());
-                Some(self.kind.block(col, wpos.with_z(z), dir))
+                if z_off == 0 {
+                    Some(old.into_vacant())
+                } else {
+                    let dir = Dir2::from_vec2((line.start - line.end).as_());
+                    Some(self.kind.block(col, wpos.with_z(z), dir))
+                }
             } else {
                 None
             }

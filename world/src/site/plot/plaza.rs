@@ -387,7 +387,7 @@ impl Structure for Plaza {
         _wpos: Vec2<i32>,
         weight: f32,
     ) {
-        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(12) * 25.0);
+        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(1) * 45.0);
     }
 
     fn render_ordering(&self) -> u32 { 2 }
@@ -849,7 +849,7 @@ impl Structure for Plaza {
         if col.water_level > col.alt || self.hard_alt.is_some_and(|alt| z < alt) {
             return None;
         };
-        if z_off <= 0 {
+        if z_off <= -1 {
             let block = self.kind.block(col, wpos.with_z(z), self.dir);
             if old.is_filled() {
                 if old.is_terrain() { Some(block) } else { None }

@@ -181,7 +181,7 @@ pub enum TileKind {
     Hazard(HazardKind),
     Field,
     Plaza,
-    Road { a: u16, b: u16, w: u16 },
+    Road { a: u16, b: u16, w: u16, alt: f32 },
     Path { closest_pos: Vec2<f32>, path: Path },
     Building,
     Castle,

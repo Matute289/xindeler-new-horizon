@@ -178,7 +178,7 @@ impl Structure for House {
         _wpos: Vec2<i32>,
         weight: f32,
     ) {
-        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(4) * 25.0);
+        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(8) * 25.0);
     }
 
     fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
