@@ -1,5 +1,5 @@
 use crate::{
-    CONFIG, IndexRef,
+    CONFIG, IndexRef, Land,
     all::ForestKind,
     sim::{Path, RiverKind, SimChunk, WorldSim, local_cells},
     site::SpawnRules,
@@ -637,7 +637,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
         let mut spawn_rules = SpawnRules::default();
         for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
-            site.spawn_rules(&mut spawn_rules, wpos);
+            site.spawn_rules(&mut spawn_rules, &Land::from_sim(sim), wpos);
         }
         let alt = alt
             + (spawn_rules.get_preferred_alt().0 - alt)

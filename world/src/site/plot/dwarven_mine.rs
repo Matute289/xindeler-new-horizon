@@ -51,7 +51,13 @@ impl Structure for DwarvenMine {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_dwarvenmine"))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
         let near_entrance = within_distance(wpos, self.origin, 64);
         spawn_rules.trees &= !near_entrance;
         spawn_rules.max_warp = spawn_rules.max_warp.min((!near_entrance) as i32 as f32);

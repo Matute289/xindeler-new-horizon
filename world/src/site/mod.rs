@@ -265,7 +265,7 @@ impl Site {
             * TILE_SIZE as i32) as f32
     }
 
-    pub fn spawn_rules(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>) {
+    pub fn spawn_rules(&self, spawn_rules: &mut SpawnRules, land: &Land, wpos: Vec2<i32>) {
         let tile_pos = self.wpos_tile_pos(wpos);
         let max_warp = SQUARE_9
             .iter()
@@ -295,7 +295,7 @@ impl Site {
             {
                 spawn_rules.prefer_alt(hard_alt as f32, weight);
             } else if let Some(plot) = tile.plot {
-                self.plot(plot).spawn_rules(spawn_rules, wpos, weight);
+                self.plot(plot).spawn_rules(spawn_rules, land, wpos, weight);
             }
         });
 

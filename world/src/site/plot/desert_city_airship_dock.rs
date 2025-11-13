@@ -125,7 +125,13 @@ impl Structure for DesertCityAirshipDock {
         ))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
         // dock is 5 tiles = 30 blocks in radius
         // airships are 39 blocks wide.
         // Tree can be up to 20 blocks in radius.

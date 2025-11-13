@@ -380,8 +380,14 @@ impl Structure for Plaza {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_plaza"))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
-        spawn_rules.prefer_alt(self.alt as f32, weight * 4.0);
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(12) * 25.0);
     }
 
     fn render_ordering(&self) -> u32 { 2 }

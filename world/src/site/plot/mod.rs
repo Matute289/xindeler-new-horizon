@@ -266,8 +266,14 @@ impl Structure for Plot {
         foreach_plot!(&self.kind, plot => plot.render(site, land, painter))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
-        foreach_plot!(&self.kind, plot => plot.spawn_rules(spawn_rules, wpos, weight))
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        land: &Land,
+        wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        foreach_plot!(&self.kind, plot => plot.spawn_rules(spawn_rules, land, wpos, weight))
     }
 
     fn rel_terrain_offset(&self, col: &ColumnSample) -> i32 {

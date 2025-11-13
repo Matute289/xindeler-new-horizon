@@ -66,7 +66,13 @@ impl Structure for Sahagin {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_sahagin"))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
         spawn_rules.trees &= !within_distance(wpos, self.bounds.center(), 75);
         spawn_rules.waypoints = false;
     }

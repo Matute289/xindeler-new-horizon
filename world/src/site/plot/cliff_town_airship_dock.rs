@@ -134,7 +134,13 @@ impl Structure for CliffTownAirshipDock {
         ))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
         // dock is 3 tiles = 18 blocks in radius
         // airships are 20 blocks wide.
         // Leave extra space for tree width (at lease 15 extra).

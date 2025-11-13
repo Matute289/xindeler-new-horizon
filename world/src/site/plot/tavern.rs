@@ -1293,7 +1293,13 @@ impl Structure for Tavern {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_tavern"))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        weight: f32,
+    ) {
         spawn_rules.prefer_alt(self.door_wpos.z as f32, weight * 2.0);
     }
 

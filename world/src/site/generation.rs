@@ -1724,13 +1724,21 @@ pub trait Structure: core::any::Any {
         self.as_dyn().render_inner(site, land, painter)
     }
 
-    fn spawn_rules_inner(&self, _spawn_rules: &mut SpawnRules, _wpos: Vec2<i32>, _weight: f32) {}
+    fn spawn_rules_inner(
+        &self,
+        _spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+    }
 
-    fn spawn_rules(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32)
+    fn spawn_rules(&self, spawn_rules: &mut SpawnRules, land: &Land, wpos: Vec2<i32>, weight: f32)
     where
         Self: Sized,
     {
-        self.as_dyn().spawn_rules_inner(spawn_rules, wpos, weight);
+        self.as_dyn()
+            .spawn_rules_inner(spawn_rules, land, wpos, weight);
     }
 
     // Generate a primitive tree and fills for this structure

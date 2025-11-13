@@ -171,8 +171,14 @@ impl Structure for House {
         Some((Self::as_dyn_impl(self), "as_dyn_structure_house"))
     }
 
-    fn spawn_rules_inner(&self, spawn_rules: &mut SpawnRules, wpos: Vec2<i32>, weight: f32) {
-        spawn_rules.prefer_alt(self.alt as f32, weight * 2.0);
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(4) * 25.0);
     }
 
     fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
