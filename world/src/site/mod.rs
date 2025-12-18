@@ -292,7 +292,7 @@ impl Site {
             // Special case: roads get their altitude from the tile, not the plot
             // TODO: Should this be true of all tiles?
             if let TileKind::Road { alt, .. } = &tile.kind {
-                spawn_rules.prefer_alt(*alt, weight.powi(1) * 45.0);
+                spawn_rules.prefer_alt(*alt, weight.powi(4) * 25.0);
             } else if let Some(plot) = tile.plot {
                 self.plot(plot).spawn_rules(spawn_rules, land, wpos, weight);
             }
@@ -1323,7 +1323,7 @@ impl Site {
                             Extent2::broadcast(size),
                         )
                     }) {
-                        let house = plot::House::generate(
+                        let house = plot::Building::generate(
                             land,
                             &mut reseed(&mut rng),
                             &site,
@@ -1335,7 +1335,7 @@ impl Site {
                         );
                         let house_alt = house.alt;
                         let plot = site.create_plot(Plot {
-                            kind: PlotKind::House(house),
+                            kind: PlotKind::Building(house),
                             root_tile: aabr.center(),
                             tiles: aabr_tiles(aabr).collect(),
                         });
