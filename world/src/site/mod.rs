@@ -292,6 +292,15 @@ impl Site {
             // TODO: Should this be true of all tiles?
             if let TileKind::Road { alt, .. } = &tile.kind {
                 spawn_rules.prefer_alt(*alt, weight.powi(4) * 25.0);
+            } else if let TileKind::Path { closest_pos, path } = &tile.kind
+                && let Some(hard_alt) = tile.hard_alt
+            {
+                spawn_rules.prefer_alt(
+                    hard_alt as f32,
+                    (1.0 - (closest_pos.distance(wpos.as_()) - path.width * 1.25).max(0.0) * 0.15)
+                        .clamped(0.001, 1.0)
+                        .powi(2),
+                );
             } else if let Some(plot) = tile.plot {
                 self.plot(plot).spawn_rules(spawn_rules, land, wpos, weight);
             }
@@ -299,7 +308,6 @@ impl Site {
 
         spawn_rules.trees &= max_warp == 1.0;
         spawn_rules.max_warp = spawn_rules.max_warp.min(max_warp);
-        spawn_rules.paths &= max_warp > f32::EPSILON;
     }
 
     pub fn bounds(&self) -> Aabr<i32> {
@@ -455,13 +463,17 @@ impl Site {
                 let dir = CARDINALS
                     .iter()
                     .find(|dir| self.tiles.get(center + *dir).is_road())?;
-                let hard_alt = self.tiles.get(center + *dir).plot.and_then(|plot| {
-                    if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
-                        Some(p.hard_alt.unwrap_or(p.alt))
-                    } else {
-                        None
-                    }
-                });
+                let hard_alt = self.tiles.get(center + *dir).hard_alt.or(self
+                    .tiles
+                    .get(center + *dir)
+                    .plot
+                    .and_then(|plot| {
+                        if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
+                            Some(p.hard_alt.unwrap_or(p.alt))
+                        } else {
+                            None
+                        }
+                    }));
                 self.tiles
                     .grow_aabr(center, area_range.clone(), min_dims)
                     .ok()
@@ -692,7 +704,8 @@ impl Site {
                                 tile.kind = TileKind::Path {
                                     closest_pos: path_wpos,
                                     path,
-                                }
+                                };
+                                tile.hard_alt = Some(land.get_alt_approx(path_wpos.as_()) as i32);
                             });
                     }
                 }

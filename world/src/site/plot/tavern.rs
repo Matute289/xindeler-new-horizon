@@ -1300,8 +1300,10 @@ impl Structure for Tavern {
         _wpos: Vec2<i32>,
         weight: f32,
     ) {
-        spawn_rules.prefer_alt(self.door_wpos.z as f32, weight * 2.0);
+        spawn_rules.prefer_alt(self.door_wpos.z as f32 - 1.0, weight * 2.0);
     }
+
+    fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
 
     fn render_inner(&self, _site: &Site, land: &Land, painter: &crate::site::Painter) {
         let field = RandomField::new(740384);

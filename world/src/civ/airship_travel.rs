@@ -558,11 +558,8 @@ impl Airships {
             .iter()
             .flat_map(|(site_id, site)| {
                 site.plots().flat_map(move |plot| {
-                    if let Some(info) = plot.airship_dock_info() {
-                        Some((info.center, info.docking_positions, site_id))
-                    } else {
-                        None
-                    }
+                    plot.airship_dock_info()
+                        .map(|info| (info.center, info.docking_positions, site_id))
                 })
             })
             .map(|(center, docking_positions, site_id)| {

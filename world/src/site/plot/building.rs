@@ -86,7 +86,7 @@ impl Building {
             });
         }
 
-        fn generate_wing(parent: &mut Wing, limits: Aabr<i32>, rng: &mut impl Rng) {
+        fn generate_wing(parent: &mut Wing, _limits: Aabr<i32>, rng: &mut impl Rng) {
             if rng.random_bool(0.5) && parent.dim.y >= 3 {
                 let w = rng.random_range(1..=parent.dim.y);
                 let is_left = rng.random_bool(0.5);
@@ -112,7 +112,7 @@ impl Building {
                     dim: Vec2::new(w, parent.dim.x + rng.random_range(1..2)),
                     children: Vec::new(),
                 };
-                generate_wing(&mut wing, limits, rng);
+                generate_wing(&mut wing, _limits, rng);
                 parent.children.push(wing);
             }
         }
@@ -145,7 +145,7 @@ impl Building {
         wing: &Wing,
         site: &Site,
         painter: &Painter,
-        interior: &mut PrimitiveRef,
+        _interior: &mut PrimitiveRef,
         body: &mut PrimitiveRef,
         roof: &mut PrimitiveRef,
         depth: i32,
@@ -169,7 +169,7 @@ impl Building {
             ),
         );
         for child in &wing.children {
-            self.walk_wing(child, site, painter, interior, body, roof, depth + 1);
+            self.walk_wing(child, site, painter, _interior, body, roof, depth + 1);
         }
     }
 }
