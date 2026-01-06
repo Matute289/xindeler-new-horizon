@@ -150,7 +150,7 @@ impl FarmField {
 
         // Stepped terrain, but only on slopes
         let center_grad = land.get_gradient_approx(bounds.center());
-        let step_size = if center_grad > 0.075 {
+        let step_size = if center_grad > 0.25 {
             Some((center_grad * 8.0).clamped(3.0, 12.0))
         } else {
             None
