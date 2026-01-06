@@ -5,7 +5,6 @@ use crate::{
 };
 use common::terrain::{Block, BlockKind};
 use enumset::EnumSet;
-use rand::prelude::*;
 use strum::IntoEnumIterator;
 use util::sprites::PainterSpriteExt;
 use vek::*;
@@ -90,7 +89,7 @@ impl Structure for Road {
 
     fn render_ordering(&self) -> u32 { 2 }
 
-    fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
+    fn render_inner(&self, site: &Site, _land: &Land, painter: &Painter) {
         let field = RandomField::new(76237);
 
         for p in self.path.iter() {

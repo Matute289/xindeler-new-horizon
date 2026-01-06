@@ -27,7 +27,6 @@ use common::{
     generation::{EntityInfo, EntitySpawn},
     lottery::Lottery,
     map::MarkerKind,
-    match_some,
     spiral::Spiral2d,
     store::{Id, Store},
     terrain::{
@@ -480,9 +479,8 @@ impl Site {
         let dir = Vec2::<f32>::zero()
             .map(|_| rng.random_range(-1.0..1.0))
             .normalized();
-        let search_pos = if rng.random()
-            && let plot = self.plot(*self.plazas.choose(rng)?)
-        {
+        let search_pos = if rng.random() {
+            let plot = self.plot(*self.plazas.choose(rng)?);
             let sz = plot.find_bounds().size();
             plot.root_tile + dir.map(|e: f32| e.round() as i32) * (sz + 1)
         } else if let PlotKind::Road(plot::Road { path, .. }) =
@@ -1323,7 +1321,7 @@ impl Site {
                             Extent2::broadcast(size),
                         )
                     }) {
-                        let house = plot::Building::generate(
+                        let house = plot::House::generate(
                             land,
                             &mut reseed(&mut rng),
                             &site,
@@ -1335,7 +1333,7 @@ impl Site {
                         );
                         let house_alt = house.alt;
                         let plot = site.create_plot(Plot {
-                            kind: PlotKind::Building(house),
+                            kind: PlotKind::House(house),
                             root_tile: aabr.center(),
                             tiles: aabr_tiles(aabr).collect(),
                         });

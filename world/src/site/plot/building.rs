@@ -1,16 +1,10 @@
 use super::*;
-use crate::{
-    Land,
-    all::ForestKind,
-    site::util::sprites::PainterSpriteExt,
-    util::{DIRS, RandomField, Sampler},
-};
+use crate::Land;
 use common::{
-    calendar::{Calendar, CalendarEvent},
-    terrain::{Block, BlockKind, SpriteKind},
+    calendar::Calendar,
+    terrain::{Block, BlockKind},
 };
-use rand::{prelude::*, seq::IndexedRandom};
-use strum::IntoEnumIterator;
+use rand::prelude::*;
 use vek::*;
 
 /// Wings represent the external structure of a building.
@@ -46,6 +40,7 @@ impl Wing {
 }
 
 struct Room {
+    #[allow(dead_code)]
     aabb: Aabb<i32>,
 }
 
@@ -56,9 +51,11 @@ pub struct Building {
     /// Axis aligned bounding region of tiles
     tile_aabr: Aabr<i32>,
     /// Axis aligned bounding region for the house
+    #[allow(dead_code)]
     bounds: Aabr<i32>,
     /// Approximate altitude of the door tile
     pub(crate) alt: i32,
+    #[allow(dead_code)]
     rooms: Vec<Room>,
     base: Wing,
 }
@@ -71,12 +68,12 @@ impl Building {
         door_tile: Vec2<i32>,
         door_dir: Vec2<i32>,
         tile_aabr: Aabr<i32>,
-        calendar: Option<&Calendar>,
+        _calendar: Option<&Calendar>,
         alt: Option<i32>,
     ) -> Self {
         let mut rooms = Vec::new();
 
-        for _ in (0..rng.random_range(2..5)) {
+        for _ in 0..rng.random_range(2..5) {
             let min = tile_aabr
                 .min
                 .map2(tile_aabr.max, |min, max| rng.random_range(min..max));
@@ -211,49 +208,60 @@ impl Structure for Building {
             0,
         );
 
-        /*
         for room in &self.rooms {
-            let min = site.tile_wpos(room.aabb.min.xy()).with_z(self.alt + room.aabb.min.z * ROOM_HEIGHT);
-            let max = site.tile_wpos(room.aabb.max.xy()).with_z(self.alt + room.aabb.max.z * ROOM_HEIGHT) + 1;
+            let min = site
+                .tile_wpos(room.aabb.min.xy())
+                .with_z(self.alt + room.aabb.min.z * ROOM_HEIGHT);
+            let max = site
+                .tile_wpos(room.aabb.max.xy())
+                .with_z(self.alt + room.aabb.max.z * ROOM_HEIGHT)
+                + 1;
 
             const EAVES: i32 = 1;
 
             // Interior
-            interior = interior.union(painter.aabb(Aabb { min: min + 1, max: max - 1 }));
+            interior = interior.union(painter.aabb(Aabb {
+                min: min + 1,
+                max: max - 1,
+            }));
 
             // Body
             body = body.union(painter.aabb(Aabb { min, max }));
 
             // Roof
-            roof = roof.union(painter.pyramid(Aabb {
-                min: (min.xy() - EAVES).with_z(max.z),
-                max: (max.xy() + EAVES).with_z(max.z + (max.xy() - min.xy()).reduce_min() + EAVES * 2),
-            }));
+            roof = roof.union(
+                painter.pyramid(Aabb {
+                    min: (min.xy() - EAVES).with_z(max.z),
+                    max: (max.xy() + EAVES)
+                        .with_z(max.z + (max.xy() - min.xy()).reduce_min() + EAVES * 2),
+                }),
+            );
 
             // Frame
             for tile in util::aabb_iter(room.aabb) {
-                let min = site.tile_wpos(tile.xy()).with_z(self.alt + tile.z * ROOM_HEIGHT);
+                let min = site
+                    .tile_wpos(tile.xy())
+                    .with_z(self.alt + tile.z * ROOM_HEIGHT);
                 let max = min + Vec2::broadcast(TILE_SIZE as i32).with_z(ROOM_HEIGHT) + 1;
-                frame = frame.union(painter
-                    .aabb(Aabb {
-                        min,
-                        max,
-                    })
-                    .without(painter.aabb(Aabb {
-                        min: min + 1 - Vec3::unit_x(),
-                        max: max - 1 + Vec3::unit_x(),
-                    }))
-                    .without(painter.aabb(Aabb {
-                        min: min + 1 - Vec3::unit_y(),
-                        max: max - 1 + Vec3::unit_y(),
-                    }))
-                    .without(painter.aabb(Aabb {
-                        min: min + 1 - Vec3::unit_z(),
-                        max: max - 1 + Vec3::unit_z(),
-                    })));
+                frame = frame.union(
+                    painter
+                        .aabb(Aabb { min, max })
+                        .without(painter.aabb(Aabb {
+                            min: min + 1 - Vec3::unit_x(),
+                            max: max - 1 + Vec3::unit_x(),
+                        }))
+                        .without(painter.aabb(Aabb {
+                            min: min + 1 - Vec3::unit_y(),
+                            max: max - 1 + Vec3::unit_y(),
+                        }))
+                        .without(painter.aabb(Aabb {
+                            min: min + 1 - Vec3::unit_z(),
+                            max: max - 1 + Vec3::unit_z(),
+                        })),
+                );
             }
         }
-        */
+
         // Base
         painter
             .aabb(Aabb {

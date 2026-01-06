@@ -468,40 +468,6 @@ impl Civs {
         // Tick
         //=== old economy is gone
 
-        // Flatten ground around sites
-        prof_span!(guard, "Flatten ground around sites");
-        for site in this.sites.values() {
-            let wpos = site.center * TerrainChunkSize::RECT_SIZE.map(|e: u32| e as i32);
-
-            let (radius, flatten_radius) = match &site.kind {
-                SiteKind::Refactor => (32i32, 10.0),
-                SiteKind::CliffTown => (2i32, 1.0),
-                SiteKind::SavannahTown => (48i32, 25.0),
-                SiteKind::CoastalTown => (64i32, 35.0),
-                SiteKind::JungleRuin => (8i32, 3.0),
-                SiteKind::DesertCity => (64i32, 25.0),
-                SiteKind::ChapelSite => (36i32, 10.0),
-                SiteKind::Terracotta => (64i32, 35.0),
-                SiteKind::GiantTree => (12i32, 8.0),
-                SiteKind::Gnarling => (16i32, 10.0),
-                SiteKind::Citadel => (16i32, 0.0),
-                SiteKind::Bridge(_, _) => (0, 0.0),
-                SiteKind::Adlet => (16i32, 0.0),
-                SiteKind::Haniwa => (32i32, 16.0),
-                SiteKind::PirateHideout => (8i32, 3.0),
-                SiteKind::RockCircle => (8i32, 3.0),
-                SiteKind::TrollCave => (4i32, 1.5),
-                SiteKind::Camp => (4i32, 1.5),
-                SiteKind::DwarvenMine => (8i32, 3.0),
-                SiteKind::Cultist => (24i32, 10.0),
-                SiteKind::Sahagin => (8i32, 3.0),
-                SiteKind::VampireCastle => (10i32, 16.0),
-                SiteKind::GliderCourse => (0, 0.0),
-                SiteKind::Myrmidon => (64i32, 35.0),
-            };
-        }
-        drop(guard);
-
         // Place sites in world
         prof_span!(guard, "Place sites in world");
         let mut cnt = 0;
