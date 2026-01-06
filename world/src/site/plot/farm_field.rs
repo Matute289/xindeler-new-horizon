@@ -285,7 +285,7 @@ impl Structure for FarmField {
         } else if is_bank {
             // Don't grow anything on banks
             None
-        } else if z_off == 0 {
+        } else if matches!(old.kind(), BlockKind::Grass | BlockKind::Sand) {
             // soil
             Some(Block::new(
                 if self.is_desert {
