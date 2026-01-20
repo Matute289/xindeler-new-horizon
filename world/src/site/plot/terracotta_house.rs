@@ -57,7 +57,7 @@ impl Structure for TerracottaHouse {
         spawn_rules: &mut SpawnRules,
         _land: &Land,
         wpos: Vec2<i32>,
-        _weight: f32,
+        weight: f32,
     ) {
         spawn_rules.trees &= !within_distance(wpos, self.bounds.center(), 85);
         spawn_rules.waypoints = false;
