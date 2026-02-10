@@ -3,7 +3,7 @@ ChargedRanged(
     energy_drain: 0,
     idle_drain: 0,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 1,
             buff: Some((
@@ -12,6 +12,7 @@ ChargedRanged(
                 strength: DamageFraction(0.2),
                 chance: 0.25,
             )),
+            damage_kind: Piercing,
         )),
         scaled: Some((
             damage: 12.0,

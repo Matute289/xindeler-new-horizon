@@ -3,16 +3,17 @@ BasicRanged(
     buildup_duration: 0.3,
     recover_duration: 0.5,
     projectile: (
-        kind: ExplosiveHazard(
+        kind: Explosive(
             radius: 5,
             min_falloff: 0.75,
             reagent: Some(Yellow),
-            is_sticky: false,
-            duration: 10,
         ),
         attack: Some((
             damage: 25,
+            damage_kind: Energy,
         )),
+        lifetime_override: Some(10.0),
+        is_sticky: false,
     ),
     projectile_body: Object(IronPikeBomb),
     projectile_light: None,

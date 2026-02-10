@@ -3,13 +3,13 @@ BasicRanged(
     buildup_duration: 0.75,
     recover_duration: 0.75,
     projectile: (
-        kind: Hazard(
-            is_sticky: true,
-            duration: 20,
-        ),
+        kind: Simple,
         attack: Some((
             damage: 15,
+            damage_kind: Piercing,
         )),
+        lifetime_override: Some(20.0),
+        hazard_marker: true,
     ),
     projectile_body: Object(AdletTrap),
     projectile_light: None,

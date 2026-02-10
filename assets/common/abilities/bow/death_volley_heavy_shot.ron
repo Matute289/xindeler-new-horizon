@@ -3,7 +3,7 @@ BasicRanged(
     buildup_duration: 0.6,
     recover_duration: 1.0,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 9.0,
             buff: Some((
@@ -13,6 +13,7 @@ BasicRanged(
                 chance: 0.5,
             )),
             without_combo: true,
+            damage_kind: Piercing,
         )),
         split: Some((
             split_on_terrain: false,

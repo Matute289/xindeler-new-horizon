@@ -936,7 +936,6 @@ image_ids! {
         buff_tenacity: "voxygen.element.de_buffs.buff_tenacity",
         buff_resilience: "voxygen.element.de_buffs.buff_resilience",
         buff_owltalon: "voxygen.element.de_buffs.buff_owltalon",
-        buff_heavynock: "voxygen.element.de_buffs.buff_heavynock",
         buff_heartseeker: "voxygen.element.de_buffs.buff_heartseeker",
         buff_eagleeye: "voxygen.element.de_buffs.buff_eagleeye",
         buff_ardenthunter: "voxygen.element.de_buffs.buff_ardenthunter",

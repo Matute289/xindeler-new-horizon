@@ -3690,9 +3690,7 @@ impl Stance {
             Stance::Bow(BowStance::DrenchArrow) => "common.abilities.bow.drench_arrow",
             Stance::Bow(BowStance::FreezeArrow) => "common.abilities.bow.freeze_arrow",
             Stance::Bow(BowStance::JoltArrow) => "common.abilities.bow.jolt_arrow",
-            Stance::Bow(BowStance::PiercingGale) => "common.abilities.bow.piercing_gale",
             Stance::Bow(BowStance::Hawkstrike) => "common.abilities.bow.hawkstrike",
-            Stance::Bow(BowStance::Fusillade) => "common.abilities.bow.fusillade",
             Stance::Bow(BowStance::DeathVolley) => "common.abilities.bow.death_volley",
             Stance::None => "veloren.core.pseudo_abilities.no_stance",
         }
@@ -3716,9 +3714,7 @@ pub enum BowStance {
     DrenchArrow,
     FreezeArrow,
     JoltArrow,
-    PiercingGale,
     Hawkstrike,
-    Fusillade,
     DeathVolley,
 }
 

@@ -3,13 +3,13 @@ BasicRanged(
     buildup_duration: 0.75,
     recover_duration: 1.6,
     projectile: (
-        kind: Hazard(
-            is_sticky: true,
-            duration: 3,
-        ),
+        kind: Simple,
         attack: Some((
             damage: 20,
+            damage_kind: Piercing,
         )),
+        lifetime_override: Some(3.0),
+        hazard_marker: true,
     ),
     projectile_body: Object(StrigoiHead),
     projectile_light: None,

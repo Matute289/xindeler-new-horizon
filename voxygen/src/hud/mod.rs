@@ -5603,7 +5603,6 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::ScornfulTaunt => imgs.buff_scornfultaunt,
         BuffKind::Tenacity => imgs.buff_tenacity,
         BuffKind::OwlTalon => imgs.buff_owltalon,
-        BuffKind::HeavyNock => imgs.buff_heavynock,
         BuffKind::Heartseeker => imgs.buff_heartseeker,
         BuffKind::EagleEye => imgs.buff_eagleeye,
         BuffKind::ArdentHunter => imgs.buff_ardenthunter,

@@ -4,7 +4,7 @@ BasicRanged(
     recover_duration: 1.4,
     projectile_spread: Some(Increasing(0.05)),
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 12,
             knockback: Some(5),
@@ -20,6 +20,7 @@ BasicRanged(
                 strength: Value(0.3),
                 chance: 1.0,
             ))),
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(Arrow),

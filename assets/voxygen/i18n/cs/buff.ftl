@@ -178,8 +178,6 @@ buff-combo_generation = Tvorba komba
         }
 buff-owltalon = Soví Spár
     .desc = Díky tomu, že tvůj cíl vůbec neví o tvé přítomnosti, bude tvůj útok přesnější a silnější.
-buff-heavynock = Těžký Šíp
-    .desc = Nasaď si do luku těžší šíp, čímž budeš schopný následující střelou ochromit cíl. Těžší šíp bude mít ale menší průbojnost na dlouhé vzdálenosti.
 buff-eagleeye = Oko Dravce
     .desc = Přesně vidíš zranitelná místa nepřátel a máš dost obratnosti k vedení každého šípu do těchto míst.
 buff-chilled = Vymrzlý

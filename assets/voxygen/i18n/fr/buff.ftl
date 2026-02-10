@@ -235,8 +235,6 @@ buff-combo_generation = Génération de combo
         }
 buff-owltalon = Serres de chouette
     .desc = Prenant avantage de l'ignorance de votre cible quand à votre présence, votre prochaine attaque sera plus précise et infligera davantage de dommages.
-buff-heavynock = Encoche lourde
-    .desc = Encochez une flèche plus lourde, permettant à votre prochain tir d'étourdir sa cible. Cette flèche plus lourde aura cependant moins d'inertie à de longues distances.
 buff-heartseeker = Cherchecœur
     .desc = Votre prochaine flèche frappera votre ennemi de manière similaire à une blessure au cœur, causant une blessure plus sévère et vous donnant de l'endurance.
 buff-eagleeye = Œil d'aigle

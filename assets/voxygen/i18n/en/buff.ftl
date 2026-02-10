@@ -182,9 +182,6 @@ buff-resilience = Resilience
 ## Owl Talon
 buff-owltalon = Owl Talon
     .desc = Taking advantage of your target not knowing of your presence, your next attack will be more precise and deal more damage.
-## Heavy Nock
-buff-heavynock = Heavy Nock
-    .desc = Nock a heavier arrow to your bow, allowing your next shot to stagger the target. The heavier arrow will have less momentum at longer ranges though.
 ## Heartseeker
 buff-heartseeker = Heartseeker
     .desc = Your next arrow will strike your enemy as if it'd dealt a heartwound, causing a more serious wound and giving you energy.

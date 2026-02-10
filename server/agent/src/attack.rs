@@ -2535,11 +2535,7 @@ impl AgentData<'_> {
             let prefer_m2 = matches!(
                 self.stance,
                 Some(Stance::Bow(
-                    BowStance::Barrage
-                        | BowStance::PiercingGale
-                        | BowStance::Hawkstrike
-                        | BowStance::Fusillade
-                        | BowStance::DeathVolley
+                    BowStance::Barrage | BowStance::Hawkstrike | BowStance::DeathVolley
                 ))
             );
             let current_input = self.char_state.ability_info().map(|ai| ai.input);

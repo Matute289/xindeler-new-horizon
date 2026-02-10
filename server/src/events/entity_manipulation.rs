@@ -36,7 +36,7 @@ use common::{
         inventory::item::{AbilityMap, MaterialStatManifest},
         item::flatten_counted_items,
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_SLOW},
-        projectile::{ProjectileAttack, ProjectileConstructorKind},
+        projectile::{ProjectileAttack, ProjectileConstructorKind, ProjectileExplosionTarget},
     },
     consts::TELEPORTER_RADIUS,
     event::{
@@ -2338,6 +2338,7 @@ impl ServerEvent for BonkEvent {
                                             min_falloff: 0.75,
                                             reagent: None,
                                             terrain: Some((4.0, ColorPreset::Black)),
+                                            target: ProjectileExplosionTarget::Both,
                                         },
                                         attack: Some(ProjectileAttack {
                                             damage: 40.0,
@@ -2350,6 +2351,7 @@ impl ServerEvent for BonkEvent {
                                             attack_effect: None,
                                             damage_effect: None,
                                             without_combo: false,
+                                            damage_kind: DamageKind::Energy,
                                         }),
                                         scaled: None,
                                         homing_rate: None,
@@ -2357,6 +2359,10 @@ impl ServerEvent for BonkEvent {
                                         lifetime_override: None,
                                         limit_per_ability: false,
                                         override_collider: None,
+                                        pierce_entities: false,
+                                        is_point: true,
+                                        is_sticky: true,
+                                        hazard_marker: false,
                                     }
                                     .create_projectile(None, 1.0, None),
                                     speed: vel.0.magnitude(),

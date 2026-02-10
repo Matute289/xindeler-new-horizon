@@ -3,10 +3,7 @@ BasicRanged(
     buildup_duration: 0.75,
     recover_duration: 0.75,
     projectile: (
-        kind: Hazard(
-            is_sticky: true,
-            duration: 80,
-        ),
+        kind: Simple
         attack: Some((
             damage: 32,
             buff: Some((
@@ -15,7 +12,10 @@ BasicRanged(
                 strength: Value(0.3),
                 chance: 1.0,
             )),
+            damage_kind: Piercing,
         )),
+        lifetime_override: Some(80.0),
+        hazard_marker: true,
     ),
     projectile_body: Object(BorealTrap),
     projectile_light: None,

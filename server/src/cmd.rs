@@ -5986,7 +5986,6 @@ fn build_buff(
             | BuffKind::Tenacity
             | BuffKind::Resilience
             | BuffKind::OwlTalon
-            | BuffKind::HeavyNock
             | BuffKind::Heartseeker
             | BuffKind::EagleEye
             | BuffKind::Chilled

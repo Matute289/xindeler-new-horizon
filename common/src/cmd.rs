@@ -179,7 +179,6 @@ lazy_static! {
             BuffKind::Tenacity => "tenacity",
             BuffKind::Resilience => "resilience",
             BuffKind::OwlTalon => "owl_talon",
-            BuffKind::HeavyNock => "heavy_nock",
             BuffKind::Heartseeker => "heartseeker",
             BuffKind::EagleEye => "eagle_eye",
             BuffKind::Chilled => "chilled",

@@ -24,7 +24,7 @@ use common::{
             ConsumableKind, Effects, Item, ItemDesc, ItemKind,
             tool::{AbilitySpec, ToolKind},
         },
-        projectile::{ProjectileConstructorKind, aim_projectile},
+        projectile::aim_projectile,
     },
     consts::MAX_MOUNT_RANGE,
     effect::{BuffEffect, Effect},
@@ -34,7 +34,7 @@ use common::{
     mounting::VolumePos,
     path::TraversalConfig,
     rtsim::NpcActivity,
-    states::basic_beam,
+    states::{basic_beam, utils::StageSection},
     terrain::Block,
     time::DayPeriod,
     util::Dir,
@@ -1458,6 +1458,7 @@ impl AgentData<'_> {
         // attack handler.
         if let Some(dir) = match self.char_state {
             CharacterState::ChargedRanged(c) if dist_sqrd > 0.0 => {
+                let offset_z = c.static_data.projectile.agent_aim_z_offset(tgt_eye_offset);
                 let charge_factor =
                     c.timer.as_secs_f32() / c.static_data.charge_duration.as_secs_f32();
                 let projectile_speed = c.static_data.initial_projectile_speed
@@ -1471,19 +1472,13 @@ impl AgentData<'_> {
                     Vec3::new(
                         tgt_data.pos.0.x,
                         tgt_data.pos.0.y,
-                        tgt_data.pos.0.z + tgt_eye_offset,
+                        tgt_data.pos.0.z + offset_z,
                     ),
                     false,
                 )
             },
             CharacterState::BasicRanged(c) => {
-                let offset_z = match c.static_data.projectile.kind {
-                    // Aim explosives and hazards at feet instead of eyes for splash damage
-                    ProjectileConstructorKind::Explosive { .. }
-                    | ProjectileConstructorKind::ExplosiveHazard { .. }
-                    | ProjectileConstructorKind::Hazard { .. } => 0.0,
-                    _ => tgt_eye_offset,
-                };
+                let offset_z = c.static_data.projectile.agent_aim_z_offset(tgt_eye_offset);
                 let projectile_speed = c.static_data.projectile_speed;
                 aim_projectile(
                     projectile_speed,
@@ -1515,13 +1510,24 @@ impl AgentData<'_> {
                 })
             },
             CharacterState::RapidRanged(c) => {
-                let offset_z = match c.static_data.projectile.kind {
-                    // Aim explosives and hazards at feet instead of eyes for splash damage
-                    ProjectileConstructorKind::Explosive { .. }
-                    | ProjectileConstructorKind::ExplosiveHazard { .. }
-                    | ProjectileConstructorKind::Hazard { .. } => 0.0,
-                    _ => tgt_eye_offset,
-                };
+                let offset_z = c.static_data.projectile.agent_aim_z_offset(tgt_eye_offset);
+                let projectile_speed = c.static_data.projectile_speed;
+                aim_projectile(
+                    projectile_speed,
+                    self.pos.0
+                        + self.body.map_or(Vec3::zero(), |body| {
+                            body.projectile_offsets(self.ori.look_vec(), self.scale)
+                        }),
+                    Vec3::new(
+                        tgt_data.pos.0.x,
+                        tgt_data.pos.0.y,
+                        tgt_data.pos.0.z + offset_z,
+                    ),
+                    false,
+                )
+            },
+            CharacterState::LeapRanged(c) if matches!(c.stage_section, StageSection::Movement) => {
+                let offset_z = c.static_data.projectile.agent_aim_z_offset(tgt_eye_offset);
                 let projectile_speed = c.static_data.projectile_speed;
                 aim_projectile(
                     projectile_speed,

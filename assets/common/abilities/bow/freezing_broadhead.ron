@@ -16,6 +16,7 @@ ChargedRanged(
                 strength: Value(0.25),
                 chance: 1.0,
             )),
+            damage_kind: Energy,
         )),
         scaled: Some((
             damage: 16,

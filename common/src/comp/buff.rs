@@ -1,8 +1,8 @@
 use crate::{
     combat::{
         AttackEffect, AttackSource, AttackedModification, AttackedModifier, CombatBuff,
-        CombatBuffStrength, CombatEffect, CombatModification, CombatRequirement, ScalingKind,
-        StatEffect, StatEffectTarget,
+        CombatBuffStrength, CombatEffect, CombatRequirement, ScalingKind, StatEffect,
+        StatEffectTarget,
     },
     comp::{Mass, Stats, aura::AuraKey, tool::ToolKind},
     link::DynWeakLinkHandle,
@@ -151,11 +151,6 @@ pub enum BuffKind {
     /// wielding their weapon, and also generally increases damage.
     /// Strength linearly increases the damage increase.
     OwlTalon,
-    /// Causes the next projectile fired to have more knockback and poise
-    /// damage.
-    /// Strength linearly increases the knockback and poise damage applied to
-    /// the next projectile.
-    HeavyNock,
     /// Causes the next projectile to both gain precision and restore more
     /// energy.
     /// Strength linearly increases the precision override and energy restored.
@@ -316,7 +311,6 @@ impl BuffKind {
             | BuffKind::Tenacity
             | BuffKind::Resilience
             | BuffKind::OwlTalon
-            | BuffKind::HeavyNock
             | BuffKind::Heartseeker
             | BuffKind::EagleEye
             | BuffKind::ArdentHunter
@@ -620,22 +614,6 @@ impl BuffKind {
                 BuffEffect::PrecisionModifier(Some(CombatRequirement::TargetUnwielded), 0.8, false),
                 BuffEffect::AttackDamage(1.0 + data.strength),
             ],
-            BuffKind::HeavyNock => {
-                let range_mod = CombatModification::RangeWeakening {
-                    start_dist: 5.0,
-                    end_dist: 50.0,
-                    min_str: 0.3,
-                };
-                let poise = AttackEffect::new(None, CombatEffect::Poise(35.0 * data.strength))
-                    .with_requirement(CombatRequirement::AnyDamage)
-                    .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile))
-                    .with_modification(range_mod);
-                vec![
-                    BuffEffect::KnockbackMult(data.strength * 5.0),
-                    BuffEffect::AttackEffect(poise),
-                    BuffEffect::AttackDamage(0.75), // TODO: has no effect on damage?
-                ]
-            },
             BuffKind::Heartseeker => {
                 let energy =
                     AttackEffect::new(None, CombatEffect::EnergyReward(14.0 * data.strength))

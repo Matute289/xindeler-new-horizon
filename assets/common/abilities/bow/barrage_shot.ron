@@ -7,7 +7,7 @@ RapidRanged(
         max_projectiles: Some(20),
     ),
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 8,
             buff: Some((
@@ -17,6 +17,7 @@ RapidRanged(
                 chance: 0.025,
             )),
             without_combo: true,
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(Arrow),
