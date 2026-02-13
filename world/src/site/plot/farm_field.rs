@@ -172,7 +172,7 @@ impl FarmField {
         }
     }
 
-    // Returns the properties of banked steps for this field (fract, alt)
+    /// Returns the properties of banked steps for this field (fract, alt)
     fn step(&self, alt: f32) -> Option<(f32, f32)> {
         const STEP_POW: i32 = 8;
 

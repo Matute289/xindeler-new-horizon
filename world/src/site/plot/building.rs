@@ -109,7 +109,7 @@ impl Building {
                             } else {
                                 parent.dim.y - 1 - offset
                             },
-                    dim: Vec2::new(w, parent.dim.x + rng.random_range(1..2)),
+                    dim: Vec2::new(w, parent.dim.x + rng.random_range(1..3)),
                     children: Vec::new(),
                 };
                 generate_wing(&mut wing, _limits, rng);
