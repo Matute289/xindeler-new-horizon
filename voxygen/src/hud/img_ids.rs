@@ -938,7 +938,7 @@ image_ids! {
         buff_owltalon: "voxygen.element.de_buffs.buff_owltalon",
         buff_heartseeker: "voxygen.element.de_buffs.buff_heartseeker",
         buff_eagleeye: "voxygen.element.de_buffs.buff_eagleeye",
-        buff_ardenthunter: "voxygen.element.de_buffs.buff_ardenthunter",
+        buff_ardenthunt: "voxygen.element.de_buffs.buff_ardenthunt",
         buff_septicshot: "voxygen.element.de_buffs.buff_septicshot",
 
         // Debuffs
@@ -959,7 +959,6 @@ image_ids! {
         debuff_amnesia_0: "voxygen.element.de_buffs.debuff_amnesia_0",
         debuff_offbalance_0: "voxygen.element.de_buffs.debuff_offbalance_0",
         debuff_chilled: "voxygen.element.de_buffs.debuff_chilled",
-        debuff_ardenthunted: "voxygen.element.de_buffs.debuff_ardenthunted",
 
         // Animation Frames
         // Buff Frame

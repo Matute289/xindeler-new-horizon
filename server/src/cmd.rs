@@ -35,8 +35,8 @@ use common::{
     },
     combat,
     comp::{
-        self, AdminRole, Aura, AuraKind, BuffCategory, ChatType, Content, GizmoSubscriber,
-        Inventory, Item, LightEmitter, LocalizationArg, WaypointArea,
+        self, AdminRole, Aura, AuraKind, ChatType, Content, GizmoSubscriber, Inventory, Item,
+        LightEmitter, LocalizationArg, WaypointArea,
         agent::{FlightMode, PidControllers},
         aura::{AuraKindVariant, AuraTarget},
         buff::{Buff, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData},
@@ -5293,7 +5293,7 @@ fn handle_aura(
             AuraKind::Buff {
                 kind: buffkind,
                 data: buffdata,
-                category: BuffCategory::Natural,
+                category: None,
                 source: if new_entity {
                     BuffSource::World
                 } else {
@@ -5989,8 +5989,7 @@ fn build_buff(
             | BuffKind::Heartseeker
             | BuffKind::EagleEye
             | BuffKind::Chilled
-            | BuffKind::ArdentHunter
-            | BuffKind::ArdentHunted
+            | BuffKind::ArdentHunt
             | BuffKind::SepticShot => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
@@ -6023,6 +6022,7 @@ fn cast_buff(buffkind: BuffKind, data: BuffData, server: &mut Server, target: Ec
                 BuffSource::Command,
                 *time,
                 dest_info,
+                None,
                 None,
             ),
             *time,

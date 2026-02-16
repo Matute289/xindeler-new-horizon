@@ -15,7 +15,10 @@ ChargedMelee(
                 knockback: 0,
                 energy_regen: 15,
             ))),
-        damage_effect: Some(BuffsVulnerable(0.5, Bleeding)),
+        attack_effect: Some((
+            AdditionalDamage(0.5),
+            TargetHasBuff(Bleeding),
+        )),
         range: 4.5,
         angle: 10.0,
     ),

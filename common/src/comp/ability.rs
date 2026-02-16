@@ -1,15 +1,14 @@
 use crate::{
     combat::{self, CombatEffect, DamageKind, Knockback, ScalingKind},
     comp::{
-        self, Body, CharacterState, LightEmitter, StateUpdate, aura, beam, buff,
+        self, Body, CharacterState, Combo, LightEmitter, StateUpdate, aura, beam,
+        buff::{self, BuffKind, Buffs},
         character_state::AttackFilters,
         inventory::{
             Inventory,
             item::{
                 ItemDefinitionIdOwned, ItemKind, Tool,
-                tool::{
-                    AbilityContext, AbilityItem, AbilityKind, ContextualIndex, Stats, ToolKind,
-                },
+                tool::{AbilityItem, AbilityKind, ContextualIndex, Stats, ToolKind},
             },
             slot::EquipSlot,
         },
@@ -196,8 +195,10 @@ impl ActiveAbilities {
         skill_set: &SkillSet,
         body: Option<&Body>,
         char_state: Option<&CharacterState>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        combo: Option<&Combo>,
         stats: Option<&comp::Stats>,
+        buffs: Option<&Buffs>,
         // bool is from_offhand
     ) -> Option<(CharacterAbility, bool, SpecifiedAbility)> {
         let ability = self.get_ability(input, inv, Some(skill_set), stats);
@@ -239,10 +240,12 @@ impl ActiveAbilities {
                 //
                 // We could alternatively just take `ability`, but it works too.
                 let dispatched = match ability.try_ability_set_key()? {
-                    I::Guard => abilities.guard(Some(skill_set), context),
-                    I::Primary => abilities.primary(Some(skill_set), context),
-                    I::Secondary => abilities.secondary(Some(skill_set), context),
-                    I::Auxiliary(index) => abilities.auxiliary(index, Some(skill_set), context),
+                    I::Guard => abilities.guard(Some(skill_set), stance, inv, combo, buffs),
+                    I::Primary => abilities.primary(Some(skill_set), stance, inv, combo, buffs),
+                    I::Secondary => abilities.secondary(Some(skill_set), stance, inv, combo, buffs),
+                    I::Auxiliary(index) => {
+                        abilities.auxiliary(index, Some(skill_set), stance, inv, combo, buffs)
+                    },
                     I::Movement => return None,
                 };
 
@@ -421,7 +424,9 @@ impl Ability {
         char_state: Option<&CharacterState>,
         inv: Option<&'a Inventory>,
         skill_set: Option<&'a SkillSet>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<&'a str> {
         let ability_set = |equip_slot| {
             inv.and_then(|inv| inv.equipped(equip_slot))
@@ -445,10 +450,12 @@ impl Ability {
                 use AbilityInput as I;
 
                 let dispatched = match self.try_ability_set_key()? {
-                    I::Guard => abilities.guard(skill_set, context),
-                    I::Primary => abilities.primary(skill_set, context),
-                    I::Secondary => abilities.secondary(skill_set, context),
-                    I::Auxiliary(index) => abilities.auxiliary(index, skill_set, context),
+                    I::Guard => abilities.guard(skill_set, stance, inv, combo, buffs),
+                    I::Primary => abilities.primary(skill_set, stance, inv, combo, buffs),
+                    I::Secondary => abilities.secondary(skill_set, stance, inv, combo, buffs),
+                    I::Auxiliary(index) => {
+                        abilities.auxiliary(index, skill_set, stance, inv, combo, buffs)
+                    },
                     I::Movement => return None,
                 };
 
@@ -3726,6 +3733,7 @@ pub enum AbilityInitEvent {
         strength: f32,
         duration: Option<Secs>,
     },
+    RemoveBuff(BuffKind),
 }
 
 impl Component for Stance {

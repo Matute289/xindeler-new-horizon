@@ -146,6 +146,10 @@ impl CharacterBehavior for Data {
                             *data.time,
                             dest_info,
                             Some(data.mass),
+                            self.static_data
+                                .ability_info
+                                .input_attr
+                                .and_then(|ia| ia.target_entity),
                         );
                         output_events.emit_server(BuffEvent {
                             entity: data.entity,

@@ -271,7 +271,13 @@
         abilities: [
             Simple(Bow(Foothold), "common.abilities.bow.foothold"),
             Simple(Bow(HeavyNock), "common.abilities.bow.heavy_nock"),
-            Simple(Bow(ArdentHunt), "common.abilities.bow.ardent_hunt"),
+            Contextualized(
+                pseudo_id: "common.abilities.bow.ardent_hunt",
+                abilities: [
+                    ((buff: ArdentHunt), (Bow(ArdentHunt), "common.abilities.bow.ardent_hunt_clear")),
+                    ((), (Bow(ArdentHunt), "common.abilities.bow.ardent_hunt")),
+                ],
+            ),
             Simple(Bow(OwlTalon), "common.abilities.bow.owl_talon"),
             Simple(Bow(EagleEye), "common.abilities.bow.eagle_eye"),
             Simple(Bow(Heartseeker), "common.abilities.bow.heartseeker"),

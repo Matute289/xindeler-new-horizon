@@ -207,7 +207,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::OwlTalon => "buff-owltalon",
         BuffKind::Heartseeker => "buff-heartseeker",
         BuffKind::EagleEye => "buff-eagleeye",
-        BuffKind::ArdentHunter => "buff-ardenthunter",
+        BuffKind::ArdentHunt => "buff-ardenthunt",
         BuffKind::SepticShot => "buff-septicshot",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
@@ -226,7 +226,6 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Amnesia => "buff-amnesia",
         BuffKind::OffBalance => "buff-offbalance",
         BuffKind::Chilled => "buff-chilled",
-        BuffKind::ArdentHunted => "buff-ardenthunted",
         // Neutral
         BuffKind::Polymorphed => "buff-polymorphed",
     }
@@ -371,8 +370,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Heartseeker
                         | BuffKind::EagleEye
                         | BuffKind::Chilled
-                        | BuffKind::ArdentHunter
-                        | BuffKind::ArdentHunted
+                        | BuffKind::ArdentHunt
                         | BuffKind::SepticShot => Cow::Borrowed(""),
                     };
 
@@ -645,6 +643,7 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         "common.abilities.bow.foothold" => imgs.bow_foothold,
         "common.abilities.bow.heavy_nock" => imgs.bow_heavy_nock,
         "common.abilities.bow.ardent_hunt" => imgs.bow_ardent_hunt,
+        "common.abilities.bow.ardent_hunt_clear" => imgs.bow_ardent_hunt,
         "common.abilities.bow.owl_talon" => imgs.bow_owl_talon,
         "common.abilities.bow.eagle_eye" => imgs.bow_eagle_eye,
         "common.abilities.bow.heartseeker" => imgs.bow_heartseeker,

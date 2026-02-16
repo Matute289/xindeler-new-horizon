@@ -782,10 +782,8 @@ pub mod tests {
                 | CombatEffect::Lifesteal(_)
                 | CombatEffect::Poise(_)
                 | CombatEffect::Combo(_)
-                | CombatEffect::StageVulnerable(_, _)
+                | CombatEffect::AdditionalDamage(_)
                 | CombatEffect::RefreshBuff(_, _)
-                | CombatEffect::BuffsVulnerable(_, _)
-                | CombatEffect::StunnedVulnerable(_)
                 | CombatEffect::SelfBuff(_)
                 | CombatEffect::Energy(_)
                 | CombatEffect::DebuffsVulnerable { .. } => {},

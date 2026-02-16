@@ -14,7 +14,6 @@ use common::{
         },
         buff::BuffKind,
         fluid_dynamics::LiquidKind,
-        item::tool::AbilityContext,
         skills::{AxeSkill, BowSkill, HammerSkill, SceptreSkill, Skill, StaffSkill, SwordSkill},
     },
     consts::GRAVITY,
@@ -2675,7 +2674,6 @@ impl AgentData<'_> {
         enum ActionStateConditions {
             ConditionStaffCanShockwave = 0,
         }
-        let context = AbilityContext::from(self.stance, Some(self.inventory), self.combo);
         let extract_ability = |input: AbilityInput| {
             self.active_abilities
                 .activate_ability(
@@ -2684,8 +2682,10 @@ impl AgentData<'_> {
                     self.skill_set,
                     self.body,
                     Some(self.char_state),
-                    &context,
+                    self.stance,
+                    self.combo,
                     self.stats,
+                    self.buffs,
                 )
                 .map_or(Default::default(), |a| a.0)
         };

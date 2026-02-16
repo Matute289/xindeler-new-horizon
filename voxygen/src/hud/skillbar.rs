@@ -27,14 +27,11 @@ use i18n::Localization;
 use client::{self, Client};
 use common::{
     comp::{
-        self, Ability, ActiveAbilities, Body, CharacterState, Combo, Energy, Hardcore, Health,
-        Inventory, Poise, PoiseState, SkillSet, Stats,
+        self, Ability, ActiveAbilities, Body, Buffs, CharacterState, Combo, Energy, Hardcore,
+        Health, Inventory, Poise, PoiseState, SkillSet, Stats,
         ability::{AbilityInput, Stance},
         is_downed,
-        item::{
-            ItemDesc, ItemI18n, MaterialStatManifest,
-            tool::{AbilityContext, ToolKind},
-        },
+        item::{ItemDesc, ItemI18n, MaterialStatManifest, tool::ToolKind},
         skillset::SkillGroupKind,
     },
     recipe::RecipeBookManifest,
@@ -293,11 +290,11 @@ pub struct Skillbar<'a> {
     msm: &'a MaterialStatManifest,
     rbm: &'a RecipeBookManifest,
     combo_floater: Option<ComboFloater>,
-    context: &'a AbilityContext,
     combo: Option<&'a Combo>,
     char_state: Option<&'a CharacterState>,
     stance: Option<&'a Stance>,
     stats: Option<&'a Stats>,
+    buffs: Option<&'a Buffs>,
 }
 
 impl<'a> Skillbar<'a> {
@@ -327,11 +324,11 @@ impl<'a> Skillbar<'a> {
         msm: &'a MaterialStatManifest,
         rbm: &'a RecipeBookManifest,
         combo_floater: Option<ComboFloater>,
-        context: &'a AbilityContext,
         combo: Option<&'a Combo>,
         char_state: Option<&'a CharacterState>,
         stance: Option<&'a Stance>,
         stats: Option<&'a Stats>,
+        buffs: Option<&'a Buffs>,
     ) -> Self {
         Self {
             client,
@@ -359,11 +356,11 @@ impl<'a> Skillbar<'a> {
             msm,
             rbm,
             combo_floater,
-            context,
             combo,
             char_state,
             stance,
             stats,
+            buffs,
         }
     }
 
@@ -1013,11 +1010,11 @@ impl<'a> Skillbar<'a> {
             self.skillset,
             self.active_abilities,
             self.body,
-            self.context,
             self.combo,
             self.char_state,
             self.stance,
             self.stats,
+            self.buffs,
         );
 
         let image_source = (self.item_imgs, self.imgs);
@@ -1104,7 +1101,7 @@ impl<'a> Skillbar<'a> {
 
         // Helper
         let tooltip_text = |slot| {
-            let (hotbar, inventory, _, skill_set, active_abilities, _, contexts, ..) =
+            let (hotbar, inventory, _, skill_set, active_abilities, _, combo, _, stance, _, buffs) =
                 content_source;
             hotbar.get(slot).and_then(|content| match content {
                 hotbar::SlotContents::Inventory(i, _) => inventory.get_by_hash(i).map(|item| {
@@ -1122,7 +1119,9 @@ impl<'a> Skillbar<'a> {
                                     self.char_state,
                                     Some(inventory),
                                     Some(skill_set),
-                                    contexts,
+                                    stance,
+                                    combo,
+                                    buffs,
                                 )
                             })
                     })
@@ -1268,7 +1267,9 @@ impl<'a> Skillbar<'a> {
                 self.char_state,
                 Some(self.inventory),
                 Some(self.skillset),
-                self.context,
+                self.stance,
+                self.combo,
+                self.buffs,
             )
         });
 
@@ -1299,7 +1300,9 @@ impl<'a> Skillbar<'a> {
                 self.char_state,
                 Some(self.inventory),
                 Some(self.skillset),
-                self.context,
+                self.stance,
+                self.combo,
+                self.buffs,
             )
         });
 
@@ -1321,8 +1324,10 @@ impl<'a> Skillbar<'a> {
                         self.skillset,
                         Some(self.body),
                         self.char_state,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         self.stats,
+                        self.buffs,
                     )
                 })
                 .is_some_and(|(a, _, _)| {

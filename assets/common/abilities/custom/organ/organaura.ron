@@ -8,7 +8,6 @@ BasicAura(
             kind: ProtectingWard,
             strength: 0.20,
             duration: Some(10.0),
-            category: Magical,
         ),
     ],
     aura_duration: Some(34.75),

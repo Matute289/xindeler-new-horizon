@@ -12,7 +12,10 @@ FinisherMelee(
         ),
         range: 3.0,
         angle: 15.0,
-        damage_effect: Some(BuffsVulnerable(1.4, Parried)),
+        attack_effect: Some((
+            AdditionalDamage(1.4),
+            TargetHasBuff(Parried),
+        )),
     ),
     minimum_combo: 10,
 )

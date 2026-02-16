@@ -13,11 +13,7 @@ use crate::{
         controller::InventoryManip,
         crustacean, golem,
         inventory::slot::{ArmorSlot, EquipSlot, Slot},
-        item::{
-            Hands, ItemKind, ToolKind,
-            armor::Friction,
-            tool::{self, AbilityContext},
-        },
+        item::{Hands, ItemKind, ToolKind, armor::Friction, tool},
         object, quadruped_low, quadruped_medium, quadruped_small, ship,
         skills::{SKILL_MODIFIERS, Skill, SwimSkill},
         theropod,
@@ -1441,7 +1437,6 @@ fn handle_ability(
     output_events: &mut OutputEvents,
     input: InputKind,
 ) -> bool {
-    let context = AbilityContext::from(data.stance, data.inventory, data.combo);
     if let Some(ability_input) = input.into()
         && let Some((ability, from_offhand, spec_ability)) = data
             .active_abilities
@@ -1452,8 +1447,10 @@ fn handle_ability(
                     data.skill_set,
                     Some(data.body),
                     Some(data.character),
-                    &context,
+                    data.stance,
+                    data.combo,
                     Some(data.stats),
+                    data.buffs,
                 )
             })
             .map(|(mut a, f, s)| {
@@ -1488,6 +1485,10 @@ fn handle_ability(
         )) {
             Ok(character_state) => {
                 let tool_kind = character_state.ability_info().and_then(|ai| ai.tool);
+                let target_uid = character_state
+                    .ability_info()
+                    .and_then(|ai| ai.input_attr)
+                    .and_then(|ia| ia.target_entity);
                 update.character = character_state;
 
                 if let Some(init_event) = ability.ability_meta().init_event {
@@ -1520,7 +1521,14 @@ fn handle_ability(
                                     *data.time,
                                     dest_info,
                                     Some(data.mass),
+                                    target_uid,
                                 )),
+                            });
+                        },
+                        AbilityInitEvent::RemoveBuff(buff) => {
+                            output_events.emit_server(BuffEvent {
+                                entity: data.entity,
+                                buff_change: BuffChange::RemoveByKind(buff),
                             });
                         },
                     }

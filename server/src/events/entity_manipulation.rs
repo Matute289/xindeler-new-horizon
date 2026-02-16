@@ -743,6 +743,7 @@ impl ServerEvent for DestroyEvent {
                                 data.buffs.get(effect_target),
                                 data.character_states.get(effect_target),
                                 data.orientations.get(effect_target),
+                                data.uids.get(effect_target).copied(),
                             ),
                             (
                                 Some(ev.entity),
@@ -809,7 +810,6 @@ impl ServerEvent for DestroyEvent {
                                             (
                                                 data.uids.get(ev.entity).copied(),
                                                 data.masses.get(ev.entity),
-                                                None,
                                             ),
                                             (
                                                 data.stats.get(effect_target),
@@ -817,6 +817,7 @@ impl ServerEvent for DestroyEvent {
                                             ),
                                             damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -885,71 +886,25 @@ impl ServerEvent for DestroyEvent {
                                     change: (*c as f32 * strength_modifier).ceil() as i32,
                                 });
                             },
-                            CombatEffect::StageVulnerable(damage, section) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.stage_section() == Some(*section))
-                                {
-                                    let change = HealthChange {
-                                        amount: -damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
+                            CombatEffect::AdditionalDamage(damage) => {
+                                let change = HealthChange {
+                                    amount: -damage_dealt * damage * strength_modifier,
+                                    by: dmg_contrib,
+                                    cause: Some(DamageSource::Other),
+                                    time: *data.time,
+                                    precise: false,
+                                    instance: rand::random(),
+                                };
+                                emitters.emit(HealthChangeEvent {
+                                    entity: effect_target,
+                                    change,
+                                });
                             },
                             CombatEffect::RefreshBuff(chance, b) => {
                                 if rng.random::<f32>() < *chance {
                                     emitters.emit(BuffEvent {
                                         entity: effect_target,
                                         buff_change: buff::BuffChange::Refresh(*b),
-                                    });
-                                }
-                            },
-                            CombatEffect::BuffsVulnerable(damage, buff) => {
-                                if data
-                                    .buffs
-                                    .get(effect_target)
-                                    .is_some_and(|b| b.contains(*buff))
-                                {
-                                    let change = HealthChange {
-                                        amount: -damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
-                            },
-                            CombatEffect::StunnedVulnerable(damage) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.is_stunned())
-                                {
-                                    let change = HealthChange {
-                                        amount: -damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
                                     });
                                 }
                             },
@@ -963,10 +918,10 @@ impl ServerEvent for DestroyEvent {
                                                 data.uids.get(effect_target).copied(),
                                                 data.stats.get(effect_target),
                                                 data.masses.get(effect_target),
-                                                None,
                                             ),
                                             damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -2242,6 +2197,7 @@ pub fn emit_effect_events(
                     time,
                     dest_info,
                     source_mass,
+                    None,
                 )),
             });
         },
@@ -2459,16 +2415,7 @@ impl ServerEvent for BuffEvent {
                         let immunity_by_buff = buffs
                             .buffs
                             .values_mut()
-                            .flat_map(|b| {
-                                b.kind.effects(
-                                    &b.data,
-                                    if let BuffSource::Character { by, .. } = b.source {
-                                        Some(by)
-                                    } else {
-                                        None
-                                    },
-                                )
-                            })
+                            .flat_map(|b| b.kind.effects(&b.data, None))
                             .find(|b| match b {
                                 BuffEffect::BuffImmunity(kind) => new_buff.kind == *kind,
                                 _ => false,
@@ -2502,6 +2449,8 @@ impl ServerEvent for BuffEvent {
                                         mass: masses.get(ev.entity),
                                     },
                                     // There is no source entity
+                                    None,
+                                    // There is no target entity
                                     None,
                                 );
                                 buffs.insert(resilience_buff, *time);
@@ -2708,11 +2657,12 @@ impl ServerEvent for ParryHookEvent {
                 let buff = buff::Buff::new(
                     BuffKind::Parried,
                     data,
-                    vec![buff::BuffCategory::Physical],
+                    vec![],
                     source,
                     *time,
                     dest_info,
                     masses.get(ev.defender),
+                    ev.attacker.and_then(|a| uids.get(a).copied()),
                 );
                 buff_emitter.emit(BuffEvent {
                     entity: attacker,
@@ -2930,6 +2880,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                 data.buffs.get(effect_target),
                                 data.character_states.get(effect_target),
                                 data.orientations.get(effect_target),
+                                data.uids.get(effect_target).copied(),
                             ),
                             (
                                 Some(ev.entity),
@@ -2996,7 +2947,6 @@ impl ServerEvent for EntityAttackedHookEvent {
                                             (
                                                 data.uids.get(ev.entity).copied(),
                                                 data.masses.get(ev.entity),
-                                                None,
                                             ),
                                             (
                                                 data.stats.get(effect_target),
@@ -3004,6 +2954,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                             ),
                                             ev.damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -3072,71 +3023,25 @@ impl ServerEvent for EntityAttackedHookEvent {
                                     change: (*c as f32 * strength_modifier).ceil() as i32,
                                 });
                             },
-                            CombatEffect::StageVulnerable(damage, section) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.stage_section() == Some(*section))
-                                {
-                                    let change = HealthChange {
-                                        amount: -ev.damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
+                            CombatEffect::AdditionalDamage(damage) => {
+                                let change = HealthChange {
+                                    amount: -ev.damage_dealt * damage * strength_modifier,
+                                    by: dmg_contrib,
+                                    cause: Some(DamageSource::Other),
+                                    time: *data.time,
+                                    precise: false,
+                                    instance: rand::random(),
+                                };
+                                emitters.emit(HealthChangeEvent {
+                                    entity: effect_target,
+                                    change,
+                                });
                             },
                             CombatEffect::RefreshBuff(chance, b) => {
                                 if rng.random::<f32>() < *chance {
                                     emitters.emit(BuffEvent {
                                         entity: effect_target,
                                         buff_change: buff::BuffChange::Refresh(*b),
-                                    });
-                                }
-                            },
-                            CombatEffect::BuffsVulnerable(damage, buff) => {
-                                if data
-                                    .buffs
-                                    .get(effect_target)
-                                    .is_some_and(|b| b.contains(*buff))
-                                {
-                                    let change = HealthChange {
-                                        amount: -ev.damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
-                            },
-                            CombatEffect::StunnedVulnerable(damage) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.is_stunned())
-                                {
-                                    let change = HealthChange {
-                                        amount: -ev.damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
                                     });
                                 }
                             },
@@ -3150,10 +3055,10 @@ impl ServerEvent for EntityAttackedHookEvent {
                                                 data.uids.get(effect_target).copied(),
                                                 data.stats.get(effect_target),
                                                 data.masses.get(effect_target),
-                                                None,
                                             ),
                                             ev.damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }

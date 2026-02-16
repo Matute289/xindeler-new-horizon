@@ -10,7 +10,7 @@ ItemDef(
                     strength: 3.0,
                     duration: Some(20),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         )
     ),

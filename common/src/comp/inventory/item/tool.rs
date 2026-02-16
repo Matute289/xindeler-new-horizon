@@ -6,6 +6,7 @@ use crate::{
     comp::{
         CharacterAbility, Combo, SkillSet,
         ability::Stance,
+        buff::{BuffKind, Buffs},
         inventory::{
             Inventory,
             item::{DurabilityMultiplier, ItemKind},
@@ -367,7 +368,10 @@ impl<T> AbilityKind<T> {
     pub fn ability(
         &self,
         skillset: Option<&SkillSet>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<(&T, Option<ContextualIndex>)> {
         let unlocked = |s: Option<Skill>, a| {
             // If there is a skill requirement and the skillset does not contain the
@@ -389,7 +393,7 @@ impl<T> AbilityKind<T> {
                 })
                 .find_map(|(i, (req_context, a))| {
                     req_context
-                        .fulfilled_by(context)
+                        .fulfilled_by(stance, inv, combo, buffs)
                         .then_some((a, Some(ContextualIndex(i))))
                 }),
         }
@@ -405,15 +409,17 @@ pub struct AbilityContext {
     #[serde(default)]
     pub dual_wielding_same_kind: bool,
     pub combo: Option<u32>,
+    pub buff: Option<BuffKind>,
 }
 
 impl AbilityContext {
-    pub fn from(stance: Option<&Stance>, inv: Option<&Inventory>, combo: Option<&Combo>) -> Self {
-        let stance = match stance {
-            Some(Stance::None) => None,
-            Some(stance) => Some(*stance),
-            None => None,
-        };
+    fn fulfilled_by(
+        &self,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
+    ) -> bool {
         let dual_wielding_same_kind = if let Some(inv) = inv {
             let tool_kind = |slot| {
                 inv.equipped(slot).and_then(|i| {
@@ -428,29 +434,21 @@ impl AbilityContext {
         } else {
             false
         };
-        let combo = combo.map(|c| c.counter());
 
-        AbilityContext {
-            stance,
-            dual_wielding_same_kind,
-            combo,
-        }
-    }
-
-    fn fulfilled_by(&self, context: &AbilityContext) -> bool {
-        let AbilityContext {
-            stance,
-            dual_wielding_same_kind,
-            combo,
-        } = self;
         // Either stance not required or context is in the same stance
-        let stance_check = stance.is_none_or(|s| context.stance == Some(s));
+        let stance_check = self.stance.is_none_or(|s| stance.copied() == Some(s));
         // Either dual wield not required or context is dual wielding
-        let dual_wield_check = !dual_wielding_same_kind || context.dual_wielding_same_kind;
+        let dual_wield_check = !self.dual_wielding_same_kind || dual_wielding_same_kind;
         // Either no minimum combo needed or context has sufficient combo
-        let combo_check = combo.is_none_or(|c| context.combo.is_some_and(|c_c| c_c >= c));
+        let combo_check = self
+            .combo
+            .is_none_or(|c_req| combo.is_some_and(|c| c.counter() >= c_req));
+        // Either no buff requored or entity has buff present
+        let buff_check = self
+            .buff
+            .is_none_or(|b| buffs.is_some_and(|buffs| buffs.contains(b)));
 
-        stance_check && dual_wield_check && combo_check
+        stance_check && dual_wield_check && combo_check && buff_check
     }
 }
 
@@ -492,38 +490,50 @@ impl<T> AbilitySet<T> {
     pub fn guard(
         &self,
         skillset: Option<&SkillSet>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<(&T, Option<ContextualIndex>)> {
         self.guard
             .as_ref()
-            .and_then(|g| g.ability(skillset, context))
+            .and_then(|g| g.ability(skillset, stance, inv, combo, buffs))
     }
 
     pub fn primary(
         &self,
         skillset: Option<&SkillSet>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<(&T, Option<ContextualIndex>)> {
-        self.primary.ability(skillset, context)
+        self.primary.ability(skillset, stance, inv, combo, buffs)
     }
 
     pub fn secondary(
         &self,
         skillset: Option<&SkillSet>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<(&T, Option<ContextualIndex>)> {
-        self.secondary.ability(skillset, context)
+        self.secondary.ability(skillset, stance, inv, combo, buffs)
     }
 
     pub fn auxiliary(
         &self,
         index: usize,
         skillset: Option<&SkillSet>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<(&T, Option<ContextualIndex>)> {
         self.abilities
             .get(index)
-            .and_then(|a| a.ability(skillset, context))
+            .and_then(|a| a.ability(skillset, stance, inv, combo, buffs))
     }
 }
 

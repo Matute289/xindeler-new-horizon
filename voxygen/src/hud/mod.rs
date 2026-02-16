@@ -108,7 +108,7 @@ use common::{
         },
         item::{
             ItemDefinitionIdOwned, ItemDesc, ItemI18n, MaterialStatManifest, Quality,
-            tool::{AbilityContext, ToolKind},
+            tool::ToolKind,
         },
         loot_owner::LootOwnerKind,
         skillset::{SkillGroupKind, SkillsPersistenceError, skills::Skill},
@@ -3254,9 +3254,6 @@ impl Hud {
             skillsets.get(entity),
             bodies.get(entity),
         ) {
-            let stance = stances.get(entity);
-            let context = AbilityContext::from(stance, Some(inventory), combo);
-
             let skillbar_events = Skillbar::new(
                 client,
                 &info,
@@ -3284,11 +3281,11 @@ impl Hud {
                 &msm,
                 &rbm,
                 self.floaters.combo_floater,
-                &context,
                 combo,
                 char_states.get(entity),
-                stance,
+                stances.get(entity),
                 stats.get(entity),
+                buffs.get(entity),
             )
             .set(self.ids.skillbar, ui_widgets);
 
@@ -3919,7 +3916,6 @@ impl Hud {
                 poises.get(entity),
                 uids.get(entity),
             ) {
-                let context = AbilityContext::from(stances.get(entity), Some(inventory), combo);
                 for event in Diary::new(
                     &self.show,
                     client,
@@ -3943,8 +3939,10 @@ impl Hud {
                     tooltip_manager,
                     &mut self.slot_manager,
                     self.pulse,
-                    &context,
+                    stances.get(entity),
+                    combo,
                     stats.get(entity),
+                    buffs.get(entity),
                 )
                 .set(self.ids.diary, ui_widgets)
                 {
@@ -5605,7 +5603,7 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::OwlTalon => imgs.buff_owltalon,
         BuffKind::Heartseeker => imgs.buff_heartseeker,
         BuffKind::EagleEye => imgs.buff_eagleeye,
-        BuffKind::ArdentHunter => imgs.buff_ardenthunter,
+        BuffKind::ArdentHunt => imgs.buff_ardenthunt,
         BuffKind::SepticShot => imgs.buff_septicshot,
         //  Debuffs
         BuffKind::Bleeding => imgs.debuff_bleed_0,
@@ -5625,7 +5623,6 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Amnesia => imgs.debuff_amnesia_0,
         BuffKind::OffBalance => imgs.debuff_offbalance_0,
         BuffKind::Chilled => imgs.debuff_chilled,
-        BuffKind::ArdentHunted => imgs.debuff_ardenthunted,
     }
 }
 

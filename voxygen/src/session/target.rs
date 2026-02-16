@@ -3,7 +3,7 @@ use vek::*;
 
 use client::{self, Client};
 use common::{
-    comp::{self, CapsulePrism, tool::ToolKind},
+    comp::{self, CapsulePrism, Health, tool::ToolKind},
     consts::{MAX_INTERACT_RANGE, MAX_PICKUP_RANGE},
     link::Is,
     mounting::{Mount, Rider},
@@ -126,6 +126,7 @@ pub(super) fn targets_under_cursor(
     // Need to raycast by distance to cam
     // But also filter out by distance to the player (but this only needs to be done
     // on final result)
+    let player_wielding = player_char_state.is_some_and(|cs| cs.is_wield());
     let mut nearby = (
         &ecs.entities(),
         &positions,
@@ -134,21 +135,23 @@ pub(super) fn targets_under_cursor(
         ecs.read_storage::<comp::PickupItem>().maybe(),
         !&ecs.read_storage::<Is<Mount>>(),
         ecs.read_storage::<Is<Rider>>().maybe(),
+        ecs.read_storage::<Health>().maybe(),
     )
         .join()
-        .filter(|(e, _, _, _, _, _, _)| *e != viewpoint_entity)
-        .filter_map(|(e, p, s, b, i, _, is_rider)| {
+        .filter(|(e, _, _, _, _, _, _, _)| *e != viewpoint_entity)
+        .filter_map(|(e, p, s, b, i, _, is_rider, health)| {
             const RADIUS_SCALE: f32 = 3.0;
             // TODO: use collider radius instead of body radius?
             let radius = s.map_or(1.0, |s| s.0) * (b.dimensions() * Vec3::new(1.0, 1.0, 0.5)).reduce_partial_max() * RADIUS_SCALE;
+            let height = s.map_or(1.0, |s| s.0) * b.height();
             // Move position up from the feet
-            let pos = Vec3::new(p.0.x, p.0.y, p.0.z + radius);
+            let pos = Vec3::new(p.0.x, p.0.y, p.0.z + (height / 2.0));
             // Distance squared from camera to the entity
             let dist_sqr = pos.distance_squared(cam_pos);
             // We only care about interacting with entities that contain items,
-            // or are not inanimate (to trade with), and are not riding the player.
+            // or are not inanimate (to trade with), or have health (and thus can be targeted by abilities); and are not riding the player.
             let not_riding_player = is_rider.is_none_or(|is_rider| Some(&is_rider.mount) != uids.get(viewpoint_entity));
-            if (i.is_some() || !matches!(b, comp::Body::Object(_))) && not_riding_player {
+            if (i.is_some() || !matches!(b, comp::Body::Object(_)) || health.is_some()) && not_riding_player {
                 Some((e, pos, radius, dist_sqr))
             } else {
                 None
@@ -156,10 +159,10 @@ pub(super) fn targets_under_cursor(
         })
         // Roughly filter out entities farther than ray distance
         .filter(|(_, _, r, d_sqr)| *d_sqr <= max_target_dist.powi(2) + 2.0 * max_target_dist * r + r.powi(2))
-        // Ignore entities intersecting the camera
-        .filter(|(_, _, r, d_sqr)| *d_sqr > r.powi(2))
-        // Substract sphere radius from distance to the camera
-        .map(|(e, p, r, d_sqr)| (e, p, r, d_sqr.sqrt() - r))
+        // Ignore entities intersecting the camera, unless the player is wielding (heuristic used to decide if player is trying to target an entity with an ability)
+        .filter(|(_, _, r, d_sqr)| player_wielding || *d_sqr > r.powi(2))
+        // Substract sphere radius from distance to the camera if not wielding
+        .map(|(e, p, r, d_sqr)| (e, p, r, d_sqr.sqrt() - if player_wielding { 0.0 } else { r }))
         .collect::<Vec<_>>();
     // Sort by distance
     nearby.sort_unstable_by(|a, b| a.3.partial_cmp(&b.3).unwrap());
@@ -174,7 +177,7 @@ pub(super) fn targets_under_cursor(
         .map(|(e, p, r, _)| (e, *p, r))
         // Find first one that intersects the ray segment, allow for entities nearby to the camera ray when wielding a weapon (as some abilities target an entity)
         .find(|(_, p, r)| {
-            if player_char_state.is_some_and(|cs| cs.is_wield()) {
+            if player_wielding {
                 seg_ray.projected_point(*p).distance_squared(*p) < (*r + cam_pos.distance(*p) / 10.0).powi(2)
             } else {
                 seg_ray.projected_point(*p).distance_squared(*p) < r.powi(2)

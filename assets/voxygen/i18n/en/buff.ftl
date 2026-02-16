@@ -191,12 +191,9 @@ buff-eagleeye = Eagle Eye
 ## Chilled
 buff-chilled = Chilled
     .desc = The intense cold makes you a little slower and leaves you more vulnerable to forceful attacks.
-## Ardent Hunter
-buff-ardenthunter = Ardent Hunter
-    .desc = Your fervor causes your arrows to be more lethal to a specific target, and your energy to rise as you see your arrows strike them.
-## Aredent Hunted
-buff-ardenthunted = Ardent Hunted
-    .desc = You have been marked as a target by a fervent archer.
+## Ardent Hunt
+buff-ardenthunt = Ardent Hunt
+    .desc = Your fervor causes your arrows to be more lethal to a specific target, at the cost of them being weaker against other targets.
 ## Septic Shot
 buff-septicshot = Septic Shot
     .desc = Your next arrow will cause infection in the target, making it more deadly if the target has any ongoing conditions.

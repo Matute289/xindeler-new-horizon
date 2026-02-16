@@ -1,8 +1,7 @@
 use crate::{
     combat::{
-        AttackEffect, AttackSource, AttackedModification, AttackedModifier, CombatBuff,
-        CombatBuffStrength, CombatEffect, CombatRequirement, ScalingKind, StatEffect,
-        StatEffectTarget,
+        AttackEffect, AttackSource, AttackedModification, CombatBuff, CombatBuffStrength,
+        CombatEffect, CombatRequirement, ScalingKind, StatEffect, StatEffectTarget,
     },
     comp::{Mass, Stats, aura::AuraKey, tool::ToolKind},
     link::DynWeakLinkHandle,
@@ -161,12 +160,13 @@ pub enum BuffKind {
     /// equivalent to the buff strength, and the additional precision power is
     /// 50% of the buff strength.
     EagleEye,
-    /// Causes the next projectile fired to debuff the target with ArdentHunted.
-    /// Projectiles fired at the target generate additional combo, and
-    /// increase energy reward by a percentage.
-    /// Strength linearly increases the amount of additional combo generated and
-    /// the additional energy reward.
-    ArdentHunter,
+    /// Marks a specific entity to be affected by projectiles fired while this
+    /// buff is active.
+    /// Projectiles fired at this target deal additional damage, while
+    /// projectiles fired at other targets deal reduced damage.
+    /// Strength linearly increases the amount of additional damage dealt to the
+    /// target. Damage reduction against other targets is fixed at -25%.
+    ArdentHunt,
     /// Causes the next projectile fired to do additional damage for every
     /// debuff the target has that had been inflicted by the attacker when using
     /// a bow.
@@ -248,10 +248,6 @@ pub enum BuffKind {
     /// linearly with strength, 1.0 leads to 100% more poise damage.
     /// Provides immunity to Heatstroke.
     Chilled,
-    /// Increases combo generation and energy reward when hit with projectiles.
-    /// Strength linearly increases the amount of additional combo generated and
-    /// the additional energy reward.
-    ArdentHunted,
     // =================
     //      COMPLEX
     // =================
@@ -313,7 +309,7 @@ impl BuffKind {
             | BuffKind::OwlTalon
             | BuffKind::Heartseeker
             | BuffKind::EagleEye
-            | BuffKind::ArdentHunter
+            | BuffKind::ArdentHunt
             | BuffKind::SepticShot => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::Cursed
@@ -330,8 +326,7 @@ impl BuffKind {
             | BuffKind::Winded
             | BuffKind::Amnesia
             | BuffKind::OffBalance
-            | BuffKind::Chilled
-            | BuffKind::ArdentHunted => BuffDescriptor::SimpleNegative,
+            | BuffKind::Chilled => BuffDescriptor::SimpleNegative,
             BuffKind::Polymorphed => BuffDescriptor::Complex,
         }
     }
@@ -367,7 +362,7 @@ impl BuffKind {
     /// only the strongest.
     pub fn stacks(self) -> bool { matches!(self, BuffKind::PotionSickness | BuffKind::Resilience) }
 
-    pub fn effects(&self, data: &BuffData, source_entity: Option<Uid>) -> Vec<BuffEffect> {
+    pub fn effects(&self, data: &BuffData, target_entity: Option<Uid>) -> Vec<BuffEffect> {
         // Normalized nonlinear scaling
         // TODO: Do we want to make denominator term parameterized. Come back to if we
         // add nn_scaling3.
@@ -641,35 +636,17 @@ impl BuffKind {
                     BuffEffect::EnergyReward(0.25 + data.strength * 0.25),
                 ]
             },
-            BuffKind::ArdentHunter => vec![BuffEffect::AttackEffect(
-                AttackEffect::new(
-                    None,
-                    CombatEffect::Buff(CombatBuff {
-                        kind: BuffKind::ArdentHunted,
-                        dur_secs: data.secondary_duration.unwrap_or(Secs(60.0)),
-                        strength: CombatBuffStrength::Value(data.strength),
-                        chance: 1.0,
-                    }),
-                )
-                .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
-            )],
-            BuffKind::ArdentHunted => {
-                let projectile_req = CombatRequirement::AttackSource(AttackSource::Projectile);
-                let mut energy_reward_effect =
-                    AttackedModification::new(AttackedModifier::EnergyReward(data.strength))
-                        .with_requirement(projectile_req);
-                let mut damage_mult_effect =
-                    AttackedModification::new(AttackedModifier::DamageMultiplier(data.strength))
-                        .with_requirement(projectile_req);
-                if let Some(uid) = source_entity {
-                    let attacker_req = CombatRequirement::Attacker(uid);
-                    energy_reward_effect = energy_reward_effect.with_requirement(attacker_req);
-                    damage_mult_effect = damage_mult_effect.with_requirement(attacker_req);
+            BuffKind::ArdentHunt => {
+                const GENERAL_MULT: f32 = 0.75;
+                let hunt_mult = (1.0 / GENERAL_MULT.max(0.1)) + data.strength;
+                let mut effects = vec![BuffEffect::AttackDamage(GENERAL_MULT)];
+                if let Some(target) = target_entity {
+                    effects.push(BuffEffect::AttackEffect(
+                        AttackEffect::new(None, CombatEffect::AdditionalDamage(hunt_mult - 1.0))
+                            .with_requirement(CombatRequirement::Target(target)),
+                    ));
                 }
-                vec![
-                    BuffEffect::AttackedModification(energy_reward_effect),
-                    BuffEffect::AttackedModification(damage_mult_effect),
-                ]
+                effects
             },
             BuffKind::SepticShot => vec![BuffEffect::AttackEffect(
                 AttackEffect::new(None, CombatEffect::DebuffsVulnerable {
@@ -816,10 +793,6 @@ impl BuffData {
 /// positive/negative buffs).
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub enum BuffCategory {
-    Natural,
-    Physical,
-    Magical,
-    Divine,
     PersistOnDowned,
     PersistOnDeath,
     FromActiveAura(Uid, AuraKey),
@@ -981,14 +954,12 @@ impl Buff {
         dest_info: DestInfo,
         // Create source_info if we need more parameters from source
         source_mass: Option<&Mass>,
+        // Note: This refers to the target of the ability that caused a new buff, which is not
+        // necessarily the target of the buff
+        target_uid: Option<Uid>,
     ) -> Self {
         let data = kind.modify_data(data, source_mass, dest_info, source);
-        let source_uid = if let BuffSource::Character { by, .. } = source {
-            Some(by)
-        } else {
-            None
-        };
-        let effects = kind.effects(&data, source_uid);
+        let effects = kind.effects(&data, target_uid);
         let cat_ids = kind.extend_cat_ids(cat_ids);
         let start_time = Time(time.0 + data.delay.map_or(0.0, |delay| delay.0));
         let end_time = if cat_ids.iter().any(|cat_id| {
@@ -1266,6 +1237,7 @@ pub mod tests {
             BuffSource::Unknown,
             time,
             DestInfo::default(),
+            None,
             None,
         )
     }

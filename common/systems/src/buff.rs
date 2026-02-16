@@ -167,6 +167,22 @@ impl<'a> System<'a> for Sys {
             };
             // Apply buffs to entity based off of their current physics_state
             if let Some(physics_state) = physics_state {
+                let emit_terrain_buff = |emitters: &mut EventEmitters, kind, data| {
+                    emitters.emit(BuffEvent {
+                        entity,
+                        buff_change: BuffChange::Add(Buff::new(
+                            kind,
+                            data,
+                            vec![],
+                            BuffSource::World,
+                            *read_data.time,
+                            dest_info,
+                            None,
+                            // Terrain effects have no associated ability for there to be a target
+                            None,
+                        )),
+                    });
+                };
                 // Set nearby entities on fire if burning
                 if let Some((_, burning)) = buff_comp.iter_kind(BuffKind::Burning).next() {
                     for t_entity in physics_state.touch_entities.keys().filter_map(|te_uid| {
@@ -205,7 +221,7 @@ impl<'a> System<'a> for Sys {
                                 buff_change: BuffChange::Add(Buff::new(
                                     BuffKind::Burning,
                                     BuffData::new(burning.data.strength, duration),
-                                    vec![BuffCategory::Natural],
+                                    vec![],
                                     BuffSource::World,
                                     *read_data.time,
                                     DestInfo {
@@ -215,6 +231,9 @@ impl<'a> System<'a> for Sys {
                                         mass: read_data.masses.get(t_entity),
                                     },
                                     mass,
+                                    // There is no ability being cast that would cause there to be
+                                    // a target
+                                    None,
                                 )),
                             });
                         }
@@ -225,54 +244,33 @@ impl<'a> System<'a> for Sys {
                     Some(SpriteKind::EnsnaringVines)
                 ) {
                     // If on ensnaring vines, apply partial ensnared debuff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Ensnared,
-                            BuffData::new(0.5, Some(Secs(0.1))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Ensnared,
+                        BuffData::new(0.5, Some(Secs(0.1))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::EnsnaringWeb)
                 ) {
                     // If on ensnaring web, apply ensnared debuff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Ensnared,
-                            BuffData::new(1.0, Some(Secs(1.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Ensnared,
+                        BuffData::new(1.0, Some(Secs(1.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::SeaUrchin)
                 ) {
                     // If touching Sea Urchin apply Bleeding buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Bleeding,
-                            BuffData::new(1.0, Some(Secs(6.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Bleeding,
+                        BuffData::new(1.0, Some(Secs(6.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
@@ -292,18 +290,11 @@ impl<'a> System<'a> for Sys {
                         });
                         emitters.emit(Outcome::Slash { pos: pos.0 });
 
-                        emitters.emit(BuffEvent {
-                            entity,
-                            buff_change: BuffChange::Add(Buff::new(
-                                BuffKind::Bleeding,
-                                BuffData::new(5.0, Some(Secs(3.0))),
-                                Vec::new(),
-                                BuffSource::World,
-                                *read_data.time,
-                                dest_info,
-                                None,
-                            )),
-                        });
+                        emit_terrain_buff(
+                            &mut emitters,
+                            BuffKind::Bleeding,
+                            BuffData::new(5.0, Some(Secs(3.0))),
+                        );
                     }
                 }
                 if matches!(
@@ -311,85 +302,42 @@ impl<'a> System<'a> for Sys {
                     Some(SpriteKind::IronSpike | SpriteKind::HaniwaTrapTriggered)
                 ) {
                     // If touching Iron Spike apply Bleeding buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Bleeding,
-                            BuffData::new(1.0, Some(Secs(4.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Bleeding,
+                        BuffData::new(1.0, Some(Secs(4.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::HotSurface)
                 ) {
                     // If touching a hot surface apply Burning buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Burning,
-                            BuffData::new(10.0, None),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(&mut emitters, BuffKind::Burning, BuffData::new(10.0, None));
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::IceSpike)
                 ) {
                     // When standing on IceSpike, apply bleeding
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Bleeding,
-                            BuffData::new(15.0, Some(Secs(0.1))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Bleeding,
+                        BuffData::new(15.0, Some(Secs(0.1))),
+                    );
                     // When standing on IceSpike also apply Frozen
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Frozen,
-                            BuffData::new(0.2, Some(Secs(3.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Frozen,
+                        BuffData::new(0.2, Some(Secs(3.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::FireBlock)
                 ) {
                     // If on FireBlock vines, apply burning buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Burning,
-                            BuffData::new(20.0, None),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(&mut emitters, BuffKind::Burning, BuffData::new(20.0, None));
                 }
                 if matches!(
                     physics_state.in_fluid,
@@ -400,18 +348,7 @@ impl<'a> System<'a> for Sys {
                 ) && !body.negates_buff(BuffKind::Burning)
                 {
                     // If in lava fluid, apply burning debuff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Burning,
-                            BuffData::new(20.0, None),
-                            vec![BuffCategory::Natural],
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(&mut emitters, BuffKind::Burning, BuffData::new(20.0, None));
                 } else if matches!(
                     physics_state.in_fluid,
                     Some(Fluid::Liquid {
@@ -481,6 +418,10 @@ impl<'a> System<'a> for Sys {
                             buff.source,
                             *read_data.time,
                             dest_info,
+                            None,
+                            // If we ever need to transfer the "target" entity from an expired
+                            // aura, we'll have to store the target entity somewhere (maybe buff,
+                            // maybe aura)? Revisit if this causes issues.
                             None,
                         )),
                     });

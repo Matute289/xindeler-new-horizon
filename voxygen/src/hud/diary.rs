@@ -22,14 +22,10 @@ use client::{self, Client};
 use common::{
     combat,
     comp::{
-        self, Body, CharacterState, Energy, Health, Inventory, Poise, Stats,
+        self, Body, Buffs, CharacterState, Combo, Energy, Health, Inventory, Poise, Stance, Stats,
         ability::{Ability, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT},
         inventory::{
-            item::{
-                ItemI18n, ItemKind, MaterialStatManifest,
-                item_key::ItemKey,
-                tool::{AbilityContext, ToolKind},
-            },
+            item::{ItemI18n, ItemKind, MaterialStatManifest, item_key::ItemKey, tool::ToolKind},
             slot::EquipSlot,
         },
         skills::{
@@ -206,8 +202,10 @@ pub struct Diary<'a> {
     tooltip_manager: &'a mut TooltipManager,
     slot_manager: &'a mut SlotManager,
     pulse: f32,
-    context: &'a AbilityContext,
+    stance: Option<&'a Stance>,
+    combo: Option<&'a Combo>,
     stats: Option<&'a Stats>,
+    buffs: Option<&'a Buffs>,
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -256,8 +254,10 @@ impl<'a> Diary<'a> {
         tooltip_manager: &'a mut TooltipManager,
         slot_manager: &'a mut SlotManager,
         pulse: f32,
-        context: &'a AbilityContext,
+        stance: Option<&'a Stance>,
+        combo: Option<&'a Combo>,
         stats: Option<&'a Stats>,
+        buffs: Option<&'a Buffs>,
     ) -> Self {
         Self {
             show,
@@ -282,8 +282,10 @@ impl<'a> Diary<'a> {
             tooltip_manager,
             slot_manager,
             pulse,
-            context,
+            stance,
+            combo,
             stats,
+            buffs,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -859,9 +861,11 @@ impl Widget for Diary<'_> {
                         self.active_abilities,
                         self.inventory,
                         self.skill_set,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         Some(self.char_state),
                         self.stats,
+                        self.buffs,
                     ),
                     image_source: self.imgs,
                     slot_manager: Some(self.slot_manager),
@@ -882,7 +886,9 @@ impl Widget for Diary<'_> {
                             Some(self.char_state),
                             Some(self.inventory),
                             Some(self.skill_set),
-                            self.context,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
                         );
                     let (ability_title, ability_desc) = if let Some(ability_id) = ability_id {
                         util::ability_description(ability_id, self.localized_strings)
@@ -954,7 +960,9 @@ impl Widget for Diary<'_> {
                             Some(self.char_state),
                             Some(self.inventory),
                             Some(self.skill_set),
-                            self.context,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
                         ),
                         a,
                     )
@@ -1060,9 +1068,11 @@ impl Widget for Diary<'_> {
                         self.active_abilities,
                         self.inventory,
                         self.skill_set,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         Some(self.char_state),
                         self.stats,
+                        self.buffs,
                     ),
                     image_source: self.imgs,
                     slot_manager: Some(self.slot_manager),
