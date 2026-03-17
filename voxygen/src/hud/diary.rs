@@ -2402,8 +2402,8 @@ impl Diary<'_> {
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 310.0, 644.0),
             },
             SkillIcon::Ability {
-                skill: Skill::Bow(BowSkill::OwlTalon),
-                ability_id: "common.abilities.bow.owl_talon",
+                skill: Skill::Bow(BowSkill::StormChaser),
+                ability_id: "common.abilities.bow.storm_chaser",
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 154.0),
             },
             SkillIcon::Ability {

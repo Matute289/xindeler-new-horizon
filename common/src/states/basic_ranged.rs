@@ -215,7 +215,8 @@ impl CharacterBehavior for Data {
                             body: self.static_data.projectile_body,
                             projectile: projectile.clone(),
                             light: self.static_data.projectile_light,
-                            speed: self.static_data.projectile_speed,
+                            speed: self.static_data.projectile_speed
+                                * data.stats.projectile_speed_mult,
                             object: None,
                             marker: self.static_data.marker,
                         });
@@ -227,11 +228,7 @@ impl CharacterBehavior for Data {
                 } else if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::BasicRanged(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

@@ -233,10 +233,6 @@ buff-combo_generation = Génération de combo
             [1] Génère { $str_total } combo en { $duration } seconde.
            *[other] Génère { $str_total } combo en { $duration } secondes.
         }
-buff-owltalon = Serres de chouette
-    .desc = Prenant avantage de l'ignorance de votre cible quand à votre présence, votre prochaine attaque sera plus précise et infligera davantage de dommages.
-buff-heartseeker = Cherchecœur
-    .desc = Votre prochaine flèche frappera votre ennemi de manière similaire à une blessure au cœur, causant une blessure plus sévère et vous donnant de l'endurance.
 buff-eagleeye = Œil d'aigle
     .desc = Vous pouvez observer les points vulnérables de vos cibles avec clarté, et avez l'agilité nécessaire pour guider chaque flèche sur ceux-ci.
 buff-chilled = Au frais

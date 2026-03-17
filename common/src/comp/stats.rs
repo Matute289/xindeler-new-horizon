@@ -77,8 +77,12 @@ pub struct Stats {
     pub poise_reduction: StatsSplit,
     pub max_health_modifiers: StatsModifier,
     pub move_speed_modifier: f32,
+    pub charge_move_speed_modifier: f32,
+    pub buildup_move_speed_modifier: f32,
     pub jump_modifier: f32,
     pub attack_speed_modifier: f32,
+    pub charge_speed_modifier: f32,
+    pub buildup_speed_modifier: f32,
     pub recovery_speed_modifier: f32,
     pub friction_modifier: f32,
     pub max_energy_modifiers: StatsModifier,
@@ -93,6 +97,7 @@ pub struct Stats {
     /// that gets ignored by attacks from this entity
     pub mitigations_penetration: f32,
     pub energy_reward_modifier: f32,
+    pub energy_efficiency_modifier: f32,
     /// This creates effects when the entity is damaged
     pub effects_on_damaged: Vec<StatEffect>,
     /// This creates effects when the entity is killed
@@ -104,6 +109,7 @@ pub struct Stats {
     pub attacked_modifications: Vec<AttackedModification>,
     pub precision_power_mult: f32,
     pub knockback_mult: f32,
+    pub projectile_speed_mult: f32,
 }
 
 impl Stats {
@@ -115,9 +121,13 @@ impl Stats {
             poise_reduction: StatsSplit::default(),
             max_health_modifiers: StatsModifier::default(),
             move_speed_modifier: 1.0,
+            charge_move_speed_modifier: 1.0,
+            buildup_move_speed_modifier: 1.0,
             jump_modifier: 1.0,
             attack_speed_modifier: 1.0,
             recovery_speed_modifier: 1.0,
+            charge_speed_modifier: 1.0,
+            buildup_speed_modifier: 1.0,
             friction_modifier: 1.0,
             max_energy_modifiers: StatsModifier::default(),
             poise_damage_modifier: 1.0,
@@ -128,6 +138,7 @@ impl Stats {
             effects_on_attack: Vec::new(),
             mitigations_penetration: 0.0,
             energy_reward_modifier: 1.0,
+            energy_efficiency_modifier: 1.0,
             effects_on_damaged: Vec::new(),
             effects_on_death: Vec::new(),
             disable_auxiliary_abilities: false,
@@ -136,6 +147,7 @@ impl Stats {
             attacked_modifications: Vec::new(),
             precision_power_mult: 1.0,
             knockback_mult: 1.0,
+            projectile_speed_mult: 1.0,
         }
     }
 

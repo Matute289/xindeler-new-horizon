@@ -176,13 +176,9 @@ buff-combo_generation = Tvorba komba
             [few] Vytváří { $str_total } komba za { $duration } sekund.
            *[other] Vytváří { $str_total } komb za { $duration } sekund.
         }
-buff-owltalon = Soví Spár
-    .desc = Díky tomu, že tvůj cíl vůbec neví o tvé přítomnosti, bude tvůj útok přesnější a silnější.
 buff-eagleeye = Oko Dravce
     .desc = Přesně vidíš zranitelná místa nepřátel a máš dost obratnosti k vedení každého šípu do těchto míst.
 buff-chilled = Vymrzlý
     .desc = Intenzivní chlad tě zpomaluje a jsi zranitelnější silovým útokům.
 buff-septicshot = Hnisající Rána
     .desc = Tvůj další šíp způsobí cíli infekci, která bude ještě účinnější, pokud má cíl nějaké další stavy.
-buff-heartseeker = Srdcobijec
-    .desc = Tvůj další šíp udeří na nepřítele jako by trefil přímo do srdce, tím mu způsobí vážnější zranění a tobě přidá energii.

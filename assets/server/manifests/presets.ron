@@ -90,7 +90,7 @@
         (Bow(SepticShot), 1),
         (Bow(Barrage), 1),
 
-        (Bow(OwlTalon), 1),
+        (Bow(StormChaser), 1),
         (Bow(EagleEye), 1),
         (Bow(IgniteArrow), 1),
         (Bow(DrenchArrow), 1),
@@ -158,7 +158,7 @@
         (Bow(SepticShot), 1),
         (Bow(Barrage), 1),
 
-        (Bow(OwlTalon), 1),
+        (Bow(StormChaser), 1),
         (Bow(EagleEye), 1),
         (Bow(IgniteArrow), 1),
         (Bow(DrenchArrow), 1),

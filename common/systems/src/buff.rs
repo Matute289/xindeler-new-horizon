@@ -746,11 +746,23 @@ fn execute_effect(
         BuffEffect::MovementSpeed(speed) => {
             stat.move_speed_modifier *= *speed;
         },
+        BuffEffect::ChargeMoveSpeed(speed) => {
+            stat.charge_move_speed_modifier *= *speed;
+        },
+        BuffEffect::BuildupMoveSpeed(speed) => {
+            stat.buildup_move_speed_modifier *= *speed;
+        },
         BuffEffect::AttackSpeed(speed) => {
             stat.attack_speed_modifier *= *speed;
         },
         BuffEffect::RecoverySpeed(speed) => {
             stat.recovery_speed_modifier *= *speed;
+        },
+        BuffEffect::ChargingSpeed(speed) => {
+            stat.charge_speed_modifier *= *speed;
+        },
+        BuffEffect::BuildupSpeed(speed) => {
+            stat.buildup_speed_modifier *= *speed;
         },
         BuffEffect::GroundFriction(gf) => {
             stat.friction_modifier *= *gf;
@@ -812,6 +824,9 @@ fn execute_effect(
         BuffEffect::EnergyReward(er) => {
             stat.energy_reward_modifier *= er;
         },
+        BuffEffect::EnergyEfficiency(ef) => {
+            stat.energy_efficiency_modifier *= *ef;
+        },
         BuffEffect::DamagedEffect(effect) => stat.effects_on_damaged.push(effect.clone()),
         BuffEffect::DeathEffect(effect) => stat.effects_on_death.push(effect.clone()),
         BuffEffect::DisableAuxiliaryAbilities => stat.disable_auxiliary_abilities = true,
@@ -829,6 +844,9 @@ fn execute_effect(
         },
         BuffEffect::KnockbackMult(km) => {
             stat.knockback_mult *= km;
+        },
+        BuffEffect::ProjectileSpeedMult(ps) => {
+            stat.projectile_speed_mult *= *ps;
         },
     };
 }

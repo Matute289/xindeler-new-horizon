@@ -141,11 +141,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovery
                     if let CharacterState::BasicMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                         c.movement_modifier = self.static_data.movement_modifier.recover;
                         c.ori_modifier = self.static_data.ori_modifier.recover;
                     }

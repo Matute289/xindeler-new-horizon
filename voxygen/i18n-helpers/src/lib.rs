@@ -401,8 +401,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::ScornfulTaunt
         | BuffKind::Tenacity
         | BuffKind::Resilience
-        | BuffKind::OwlTalon
-        | BuffKind::Heartseeker
+        | BuffKind::StormChaser
         | BuffKind::EagleEye
         | BuffKind::ArdentHunt
         | BuffKind::SepticShot => {

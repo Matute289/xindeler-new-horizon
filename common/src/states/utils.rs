@@ -473,7 +473,15 @@ pub fn handle_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f3
 
 /// Updates components to move player as if theyre on ground or in air
 fn basic_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
-    let efficiency = efficiency * data.stats.move_speed_modifier * data.stats.friction_modifier;
+    let section_modifier = match data.character.stage_section() {
+        Some(StageSection::Buildup) => data.stats.buildup_move_speed_modifier,
+        Some(StageSection::Charge) => data.stats.charge_move_speed_modifier,
+        _ => 1.0,
+    };
+    let efficiency = efficiency
+        * data.stats.move_speed_modifier
+        * data.stats.friction_modifier
+        * section_modifier;
 
     let accel = if let Some(block) = data.physics.on_ground {
         // FRIC_GROUND temporarily used to normalize things around expected values
@@ -1454,9 +1462,14 @@ fn handle_ability(
                 )
             })
             .map(|(mut a, f, s)| {
-                if let Some(contextual_stats) = a.ability_meta().contextual_stats {
-                    a = a.adjusted_by_stats(contextual_stats.equivalent_stats(data))
-                }
+                let mut contextual_stats =
+                    if let Some(contextual_stats) = a.ability_meta().contextual_stats {
+                        contextual_stats.equivalent_stats(data)
+                    } else {
+                        tool::Stats::one()
+                    };
+                contextual_stats.energy_efficiency *= data.stats.energy_efficiency_modifier;
+                a = a.adjusted_by_stats(contextual_stats);
                 (a, f, s)
             })
             .filter(|(ability, _, _)| ability.requirements_paid(data, update))
@@ -1715,10 +1728,16 @@ fn checked_tick_attack(
     timer: Duration,
     other_modifier: Option<f32>,
 ) -> Option<Duration> {
+    let section_modifier = match data.character.stage_section() {
+        Some(StageSection::Buildup) => data.stats.buildup_speed_modifier,
+        Some(StageSection::Charge) => data.stats.charge_speed_modifier,
+        Some(StageSection::Recover) => data.stats.recovery_speed_modifier,
+        _ => 1.0,
+    };
     checked_tick(
         data,
         timer,
-        Some(data.stats.attack_speed_modifier * other_modifier.unwrap_or(1.0)),
+        Some(data.stats.attack_speed_modifier * section_modifier * other_modifier.unwrap_or(1.0)),
     )
 }
 

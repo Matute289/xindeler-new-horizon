@@ -2107,7 +2107,7 @@ impl AgentData<'_> {
                 );
                 if tactics.is_empty() {
                     try_tactic(
-                        BowSkill::OwlTalon,
+                        BowSkill::StormChaser,
                         BowTactics::HunterIntermediate,
                         &mut tactics,
                     );
@@ -2534,7 +2534,7 @@ impl AgentData<'_> {
             let prefer_m2 = matches!(
                 self.stance,
                 Some(Stance::Bow(
-                    BowStance::Barrage | BowStance::Hawkstrike | BowStance::DeathVolley
+                    BowStance::Barrage | BowStance::Hawkstrike | BowStance::Heartseeker
                 ))
             );
             let current_input = self.char_state.ability_info().map(|ai| ai.input);
@@ -2617,11 +2617,20 @@ impl AgentData<'_> {
             }
             if let Some(input) = next_input {
                 if could_use_input(input, ability_preferences) {
-                    if matches!(input, InputKind::Secondary)
-                        && matches!(self.stance, Some(Stance::Bow(BowStance::DeathVolley)))
-                    {
+                    let is_death_volley = if let Some(ability_input) = input.into() {
+                        let raw_input = self.active_abilities.get_ability(
+                            ability_input,
+                            Some(self.inventory),
+                            Some(self.skill_set),
+                            self.stats,
+                        );
+                        raw_input == Ability::MainWeaponAux(16)
+                    } else {
+                        false
+                    };
+                    if is_death_volley {
                         controller.push_action(ControlAction::StartInput {
-                            input: InputKind::Secondary,
+                            input,
                             target_entity: None,
                             select_pos: Some(tgt_data.pos.0),
                         });

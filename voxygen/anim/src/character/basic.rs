@@ -2877,7 +2877,9 @@ impl Animation for BasicAction {
                 next.hand_l.position += Vec3::new(4.0, -6.0, -6.0) * move1;
                 next.hand_l.orientation.rotate_z(move1 * 2.0);
             },
-            Some("common.abilities.bow.owl_talon") => {
+            Some(
+                "common.abilities.bow.storm_chaser" | "common.abilities.bow.storm_chaser_clear",
+            ) => {
                 bow_start(&mut next, s_a);
 
                 next.hand_l.position += Vec3::new(-4.0, 0.0, 4.0) * move1;
@@ -2964,15 +2966,6 @@ impl Animation for BasicAction {
                 next.hand_l.position += Vec3::new(0.0, 5.0, 0.0) * move_rep;
             },
             Some("common.abilities.bow.death_volley") => {
-                bow_start(&mut next, s_a);
-
-                next.hand_l.position += Vec3::new(0.0, 8.0, 0.0) * (-move1 + move2);
-                next.hold.scale *= 1.0 + move1;
-            },
-            Some(
-                "common.abilities.bow.death_volley_shot"
-                | "common.abilities.bow.death_volley_heavy_shot",
-            ) => {
                 bow_start(&mut next, s_a);
                 let look_z = d.look_dir_override.map_or(d.look_dir.z, |ldo| ldo.z);
                 bow_draw(&mut next, move1base, look_z);

@@ -106,7 +106,7 @@ pub enum BowSkill {
     Foothold,
     HeavyNock,
     ArdentHunt,
-    OwlTalon,
+    StormChaser,
     EagleEye,
     Heartseeker,
     Hawkstrike,

@@ -254,11 +254,7 @@ impl CharacterBehavior for Data {
                 if self.timer < strike_data.recover_duration {
                     // Recovery
                     if let CharacterState::ComboMelee2(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Return to wielding

@@ -3,6 +3,6 @@ Simple(
     combo_cost: 0,
     buildup_duration: 0.1,
     meta: (
-        init_event: Some(EnterStance(Bow(Heartseeker))),
+        init_event: Some(RemoveBuff(StormChaser)),
     ),
 )

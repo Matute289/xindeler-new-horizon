@@ -146,14 +146,13 @@ pub enum BuffKind {
     /// Strength linearly decreases the duration of newly applied, affected
     /// debuffs, 0.5 is a 50% reduction.
     Resilience,
-    /// Causes the next attack to have precision of 1.0 if the target is not
-    /// wielding their weapon, and also generally increases damage.
-    /// Strength linearly increases the damage increase.
-    OwlTalon,
-    /// Causes the next projectile to both gain precision and restore more
-    /// energy.
-    /// Strength linearly increases the precision override and energy restored.
-    Heartseeker,
+    /// Causes you to have faster projectiles at the cost of slower charging
+    /// speed and movement speed while charging, and worse energy efficiency.
+    /// Strength linearly increases projectile speed (1.0 is a 100% increase,
+    /// 1.0 is a 200% increase). Strength non-linearly decreases charging speed,
+    /// charging movement speed, and energy efficiency (1.0 is a 20% decrease,
+    /// 2.0 is a 33% decrease).
+    StormChaser,
     /// Causes projectile attacks to have more precision power, and to guarantee
     /// a minimum precision multiplier.
     /// Strength linearly increases both. The minimum precision power is
@@ -306,8 +305,7 @@ impl BuffKind {
             | BuffKind::ScornfulTaunt
             | BuffKind::Tenacity
             | BuffKind::Resilience
-            | BuffKind::OwlTalon
-            | BuffKind::Heartseeker
+            | BuffKind::StormChaser
             | BuffKind::EagleEye
             | BuffKind::ArdentHunt
             | BuffKind::SepticShot => BuffDescriptor::SimplePositive,
@@ -367,7 +365,7 @@ impl BuffKind {
         // TODO: Do we want to make denominator term parameterized. Come back to if we
         // add nn_scaling3.
         let nn_scaling = |a: f32| a.abs() / (a.abs() + 0.5) * a.signum();
-        let nn_scaling2 = |a: f32| a.abs() / (a.abs() + 1.0) * a.signum();
+        let nn_scaling_custom = |a: f32, b: f32| a.abs() / (a.abs() + b.max(0.1)) * a.signum();
         let instance = rand::random();
         match self {
             BuffKind::Bleeding => vec![BuffEffect::HealthChangeOverTime {
@@ -591,7 +589,7 @@ impl BuffKind {
             ],
             BuffKind::Rooted => vec![BuffEffect::MovementSpeed(0.0)],
             BuffKind::Winded => vec![
-                BuffEffect::MovementSpeed(1.0 - nn_scaling2(data.strength)),
+                BuffEffect::MovementSpeed(1.0 - nn_scaling_custom(data.strength, 1.0)),
                 BuffEffect::EnergyReward(1.0 - nn_scaling(data.strength)),
             ],
             BuffKind::Amnesia => vec![BuffEffect::DisableAuxiliaryAbilities],
@@ -605,24 +603,15 @@ impl BuffKind {
                 )),
             ],
             BuffKind::Resilience => vec![BuffEffect::CrowdControlResistance(data.strength)],
-            BuffKind::OwlTalon => vec![
-                BuffEffect::PrecisionModifier(Some(CombatRequirement::TargetUnwielded), 0.8, false),
-                BuffEffect::AttackDamage(1.0 + data.strength),
-            ],
-            BuffKind::Heartseeker => {
-                let energy =
-                    AttackEffect::new(None, CombatEffect::EnergyReward(14.0 * data.strength))
-                        .with_requirement(CombatRequirement::AnyDamage)
-                        .with_requirement(CombatRequirement::AttackSource(
-                            AttackSource::Projectile,
-                        ));
+            BuffKind::StormChaser => {
+                let debuff_mult = 1.0 - nn_scaling_custom(data.strength, 4.0);
                 vec![
-                    BuffEffect::PrecisionModifier(
-                        Some(CombatRequirement::AttackSource(AttackSource::Projectile)),
-                        data.strength * 1.2,
-                        false,
-                    ),
-                    BuffEffect::AttackEffect(energy),
+                    BuffEffect::ChargeMoveSpeed(debuff_mult),
+                    BuffEffect::BuildupMoveSpeed(debuff_mult),
+                    BuffEffect::ChargingSpeed(debuff_mult),
+                    BuffEffect::BuildupSpeed(debuff_mult),
+                    BuffEffect::EnergyEfficiency(debuff_mult),
+                    BuffEffect::ProjectileSpeedMult(1.0 + data.strength),
                 ]
             },
             BuffKind::EagleEye => {
@@ -850,10 +839,18 @@ pub enum BuffEffect {
     },
     /// Modifies move speed of target
     MovementSpeed(f32),
+    /// Modifies charging move speed of target
+    ChargeMoveSpeed(f32),
+    /// Modifies buildup move speed of target
+    BuildupMoveSpeed(f32),
     /// Modifies attack speed of target
     AttackSpeed(f32),
     /// Modifies recovery speed of target
     RecoverySpeed(f32),
+    /// Modifies charging speed of target
+    ChargingSpeed(f32),
+    /// Modifies buildup speed of target
+    BuildupSpeed(f32),
     /// Modifies ground friction of target
     GroundFriction(f32),
     /// Reduces poise damage taken after armor is accounted for by this fraction
@@ -880,6 +877,8 @@ pub enum BuffEffect {
     MitigationsPenetration(f32),
     /// Modifies energy rewarded on successful strikes
     EnergyReward(f32),
+    /// Modifies energy efficiency of using abilities
+    EnergyEfficiency(f32),
     /// Add an effect to the entity when damaged by an attack
     DamagedEffect(StatEffect),
     /// Add an effect to the entity when killed
@@ -896,6 +895,8 @@ pub enum BuffEffect {
     PrecisionPowerMult(f32),
     /// Multiplies knockback dealt by attacks
     KnockbackMult(f32),
+    /// Multiplier to speed of projectiles fired by the target
+    ProjectileSpeedMult(f32),
 }
 
 /// Actual de/buff.

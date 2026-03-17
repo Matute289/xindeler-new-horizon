@@ -204,8 +204,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::ScornfulTaunt => "buff-scornfultaunt",
         BuffKind::Tenacity => "buff-tenacity",
         BuffKind::Resilience => "buff-resilience",
-        BuffKind::OwlTalon => "buff-owltalon",
-        BuffKind::Heartseeker => "buff-heartseeker",
+        BuffKind::StormChaser => "buff-stormchaser",
         BuffKind::EagleEye => "buff-eagleeye",
         BuffKind::ArdentHunt => "buff-ardenthunt",
         BuffKind::SepticShot => "buff-septicshot",
@@ -366,8 +365,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::OffBalance
                         | BuffKind::Tenacity
                         | BuffKind::Resilience
-                        | BuffKind::OwlTalon
-                        | BuffKind::Heartseeker
+                        | BuffKind::StormChaser
                         | BuffKind::EagleEye
                         | BuffKind::Chilled
                         | BuffKind::ArdentHunt
@@ -644,9 +642,11 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         "common.abilities.bow.heavy_nock" => imgs.bow_heavy_nock,
         "common.abilities.bow.ardent_hunt" => imgs.bow_ardent_hunt,
         "common.abilities.bow.ardent_hunt_clear" => imgs.bow_ardent_hunt,
-        "common.abilities.bow.owl_talon" => imgs.bow_owl_talon,
+        "common.abilities.bow.storm_chaser" => imgs.bow_storm_chaser,
+        "common.abilities.bow.storm_chaser_clear" => imgs.bow_storm_chaser,
         "common.abilities.bow.eagle_eye" => imgs.bow_eagle_eye,
         "common.abilities.bow.heartseeker" => imgs.bow_heartseeker,
+        "common.abilities.bow.heartseeker_shot" => imgs.bow_heartseeker,
         "common.abilities.bow.hawkstrike" => imgs.bow_hawkstrike,
         "common.abilities.bow.hawkstrike_shot" => imgs.bow_hawkstrike,
         "common.abilities.bow.septic_shot" => imgs.bow_septic_shot,
@@ -670,8 +670,6 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         "common.abilities.bow.greater_scatterburst" => imgs.bow_greater_scatterburst,
         "common.abilities.bow.fusillade" => imgs.bow_fusillade,
         "common.abilities.bow.death_volley" => imgs.bow_death_volley,
-        "common.abilities.bow.death_volley_shot" => imgs.bow_death_volley,
-        "common.abilities.bow.death_volley_heavy_shot" => imgs.bow_death_volley,
         // Staff
         "common.abilities.staff.firebomb" => imgs.fireball,
         "common.abilities.staff.flamethrower" => imgs.flamethrower,

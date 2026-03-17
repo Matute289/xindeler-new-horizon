@@ -180,11 +180,8 @@ buff-tenacity = Tenacity
 buff-resilience = Resilience
     .desc = After having just taken a debilitating attack, you become more resilient to future incapaciting effects.
 ## Owl Talon
-buff-owltalon = Owl Talon
-    .desc = Taking advantage of your target not knowing of your presence, your next attack will be more precise and deal more damage.
-## Heartseeker
-buff-heartseeker = Heartseeker
-    .desc = Your next arrow will strike your enemy as if it'd dealt a heartwound, causing a more serious wound and giving you energy.
+buff-stormchaser = Storm Chaser
+    .desc = You take a firmer stance, being more deliberate in drawing back your bow, to cause your arrows to have a much greater speed.
 ## Eagle Eye
 buff-eagleeye = Eagle Eye
     .desc = You can clearly see the vulnerable areas on your targets, and have the agility required to direct every arrow to those areas.

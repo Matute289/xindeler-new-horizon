@@ -137,8 +137,9 @@ impl CharacterBehavior for Data {
                             body: self.static_data.projectile_body,
                             projectile: projectile.clone(),
                             light: self.static_data.projectile_light,
-                            speed: self.static_data.initial_projectile_speed
-                                + charge_frac * self.static_data.scaled_projectile_speed,
+                            speed: (self.static_data.initial_projectile_speed
+                                + charge_frac * self.static_data.scaled_projectile_speed)
+                                * data.stats.projectile_speed_mult,
                             object: None,
                             marker: self.static_data.marker,
                         });
@@ -177,11 +178,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::ChargedRanged(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

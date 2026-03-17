@@ -5985,8 +5985,7 @@ fn build_buff(
             | BuffKind::OffBalance
             | BuffKind::Tenacity
             | BuffKind::Resilience
-            | BuffKind::OwlTalon
-            | BuffKind::Heartseeker
+            | BuffKind::StormChaser
             | BuffKind::EagleEye
             | BuffKind::Chilled
             | BuffKind::ArdentHunt
