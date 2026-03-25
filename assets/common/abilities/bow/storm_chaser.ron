@@ -6,4 +6,5 @@ SelfBuff(
         BuffDesc(kind: StormChaser, data: BuffData(strength: 0.5, duration: None)),
     ],
     energy_cost: 10,
+    enforced_limit: false,
 )

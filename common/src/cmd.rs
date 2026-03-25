@@ -183,6 +183,10 @@ lazy_static! {
             BuffKind::Chilled => "chilled",
             BuffKind::ArdentHunt => "ardent_hunt",
             BuffKind::SepticShot => "septic_shot",
+            BuffKind::IgniteArrow => "ignite_arrow",
+            BuffKind::FreezeArrow => "freeze_arrow",
+            BuffKind::DrenchArrow => "drench_arrow",
+            BuffKind::JoltArrow => "jolt_arrow",
         };
         let mut buff_parser = HashMap::new();
         for kind in BuffKind::iter() {

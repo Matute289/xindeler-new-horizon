@@ -5989,7 +5989,11 @@ fn build_buff(
             | BuffKind::EagleEye
             | BuffKind::Chilled
             | BuffKind::ArdentHunt
-            | BuffKind::SepticShot => {
+            | BuffKind::SepticShot
+            | BuffKind::IgniteArrow
+            | BuffKind::FreezeArrow
+            | BuffKind::DrenchArrow
+            | BuffKind::JoltArrow => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {

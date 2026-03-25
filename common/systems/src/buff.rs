@@ -848,5 +848,8 @@ fn execute_effect(
         BuffEffect::ProjectileSpeedMult(ps) => {
             stat.projectile_speed_mult *= *ps;
         },
+        BuffEffect::ProjectileConstructorEffect(pce) => {
+            stat.projectile_constructor_effects.push(pce.clone())
+        },
     };
 }

@@ -208,6 +208,10 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::EagleEye => "buff-eagleeye",
         BuffKind::ArdentHunt => "buff-ardenthunt",
         BuffKind::SepticShot => "buff-septicshot",
+        BuffKind::IgniteArrow => "buff-ignitearrow",
+        BuffKind::FreezeArrow => "buff-freezearrow",
+        BuffKind::DrenchArrow => "buff-drencharrow",
+        BuffKind::JoltArrow => "buff-joltarrow",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
         BuffKind::Cursed => "buff-cursed",
@@ -369,7 +373,11 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::EagleEye
                         | BuffKind::Chilled
                         | BuffKind::ArdentHunt
-                        | BuffKind::SepticShot => Cow::Borrowed(""),
+                        | BuffKind::SepticShot
+                        | BuffKind::IgniteArrow
+                        | BuffKind::FreezeArrow
+                        | BuffKind::DrenchArrow
+                        | BuffKind::JoltArrow => Cow::Borrowed(""),
                     };
 
                     write!(&mut description, "{}", buff_desc).unwrap();
@@ -651,16 +659,12 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         "common.abilities.bow.hawkstrike_shot" => imgs.bow_hawkstrike,
         "common.abilities.bow.septic_shot" => imgs.bow_septic_shot,
         "common.abilities.bow.ignite_arrow" => imgs.bow_ignite_arrow,
-        "common.abilities.bow.burning_arrow" => imgs.bow_burning_arrow,
         "common.abilities.bow.burning_broadhead" => imgs.bow_burning_broadhead,
         "common.abilities.bow.drench_arrow" => imgs.bow_drench_arrow,
-        "common.abilities.bow.poison_arrow" => imgs.bow_poison_arrow,
         "common.abilities.bow.poison_broadhead" => imgs.bow_poison_broadhead,
         "common.abilities.bow.freeze_arrow" => imgs.bow_freeze_arrow,
-        "common.abilities.bow.freezing_arrow" => imgs.bow_freezing_arrow,
         "common.abilities.bow.freezing_broadhead" => imgs.bow_freezing_broadhead,
         "common.abilities.bow.jolt_arrow" => imgs.bow_jolt_arrow,
-        "common.abilities.bow.lightning_arrow" => imgs.bow_lightning_arrow,
         "common.abilities.bow.lightning_broadhead" => imgs.bow_lightning_broadhead,
         "common.abilities.bow.barrage" => imgs.bow_barrage,
         "common.abilities.bow.barrage_shot" => imgs.bow_barrage,

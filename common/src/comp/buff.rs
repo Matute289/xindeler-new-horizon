@@ -3,7 +3,15 @@ use crate::{
         AttackEffect, AttackSource, AttackedModification, CombatBuff, CombatBuffStrength,
         CombatEffect, CombatRequirement, ScalingKind, StatEffect, StatEffectTarget,
     },
-    comp::{Mass, Stats, aura::AuraKey, tool::ToolKind},
+    comp::{
+        FrontendMarker, Mass, Stats,
+        aura::AuraKey,
+        projectile::{
+            ProjectileArcingProperties, ProjectileConstructorEffect,
+            ProjectileConstructorEffectKind,
+        },
+        tool::ToolKind,
+    },
     link::DynWeakLinkHandle,
     match_some,
     resources::{Secs, Time},
@@ -171,6 +179,24 @@ pub enum BuffKind {
     /// a bow.
     /// Strength linearly increases the amount of additional damage.
     SepticShot,
+    /// Causes the next projectile fired by a bow to add the burning debuff to
+    /// the target.
+    /// Strength linearly increases the fraction of damage converted to burning
+    /// (0.5 -> +50%, 1.0 -> +100%).
+    IgniteArrow,
+    /// Causes the next projectile fired by a bow to add the frozen debuff to
+    /// the target.
+    /// The strength of this buff becomes the strength of the frozen debuff.
+    FreezeArrow,
+    /// Causes the next projectile fired by a bow to add the poisoned debuff to
+    /// the target.
+    /// The strength of this buff becomes the strength of the poisoned debuff.
+    DrenchArrow,
+    /// Causes the next projectile fired by a bow to change to an arcing
+    /// projectile.
+    /// The strength of this buff is multiplied by the damage on the original
+    /// projectile to determine the arcing damage.
+    JoltArrow,
     // =================
     //      DEBUFFS
     // =================
@@ -308,7 +334,11 @@ impl BuffKind {
             | BuffKind::StormChaser
             | BuffKind::EagleEye
             | BuffKind::ArdentHunt
-            | BuffKind::SepticShot => BuffDescriptor::SimplePositive,
+            | BuffKind::SepticShot
+            | BuffKind::IgniteArrow
+            | BuffKind::FreezeArrow
+            | BuffKind::DrenchArrow
+            | BuffKind::JoltArrow => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::Cursed
             | BuffKind::Burning
@@ -646,6 +676,93 @@ impl BuffKind {
                 })
                 .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
             )],
+            BuffKind::IgniteArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::AttackEffect(
+                        AttackEffect::new(
+                            None,
+                            CombatEffect::Buff(CombatBuff {
+                                kind: BuffKind::Burning,
+                                dur_secs: data.secondary_duration.unwrap_or(Secs(10.0)),
+                                strength: CombatBuffStrength::DamageFraction(data.strength),
+                                chance: 1.0,
+                            }),
+                        )
+                        .with_requirement(CombatRequirement::AttackSource(
+                            AttackSource::Projectile,
+                        )),
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::IgniteArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
+            BuffKind::FreezeArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::AttackEffect(
+                        AttackEffect::new(
+                            None,
+                            CombatEffect::Buff(CombatBuff {
+                                kind: BuffKind::Frozen,
+                                dur_secs: data.secondary_duration.unwrap_or(Secs(10.0)),
+                                strength: CombatBuffStrength::Value(data.strength),
+                                chance: 1.0,
+                            }),
+                        )
+                        .with_requirement(CombatRequirement::AttackSource(
+                            AttackSource::Projectile,
+                        )),
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::FreezeArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
+            BuffKind::DrenchArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::AttackEffect(
+                        AttackEffect::new(
+                            None,
+                            CombatEffect::Buff(CombatBuff {
+                                kind: BuffKind::Poisoned,
+                                dur_secs: data.secondary_duration.unwrap_or(Secs(10.0)),
+                                strength: CombatBuffStrength::Value(data.strength),
+                                chance: 1.0,
+                            }),
+                        )
+                        .with_requirement(CombatRequirement::AttackSource(
+                            AttackSource::Projectile,
+                        )),
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::DrenchArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
+            BuffKind::JoltArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::ConvertKindToArcing(
+                        ProjectileArcingProperties {
+                            distance: 8.0,
+                            arcs: 3,
+                            min_delay: Secs(0.25),
+                            max_delay: Secs(1.0),
+                            targets_owner: false,
+                        },
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::JoltArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
         }
     }
 
@@ -786,9 +903,23 @@ pub enum BuffCategory {
     PersistOnDeath,
     FromActiveAura(Uid, AuraKey),
     FromLink(DynWeakLinkHandle),
+    /// Buffs with this category are removed in the EntityAttackedHook event
+    /// handler
     RemoveOnAttack,
+    /// Buffs with this category are removed by any loadout changes triggered
+    /// from the character state system, buffs added by the self buff character
+    /// state automatically have this buff category
     RemoveOnLoadoutChange,
+    /// Ensures only 1 buff with this category can be present on an entity,
+    /// enforced in self buff character state
+    // TODO: Do we want to enforce this category similarly to how WeaponCoating is enforced?
     SelfBuff,
+    /// Ensures only 1 buff with this category can be present on an entity,
+    /// enforced in buff event handling. Currently cleared in the event handler
+    /// for shooting a projectile.
+    // TODO: If we need to clear buffs with this category in another place (e.g. on melee attacks),
+    // then logic will need to be added.
+    WeaponCoating,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -897,6 +1028,9 @@ pub enum BuffEffect {
     KnockbackMult(f32),
     /// Multiplier to speed of projectiles fired by the target
     ProjectileSpeedMult(f32),
+    /// Adds effects to projectiles when they are constructed from a projectile
+    /// constructor
+    ProjectileConstructorEffect(ProjectileConstructorEffect),
 }
 
 /// Actual de/buff.
@@ -1208,6 +1342,44 @@ impl Buffs {
                     next_start_time = buff.end_time;
                 }
             })
+        }
+    }
+
+    pub fn remove_by_category(
+        &mut self,
+        all_required: Vec<BuffCategory>,
+        any_required: Vec<BuffCategory>,
+        none_required: Vec<BuffCategory>,
+    ) {
+        let mut keys_to_remove = Vec::new();
+        for (key, buff) in self.buffs.iter() {
+            let mut required_met = true;
+            for required in &all_required {
+                if !buff.cat_ids.iter().any(|cat| cat == required) {
+                    required_met = false;
+                    break;
+                }
+            }
+            let mut any_met = any_required.is_empty();
+            for any in &any_required {
+                if buff.cat_ids.iter().any(|cat| cat == any) {
+                    any_met = true;
+                    break;
+                }
+            }
+            let mut none_met = true;
+            for none in &none_required {
+                if buff.cat_ids.iter().any(|cat| cat == none) {
+                    none_met = false;
+                    break;
+                }
+            }
+            if required_met && any_met && none_met {
+                keys_to_remove.push(key);
+            }
+        }
+        for key in keys_to_remove {
+            self.remove(key);
         }
     }
 }

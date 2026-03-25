@@ -2812,12 +2812,7 @@ impl Animation for BasicAction {
             //                BOW
             // ==================================
             Some(
-                "common.abilities.bow.arrow_shot"
-                | "common.abilities.bow.lesser_scatterburst"
-                | "common.abilities.bow.burning_arrow"
-                | "common.abilities.bow.poison_arrow"
-                | "common.abilities.bow.freezing_arrow"
-                | "common.abilities.bow.lightning_arrow",
+                "common.abilities.bow.arrow_shot" | "common.abilities.bow.lesser_scatterburst",
             ) => {
                 bow_start(&mut next, s_a);
 

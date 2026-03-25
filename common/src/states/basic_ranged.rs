@@ -136,11 +136,13 @@ impl CharacterBehavior for Data {
                 if !self.exhausted {
                     // Fire
                     let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
-                    let projectile = self.static_data.projectile.clone().create_projectile(
-                        Some(*data.uid),
-                        precision_mult,
-                        Some(self.static_data.ability_info),
-                    );
+                    let (projectile, marker) =
+                        self.static_data.projectile.clone().create_projectile(
+                            Some(*data.uid),
+                            precision_mult,
+                            Some(self.static_data.ability_info),
+                            Some(data.stats),
+                        );
                     // Shoots all projectiles simultaneously
                     let num_projectiles = self
                         .static_data
@@ -218,7 +220,7 @@ impl CharacterBehavior for Data {
                             speed: self.static_data.projectile_speed
                                 * data.stats.projectile_speed_mult,
                             object: None,
-                            marker: self.static_data.marker,
+                            marker: self.static_data.marker.or(marker),
                         });
                     }
 

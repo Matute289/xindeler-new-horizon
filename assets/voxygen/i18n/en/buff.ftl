@@ -194,6 +194,18 @@ buff-ardenthunt = Ardent Hunt
 ## Septic Shot
 buff-septicshot = Septic Shot
     .desc = Your next arrow will cause infection in the target, making it more deadly if the target has any ongoing conditions.
+## Ignite Arrow
+buff-ignitearrow = Ignite Arrow
+    .desc = You've ignited your next arrow, which will cause it to burn the target it strikes, and may be explosive if fired in a certain way.
+## Freeze Arrow
+buff-freezearrow = Freeze Arrow
+    .desc = You've frozen your next arrow, which will cause it to freeze the target it strikes, and it may explode in a cloud of frost if fired in a certain way.
+## Drench Arrow
+buff-drencharrow = Drench Arrow
+    .desc = You've drenched your next arrow in poison, which will cause it to poison the target it strikes, and it may explode in a cloud of poison if fired in a certain way.
+## Jolt Arrow
+buff-joltarrow = Jolt Arrow
+    .desc = You've statically charged your next arrow, which will create arcs of electricity from the target it strikes, and it may be attracted to targets if fired in a certain way.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

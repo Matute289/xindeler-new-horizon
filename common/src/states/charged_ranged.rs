@@ -100,7 +100,7 @@ impl CharacterBehavior for Data {
                         .body
                         .projectile_offsets(update.ori.look_vec(), data.scale.map_or(1.0, |s| s.0));
                     let pos = Pos(data.pos.0 + body_offsets);
-                    let projectile = self
+                    let (projectile, marker) = self
                         .static_data
                         .projectile
                         .clone()
@@ -109,6 +109,7 @@ impl CharacterBehavior for Data {
                             Some(*data.uid),
                             precision_mult,
                             Some(self.static_data.ability_info),
+                            Some(data.stats),
                         );
 
                     let num_projectiles = self
@@ -141,7 +142,7 @@ impl CharacterBehavior for Data {
                                 + charge_frac * self.static_data.scaled_projectile_speed)
                                 * data.stats.projectile_speed_mult,
                             object: None,
-                            marker: self.static_data.marker,
+                            marker: self.static_data.marker.or(marker),
                         });
                     }
 

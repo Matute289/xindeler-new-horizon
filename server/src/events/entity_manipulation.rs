@@ -2281,6 +2281,39 @@ impl ServerEvent for BonkEvent {
                             };
 
                             if matches!(block.get_sprite(), Some(SpriteKind::Bomb)) {
+                                let (projectile, marker) = ProjectileConstructor {
+                                    kind: ProjectileConstructorKind::Explosive {
+                                        radius: 12.0,
+                                        min_falloff: 0.75,
+                                        reagent: None,
+                                        terrain: Some((4.0, ColorPreset::Black)),
+                                        target: ProjectileExplosionTarget::Both,
+                                    },
+                                    attack: Some(ProjectileAttack {
+                                        damage: 40.0,
+                                        poise: Some(100.0),
+                                        knockback: None,
+                                        energy: None,
+                                        buff: None,
+                                        friendly_fire: true,
+                                        blockable: true,
+                                        attack_effect: None,
+                                        damage_effect: None,
+                                        without_combo: false,
+                                        damage_kind: DamageKind::Energy,
+                                    }),
+                                    scaled: None,
+                                    homing_rate: None,
+                                    split: None,
+                                    lifetime_override: None,
+                                    limit_per_ability: false,
+                                    override_collider: None,
+                                    pierce_entities: false,
+                                    is_point: true,
+                                    is_sticky: true,
+                                    hazard_marker: false,
+                                }
+                                .create_projectile(None, 1.0, None, None);
                                 shoot_emitter.emit(ShootEvent {
                                     entity: None,
                                     source_vel: None,
@@ -2288,42 +2321,10 @@ impl ServerEvent for BonkEvent {
                                     dir: Dir::from_unnormalized(vel.0).unwrap_or_default(),
                                     body: Body::Object(body),
                                     light: None,
-                                    projectile: ProjectileConstructor {
-                                        kind: ProjectileConstructorKind::Explosive {
-                                            radius: 12.0,
-                                            min_falloff: 0.75,
-                                            reagent: None,
-                                            terrain: Some((4.0, ColorPreset::Black)),
-                                            target: ProjectileExplosionTarget::Both,
-                                        },
-                                        attack: Some(ProjectileAttack {
-                                            damage: 40.0,
-                                            poise: Some(100.0),
-                                            knockback: None,
-                                            energy: None,
-                                            buff: None,
-                                            friendly_fire: true,
-                                            blockable: true,
-                                            attack_effect: None,
-                                            damage_effect: None,
-                                            without_combo: false,
-                                            damage_kind: DamageKind::Energy,
-                                        }),
-                                        scaled: None,
-                                        homing_rate: None,
-                                        split: None,
-                                        lifetime_override: None,
-                                        limit_per_ability: false,
-                                        override_collider: None,
-                                        pierce_entities: false,
-                                        is_point: true,
-                                        is_sticky: true,
-                                        hazard_marker: false,
-                                    }
-                                    .create_projectile(None, 1.0, None),
+                                    projectile,
                                     speed: vel.0.magnitude(),
                                     object: None,
-                                    marker: None,
+                                    marker,
                                 });
                             } else {
                                 create_object_emitter.emit(CreateObjectEvent {
@@ -2463,6 +2464,14 @@ impl ServerEvent for BuffEvent {
                                 new_buff.effects.clear();
                             }
 
+                            if new_buff.cat_ids.contains(&BuffCategory::WeaponCoating) {
+                                buffs.remove_by_category(
+                                    vec![BuffCategory::WeaponCoating],
+                                    Vec::new(),
+                                    Vec::new(),
+                                );
+                            }
+
                             buffs.insert(new_buff, *time);
                         }
                     },
@@ -2484,36 +2493,7 @@ impl ServerEvent for BuffEvent {
                         any_required,
                         none_required,
                     } => {
-                        let mut keys_to_remove = Vec::new();
-                        for (key, buff) in buffs.buffs.iter() {
-                            let mut required_met = true;
-                            for required in &all_required {
-                                if !buff.cat_ids.iter().any(|cat| cat == required) {
-                                    required_met = false;
-                                    break;
-                                }
-                            }
-                            let mut any_met = any_required.is_empty();
-                            for any in &any_required {
-                                if buff.cat_ids.iter().any(|cat| cat == any) {
-                                    any_met = true;
-                                    break;
-                                }
-                            }
-                            let mut none_met = true;
-                            for none in &none_required {
-                                if buff.cat_ids.iter().any(|cat| cat == none) {
-                                    none_met = false;
-                                    break;
-                                }
-                            }
-                            if required_met && any_met && none_met {
-                                keys_to_remove.push(key);
-                            }
-                        }
-                        for key in keys_to_remove {
-                            buffs.remove(key);
-                        }
+                        buffs.remove_by_category(all_required, any_required, none_required);
                     },
                     BuffChange::Refresh(kind) => {
                         buffs

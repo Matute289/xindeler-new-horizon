@@ -4,7 +4,7 @@ use crate::{
         DamageKind, GroupTarget, Knockback, KnockbackDir,
     },
     comp::{
-        ArcProperties, CapsulePrism,
+        ArcProperties, CapsulePrism, FrontendMarker, Stats,
         ability::Dodgeable,
         item::{Reagent, tool},
         pool::PoolProperties,
@@ -158,6 +158,29 @@ pub struct ProjectileAttack {
     pub damage_kind: DamageKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileArcingProperties {
+    pub distance: f32,
+    pub arcs: u32,
+    pub min_delay: Secs,
+    pub max_delay: Secs,
+    #[serde(default)]
+    pub targets_owner: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ProjectileConstructorEffectKind {
+    AttackEffect(AttackEffect),
+    ConvertKindToArcing(ProjectileArcingProperties),
+    Marker(FrontendMarker),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileConstructorEffect {
+    pub kind: ProjectileConstructorEffectKind,
+    pub tool_filter: Option<tool::ToolKind>,
+}
+
 fn default_both() -> ProjectileExplosionTarget { ProjectileExplosionTarget::Both }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -173,14 +196,7 @@ pub enum ProjectileConstructorKind {
         #[serde(default = "default_both")]
         target: ProjectileExplosionTarget,
     },
-    Arcing {
-        distance: f32,
-        arcs: u32,
-        min_delay: Secs,
-        max_delay: Secs,
-        #[serde(default)]
-        targets_owner: bool,
-    },
+    Arcing(ProjectileArcingProperties),
     Possess,
     Firework(Reagent),
     SurpriseEgg,
@@ -200,7 +216,8 @@ impl ProjectileConstructor {
         owner: Option<Uid>,
         precision_mult: f32,
         ability_info: Option<AbilityInfo>,
-    ) -> Projectile {
+        attacker_stats: Option<&Stats>,
+    ) -> (Projectile, Option<FrontendMarker>) {
         if self.scaled.is_some() {
             dev_panic!(
                 "Attempted to create a projectile that had a provided scaled value without \
@@ -209,6 +226,7 @@ impl ProjectileConstructor {
         }
 
         let instance = rand::random();
+        let marker = None;
         let attack = self.attack.map(|a| {
             let target = if a.friendly_fire {
                 Some(GroupTarget::All)
@@ -291,6 +309,36 @@ impl ProjectileConstructor {
             attack
         });
 
+        let (proj_kind, attack, marker) = {
+            let mut proj_kind = self.kind;
+            let mut attack = attack;
+            let mut marker = marker;
+
+            for effect in attacker_stats
+                .iter()
+                .flat_map(|s| s.projectile_constructor_effects.iter())
+            {
+                if effect
+                    .tool_filter
+                    .is_none_or(|tk| Some(tk) == ability_info.and_then(|ai| ai.tool))
+                {
+                    match &effect.kind {
+                        ProjectileConstructorEffectKind::ConvertKindToArcing(arc) => {
+                            proj_kind = ProjectileConstructorKind::Arcing(*arc);
+                        },
+                        ProjectileConstructorEffectKind::AttackEffect(effect) => {
+                            attack = attack.map(|a| a.with_effect(effect.clone()));
+                        },
+                        ProjectileConstructorEffectKind::Marker(mark) => {
+                            marker = Some(*mark);
+                        },
+                    }
+                }
+            }
+
+            (proj_kind, attack, marker)
+        };
+
         let homing = ability_info
             .and_then(|a| a.input_attr)
             .and_then(|i| i.target_entity)
@@ -306,14 +354,14 @@ impl ProjectileConstructor {
             }
         }
 
-        let default_lifetime = Secs(match self.kind {
+        let default_lifetime = Secs(match proj_kind {
             ProjectileConstructorKind::Firework(_) => 3.0,
             _ => 15.0,
         });
 
         let lifetime = self.lifetime_override.unwrap_or(default_lifetime);
 
-        match self.kind {
+        let projectile = match proj_kind {
             ProjectileConstructorKind::Simple => {
                 hit_solid.push(Effect::Stick);
                 hit_solid.push(Effect::Bonk);
@@ -410,13 +458,13 @@ impl ProjectileConstructor {
                     override_collider: self.override_collider,
                 }
             },
-            ProjectileConstructorKind::Arcing {
+            ProjectileConstructorKind::Arcing(ProjectileArcingProperties {
                 distance,
                 arcs,
                 min_delay,
                 max_delay,
                 targets_owner,
-            } => {
+            }) => {
                 let mut hit_entity = vec![Effect::Vanish];
 
                 if let Some(attack) = attack {
@@ -526,35 +574,19 @@ impl ProjectileConstructor {
                     dodgeable,
                 });
 
+                let lifetime = self.lifetime_override.unwrap_or(Secs(10.0));
+
+                let mut hit_entity = vec![Effect::Vanish];
+
                 if let Some(props) = pool_props {
                     hit_solid.push(Effect::Pool(props.clone()));
                     hit_solid.push(Effect::Vanish);
-
-                    let lifetime = self.lifetime_override.unwrap_or(Secs(10.0));
-
-                    return Projectile {
-                        hit_solid,
-                        hit_entity: vec![Effect::Pool(props), Effect::Vanish],
-                        timeout,
-                        time_left: Duration::from_secs_f64(lifetime.0),
-                        init_time: lifetime,
-                        owner,
-                        ignore_group: true,
-                        is_sticky: true,
-                        is_point: true,
-                        homing,
-                        pierce_entities: false,
-                        hit_entities: Vec::new(),
-                        limit_per_ability: self.limit_per_ability,
-                        override_collider: self.override_collider,
-                    };
+                    hit_entity.push(Effect::Pool(props));
                 }
-
-                let lifetime = self.lifetime_override.unwrap_or(Secs(10.0));
 
                 Projectile {
                     hit_solid,
-                    hit_entity: vec![Effect::Vanish],
+                    hit_entity,
                     timeout,
                     time_left: Duration::from_secs_f64(lifetime.0),
                     init_time: lifetime,
@@ -592,7 +624,8 @@ impl ProjectileConstructor {
                     override_collider: self.override_collider,
                 }
             },
-        }
+        };
+        (projectile, marker)
     }
 
     pub fn handle_scaling(mut self, scaling: f32) -> Self {
@@ -668,9 +701,10 @@ impl ProjectileConstructor {
             | ProjectileConstructorKind::Pool { ref mut radius, .. } => {
                 *radius *= stats.range;
             },
-            ProjectileConstructorKind::Arcing {
-                ref mut distance, ..
-            } => {
+            ProjectileConstructorKind::Arcing(ProjectileArcingProperties {
+                ref mut distance,
+                ..
+            }) => {
                 *distance *= stats.range;
             },
         }

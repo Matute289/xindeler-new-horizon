@@ -3693,10 +3693,6 @@ impl Stance {
             },
             Stance::Bow(BowStance::Barrage) => "common.abilities.bow.barrage",
             Stance::Bow(BowStance::Scatterburst) => "common.abilities.bow.scatterburst",
-            Stance::Bow(BowStance::IgniteArrow) => "common.abilities.bow.ignite_arrow",
-            Stance::Bow(BowStance::DrenchArrow) => "common.abilities.bow.drench_arrow",
-            Stance::Bow(BowStance::FreezeArrow) => "common.abilities.bow.freeze_arrow",
-            Stance::Bow(BowStance::JoltArrow) => "common.abilities.bow.jolt_arrow",
             Stance::Bow(BowStance::Hawkstrike) => "common.abilities.bow.hawkstrike",
             Stance::Bow(BowStance::Heartseeker) => "common.abilities.bow.heartseeker",
             Stance::None => "veloren.core.pseudo_abilities.no_stance",
@@ -3717,10 +3713,6 @@ pub enum SwordStance {
 pub enum BowStance {
     Barrage,
     Scatterburst,
-    IgniteArrow,
-    DrenchArrow,
-    FreezeArrow,
-    JoltArrow,
     Heartseeker,
     Hawkstrike,
 }

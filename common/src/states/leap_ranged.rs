@@ -118,11 +118,13 @@ impl CharacterBehavior for Data {
                         let precision_mult =
                             combat::compute_precision_mult(data.inventory, data.msm);
 
-                        let projectile = self.static_data.projectile.clone().create_projectile(
-                            Some(*data.uid),
-                            precision_mult,
-                            Some(self.static_data.ability_info),
-                        );
+                        let (projectile, marker) =
+                            self.static_data.projectile.clone().create_projectile(
+                                Some(*data.uid),
+                                precision_mult,
+                                Some(self.static_data.ability_info),
+                                Some(data.stats),
+                            );
 
                         let body_offsets = data.body.projectile_offsets(
                             update.ori.look_vec(),
@@ -140,7 +142,7 @@ impl CharacterBehavior for Data {
                             speed: self.static_data.projectile_speed
                                 * data.stats.projectile_speed_mult,
                             object: None,
-                            marker: None,
+                            marker,
                         });
 
                         if let CharacterState::LeapRanged(c) = &mut update.character {

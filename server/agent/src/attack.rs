@@ -2521,16 +2521,7 @@ impl AgentData<'_> {
                     *next_input = Some(current_input);
                 }
             };
-            let prefer_m1m2 = matches!(
-                self.stance,
-                Some(Stance::Bow(
-                    BowStance::Scatterburst
-                        | BowStance::IgniteArrow
-                        | BowStance::DrenchArrow
-                        | BowStance::FreezeArrow
-                        | BowStance::JoltArrow
-                ))
-            );
+            let prefer_m1m2 = matches!(self.stance, Some(Stance::Bow(BowStance::Scatterburst)));
             let prefer_m2 = matches!(
                 self.stance,
                 Some(Stance::Bow(

@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 use std::{error::Error, fmt};
 
-use crate::combat::{AttackEffect, AttackedModification, CombatRequirement, StatEffect};
+use crate::{
+    combat::{AttackEffect, AttackedModification, CombatRequirement, StatEffect},
+    comp::projectile::ProjectileConstructorEffect,
+};
 
 use super::Body;
 
@@ -110,6 +113,7 @@ pub struct Stats {
     pub precision_power_mult: f32,
     pub knockback_mult: f32,
     pub projectile_speed_mult: f32,
+    pub projectile_constructor_effects: Vec<ProjectileConstructorEffect>,
 }
 
 impl Stats {
@@ -148,6 +152,7 @@ impl Stats {
             precision_power_mult: 1.0,
             knockback_mult: 1.0,
             projectile_speed_mult: 1.0,
+            projectile_constructor_effects: Vec::new(),
         }
     }
 

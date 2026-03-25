@@ -189,11 +189,13 @@ impl CharacterBehavior for Data {
                             (base_pos, base_dir)
                         };
 
-                    let projectile = self.static_data.projectile.clone().create_projectile(
-                        Some(*data.uid),
-                        precision_mult,
-                        Some(self.static_data.ability_info),
-                    );
+                    let (projectile, marker) =
+                        self.static_data.projectile.clone().create_projectile(
+                            Some(*data.uid),
+                            precision_mult,
+                            Some(self.static_data.ability_info),
+                            Some(data.stats),
+                        );
                     output_events.emit_server(ShootEvent {
                         entity: Some(data.entity),
                         source_vel: Some(*data.vel),
@@ -204,7 +206,7 @@ impl CharacterBehavior for Data {
                         light: self.static_data.projectile_light,
                         speed: self.static_data.projectile_speed * data.stats.projectile_speed_mult,
                         object: None,
-                        marker: None,
+                        marker,
                     });
 
                     // Removes energy from character when arrow is fired

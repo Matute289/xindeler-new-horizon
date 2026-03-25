@@ -138,10 +138,11 @@ impl CharacterBehavior for Data {
                             projectile
                         }
                     };
-                    let projectile = projectile.create_projectile(
+                    let (projectile, _marker) = projectile.create_projectile(
                         Some(*data.uid),
                         precision_mult,
                         Some(self.static_data.ability_info),
+                        Some(data.stats),
                     );
 
                     // Removes the thrown item from the entity's inventory and creates a
