@@ -1504,12 +1504,17 @@ fn handle_ability(
                     .and_then(|ia| ia.target_entity);
                 update.character = character_state;
 
-                if let Some(init_event) = ability.ability_meta().init_event {
+                for init_event in ability
+                    .ability_meta()
+                    .init_event
+                    .iter()
+                    .chain(ability.ability_meta().init_event2.iter())
+                {
                     match init_event {
                         AbilityInitEvent::EnterStance(stance) => {
                             output_events.emit_server(ChangeStanceEvent {
                                 entity: data.entity,
-                                stance,
+                                stance: *stance,
                             });
                         },
                         AbilityInitEvent::GainBuff {
@@ -1524,8 +1529,8 @@ fn handle_ability(
                             output_events.emit_server(BuffEvent {
                                 entity: data.entity,
                                 buff_change: BuffChange::Add(Buff::new(
-                                    kind,
-                                    BuffData::new(strength, duration),
+                                    *kind,
+                                    BuffData::new(*strength, *duration),
                                     vec![BuffCategory::SelfBuff],
                                     BuffSource::Character {
                                         by: *data.uid,
@@ -1541,7 +1546,7 @@ fn handle_ability(
                         AbilityInitEvent::RemoveBuff(buff) => {
                             output_events.emit_server(BuffEvent {
                                 entity: data.entity,
-                                buff_change: BuffChange::RemoveByKind(buff),
+                                buff_change: BuffChange::RemoveByKind(*buff),
                             });
                         },
                     }

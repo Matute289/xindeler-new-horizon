@@ -3537,6 +3537,8 @@ pub struct AbilityMeta {
     #[serde(default)]
     /// This is an event that gets emitted when the ability is first activated
     pub init_event: Option<AbilityInitEvent>,
+    // TODO: Evaluate if we want this to be a vec if we need more? Would lose copy though...
+    pub init_event2: Option<AbilityInitEvent>,
     #[serde(default)]
     pub requirements: AbilityRequirements,
     /// Adjusts stats of ability when activated based on context.
