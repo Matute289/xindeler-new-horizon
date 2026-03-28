@@ -801,7 +801,6 @@ fn dispatch_hit(
                 emitters.emit(PossessEvent(owner_uid, target_uid));
             }
         },
-        projectile::Effect::Stick => {},
         projectile::Effect::Firework(_) => {},
         projectile::Effect::SurpriseEgg => {
             let Pos(pos) = *projectile_info.pos;

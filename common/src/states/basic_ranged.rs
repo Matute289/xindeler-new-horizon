@@ -157,8 +157,8 @@ impl CharacterBehavior for Data {
                         data.inputs.look_dir
                     };
 
-                    //Adds the vertical angle offset if present.
-                    //Unwrap clause fires if the cross product is degenerate.
+                    // Adds the vertical angle offset if present.
+                    // Unwrap clause fires if the cross product is degenerate.
                     let aim_dir = if self.static_data.vertical_angle_offset != 0.0 {
                         let cross = vek::Vec3::unit_z().cross(*aim_dir).normalized();
                         Dir::from_unnormalized(

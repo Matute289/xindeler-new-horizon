@@ -2311,7 +2311,7 @@ impl ServerEvent for BonkEvent {
                                     pierce_entities: false,
                                     is_point: true,
                                     is_sticky: true,
-                                    hazard_marker: false,
+                                    hazard: false,
                                 }
                                 .create_projectile(None, 1.0, None, None);
                                 shoot_emitter.emit(ShootEvent {

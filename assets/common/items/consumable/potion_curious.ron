@@ -65,7 +65,8 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Pig, body_type: Female )))),
                 ),
-                cat_ids: [
+                cat_ids: [],
+            )),
         ])
     ),
     quality: Common,

@@ -242,17 +242,10 @@
         ],
     )),
     Tool(Bow): AbilitySet((
-        primary: Contextualized(
-            pseudo_id: "common.abilities.bow.arrow_shot",
-            abilities: [
-                ((stance: Bow(Scatterburst)), (Bow(Scatterburst), "common.abilities.bow.lesser_scatterburst")),
-                ((), (None, "common.abilities.bow.arrow_shot")),
-            ],
-        ),
+        primary: Simple(None, "common.abilities.bow.arrow_shot"),
         secondary: Contextualized(
             pseudo_id: "common.abilities.bow.broadhead",
             abilities: [
-                ((stance: Bow(Scatterburst)), (Bow(Scatterburst), "common.abilities.bow.greater_scatterburst")),
                 ((stance: Bow(Barrage)), (Bow(Barrage), "common.abilities.bow.barrage_shot")),
                 ((stance: Bow(Heartseeker), buff: IgniteArrow), (Bow(Heartseeker), "common.abilities.bow.burning_heartseeker_shot")),
                 ((stance: Bow(Heartseeker), buff: DrenchArrow), (Bow(Heartseeker), "common.abilities.bow.poison_heartseeker_shot")),
@@ -298,7 +291,16 @@
             Simple(Bow(JoltArrow), "common.abilities.bow.jolt_arrow"),
             Simple(Bow(Barrage), "common.abilities.bow.barrage"),
             Simple(Bow(PiercingGale), "common.abilities.bow.piercing_gale"),
-            Simple(Bow(Scatterburst), "common.abilities.bow.scatterburst"),
+            Contextualized(
+                pseudo_id: "common.abilities.bow.thorn_stake",
+                abilities: [
+                    ((buff: IgniteArrow), (Bow(ThornStake), "common.abilities.bow.burning_thorn_stake")),
+                    ((buff: FreezeArrow), (Bow(ThornStake), "common.abilities.bow.freezing_thorn_stake")),
+                    ((buff: DrenchArrow), (Bow(ThornStake), "common.abilities.bow.poison_thorn_stake")),
+                    ((buff: JoltArrow), (Bow(ThornStake), "common.abilities.bow.lightning_thorn_stake")),
+                    ((), (Bow(ThornStake), "common.abilities.bow.thorn_stake")),
+                ],
+            ),
             Simple(Bow(Fusillade), "common.abilities.bow.fusillade"),
             Simple(Bow(DeathVolley), "common.abilities.bow.death_volley"),
         ],

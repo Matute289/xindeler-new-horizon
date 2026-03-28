@@ -27,7 +27,6 @@ pub enum Effect {
     Attack(Attack),
     Explode(Explosion),
     Vanish,
-    Stick,
     Possess,
     Bonk, // Knock/dislodge/change objects on hit
     Firework(Reagent),
@@ -112,7 +111,7 @@ pub struct ProjectileConstructor {
     #[serde(default = "default_true")]
     pub is_sticky: bool,
     #[serde(default)]
-    pub hazard_marker: bool,
+    pub hazard: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -363,7 +362,6 @@ impl ProjectileConstructor {
 
         let projectile = match proj_kind {
             ProjectileConstructorKind::Simple => {
-                hit_solid.push(Effect::Stick);
                 hit_solid.push(Effect::Bonk);
 
                 let mut hit_entity = vec![Effect::Vanish];
@@ -438,7 +436,9 @@ impl ProjectileConstructor {
                     },
                 }
 
-                hit_solid.push(Effect::Vanish);
+                if !self.hazard {
+                    hit_solid.push(Effect::Vanish);
+                }
                 hit_entity.push(Effect::Vanish);
 
                 Projectile {
@@ -499,25 +499,21 @@ impl ProjectileConstructor {
                     override_collider: self.override_collider,
                 }
             },
-            ProjectileConstructorKind::Possess => {
-                hit_solid.push(Effect::Stick);
-
-                Projectile {
-                    hit_solid,
-                    hit_entity: vec![Effect::Stick, Effect::Possess],
-                    timeout,
-                    time_left: Duration::from_secs_f64(lifetime.0),
-                    init_time: lifetime,
-                    owner,
-                    ignore_group: false,
-                    is_sticky: self.is_sticky,
-                    is_point: self.is_point,
-                    homing,
-                    pierce_entities: self.pierce_entities,
-                    hit_entities: Vec::new(),
-                    limit_per_ability: self.limit_per_ability,
-                    override_collider: self.override_collider,
-                }
+            ProjectileConstructorKind::Possess => Projectile {
+                hit_solid,
+                hit_entity: vec![Effect::Possess],
+                timeout,
+                time_left: Duration::from_secs_f64(lifetime.0),
+                init_time: lifetime,
+                owner,
+                ignore_group: false,
+                is_sticky: self.is_sticky,
+                is_point: self.is_point,
+                homing,
+                pierce_entities: self.pierce_entities,
+                hit_entities: Vec::new(),
+                limit_per_ability: self.limit_per_ability,
+                override_collider: self.override_collider,
             },
             ProjectileConstructorKind::Firework(reagent) => {
                 timeout.push(Effect::Firework(reagent));
@@ -751,14 +747,14 @@ impl ProjectileConstructor {
             | ProjectileConstructorKind::Firework(_)
             | ProjectileConstructorKind::SurpriseEgg
             | ProjectileConstructorKind::TrainingDummy
-            | ProjectileConstructorKind::Arcing { .. }
+            | ProjectileConstructorKind::Arcing(_)
             | ProjectileConstructorKind::Pool { .. } => false,
             ProjectileConstructorKind::Explosive { .. } => true,
         }
     }
 
     pub fn agent_aim_z_offset(&self, tgt_eye_offset: f32) -> f32 {
-        if self.hazard_marker || matches!(self.kind, ProjectileConstructorKind::Explosive { .. }) {
+        if self.hazard || matches!(self.kind, ProjectileConstructorKind::Explosive { .. }) {
             0.0
         } else {
             tgt_eye_offset

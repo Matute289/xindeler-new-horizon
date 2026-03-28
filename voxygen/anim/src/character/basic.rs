@@ -2811,9 +2811,7 @@ impl Animation for BasicAction {
             // ==================================
             //                BOW
             // ==================================
-            Some(
-                "common.abilities.bow.arrow_shot" | "common.abilities.bow.lesser_scatterburst",
-            ) => {
+            Some("common.abilities.bow.arrow_shot") => {
                 bow_start(&mut next, s_a);
 
                 let charge = chargebase.min(1.0);
@@ -2826,7 +2824,6 @@ impl Animation for BasicAction {
             },
             Some(
                 "common.abilities.bow.broadhead"
-                | "common.abilities.bow.greater_scatterburst"
                 | "common.abilities.bow.burning_broadhead"
                 | "common.abilities.bow.poison_broadhead"
                 | "common.abilities.bow.freezing_broadhead"
@@ -2894,11 +2891,6 @@ impl Animation for BasicAction {
                 next.control.orientation.rotate_y(move1 * 0.4);
                 next.control.orientation.rotate_x(move1 * 0.6);
                 next.control.position += Vec3::new(4.0, 0.0, 6.0) * move1;
-            },
-            Some("common.abilities.bow.scatterburst") => {
-                bow_start(&mut next, s_a);
-
-                next.hand_l.position += Vec3::new(0.0, 5.0, 0.0) * ((move1 + move2) * 10.0).sin();
             },
             Some("common.abilities.bow.eagle_eye") => {
                 bow_start(&mut next, s_a);

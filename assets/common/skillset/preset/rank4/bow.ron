@@ -13,5 +13,5 @@
     Skill((Bow(IgniteArrow), 1)),
     Skill((Bow(DrenchArrow), 1)),
     Skill((Bow(PiercingGale), 1)),
-    Skill((Bow(Scatterburst), 1)),
+    Skill((Bow(ThornStake), 1)),
 ]

@@ -117,7 +117,7 @@ pub enum BowSkill {
     JoltArrow,
     Barrage,
     PiercingGale,
-    Scatterburst,
+    ThornStake,
     Fusillade,
     DeathVolley,
 }

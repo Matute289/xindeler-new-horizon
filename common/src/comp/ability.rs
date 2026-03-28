@@ -822,7 +822,6 @@ pub enum CharacterAbility {
         movement_modifier: MovementModifier,
         #[serde(default)]
         ori_modifier: OrientationModifier,
-        #[serde(default)]
         marker: Option<comp::FrontendMarker>,
         #[serde(default)]
         meta: AbilityMeta,
@@ -3694,7 +3693,6 @@ impl Stance {
                 "veloren.core.pseudo_abilities.sword.cleaving_stance"
             },
             Stance::Bow(BowStance::Barrage) => "common.abilities.bow.barrage",
-            Stance::Bow(BowStance::Scatterburst) => "common.abilities.bow.scatterburst",
             Stance::Bow(BowStance::Hawkstrike) => "common.abilities.bow.hawkstrike",
             Stance::Bow(BowStance::Heartseeker) => "common.abilities.bow.heartseeker",
             Stance::None => "veloren.core.pseudo_abilities.no_stance",
@@ -3714,7 +3712,6 @@ pub enum SwordStance {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash, PartialOrd, Ord)]
 pub enum BowStance {
     Barrage,
-    Scatterburst,
     Heartseeker,
     Hawkstrike,
 }

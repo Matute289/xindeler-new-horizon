@@ -2180,14 +2180,14 @@ impl AgentData<'_> {
                 BowTactics::HunterIntermediate => {
                     // ardent hunt
                     set_ability(controller, 0, 2);
-                    // foothold, heavy nock, owl talon, or eagle eye
+                    // foothold, heavy nock, storm chaser, or eagle eye
                     let mut options = vec![0, 1, 3, 4];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::HunterAdvanced => {
-                    // ardent hunt, owl talon, eagle eye, heartseeker, or hawkstrike
+                    // ardent hunt, storm chaser, eagle eye, heartseeker, or hawkstrike
                     let mut options = vec![2, 3, 4, 5, 6];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2234,14 +2234,14 @@ impl AgentData<'_> {
                 BowTactics::ArtilleryIntermediate => {
                     // barrage
                     set_ability(controller, 0, 12);
-                    // foothold, heavy nock, piercing gale, or scatterburst
+                    // foothold, heavy nock, piercing gale, or thorn stake
                     let mut options = vec![0, 1, 13, 14];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::ArtilleryAdvanced => {
-                    // barrage, piercing gale, scatterburst, fusillade, death volley
+                    // barrage, piercing gale, thorn stake, fusillade, death volley
                     let mut options = vec![12, 13, 14, 15, 16];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2521,7 +2521,6 @@ impl AgentData<'_> {
                     *next_input = Some(current_input);
                 }
             };
-            let prefer_m1m2 = matches!(self.stance, Some(Stance::Bow(BowStance::Scatterburst)));
             let prefer_m2 = matches!(
                 self.stance,
                 Some(Stance::Bow(
@@ -2536,12 +2535,6 @@ impl AgentData<'_> {
             let mut next_input = None;
             if let Some(input) = current_input {
                 continue_current_input(input, &mut next_input);
-            } else if prefer_m1m2 {
-                if rng.random_bool(0.3) {
-                    next_input = Some(InputKind::Primary);
-                } else {
-                    next_input = Some(InputKind::Secondary);
-                }
             } else if prefer_m2 {
                 if could_use_input(InputKind::Secondary, ability_preferences) {
                     next_input = Some(InputKind::Secondary);

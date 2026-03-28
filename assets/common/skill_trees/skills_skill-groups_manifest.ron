@@ -93,7 +93,7 @@
         Bow(IgniteArrow),
         Bow(DrenchArrow),
         Bow(PiercingGale),
-        Bow(Scatterburst),
+        Bow(ThornStake),
         Bow(Heartseeker),
         Bow(Hawkstrike),
         Bow(FreezeArrow),
