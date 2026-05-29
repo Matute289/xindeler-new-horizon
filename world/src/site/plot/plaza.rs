@@ -138,7 +138,7 @@ impl Plaza {
 
         let min_size = aabr.size().reduce_min();
         // For now only generate plaza structures in woodland villages
-        let decoration = if land.get_gradient_approx(aabr.center()) < 0.4
+        let decoration = if land.get_gradient_approx(aabr.center()) < 1.5
             && min_size >= TILE_SIZE as i32 * 5
             && matches!(site.kind, Some(SiteKind::Refactor))
         {
