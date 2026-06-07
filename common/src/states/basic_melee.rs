@@ -77,8 +77,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::BasicMelee(c) = &mut update.character {
                         c.timer = Duration::default();
                         c.stage_section = StageSection::Action;
-                        c.movement_modifier = self.static_data.movement_modifier.swing;
-                        c.ori_modifier = self.static_data.ori_modifier.swing;
+                        c.movement_modifier = self.static_data.movement_modifier.action;
+                        c.ori_modifier = self.static_data.ori_modifier.action;
                     }
                 }
             },

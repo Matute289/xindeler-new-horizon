@@ -29,11 +29,12 @@ BasicRanged(
             )),
         )),
         lifetime_override: Some(0.6),
-        limit_per_ability: true,
     ),
     projectile_body: Object(Arrow),
     projectile_speed: 30.0,
     auto_aim: true,
+    // Note: auto aim gets applied before this, this parameter is included as a fallback option for if the targeted terrain is too far away for voxygen targeting code to 'see'
+    vertical_angle_offset: 1.2,
     movement_modifier: (
         buildup: Some(0.0),
         recover: Some(0.2),

@@ -250,5 +250,3 @@ buff-ardenthunter = Cazador Apasionado
     .desc = Tu fervor hace que tus flechas sean más letales contra un objetivo concreto, y tu energía aumenta al ver cómo tus flechas lo alcanzan.
 buff-ardenthunted = Cazado con Fervor
     .desc = Un arquero ferviente te ha marcado como objetivo.
-buff-septicshot = Disparo séptico
-    .desc = Tu próximo disparo provocará una infección en el objetivo, lo que aumentará su letalidad si este tiene alguna otra condición.

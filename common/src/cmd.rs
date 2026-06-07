@@ -182,7 +182,6 @@ lazy_static! {
             BuffKind::EagleEye => "eagle_eye",
             BuffKind::Chilled => "chilled",
             BuffKind::ArdentHunt => "ardent_hunt",
-            BuffKind::SepticShot => "septic_shot",
             BuffKind::IgniteArrow => "ignite_arrow",
             BuffKind::FreezeArrow => "freeze_arrow",
             BuffKind::DrenchArrow => "drench_arrow",

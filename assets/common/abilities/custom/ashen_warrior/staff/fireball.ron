@@ -26,7 +26,7 @@ BasicRanged(
     num_projectiles: Value(1),
     movement_modifier: (
         buildup: Some(0.3),
-        swing: Some(0.3),
+        action: Some(0.3),
         recover: Some(0.3),
     ),
 )

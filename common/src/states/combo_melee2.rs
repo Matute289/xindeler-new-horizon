@@ -149,8 +149,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::ComboMelee2(c) = &mut update.character {
                         c.timer = Duration::default();
                         c.stage_section = StageSection::Action;
-                        c.movement_modifier = strike_data.movement_modifier.swing;
-                        c.ori_modifier = strike_data.ori_modifier.swing;
+                        c.movement_modifier = strike_data.movement_modifier.action;
+                        c.ori_modifier = strike_data.ori_modifier.action;
                     }
                 }
                 if let Some(FrontendSpecifier::ClayGolemDash) = self.static_data.specifier {

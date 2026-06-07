@@ -180,5 +180,3 @@ buff-eagleeye = Oko Dravce
     .desc = Přesně vidíš zranitelná místa nepřátel a máš dost obratnosti k vedení každého šípu do těchto míst.
 buff-chilled = Vymrzlý
     .desc = Intenzivní chlad tě zpomaluje a jsi zranitelnější silovým útokům.
-buff-septicshot = Hnisající Rána
-    .desc = Tvůj další šíp způsobí cíli infekci, která bude ještě účinnější, pokud má cíl nějaké další stavy.

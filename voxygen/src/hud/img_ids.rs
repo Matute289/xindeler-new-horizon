@@ -944,7 +944,6 @@ image_ids! {
         buff_stormchaser: "voxygen.element.de_buffs.buff_stormchaser",
         buff_eagleeye: "voxygen.element.de_buffs.buff_eagleeye",
         buff_ardenthunt: "voxygen.element.de_buffs.buff_ardenthunt",
-        buff_septicshot: "voxygen.element.de_buffs.buff_septicshot",
 
         // Debuffs
         debuff_cursed_0: "voxygen.element.de_buffs.debuff_cursed_0",

@@ -191,9 +191,6 @@ buff-chilled = Chilled
 ## Ardent Hunt
 buff-ardenthunt = Ardent Hunt
     .desc = Your fervor causes your arrows to be more lethal to a specific target, at the cost of them being weaker against other targets.
-## Septic Shot
-buff-septicshot = Septic Shot
-    .desc = Your next arrow will cause infection in the target, making it more deadly if the target has any ongoing conditions.
 ## Ignite Arrow
 buff-ignitearrow = Ignite Arrow
     .desc = You've ignited your next arrow, which will cause it to burn the target it strikes, and may be explosive if fired in a certain way.

@@ -237,5 +237,3 @@ buff-eagleeye = Œil d'aigle
     .desc = Vous pouvez observer les points vulnérables de vos cibles avec clarté, et avez l'agilité nécessaire pour guider chaque flèche sur ceux-ci.
 buff-chilled = Au frais
     .desc = Le froid intense vous ralenti et vous laisse davantage vulnérable aux attaques puissantes.
-buff-septicshot = Tir septique
-    .desc = Votre prochaine flèche inflige une infection à la cible, plus léthale si celle-ci subit déjà des effets négatifs.

@@ -5989,7 +5989,6 @@ fn build_buff(
             | BuffKind::EagleEye
             | BuffKind::Chilled
             | BuffKind::ArdentHunt
-            | BuffKind::SepticShot
             | BuffKind::IgniteArrow
             | BuffKind::FreezeArrow
             | BuffKind::DrenchArrow

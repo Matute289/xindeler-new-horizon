@@ -150,8 +150,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
                         c.stage_section = StageSection::Action;
                         c.timer = Duration::default();
-                        c.movement_modifier = self.static_data.movement_modifier.swing;
-                        c.ori_modifier = self.static_data.ori_modifier.swing;
+                        c.movement_modifier = self.static_data.movement_modifier.action;
+                        c.ori_modifier = self.static_data.ori_modifier.action;
                     }
                 }
             },

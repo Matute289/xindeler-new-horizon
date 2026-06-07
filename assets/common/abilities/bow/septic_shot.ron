@@ -1,10 +1,36 @@
-SelfBuff(
-    buildup_duration: 0.1,
-    cast_duration: 0.1,
-    recover_duration: 0.1,
-    buffs: [
-        BuffDesc(kind: SepticShot, data: BuffData(strength: 1.0, duration: Some(30.0))),
-    ],
-    buff_cat: Some(RemoveOnAttack),
+BasicRanged(
     energy_cost: 20,
+    buildup_duration: 0.4,
+    recover_duration: 0.1,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 20,
+            knockback: Some(4),
+            energy: Some(16),
+            buff: Some((
+                kind: Bleeding,
+                dur_secs: 10,
+                strength: DamageFraction(0.1),
+                chance: 0.1,
+            )),
+            damage_kind: Piercing,
+            attack_effect: Some((
+                DebuffsVulnerable(
+                    mult: 1.0,
+                    scaling: Sqrt,
+                    filter_attacker: true,
+                    filter_weapon: Some(Bow),
+                ),
+                AttackSource(Projectile),
+            ))
+        )),
+    ),
+    projectile_body: Object(Arrow),
+    projectile_speed: 110.0,
+    movement_modifier: (
+        buildup: Some(0.7),
+        action: Some(0.7),
+        recover: Some(0.7),
+    ),
 )

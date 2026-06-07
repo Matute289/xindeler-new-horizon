@@ -94,8 +94,8 @@ impl CharacterBehavior for Data {
                     update.character = CharacterState::Explosion(Data {
                         timer: Duration::default(),
                         stage_section: StageSection::Action,
-                        movement_modifier: self.static_data.movement_modifier.swing,
-                        ori_modifier: self.static_data.ori_modifier.swing,
+                        movement_modifier: self.static_data.movement_modifier.action,
+                        ori_modifier: self.static_data.ori_modifier.action,
                         ..*self
                     });
                 }

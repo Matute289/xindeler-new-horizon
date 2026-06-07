@@ -1988,7 +1988,7 @@ fn loadout_change_hook(data: &JoinData<'_>, output_events: &mut OutputEvents, cl
 #[serde(deny_unknown_fields)]
 pub struct MovementModifier {
     pub buildup: Option<f32>,
-    pub swing: Option<f32>,
+    pub action: Option<f32>,
     pub recover: Option<f32>,
 }
 
@@ -1996,7 +1996,7 @@ pub struct MovementModifier {
 #[serde(deny_unknown_fields)]
 pub struct OrientationModifier {
     pub buildup: Option<f32>,
-    pub swing: Option<f32>,
+    pub action: Option<f32>,
     pub recover: Option<f32>,
 }
 

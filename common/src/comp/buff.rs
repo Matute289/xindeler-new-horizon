@@ -1,7 +1,7 @@
 use crate::{
     combat::{
         AttackEffect, AttackSource, AttackedModification, CombatBuff, CombatBuffStrength,
-        CombatEffect, CombatRequirement, ScalingKind, StatEffect, StatEffectTarget,
+        CombatEffect, CombatRequirement, StatEffect, StatEffectTarget,
     },
     comp::{
         FrontendMarker, Mass, Stats,
@@ -171,11 +171,6 @@ pub enum BuffKind {
     /// Strength linearly increases the amount of additional damage dealt to the
     /// target. Damage reduction against other targets is fixed at -25%.
     ArdentHunt,
-    /// Causes the next projectile fired to do additional damage for every
-    /// debuff the target has that had been inflicted by the attacker when using
-    /// a bow.
-    /// Strength linearly increases the amount of additional damage.
-    SepticShot,
     /// Causes the next projectile fired by a bow to add the burning debuff to
     /// the target.
     /// Strength linearly increases the fraction of damage converted to burning
@@ -331,7 +326,6 @@ impl BuffKind {
             | BuffKind::StormChaser
             | BuffKind::EagleEye
             | BuffKind::ArdentHunt
-            | BuffKind::SepticShot
             | BuffKind::IgniteArrow
             | BuffKind::FreezeArrow
             | BuffKind::DrenchArrow
@@ -667,15 +661,6 @@ impl BuffKind {
                 }
                 effects
             },
-            BuffKind::SepticShot => vec![BuffEffect::AttackEffect(
-                AttackEffect::new(None, CombatEffect::DebuffsVulnerable {
-                    mult: data.strength,
-                    scaling: ScalingKind::Sqrt,
-                    filter_attacker: true,
-                    filter_weapon: Some(ToolKind::Bow),
-                })
-                .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
-            )],
             BuffKind::IgniteArrow => vec![
                 BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
                     kind: ProjectileConstructorEffectKind::AttackEffect(

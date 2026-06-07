@@ -5603,7 +5603,6 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::StormChaser => imgs.buff_stormchaser,
         BuffKind::EagleEye => imgs.buff_eagleeye,
         BuffKind::ArdentHunt => imgs.buff_ardenthunt,
-        BuffKind::SepticShot => imgs.buff_septicshot,
         BuffKind::IgniteArrow => imgs.bow_ignite_arrow,
         BuffKind::FreezeArrow => imgs.bow_freeze_arrow,
         BuffKind::DrenchArrow => imgs.bow_drench_arrow,

@@ -21,8 +21,6 @@ ComboMelee2(
             recover_duration: 0.15,
             movement: (
                 buildup: Some(Forward(0.1)),
-                swing: None,
-                recover: None,
             ),
         ),
     ],

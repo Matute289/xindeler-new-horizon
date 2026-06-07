@@ -651,6 +651,7 @@ impl Attack {
                             let change = {
                                 let mut change = change;
                                 change.amount *= damage * strength_modifier;
+                                change.instance = rand::random();
                                 change
                             };
                             accumulated_damage -= change.amount;
@@ -743,6 +744,7 @@ impl Attack {
                                         change.amount *= scaling.factor(num_debuffs as f32, 1.0)
                                             * mult
                                             * strength_modifier;
+                                        change.instance = rand::random();
                                         change
                                     };
                                     accumulated_damage -= change.amount;

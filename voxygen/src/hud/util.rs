@@ -207,7 +207,6 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::StormChaser => "buff-stormchaser",
         BuffKind::EagleEye => "buff-eagleeye",
         BuffKind::ArdentHunt => "buff-ardenthunt",
-        BuffKind::SepticShot => "buff-septicshot",
         BuffKind::IgniteArrow => "buff-ignitearrow",
         BuffKind::FreezeArrow => "buff-freezearrow",
         BuffKind::DrenchArrow => "buff-drencharrow",
@@ -373,7 +372,6 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::EagleEye
                         | BuffKind::Chilled
                         | BuffKind::ArdentHunt
-                        | BuffKind::SepticShot
                         | BuffKind::IgniteArrow
                         | BuffKind::FreezeArrow
                         | BuffKind::DrenchArrow

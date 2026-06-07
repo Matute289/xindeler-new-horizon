@@ -404,7 +404,6 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::StormChaser
         | BuffKind::EagleEye
         | BuffKind::ArdentHunt
-        | BuffKind::SepticShot
         | BuffKind::IgniteArrow
         | BuffKind::FreezeArrow
         | BuffKind::DrenchArrow
