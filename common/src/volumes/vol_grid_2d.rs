@@ -8,10 +8,10 @@ use hashbrown::{HashMap, hash_map};
 use std::{fmt::Debug, ops::Deref, sync::Arc};
 use vek::*;
 
-#[derive(Debug, Clone)]
-pub enum VolGrid2dError<V: RectRasterableVol> {
+#[derive(Copy, Clone, Debug)]
+pub enum VolGrid2dError<E> {
     NoSuchChunk,
-    ChunkError(V::Error),
+    ChunkError(E),
     DynaError(DynaError),
     InvalidChunkSize,
 }
@@ -56,13 +56,13 @@ impl<V: RectRasterableVol> VolGrid2d<V> {
 }
 
 impl<V: RectRasterableVol + Debug> BaseVol for VolGrid2d<V> {
-    type Error = VolGrid2dError<V>;
+    type Error = VolGrid2dError<V::Error>;
     type Vox = V::Vox;
 }
 
 impl<V: RectRasterableVol + ReadVol + Debug> ReadVol for VolGrid2d<V> {
     #[inline(always)]
-    fn get(&self, pos: Vec3<i32>) -> Result<&V::Vox, VolGrid2dError<V>> {
+    fn get(&self, pos: Vec3<i32>) -> Result<&V::Vox, VolGrid2dError<V::Error>> {
         let ck = Self::chunk_key(pos);
         self.get_key(ck)
             .ok_or(VolGrid2dError::NoSuchChunk)
@@ -118,7 +118,7 @@ impl<I: Into<Aabr<i32>>, V: RectRasterableVol + ReadVol + Debug> SampleVol<I> fo
     ///
     /// Note that the resultant volume does not carry forward metadata from the
     /// original chunks.
-    fn sample(&self, range: I) -> Result<Self::Sample, VolGrid2dError<V>> {
+    fn sample(&self, range: I) -> Result<Self::Sample, VolGrid2dError<V::Error>> {
         let range = range.into();
 
         let mut sample = VolGrid2d::new(self.map_size_lg, Arc::clone(&self.default))?;
@@ -142,7 +142,7 @@ impl<I: Into<Aabr<i32>>, V: RectRasterableVol + ReadVol + Debug> SampleVol<I> fo
 
 impl<V: RectRasterableVol + WriteVol + Clone + Debug> WriteVol for VolGrid2d<V> {
     #[inline(always)]
-    fn set(&mut self, pos: Vec3<i32>, vox: V::Vox) -> Result<V::Vox, VolGrid2dError<V>> {
+    fn set(&mut self, pos: Vec3<i32>, vox: V::Vox) -> Result<V::Vox, VolGrid2dError<V::Error>> {
         let ck = Self::chunk_key(pos);
         self.chunks
             .get_mut(&ck)
@@ -157,7 +157,7 @@ impl<V: RectRasterableVol + WriteVol + Clone + Debug> WriteVol for VolGrid2d<V> 
 }
 
 impl<V: RectRasterableVol> VolGrid2d<V> {
-    pub fn new(map_size_lg: MapSizeLg, default: Arc<V>) -> Result<Self, VolGrid2dError<V>> {
+    pub fn new(map_size_lg: MapSizeLg, default: Arc<V>) -> Result<Self, VolGrid2dError<V::Error>> {
         if Self::chunk_size()
             .map(|e| e.is_power_of_two() && e > 0)
             .reduce_and()
@@ -264,7 +264,7 @@ impl<'a, V: RectRasterableVol> CachedVolGrid2d<'a, V> {
 
 impl<V: RectRasterableVol + ReadVol> CachedVolGrid2d<'_, V> {
     #[inline(always)]
-    pub fn get(&mut self, pos: Vec3<i32>) -> Result<&V::Vox, VolGrid2dError<V>> {
+    pub fn get(&mut self, pos: Vec3<i32>) -> Result<&V::Vox, VolGrid2dError<V::Error>> {
         // Calculate chunk key from block pos
         let ck = VolGrid2d::<V>::chunk_key(pos);
         let chunk = if self

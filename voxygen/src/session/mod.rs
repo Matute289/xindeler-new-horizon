@@ -743,34 +743,14 @@ impl PlayState for SessionState {
                 }
             }
 
-            // Nearest block to consider with GameInput primary or secondary key.
-            let nearest_block_dist = find_shortest_distance(&[
-                mine_target
-                    .filter(|_| active_mine_tool.is_some())
-                    .map(|t| t.distance),
-                build_target.filter(|_| can_build).map(|t| t.distance),
-            ]);
-            // Nearest block to be highlighted in the scene (self.scene.set_select_pos).
-            let nearest_scene_dist = find_shortest_distance(&[
-                nearest_block_dist,
-                collect_target
-                    .filter(|_| active_mine_tool.is_none())
-                    .map(|t| t.distance),
-            ]);
             // Set break_block_pos only if mining is closest.
-            self.inputs.break_block_pos = if let Some(mt) = mine_target
-                .filter(|mt| active_mine_tool.is_some() && nearest_scene_dist == Some(mt.distance))
-            {
+            self.inputs.break_block_pos = if let Some(mt) = mine_target {
                 self.scene.set_select_pos(Some(mt.position_int()));
                 Some(mt.position)
-            } else if let Some(bt) =
-                build_target.filter(|bt| can_build && nearest_scene_dist == Some(bt.distance))
-            {
+            } else if let Some(bt) = build_target {
                 self.scene.set_select_pos(Some(bt.position_int()));
                 None
-            } else if let Some(ct) =
-                collect_target.filter(|ct| nearest_scene_dist == Some(ct.distance))
-            {
+            } else if let Some(ct) = collect_target {
                 self.scene.set_select_pos(Some(ct.position_int()));
                 None
             } else {
@@ -817,9 +797,7 @@ impl PlayState for SessionState {
                                 // Mine and build targets can be the same block. make building
                                 // take precedence.
                                 // Order of precedence: build, then mining, then attack.
-                                if let Some(build_target) = build_target.filter(|bt| {
-                                    state && can_build && nearest_block_dist == Some(bt.distance)
-                                }) {
+                                if let Some(build_target) = build_target.filter(|_| state) {
                                     client.remove_block(build_target.position_int());
                                 } else {
                                     client.handle_input(
@@ -833,9 +811,7 @@ impl PlayState for SessionState {
                             GameInput::Secondary => {
                                 self.walking_speed = false;
                                 let mut client = self.client.borrow_mut();
-                                if let Some(build_target) = build_target.filter(|bt| {
-                                    state && can_build && nearest_block_dist == Some(bt.distance)
-                                }) {
+                                if let Some(build_target) = build_target.filter(|_| state) {
                                     let selected_pos = build_target.kind.0;
                                     client.place_block(
                                         selected_pos.map(|p| p.floor() as i32),
@@ -2398,12 +2374,6 @@ impl PlayState for SessionState {
     }
 
     fn egui_enabled(&self) -> bool { true }
-}
-
-fn find_shortest_distance(arr: &[Option<f32>]) -> Option<f32> {
-    arr.iter()
-        .filter_map(|x| *x)
-        .min_by(|d1, d2| OrderedFloat(*d1).cmp(&OrderedFloat(*d2)))
 }
 
 // TODO: Can probably be exported in some way for AI, somehow

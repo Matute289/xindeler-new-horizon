@@ -9,6 +9,7 @@ use common::{
         aura::EnteredAuras,
         melee::MultiTarget,
     },
+    consts::MAX_PICKUP_RANGE,
     event::{self, EmitExt, EventBus},
     event_emitters,
     outcome::Outcome,
@@ -123,8 +124,10 @@ impl<'a> System<'a> for Sys {
             // Mine blocks broken by the attack
             if let Some((block_pos, tool)) = melee_attack.break_block {
                 // Check distance to block
+                // TODO: Should this use melee attack range instead? Make sure voxygen supports
+                // it!
                 if eye_pos.distance_squared(block_pos.map(|e| e as f32 + 0.5))
-                    < (rad + scale * melee_attack.range).powi(2)
+                    < MAX_PICKUP_RANGE.powi(2)
                 {
                     emitters.emit(event::MineBlockEvent {
                         entity: attacker,
