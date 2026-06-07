@@ -944,7 +944,7 @@ impl Attack {
                             && rng.random::<f32>() < b.chance
                         {
                             emitters.emit(BuffEvent {
-                                entity: target.entity,
+                                entity: attacker.entity,
                                 buff_change: BuffChange::Add(b.to_self_buff(
                                     time,
                                     (Some(attacker.uid), attacker.stats, attacker.mass),

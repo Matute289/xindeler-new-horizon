@@ -274,13 +274,7 @@
                     ((), (Bow(ArdentHunt), "common.abilities.bow.ardent_hunt")),
                 ],
             ),
-            Contextualized(
-                pseudo_id: "common.abilities.bow.storm_chaser",
-                abilities: [
-                    ((buff: StormChaser), (Bow(StormChaser), "common.abilities.bow.storm_chaser_clear")),
-                    ((), (Bow(StormChaser), "common.abilities.bow.storm_chaser")),
-                ],
-            ),
+            Simple(Bow(StormChaser), "common.abilities.bow.storm_chaser"),
             Simple(Bow(EagleEye), "common.abilities.bow.eagle_eye"),
             Simple(Bow(Heartseeker), "common.abilities.bow.heartseeker"),
             Simple(Bow(Hawkstrike), "common.abilities.bow.hawkstrike"),

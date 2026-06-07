@@ -154,12 +154,9 @@ pub enum BuffKind {
     /// Strength linearly decreases the duration of newly applied, affected
     /// debuffs, 0.5 is a 50% reduction.
     Resilience,
-    /// Causes you to have faster projectiles at the cost of slower charging
-    /// speed and movement speed while charging, and worse energy efficiency.
-    /// Strength linearly increases projectile speed (1.0 is a 100% increase,
-    /// 1.0 is a 200% increase). Strength non-linearly decreases charging speed,
-    /// charging movement speed, and energy efficiency (1.0 is a 20% decrease,
-    /// 2.0 is a 33% decrease).
+    /// Causes successful bow weapon attacks to cause you to gain the hastened
+    /// buff for a few seconds.
+    /// StormChaser strength is used as strength for Hastened.
     StormChaser,
     /// Causes projectile attacks to have more precision power, and to guarantee
     /// a minimum precision multiplier.
@@ -634,15 +631,18 @@ impl BuffKind {
             ],
             BuffKind::Resilience => vec![BuffEffect::CrowdControlResistance(data.strength)],
             BuffKind::StormChaser => {
-                let debuff_mult = 1.0 - nn_scaling_custom(data.strength, 4.0);
-                vec![
-                    BuffEffect::ChargeMoveSpeed(debuff_mult),
-                    BuffEffect::BuildupMoveSpeed(debuff_mult),
-                    BuffEffect::ChargingSpeed(debuff_mult),
-                    BuffEffect::BuildupSpeed(debuff_mult),
-                    BuffEffect::EnergyEfficiency(debuff_mult),
-                    BuffEffect::ProjectileSpeedMult(1.0 + data.strength),
-                ]
+                vec![BuffEffect::AttackEffect(
+                    AttackEffect::new(
+                        None,
+                        CombatEffect::SelfBuff(CombatBuff {
+                            kind: BuffKind::Hastened,
+                            dur_secs: data.secondary_duration.unwrap_or(Secs(1.0)),
+                            strength: CombatBuffStrength::Value(data.strength),
+                            chance: 1.0,
+                        }),
+                    )
+                    .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
+                )]
             },
             BuffKind::EagleEye => {
                 vec![
