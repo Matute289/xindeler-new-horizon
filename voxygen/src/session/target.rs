@@ -109,13 +109,16 @@ pub(super) fn targets_under_cursor(
         .filter(|(_, b)| matches!(b, Ok(Some(b)) if b.mine_tool().zip(active_mine_tool).map_or(false, |(a, b)| a == b)))
         // ...and by the distance to the player's eye position
         .filter(|(d, _)| eye_pos.distance(break_tgt_pos(*d)) < MAX_PICKUP_RANGE);
-    // Building is limited by the maximum target distance
-    let build_cast =
+    let build_cast = Some(ray.until(|b| b.is_solid()).cast())
+        // Building is limited by the maximum target distance
+        .filter(|(d, _)| *d < MAX_TARGET_RANGE);
+    // Visual obstacles are limited by filled blocks
+    let obstacle_cast =
         Some(ray.until(|b| b.is_filled()).cast()).filter(|(d, _)| *d < MAX_TARGET_RANGE);
 
     // The maximum distance at which entities can be targetted is based on the
     // distance to the nearest terrain obstacle being looked at
-    let max_target_dist = build_cast.map_or(MAX_TARGET_RANGE, |(d, _)| d);
+    let max_target_dist = obstacle_cast.map_or(MAX_TARGET_RANGE, |(d, _)| d);
 
     let uids = ecs.read_storage::<Uid>();
 
@@ -195,7 +198,7 @@ pub(super) fn targets_under_cursor(
             } else { None }
         });
 
-    let terrain_target = build_cast.map(|(d, _)| Target {
+    let terrain_target = obstacle_cast.map(|(d, _)| Target {
         kind: Terrain,
         distance: d,
         position: break_tgt_pos(d),
