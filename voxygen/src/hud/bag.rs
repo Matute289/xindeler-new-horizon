@@ -1,9 +1,9 @@
 use super::{
-    CRITICAL_HP_COLOR, HudInfo, LOW_HP_COLOR, Show, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN, cr_color,
+    CRITICAL_HP_COLOR, HudInfo, LOW_HP_COLOR, Show, SlotGrid, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN,
+    cr_color,
     img_ids::{Imgs, ImgsRot},
     item_imgs::ItemImgs,
-    slots::{ArmorSlot, EquipSlot, InventorySlot, SlotManager},
-    util,
+    slots::{ArmorSlot, EquipSlot, SlotManager},
 };
 use crate::{
     GlobalState,
@@ -24,12 +24,11 @@ use crate::{
 };
 use client::Client;
 use common::{
-    assets::AssetExt,
     combat::{Damage, combat_rating, perception_dist_multiplier_from_stealth},
     comp::{
         Body, Energy, Health, Inventory, Poise, SkillSet, Stats,
-        inventory::{InventorySortOrder, slot::Slot},
-        item::{ItemDef, ItemDesc, ItemI18n, MaterialStatManifest, Quality},
+        inventory::InventorySortOrder,
+        item::{ItemDesc, ItemI18n, MaterialStatManifest},
     },
     recipe::RecipeBookManifest,
 };
@@ -41,18 +40,14 @@ use conrod_core::{
 use i18n::Localization;
 use std::borrow::Cow;
 
-use crate::hud::slots::SlotKind;
 use specs::Entity as EcsEntity;
-use std::{borrow::Borrow, sync::Arc};
 use vek::{Vec2, approx::AbsDiffEq};
 
 widget_ids! {
     pub struct InventoryScrollerIds {
         draggable_area,
         inv_alignment,
-        inv_slots[],
-        inv_slot_names[],
-        inv_slot_amounts[],
+        slot_grid,
         //coin_ico,
         space_txt,
         //coin_txt,
@@ -247,8 +242,23 @@ impl<'a> InventoryScroller<'a> {
     ) {
         let space_max = self.inventory.slots().count();
 
+        let grid_width = 362.0;
+        let grid_height = if self.show_bag_inv && !self.on_right {
+            440.0 // This for the left bag
+        } else if self.show_bag_inv && self.on_right {
+            600.0 // This for the expanded right bag
+        } else {
+            200.0
+        };
+
+        // let slot_columns = 6;
+        // let slot_spacing = 6;
+        // // (cols * slot_size) + ((cols - 1) * spacing) = (width - padding)
+        // let slot_size = ((grid_width - 2.0) - ((slot_columns - 1) * slot_spacing)) /
+        // slot_columns;
+
         // Slots Scrollbar
-        if space_max > 45 && !self.show_bag_inv {
+        if space_max > 5 && !self.show_bag_inv {
             // Scrollbar-BG
             Image::new(self.imgs.scrollbar_bg)
                 .w_h(9.0, 173.0)
@@ -262,7 +272,7 @@ impl<'a> InventoryScroller<'a> {
                 .color(UI_MAIN)
                 .middle_of(state.ids.scrollbar_bg)
                 .set(state.ids.scrollbar_slots, ui);
-        } else if space_max > 135 && self.on_right {
+        } else if space_max > 5 && self.on_right {
             // Scrollbar-BG
             Image::new(self.imgs.scrollbar_bg_big)
                 .w_h(9.0, 592.0)
@@ -295,15 +305,6 @@ impl<'a> InventoryScroller<'a> {
                 .set(state.ids.left_scrollbar_slots, ui);
         }
 
-        let grid_width = 362.0;
-        let grid_height = if self.show_bag_inv && !self.on_right {
-            440.0 // This for the left bag
-        } else if self.show_bag_inv && self.on_right {
-            600.0 // This for the expanded right bag
-        } else {
-            200.0
-        };
-
         // Alignment for Grid
         Rectangle::fill_with([grid_width, grid_height], color::TRANSPARENT)
             .bottom_left_with_margins_on(
@@ -320,214 +321,28 @@ impl<'a> InventoryScroller<'a> {
 
         // Bag Slots
         // Create available inventory slot widgets
-        if state.ids.inv_slots.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids.inv_slots.resize(
-                    self.inventory.capacity() + self.inventory.overflow_items().count(),
-                    &mut ui.widget_id_generator(),
-                );
-            });
-        }
-        if state.ids.inv_slot_names.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids
-                    .inv_slot_names
-                    .resize(self.inventory.capacity(), &mut ui.widget_id_generator());
-            });
-        }
-        if state.ids.inv_slot_amounts.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids
-                    .inv_slot_amounts
-                    .resize(self.inventory.capacity(), &mut ui.widget_id_generator());
-            });
-        }
-        // Determine the range of inventory slots that are provided by the loadout item
-        // that the mouse is over
-        let mouseover_loadout_slots = self
-            .slot_manager
-            .mouse_over_slot
-            .and_then(|x| {
-                if let SlotKind::Equip(e) = x {
-                    self.inventory.get_slot_range_for_equip_slot(e)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0usize..0usize);
-
-        // Display inventory contents
-        let mut slot_maker = SlotMaker {
-            empty_slot: self.imgs.inv_slot,
-            filled_slot: self.imgs.inv_slot,
-            selected_slot: self.imgs.inv_slot_sel,
-            background_color: Some(UI_MAIN),
-            content_size: ContentSize {
-                width_height_ratio: 1.0,
-                max_fraction: 0.75,
-            },
-            selected_content_scale: 1.067,
-            amount_font: self.fonts.cyri.conrod_id,
-            amount_margins: Vec2::new(-4.0, 0.0),
-            amount_font_size: self.fonts.cyri.scale(12),
-            amount_text_color: TEXT_COLOR,
-            content_source: self.inventory,
-            image_source: self.item_imgs,
-            slot_manager: Some(self.slot_manager),
-            pulse: self.pulse,
-        };
-
-        let mut i = 0;
-        let mut items = self
-            .inventory
-            .slots_with_id()
-            .map(|(slot, item)| (Slot::Inventory(slot), item.as_ref()))
-            .chain(
-                self.inventory
-                    .overflow_items()
-                    .enumerate()
-                    .map(|(i, item)| (Slot::Overflow(i), Some(item))),
-            )
-            .collect::<Vec<_>>();
-        if self.details_mode && !self.is_us {
-            items.sort_by_cached_key(|(_, item)| {
-                (
-                    item.is_none(),
-                    item.as_ref().map(|i| {
-                        (
-                            std::cmp::Reverse(i.quality()),
-                            {
-                                // TODO: we do double the work here, optimize?
-                                let (name, _) =
-                                    util::item_text(i, self.localized_strings, self.item_i18n);
-                                name
-                            },
-                            i.amount(),
-                        )
-                    }),
-                )
-            });
-        }
-        for (pos, item) in items.into_iter() {
-            if self.details_mode && !self.is_us && item.is_none() {
-                continue;
-            }
-            let (x, y) = if self.details_mode {
-                (0, i)
-            } else {
-                (i % 9, i / 9)
-            };
-            let slot_size = if self.details_mode { 20.0 } else { 40.0 };
-
-            // Slot
-            let mut slot_widget = slot_maker
-                .fabricate(
-                    InventorySlot {
-                        slot: pos,
-                        ours: self.is_us,
-                        entity: self.entity,
-                    },
-                    [slot_size as f32; 2],
-                )
-                .top_left_with_margins_on(
-                    state.ids.inv_alignment,
-                    0.0 + y as f64 * slot_size,
-                    0.0 + x as f64 * slot_size,
-                );
-
-            // Highlight slots are provided by the loadout item that the mouse is over
-            if mouseover_loadout_slots.contains(&i) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
-            }
-
-            if self.show_salvage && item.as_ref().is_some_and(|item| item.is_salvageable()) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
-            }
-
-            // Highlight in red slots that are overflow
-            if matches!(pos, Slot::Overflow(_)) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 0.0, 0.0, 1.0));
-            }
-
-            if let Some(item) = item {
-                let quality_col_img = match item.quality() {
-                    Quality::Low => self.imgs.inv_slot_grey,
-                    Quality::Common => self.imgs.inv_slot_common,
-                    Quality::Moderate => self.imgs.inv_slot_green,
-                    Quality::High => self.imgs.inv_slot_blue,
-                    Quality::Epic => self.imgs.inv_slot_purple,
-                    Quality::Legendary => self.imgs.inv_slot_gold,
-                    Quality::Artifact => self.imgs.inv_slot_orange,
-                    _ => self.imgs.inv_slot_red,
-                };
-
-                let prices_info = self
-                    .client
-                    .pending_trade()
-                    .as_ref()
-                    .and_then(|(_, _, prices)| prices.clone());
-
-                if self.show_salvage && item.is_salvageable() {
-                    let salvage_result: Vec<_> = item
-                        .salvage_output()
-                        .map(|(material_id, _)| Arc::<ItemDef>::load_expect_cloned(material_id))
-                        .map(|item| item as Arc<dyn ItemDesc>)
-                        .collect();
-
-                    let items = salvage_result
-                        .iter()
-                        .map(|item| item.borrow())
-                        .chain(core::iter::once(item as &dyn ItemDesc));
-
-                    slot_widget
-                        .filled_slot(quality_col_img)
-                        .with_item_tooltip(
-                            self.item_tooltip_manager,
-                            items,
-                            &prices_info,
-                            self.item_tooltip,
-                        )
-                        .set(state.ids.inv_slots[i], ui);
-                } else {
-                    slot_widget
-                        .filled_slot(quality_col_img)
-                        .with_item_tooltip(
-                            self.item_tooltip_manager,
-                            core::iter::once(item as &dyn ItemDesc),
-                            &prices_info,
-                            self.item_tooltip,
-                        )
-                        .set(state.ids.inv_slots[i], ui);
-                }
-                if self.details_mode {
-                    let (name, _) = util::item_text(item, self.localized_strings, self.item_i18n);
-                    Text::new(&name)
-                        .top_left_with_margins_on(
-                            state.ids.inv_alignment,
-                            0.0 + y as f64 * slot_size,
-                            30.0 + x as f64 * slot_size,
-                        )
-                        .font_id(self.fonts.cyri.conrod_id)
-                        .font_size(self.fonts.cyri.scale(14))
-                        .color(color::WHITE)
-                        .set(state.ids.inv_slot_names[i], ui);
-
-                    Text::new(&format!("{}", item.amount()))
-                        .top_left_with_margins_on(
-                            state.ids.inv_alignment,
-                            0.0 + y as f64 * slot_size,
-                            grid_width - 40.0 + x as f64 * slot_size,
-                        )
-                        .font_id(self.fonts.cyri.conrod_id)
-                        .font_size(self.fonts.cyri.scale(14))
-                        .color(color::WHITE)
-                        .set(state.ids.inv_slot_amounts[i], ui);
-                }
-            } else {
-                slot_widget.set(state.ids.inv_slots[i], ui);
-            }
-            i += 1;
-        }
+        SlotGrid::new(
+            self.client,
+            self.imgs,
+            self.item_imgs,
+            self.fonts,
+            self.item_tooltip_manager,
+            self.slot_manager,
+            self.inventory,
+            self.item_tooltip,
+            self.localized_strings,
+            self.item_i18n,
+            self.entity,
+            self.pulse,
+        )
+        .columns(6)
+        .is_us(self.is_us)
+        .details_mode(self.details_mode)
+        .show_salvage(self.show_salvage)
+        .slot_size(if self.details_mode { 20.0 } else { 55.0 })
+        .wh_of(state.ids.inv_alignment)
+        .top_left_of(state.ids.inv_alignment)
+        .set(state.ids.slot_grid, ui);
     }
 
     fn footer_metrics(

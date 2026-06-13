@@ -122,7 +122,7 @@ pub enum Event<K> {
     SplitDropped(K),
     // Dragged half of the stack
     SplitDragged(K, K),
-    // Clicked while selected
+    // Right click when not dragging
     Used(K),
     // {Shift,Ctrl}-clicked
     Request { slot: K, auto_quantity: bool },
@@ -352,11 +352,8 @@ where
         }
 
         let input = ui.widget_input(widget);
-        // TODO: make more robust wrt multiple events in the same frame (eg event order
-        // may matter) TODO: handle taps as well
         let click_count = input.clicks().left().count();
         if click_count > 0 {
-            let odd_num_clicks = click_count % 2 == 1;
             self.state = if let ManagerState::Selected(id, other_slot) = self.state {
                 if id != widget {
                     // Swap
@@ -365,23 +362,16 @@ where
                     }
                     if click_count == 1 {
                         ManagerState::Idle
-                    } else if click_count == 2 {
-                        // Was clicked again
-                        ManagerState::Selected(widget, slot)
                     } else {
-                        // Clicked more than once after swap, use and deselect
-                        self.events.push(Event::Used(slot));
-                        ManagerState::Idle
+                        ManagerState::Selected(widget, slot)
                     }
                 } else {
-                    // Clicked widget was already selected
-                    // Deselect and emit use if clicked while selected
-                    self.events.push(Event::Used(slot));
+                    // Clicked widget was already selected; deselect widget
                     ManagerState::Idle
                 }
             } else {
                 // No widgets were selected
-                if odd_num_clicks && filled {
+                if filled {
                     ManagerState::Selected(widget, slot)
                 } else {
                     // Selected and then deselected with one or more clicks
@@ -443,6 +433,22 @@ where
             ManagerState::Selected(id, _) if id == widget => Interaction::Selected,
             ManagerState::Dragging(id, _, _, _) if id == widget => Interaction::Dragging,
             _ => Interaction::None,
+        }
+    }
+
+    /// Emit a Used event and deselects the selected slot
+    pub fn use_selected(&mut self) {
+        if let ManagerState::Selected(_, slot) = self.state {
+            self.events.push(Event::Used(slot));
+            self.state = ManagerState::Idle;
+        }
+    }
+
+    /// Emit a Dropped event and deselects the selected slot
+    pub fn dropped_selected(&mut self) {
+        if let ManagerState::Selected(_, slot) = self.state {
+            self.events.push(Event::Dropped(slot));
+            self.state = ManagerState::Idle;
         }
     }
 
