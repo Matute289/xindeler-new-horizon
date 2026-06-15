@@ -497,39 +497,42 @@ impl Scene {
                 is_attack,
                 reagent,
                 ..
-            } => self.event_lights.push(EventLight {
-                light: Light::new(
-                    *pos,
-                    match reagent {
-                        Some(Reagent::Blue) => Rgb::new(0.15, 0.4, 1.0),
-                        Some(Reagent::Green) => Rgb::new(0.0, 1.0, 0.0),
-                        Some(Reagent::Purple) => Rgb::new(0.7, 0.0, 1.0),
-                        Some(Reagent::Red) => {
-                            if *is_attack {
-                                Rgb::new(1.0, 0.5, 0.0)
+            } => match reagent {
+                Some(Reagent::Earth) => {},
+                _ => self.event_lights.push(EventLight {
+                    light: Light::new(
+                        *pos,
+                        match reagent {
+                            Some(Reagent::Blue) => Rgb::new(0.15, 0.4, 1.0),
+                            Some(Reagent::Green) => Rgb::new(0.0, 1.0, 0.0),
+                            Some(Reagent::Purple) => Rgb::new(0.7, 0.0, 1.0),
+                            Some(Reagent::Red) => {
+                                if *is_attack {
+                                    Rgb::new(1.0, 0.5, 0.0)
+                                } else {
+                                    Rgb::new(1.0, 0.0, 0.0)
+                                }
+                            },
+                            Some(Reagent::White) => Rgb::new(1.0, 1.0, 1.0),
+                            Some(Reagent::Yellow) => Rgb::new(1.0, 1.0, 0.0),
+                            Some(Reagent::FireRain) => Rgb::new(1.0, 0.8, 0.3),
+                            Some(Reagent::FireGigas) => Rgb::new(1.0, 0.6, 0.2),
+                            Some(Reagent::Earth) | None => Rgb::new(1.0, 0.5, 0.0),
+                        },
+                        power
+                            * if *is_attack || reagent.is_none() {
+                                25.0
                             } else {
-                                Rgb::new(1.0, 0.0, 0.0)
-                            }
-                        },
-                        Some(Reagent::White) => Rgb::new(1.0, 1.0, 1.0),
-                        Some(Reagent::Yellow) => Rgb::new(1.0, 1.0, 0.0),
-                        Some(Reagent::FireRain) => Rgb::new(1.0, 0.8, 0.3),
-                        Some(Reagent::FireGigas) => Rgb::new(1.0, 0.6, 0.2),
-                        None => Rgb::new(1.0, 0.5, 0.0),
+                                100.0
+                            },
+                    ),
+                    timeout: match reagent {
+                        Some(_) => 0.8,
+                        None => 0.25,
                     },
-                    power
-                        * if *is_attack || reagent.is_none() {
-                            25.0
-                        } else {
-                            100.0
-                        },
-                ),
-                timeout: match reagent {
-                    Some(_) => 0.8,
-                    None => 0.25,
-                },
-                fadeout: |timeout| timeout * 2.0,
-            }),
+                    fadeout: |timeout| timeout * 2.0,
+                }),
+            },
             Outcome::ProjectileShot { .. } => {},
             _ => {},
         }

@@ -218,6 +218,17 @@ impl ParticleMgr {
                                 },
                             );
                         },
+                        Some(Reagent::Earth) => {
+                            self.particles.resize_with(self.particles.len() + 150, || {
+                                Particle::new(
+                                    Duration::from_millis(250),
+                                    time,
+                                    ParticleMode::BigShrapnel,
+                                    *pos,
+                                    scene_data,
+                                )
+                            })
+                        },
                         _ => {},
                     }
                 } else {
@@ -240,6 +251,7 @@ impl ParticleMgr {
                                     Some(Reagent::Yellow) => ParticleMode::FireworkYellow,
                                     Some(Reagent::FireRain) => ParticleMode::FireworkYellow,
                                     Some(Reagent::FireGigas) => ParticleMode::FireGigasExplosion,
+                                    Some(Reagent::Earth) => ParticleMode::BigShrapnel,
                                     None => ParticleMode::Shrapnel,
                                 },
                                 *pos,
@@ -2509,7 +2521,7 @@ impl ParticleMgr {
                                 );
 
                                 let nose_pos = pos + look_dir * 3.0;
-                                let nose_angle: f32 = 2.8; // 
+                                let nose_angle: f32 = 2.8; //
                                 let nose_range = 3.0_f32;
                                 self.particles.resize_with(
                                     self.particles.len() + usize::from(heartbeats) * 6,

@@ -2882,8 +2882,15 @@ impl Animation for BasicAction {
             Some("common.abilities.bow.heavy_nock") => {
                 bow_start(&mut next, s_a);
 
-                next.hold.scale *= 1.0 + move1base / 2.0;
-                next.hold.position += Vec3::new(0.0, 0.0, -2.5) * move1;
+                bow_draw(&mut next, move1, d.look_dir.z);
+                next.control.position += Vec3::new(0.0, 0.0, 3.0) * move1;
+                next.control.orientation.rotate_x(move1 * 0.6);
+                next.hand_l.position += Vec3::new(0.0, -3.0, 0.0) * move1;
+                next.hold.scale *= 1.0 + 0.5 * move1;
+                let offset = 3.0;
+                next.torso.position += Vec3::new(0.0, -5.0, -offset) * move1;
+                next.foot_l.position += Vec3::new(0.0, 0.0, offset) * move1;
+                next.foot_r.position += Vec3::new(0.0, 0.0, offset) * move1;
             },
             Some("common.abilities.bow.heartseeker") => {
                 bow_start(&mut next, s_a);

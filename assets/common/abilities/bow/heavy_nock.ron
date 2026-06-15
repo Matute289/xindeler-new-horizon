@@ -7,6 +7,7 @@ BasicRanged(
             radius: 2,
             min_falloff: 0.25,
             target: SolidOnlyEntityAttack,
+            reagent: Some(Earth),
         ),
         attack: Some((
             damage: 15,
@@ -16,6 +17,7 @@ BasicRanged(
     ),
     projectile_body: Object(Arrow),
     projectile_speed: 40.0,
+    vertical_angle_offset: 0.2,
     movement_modifier: (
         buildup: Some(0.6),
         recover: Some(0.6),
