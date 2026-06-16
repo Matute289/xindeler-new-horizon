@@ -842,6 +842,7 @@ impl Widget for Diary<'_> {
 
                 let mut slot_maker = SlotMaker {
                     empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
                     filled_slot: self.imgs.inv_slot,
                     selected_slot: self.imgs.inv_slot_sel,
                     background_color: Some(UI_MAIN),
@@ -895,7 +896,8 @@ impl Widget for Diary<'_> {
                     let image_offsets = 92.0 * i as f64;
 
                     let slot = AbilitySlot::Slot(i);
-                    let mut ability_slot = slot_maker.fabricate(slot, [image_size; 2]);
+                    let mut ability_slot =
+                        slot_maker.fabricate(slot, [image_size; 2], false, false);
 
                     if i == 0 {
                         ability_slot = ability_slot.top_left_with_margins_on(
@@ -1040,6 +1042,7 @@ impl Widget for Diary<'_> {
 
                 let mut slot_maker = SlotMaker {
                     empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
                     filled_slot: self.imgs.inv_slot,
                     selected_slot: self.imgs.inv_slot_sel,
                     background_color: Some(UI_MAIN),
@@ -1106,7 +1109,7 @@ impl Widget for Diary<'_> {
 
                     let slot = AbilitySlot::Ability(*ability);
                     slot_maker
-                        .fabricate(slot, [100.0; 2])
+                        .fabricate(slot, [100.0; 2], false, false)
                         .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                         .set(state.ids.abilities[id_index], ui);
 
@@ -1115,7 +1118,7 @@ impl Widget for Diary<'_> {
 
                         let slot = AbilitySlot::Ability(ability);
                         slot_maker
-                            .fabricate(slot, [100.0; 2])
+                            .fabricate(slot, [100.0; 2], false, false)
                             .top_right_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                             .set(state.ids.abilities_dual[id_index], ui);
                     }

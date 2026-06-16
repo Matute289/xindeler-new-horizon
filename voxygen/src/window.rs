@@ -8,7 +8,7 @@ use crate::{
 use common_base::span;
 use crossbeam_channel as channel;
 use gilrs::{Button as GilButton, EventType, Gilrs};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, hash_set::Iter};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -41,11 +41,19 @@ pub enum MenuInput {
     ScrollDown,
     ScrollLeft,
     ScrollRight,
-    Home,
-    End,
+    PageDown,
+    PageUp,
     Apply,
     Back,
     Exit,
+    SomethingIdk, // Change local window focus
+    WindowFocus,  // Change global window focus
+}
+
+/// Manages an Iterator over MenuInputs or GameInputs
+pub enum MappedInput<'a> {
+    Menu(Iter<'a, MenuInput>),
+    Game(Iter<'a, GameInput>),
 }
 
 impl MenuInput {
@@ -184,6 +192,7 @@ impl KeyMouse {
 #[derive(Clone, Copy, Debug)]
 pub enum RemappingMode {
     RemapKeyboard(GameInput),
+    RemapKeyboardMenu(MenuInput),
     RemapGamepadButtons(GameInput),
     RemapGamepadLayers(GameInput),
     RemapGamepadMenu(MenuInput),
@@ -226,6 +235,7 @@ pub struct Window {
     pub focused: bool,
     gilrs: Option<Gilrs>,
     pub controller_modifiers: Vec<Button>,
+    pub menu_open: bool,
     cursor_position: winit::dpi::PhysicalPosition<f64>,
     mouse_emulation_vec: Vec2<f32>,
     controller_type: ControllerType,
@@ -340,6 +350,7 @@ impl Window {
             focused: true,
             gilrs,
             controller_modifiers: Vec::new(),
+            menu_open: false,
             cursor_position: winit::dpi::PhysicalPosition::new(0.0, 0.0),
             mouse_emulation_vec: Vec2::zero(),
             controller_type: ControllerType::Xbox,
@@ -456,6 +467,7 @@ impl Window {
                     last_input: &mut LastInput,
                     mod1: bool,
                     mod2: bool,
+                    menu_open: bool,
                 ) {
                     // update last input to be controller if button was pressed
                     *last_input = LastInput::Controller;
@@ -475,13 +487,23 @@ impl Window {
                         }
                     }
 
-                    // fetch actions to perform; prioritize game layers over buttons
-                    // if nothing was returned, then a remapping action was likely performed
-                    if let Some(game_inputs) = Window::map_controller_input(
-                        settings, remapping, modifiers, button, mod1, mod2,
+                    if let Some(mapped_inputs) = Window::map_controller_input(
+                        settings, remapping, modifiers, button, mod1, mod2, menu_open,
                     ) {
-                        for game_input in game_inputs {
-                            events.push(Event::InputUpdate(*game_input, is_pressed));
+                        match mapped_inputs {
+                            // Fetch actions to perform; if nothing was returned, then either no
+                            // action was assigned to the input, or a remapping action was performed
+                            MappedInput::Menu(menu_inputs) => {
+                                for menu_input in menu_inputs {
+                                    events.push(Event::MenuInput(*menu_input, is_pressed));
+                                }
+                            },
+                            MappedInput::Game(game_inputs) => {
+                                // Prioritize game layers over buttons
+                                for game_input in game_inputs {
+                                    events.push(Event::InputUpdate(*game_input, is_pressed));
+                                }
+                            },
                         }
                     }
                 }
@@ -499,6 +521,7 @@ impl Window {
                             &mut self.last_input,
                             self.gamelayer_mod1,
                             self.gamelayer_mod2,
+                            self.menu_open,
                         );
                     },
                     EventType::ButtonReleased(button, code) => {
@@ -512,6 +535,7 @@ impl Window {
                             &mut self.last_input,
                             self.gamelayer_mod1,
                             self.gamelayer_mod2,
+                            self.menu_open,
                         );
                     },
                     EventType::ButtonChanged(button, _value, code) => {
@@ -649,22 +673,22 @@ impl Window {
                         },
                         input => Some(Event::AnalogMenuInput(input)),
                     },
-                    Event::MenuInput(menu_input, state) => {
-                        // determine if left mouse or right mouse button
-                        let mouse_button = match menu_input {
-                            MenuInput::Apply => conrod_core::input::state::mouse::Button::Left,
-                            MenuInput::Back => conrod_core::input::state::mouse::Button::Right,
-                            _ => return Some(event),
-                        };
-                        Some(match state {
-                            true => Event::Ui(ui::Event(conrod_core::event::Input::Press(
-                                conrod_core::input::Button::Mouse(mouse_button),
-                            ))),
-                            false => Event::Ui(ui::Event(conrod_core::event::Input::Release(
-                                conrod_core::input::Button::Mouse(mouse_button),
-                            ))),
-                        })
-                    },
+                    // Event::MenuInput(menu_input, state) => {
+                    //     // determine if left mouse or right mouse button
+                    //     let mouse_button = match menu_input {
+                    //         MenuInput::Apply => conrod_core::input::state::mouse::Button::Left,
+                    //         MenuInput::Back => conrod_core::input::state::mouse::Button::Right,
+                    //         _ => return Some(event),
+                    //     };
+                    //     Some(match state {
+                    //         true => Event::Ui(ui::Event(conrod_core::event::Input::Press(
+                    //             conrod_core::input::Button::Mouse(mouse_button),
+                    //         ))),
+                    //         false => Event::Ui(ui::Event(conrod_core::event::Input::Release(
+                    //             conrod_core::input::Button::Mouse(mouse_button),
+                    //         ))),
+                    //     })
+                    // },
                     _ => Some(event),
                 })
                 .collect();
@@ -732,23 +756,26 @@ impl Window {
                     .push(Event::Moved(Vec2::new(x as u32, y as u32)));
             },
             WindowEvent::MouseInput { button, state, .. } => {
-                if let (true, Some(game_inputs)) =
-                    // Mouse input not mapped to input if it is not grabbed
-                    (
-                        self.cursor_grabbed,
-                        Window::map_input(
-                            KeyMouse::Mouse(button),
-                            controls,
-                            &mut self.remapping_mode,
-                            &mut self.last_input,
-                        ),
-                    )
-                {
-                    for game_input in game_inputs {
-                        self.events.push(Event::InputUpdate(
-                            *game_input,
-                            state == winit::event::ElementState::Pressed,
-                        ));
+                // Mouse input not mapped to input if it is not grabbed
+                if self.cursor_grabbed {
+                    if let Some(mapped_inputs) = Window::map_input(
+                        KeyMouse::Mouse(button),
+                        controls,
+                        &mut self.remapping_mode,
+                        &mut self.last_input,
+                        self.menu_open,
+                    ) {
+                        match mapped_inputs {
+                            MappedInput::Game(game_inputs) => {
+                                for game_input in game_inputs {
+                                    self.events.push(Event::InputUpdate(
+                                        *game_input,
+                                        state == winit::event::ElementState::Pressed,
+                                    ));
+                                }
+                            },
+                            _ => {},
+                        }
                     }
                 }
                 self.events.push(Event::MouseButton(button, state));
@@ -779,47 +806,60 @@ impl Window {
                     return;
                 }
 
-                if let Some(game_inputs) = Window::map_input(
+                if let Some(mapped_inputs) = Window::map_input(
                     KeyMouse::Key(event.logical_key),
                     controls,
                     &mut self.remapping_mode,
                     &mut self.last_input,
+                    self.menu_open,
                 ) {
-                    for game_input in game_inputs {
-                        match game_input {
-                            GameInput::Fullscreen => {
-                                if event.state == winit::event::ElementState::Pressed
-                                    && !Self::is_pressed(
-                                        &mut self.keypress_map,
-                                        GameInput::Fullscreen,
-                                    )
-                                {
-                                    self.toggle_fullscreen = !self.toggle_fullscreen;
+                    match mapped_inputs {
+                        MappedInput::Menu(menu_inputs) => {
+                            for menu_input in menu_inputs {
+                                self.events.push(Event::MenuInput(
+                                    *menu_input,
+                                    event.state == winit::event::ElementState::Pressed,
+                                ));
+                            }
+                        },
+                        MappedInput::Game(game_inputs) => {
+                            for game_input in game_inputs {
+                                match game_input {
+                                    GameInput::Fullscreen => {
+                                        if event.state == winit::event::ElementState::Pressed
+                                            && !Self::is_pressed(
+                                                &mut self.keypress_map,
+                                                GameInput::Fullscreen,
+                                            )
+                                        {
+                                            self.toggle_fullscreen = !self.toggle_fullscreen;
+                                        }
+                                        Self::set_pressed(
+                                            &mut self.keypress_map,
+                                            GameInput::Fullscreen,
+                                            event.state,
+                                        );
+                                    },
+                                    GameInput::Screenshot => {
+                                        self.take_screenshot = event.state
+                                            == winit::event::ElementState::Pressed
+                                            && !Self::is_pressed(
+                                                &mut self.keypress_map,
+                                                GameInput::Screenshot,
+                                            );
+                                        Self::set_pressed(
+                                            &mut self.keypress_map,
+                                            GameInput::Screenshot,
+                                            event.state,
+                                        );
+                                    },
+                                    _ => self.events.push(Event::InputUpdate(
+                                        *game_input,
+                                        event.state == winit::event::ElementState::Pressed,
+                                    )),
                                 }
-                                Self::set_pressed(
-                                    &mut self.keypress_map,
-                                    GameInput::Fullscreen,
-                                    event.state,
-                                );
-                            },
-                            GameInput::Screenshot => {
-                                self.take_screenshot = event.state
-                                    == winit::event::ElementState::Pressed
-                                    && !Self::is_pressed(
-                                        &mut self.keypress_map,
-                                        GameInput::Screenshot,
-                                    );
-                                Self::set_pressed(
-                                    &mut self.keypress_map,
-                                    GameInput::Screenshot,
-                                    event.state,
-                                );
-                            },
-                            _ => self.events.push(Event::InputUpdate(
-                                *game_input,
-                                event.state == winit::event::ElementState::Pressed,
-                            )),
-                        }
+                            }
+                        },
                     }
                 }
             },
@@ -1213,15 +1253,19 @@ impl Window {
     }
 
     // Function used to handle Mouse and Key events. It first checks if we're in
-    // remapping mode for a specific GameInput. If we are, we modify the binding
-    // of that GameInput with the KeyMouse passed. Else, we return an iterator of
-    // the GameInputs for that KeyMouse.
+    // remapping mode for a specific GameInput or MenuInput. If we are, we modify
+    // the binding of that GameInput/MenuInput with the KeyMouse passed. Else,
+    // we return an iterator of the GameInputs/MenuInputs for that KeyMouse. If
+    // a menu is open, it will return a MenuInput unless there is not one available
+    // (which it will then return GameInput). If a menu is not open, return
+    // GameInput.
     fn map_input<'a>(
         key_mouse: KeyMouse,
         controls: &'a mut ControlSettings,
         remapping: &mut RemappingMode,
         last_input: &mut LastInput,
-    ) -> Option<impl Iterator<Item = &'a GameInput> + use<'a>> {
+        menu_open: bool,
+    ) -> Option<MappedInput<'a>> {
         let key_mouse = key_mouse.into_upper();
 
         // update last input to be Keyboard/Mouse if button was pressed
@@ -1233,9 +1277,31 @@ impl Window {
                 *remapping = RemappingMode::None;
                 None
             },
-            RemappingMode::None => controls
-                .get_associated_game_inputs(&key_mouse)
-                .map(|game_inputs| game_inputs.iter()),
+            RemappingMode::RemapKeyboardMenu(menu_input) => {
+                controls.modify_menu_binding(menu_input, key_mouse);
+                *remapping = RemappingMode::None;
+                None
+            },
+            RemappingMode::None => {
+                if !menu_open {
+                    // If a menu is not open, simply return any game inputs
+                    controls
+                        .get_associated_game_inputs(&key_mouse)
+                        .map(|game_inputs| MappedInput::Game(game_inputs.iter()))
+                } else {
+                    // If a menu is open, return the associated MenuInput if any, otherwise return
+                    // the associated GameInput
+                    if let Some(menu_inputs) = controls.get_associated_menu_inputs(&key_mouse) {
+                        if !menu_inputs.is_empty() {
+                            return Some(MappedInput::Menu(menu_inputs.iter()));
+                        }
+                    }
+
+                    controls
+                        .get_associated_game_inputs(&key_mouse)
+                        .map(|game_inputs| MappedInput::Game(game_inputs.iter()))
+                }
+            },
             _ => None,
         }
     }
@@ -1249,7 +1315,8 @@ impl Window {
         button: &Button,
         mod1_input: bool,
         mod2_input: bool,
-    ) -> Option<impl Iterator<Item = &'a GameInput> + use<'a>> {
+        menu_open: bool,
+    ) -> Option<MappedInput<'a>> {
         match *remapping {
             RemappingMode::RemapGamepadLayers(game_input) => {
                 // create the new layer entry
@@ -1294,21 +1361,49 @@ impl Window {
                     mod2: modifiers.get(0).copied().unwrap_or_default(),
                 };
 
-                // first check layer entries
-                if let Some(game_inputs) = controller.get_associated_game_layer_inputs(&l_entry1) {
-                    Some(game_inputs.iter())
-                } else if let Some(game_inputs) =
-                    controller.get_associated_game_layer_inputs(&l_entry2)
-                {
-                    Some(game_inputs.iter())
-                } else {
-                    // check button entries
-                    controller
-                        .get_associated_game_button_inputs(button)
-                        .map(|game_inputs| game_inputs.iter())
-                }
+                if !menu_open {
+                    // If a menu is not open, simply return any game inputs
 
-                // TODO: check menu buttons
+                    // First check layer entries
+                    if let Some(game_inputs) =
+                        controller.get_associated_game_layer_inputs(&l_entry1)
+                    {
+                        Some(MappedInput::Game(game_inputs.iter()))
+                    } else if let Some(game_inputs) =
+                        controller.get_associated_game_layer_inputs(&l_entry2)
+                    {
+                        Some(MappedInput::Game(game_inputs.iter()))
+                    } else {
+                        // check button entries
+                        controller
+                            .get_associated_game_button_inputs(button)
+                            .map(|game_inputs| MappedInput::Game(game_inputs.iter()))
+                    }
+                } else {
+                    // If a menu is open, return the associated MenuInput if any, otherwise return
+                    // the associated GameInput
+                    if let Some(menu_inputs) = controller.get_associated_game_menu_inputs(button) {
+                        if !menu_inputs.is_empty() {
+                            return Some(MappedInput::Menu(menu_inputs.iter()));
+                        }
+                    }
+
+                    // First check layer entries
+                    if let Some(game_inputs) =
+                        controller.get_associated_game_layer_inputs(&l_entry1)
+                    {
+                        Some(MappedInput::Game(game_inputs.iter()))
+                    } else if let Some(game_inputs) =
+                        controller.get_associated_game_layer_inputs(&l_entry2)
+                    {
+                        Some(MappedInput::Game(game_inputs.iter()))
+                    } else {
+                        // check button entries
+                        controller
+                            .get_associated_game_button_inputs(button)
+                            .map(|game_inputs| MappedInput::Game(game_inputs.iter()))
+                    }
+                }
             },
             _ => None,
         }

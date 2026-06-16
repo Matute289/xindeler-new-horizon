@@ -92,7 +92,7 @@ use crate::{
         img_ids::Rotations,
         slot::{self, SlotKey},
     },
-    window::Event as WinEvent,
+    window::{Event as WinEvent, MenuInput},
 };
 use client::{Client, UserNotification};
 use common::{
@@ -950,6 +950,8 @@ impl Show {
         }
     }
 
+    pub fn bag_print(&self) -> bool { self.bag }
+
     fn trade(&mut self, open: bool) {
         if !self.esc_menu {
             self.bag = open;
@@ -1251,6 +1253,58 @@ impl CollectFailedData {
     pub fn new(pulse: f32, reason: HudCollectFailedReason) -> Self { Self { pulse, reason } }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowId {
+    None,
+    Bag,
+}
+
+#[derive(Clone)]
+pub struct FocusManager {
+    // was going to operate as a FILO stack, but then I violated the FILO property so idk anymore
+    focus: Vec<WindowId>,
+}
+
+impl FocusManager {
+    pub fn new() -> Self { Self { focus: Vec::new() } }
+
+    // Returns the last element in the stack
+    pub fn top(&self) -> WindowId {
+        match self.focus.last() {
+            Some(&id) => id,
+            None => WindowId::None,
+        }
+    }
+
+    // Adds a new element to the stack
+    pub fn push(&mut self, id: WindowId) {
+        if self.top() != id {
+            self.focus.push(id);
+        }
+    }
+
+    // removes the current element from the stack and any parent elements if any
+    pub fn remove(&mut self, id: WindowId) { self.focus.retain(|x| *x != id); }
+
+    // re-focuses a window that may not be the current focused window. If it finds
+    // an element in the list, it deletes it and re-adds it to the top of the stack
+    #[allow(unused)]
+    pub fn focus(&mut self, id: WindowId) -> bool {
+        if let Some(index) = self.focus.iter().position(|&w| w == id) {
+            let item = self.focus.remove(index);
+            self.focus.push(item);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Returns whether the array is empty or not
+    pub fn is_empty(&self) -> bool { if self.focus.is_empty() { false } else { true } }
+
+    pub fn printer(&self) { println!("Open windows: {:?}", self.focus) }
+}
+
 /// Stores HUD related state which should be persisted even if the HUD is
 /// temporarily hidden (by ie. going to the character screen).
 #[derive(Default)]
@@ -1282,9 +1336,6 @@ pub struct Hud {
     content_bubbles: Vec<(Vec3<f32>, comp::SpeechBubble)>,
     pub persisted_state: Rc<RefCell<PersistedHudState>>,
     pub show: Show,
-    //never_show: bool,
-    //intro: bool,
-    //intro_2: bool,
     to_focus: Option<Option<widget::Id>>,
     force_ungrab: bool,
     force_chat_input: Option<String>,
@@ -1293,8 +1344,10 @@ pub struct Hud {
     pulse: f32,
     hp_pulse: f32,
     slot_manager: slots::SlotManager,
+    focus_manager: FocusManager,
     hotbar: hotbar::State,
     events: Vec<Event>,
+    menu_events: Vec<MenuInput>,
     crosshair_opacity: f32,
     floaters: Floaters,
     voxel_minimap: VoxelMinimap,
@@ -1387,8 +1440,6 @@ impl Hud {
             persisted_state,
             speech_bubbles: HashMap::new(),
             content_bubbles: Vec::new(),
-            //intro: false,
-            //intro_2: false,
             show: Show {
                 intro: false,
                 bag: false,
@@ -1423,7 +1474,6 @@ impl Hud {
                 trade_amount_input_key: None,
             },
             to_focus: None,
-            //never_show: false,
             force_ungrab: false,
             force_chat_input: None,
             force_chat_cursor: None,
@@ -1431,8 +1481,10 @@ impl Hud {
             pulse: 0.0,
             hp_pulse: 0.0,
             slot_manager,
+            focus_manager: FocusManager::new(),
             hotbar: hotbar_state,
             events: Vec::new(),
+            menu_events: Vec::new(),
             crosshair_opacity: 0.0,
             floaters: Floaters {
                 exp_floaters: Vec::new(),
@@ -3526,6 +3578,7 @@ impl Hud {
                 &msm,
                 &rbm,
                 poise,
+                &self.menu_events,
             )
             .set(self.ids.bag, ui_widgets)
             {
@@ -3534,7 +3587,12 @@ impl Hud {
                     bag::Event::SetDetailsMode(mode) => self.show.bag_details = mode,
                     bag::Event::Close => {
                         self.show.stats = false;
-                        Self::show_bag(&mut self.slot_manager, &mut self.show, false);
+                        Self::show_bag(
+                            &mut self.slot_manager,
+                            &mut self.focus_manager,
+                            &mut self.show,
+                            false,
+                        );
                         if !self.show.social {
                             self.show.want_grab = true;
                             self.force_ungrab = false;
@@ -3705,12 +3763,6 @@ impl Hud {
 
         self.new_messages.clear();
         self.new_notifications.clear();
-
-        // Windows
-
-        // Char Window will always appear at the left side. Other Windows default to the
-        // left side, but when the Char Window is opened they will appear to the right
-        // of it.
 
         // Settings
         if let Windows::Settings = self.show.open_windows {
@@ -4705,13 +4757,26 @@ impl Hud {
             }
         }
 
+        // if a menu is open, notify window so it can restrict GameInputs
+        global_state.window.menu_open = self.focus_manager.is_empty();
+
+        self.menu_events.clear(); // clear all menu inputs after they have been read
         events
     }
 
-    fn show_bag(slot_manager: &mut slots::SlotManager, show: &mut Show, state: bool) {
+    fn show_bag(
+        slot_manager: &mut slots::SlotManager,
+        focus_manager: &mut FocusManager,
+        show: &mut Show,
+        state: bool,
+    ) {
         show.bag(state);
         if !state {
             slot_manager.idle();
+            focus_manager.remove(WindowId::Bag);
+        } else {
+            // An attempt at keeping track of window focus
+            focus_manager.push(WindowId::Bag);
         }
     }
 
@@ -4978,6 +5043,17 @@ impl Hud {
             },
 
             // Press key while not typing
+            // MenuInput
+            WinEvent::MenuInput(key, state) if !self.typing() => {
+                if state {
+                    self.menu_events.push(key);
+                    true
+                } else {
+                    false
+                }
+            },
+
+            // GameInput
             WinEvent::InputUpdate(key, state) if !self.typing() => {
                 let gs_audio = &global_state.settings.audio;
                 let mut toggle_mute = |audio: Audio| {
@@ -5002,7 +5078,12 @@ impl Hud {
                     GameInput::Inventory if state => {
                         global_state.profile.tutorial.event_open_inventory();
                         let state = !self.show.bag;
-                        Self::show_bag(&mut self.slot_manager, &mut self.show, state);
+                        Self::show_bag(
+                            &mut self.slot_manager,
+                            &mut self.focus_manager,
+                            &mut self.show,
+                            state,
+                        );
                         true
                     },
                     GameInput::Social if state => {

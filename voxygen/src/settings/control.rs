@@ -1,4 +1,7 @@
-use crate::{game_input::GameInput, window::KeyMouse};
+use crate::{
+    game_input::GameInput,
+    window::{KeyMouse, MenuInput},
+};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
@@ -13,6 +16,7 @@ use winit::{
 #[serde(default)]
 struct ControlSettingsSerde {
     keybindings: HashMap<GameInput, Option<KeyMouse>>,
+    menubindings: HashMap<MenuInput, Option<KeyMouse>>,
 }
 
 impl From<ControlSettings> for ControlSettingsSerde {
@@ -28,6 +32,7 @@ impl From<ControlSettings> for ControlSettingsSerde {
         }
         ControlSettingsSerde {
             keybindings: user_bindings,
+            menubindings: HashMap::new(),
         }
     }
 }
@@ -42,6 +47,8 @@ impl Default for ControlSettingsSerde {
 pub struct ControlSettings {
     pub keybindings: HashMap<GameInput, Option<KeyMouse>>,
     pub inverse_keybindings: HashMap<KeyMouse, HashSet<GameInput>>, // used in event loop
+    pub menubindings: HashMap<MenuInput, Option<KeyMouse>>,
+    pub inverse_menubindings: HashMap<KeyMouse, HashSet<MenuInput>>,
 }
 
 impl From<ControlSettingsSerde> for ControlSettings {
@@ -80,12 +87,31 @@ impl ControlSettings {
         }
     }
 
+    pub fn remove_menu_binding(&mut self, menu_input: MenuInput) {
+        if let Some(inverse) = self
+            .menubindings
+            .insert(menu_input, None)
+            .flatten()
+            .and_then(|key_mouse| self.inverse_menubindings.get_mut(&key_mouse))
+        {
+            inverse.remove(&menu_input);
+        }
+    }
+
     pub fn get_binding(&self, game_input: GameInput) -> Option<KeyMouse> {
         self.keybindings.get(&game_input).cloned().flatten()
     }
 
+    pub fn get_menu_binding(&self, menu_input: MenuInput) -> Option<KeyMouse> {
+        self.menubindings.get(&menu_input).cloned().flatten()
+    }
+
     pub fn get_associated_game_inputs(&self, key_mouse: &KeyMouse) -> Option<&HashSet<GameInput>> {
         self.inverse_keybindings.get(key_mouse)
+    }
+
+    pub fn get_associated_menu_inputs(&self, key_mouse: &KeyMouse) -> Option<&HashSet<MenuInput>> {
+        self.inverse_menubindings.get(key_mouse)
     }
 
     pub fn insert_binding(&mut self, game_input: GameInput, key_mouse: KeyMouse) {
@@ -94,6 +120,15 @@ impl ControlSettings {
             .entry(key_mouse)
             .or_default()
             .insert(game_input);
+    }
+
+    pub fn insert_menu_binding(&mut self, menu_input: MenuInput, key_mouse: KeyMouse) {
+        self.menubindings
+            .insert(menu_input, Some(key_mouse.clone()));
+        self.inverse_menubindings
+            .entry(key_mouse)
+            .or_default()
+            .insert(menu_input);
     }
 
     pub fn modify_binding(&mut self, game_input: GameInput, key_mouse: KeyMouse) {
@@ -114,6 +149,24 @@ impl ControlSettings {
         self.keybindings.insert(game_input, Some(key_mouse));
     }
 
+    pub fn modify_menu_binding(&mut self, menu_input: MenuInput, key_mouse: KeyMouse) {
+        // For the KeyMouse->MenuInput hashmap, we first need to remove the MenuInput
+        // from the old binding
+        if let Some(old_binding) = self.get_menu_binding(menu_input) {
+            self.inverse_menubindings
+                .entry(old_binding)
+                .or_default()
+                .remove(&menu_input);
+        }
+        // Then we add the MenuInput to the proper key
+        self.inverse_menubindings
+            .entry(key_mouse.clone())
+            .or_default()
+            .insert(menu_input);
+        // For the MenuInput->KeyMouse hashmap, just overwrite the value
+        self.menubindings.insert(menu_input, Some(key_mouse));
+    }
+
     /// Return true if this key is used for multiple GameInputs that aren't
     /// expected to be safe to have bound to the same key at the same time
     pub fn has_conflicting_bindings(&self, key_mouse: KeyMouse) -> bool {
@@ -127,6 +180,14 @@ impl ControlSettings {
             }
         }
         false
+    }
+
+    /// Return true if this key is used for multiple MenuInputs that aren't
+    /// expected to be safe to have bound to the same key at the same time
+    pub fn has_conflicting_menu_bindings(&self, key_mouse: KeyMouse) -> bool {
+        self.inverse_menubindings
+            .get(&key_mouse)
+            .is_some_and(|menu_inputs| menu_inputs.len() > 1)
     }
 
     pub fn default_binding(game_input: GameInput) -> Option<KeyMouse> {
@@ -218,6 +279,28 @@ impl ControlSettings {
             GameInput::ToggleWalk => char("B"),
         }))
     }
+
+    pub fn default_menu_binding(menu_input: MenuInput) -> Option<KeyMouse> {
+        //let char = |s| Key::Character(winit::keyboard::SmolStr::new(s));
+
+        Some(KeyMouse::Key(match menu_input {
+            MenuInput::Up => Key::Named(NamedKey::ArrowUp),
+            MenuInput::Down => Key::Named(NamedKey::ArrowDown),
+            MenuInput::Left => Key::Named(NamedKey::ArrowLeft),
+            MenuInput::Right => Key::Named(NamedKey::ArrowRight),
+            MenuInput::ScrollUp => return None,
+            MenuInput::ScrollDown => return None,
+            MenuInput::ScrollLeft => return None,
+            MenuInput::ScrollRight => return None,
+            MenuInput::PageDown => return None, //char("Q"),
+            MenuInput::PageUp => return None,   //char("E"),
+            MenuInput::Apply => Key::Named(NamedKey::Enter),
+            MenuInput::Back => Key::Named(NamedKey::Escape),
+            MenuInput::Exit => return None,
+            MenuInput::SomethingIdk => return None,
+            MenuInput::WindowFocus => return None,
+        }))
+    }
 }
 
 impl Default for ControlSettings {
@@ -225,6 +308,8 @@ impl Default for ControlSettings {
         let mut new_settings = Self {
             keybindings: HashMap::new(),
             inverse_keybindings: HashMap::new(),
+            menubindings: HashMap::new(),
+            inverse_menubindings: HashMap::new(),
         };
         // Sets the initial keybindings for those GameInputs.
         for game_input in GameInput::iter() {
@@ -232,6 +317,12 @@ impl Default for ControlSettings {
                 None => {},
                 Some(default) => new_settings.insert_binding(game_input, default),
             };
+        }
+        // Sets the initial keybindings for the MenuInputs
+        for menu_input in MenuInput::iter() {
+            if let Some(default) = ControlSettings::default_menu_binding(menu_input) {
+                new_settings.insert_menu_binding(menu_input, default);
+            }
         }
         new_settings
     }

@@ -32,6 +32,7 @@ pub struct ContentSize {
 
 pub struct SlotMaker<'a, C, I, S: SumSlot> {
     pub empty_slot: image::Id,
+    pub hovered_slot: image::Id,
     pub filled_slot: image::Id,
     pub selected_slot: image::Id,
     // Is this useful?
@@ -57,6 +58,8 @@ where
         &mut self,
         contents: K,
         wh: [f32; 2],
+        menu_hover: bool,
+        menu_clicked: bool,
     ) -> Slot<'_, K, C, I, S> {
         let content_size = {
             let ContentSize {
@@ -76,6 +79,7 @@ where
         Slot::new(
             contents,
             self.empty_slot,
+            self.hovered_slot,
             self.selected_slot,
             self.filled_slot,
             content_size,
@@ -86,6 +90,8 @@ where
             self.amount_text_color,
             self.content_source,
             self.image_source,
+            menu_hover,
+            menu_clicked,
             self.pulse,
         )
         .wh([wh[0] as f64, wh[1] as f64])
@@ -141,6 +147,7 @@ pub struct SlotManager<S: SumSlot> {
     // Note: could potentially be specialized for each slot if needed
     drag_img_size: Vec2<f32>,
     pub mouse_over_slot: Option<S>,
+    pub focused_idx: Option<usize>,
     // Si prefixes settings
     use_prefixes: bool,
     prefix_switch_point: u32,
@@ -188,6 +195,7 @@ where
             events: Vec::new(),
             drag_id: generator.next(),
             mouse_over_slot: None,
+            focused_idx: None,
             use_prefixes,
             prefix_switch_point,
             // TODO(heyzoos) Will be useful for whoever works on rendering the number of items "in
@@ -461,8 +469,18 @@ where
         }
     }
 
+    /// Selects a specified slot
+    pub fn select(&mut self, widget: widget::Id, slot: S) {
+        // Sets the slot to selected; if it has no content, it will be deselected on the
+        // next fn update call
+        self.state = ManagerState::Selected(widget, slot);
+    }
+
     /// Sets the SlotManager into an idle state
     pub fn idle(&mut self) { self.state = ManagerState::Idle; }
+
+    /// Clears the menu input focus (e.g., when the mouse is being used)
+    pub fn clear_focus(&mut self) { self.focused_idx = None; }
 }
 
 #[derive(WidgetCommon)]
@@ -471,6 +489,7 @@ pub struct Slot<'a, K: SlotKey<C, I> + Into<S>, C, I, S: SumSlot> {
 
     // Images for slot background and frame
     empty_slot: image::Id,
+    hovered_slot: image::Id,
     selected_slot: image::Id,
     background_color: Option<Color>,
 
@@ -492,6 +511,10 @@ pub struct Slot<'a, K: SlotKey<C, I> + Into<S>, C, I, S: SumSlot> {
     content_source: &'a C,
     image_source: &'a I,
 
+    // Menu button navigation
+    menu_hover: bool,
+    menu_click: bool,
+
     pulse: f32,
 
     #[conrod(common_builder)]
@@ -499,13 +522,13 @@ pub struct Slot<'a, K: SlotKey<C, I> + Into<S>, C, I, S: SumSlot> {
 }
 
 widget_ids! {
-    // Note: icon, amount, and amount_bg are not always used. Is there any cost to having them?
     struct Ids {
         background,
         icon,
         amount,
         amount_bg,
         content,
+        slot_highlight,
     }
 }
 
@@ -545,6 +568,7 @@ where
     fn new(
         slot_key: K,
         empty_slot: image::Id,
+        hovered_slot: image::Id,
         filled_slot: image::Id,
         selected_slot: image::Id,
         content_size: Vec2<f32>,
@@ -555,11 +579,14 @@ where
         amount_text_color: Color,
         content_source: &'a C,
         image_source: &'a I,
+        menu_hover: bool,
+        menu_click: bool,
         pulse: f32,
     ) -> Self {
         Self {
             slot_key,
             empty_slot,
+            hovered_slot,
             filled_slot,
             selected_slot,
             background_color: None,
@@ -573,6 +600,8 @@ where
             slot_manager: None,
             content_source,
             image_source,
+            menu_hover,
+            menu_click,
             pulse,
             common: widget::CommonBuilder::default(),
         }
@@ -639,6 +668,14 @@ where
 
         // Get image ids
         let content_images = state.cached_images.as_ref().map(|c| c.1.clone());
+
+        // Check menu button navigation selection events
+        if self.menu_click && self.menu_hover {
+            self.slot_manager
+                .as_mut()
+                .map(|m| m.select(id, slot_key.into()));
+        }
+
         // Get whether this slot is selected
         let interaction = self.slot_manager.as_mut().map_or(Interaction::None, |m| {
             m.update(
@@ -712,6 +749,21 @@ where
                 .parent(id)
                 .graphics_for(id)
                 .set(state.ids.content, ui);
+        }
+
+        // Draw on-hover highlight - let text overlap if the slot is small
+        let is_highlighted = self
+            .slot_manager
+            .as_ref()
+            .map_or(false, |sm| sm.mouse_over_slot == Some(slot_key.into()));
+
+        if is_highlighted || self.menu_hover {
+            Image::new(self.hovered_slot)
+                .x_y(x, y)
+                .w_h(w, h)
+                .parent(id)
+                .graphics_for(id)
+                .set(state.ids.slot_highlight, ui);
         }
 
         // Draw amount

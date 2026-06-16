@@ -195,10 +195,6 @@ impl ControllerSettings {
         }
     }
 
-    pub fn get_game_button_binding(&self, input: GameInput) -> Option<Button> {
-        self.game_button_map.get(&input).cloned().flatten()
-    }
-
     pub fn get_associated_game_button_inputs(
         &self,
         button: &Button,
@@ -211,6 +207,14 @@ impl ControllerSettings {
         layers: &LayerEntry,
     ) -> Option<&HashSet<GameInput>> {
         self.inverse_layer_button_map.get(layers)
+    }
+
+    pub fn get_associated_game_menu_inputs(&self, button: &Button) -> Option<&HashSet<MenuInput>> {
+        self.inverse_menu_button_map.get(button)
+    }
+
+    pub fn get_game_button_binding(&self, input: GameInput) -> Option<Button> {
+        self.game_button_map.get(&input).cloned().flatten()
     }
 
     pub fn get_menu_button_binding(&self, input: MenuInput) -> Option<Button> {
@@ -915,11 +919,13 @@ impl ControllerSettings {
             MenuInput::ScrollDown => Some(Button::Simple(GilButton::Unknown)),
             MenuInput::ScrollLeft => Some(Button::Simple(GilButton::Unknown)),
             MenuInput::ScrollRight => Some(Button::Simple(GilButton::Unknown)),
-            MenuInput::Home => Some(Button::Simple(GilButton::Unknown)),
-            MenuInput::End => Some(Button::Simple(GilButton::Unknown)),
+            MenuInput::PageUp => Some(Button::Simple(GilButton::RightTrigger)),
+            MenuInput::PageDown => Some(Button::Simple(GilButton::LeftTrigger)),
             MenuInput::Apply => Some(Button::Simple(GilButton::South)),
             MenuInput::Back => Some(Button::Simple(GilButton::East)),
             MenuInput::Exit => Some(Button::Simple(GilButton::Mode)),
+            MenuInput::SomethingIdk => Some(Button::Simple(GilButton::North)),
+            MenuInput::WindowFocus => Some(Button::Simple(GilButton::Select)),
         }
     }
 }

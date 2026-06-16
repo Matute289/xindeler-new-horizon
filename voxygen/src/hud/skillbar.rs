@@ -1024,6 +1024,7 @@ impl<'a> Skillbar<'a> {
         let mut slot_maker = SlotMaker {
             // TODO: is a separate image needed for the frame?
             empty_slot: self.imgs.skillbar_slot,
+            hovered_slot: self.imgs.skillbar_index,
             filled_slot: self.imgs.skillbar_slot,
             selected_slot: self.imgs.inv_slot_sel,
             background_color: None,
@@ -1134,7 +1135,7 @@ impl<'a> Skillbar<'a> {
         let slots = slot_entries(state, slot_offset);
         for entry in slots {
             let slot = slot_maker
-                .fabricate(entry.slot, [40.0; 2])
+                .fabricate(entry.slot, [40.0; 2], false, false)
                 .filled_slot(self.imgs.skillbar_slot)
                 .position(entry.position);
             // if there is an item attached, show item tooltip
@@ -1180,6 +1181,7 @@ impl<'a> Skillbar<'a> {
                             Image::new(selection_image)
                                 .w_h(42.0, 42.0)
                                 .middle_of(entry.widget_id)
+                                .graphics_for(entry.widget_id)
                                 .set(state.ids.slot_highlight, ui);
                         }
                     }
@@ -1201,6 +1203,7 @@ impl<'a> Skillbar<'a> {
                             Image::new(selection_image)
                                 .w_h(42.0, 42.0)
                                 .middle_of(entry.widget_id)
+                                .graphics_for(entry.widget_id)
                                 .set(state.ids.slot_highlight, ui);
                         }
                     }

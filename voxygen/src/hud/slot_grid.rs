@@ -12,6 +12,7 @@ use crate::{
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
+    window::MenuInput,
 };
 use client::Client;
 use common::{
@@ -23,8 +24,8 @@ use common::{
     },
 };
 use conrod_core::{
-    Color, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, builder_methods,
-    color,
+    Borderable, Color, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon,
+    builder_methods, color,
     widget::{self, Button, Rectangle, Text},
     widget_ids,
 };
@@ -49,6 +50,7 @@ pub struct SlotGrid<'a> {
     item_i18n: &'a ItemI18n,
     entity: EcsEntity,
     pulse: f32,
+    menu_events: &'a Vec<MenuInput>,
     is_us: bool,
     details_mode: bool,
     show_salvage: bool,
@@ -72,6 +74,7 @@ pub struct State {
 
     active_context_slot: Option<SlotKind>,
     context_menu_pos: [f64; 2],
+    active_slot: [usize; 2],
 }
 
 impl<'a> SlotGrid<'a> {
@@ -97,6 +100,7 @@ impl<'a> SlotGrid<'a> {
         item_i18n: &'a ItemI18n,
         entity: EcsEntity,
         pulse: f32,
+        menu_events: &'a Vec<MenuInput>,
     ) -> Self {
         SlotGrid {
             common: widget::CommonBuilder::default(),
@@ -112,6 +116,7 @@ impl<'a> SlotGrid<'a> {
             item_i18n,
             entity,
             pulse,
+            menu_events,
             is_us: true,
             details_mode: false,
             show_salvage: false,
@@ -132,6 +137,7 @@ impl<'a> Widget for SlotGrid<'a> {
             ids: Ids::new(id_gen),
             active_context_slot: None,
             context_menu_pos: [0.0, 0.0],
+            active_slot: [0, 0],
         }
     }
 
@@ -147,6 +153,53 @@ impl<'a> Widget for SlotGrid<'a> {
                 // if nothing is selected, the context menu should never be open
                 s.active_context_slot = None;
             })
+        }
+
+        // MENU INPUTS: change the slot focus
+        // Up: go up a row (no wrap)
+        // Down: go down a row (no wrap)
+        // Left: move left a column (no wrap) (maybe change tabs to gear?)
+        // Right: move right a column (no wrap) (maybe change tabs to crafting?)
+        // Apply: select the current slot
+        // Back: close the bag menu
+        let mut clicked = false;
+        if selected.is_none() {
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::Up => state.update(|s| {
+                        let [x, y] = s.active_slot;
+                        if y > 0 {
+                            s.active_slot = [x, y - 1];
+                        }
+                    }),
+                    MenuInput::Down => state.update(|s| {
+                        let [x, y] = s.active_slot;
+                        // automate to be height
+                        if y < 8 {
+                            s.active_slot = [x, y + 1];
+                        }
+                    }),
+                    MenuInput::Left => state.update(|s| {
+                        let [x, y] = s.active_slot;
+                        if x > 0 {
+                            s.active_slot = [x - 1, y];
+                        }
+                    }),
+                    MenuInput::Right => state.update(|s| {
+                        let [x, y] = s.active_slot;
+                        if x < self.columns - 1 {
+                            s.active_slot = [x + 1, y];
+                        }
+                    }),
+                    MenuInput::Apply => {
+                        clicked = true;
+                    },
+                    MenuInput::Back => {
+                        // TODO
+                    },
+                    _ => {},
+                }
+            }
         }
 
         // create available inventory slot widgets
@@ -182,6 +235,7 @@ impl<'a> Widget for SlotGrid<'a> {
         // display inventory contents
         let mut slot_maker = SlotMaker {
             empty_slot: self.imgs.inv_slot,
+            hovered_slot: self.imgs.skillbar_index,
             filled_slot: self.imgs.inv_slot,
             selected_slot: self.imgs.inv_slot_sel,
             background_color: Some(UI_MAIN),
@@ -250,8 +304,12 @@ impl<'a> Widget for SlotGrid<'a> {
                 entity: self.entity,
             };
 
+            // Check if active menu button navigation hover
+            let menu_hover =
+                state.active_slot[0] == x && state.active_slot[1] == y && selected.is_none();
+
             let mut slot_widget = slot_maker
-                .fabricate(inv_slot, [self.slot_size as f32; 2])
+                .fabricate(inv_slot, [self.slot_size as f32; 2], menu_hover, clicked)
                 .top_left_with_margins_on(
                     id,
                     // decimal values might cause pixel mismatches between slots, use floor to try
@@ -260,9 +318,8 @@ impl<'a> Widget for SlotGrid<'a> {
                     (x as f64 * (self.slot_size + self.spacing)).floor(),
                 );
 
-            // highlight slots are provided by the loadout item that the mouse is over
+            // highlight slots are provided by the loadout item (bag) that the mouse is over
             if mouseover_loadout_slots.contains(&i) {
-                // TODO: with_background_color doesn't seem to do anything
                 slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
             }
 
@@ -347,7 +404,7 @@ impl<'a> Widget for SlotGrid<'a> {
                         .top_left_with_margins_on(
                             id,
                             0.0 + y as f64 * self.slot_size,
-                            current_width - 40.0 as f64 * self.slot_size,
+                            current_width - 40.0_f64 * self.slot_size,
                         )
                         .font_id(self.fonts.cyri.conrod_id)
                         .font_size(self.fonts.cyri.scale(14))
@@ -379,7 +436,7 @@ impl<'a> Widget for SlotGrid<'a> {
             let [x, y] = state.context_menu_pos;
             let total_h = (actions.len() as f64 * 25.0) + ((actions.len() as f64 + 1.0) * 2.0);
 
-            let event = ContextMenu::new(&actions, self.fonts, self.imgs)
+            let event = ContextMenu::new(&actions, self.fonts, self.imgs, self.menu_events)
                 .top_left_with_margins_on(id, y, x)
                 .w_h(130.0, total_h)
                 .set(state.ids.context_menu, ui);
@@ -404,6 +461,7 @@ struct ContextMenu<'a> {
     actions: &'a [&'a str],
     fonts: &'a Fonts,
     imgs: &'a Imgs,
+    menu_events: &'a Vec<MenuInput>,
 }
 
 widget_ids! {
@@ -415,15 +473,23 @@ widget_ids! {
 
 struct ContextState {
     ids: ContextMenuIds,
+
+    active_slot: [usize; 1],
 }
 
 impl<'a> ContextMenu<'a> {
-    fn new(actions: &'a [&'a str], fonts: &'a Fonts, imgs: &'a Imgs) -> Self {
+    fn new(
+        actions: &'a [&'a str],
+        fonts: &'a Fonts,
+        imgs: &'a Imgs,
+        menu_events: &'a Vec<MenuInput>,
+    ) -> Self {
         ContextMenu {
             common: widget::CommonBuilder::default(),
             actions,
             fonts,
             imgs,
+            menu_events,
         }
     }
 }
@@ -436,10 +502,11 @@ impl<'a> Widget for ContextMenu<'a> {
     fn init_state(&self, id_gen: widget::id::Generator) -> Self::State {
         ContextState {
             ids: ContextMenuIds::new(id_gen),
+            active_slot: [0],
         }
     }
 
-    fn style(&self) -> Self::Style { () }
+    fn style(&self) -> Self::Style {}
 
     fn update(self, args: widget::UpdateArgs<Self>) -> Self::Event {
         let widget::UpdateArgs {
@@ -453,30 +520,76 @@ impl<'a> Widget for ContextMenu<'a> {
 
         let item_h = 25.0;
         let spacing = 2.0;
+        let actions_len = self.actions.len();
+
+        // MENU INPUTS: navigate up and down the list
+        // Up: go up an item (wrap?)
+        // Down: go down an item (wrap?)
+        // Apply: select the current list item
+        // Back: close the context menu
+        let mut clicked = false;
+        for event in self.menu_events {
+            match *event {
+                MenuInput::Up => state.update(|s| {
+                    let [y] = s.active_slot;
+                    if y > 0 {
+                        s.active_slot = [y - 1];
+                    }
+                }),
+                MenuInput::Down => state.update(|s| {
+                    let [y] = s.active_slot;
+                    if y < actions_len - 1 {
+                        s.active_slot = [y + 1];
+                    }
+                }),
+                MenuInput::Apply => {
+                    clicked = true;
+                },
+                MenuInput::Back => {
+                    // TODO
+                },
+                _ => {},
+            }
+        }
 
         // draw background
-        Rectangle::fill_with(rect.dim(), Color::Rgba(0.1, 0.1, 0.1, 0.9))
+        Rectangle::fill_with(rect.dim(), Color::Rgba(0.2, 0.2, 0.2, 0.99))
             .middle_of(id)
             .set(state.ids.bg, ui);
 
-        if state.ids.buttons.len() < self.actions.len() {
+        if state.ids.buttons.len() < actions_len {
             state.update(|s| {
                 s.ids
                     .buttons
-                    .resize(self.actions.len(), &mut ui.widget_id_generator());
+                    .resize(actions_len, &mut ui.widget_id_generator());
             });
         }
 
         // position buttons
         for (i, label) in self.actions.iter().enumerate() {
             let btn_id = state.ids.buttons[i];
+            let active_btn = state.active_slot[0] == i;
             let btn = Button::image(self.imgs.nothing)
+                .color(color::BLACK)
+                .border(20.0)
+                .border_color(
+                    if state.active_slot[0] == i {
+                        color::YELLOW
+                    } else {
+                        color::WHITE
+                    }
+                )
                 .label(label)
                 .label_font_size(self.fonts.cyri.scale(12))
                 .label_font_id(self.fonts.cyri.conrod_id)
-                .label_color(color::WHITE)
-                .color(color::CHARCOAL)
-                .hover_image(self.imgs.selection_hover)
+                .label_color(
+                    if active_btn {
+                        color::YELLOW
+                    } else {
+                        color::WHITE
+                    }
+                )
+                .hover_image(self.imgs.selection_hover) // puts a border around the button
                 .press_image(self.imgs.selection_press)
                 .image_color(color::rgba(1.0, 0.82, 0.27, 1.0))
                 .h(item_h)
@@ -489,7 +602,7 @@ impl<'a> Widget for ContextMenu<'a> {
                 btn.down_from(state.ids.buttons[i - 1], spacing)
             };
 
-            if placed_btn.set(btn_id, ui).was_clicked() {
+            if placed_btn.set(btn_id, ui).was_clicked() || (clicked && active_btn) {
                 clicked_index = Some(i);
             }
         }

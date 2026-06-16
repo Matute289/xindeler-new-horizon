@@ -414,6 +414,7 @@ impl<'a> Trade<'a> {
                 self.item_tooltip_manager,
                 self.slot_manager,
                 self.pulse,
+                &Vec::new(),
                 self.localized_strings,
                 self.item_i18n,
                 false,
@@ -491,6 +492,7 @@ impl<'a> Trade<'a> {
 
         let mut slot_maker = SlotMaker {
             empty_slot: self.imgs.inv_slot,
+            hovered_slot: self.imgs.skillbar_index,
             filled_slot: self.imgs.inv_slot,
             selected_slot: self.imgs.inv_slot_sel,
             background_color: Some(UI_MAIN),
@@ -530,7 +532,7 @@ impl<'a> Trade<'a> {
             });
             // Slot
             let slot_widget = slot_maker
-                .fabricate(slot, [40.0; 2])
+                .fabricate(slot, [40.0; 2], false, false)
                 .top_left_with_margins_on(
                     state.ids.inv_alignment[who],
                     0.0 + y as f64 * (40.0),

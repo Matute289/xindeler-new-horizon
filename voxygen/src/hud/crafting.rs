@@ -1040,6 +1040,7 @@ impl Widget for Crafting<'_> {
 
             let mut slot_maker = SlotMaker {
                 empty_slot: self.imgs.inv_slot,
+                hovered_slot: self.imgs.skillbar_index,
                 filled_slot: self.imgs.inv_slot,
                 selected_slot: self.imgs.inv_slot_sel,
                 background_color: Some(UI_MAIN),
@@ -1120,7 +1121,7 @@ impl Widget for Crafting<'_> {
                     };
 
                     let primary_slot_widget = slot_maker
-                        .fabricate(primary_slot, [40.0; 2])
+                        .fabricate(primary_slot, [40.0; 2], false, false)
                         .top_left_with_margins_on(state.ids.modular_art, 4.0, 4.0)
                         .parent(state.ids.align_ing);
 
@@ -1208,7 +1209,7 @@ impl Widget for Crafting<'_> {
                     };
 
                     let secondary_slot_widget = slot_maker
-                        .fabricate(secondary_slot, [40.0; 2])
+                        .fabricate(secondary_slot, [40.0; 2], false, false)
                         .top_right_with_margins_on(state.ids.modular_art, 4.0, 4.0)
                         .parent(state.ids.align_ing);
 
@@ -1551,7 +1552,7 @@ impl Widget for Crafting<'_> {
                     };
 
                     let repair_slot_widget = slot_maker
-                        .fabricate(repair_slot, [80.0; 2])
+                        .fabricate(repair_slot, [80.0; 2], false, false)
                         .down_from(state.ids.modular_desc_txt, 15.0)
                         .align_middle_x()
                         .parent(state.ids.align_ing);
