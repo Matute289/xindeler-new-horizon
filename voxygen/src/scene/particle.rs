@@ -4423,9 +4423,86 @@ impl ParticleMgr {
 
             use comp::{FrontendMarker, visual::TorusMode};
             match marker {
-                FrontendMarker::IgniteArrow => {},
-                FrontendMarker::FreezeArrow => {},
-                FrontendMarker::DrenchArrow => {},
+                FrontendMarker::IgniteArrow => {
+                    self.particles.resize_with(
+                        self.particles.len()
+                            + usize::from(self.scheduler.heartbeats(Duration::from_millis(150))),
+                        || {
+                            let start_pos = pos
+                                + Vec3::<f32>::zero()
+                                    .map(|_| rng.random_range(-1.0..1.0))
+                                    .normalized()
+                                    * 0.05;
+                            let end_pos = start_pos
+                                + Vec3::unit_z() * 0.7
+                                + Vec3::<f32>::zero()
+                                    .map(|_| rng.random_range(-1.0..1.0))
+                                    .normalized()
+                                    * 0.05;
+                            Particle::new_directed(
+                                Duration::from_secs(1),
+                                time,
+                                ParticleMode::FlameThrower,
+                                start_pos,
+                                end_pos,
+                                scene_data,
+                            )
+                        },
+                    );
+                },
+                FrontendMarker::FreezeArrow => {
+                    self.particles.resize_with(
+                        self.particles.len()
+                            + usize::from(self.scheduler.heartbeats(Duration::from_millis(400))),
+                        || {
+                            let start_pos = pos
+                                + Vec3::<f32>::zero()
+                                    .map(|_| rng.random_range(-1.0..1.0))
+                                    .normalized()
+                                    * 0.05;
+                            let end_pos = start_pos
+                                + Vec3::unit_z() * 1.0
+                                + Vec3::<f32>::zero()
+                                    .map(|_| rng.random_range(-1.0..1.0))
+                                    .normalized()
+                                    * 0.05;
+                            Particle::new_directed(
+                                Duration::from_millis(500),
+                                time,
+                                ParticleMode::Ice,
+                                start_pos,
+                                end_pos,
+                                scene_data,
+                            )
+                        },
+                    );
+                },
+                FrontendMarker::DrenchArrow => {
+                    self.particles.resize_with(
+                        self.particles.len()
+                            + usize::from(self.scheduler.heartbeats(Duration::from_millis(500))),
+                        || {
+                            let start_pos = pos
+                                + Vec3::<f32>::zero()
+                                    .map(|_| rng.random_range(-1.0..1.0))
+                                    .normalized()
+                                    * 0.05;
+                            let end_pos = start_pos - Vec3::unit_z() * 0.7
+                                + Vec3::<f32>::zero()
+                                    .map(|_| rng.random_range(-1.0..1.0))
+                                    .normalized()
+                                    * 0.05;
+                            Particle::new_directed(
+                                Duration::from_secs(1),
+                                time,
+                                ParticleMode::CultistFlame,
+                                start_pos,
+                                end_pos,
+                                scene_data,
+                            )
+                        },
+                    );
+                },
                 FrontendMarker::JoltArrow => {
                     self.particles.resize_with(
                         self.particles.len()
