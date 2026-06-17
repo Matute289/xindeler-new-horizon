@@ -6,6 +6,7 @@ use std::{error::Error, fmt};
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, StatEffect},
     comp::projectile::ProjectileConstructorEffect,
+    uid::Uid,
 };
 
 use super::Body;
@@ -114,6 +115,10 @@ pub struct Stats {
     pub knockback_mult: f32,
     pub projectile_speed_mult: f32,
     pub projectile_constructor_effects: Vec<ProjectileConstructorEffect>,
+    /// This technically doesn't do anything. It should be used in the frontend
+    /// to 'mark' an entity for a player, or used in agent to make an NPC focus
+    /// on an entity.
+    pub marked_entities: Vec<Uid>,
 }
 
 impl Stats {
@@ -153,6 +158,7 @@ impl Stats {
             knockback_mult: 1.0,
             projectile_speed_mult: 1.0,
             projectile_constructor_effects: Vec::new(),
+            marked_entities: Vec::new(),
         }
     }
 

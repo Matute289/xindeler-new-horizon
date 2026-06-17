@@ -215,6 +215,7 @@ const WORLD_COLOR: Color = Color::Rgba(0.95, 1.0, 0.95, 1.0);
 //Nametags
 const GROUP_MEMBER: Color = Color::Rgba(0.47, 0.84, 1.0, 1.0);
 const DEFAULT_NPC: Color = Color::Rgba(1.0, 1.0, 1.0, 1.0);
+const MARKED_NPC: Color = Color::Rgba(1.0, 0.8, 0.0, 1.0);
 
 // UI Color-Theme
 const UI_MAIN: Color = Color::Rgba(0.61, 0.70, 0.70, 1.0); // Greenish Blue
@@ -2382,6 +2383,7 @@ impl Hud {
             }
 
             let speech_bubbles = &self.speech_bubbles;
+            let my_stats = stats.get(me);
             // Render overhead name tags and health bars
             for (
                 entity,
@@ -2445,6 +2447,8 @@ impl Hud {
                         let is_me = entity == me;
                         let dist_sqr = pos.distance_squared(player_pos);
 
+                        let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid));
+
                         // Determine whether to display nametag and healthbar based on whether the
                         // entity is mounted, has been damaged, is targeted/selected, or is in your
                         // group
@@ -2458,7 +2462,8 @@ impl Hud {
                             && ((info.target_entity == Some(entity))
                                 || info.selected_entity.is_some_and(|s| s.0 == entity)
                                 || health.is_none_or(overhead::should_show_healthbar)
-                                || in_group)
+                                || in_group
+                                || is_marked)
                             && dist_sqr
                                 < (if in_group {
                                     NAMETAG_GROUP_RANGE
@@ -2488,6 +2493,7 @@ impl Hud {
                             },
                             hardcore: hardcore.contains(entity),
                             stance,
+                            marked: is_marked,
                         });
                         // Only render bubble if nearby or if its me and setting is on
                         let bubble = if (dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)

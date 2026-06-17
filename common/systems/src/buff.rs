@@ -851,5 +851,8 @@ fn execute_effect(
         BuffEffect::ProjectileConstructorEffect(pce) => {
             stat.projectile_constructor_effects.push(pce.clone())
         },
+        BuffEffect::MarkEntity(e) => {
+            stat.marked_entities.push(*e);
+        },
     };
 }

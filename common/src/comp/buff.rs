@@ -658,6 +658,7 @@ impl BuffKind {
                         AttackEffect::new(None, CombatEffect::AdditionalDamage(hunt_mult - 1.0))
                             .with_requirement(CombatRequirement::Target(target)),
                     ));
+                    effects.push(BuffEffect::MarkEntity(target));
                 }
                 effects
             },
@@ -1016,6 +1017,7 @@ pub enum BuffEffect {
     /// Adds effects to projectiles when they are constructed from a projectile
     /// constructor
     ProjectileConstructorEffect(ProjectileConstructorEffect),
+    MarkEntity(Uid),
 }
 
 /// Actual de/buff.
