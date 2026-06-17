@@ -2869,9 +2869,7 @@ impl Animation for BasicAction {
                 next.hand_l.position += Vec3::new(4.0, -6.0, -6.0) * move1;
                 next.hand_l.orientation.rotate_z(move1 * 2.0);
             },
-            Some(
-                "common.abilities.bow.storm_chaser" | "common.abilities.bow.storm_chaser_clear",
-            ) => {
+            Some("common.abilities.bow.storm_chaser") => {
                 bow_start(&mut next, s_a);
 
                 next.hand_l.position += Vec3::new(-4.0, 0.0, 4.0) * move1;
@@ -2897,7 +2895,30 @@ impl Animation for BasicAction {
 
                 next.control.orientation.rotate_y(move1 * 0.4);
                 next.control.orientation.rotate_x(move1 * 0.6);
-                next.control.position += Vec3::new(4.0, 0.0, 6.0) * move1;
+                next.control.position += Vec3::new(4.0, -15.0, 6.0) * move1;
+            },
+            Some(
+                "common.abilities.bow.heartseeker_shot"
+                | "common.abilities.bow.burning_heartseeker_shot"
+                | "common.abilities.bow.poison_heartseeker_shot"
+                | "common.abilities.bow.freezing_heartseeker_shot"
+                | "common.abilities.bow.lightning_heartseeker_shot",
+            ) => {
+                bow_start(&mut next, s_a);
+
+                let charge = chargebase.min(1.0);
+                let tension = (chargebase * 250.0).sin();
+
+                bow_draw(&mut next, move1base, d.look_dir.z);
+
+                next.hand_l.position +=
+                    Vec3::new(0.0, charge * -3.0, 0.0) + Vec3::one() * tension * 0.1;
+
+                let offset = 3.0 + tension * 0.15;
+                next.torso.position += Vec3::new(0.0, -5.0, -offset) * move1;
+                next.foot_l.position += Vec3::new(0.0, -5.0, offset) * move1;
+                next.foot_l.orientation.rotate_x(move1 * -PI / 2.0);
+                next.foot_r.position += Vec3::new(0.0, 0.0, offset) * move1;
             },
             Some("common.abilities.bow.eagle_eye") => {
                 bow_start(&mut next, s_a);
@@ -2905,12 +2926,28 @@ impl Animation for BasicAction {
                 next.control.orientation.rotate_x(move1 * 0.8);
                 next.control.position += Vec3::new(5.0, 0.0, 7.0) * move1;
             },
+            Some("common.abilities.bow.septic_shot") => {
+                bow_start(&mut next, s_a);
+
+                bow_draw(&mut next, move1base, d.look_dir.z);
+
+                let move1_return = if move1base < 0.6 {
+                    move1base / 0.6
+                } else if move1base < 0.8 {
+                    1.0 - (move1base - 0.6) / 0.2
+                } else {
+                    0.0
+                };
+
+                next.hand_l.position += Vec3::new(0.0, 0.0, -15.0) * move1_return;
+                next.hand_l.position += Vec3::new(0.0, -5.0, 0.0) * move1;
+                next.hand_l.orientation.rotate_x(move1_return * -3.0);
+            },
             Some(
                 "common.abilities.bow.ignite_arrow"
                 | "common.abilities.bow.drench_arrow"
                 | "common.abilities.bow.freeze_arrow"
-                | "common.abilities.bow.jolt_arrow"
-                | "common.abilities.bow.septic_shot",
+                | "common.abilities.bow.jolt_arrow",
             ) => {
                 bow_start(&mut next, s_a);
             },
@@ -2924,19 +2961,39 @@ impl Animation for BasicAction {
             Some("common.abilities.bow.piercing_gale") => {
                 bow_start(&mut next, s_a);
 
-                next.control.orientation.rotate_y(move1 * -PI + move2 * -PI);
+                bow_draw(&mut next, move1base, d.look_dir.z);
+
+                next.control.orientation.rotate_z(move1 * 0.8);
+                next.control.orientation.rotate_y(move1 * -4.0);
+                next.control.orientation.rotate_z(move1 * -0.8);
             },
-            Some("common.abilities.bow.piercing_gale_shot") => {
+            Some(
+                "common.abilities.bow.thorn_stake"
+                | "common.abilities.bow.burning_thorn_stake"
+                | "common.abilities.bow.poison_thorn_stake"
+                | "common.abilities.bow.freezing_thorn_stake"
+                | "common.abilities.bow.lightning_thorn_stake",
+            ) => {
                 bow_start(&mut next, s_a);
 
                 bow_draw(&mut next, move1base, d.look_dir.z);
 
-                let charge = chargebase.min(2.0);
-                let rate = 2.5;
-                next.control.orientation.rotate_x(charge * -rate * 0.3);
-                next.control.orientation.rotate_z(charge * rate * 0.3);
-                next.control.orientation.rotate_y(charge * -rate);
-                next.control.orientation.rotate_z(charge * rate * -0.3);
+                let move1_return = if move1base < 0.6 {
+                    move1base / 0.6
+                } else if move1base < 0.8 {
+                    1.0 - (move1base - 0.6) / 0.2
+                } else {
+                    0.0
+                };
+                let move1_delay = if move1 > 0.8 {
+                    (move1 - 0.8) / 0.2
+                } else {
+                    0.0
+                };
+
+                next.hand_l.orientation.rotate_x(move1_return * 6.0);
+                next.hand_l.position += Vec3::new(0.0, -15.0, 0.0) * move1_return;
+                next.hand_l.position += Vec3::new(0.0, -5.0, 0.0) * move1_delay;
             },
             Some("common.abilities.bow.hawkstrike") => {
                 bow_start(&mut next, s_a);
@@ -2952,12 +3009,6 @@ impl Animation for BasicAction {
 
                 next.hand_l.position += Vec3::new(0.0, charge * -5.0, 0.0);
                 next.hand_l.orientation.rotate_y(charge * PI / 2.0);
-            },
-            Some("common.abilities.bow.fusillade") => {
-                bow_start(&mut next, s_a);
-
-                let move_rep = ((move1 + move2) * 20.0).sin();
-                next.hand_l.position += Vec3::new(0.0, 5.0, 0.0) * move_rep;
             },
             Some("common.abilities.bow.death_volley") => {
                 bow_start(&mut next, s_a);
