@@ -1,5 +1,5 @@
 BasicRanged(
-    energy_cost: 0,
+    energy_cost: 15,
     buildup_duration: 0.6,
     recover_duration: 0.15,
     projectile: (
@@ -8,7 +8,7 @@ BasicRanged(
             damage: 30,
             damage_kind: Piercing,
         )),
-        lifetime_override: Some(60.0),
+        lifetime_override: Some(30.0),
         is_point: false,
         hazard: true,
     ),

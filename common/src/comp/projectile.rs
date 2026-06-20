@@ -364,7 +364,11 @@ impl ProjectileConstructor {
             ProjectileConstructorKind::Simple => {
                 hit_solid.push(Effect::Bonk);
 
-                let mut hit_entity = vec![Effect::Vanish];
+                let mut hit_entity = Vec::new();
+
+                if !self.pierce_entities {
+                    hit_entity.push(Effect::Vanish);
+                }
 
                 if let Some(attack) = attack {
                     hit_entity.push(Effect::Attack(attack));

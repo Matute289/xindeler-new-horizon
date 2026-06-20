@@ -181,7 +181,7 @@ buff-resilience = Resilience
     .desc = After having just taken a debilitating attack, you become more resilient to future incapaciting effects.
 ## Owl Talon
 buff-stormchaser = Storm Chaser
-    .desc = You take a firmer stance, being more deliberate in drawing back your bow, to cause your arrows to have a much greater speed.
+    .desc = You revel in violence, when your arrows strike true your attacks and movements become faster.
 ## Eagle Eye
 buff-eagleeye = Eagle Eye
     .desc = You can clearly see the vulnerable areas on your targets, and have the agility required to direct every arrow to those areas.
