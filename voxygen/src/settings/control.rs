@@ -30,9 +30,18 @@ impl From<ControlSettings> for ControlSettingsSerde {
                 user_bindings.insert(k, v);
             }
         }
+
+        let mut menu_bindings: HashMap<MenuInput, Option<KeyMouse>> = HashMap::new();
+        for (k, v) in control_settings.menubindings {
+            if ControlSettings::default_menu_binding(k) != v {
+                // Menubinding chosen by the user
+                menu_bindings.insert(k, v);
+            }
+        }
+
         ControlSettingsSerde {
             keybindings: user_bindings,
-            menubindings: HashMap::new(),
+            menubindings: menu_bindings,
         }
     }
 }
@@ -54,11 +63,19 @@ pub struct ControlSettings {
 impl From<ControlSettingsSerde> for ControlSettings {
     fn from(control_serde: ControlSettingsSerde) -> Self {
         let user_keybindings = control_serde.keybindings;
+        let menu_bindings = control_serde.menubindings;
         let mut control_settings = ControlSettings::default();
         for (k, maybe_v) in user_keybindings {
             match maybe_v {
                 Some(v) => control_settings.modify_binding(k, v),
                 None => control_settings.remove_binding(k),
+            }
+        }
+        // update menu bindings
+        for (k, maybe_v) in menu_bindings {
+            match maybe_v {
+                Some(v) => control_settings.modify_menu_binding(k, v),
+                None => control_settings.remove_menu_binding(k),
             }
         }
         control_settings

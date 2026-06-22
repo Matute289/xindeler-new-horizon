@@ -74,11 +74,17 @@ pub enum GamepadBindingOption {
     GameLayers,
     MenuButtons,
 }
+#[derive(Clone, Copy)]
+pub enum KeyMouseBindingOption {
+    KeyMouseButtons,
+    MenuButtons,
+}
 
 pub struct State {
     ids: Ids,
     pub binding_mode: BindingMode,
     pub gamepad_binding_option: GamepadBindingOption,
+    pub keymouse_binding_option: KeyMouseBindingOption,
 }
 
 static SORTED_GAMEINPUTS: LazyLock<Vec<GameInput>> = LazyLock::new(|| {
@@ -102,6 +108,7 @@ impl Widget for Controls<'_> {
             ids: Ids::new(id_gen),
             binding_mode: BindingMode::Keyboard,
             gamepad_binding_option: GamepadBindingOption::GameButtons,
+            keymouse_binding_option: KeyMouseBindingOption::KeyMouseButtons,
         }
     }
 
@@ -131,6 +138,7 @@ impl Widget for Controls<'_> {
         // These temporary variables exist so state is only borrowed by resize_ids.
         let binding_mode = state.binding_mode;
         let gamepad_binding_option = state.gamepad_binding_option;
+        let keymouse_binding_option = state.keymouse_binding_option;
 
         // Button and Text resizing logic to be used by each binding type branch
         let mut resize_ids = |len| {
@@ -414,85 +422,176 @@ impl Widget for Controls<'_> {
                 },
             }
         } else {
-            let controls = &self.global_state.settings.controls;
+            match keymouse_binding_option {
+                KeyMouseBindingOption::MenuButtons => {
+                    let controls = &self.global_state.settings.controls;
 
-            resize_ids(SORTED_GAMEINPUTS.len());
+                    resize_ids(SORTED_MENUINPUTS.len());
 
-            // Loop all existing keybindings and the ids for text and button widgets
-            for (game_input, (&text_id, &button_id)) in SORTED_GAMEINPUTS.iter().zip(
-                state
-                    .ids
-                    .controls_texts
-                    .iter()
-                    .zip(state.ids.controls_buttons.iter()),
-            ) {
-                let (key_string, key_color) = if let RemappingMode::RemapKeyboard(r_input) =
-                    self.global_state.window.remapping_mode
-                    && r_input == *game_input
-                {
-                    (
-                        self.localized_strings
-                            .get_msg("hud-settings-awaitingkey")
-                            .into_owned(),
-                        TEXT_COLOR,
-                    )
-                } else if let Some(key) = controls.get_binding(*game_input) {
-                    (
-                        format!(
-                            "{} {}",
-                            key.display_string(),
-                            key.try_shortened()
-                                .map_or("".to_owned(), |short| format!("({})", short))
-                        ),
-                        if controls.has_conflicting_bindings(key) {
-                            TEXT_BIND_CONFLICT_COLOR
+                    // Loop all existing keybindings and the ids for text and button widgets
+                    for (menu_input, (&text_id, &button_id)) in SORTED_MENUINPUTS.iter().zip(
+                        state
+                            .ids
+                            .controls_texts
+                            .iter()
+                            .zip(state.ids.controls_buttons.iter()),
+                    ) {
+                        let (key_string, key_color) =
+                            if let RemappingMode::RemapKeyboardMenu(r_input) =
+                                self.global_state.window.remapping_mode
+                                && r_input == *menu_input
+                            {
+                                (
+                                    self.localized_strings
+                                        .get_msg("hud-settings-awaitingkey")
+                                        .into_owned(),
+                                    TEXT_COLOR,
+                                )
+                            } else if let Some(key) = controls.get_menu_binding(*menu_input) {
+                                (
+                                    format!(
+                                        "{} {}",
+                                        key.display_string(),
+                                        key.try_shortened()
+                                            .map_or("".to_owned(), |short| format!("({})", short))
+                                    ),
+                                    if controls.has_conflicting_menu_bindings(key) {
+                                        TEXT_BIND_CONFLICT_COLOR
+                                    } else {
+                                        TEXT_COLOR
+                                    },
+                                )
+                            } else {
+                                (
+                                    self.localized_strings
+                                        .get_msg("hud-settings-unbound")
+                                        .into_owned(),
+                                    ERROR_COLOR,
+                                )
+                            };
+                        let loc_key = self
+                            .localized_strings
+                            .get_msg(menu_input.get_localization_key());
+                        let text_widget = Text::new(&loc_key)
+                            .color(TEXT_COLOR)
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .font_size(self.fonts.cyri.scale(18));
+                        let button_widget = Button::new()
+                            .label(&key_string)
+                            .label_color(key_color)
+                            .label_font_id(self.fonts.cyri.conrod_id)
+                            .label_font_size(self.fonts.cyri.scale(15))
+                            .w(150.0)
+                            .rgba(0.0, 0.0, 0.0, 0.0)
+                            .border_rgba(0.0, 0.0, 0.0, 255.0)
+                            .label_y(Relative::Scalar(3.0));
+                        // Place top-left if it's the first text, else under the previous one
+                        let text_widget = match previous_element_id {
+                            None => {
+                                text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
+                            },
+                            Some(prev_id) => text_widget.down_from(prev_id, 10.0),
+                        };
+                        let text_width = text_widget.get_w(ui).unwrap_or(0.0);
+                        text_widget.set(text_id, ui);
+                        button_widget
+                            .right_from(text_id, 350.0 - text_width)
+                            .set(button_id, ui);
+
+                        for _ in ui.widget_input(button_id).clicks().left() {
+                            events.push(ChangeBindingKeyboardMenu(*menu_input));
+                        }
+                        for _ in ui.widget_input(button_id).clicks().right() {
+                            events.push(RemoveBindingKeyboardMenu(*menu_input));
+                        }
+                        // Set the previous id to the current one for the next cycle
+                        previous_element_id = Some(text_id);
+                    }
+                },
+                KeyMouseBindingOption::KeyMouseButtons => {
+                    let controls = &self.global_state.settings.controls;
+
+                    resize_ids(SORTED_GAMEINPUTS.len());
+
+                    // Loop all existing keybindings and the ids for text and button widgets
+                    for (game_input, (&text_id, &button_id)) in SORTED_GAMEINPUTS.iter().zip(
+                        state
+                            .ids
+                            .controls_texts
+                            .iter()
+                            .zip(state.ids.controls_buttons.iter()),
+                    ) {
+                        let (key_string, key_color) = if let RemappingMode::RemapKeyboard(r_input) =
+                            self.global_state.window.remapping_mode
+                            && r_input == *game_input
+                        {
+                            (
+                                self.localized_strings
+                                    .get_msg("hud-settings-awaitingkey")
+                                    .into_owned(),
+                                TEXT_COLOR,
+                            )
+                        } else if let Some(key) = controls.get_binding(*game_input) {
+                            (
+                                format!(
+                                    "{} {}",
+                                    key.display_string(),
+                                    key.try_shortened()
+                                        .map_or("".to_owned(), |short| format!("({})", short))
+                                ),
+                                if controls.has_conflicting_bindings(key) {
+                                    TEXT_BIND_CONFLICT_COLOR
+                                } else {
+                                    TEXT_COLOR
+                                },
+                            )
                         } else {
-                            TEXT_COLOR
-                        },
-                    )
-                } else {
-                    (
-                        self.localized_strings
-                            .get_msg("hud-settings-unbound")
-                            .into_owned(),
-                        ERROR_COLOR,
-                    )
-                };
-                let loc_key = self
-                    .localized_strings
-                    .get_msg(game_input.get_localization_key());
-                let text_widget = Text::new(&loc_key)
-                    .color(TEXT_COLOR)
-                    .font_id(self.fonts.cyri.conrod_id)
-                    .font_size(self.fonts.cyri.scale(18));
-                let button_widget = Button::new()
-                    .label(&key_string)
-                    .label_color(key_color)
-                    .label_font_id(self.fonts.cyri.conrod_id)
-                    .label_font_size(self.fonts.cyri.scale(15))
-                    .w(150.0)
-                    .rgba(0.0, 0.0, 0.0, 0.0)
-                    .border_rgba(0.0, 0.0, 0.0, 255.0)
-                    .label_y(Relative::Scalar(3.0));
-                // Place top-left if it's the first text, else under the previous one
-                let text_widget = match previous_element_id {
-                    None => text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0),
-                    Some(prev_id) => text_widget.down_from(prev_id, 10.0),
-                };
-                let text_width = text_widget.get_w(ui).unwrap_or(0.0);
-                text_widget.set(text_id, ui);
-                button_widget
-                    .right_from(text_id, 350.0 - text_width)
-                    .set(button_id, ui);
+                            (
+                                self.localized_strings
+                                    .get_msg("hud-settings-unbound")
+                                    .into_owned(),
+                                ERROR_COLOR,
+                            )
+                        };
+                        let loc_key = self
+                            .localized_strings
+                            .get_msg(game_input.get_localization_key());
+                        let text_widget = Text::new(&loc_key)
+                            .color(TEXT_COLOR)
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .font_size(self.fonts.cyri.scale(18));
+                        let button_widget = Button::new()
+                            .label(&key_string)
+                            .label_color(key_color)
+                            .label_font_id(self.fonts.cyri.conrod_id)
+                            .label_font_size(self.fonts.cyri.scale(15))
+                            .w(150.0)
+                            .rgba(0.0, 0.0, 0.0, 0.0)
+                            .border_rgba(0.0, 0.0, 0.0, 255.0)
+                            .label_y(Relative::Scalar(3.0));
+                        // Place top-left if it's the first text, else under the previous one
+                        let text_widget = match previous_element_id {
+                            None => {
+                                text_widget.top_left_with_margins_on(state.ids.window, 10.0, 5.0)
+                            },
+                            Some(prev_id) => text_widget.down_from(prev_id, 10.0),
+                        };
+                        let text_width = text_widget.get_w(ui).unwrap_or(0.0);
+                        text_widget.set(text_id, ui);
+                        button_widget
+                            .right_from(text_id, 350.0 - text_width)
+                            .set(button_id, ui);
 
-                for _ in ui.widget_input(button_id).clicks().left() {
-                    events.push(ChangeBindingKeyboard(*game_input));
-                }
-                for _ in ui.widget_input(button_id).clicks().right() {
-                    events.push(RemoveBindingKeyboard(*game_input));
-                }
-                // Set the previous id to the current one for the next cycle
-                previous_element_id = Some(text_id);
+                        for _ in ui.widget_input(button_id).clicks().left() {
+                            events.push(ChangeBindingKeyboard(*game_input));
+                        }
+                        for _ in ui.widget_input(button_id).clicks().right() {
+                            events.push(RemoveBindingKeyboard(*game_input));
+                        }
+                        // Set the previous id to the current one for the next cycle
+                        previous_element_id = Some(text_id);
+                    }
+                },
             }
         }
 
@@ -548,6 +647,52 @@ impl Widget for Controls<'_> {
             .top_right_with_margins_on(state.ids.window, offset + 5.0, 10.0)
             .set(state.ids.keybind_helper, ui);
 
+        // Drop down menu to select keyboard game bindings or menu bindings
+        if let BindingMode::Keyboard = state.binding_mode {
+            let keybindings = &self
+                .localized_strings
+                .get_msg("hud-settings-keyboard-binding");
+            let menu_keybindings = &self.localized_strings.get_msg("hud-settings-menu_buttons");
+
+            let binding_mode_list = [keybindings, menu_keybindings];
+            if let Some(clicked) = DropDownList::new(
+                &binding_mode_list,
+                Some(state.keymouse_binding_option as usize),
+            )
+            .label_color(TEXT_COLOR)
+            .label_font_id(self.fonts.cyri.conrod_id)
+            .label_font_size(self.fonts.cyri.scale(15))
+            .w_h(125.0, 35.0)
+            .rgba(0.0, 0.0, 0.0, 0.0)
+            .border_rgba(0.0, 0.0, 0.0, 255.0)
+            .label_y(Relative::Scalar(1.0))
+            .down_from(state.ids.gamepad_mode_button, 10.0)
+            .set(state.ids.gamepad_option_dropdown, ui)
+            {
+                match clicked {
+                    0 => {
+                        state.update(|s| {
+                            s.keymouse_binding_option = KeyMouseBindingOption::KeyMouseButtons
+                        });
+                        events.push(ResetBindingMode);
+                    },
+                    1 => {
+                        state.update(|s| {
+                            s.keymouse_binding_option = KeyMouseBindingOption::MenuButtons
+                        });
+                        events.push(ResetBindingMode);
+                    },
+                    _ => {
+                        state.update(|s| {
+                            s.keymouse_binding_option = KeyMouseBindingOption::KeyMouseButtons
+                        });
+                        events.push(ResetBindingMode);
+                    },
+                }
+            }
+        }
+
+        // Drop down menu to select gamepad game bindings or menu bindings
         if let BindingMode::Gamepad = state.binding_mode {
             let game_buttons = &self.localized_strings.get_msg("hud-settings-game_buttons");
             let game_layers = &self.localized_strings.get_msg("hud-settings-game_layers");

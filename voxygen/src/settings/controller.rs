@@ -47,6 +47,14 @@ impl From<ControllerSettings> for ControllerSettingsSerde {
             }
         }
 
+        // check menu buttons
+        let mut menu_bindings: HashMap<MenuInput, Option<Button>> = HashMap::new();
+        for (k, v) in controller_settings.menu_button_map {
+            if ControllerSettings::default_menu_button_binding(k) != v {
+                menu_bindings.insert(k, v);
+            }
+        }
+
         // none hashmap values
         let modifier_buttons = controller_settings.modifier_buttons;
         let pan_sensitivity = controller_settings.pan_sensitivity;
@@ -58,7 +66,7 @@ impl From<ControllerSettings> for ControllerSettingsSerde {
 
         ControllerSettingsSerde {
             game_button_map: button_bindings,
-            menu_button_map: HashMap::new(),
+            menu_button_map: menu_bindings,
             game_analog_button_map: HashMap::new(),
             menu_analog_button_map: HashMap::new(),
             game_axis_map: HashMap::new(),
@@ -113,6 +121,7 @@ impl From<ControllerSettingsSerde> for ControllerSettings {
     fn from(controller_serde: ControllerSettingsSerde) -> Self {
         let button_bindings = controller_serde.game_button_map;
         let layer_bindings = controller_serde.layer_button_map;
+        let menu_bindings = controller_serde.menu_button_map;
         let mut controller_settings = ControllerSettings::default();
         // update button bindings
         for (k, maybe_v) in button_bindings {
@@ -126,6 +135,13 @@ impl From<ControllerSettingsSerde> for ControllerSettings {
             match maybe_v {
                 Some(v) => controller_settings.modify_layer_binding(k, v),
                 None => controller_settings.remove_layer_binding(k),
+            }
+        }
+        // update menu bindings
+        for (k, maybe_v) in menu_bindings {
+            match maybe_v {
+                Some(v) => controller_settings.modify_menu_binding(k, v),
+                None => controller_settings.remove_menu_binding(k),
             }
         }
         controller_settings
