@@ -903,6 +903,12 @@ impl TradeAmountInput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowId {
+    None,
+    Bag,
+}
+
 pub struct Show {
     ui: bool,
     intro: bool,
@@ -934,11 +940,65 @@ pub struct Show {
     camera_clamp: bool,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
+    // A stack of open menus; the menu in focus should be on top
+    focus: Vec<WindowId>,
 }
+
+impl Default for Show {
+    fn default() -> Self { Self::new() }
+}
+
 impl Show {
+    pub fn new() -> Self {
+        Self {
+            ui: true,
+            intro: false,
+            crafting: false,
+            bag: false,
+            bag_inv: false,
+            bag_details: false,
+            trade: false,
+            trade_details: false,
+            social: false,
+            diary: false,
+            group: false,
+            quest: false,
+            group_menu: false,
+            esc_menu: false,
+            open_windows: Windows::None,
+            map: false,
+            ingame: true,
+            chat_tab_settings_index: None,
+            settings_tab: SettingsTab::Interface,
+            diary_fields: diary::DiaryShow::default(),
+            crafting_fields: crafting::CraftingShow::default(),
+            social_search_key: None,
+            want_grab: true,
+            stats: false,
+            free_look: false,
+            auto_walk: false,
+            zoom_lock: ChangeNotification::default(),
+            camera_clamp: false,
+            prompt_dialog: None,
+            trade_amount_input_key: None,
+            focus: Vec::new(),
+        }
+    }
+
+    // Changing a window state must go through these functions
+    fn set_bag_state(&mut self, state: bool) {
+        if state {
+            self.focus.push(WindowId::Bag); // use hashset to avoid duplicates?
+            self.bag = true;
+        } else {
+            self.focus.retain(|x| *x != WindowId::Bag);
+            self.bag = false;
+        }
+    }
+
     fn bag(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.crafting_fields.salvage = false;
 
@@ -954,7 +1014,7 @@ impl Show {
 
     fn trade(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.trade = open;
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
@@ -964,7 +1024,7 @@ impl Show {
     fn map(&mut self, open: bool) {
         if !self.esc_menu {
             self.map = open;
-            self.bag = false;
+            self.set_bag_state(false);
             self.crafting = false;
             self.crafting_fields.salvage = false;
             self.social = false;
@@ -1004,7 +1064,7 @@ impl Show {
             self.crafting = open;
             self.crafting_fields.salvage = false;
             self.crafting_fields.recipe_inputs = HashMap::new();
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
         }
@@ -1034,7 +1094,7 @@ impl Show {
             self.quest = false;
             self.crafting = false;
             self.crafting_fields.salvage = false;
-            self.bag = false;
+            self.set_bag_state(false);
             self.map = false;
             self.diary_fields = diary::DiaryShow::default();
             self.diary = open;
@@ -1049,7 +1109,7 @@ impl Show {
             } else {
                 Windows::None
             };
-            self.bag = false;
+            self.set_bag_state(false);
             self.social = false;
             self.quest = false;
             self.crafting = false;
@@ -1107,7 +1167,7 @@ impl Show {
 
     fn toggle_windows(&mut self, global_state: &mut GlobalState) {
         if self.any_window_requires_cursor() {
-            self.bag = false;
+            self.set_bag_state(false);
             self.trade = false;
             self.esc_menu = false;
             self.intro = false;
@@ -1138,7 +1198,7 @@ impl Show {
         self.open_windows = Windows::Settings;
         self.esc_menu = false;
         self.settings_tab = tab;
-        self.bag = false;
+        self.set_bag_state(false);
         self.want_grab = false;
     }
 
@@ -1253,58 +1313,6 @@ impl CollectFailedData {
     pub fn new(pulse: f32, reason: HudCollectFailedReason) -> Self { Self { pulse, reason } }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowId {
-    None,
-    Bag,
-}
-
-#[derive(Clone)]
-pub struct FocusManager {
-    // was going to operate as a FILO stack, but then I violated the FILO property so idk anymore
-    focus: Vec<WindowId>,
-}
-
-impl FocusManager {
-    pub fn new() -> Self { Self { focus: Vec::new() } }
-
-    // Returns the last element in the stack
-    pub fn top(&self) -> WindowId {
-        match self.focus.last() {
-            Some(&id) => id,
-            None => WindowId::None,
-        }
-    }
-
-    // Adds a new element to the stack
-    pub fn push(&mut self, id: WindowId) {
-        if self.top() != id {
-            self.focus.push(id);
-        }
-    }
-
-    // removes the current element from the stack and any parent elements if any
-    pub fn remove(&mut self, id: WindowId) { self.focus.retain(|x| *x != id); }
-
-    // re-focuses a window that may not be the current focused window. If it finds
-    // an element in the list, it deletes it and re-adds it to the top of the stack
-    #[allow(unused)]
-    pub fn focus(&mut self, id: WindowId) -> bool {
-        if let Some(index) = self.focus.iter().position(|&w| w == id) {
-            let item = self.focus.remove(index);
-            self.focus.push(item);
-            true
-        } else {
-            false
-        }
-    }
-
-    // Returns whether the array is empty or not
-    pub fn is_empty(&self) -> bool { if self.focus.is_empty() { false } else { true } }
-
-    pub fn printer(&self) { println!("Open windows: {:?}", self.focus) }
-}
-
 /// Stores HUD related state which should be persisted even if the HUD is
 /// temporarily hidden (by ie. going to the character screen).
 #[derive(Default)]
@@ -1344,7 +1352,6 @@ pub struct Hud {
     pulse: f32,
     hp_pulse: f32,
     slot_manager: slots::SlotManager,
-    focus_manager: FocusManager,
     hotbar: hotbar::State,
     events: Vec<Event>,
     menu_events: Vec<MenuInput>,
@@ -1440,39 +1447,7 @@ impl Hud {
             persisted_state,
             speech_bubbles: HashMap::new(),
             content_bubbles: Vec::new(),
-            show: Show {
-                intro: false,
-                bag: false,
-                bag_inv: false,
-                bag_details: false,
-                trade: false,
-                trade_details: false,
-                esc_menu: false,
-                open_windows: Windows::None,
-                map: false,
-                crafting: false,
-                ui: true,
-                social: false,
-                diary: false,
-                group: false,
-                // Change this before implementation!
-                quest: false,
-                group_menu: false,
-                chat_tab_settings_index: None,
-                settings_tab: SettingsTab::Interface,
-                diary_fields: diary::DiaryShow::default(),
-                crafting_fields: crafting::CraftingShow::default(),
-                social_search_key: None,
-                want_grab: true,
-                ingame: true,
-                stats: false,
-                free_look: false,
-                auto_walk: false,
-                zoom_lock: ChangeNotification::default(),
-                camera_clamp: false,
-                prompt_dialog: None,
-                trade_amount_input_key: None,
-            },
+            show: Show::new(),
             to_focus: None,
             force_ungrab: false,
             force_chat_input: None,
@@ -1481,7 +1456,6 @@ impl Hud {
             pulse: 0.0,
             hp_pulse: 0.0,
             slot_manager,
-            focus_manager: FocusManager::new(),
             hotbar: hotbar_state,
             events: Vec::new(),
             menu_events: Vec::new(),
@@ -3587,12 +3561,7 @@ impl Hud {
                     bag::Event::SetDetailsMode(mode) => self.show.bag_details = mode,
                     bag::Event::Close => {
                         self.show.stats = false;
-                        Self::show_bag(
-                            &mut self.slot_manager,
-                            &mut self.focus_manager,
-                            &mut self.show,
-                            false,
-                        );
+                        Self::show_bag(&mut self.slot_manager, &mut self.show, false);
                         if !self.show.social {
                             self.show.want_grab = true;
                             self.force_ungrab = false;
@@ -4758,25 +4727,16 @@ impl Hud {
         }
 
         // if a menu is open, notify window so it can restrict GameInputs
-        global_state.window.menu_open = self.focus_manager.is_empty();
+        global_state.window.menu_open = !self.show.focus.is_empty();
 
         self.menu_events.clear(); // clear all menu inputs after they have been read
         events
     }
 
-    fn show_bag(
-        slot_manager: &mut slots::SlotManager,
-        focus_manager: &mut FocusManager,
-        show: &mut Show,
-        state: bool,
-    ) {
+    fn show_bag(slot_manager: &mut slots::SlotManager, show: &mut Show, state: bool) {
         show.bag(state);
         if !state {
             slot_manager.idle();
-            focus_manager.remove(WindowId::Bag);
-        } else {
-            // An attempt at keeping track of window focus
-            focus_manager.push(WindowId::Bag);
         }
     }
 
@@ -5078,12 +5038,7 @@ impl Hud {
                     GameInput::Inventory if state => {
                         global_state.profile.tutorial.event_open_inventory();
                         let state = !self.show.bag;
-                        Self::show_bag(
-                            &mut self.slot_manager,
-                            &mut self.focus_manager,
-                            &mut self.show,
-                            state,
-                        );
+                        Self::show_bag(&mut self.slot_manager, &mut self.show, state);
                         true
                     },
                     GameInput::Social if state => {

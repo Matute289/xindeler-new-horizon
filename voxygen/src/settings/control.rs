@@ -314,8 +314,10 @@ impl ControlSettings {
             MenuInput::Apply => Key::Named(NamedKey::Enter),
             MenuInput::Back => Key::Named(NamedKey::Escape),
             MenuInput::Exit => return None,
-            MenuInput::SomethingIdk => return None,
-            MenuInput::WindowFocus => return None,
+            MenuInput::LocalFocus => return None,
+            MenuInput::GlobalFocus => return None,
+            MenuInput::EmulateLeftClick => return None,
+            MenuInput::EmulateRightClick => return None,
         }))
     }
 }

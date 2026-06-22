@@ -415,6 +415,7 @@ impl<'a> Trade<'a> {
                 self.slot_manager,
                 self.pulse,
                 &Vec::new(),
+                0,
                 self.localized_strings,
                 self.item_i18n,
                 false,
@@ -436,8 +437,8 @@ impl<'a> Trade<'a> {
                     .settings
                     .interface
                     .toggle_draggable_windows
+                    && let InventoryScrollerEvent::Drag(pos) = event
                 {
-                    let InventoryScrollerEvent::Drag(pos) = event;
                     events.push(TradeEvent::MoveBag(pos));
                 }
             }
@@ -508,6 +509,7 @@ impl<'a> Trade<'a> {
             content_source: inventory,
             image_source: self.item_imgs,
             slot_manager: Some(self.slot_manager),
+            last_input: &self.global_state.window.last_input(),
             pulse: self.pulse,
         };
 

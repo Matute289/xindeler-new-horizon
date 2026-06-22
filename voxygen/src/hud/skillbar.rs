@@ -1041,6 +1041,7 @@ impl<'a> Skillbar<'a> {
             content_source: &content_source,
             image_source: &image_source,
             slot_manager: Some(self.slot_manager),
+            last_input: &self.global_state.window.last_input(),
             pulse: self.pulse,
         };
 
@@ -1186,7 +1187,7 @@ impl<'a> Skillbar<'a> {
                         }
                     }
                 },
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     // enable UI if keyboard binding is set for CurrentSlot
                     if self
                         .global_state
@@ -1242,7 +1243,7 @@ impl<'a> Skillbar<'a> {
         // M1 is primary slot on mouse, M2 is primary slot on controller
         let (primary_id, primary_bg, secondary_id, secondary_bg) =
             match self.global_state.window.last_input() {
-                LastInput::KeyboardMouse => (
+                LastInput::Keyboard | LastInput::Mouse => (
                     state.ids.m1_content,
                     state.ids.m1_slot_bg,
                     state.ids.m2_content,
@@ -1348,7 +1349,7 @@ impl<'a> Skillbar<'a> {
 
         // M1 and M2 icons
         match self.global_state.window.last_input() {
-            LastInput::KeyboardMouse => {
+            LastInput::Keyboard | LastInput::Mouse => {
                 Image::new(self.imgs.m1_ico)
                     .w_h(16.0, 18.0)
                     .mid_bottom_with_margin_on(state.ids.m1_content, -11.0)

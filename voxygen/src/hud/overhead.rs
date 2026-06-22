@@ -464,7 +464,7 @@ impl Widget for Overhead<'_> {
                     .window
                     .last_input()
                 {
-                    LastInput::KeyboardMouse => self
+                    LastInput::Keyboard | LastInput::Mouse => self
                         .interaction_options
                         .iter()
                         .map(|(input, action)| {

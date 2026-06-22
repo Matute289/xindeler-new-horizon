@@ -67,6 +67,8 @@ pub struct InventoryScrollerState {
 
 pub enum InventoryScrollerEvent {
     Drag(Vec2<f64>),
+    ChangeLocalFocus(usize),
+    Close,
 }
 
 #[derive(WidgetCommon)]
@@ -81,6 +83,7 @@ pub struct InventoryScroller<'a> {
     slot_manager: &'a mut SlotManager,
     pulse: f32,
     menu_events: &'a Vec<MenuInput>,
+    active_content: usize,
     localized_strings: &'a Localization,
     item_i18n: &'a ItemI18n,
     show_stats: bool,
@@ -109,6 +112,7 @@ impl<'a> InventoryScroller<'a> {
         slot_manager: &'a mut SlotManager,
         pulse: f32,
         menu_events: &'a Vec<MenuInput>,
+        active_content: usize,
         localized_strings: &'a Localization,
         item_i18n: &'a ItemI18n,
         show_stats: bool,
@@ -133,6 +137,7 @@ impl<'a> InventoryScroller<'a> {
             slot_manager,
             pulse,
             menu_events,
+            active_content,
             localized_strings,
             item_i18n,
             show_stats,
@@ -242,27 +247,32 @@ impl<'a> InventoryScroller<'a> {
     fn scrollbar_and_slots(
         &mut self,
         state: &mut ConrodState<'_, InventoryScrollerState>,
+        events: &mut Vec<InventoryScrollerEvent>,
         ui: &mut UiCell<'_>,
     ) {
+        // MENU INPUTS: change the inventory button/filter focus
+        // SomethingIdk: change local window focus
+        if self.active_content == 1 {
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::LocalFocus => {
+                        events.push(InventoryScrollerEvent::ChangeLocalFocus(2));
+                    },
+                    MenuInput::Apply => {
+                        // TODO
+                    },
+                    MenuInput::Back => {
+                        events.push(InventoryScrollerEvent::Close);
+                    },
+                    _ => {},
+                }
+            }
+        }
+
         let space_max = self.inventory.slots().count();
 
-        let grid_width = 362.0;
-        let grid_height = if self.show_bag_inv && !self.on_right {
-            440.0 // This for the left bag
-        } else if self.show_bag_inv && self.on_right {
-            600.0 // This for the expanded right bag
-        } else {
-            200.0
-        };
-
-        // let slot_columns = 6;
-        // let slot_spacing = 6;
-        // // (cols * slot_size) + ((cols - 1) * spacing) = (width - padding)
-        // let slot_size = ((grid_width - 2.0) - ((slot_columns - 1) * slot_spacing)) /
-        // slot_columns;
-
         // Slots Scrollbar
-        if space_max > 5 && !self.show_bag_inv {
+        if space_max > 45 && !self.show_bag_inv {
             // Scrollbar-BG
             Image::new(self.imgs.scrollbar_bg)
                 .w_h(9.0, 173.0)
@@ -276,7 +286,7 @@ impl<'a> InventoryScroller<'a> {
                 .color(UI_MAIN)
                 .middle_of(state.ids.scrollbar_bg)
                 .set(state.ids.scrollbar_slots, ui);
-        } else if space_max > 5 && self.on_right {
+        } else if space_max > 135 && self.on_right {
             // Scrollbar-BG
             Image::new(self.imgs.scrollbar_bg_big)
                 .w_h(9.0, 592.0)
@@ -309,6 +319,15 @@ impl<'a> InventoryScroller<'a> {
                 .set(state.ids.left_scrollbar_slots, ui);
         }
 
+        let grid_width = 362.0;
+        let grid_height = if self.show_bag_inv && !self.on_right {
+            440.0 // This for the left bag
+        } else if self.show_bag_inv && self.on_right {
+            600.0 // This for the expanded right bag
+        } else {
+            200.0
+        };
+
         // Alignment for Grid
         Rectangle::fill_with([grid_width, grid_height], color::TRANSPARENT)
             .bottom_left_with_margins_on(
@@ -325,7 +344,7 @@ impl<'a> InventoryScroller<'a> {
 
         // Bag Slots
         // Create available inventory slot widgets
-        SlotGrid::new(
+        for event in SlotGrid::new(
             self.client,
             self.imgs,
             self.item_imgs,
@@ -337,17 +356,30 @@ impl<'a> InventoryScroller<'a> {
             self.localized_strings,
             self.item_i18n,
             self.entity,
+            &self.global_state.window.last_input(),
             self.pulse,
             self.menu_events,
+            self.active_content,
         )
-        .columns(6)
+        .columns(9) // 6 columns and default spacing is better imo
+        .spacing(0.0)
         .is_us(self.is_us)
         .details_mode(self.details_mode)
         .show_salvage(self.show_salvage)
-        .slot_size(if self.details_mode { 20.0 } else { 55.0 })
+        .slot_size(if self.details_mode { 20.0 } else { 40.0 }) // 55.0 for 6 columns
         .wh_of(state.ids.inv_alignment)
         .top_left_of(state.ids.inv_alignment)
-        .set(state.ids.slot_grid, ui);
+        .set(state.ids.slot_grid, ui)
+        {
+            match event {
+                super::slot_grid::SlotEvents::ChangeLocalFocus(change) => {
+                    events.push(InventoryScrollerEvent::ChangeLocalFocus(change));
+                },
+                super::slot_grid::SlotEvents::Close => {
+                    events.push(InventoryScrollerEvent::Close);
+                },
+            }
+        }
     }
 
     fn footer_metrics(
@@ -489,7 +521,7 @@ impl Widget for InventoryScroller<'_> {
         let mut events = Vec::new();
         self.background(ui);
         self.title(state, ui);
-        self.scrollbar_and_slots(state, ui);
+        self.scrollbar_and_slots(state, &mut events, ui);
         self.footer_metrics(state, ui);
         if self
             .global_state
@@ -648,6 +680,8 @@ pub struct BagState {
 
     active_content: usize,
     active_gear_slot: usize,
+    // active_context_slot: Option<SlotKind>,
+    // context_menu_pos: [usize; 2],
 }
 
 pub enum Event {
@@ -674,6 +708,8 @@ impl Widget for Bag<'_> {
             ids: BagIds::new(id_gen),
             active_content: 0,
             active_gear_slot: 1,
+            // active_context_slot: None,
+            // context_menu_pos: [0, 0],
         }
     }
 
@@ -684,27 +720,32 @@ impl Widget for Bag<'_> {
         let widget::UpdateArgs { state, ui, .. } = args;
         let i18n = &self.localized_strings;
 
+        let mut events = Vec::new();
+
+        // If I change local focus to 0 immidiately, it will also be read by the
+        // inventory which will also register the same input and change it 1. A fix for
+        // the current set-up is to just change focus after the inventory has
+        // been calculated
+        let mut change_local_focus = false;
+
         // MENU INPUTS: manage page elements
-        // SomethingIdk: change which parts of the screen you interact with
-        // Up: try to go up in the gear list
-        // Down: try to go down the gear list
+        // SomethingIdk: change which parts of the screen you interact with (0 =
+        // inventory, 1 = inventory filters/buttons, 2 = gear) Up: try to go up
+        // in the gear list Down: try to go down the gear list
         // Left: try to move left in the gear list
         // Right: try to move right in the gear list
         // Apply: something
         // Back: close the bag when gear menu is in focus
-        for event in self.menu_events {
-            match *event {
-                MenuInput::SomethingIdk => state.update(|s| {
-                    // counter
-                    // 0 = inventory
-                    // 1 = inventory filters/buttons
-                    // 2 = gear
-                    // this whole interaction logic should be probably be improved sometime
-                    s.active_content = (s.active_content + 1) % 3;
-                }),
-                MenuInput::Up => state.update(|s| {
-                    // AHHHHHHHHHHHHHH
-                    if s.active_content == 2 {
+        if state.active_content == 2 {
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::LocalFocus => {
+                        // Rest back to 0 (inventory)
+                        // // This whole interaction logic should probably be improved sometime
+                        change_local_focus = true;
+                    },
+                    MenuInput::Up => state.update(|s| {
+                        // So many values to manual set...
                         match s.active_gear_slot {
                             // weapon switch button
                             0 => {},
@@ -738,8 +779,7 @@ impl Widget for Bag<'_> {
                             14 => s.active_gear_slot = 15,
                             // hat
                             15 => {},
-                            // basically worthless tabard slot, but nooooo we can't remove it for
-                            // some reason :(
+                            // tabard
                             16 => s.active_gear_slot = 17,
                             // glider
                             17 => s.active_gear_slot = 18,
@@ -748,11 +788,8 @@ impl Widget for Bag<'_> {
                             // reset to 0 if unexpected
                             _ => s.active_gear_slot = 0,
                         }
-                    }
-                }),
-                MenuInput::Down => state.update(|s| {
-                    // Send help
-                    if s.active_content == 2 {
+                    }),
+                    MenuInput::Down => state.update(|s| {
                         match s.active_gear_slot {
                             // weapon switch button
                             0 => {},
@@ -786,7 +823,7 @@ impl Widget for Bag<'_> {
                             14 => s.active_gear_slot = 12,
                             // hat
                             15 => s.active_gear_slot = 14,
-                            // why would you even wear a tabard over a cape anyways, just merge them
+                            // tabard
                             16 => {},
                             // glider
                             17 => s.active_gear_slot = 16,
@@ -795,11 +832,8 @@ impl Widget for Bag<'_> {
                             // reset to 0 if unexpected
                             _ => s.active_gear_slot = 0,
                         }
-                    }
-                }),
-                MenuInput::Left => state.update(|s| {
-                    // What is going on!!
-                    if s.active_content == 2 {
+                    }),
+                    MenuInput::Left => state.update(|s| {
                         match s.active_gear_slot {
                             // weapon switch button
                             0 => {},
@@ -833,7 +867,7 @@ impl Widget for Bag<'_> {
                             14 => {},
                             // hat
                             15 => {},
-                            // This file is opposed to a dedicated tabard slot
+                            // tabard
                             16 => s.active_gear_slot = 13,
                             // glider
                             17 => s.active_gear_slot = 14,
@@ -842,11 +876,8 @@ impl Widget for Bag<'_> {
                             // reset to 0 if unexpected
                             _ => s.active_gear_slot = 0,
                         }
-                    }
-                }),
-                MenuInput::Right => state.update(|s| {
-                    // I hate this
-                    if s.active_content == 2 {
+                    }),
+                    MenuInput::Right => state.update(|s| {
                         match s.active_gear_slot {
                             // weapon switch button
                             0 => s.active_gear_slot = 1,
@@ -880,7 +911,7 @@ impl Widget for Bag<'_> {
                             14 => s.active_gear_slot = 17,
                             // hat
                             15 => s.active_gear_slot = 18,
-                            // It's only 1 slot, removing it won't make thaaaat much of a difference
+                            // tabard
                             16 => {},
                             // glider
                             17 => {},
@@ -889,14 +920,20 @@ impl Widget for Bag<'_> {
                             // reset to 0 if unexpected
                             _ => s.active_gear_slot = 0,
                         }
-                    }
-                }),
-                //MenuInput::Back => {}, // let individual tabs handle this
-                _ => {},
+                    }),
+                    MenuInput::Apply => {
+                        // TODO
+                    },
+                    MenuInput::Back => {
+                        // Typically, we want child widgets to handle their own back events
+                        // This back event only applies to the gear, which is in this widget
+                        events.push(Event::Close);
+                    },
+                    _ => {},
+                }
             }
         }
 
-        let mut events = Vec::new();
         let bag_tooltip = Tooltip::new({
             // Edge images [t, b, r, l]
             // Corner images [tr, tl, br, bl]
@@ -965,8 +1002,6 @@ impl Widget for Bag<'_> {
             .font_id(self.fonts.cyri.conrod_id)
             .desc_text_color(TEXT_COLOR);
 
-            let empty_menu_events = Vec::<MenuInput>::new();
-
             for event in InventoryScroller::new(
                 self.client,
                 self.global_state,
@@ -976,13 +1011,8 @@ impl Widget for Bag<'_> {
                 self.item_tooltip_manager,
                 self.slot_manager,
                 self.pulse,
-                if state.active_content == 0 {
-                    // Inventory is focused
-                    self.menu_events
-                } else {
-                    // Inventory is not focused
-                    &empty_menu_events
-                },
+                self.menu_events,
+                state.active_content,
                 self.localized_strings,
                 self.item_i18n,
                 self.show.stats,
@@ -999,9 +1029,25 @@ impl Widget for Bag<'_> {
             )
             .set(state.ids.inventory_scroller, ui)
             {
-                // Bubble events from the InventoryScroller widget
-                let InventoryScrollerEvent::Drag(pos) = event;
-                events.push(Event::MoveBag(pos));
+                match event {
+                    InventoryScrollerEvent::Drag(pos) => {
+                        events.push(Event::MoveBag(pos));
+                    },
+                    InventoryScrollerEvent::ChangeLocalFocus(change) => state.update(|s| {
+                        s.active_content = change;
+                    }),
+                    InventoryScrollerEvent::Close => {
+                        events.push(Event::Close);
+                    },
+                }
+            }
+
+            // change local focus from gear to inventory after inventory actions have been
+            // registered
+            if change_local_focus {
+                state.update(|s| {
+                    s.active_content = 0;
+                })
             }
 
             // Char Pixel-Art
@@ -1124,6 +1170,15 @@ impl Widget for Bag<'_> {
                 ));
             }
 
+            // Capture selected slot
+            // let selected = self.slot_manager.selected();
+            // if selected.is_none() {
+            //     state.update(|s| {
+            //         // If nothing is selected, the context menu should never be open
+            //         s.active_context_slot = None;
+            //     })
+            // }
+
             // Armor Slots
             let mut slot_maker = SlotMaker {
                 empty_slot: self.imgs.armor_slot_empty,
@@ -1145,6 +1200,7 @@ impl Widget for Bag<'_> {
                 content_source: inventory,
                 image_source: self.item_imgs,
                 slot_manager: Some(self.slot_manager),
+                last_input: &self.global_state.window.last_input(),
                 pulse: self.pulse,
             };
 
@@ -1308,7 +1364,7 @@ impl Widget for Bag<'_> {
                     .set(state.ids.stat_txts[i.0], ui);
                 }
                 // Loadout Slots
-                //  Head
+                // Head
                 let item_slot = EquipSlot::Armor(ArmorSlot::Head);
                 let slot = slot_maker
                     .fabricate(
@@ -1324,7 +1380,7 @@ impl Widget for Bag<'_> {
                 let slot_id = state.ids.head_slot;
                 set_tooltip!(slot, slot_id, item_slot, "hud-bag-head");
 
-                //  Necklace
+                // Necklace
                 let item_slot = EquipSlot::Armor(ArmorSlot::Neck);
                 let slot = slot_maker
                     .fabricate(
@@ -1357,7 +1413,7 @@ impl Widget for Bag<'_> {
                 let slot_id = state.ids.chest_slot;
                 set_tooltip!(slot, slot_id, item_slot, "hud-bag-chest");
 
-                //  Shoulders
+                // Shoulders
                 let item_slot = EquipSlot::Armor(ArmorSlot::Shoulders);
                 let slot = slot_maker
                     .fabricate(

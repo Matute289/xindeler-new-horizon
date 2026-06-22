@@ -940,8 +940,10 @@ impl ControllerSettings {
             MenuInput::Apply => Some(Button::Simple(GilButton::South)),
             MenuInput::Back => Some(Button::Simple(GilButton::East)),
             MenuInput::Exit => Some(Button::Simple(GilButton::Mode)),
-            MenuInput::SomethingIdk => Some(Button::Simple(GilButton::North)),
-            MenuInput::WindowFocus => Some(Button::Simple(GilButton::Select)),
+            MenuInput::LocalFocus => Some(Button::Simple(GilButton::North)),
+            MenuInput::GlobalFocus => Some(Button::Simple(GilButton::Select)),
+            MenuInput::EmulateLeftClick => Some(Button::Simple(GilButton::RightTrigger2)),
+            MenuInput::EmulateRightClick => Some(Button::Simple(GilButton::LeftTrigger2)),
         }
     }
 }

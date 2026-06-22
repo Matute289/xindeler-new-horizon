@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Server-side Prometheus metrics for entity deaths, locations, and causes of death
 - New river ambience
 - Softer rain/ambience when indoors
+- Initial menu input support was added (starting with the player inventory)
+- Menu inputs can now be remapped in settings->controls
+- Selecting an inventory slot will now open a new context menu
   
 ### Changed
 

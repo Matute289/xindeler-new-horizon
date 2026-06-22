@@ -46,8 +46,10 @@ pub enum MenuInput {
     Apply,
     Back,
     Exit,
-    SomethingIdk, // Change local window focus
-    WindowFocus,  // Change global window focus
+    LocalFocus,
+    GlobalFocus,
+    EmulateLeftClick,
+    EmulateRightClick,
 }
 
 /// Manages an Iterator over MenuInputs or GameInputs
@@ -208,9 +210,10 @@ pub enum ControllerType {
     None,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LastInput {
-    KeyboardMouse,
+    Keyboard,
+    Mouse,
     Controller,
 }
 
@@ -354,7 +357,7 @@ impl Window {
             cursor_position: winit::dpi::PhysicalPosition::new(0.0, 0.0),
             mouse_emulation_vec: Vec2::zero(),
             controller_type: ControllerType::Xbox,
-            last_input: LastInput::KeyboardMouse,
+            last_input: LastInput::Mouse,
             // Currently used to send and receive screenshot result messages
             message_sender,
             message_receiver,
@@ -673,22 +676,26 @@ impl Window {
                         },
                         input => Some(Event::AnalogMenuInput(input)),
                     },
-                    // Event::MenuInput(menu_input, state) => {
-                    //     // determine if left mouse or right mouse button
-                    //     let mouse_button = match menu_input {
-                    //         MenuInput::Apply => conrod_core::input::state::mouse::Button::Left,
-                    //         MenuInput::Back => conrod_core::input::state::mouse::Button::Right,
-                    //         _ => return Some(event),
-                    //     };
-                    //     Some(match state {
-                    //         true => Event::Ui(ui::Event(conrod_core::event::Input::Press(
-                    //             conrod_core::input::Button::Mouse(mouse_button),
-                    //         ))),
-                    //         false => Event::Ui(ui::Event(conrod_core::event::Input::Release(
-                    //             conrod_core::input::Button::Mouse(mouse_button),
-                    //         ))),
-                    //     })
-                    // },
+                    Event::MenuInput(menu_input, state) => {
+                        // determine if left mouse or right mouse button
+                        let mouse_button = match menu_input {
+                            MenuInput::EmulateLeftClick => {
+                                conrod_core::input::state::mouse::Button::Left
+                            },
+                            MenuInput::EmulateRightClick => {
+                                conrod_core::input::state::mouse::Button::Right
+                            },
+                            _ => return Some(event),
+                        };
+                        Some(match state {
+                            true => Event::Ui(ui::Event(conrod_core::event::Input::Press(
+                                conrod_core::input::Button::Mouse(mouse_button),
+                            ))),
+                            false => Event::Ui(ui::Event(conrod_core::event::Input::Release(
+                                conrod_core::input::Button::Mouse(mouse_button),
+                            ))),
+                        })
+                    },
                     _ => Some(event),
                 })
                 .collect();
@@ -714,8 +721,8 @@ impl Window {
             DeviceEvent::MouseMotion {
                 delta: (dx, dy), ..
             } if self.focused => {
-                // update last input to be Keyboard/Mouse if motion was made
-                self.last_input = LastInput::KeyboardMouse;
+                // update last input to be Mouse if motion was made
+                self.last_input = LastInput::Mouse;
 
                 let delta = Vec2::new(
                     dx as f32 * (self.pan_sensitivity as f32 / 100.0),
@@ -757,25 +764,21 @@ impl Window {
             },
             WindowEvent::MouseInput { button, state, .. } => {
                 // Mouse input not mapped to input if it is not grabbed
-                if self.cursor_grabbed {
-                    if let Some(mapped_inputs) = Window::map_input(
+                if self.cursor_grabbed
+                    && let Some(mapped_inputs) = Window::map_input(
                         KeyMouse::Mouse(button),
                         controls,
                         &mut self.remapping_mode,
                         &mut self.last_input,
                         self.menu_open,
-                    ) {
-                        match mapped_inputs {
-                            MappedInput::Game(game_inputs) => {
-                                for game_input in game_inputs {
-                                    self.events.push(Event::InputUpdate(
-                                        *game_input,
-                                        state == winit::event::ElementState::Pressed,
-                                    ));
-                                }
-                            },
-                            _ => {},
-                        }
+                    )
+                    && let MappedInput::Game(game_inputs) = mapped_inputs
+                {
+                    for game_input in game_inputs {
+                        self.events.push(Event::InputUpdate(
+                            *game_input,
+                            state == winit::event::ElementState::Pressed,
+                        ));
                     }
                 }
                 self.events.push(Event::MouseButton(button, state));
@@ -1268,8 +1271,8 @@ impl Window {
     ) -> Option<MappedInput<'a>> {
         let key_mouse = key_mouse.into_upper();
 
-        // update last input to be Keyboard/Mouse if button was pressed
-        *last_input = LastInput::KeyboardMouse;
+        // update last input to be Keyboard if button was pressed
+        *last_input = LastInput::Keyboard;
 
         match *remapping {
             RemappingMode::RemapKeyboard(game_input) => {
@@ -1291,10 +1294,10 @@ impl Window {
                 } else {
                     // If a menu is open, return the associated MenuInput if any, otherwise return
                     // the associated GameInput
-                    if let Some(menu_inputs) = controls.get_associated_menu_inputs(&key_mouse) {
-                        if !menu_inputs.is_empty() {
-                            return Some(MappedInput::Menu(menu_inputs.iter()));
-                        }
+                    if let Some(menu_inputs) = controls.get_associated_menu_inputs(&key_mouse)
+                        && !menu_inputs.is_empty()
+                    {
+                        return Some(MappedInput::Menu(menu_inputs.iter()));
                     }
 
                     controls
@@ -1382,10 +1385,10 @@ impl Window {
                 } else {
                     // If a menu is open, return the associated MenuInput if any, otherwise return
                     // the associated GameInput
-                    if let Some(menu_inputs) = controller.get_associated_game_menu_inputs(button) {
-                        if !menu_inputs.is_empty() {
-                            return Some(MappedInput::Menu(menu_inputs.iter()));
-                        }
+                    if let Some(menu_inputs) = controller.get_associated_game_menu_inputs(button)
+                        && !menu_inputs.is_empty()
+                    {
+                        return Some(MappedInput::Menu(menu_inputs.iter()));
                     }
 
                     // First check layer entries
