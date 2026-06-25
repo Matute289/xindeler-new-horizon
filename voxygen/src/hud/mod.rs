@@ -4998,6 +4998,7 @@ impl Hud {
                         self.slot_manager.idle();
                     }
                     self.show.toggle_windows(global_state);
+                    self.force_ungrab = false;
                 }
                 true
             },

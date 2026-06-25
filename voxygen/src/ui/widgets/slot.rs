@@ -55,6 +55,13 @@ impl<C, I, S> SlotMaker<'_, C, I, S>
 where
     S: SumSlot,
 {
+    /// Creates a new Slot widget
+    ///
+    /// # arguments
+    /// * `contents` - the contents of the slot type
+    /// * `wh` - the width and height of the slot
+    /// * `menu_hover` - is the slot being highlighted by menu nav
+    /// * `menu_clicked` - was the hovered slot clicked via menu nav
     pub fn fabricate<K: SlotKey<C, I> + Into<S>>(
         &mut self,
         contents: K,
@@ -149,7 +156,6 @@ pub struct SlotManager<S: SumSlot> {
     // Note: could potentially be specialized for each slot if needed
     drag_img_size: Vec2<f32>,
     pub mouse_over_slot: Option<S>,
-    pub focused_idx: Option<usize>,
     // Si prefixes settings
     use_prefixes: bool,
     prefix_switch_point: u32,
@@ -197,7 +203,6 @@ where
             events: Vec::new(),
             drag_id: generator.next(),
             mouse_over_slot: None,
-            focused_idx: None,
             use_prefixes,
             prefix_switch_point,
             // TODO(heyzoos) Will be useful for whoever works on rendering the number of items "in
@@ -480,9 +485,6 @@ where
 
     /// Sets the SlotManager into an idle state
     pub fn idle(&mut self) { self.state = ManagerState::Idle; }
-
-    /// Clears the menu input focus (e.g., when the mouse is being used)
-    pub fn clear_focus(&mut self) { self.focused_idx = None; }
 }
 
 #[derive(WidgetCommon)]
@@ -676,7 +678,7 @@ where
         // Get image ids
         let content_images = state.cached_images.as_ref().map(|c| c.1.clone());
 
-        // Check menu button navigation selection events
+        // Check menu navigation selection events
         if self.menu_click && self.menu_hover {
             self.slot_manager
                 .as_mut()
@@ -765,8 +767,8 @@ where
             .map_or(false, |sm| sm.mouse_over_slot == Some(slot_key.into()))
             && *self.last_input == LastInput::Mouse;
 
-        // Determine if menu highligh should show for keyboard or controller inputs
-        // detected
+        // Determine if menu highligh should be shown (for keyboard and controller
+        // inputs)
         let is_highlighted_menu = self.menu_hover
             && (*self.last_input == LastInput::Keyboard
                 || *self.last_input == LastInput::Controller);

@@ -178,8 +178,9 @@ impl<'a> Widget for SlotGrid<'a> {
         // MENU INPUTS: change the slot focus
         // Up: go up a row (no wrap)
         // Down: go down a row (no wrap)
-        // Left: move left a column (no wrap) (maybe change tabs to gear?)
-        // Right: move right a column (no wrap) (maybe change tabs to crafting?)
+        // Left: move left a column (no wrap)
+        // Right: move right a column (no wrap)
+        // LocalFocus: Change local focus
         // Apply: select the current slot
         // Back: close the bag menu
         let mut clicked = false;
@@ -328,7 +329,7 @@ impl<'a> Widget for SlotGrid<'a> {
                 entity: self.entity,
             };
 
-            // Check if active menu button navigation hover
+            // Check if active menu navigation hover
             let menu_hover = state.active_slot[0] == x
                 && state.active_slot[1] == y // Is it the current slot
                 && selected.is_none()        // Is the context menu not open
@@ -465,7 +466,7 @@ impl<'a> Widget for SlotGrid<'a> {
             let context_cancel = self.localized_strings.get_msg("hud-context-menu-cancel");
 
             let actions = [context_use, context_drop, context_cancel];
-            // TODO: switch from coordinates to `.left/right_of` widget ids
+            // TODO: instead of storing [x,y] coordinates, consider storing the widget id
             let [x, y] = state.context_menu_pos;
             let total_h = (actions.len() as f64 * 25.0) + ((actions.len() as f64 + 1.0) * 2.0);
 
@@ -598,7 +599,7 @@ impl<'a, T: AsRef<str>> Widget for ContextMenu<'a, T> {
             }
         }
 
-        // draw background
+        // Draw background
         Rectangle::fill_with(rect.dim(), Color::Rgba(0.2, 0.2, 0.2, 0.99))
             .middle_of(id)
             .set(state.ids.bg, ui);

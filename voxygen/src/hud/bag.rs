@@ -251,7 +251,7 @@ impl<'a> InventoryScroller<'a> {
         ui: &mut UiCell<'_>,
     ) {
         // MENU INPUTS: change the inventory button/filter focus
-        // SomethingIdk: change local window focus
+        // LocalFocus: change local window focus
         if self.active_content == 1 {
             for event in self.menu_events {
                 match *event {
@@ -680,8 +680,6 @@ pub struct BagState {
 
     active_content: usize,
     active_gear_slot: usize,
-    // active_context_slot: Option<SlotKind>,
-    // context_menu_pos: [usize; 2],
 }
 
 pub enum Event {
@@ -708,8 +706,6 @@ impl Widget for Bag<'_> {
             ids: BagIds::new(id_gen),
             active_content: 0,
             active_gear_slot: 1,
-            // active_context_slot: None,
-            // context_menu_pos: [0, 0],
         }
     }
 
@@ -728,20 +724,21 @@ impl Widget for Bag<'_> {
         // been calculated
         let mut change_local_focus = false;
 
-        // MENU INPUTS: manage page elements
-        // SomethingIdk: change which parts of the screen you interact with (0 =
-        // inventory, 1 = inventory filters/buttons, 2 = gear) Up: try to go up
-        // in the gear list Down: try to go down the gear list
+        // MENU INPUTS: manage gear elements
+        // LocalFocus: change which parts of the screen you interact with (0 =
+        // inventory, 1 = inventory filters/buttons, 2 = gear)
+        // Up: try to go up in the gear list
+        // Down: try to go down the gear list
         // Left: try to move left in the gear list
         // Right: try to move right in the gear list
-        // Apply: something
+        // Apply: TODO
         // Back: close the bag when gear menu is in focus
         if state.active_content == 2 {
             for event in self.menu_events {
                 match *event {
                     MenuInput::LocalFocus => {
-                        // Rest back to 0 (inventory)
-                        // // This whole interaction logic should probably be improved sometime
+                        // Reset back to 0 (inventory)
+                        // This whole interaction logic should probably be improved sometime
                         change_local_focus = true;
                     },
                     MenuInput::Up => state.update(|s| {
@@ -1169,15 +1166,6 @@ impl Widget for Bag<'_> {
                     self.global_state.settings.inventory.sort_order,
                 ));
             }
-
-            // Capture selected slot
-            // let selected = self.slot_manager.selected();
-            // if selected.is_none() {
-            //     state.update(|s| {
-            //         // If nothing is selected, the context menu should never be open
-            //         s.active_context_slot = None;
-            //     })
-            // }
 
             // Armor Slots
             let mut slot_maker = SlotMaker {
