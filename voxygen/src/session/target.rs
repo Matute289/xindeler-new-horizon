@@ -95,7 +95,9 @@ pub(super) fn targets_under_cursor(
         .max(MAX_PICKUP_RANGE)
         .max(MAX_INTERACT_RANGE)
         + 1.0;
-    let ray = terrain.ray(cam_pos, cam_pos + cam_dir * MAX_RAY_DIST);
+    let ray = terrain
+        .ray(cam_pos, cam_pos + cam_dir * MAX_RAY_DIST)
+        .max_iter(500);
 
     let break_tgt_pos = |dist: f32| (cam_pos + cam_dir * (dist + 0.01)).map(|e| e.floor() + 0.5);
     let place_tgt_pos = |dist: f32| (cam_pos + cam_dir * (dist - 0.01)).map(|e| e.floor() + 0.5);

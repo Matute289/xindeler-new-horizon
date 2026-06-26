@@ -743,7 +743,7 @@ impl PlayState for SessionState {
                 }
             }
 
-            // Set break_block_pos only if mining is closest.
+            // Set break_block_pos based on currently selected block
             self.inputs.break_block_pos = if let Some(mt) = mine_target {
                 self.scene.set_select_pos(Some(mt.position_int()));
                 Some(mt.position)
@@ -794,9 +794,8 @@ impl PlayState for SessionState {
                             GameInput::Primary => {
                                 self.walking_speed = false;
                                 let mut client = self.client.borrow_mut();
-                                // Mine and build targets can be the same block. make building
-                                // take precedence.
-                                // Order of precedence: build, then mining, then attack.
+                                // Building inputs take precedence... but only if there's an active
+                                // building target.
                                 if let Some(build_target) = build_target.filter(|_| state) {
                                     client.remove_block(build_target.position_int());
                                 } else {
