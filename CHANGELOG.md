@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Server-side Prometheus metrics for entity deaths, locations, and causes of death
 - New river ambience
 - Softer rain/ambience when indoors
+- Tall characters will now squat when under low obstacles
+- You can now customise your character's height
   
 ### Changed
 
