@@ -22,7 +22,14 @@ pub struct Data {
 
 impl From<&JoinData<'_>> for Data {
     fn from(data: &JoinData) -> Self {
-        let scale = data.body.dimensions().z.sqrt();
+        let scale = {
+            let mut scale = data.body.dimensions().z;
+            if let crate::comp::Body::Humanoid(humanoid) = data.body {
+                scale /= humanoid.height_scale()
+            };
+            scale.sqrt()
+        };
+
         Self {
             // Aspect ratio is what really matters for lift/drag ratio
             // and the aerodynamics model works for ARs up to 25.
