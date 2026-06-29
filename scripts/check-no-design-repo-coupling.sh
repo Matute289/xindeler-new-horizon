@@ -1,7 +1,7 @@
 #!/bin/sh
 # game-architecture guard — shipped engine code must NOT reference the private design repo.
 #
-# Data-driven / clean-architecture rule (see .claude/skills/game-architecture/SKILL.md):
+# Data-driven / clean-architecture rule (see .agents/skills/game-architecture/SKILL.md):
 # the engine depends only on shipped `assets/` data, NEVER on a `docs/…` design-repo path
 # (specs/plans/lore live in the private repo and must not be a build/test dependency).
 #
@@ -25,7 +25,7 @@ if [ -n "$hits" ]; then
     echo "" >&2
     echo "  Engine code must depend only on shipped assets/ data — never on a design-repo path." >&2
     echo "  Fix: depend on a generated assets/*.ron artifact, or defer the loader until a system" >&2
-    echo "  actually consumes it (YAGNI). See .claude/skills/game-architecture/SKILL.md." >&2
+    echo "  actually consumes it (YAGNI). See .agents/skills/game-architecture/SKILL.md." >&2
     exit 1
 fi
 

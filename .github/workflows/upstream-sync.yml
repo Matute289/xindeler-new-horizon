@@ -13,10 +13,10 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout main
+      - name: Checkout development
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: development
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -29,15 +29,15 @@ jobs:
         id: check
         run: |
           UPSTREAM_SHA=$(git rev-parse gitlab/master)
-          MAIN_SHA=$(git rev-parse origin/main)
+          BASE_SHA=$(git rev-parse origin/development)
           echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
           echo "upstream_short=${UPSTREAM_SHA:0:8}" >> $GITHUB_OUTPUT
 
-          if git merge-base --is-ancestor "$UPSTREAM_SHA" "$MAIN_SHA"; then
+          if git merge-base --is-ancestor "$UPSTREAM_SHA" "$BASE_SHA"; then
             echo "has_new_commits=false" >> $GITHUB_OUTPUT
-            echo "No new upstream commits — main is already up to date."
+            echo "No new upstream commits — development already contains upstream."
           else
-            COUNT=$(git rev-list "$MAIN_SHA..gitlab/master" --count)
+            COUNT=$(git rev-list "$BASE_SHA..gitlab/master" --count)
             echo "has_new_commits=true" >> $GITHUB_OUTPUT
             echo "Found $COUNT new upstream commits to review."
           fi
@@ -47,7 +47,7 @@ jobs:
         id: branch
         run: |
           DATE=$(date +%Y-%m-%d)
-          BRANCH="upstream/review-${DATE}"
+          BRANCH="upstream/review-${DATE}-${{ steps.check.outputs.upstream_short }}"
           git checkout -b "$BRANCH" gitlab/master
           git push origin "$BRANCH"
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
@@ -61,7 +61,11 @@ jobs:
 
             This is an automated **draft PR** for manual review of new commits from the Veloren GitLab upstream.
 
-            **DO NOT merge this PR automatically.** A human must:
+            **DO NOT merge this raw-review PR.** It exists only to inspect the upstream delta.
+            Use the `gitlab-master-merger` skill to create a separate integration branch from
+            `development`, resolve conflicts, validate it, and open the mergeable PR.
+
+            A human must:
 
             1. Review the diff
             2. Identify which upstream changes are safe to integrate (bug fixes, asset updates, non-conflicting features)
@@ -87,12 +91,13 @@ jobs:
             git checkout upstream/review-YYYY-MM-DD
 
             # 2. Create a working integration branch
-            git checkout -b upstream/integrate-YYYY-MM-DD origin/main
+            git checkout -b upstream/integrate-YYYY-MM-DD origin/development
 
             # 3. Merge and resolve conflicts manually, keeping our changes
-            git merge upstream/review-YYYY-MM-DD
+            git merge gitlab/master
 
-            # 4. Push integration branch and update this PR
+            # 4. Validate, push the integration branch, and open a separate
+            #    draft PR with base development
             ```
         run: |
           UPSTREAM_SHORT="${{ steps.check.outputs.upstream_short }}"
@@ -100,7 +105,7 @@ jobs:
           BRANCH="${{ steps.branch.outputs.branch }}"
 
           gh pr create \
-            --base main \
+            --base development \
             --head "$BRANCH" \
             --draft \
             --title "⚠️ [Upstream Review] veloren/veloren@${UPSTREAM_SHORT} — ${DATE}" \
@@ -108,4 +113,4 @@ jobs:
 
       - name: Report no new commits
         if: steps.check.outputs.has_new_commits == 'false'
-        run: echo "✅ No new upstream commits. main is already up to date with GitLab master."
+        run: echo "✅ No new upstream commits. development is already up to date with GitLab master."

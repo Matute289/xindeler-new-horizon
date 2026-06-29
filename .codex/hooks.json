@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/pre_tool_use.py\"",
+            "timeout": 120,
+            "statusMessage": "Validando comando para Xindeler"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/stop_check.py\"",
+            "timeout": 30,
+            "statusMessage": "Revisando cambios Rust pendientes"
+          }
+        ]
+      }
+    ]
+  }
+}

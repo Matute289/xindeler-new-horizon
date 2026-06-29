@@ -1,52 +1,63 @@
-# GitlabMasterMerger
+---
+name: gitlab-master-merger
+description: Use when reviewing or integrating upstream Veloren gitlab/master changes into Xindeler. Creates an integration branch from development, preserves Xindeler customizations, validates the merge, pushes only the integration branch, and opens a PR to development. Never pushes or merges protected branches.
+---
 
-Merges `gitlab/master` (upstream Veloren) into the current working branch safely, after a thorough conflict analysis that accounts for **our** custom objectives documented in specs, plans, and tasks.
+# gitlab-master-merger
+
+Integrates `gitlab/master` (the upstream engine source) into Xindeler through a review
+branch and PR, after a conflict analysis that protects Xindeler's objectives.
 
 ## When to use
 
-- User says "ponete la skill GitlabMasterMerger" or "ejecutá GitlabMasterMerger"
+- User asks to run `gitlab-master-merger` or integrate upstream engine changes
 - Any time you need to bring upstream Veloren changes into our fork
 
 ---
 
 ## Execution Model
 
-**Announce at start:** "Running GitlabMasterMerger skill — fetching upstream and analyzing conflicts."
+**Announce at start:** "Running gitlab-master-merger — fetching upstream and analyzing conflicts."
 
-Use **Opus** (most capable model) for the conflict evaluation phase (Phase 2). The analysis must be thorough — a wrong judgment here can corrupt weeks of work. Efficiency elsewhere is fine.
+Use the highest available reasoning effort for the conflict-evaluation phase. A wrong
+judgment here can corrupt weeks of work; efficiency elsewhere is secondary.
 
 ---
 
-## Phase 1: Gather state (run all commands in parallel where possible)
+## Phase 1: Gather state
+
+Require a clean worktree. Never discard local changes to make it clean.
 
 ```bash
-# 1a. Fetch both remotes
-git fetch gitlab && git fetch origin
+# 1a. Fetch both remotes without changing the working tree
+git fetch gitlab
+git fetch origin
 
-# 1b. Show current branch
-git branch --show-current
+# 1b. Confirm state
+git status --short --branch
 
 # 1c. Count divergence
-echo "=== Upstream commits we lack ===" && git log --oneline HEAD..gitlab/master
-echo "=== Our commits upstream lacks ===" && git log --oneline gitlab/master..HEAD | wc -l
+git log --oneline origin/development..gitlab/master
+git rev-list gitlab/master..origin/development --count
 
 # 1d. Find merge base
-git merge-base HEAD gitlab/master
+git merge-base origin/development gitlab/master
 ```
 
-If `git log --oneline HEAD..gitlab/master` is empty → **stop and report** "Nothing to merge — already in sync."
+If `git log --oneline origin/development..gitlab/master` is empty, stop and report that
+`development` already contains the available upstream commits.
 
 ```bash
 # 1e. List files upstream changed (relative to merge base)
-MERGE_BASE=$(git merge-base HEAD gitlab/master)
+MERGE_BASE=$(git merge-base origin/development gitlab/master)
 git diff --name-only $MERGE_BASE gitlab/master
 
 # 1f. List files WE changed (relative to same merge base)
-git diff --name-only $MERGE_BASE HEAD
+git diff --name-only $MERGE_BASE origin/development
 
 # 1g. Find the overlap
 UPSTREAM_FILES=$(git diff --name-only $MERGE_BASE gitlab/master)
-OUR_FILES=$(git diff --name-only $MERGE_BASE HEAD)
+OUR_FILES=$(git diff --name-only $MERGE_BASE origin/development)
 comm -12 <(echo "$UPSTREAM_FILES" | sort) <(echo "$OUR_FILES" | sort)
 ```
 
@@ -63,18 +74,18 @@ Read the content of the most recent spec file and the last 3 plan files to under
 
 ---
 
-## Phase 2: Conflict evaluation (use Opus — be thorough)
+## Phase 2: Conflict evaluation
 
 For each overlapping file, run:
 
 ```bash
-MERGE_BASE=$(git merge-base HEAD gitlab/master)
+MERGE_BASE=$(git merge-base origin/development gitlab/master)
 
 # What upstream changed in this file
 git diff $MERGE_BASE gitlab/master -- <FILE>
 
 # What we changed in this file
-git diff $MERGE_BASE HEAD -- <FILE>
+git diff $MERGE_BASE origin/development -- <FILE>
 ```
 
 Then evaluate each overlap on **three axes**:
@@ -131,10 +142,11 @@ with a brief describing which files need adaptation and what the target behavior
 
 ## Phase 3: Execute merge
 
-### 3a. Create staging branch
+### 3a. Create the integration branch
 
 ```bash
-git checkout -b upstream-merge-staging
+DATE=$(date +%Y-%m-%d)
+git switch --create "upstream/integrate-${DATE}" origin/development
 ```
 
 ### 3b. Merge
@@ -163,7 +175,7 @@ git add <file>
 
 Then:
 ```bash
-git merge --continue --no-edit
+GIT_EDITOR=true git merge --continue
 ```
 
 ### 3d. Verify no conflict markers remain
@@ -179,12 +191,7 @@ Expected: no output. If output appears, open each listed file and remove remaini
 
 ```bash
 # Full workspace compilation check
-VELOREN_ASSETS="$(pwd)/assets" cargo check --workspace 2>&1 | tail -10
-```
-
-If errors appear:
-```bash
-VELOREN_ASSETS="$(pwd)/assets" cargo check --workspace 2>&1 | grep "^error" | head -30
+VELOREN_ASSETS="$(pwd)/assets" cargo check --workspace
 ```
 
 For each error:
@@ -195,13 +202,13 @@ For each error:
 
 Run again after fixing:
 ```bash
-VELOREN_ASSETS="$(pwd)/assets" cargo check --workspace 2>&1 | tail -5
+VELOREN_ASSETS="$(pwd)/assets" cargo check --workspace
 ```
 Must end with `Finished`. Do not proceed to Phase 5 until this passes.
 
 Also confirm our key feature files kept our intent through the merge:
 ```bash
-git diff upstream-merge-staging..upstream-merge-staging~1 -- \
+git diff ORIG_HEAD..HEAD -- \
   common/src/comp/attunement.rs \
   server/src/sys/attunement.rs \
   common/src/combat.rs \
@@ -212,41 +219,41 @@ Expected: these files should not appear in the merge diff unless upstream explic
 
 ---
 
-## Phase 5: Integrate and push
-
-```bash
-# Switch to working branch
-git checkout <original-branch>   # e.g., development
-
-# Merge staging (preserve merge commit for traceability)
-git merge upstream-merge-staging --no-ff -m "merge: upstream gitlab/master into $(git branch --show-current)"
-
-# Push
-git push origin $(git branch --show-current)
-
-# Clean up staging
-git branch -d upstream-merge-staging
-```
-
----
-
-## Phase 6: Smoke tests
+## Phase 5: Smoke tests
 
 ```bash
 # Common crate unit tests
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common 2>&1 | tail -5
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common
 
 # Physics tests (upstream often updates these with balance changes)
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common-systems -- phys 2>&1 | tail -5
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common-systems -- phys
 
 # Voxygen clippy (publish profile, no hot-reload)
-cargo clippy -p veloren-voxygen --locked --no-default-features --features="default-publish" -- -D warnings 2>&1 | tail -5
+cargo clippy -p veloren-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
 ```
 
 All three must pass. If a test fails:
 - Check if the upstream commits changed expected values in the test.
-- Check `git log --oneline upstream-merge-staging -- <test-file>` to see if upstream touched it.
+- Check `git log --oneline HEAD -- <test-file>` to see if upstream touched it.
 - Fix or update the test accordingly.
+
+---
+
+## Phase 6: Push the integration branch and open a PR
+
+```bash
+BRANCH=$(git branch --show-current)
+git push -u origin "$BRANCH"
+gh pr create \
+  --base development \
+  --head "$BRANCH" \
+  --draft \
+  --title "upstream: integrate veloren/veloren into development" \
+  --body "Human review required. Upstream integration validated locally; see the agent report and CI."
+```
+
+Stop after reporting the draft PR URL. AI agents never merge or approve it, never push to
+`development` or `main`, and never change branch-protection settings.
 
 ---
 
@@ -257,7 +264,7 @@ After a successful merge, produce a concise summary:
 ```
 ## Upstream Merge Complete
 
-**Branch:** <branch>
+**Integration branch:** <branch>
 **Commits merged:** <N> from gitlab/master
 **Conflicts encountered:** <none | list of files>
 **Resolution strategy:** <auto | manual keep-both | adaptation required>
@@ -267,7 +274,7 @@ After a successful merge, produce a concise summary:
 ### Upstream changes now in our branch:
 - <bullet per commit category>
 
-### Our Phase 1–3 work: unaffected ✅
+### Xindeler customizations: preserved ✅
 ```
 
 If adaptation plans were created, list them:

@@ -1,0 +1,30 @@
+name: Agent configuration
+
+on:
+  pull_request:
+    paths:
+      - ".agents/**"
+      - ".codex/**"
+      - ".claude/agents/**"
+      - ".claude/skills/**"
+      - "scripts/validate-agent-config.py"
+      - ".github/workflows/agent-config.yml"
+  push:
+    branches:
+      - development
+    paths:
+      - ".agents/**"
+      - ".codex/**"
+      - ".claude/agents/**"
+      - ".claude/skills/**"
+      - "scripts/validate-agent-config.py"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Validate skills and custom agents
+        run: python3 scripts/validate-agent-config.py

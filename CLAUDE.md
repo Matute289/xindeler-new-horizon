@@ -143,7 +143,7 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 Xindeler is a fork of `gitlab veloren/veloren` (the `gitlab` remote — fetch-only, never push). To pull upstream `master` and update without breaking or overwriting Xindeler's work:
 
-- **Use the `GitlabMasterMerger` skill** together with the `upstream-sync.yml` workflow. They bring upstream changes into a **review branch** (`upstream/review-…`) and integrate via **PR** — they do **not** force-push `main`/`development`.
+- **Use the `gitlab-master-merger` skill** together with the `upstream-sync.yml` workflow. They bring upstream changes into a **review branch** (`upstream/review-…`) and integrate via **PR** — they do **not** force-push `main`/`development`.
 - ⚠️ **Never hard-mirror** upstream over our branches. (The old `mirror.yml` did `git push --force master→main` and was removed for exactly this reason; branch protection blocks it anyway.)
 - Upstream brings its own LFS binaries — these route to the **VPS** via `.lfsconfig`, never to GitHub.
 - After a sync, run the lint/test commands above and resolve conflicts so Xindeler customizations (classes, races, magic, lore-driven assets, CI/LFS config, etc.) are preserved — upstream must never clobber them.
@@ -263,7 +263,7 @@ then re-sort by score.
 **Dependency edges (X → Y = X needs Y first):**
 - BL-04 (classes-wave) → BL-01 (per-class attributes). BL-11 (Blood Slayer) → BL-01 + BL-04.
   BL-44 (animal companion) → BL-04 (subclasses) + BL-37. BL-20 (feats) → BL-04.
-- BL-07 / BL-22 (content render) → BL-02 (content factory). 
+- BL-07 / BL-22 (content render) → BL-02 (content factory).
 - BL-36 (antimagic field) shares the **persistent-zone** infra with BL-03 (difficult-terrain) — do BL-03 first.
 - BL-43 (Deck of Many Things) → BL-05 (random-effect-table rider).
 - **BL-05 (spell riders) → BL-52 (combat resolution)** — ✅ satisfied: BL-52 is code-complete (#86–#91),
@@ -273,7 +273,7 @@ then re-sort by score.
 - BL-08 / BL-10 / BL-23 → the magic engine already merged; BL-26 (counterspell) is independent magic.
 - BL-16 (ORACLE) builds on BL-15 (AURORA). BL-33 (alignment), BL-37 (sidekicks), and BL-35's AI
   section all feed/await **BL-15 AURORA** (+ BL-16 for ORACLE-review).
-- BL-42 (Battle PITS) → BL-32 (parties). 
+- BL-42 (Battle PITS) → BL-32 (parties).
 - BL-40 (rename) is coupled to the **upstream-sync** cycle — run it right after a sync, scripted.
 
 **Parallel tracks (independent; can advance concurrently):**
