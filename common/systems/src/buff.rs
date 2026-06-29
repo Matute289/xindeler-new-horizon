@@ -583,6 +583,15 @@ impl<'a> System<'a> for Sys {
                 }
             }
 
+            // BL-65: every body contributes a combat-stat baseline by threat
+            // tier; humanoid bodies contribute 0 here (PCs/class-gated NPCs get
+            // accuracy/evasion/crit from ClassAttributes above, not the body).
+            // One `threat_tier()` eval per entity (skips the work for humanoids).
+            let (npc_accuracy, npc_evasion, npc_crit) = body.base_combat_stats();
+            stat.accuracy += npc_accuracy;
+            stat.evasion += npc_evasion;
+            stat.crit_chance += npc_crit;
+
             let mut body_override = None;
 
             // Iterator over the lists of buffs by kind

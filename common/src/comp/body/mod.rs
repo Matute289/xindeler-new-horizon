@@ -221,6 +221,12 @@ pub enum Gender {
 }
 
 impl Body {
+    // BL-65: per-tier combat-stat baselines used by `base_accuracy`,
+    // `base_evasion`, and `base_crit_chance` below.
+    const TIER_ACCURACY: [f32; 5] = [0.0, 3.0, 6.0, 10.0, 15.0];
+    const TIER_CRIT: [f32; 5] = [0.0, 0.0, 0.0, 0.04, 0.06];
+    const TIER_EVASION: [f32; 5] = [0.0, 3.0, 6.0, 9.0, 12.0];
+
     pub fn is_same_species_as(&self, other: &Body) -> bool {
         match self {
             Body::Humanoid(b1) => match other {
@@ -994,6 +1000,194 @@ impl Body {
     /// If this body will retain 1 hp when it would die, and consume death
     /// protection, and entering a downed state.
     pub fn has_death_protection(&self) -> bool { matches!(self, Body::Humanoid(_)) }
+
+    /// BL-65 threat tier (0-4) used to derive NPC combat-stat baselines, keyed
+    /// off the body exactly like `base_health` (a mob's threat is its body —
+    /// there is no per-level mob scaling here).  T0 = critters/non-combatants,
+    /// T4 = raid bosses.  Humanoid returns 0 (value is unused: the base_*
+    /// helpers short-circuit to 0 for humanoids so class stats are never
+    /// double-counted).
+    pub fn threat_tier(&self) -> u8 {
+        match self {
+            // Humanoid PCs/NPCs: tier unused (base_* returns 0 directly).
+            Body::Humanoid(_) => 0,
+
+            // ── QuadrupedSmall ────────────────────────────────────────────
+            // Hyena is a combatant; everything else is a critter/pet (T0).
+            Body::QuadrupedSmall(b) => match b.species {
+                quadruped_small::Species::Hyena => 2,
+                _ => 0,
+            },
+
+            // ── QuadrupedMedium ───────────────────────────────────────────
+            // Passive livestock → T0; common predators → T2; large/apex → T3.
+            Body::QuadrupedMedium(b) => match b.species {
+                // passive / livestock
+                quadruped_medium::Species::Alpaca
+                | quadruped_medium::Species::Antelope
+                | quadruped_medium::Species::Camel
+                | quadruped_medium::Species::Cattle
+                | quadruped_medium::Species::Deer
+                | quadruped_medium::Species::Donkey
+                | quadruped_medium::Species::Horse
+                | quadruped_medium::Species::Llama
+                | quadruped_medium::Species::Mouflon
+                | quadruped_medium::Species::Zebra => 0,
+                // small combatant
+                quadruped_medium::Species::Bonerattler => 1,
+                // apex predators / large combatants
+                quadruped_medium::Species::Akhlut
+                | quadruped_medium::Species::Catoblepas
+                | quadruped_medium::Species::ClaySteed
+                | quadruped_medium::Species::Dreadhorn
+                | quadruped_medium::Species::Grolgar
+                | quadruped_medium::Species::Hirdrasil
+                | quadruped_medium::Species::Mammoth
+                | quadruped_medium::Species::Elephant
+                | quadruped_medium::Species::Ngoubou
+                | quadruped_medium::Species::Roshwalr
+                | quadruped_medium::Species::Tarasque => 3,
+                // default combatants (Bear/Lion/Wolf/Saber/Tiger/etc.)
+                _ => 2,
+            },
+
+            // ── FishMedium / FishSmall ────────────────────────────────────
+            Body::FishMedium(_) | Body::FishSmall(_) => 0,
+
+            // ── Dragon ────────────────────────────────────────────────────
+            Body::Dragon(_) => 4,
+
+            // ── BirdLarge ─────────────────────────────────────────────────
+            Body::BirdLarge(b) => match b.species {
+                bird_large::Species::Phoenix => 4,
+                _ => 3,
+            },
+
+            // ── BirdMedium ────────────────────────────────────────────────
+            // Non-combatant birds → T0; aggressive species → T1.
+            Body::BirdMedium(b) => match b.species {
+                bird_medium::Species::VampireBat | bird_medium::Species::BloodmoonBat => 1,
+                _ => 0,
+            },
+
+            // ── BipedLarge ────────────────────────────────────────────────
+            // Default T3; hard boss overrides → T4.
+            Body::BipedLarge(b) => match b.species {
+                biped_large::Species::Mindflayer
+                | biped_large::Species::Minotaur
+                | biped_large::Species::Cyclops
+                | biped_large::Species::Cursekeeper
+                | biped_large::Species::Gigasfrost
+                | biped_large::Species::Gigasfire
+                | biped_large::Species::Forgemaster => 4,
+                _ => 3,
+            },
+
+            // ── BipedSmall ────────────────────────────────────────────────
+            // Default T1; Jiangshi → T2 (notably tougher undead).
+            Body::BipedSmall(b) => match b.species {
+                biped_small::Species::Jiangshi => 2,
+                _ => 1,
+            },
+
+            // ── Golem ─────────────────────────────────────────────────────
+            // Default T2; heavy/boss golems → T3.
+            Body::Golem(b) => match b.species {
+                golem::Species::Gravewarden
+                | golem::Species::IronGolem
+                | golem::Species::AncientEffigy => 3,
+                _ => 2,
+            },
+
+            // ── Theropod ─────────────────────────────────────────────────
+            // Default T3 (large predators); small raptors → T1.
+            Body::Theropod(b) => match b.species {
+                theropod::Species::Sandraptor
+                | theropod::Species::Snowraptor
+                | theropod::Species::Woodraptor => 1,
+                _ => 3,
+            },
+
+            // ── QuadrupedLow ──────────────────────────────────────────────
+            // Default T2; small/passive → T1; big drakes/bosses → T3.
+            Body::QuadrupedLow(b) => match b.species {
+                quadruped_low::Species::Driggle
+                | quadruped_low::Species::Pangolin
+                | quadruped_low::Species::Tortoise => 1,
+                quadruped_low::Species::Lavadrake
+                | quadruped_low::Species::Maneater
+                | quadruped_low::Species::Rocksnapper
+                | quadruped_low::Species::Reefsnapper
+                | quadruped_low::Species::Rootsnapper
+                | quadruped_low::Species::Sandshark
+                | quadruped_low::Species::Hydra
+                | quadruped_low::Species::Basilisk
+                | quadruped_low::Species::Snaretongue
+                | quadruped_low::Species::Dagon => 3,
+                _ => 2,
+            },
+
+            // ── Arthropod ─────────────────────────────────────────────────
+            // Default T1; large spiders/antlion → T2.
+            Body::Arthropod(b) => match b.species {
+                arthropod::Species::Tarantula
+                | arthropod::Species::Blackwidow
+                | arthropod::Species::Antlion => 2,
+                _ => 1,
+            },
+
+            // ── Crustacean ────────────────────────────────────────────────
+            Body::Crustacean(_) => 0,
+
+            // ── Non-combatant / structural bodies ─────────────────────────
+            Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => 0,
+        }
+    }
+
+    /// BL-65 NPC baseline accuracy (BL-52 to-hit).  Humanoid bodies return
+    /// 0.0 — class/level stats come from `ClassAttributes`, not the body.
+    pub fn base_accuracy(&self) -> f32 {
+        if matches!(self, Body::Humanoid(_)) {
+            0.0
+        } else {
+            Self::TIER_ACCURACY[self.threat_tier() as usize]
+        }
+    }
+
+    /// BL-65 NPC baseline evasion.  Humanoid bodies return 0.0.
+    pub fn base_evasion(&self) -> f32 {
+        if matches!(self, Body::Humanoid(_)) {
+            0.0
+        } else {
+            Self::TIER_EVASION[self.threat_tier() as usize]
+        }
+    }
+
+    /// BL-65 NPC baseline crit chance.  Humanoid bodies return 0.0.
+    pub fn base_crit_chance(&self) -> f32 {
+        if matches!(self, Body::Humanoid(_)) {
+            0.0
+        } else {
+            Self::TIER_CRIT[self.threat_tier() as usize]
+        }
+    }
+
+    /// BL-65: the `(accuracy, evasion, crit_chance)` baseline this body
+    /// contributes to the BL-52 to-hit layer, computing the threat tier once.
+    /// Humanoid bodies contribute nothing (PCs / class-gated NPCs get these
+    /// from `ClassAttributes`). Used in the per-tick stat assembly to avoid
+    /// evaluating `threat_tier()` three times per entity.
+    pub fn base_combat_stats(&self) -> (f32, f32, f32) {
+        if matches!(self, Body::Humanoid(_)) {
+            return (0.0, 0.0, 0.0);
+        }
+        let tier = self.threat_tier() as usize;
+        (
+            Self::TIER_ACCURACY[tier],
+            Self::TIER_EVASION[tier],
+            Self::TIER_CRIT[tier],
+        )
+    }
 
     pub fn base_health(&self) -> u16 {
         match self {
@@ -2068,4 +2262,129 @@ impl Body {
 
 impl Component for Body {
     type Storage = DerefFlaggedStorage<Self, specs::VecStorage<Self>>;
+}
+
+#[cfg(test)]
+mod bl65_tests {
+    use super::*;
+    use crate::comp::body::{biped_large, biped_small, dragon, humanoid, quadruped_small};
+
+    fn humanoid_body() -> Body {
+        Body::Humanoid(humanoid::Body {
+            species: humanoid::Species::Human,
+            body_type: humanoid::BodyType::Male,
+            hair_style: 0,
+            beard: 0,
+            eyes: 0,
+            accessory: 0,
+            hair_color: 0,
+            skin: 0,
+            eye_color: 0,
+        })
+    }
+
+    fn husk_body() -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species: biped_small::Species::Husk,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    fn jiangshi_body() -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species: biped_small::Species::Jiangshi,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    fn dragon_body() -> Body {
+        Body::Dragon(dragon::Body {
+            species: dragon::Species::Reddragon,
+            body_type: dragon::BodyType::Male,
+        })
+    }
+
+    fn minotaur_body() -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species: biped_large::Species::Minotaur,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn pig_body() -> Body {
+        Body::QuadrupedSmall(quadruped_small::Body {
+            species: quadruped_small::Species::Pig,
+            body_type: quadruped_small::BodyType::Male,
+        })
+    }
+
+    // ── Humanoid short-circuits to 0 regardless of tier ──────────────────
+    #[test]
+    fn humanoid_returns_zero_accuracy() {
+        assert_eq!(humanoid_body().base_accuracy(), 0.0);
+    }
+
+    #[test]
+    fn humanoid_returns_zero_evasion() {
+        assert_eq!(humanoid_body().base_evasion(), 0.0);
+    }
+
+    #[test]
+    fn humanoid_returns_zero_crit() {
+        assert_eq!(humanoid_body().base_crit_chance(), 0.0);
+    }
+
+    // ── T0 critter (Pig / QuadrupedSmall) ────────────────────────────────
+    #[test]
+    fn t0_critter_returns_zero_stats() {
+        let pig = pig_body();
+        assert_eq!(pig.threat_tier(), 0);
+        assert_eq!(pig.base_accuracy(), 0.0);
+        assert_eq!(pig.base_evasion(), 0.0);
+        assert_eq!(pig.base_crit_chance(), 0.0);
+    }
+
+    // ── T1 body (BipedSmall Husk) ─────────────────────────────────────────
+    #[test]
+    fn t1_husk_has_correct_stats() {
+        let husk = husk_body();
+        assert_eq!(husk.threat_tier(), 1);
+        assert_eq!(husk.base_accuracy(), 3.0);
+        assert_eq!(husk.base_evasion(), 3.0);
+        assert_eq!(husk.base_crit_chance(), 0.0);
+    }
+
+    // ── T2 body (BipedSmall Jiangshi) ────────────────────────────────────
+    #[test]
+    fn t2_jiangshi_has_correct_stats() {
+        let j = jiangshi_body();
+        assert_eq!(j.threat_tier(), 2);
+        assert_eq!(j.base_accuracy(), 6.0);
+        assert_eq!(j.base_evasion(), 6.0);
+        assert_eq!(j.base_crit_chance(), 0.0);
+    }
+
+    // ── T4 body (Dragon) ─────────────────────────────────────────────────
+    #[test]
+    fn t4_dragon_has_correct_stats() {
+        let d = dragon_body();
+        assert_eq!(d.threat_tier(), 4);
+        assert_eq!(d.base_accuracy(), 15.0);
+        assert_eq!(d.base_evasion(), 12.0);
+        assert!(
+            (d.base_crit_chance() - 0.06).abs() < f32::EPSILON,
+            "expected 0.06 crit, got {}",
+            d.base_crit_chance()
+        );
+    }
+
+    // ── T4 body (BipedLarge Minotaur) ────────────────────────────────────
+    #[test]
+    fn t4_minotaur_has_correct_stats() {
+        let m = minotaur_body();
+        assert_eq!(m.threat_tier(), 4);
+        assert_eq!(m.base_accuracy(), 15.0);
+        assert_eq!(m.base_evasion(), 12.0);
+        assert!((m.base_crit_chance() - 0.06).abs() < f32::EPSILON);
+    }
 }
