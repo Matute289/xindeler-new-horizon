@@ -139,17 +139,20 @@ impl Skeleton for CharacterSkeleton {
         // TODO: extract scaler from body to it's own method so we can call that
         // directly instead of going through SkeletonAttr? (note todo also
         // appiles to other body variant animations)
-        let base_mat = base_mat * Mat4::scaling_3d(body.height() * (1.0 / 25.0));
+        let base_mat =
+            base_mat * Mat4::scaling_3d(Body::BASE_HEIGHT * body.scaler() * (1.0 / 25.0));
+
+        let height_scale = body.height_scale();
 
         let squash_chest = |tr: Transform<f32, f32, f32>| Transform {
-            position: tr.position * Vec3::new(1.0, 1.0, self.squash.powi(2))
+            position: tr.position * Vec3::new(1.0, 1.0, self.squash.powi(2) * height_scale)
                 + Vec3::new(0.0, (self.squash - 1.0).min(0.0) * 8.0, 0.0),
             orientation: tr.orientation
                 * Quaternion::rotation_x((self.squash - 1.0).min(0.0) * 2.0),
             ..tr
         };
         let squash_limb = |tr: Transform<f32, f32, f32>| Transform {
-            position: tr.position * Vec3::new(1.0, 1.0, self.squash.powi(2))
+            position: tr.position * Vec3::new(1.0, 1.0, self.squash.powi(2) * height_scale)
                 + Vec3::new(0.0, (1.0 - self.squash).max(0.0) * 5.0, 0.0),
             orientation: tr.orientation
                 * Quaternion::rotation_x((1.0 - self.squash).max(0.0) * 2.0),

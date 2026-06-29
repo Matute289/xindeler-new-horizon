@@ -352,6 +352,7 @@ enum Message {
     EyeColor(u8),
     Accessory(u8),
     Beard(u8),
+    HeightScale(u8),
     StartingSite(usize),
     PrevStartingSite,
     NextStartingSite,
@@ -1355,6 +1356,14 @@ impl Controls {
                         Message::Beard,
                         (fonts, imgs),
                     ),
+                    char_slider(
+                        i18n.get_msg("char_selection-height_scale").into_owned(),
+                        &mut sliders.height_scale,
+                        255,
+                        body.height_scale,
+                        Message::HeightScale,
+                        (fonts, imgs),
+                    ),
                 ])
                 .max_width(200)
                 .padding(5);
@@ -2000,6 +2009,12 @@ impl Controls {
                     body.validate();
                 }
             },
+            Message::HeightScale(value) => {
+                if let Mode::CreateOrEdit { body, .. } = &mut self.mode {
+                    body.height_scale = value;
+                    body.validate();
+                }
+            },
             Message::StartingSite(idx) => {
                 if let Mode::CreateOrEdit { start_site_idx, .. } = &mut self.mode {
                     *start_site_idx = Some(idx);
@@ -2211,5 +2226,6 @@ struct Sliders {
     eye_color: slider::State,
     accessory: slider::State,
     beard: slider::State,
+    height_scale: slider::State,
     starting_site: slider::State,
 }
