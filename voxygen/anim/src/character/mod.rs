@@ -149,8 +149,7 @@ impl Skeleton for CharacterSkeleton {
                 + Vec3::new(0.0, (self.squash - 1.0).min(0.0) * 8.0, 0.0),
             orientation: tr.orientation
                 * Quaternion::rotation_x((self.squash - 1.0).min(0.0) * 2.0),
-            scale: tr.scale * Vec3::broadcast(Lerp::lerp(1.0, height_scale, 0.25)),
-            ..tr
+            scale: tr.scale * Lerp::lerp(1.0, height_scale, 0.25),
         };
         let transform_limb = |tr: Transform<f32, f32, f32>| Transform {
             position: tr.position * Vec3::new(1.0, 1.0, self.squash)
