@@ -1947,6 +1947,7 @@ impl Controls {
                     body.skin = rng.random_range(0..species.num_skin_colors());
                     body.eye_color = rng.random_range(0..species.num_eye_colors());
                     body.eyes = rng.random_range(0..species.num_eyes(body_type));
+                    body.height_scale = rng.random();
                 }
             },
             Message::HardcoreEnabled(checked) => {
