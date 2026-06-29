@@ -531,6 +531,7 @@ impl ServerChatCommand {
                     Float("strength", 0.01, Optional),
                     Float("duration", 10.0, Optional),
                     Any("buff data spec", Optional),
+                    EntityTarget(Optional),
                 ],
                 Content::localized("command-buff-desc"),
                 Some(Admin),

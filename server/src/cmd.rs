@@ -6043,11 +6043,15 @@ fn handle_buff(
     args: Vec<String>,
     action: &ServerChatCommand,
 ) -> CmdResult<()> {
-    let (Some(buff), strength, duration, misc_data_spec) =
-        parse_cmd_args!(args, String, f32, f64, String)
+    let (Some(buff), strength, duration, misc_data_spec, entity_target) =
+        parse_cmd_args!(args, String, f32, f64, String, EntityTarget)
     else {
         return Err(action.help_content());
     };
+
+    let buff_target = entity_target
+        .map(|entity_target| get_entity_target(entity_target, server))
+        .unwrap_or(Ok(target))?;
 
     let strength = strength.unwrap_or(0.01);
 
@@ -6064,14 +6068,14 @@ fn handle_buff(
                 .iter()
                 .filter_map(|kind_key| parse_buffkind(kind_key))
                 .filter(|buffkind| buffkind.is_simple())
-                .for_each(|buffkind| cast_buff(buffkind, buffdata, server, target));
+                .for_each(|buffkind| cast_buff(buffkind, buffdata, server, buff_target));
         },
         "clear" => {
             if let Some(mut buffs) = server
                 .state
                 .ecs()
                 .write_storage::<comp::Buffs>()
-                .get_mut(target)
+                .get_mut(buff_target)
             {
                 buffs.buffs.clear();
                 buffs.kinds.clear();
@@ -6100,7 +6104,7 @@ fn handle_buff(
                     .transpose()?,
             )?;
 
-            cast_buff(buffkind, buffdata, server, target);
+            cast_buff(buffkind, buffdata, server, buff_target);
         },
     }
 

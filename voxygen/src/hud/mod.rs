@@ -2429,6 +2429,7 @@ impl Hud {
                         // group
                         // Note: even if this passes the healthbar can
                         // be hidden in some cases if it is at maximum
+                        let has_active_buffs = buffs.iter_active().next().is_some();
                         let display_overhead_info = !is_me
                             && (is_mount.is_none()
                                 || health.is_none_or(overhead::should_show_healthbar))
@@ -2437,7 +2438,8 @@ impl Hud {
                             && ((info.target_entity == Some(entity))
                                 || info.selected_entity.is_some_and(|s| s.0 == entity)
                                 || health.is_none_or(overhead::should_show_healthbar)
-                                || in_group)
+                                || in_group
+                                || has_active_buffs)
                             && dist_sqr
                                 < (if in_group {
                                     NAMETAG_GROUP_RANGE
