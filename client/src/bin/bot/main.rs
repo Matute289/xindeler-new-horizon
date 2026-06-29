@@ -212,6 +212,7 @@ impl BotClient {
             hair_color: 0,
             skin: 0,
             eye_color: 0,
+            height_scale: u8::MAX / 2,
         }
     }
 

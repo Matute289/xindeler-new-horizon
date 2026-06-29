@@ -36,7 +36,7 @@ make_proj_elim!(
 
 impl Body {
     pub const BASE_HEIGHT: f32 = 20.0 / 9.0;
-    const HEIGHT_SCALE_RANGE: Range<f32> = 0.8..1.10;
+    const HEIGHT_SCALE_RANGE: Range<f32> = 0.85..1.15;
 
     pub fn iter() -> impl Iterator<Item = Self> {
         // I'm too lazy to figure out decorations and I don't think we need that

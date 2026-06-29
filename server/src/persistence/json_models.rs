@@ -20,7 +20,7 @@ pub struct HumanoidBody {
     pub height_scale: u8,
 }
 
-fn default_height_scale() -> u8 { 128 }
+fn default_height_scale() -> u8 { u8::MAX / 2 }
 
 impl From<&comp::humanoid::Body> for HumanoidBody {
     fn from(body: &comp::humanoid::Body) -> Self {
