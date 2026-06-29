@@ -27,8 +27,8 @@ use i18n::Localization;
 use client::{self, Client};
 use common::{
     comp::{
-        self, Ability, AbilityPool, ActiveAbilities, Body, CharacterState, Combo, Energy, Hardcore,
-        Health, Inventory, Poise, PoiseState, SkillSet, Stats,
+        self, Ability, AbilityCooldowns, AbilityPool, ActiveAbilities, Body, CharacterState, Combo,
+        Energy, Hardcore, Health, Inventory, Poise, PoiseState, SkillSet, Stats,
         ability::{AbilityInput, Stance},
         is_downed,
         item::{
@@ -148,6 +148,9 @@ widget_ids! {
         slot10_text,
         slot10_text_bg,
         slot_highlight,
+        // Cooldown overlays (one per hotbar slot)
+        slot_cooldown_overlays[],
+        slot_cooldown_txts[],
     }
 }
 
@@ -301,6 +304,8 @@ pub struct Skillbar<'a> {
     char_state: Option<&'a CharacterState>,
     stance: Option<&'a Stance>,
     stats: Option<&'a Stats>,
+    ability_cooldowns: Option<&'a AbilityCooldowns>,
+    now: f64,
 }
 
 impl<'a> Skillbar<'a> {
@@ -337,6 +342,8 @@ impl<'a> Skillbar<'a> {
         char_state: Option<&'a CharacterState>,
         stance: Option<&'a Stance>,
         stats: Option<&'a Stats>,
+        ability_cooldowns: Option<&'a AbilityCooldowns>,
+        now: f64,
     ) -> Self {
         Self {
             client,
@@ -371,6 +378,8 @@ impl<'a> Skillbar<'a> {
             char_state,
             stance,
             stats,
+            ability_cooldowns,
+            now,
         }
     }
 
@@ -1174,6 +1183,59 @@ impl<'a> Skillbar<'a> {
         slot_maker.selected_slot = self.imgs.skillbar_slot;
 
         let slots = slot_entries(state, slot_offset);
+        // Collect cooldown data before entering the slot loop so we can draw overlays
+        // after the slot_maker/closure borrows are released.
+        let cooldown_data: Vec<Option<(widget::Id, widget::Id, f64)>> = slots
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                let ability_id =
+                    if let Some(hotbar::SlotContents::Ability(i)) = self.hotbar.get(entry.slot) {
+                        let (
+                            _,
+                            inventory,
+                            _,
+                            skill_set,
+                            active_abilities,
+                            ability_pool,
+                            _,
+                            contexts,
+                            ..,
+                        ) = content_source;
+                        active_abilities.and_then(|a| {
+                            a.auxiliary_set(Some(inventory), Some(skill_set))
+                                .get(i)
+                                .and_then(|a| {
+                                    Ability::from(*a).ability_id(
+                                        self.char_state,
+                                        Some(inventory),
+                                        Some(skill_set),
+                                        ability_pool,
+                                        contexts,
+                                    )
+                                })
+                        })
+                    } else {
+                        None
+                    };
+                if let Some(id) = ability_id {
+                    if let Some(ready_at) = self
+                        .ability_cooldowns
+                        .and_then(|c| c.ready_at(id))
+                        .filter(|ready_at| self.now < ready_at.0)
+                    {
+                        let remaining = (ready_at.0 - self.now).ceil();
+                        return Some((
+                            state.ids.slot_cooldown_overlays[idx],
+                            state.ids.slot_cooldown_txts[idx],
+                            remaining,
+                        ));
+                    }
+                }
+                None
+            })
+            .collect();
+
         for entry in slots {
             let slot = slot_maker
                 .fabricate(entry.slot, [40.0; 2])
@@ -1278,6 +1340,23 @@ impl<'a> Skillbar<'a> {
                     .set(id_bg, ui);
             }
         }
+
+        // Cooldown overlays — drawn after the slot loop so slot_maker borrows are
+        // released.
+        for (entry, cd) in slots.iter().zip(cooldown_data.iter()) {
+            if let Some((overlay_id, txt_id, remaining_secs)) = cd {
+                Rectangle::fill_with([40.0, 40.0], Color::Rgba(0.0, 0.0, 0.0, 0.55))
+                    .middle_of(entry.widget_id)
+                    .set(*overlay_id, ui);
+                Text::new(&format!("{:.0}", remaining_secs))
+                    .middle_of(entry.widget_id)
+                    .font_size(self.fonts.cyri.scale(14))
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .color(Color::Rgba(1.0, 1.0, 1.0, 1.0))
+                    .set(*txt_id, ui);
+            }
+        }
+
         // M1 is primary slot on mouse, M2 is primary slot on controller
         let (primary_id, primary_bg, secondary_id, secondary_bg) =
             match self.global_state.window.last_input() {
@@ -1504,6 +1583,16 @@ impl Widget for Skillbar<'_> {
                 self::Poise::POISE_THRESHOLDS.len(),
                 &mut ui.widget_id_generator(),
             )
+        });
+
+        // Cooldown overlay widget ids (one per hotbar slot)
+        state.update(|s| {
+            s.ids
+                .slot_cooldown_overlays
+                .resize(10, &mut ui.widget_id_generator());
+            s.ids
+                .slot_cooldown_txts
+                .resize(10, &mut ui.widget_id_generator());
         });
 
         // Alignment and BG

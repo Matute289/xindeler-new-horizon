@@ -96,7 +96,8 @@ use client::{Client, UserNotification};
 use common::{
     combat,
     comp::{
-        self, BuffData, BuffKind, Content, Health, Item, MapMarkerChange, PickupItem, PresenceKind,
+        self, AbilityCooldowns, BuffData, BuffKind, Content, Health, Item, MapMarkerChange,
+        PickupItem, PresenceKind,
         ability::{AuxiliaryAbility, Stance},
         fluid_dynamics,
         inventory::{
@@ -3216,6 +3217,7 @@ impl Hud {
         let skillsets = ecs.read_storage::<comp::SkillSet>();
         let active_abilities = ecs.read_storage::<comp::ActiveAbilities>();
         let ability_pools = ecs.read_storage::<comp::AbilityPool>();
+        let ability_cooldowns_storage = ecs.read_storage::<AbilityCooldowns>();
         let ability_map = ecs.read_resource::<comp::item::tool::AbilityMap>();
         let bodies = ecs.read_storage::<comp::Body>();
         let poises = ecs.read_storage::<comp::Poise>();
@@ -3284,6 +3286,8 @@ impl Hud {
                 char_states.get(entity),
                 stance,
                 stats.get(entity),
+                ability_cooldowns_storage.get(entity),
+                time.0,
             )
             .set(self.ids.skillbar, ui_widgets);
 
