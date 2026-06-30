@@ -340,10 +340,22 @@ impl Scene {
                 FigureState::new(renderer, CharacterSkeleton::new(false, 0.0, 1.0), body)
             });
             let params = figure_params(scene_data.delta_time, self.char_pos);
+            let tgt_skeleton = anim::character::IdleAnimation::update_skeleton(
+                &char_state.skeleton,
+                (
+                    active_tool_kind,
+                    second_tool_kind,
+                    hands,
+                    scene_data.time as f32,
+                ),
+                scene_data.time as f32,
+                &mut 0.0,
+                &anim::character::SkeletonAttr::from(&body),
+            );
             // Apply different animations to the character depending occasionally
             let tgt_skeleton = if !is_edit && (scene_data.time + 113.0) % 80.0 < 10.0 {
                 anim::character::SitAnimation::update_skeleton(
-                    &char_state.skeleton,
+                    &tgt_skeleton,
                     (
                         active_tool_kind,
                         second_tool_kind,
@@ -361,7 +373,7 @@ impl Scene {
                     states::{use_item::ItemUseKind, utils::StageSection},
                 };
                 anim::character::ConsumeAnimation::update_skeleton(
-                    &char_state.skeleton,
+                    &tgt_skeleton,
                     (
                         scene_data.time as f32,
                         Some(StageSection::Action),
@@ -373,7 +385,7 @@ impl Scene {
                 )
             } else if (scene_data.time + 173.0) % 60.0 < 6.0 {
                 anim::character::DanceAnimation::update_skeleton(
-                    &char_state.skeleton,
+                    &tgt_skeleton,
                     (active_tool_kind, second_tool_kind, scene_data.time as f32),
                     scene_data.time as f32,
                     &mut 0.0,
@@ -381,7 +393,7 @@ impl Scene {
                 )
             } else {
                 anim::character::StandAnimation::update_skeleton(
-                    &char_state.skeleton,
+                    &tgt_skeleton,
                     (
                         active_tool_kind,
                         second_tool_kind,
