@@ -115,6 +115,7 @@ pub struct Stream {
     a2b_msg_s: crossbeam_channel::Sender<(Sid, Bytes)>,
     b2a_msg_recv_r: Option<async_channel::Receiver<Bytes>>,
     a2b_close_stream_s: Option<mpsc::UnboundedSender<Sid>>,
+    output_limit: usize,
 }
 
 /// Error type thrown by [`Networks`](Network) methods
@@ -248,12 +249,13 @@ impl Network {
     ///
     /// [`Pid::new()`]: network_protocol::Pid::new
     /// [`Runtime`]: tokio::runtime::Runtime
-    pub fn new(participant_id: Pid, runtime: &Runtime) -> Self {
+    pub fn new(participant_id: Pid, runtime: &Runtime, output_limit: usize) -> Self {
         Self::internal_new(
             participant_id,
             runtime,
             #[cfg(feature = "metrics")]
             None,
+            output_limit,
         )
     }
 
@@ -272,18 +274,24 @@ impl Network {
     ///
     /// let runtime = Runtime::new().unwrap();
     /// let registry = Registry::new();
-    /// let network = Network::new_with_registry(Pid::new(), &runtime, &registry);
+    /// let network = Network::new_with_registry(Pid::new(), &runtime, &registry, 1 << 20);
     /// ```
     /// [`new`]: crate::api::Network::new
     #[cfg(feature = "metrics")]
-    pub fn new_with_registry(participant_id: Pid, runtime: &Runtime, registry: &Registry) -> Self {
-        Self::internal_new(participant_id, runtime, Some(registry))
+    pub fn new_with_registry(
+        participant_id: Pid,
+        runtime: &Runtime,
+        registry: &Registry,
+        output_limit: usize,
+    ) -> Self {
+        Self::internal_new(participant_id, runtime, Some(registry), output_limit)
     }
 
     fn internal_new(
         participant_id: Pid,
         runtime: &Runtime,
         #[cfg(feature = "metrics")] registry: Option<&Registry>,
+        output_limit: usize,
     ) -> Self {
         let p = participant_id;
         let span = info_span!("network", ?p);
@@ -293,6 +301,7 @@ impl Network {
                 participant_id,
                 #[cfg(feature = "metrics")]
                 registry,
+                output_limit,
             );
         let participant_disconnect_sender = Arc::new(Mutex::new(HashMap::new()));
         let (shutdown_network_s, shutdown_network_r) = oneshot::channel();
@@ -845,6 +854,7 @@ impl Stream {
         a2b_msg_s: crossbeam_channel::Sender<(Sid, Bytes)>,
         b2a_msg_recv_r: async_channel::Receiver<Bytes>,
         a2b_close_stream_s: mpsc::UnboundedSender<Sid>,
+        output_limit: usize,
     ) -> Self {
         Self {
             local_pid,
@@ -857,6 +867,7 @@ impl Stream {
             a2b_msg_s,
             b2a_msg_recv_r: Some(b2a_msg_recv_r),
             a2b_close_stream_s: Some(a2b_close_stream_s),
+            output_limit,
         }
     }
 
@@ -1022,7 +1033,7 @@ impl Stream {
     /// ```
     #[inline]
     pub async fn recv<M: DeserializeOwned>(&mut self) -> Result<M, StreamError> {
-        self.recv_raw().await?.deserialize()
+        self.recv_raw().await?.deserialize(self.output_limit)
     }
 
     /// the equivalent like [`send_raw`] but for [`recv`], no [`bincode`] or
@@ -1123,7 +1134,7 @@ impl Stream {
                         #[cfg(feature = "compression")]
                         compressed: self.promises.contains(Promises::COMPRESSED),
                     }
-                    .deserialize()?,
+                    .deserialize(self.output_limit)?,
                 )),
                 Err(async_channel::TryRecvError::Empty) => Ok(None),
                 Err(async_channel::TryRecvError::Closed) => {

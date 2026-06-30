@@ -77,6 +77,7 @@ pub struct BParticipant {
     shutdown_barrier: AtomicI32,
     metrics: Arc<NetworkMetrics>,
     open_stream_channels: Arc<Mutex<Option<OpenStreamInfo>>>,
+    output_limit: usize,
 }
 
 impl BParticipant {
@@ -92,6 +93,7 @@ impl BParticipant {
         remote_pid: Pid,
         offset_sid: Sid,
         metrics: Arc<NetworkMetrics>,
+        output_limit: usize,
     ) -> (
         Self,
         mpsc::UnboundedSender<A2bStreamOpen>,
@@ -131,6 +133,7 @@ impl BParticipant {
                 run_channels,
                 metrics,
                 open_stream_channels: Arc::new(Mutex::new(None)),
+                output_limit,
             },
             a2b_open_stream_s,
             b2a_stream_opened_r,
@@ -292,7 +295,7 @@ impl BParticipant {
                     trace!(?sid, ?cid, "open stream");
 
                     let stream = self
-                        .create_stream(sid, prio, promises, guaranteed_bandwidth)
+                        .create_stream(sid, prio, promises, guaranteed_bandwidth, self.output_limit)
                         .await;
 
                     let event = ProtocolEvent::OpenStream {
@@ -516,7 +519,13 @@ impl BParticipant {
                         // waiting for receiving is not necessary, because the send_mgr will first
                         // process this before process messages!
                         let stream = self
-                            .create_stream(sid, prio, promises, guaranteed_bandwidth)
+                            .create_stream(
+                                sid,
+                                prio,
+                                promises,
+                                guaranteed_bandwidth,
+                                self.output_limit,
+                            )
                             .await;
                         b2a_stream_opened_s.send(stream).unwrap();
                         retrigger(cid, p, &mut recv_protocols);
@@ -757,6 +766,7 @@ impl BParticipant {
         prio: Prio,
         promises: Promises,
         guaranteed_bandwidth: Bandwidth,
+        output_limit: usize,
     ) -> Stream {
         let (b2a_msg_recv_s, b2a_msg_recv_r) = async_channel::unbounded::<Bytes>();
         let send_closed = Arc::new(AtomicBool::new(false));
@@ -796,6 +806,7 @@ impl BParticipant {
             a2b_msg_s,
             b2a_msg_recv_r,
             a2b_close_stream_s,
+            output_limit,
         )
     }
 }

@@ -26,6 +26,7 @@ use common::{
     resources::TimeOfDay,
     slowjob::SlowJobPool,
     terrain::{BlockKind, CoordinateConversions},
+    util::Dir,
     vol::{BaseVol, ReadVol},
 };
 use specs::WorldExt;
@@ -339,18 +340,63 @@ impl Scene {
                 FigureState::new(renderer, CharacterSkeleton::new(false, 0.0, 1.0), body)
             });
             let params = figure_params(scene_data.delta_time, self.char_pos);
-            let tgt_skeleton = anim::character::IdleAnimation::update_skeleton(
-                &char_state.skeleton,
-                (
-                    active_tool_kind,
-                    second_tool_kind,
-                    hands,
+            // Apply different animations to the character depending occasionally
+            let tgt_skeleton = if !is_edit && (scene_data.time + 113.0) % 80.0 < 10.0 {
+                anim::character::SitAnimation::update_skeleton(
+                    &char_state.skeleton,
+                    (
+                        active_tool_kind,
+                        second_tool_kind,
+                        Dir::forward().to_vec(),
+                        Dir::forward(),
+                        scene_data.time as f32,
+                    ),
                     scene_data.time as f32,
-                ),
-                scene_data.time as f32,
-                &mut 0.0,
-                &anim::character::SkeletonAttr::from(&body),
-            );
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            } else if (scene_data.time + 133.0) % 70.0 < 3.0 {
+                use common::{
+                    comp::item::ConsumableKind,
+                    states::{use_item::ItemUseKind, utils::StageSection},
+                };
+                anim::character::ConsumeAnimation::update_skeleton(
+                    &char_state.skeleton,
+                    (
+                        scene_data.time as f32,
+                        Some(StageSection::Action),
+                        Some(ItemUseKind::Consumable(ConsumableKind::Food)),
+                    ),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            } else if (scene_data.time + 173.0) % 60.0 < 6.0 {
+                anim::character::DanceAnimation::update_skeleton(
+                    &char_state.skeleton,
+                    (active_tool_kind, second_tool_kind, scene_data.time as f32),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            } else {
+                anim::character::StandAnimation::update_skeleton(
+                    &char_state.skeleton,
+                    (
+                        active_tool_kind,
+                        second_tool_kind,
+                        hands,
+                        Dir::forward().to_vec(),
+                        Dir::forward().to_vec(),
+                        Dir::forward(),
+                        scene_data.time as f32,
+                        Vec3::zero(),
+                    ),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            };
             let dt_lerp = (scene_data.delta_time * 15.0).min(1.0);
             char_state.skeleton = Lerp::lerp(&char_state.skeleton, &tgt_skeleton, dt_lerp);
             char_state.skeleton.holding_lantern = lantern_light.is_some();

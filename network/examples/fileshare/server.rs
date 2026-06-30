@@ -32,8 +32,8 @@ impl Server {
     pub fn new(runtime: Arc<Runtime>) -> (Self, mpsc::UnboundedSender<LocalCommand>) {
         let (command_sender, command_receiver) = mpsc::unbounded_channel();
 
-        let server = Network::new(Pid::new(), &runtime);
-        let client = Network::new(Pid::new(), &runtime);
+        let server = Network::new(Pid::new(), &runtime, usize::MAX);
+        let client = Network::new(Pid::new(), &runtime, usize::MAX);
 
         let run_channels = ControlChannels { command_receiver };
         (
