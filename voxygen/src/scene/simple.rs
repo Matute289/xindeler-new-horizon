@@ -211,7 +211,7 @@ impl Scene {
             .set_focus_pos(self.char_pos + Vec3::unit_z() * cam_height);
         let ori = self.camera.get_tgt_orientation();
         self.camera
-            .set_orientation(Vec3::new(ori.x, ori.y.max(-0.25), ori.z));
+            .set_orientation(Vec3::new(ori.x, ori.y.max(-0.15), ori.z));
         self.camera.update(
             scene_data.time,
             /* 1.0 / 60.0 */ scene_data.delta_time,
