@@ -405,7 +405,7 @@ where
         > + Eq
         + Hash,
 {
-    pub fn get_or_create_model<'c>(
+    pub fn get_or_create_model<'c, 'd>(
         &'c mut self,
         renderer: &mut Renderer,
         atlas: &mut super::FigureAtlas,
@@ -415,7 +415,7 @@ where
         tick: u64,
         camera_mode: CameraMode,
         character_state: Option<&CharacterState>,
-        slow_jobs: &SlowJobPool,
+        slow_jobs: impl Into<Option<&'d SlowJobPool>>,
         item_key: Option<ItemKey>,
     ) -> (FigureModelEntryLod<'c>, &'c Skel::Attr)
     where
@@ -484,14 +484,11 @@ where
             },
             Entry::Vacant(v) => {
                 let key = v.key().clone();
-                let slot = Arc::new(atomic::AtomicCell::new(None));
                 let manifests = self.manifests.clone();
-                let slot_ = Arc::clone(&slot);
 
-                slow_jobs.spawn("FIGURE_MESHING", move || {
+                let job = move || {
                     // First, load all the base vertex data.
-                    let meshes =
-                        <Skel::Body as BodySpec>::bone_meshes(&key, &manifests, extra);
+                    let meshes = <Skel::Body as BodySpec>::bone_meshes(&key, &manifests, extra);
 
                     // Then, set up meshing context.
                     let mut greedy = FigureModel::make_greedy();
@@ -616,20 +613,43 @@ where
                     ];
 
                     let (atlas_texture_data, atlas_size) = greedy.finalize();
-                    slot_.store(Some(MeshWorkerResponse {
+                    MeshWorkerResponse {
                         atlas_texture_data,
                         atlas_size,
                         opaque,
                         bounds: figure_bounds,
                         vertex_range: models,
-                    }));
-                });
+                    }
+                };
 
-                let skel = &(v
-                    .insert(((FigureModelEntryFuture::Pending(slot), skeleton_attr), tick))
-                    .0)
-                    .1;
-                (None, skel)
+                let model = if let Some(slow_jobs) = slow_jobs.into() {
+                    let slot = Arc::new(atomic::AtomicCell::new(None));
+                    let slot_ = Arc::clone(&slot);
+
+                    slow_jobs.spawn("FIGURE_MESHING", move || {
+                        slot_.store(Some(job()));
+                    });
+
+                    FigureModelEntryFuture::Pending(slot)
+                } else {
+                    let MeshWorkerResponse {
+                        atlas_texture_data,
+                        atlas_size,
+                        opaque,
+                        bounds,
+                        vertex_range,
+                    } = job();
+                    FigureModelEntryFuture::Done(atlas.create_figure(
+                        renderer,
+                        atlas_texture_data,
+                        atlas_size,
+                        (opaque, bounds),
+                        vertex_range,
+                    ))
+                };
+
+                let (model, skel) = &(v.insert(((model, skeleton_attr), tick)).0);
+                (model.get_done(), skel)
             },
         }
     }

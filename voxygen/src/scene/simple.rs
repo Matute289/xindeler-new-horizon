@@ -356,7 +356,9 @@ impl Scene {
                 scene_data.tick,
                 CameraMode::default(),
                 None,
-                scene_data.slow_job_pool,
+                // Don't perform meshing work on a job pool since we need the model to update
+                // immediately
+                None,
                 None,
             );
             char_state.update(
