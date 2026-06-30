@@ -247,6 +247,7 @@ impl PlayState for CharSelectionState {
                     scene_data,
                     loadout,
                     &client,
+                    self.char_selection_ui.is_edit(),
                 );
             }
 

@@ -2216,6 +2216,8 @@ impl CharSelectionUi {
     }
 
     pub fn render<'a>(&'a self, drawer: &mut UiDrawer<'_, 'a>) { self.ui.render(drawer); }
+
+    pub fn is_edit(&self) -> bool { matches!(&self.controls.mode, Mode::CreateOrEdit { .. }) }
 }
 
 #[derive(Default)]

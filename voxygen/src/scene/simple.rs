@@ -199,10 +199,16 @@ impl Scene {
         scene_data: SceneData,
         inventory: Option<&Inventory>,
         client: &Client,
+        is_edit: bool,
     ) {
-        self.camera.set_distance(6.0);
+        self.camera.set_distance(if is_edit { 3.5 } else { 6.0 });
+        let cam_height = if let Some(b) = scene_data.body {
+            b.height() * 0.65
+        } else {
+            1.75
+        };
         self.camera
-            .force_focus_pos(self.char_pos + Vec3::unit_z() * 2.0);
+            .set_focus_pos(self.char_pos + Vec3::unit_z() * cam_height);
         let ori = self.camera.get_tgt_orientation();
         self.camera
             .set_orientation(Vec3::new(ori.x, ori.y.max(-0.25), ori.z));
@@ -231,7 +237,8 @@ impl Scene {
         self.lod
             .maintain(renderer, client, self.camera.get_focus_pos(), &self.camera);
 
-        let lantern_light = if !time_of_day.day_period().is_light()
+        let lantern_light = if !is_edit
+            && !time_of_day.day_period().is_light()
             && let Some(char_state) = &self.char_state
             && let Some(inv) = inventory
             && let Some(item) = inv.equipped(EquipSlot::Lantern)
