@@ -340,6 +340,7 @@ impl Scene {
                 FigureState::new(renderer, CharacterSkeleton::new(false, 0.0, 1.0), body)
             });
             let params = figure_params(scene_data.delta_time, self.char_pos);
+            char_state.skeleton.holding_lantern = lantern_light.is_some();
             let tgt_skeleton = anim::character::IdleAnimation::update_skeleton(
                 &char_state.skeleton,
                 (
@@ -411,7 +412,6 @@ impl Scene {
             };
             let dt_lerp = (scene_data.delta_time * 15.0).min(1.0);
             char_state.skeleton = Lerp::lerp(&char_state.skeleton, &tgt_skeleton, dt_lerp);
-            char_state.skeleton.holding_lantern = lantern_light.is_some();
             let (model, _) = self.char_model_cache.get_or_create_model(
                 renderer,
                 &mut self.figure_atlas,
