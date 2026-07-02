@@ -57,10 +57,16 @@ impl Structure for TerracottaHouse {
         spawn_rules: &mut SpawnRules,
         _land: &Land,
         wpos: Vec2<i32>,
-        weight: f32,
+        _weight: f32,
     ) {
         spawn_rules.trees &= !within_distance(wpos, self.bounds.center(), 85);
         spawn_rules.waypoints = false;
+
+        const MIN_FLAT_DIST: f32 = 12.0;
+        const SLOPE_LENGTH: f32 = 16.0;
+        let dist = wpos.as_::<f32>().distance(self.bounds.center().as_());
+        let weight = (1.0 - (dist - MIN_FLAT_DIST).max(0.0) / SLOPE_LENGTH).max(0.0);
+        spawn_rules.prefer_alt(self.alt as f32, weight);
     }
 
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
