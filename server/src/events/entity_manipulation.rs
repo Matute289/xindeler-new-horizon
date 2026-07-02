@@ -618,12 +618,12 @@ fn handle_exp_gain(
             new_level = level_after
         );
     }
-    // BL-20: 1 feat point per 10 character levels (10/20/30/40 — lore cadence,
+    // BL-20: 1 feat point per 10 character levels (15/25/35/45 — lore cadence,
     // max 4 total). Grants directly via `grant_skill_point` (exp-independent),
     // not the standard XP-per-group path. Checks every milestone so a single
-    // XP gain that crosses several thresholds at once (e.g. level 8 -> 25)
+    // XP gain that crosses several thresholds at once (e.g. level 13 -> 30)
     // grants one point per milestone crossed.
-    for milestone in [10, 20, 30, 40] {
+    for milestone in [15, 25, 35, 45] {
         if level_before < milestone && level_after >= milestone {
             skill_set.grant_skill_point(SkillGroupKind::Feats);
         }

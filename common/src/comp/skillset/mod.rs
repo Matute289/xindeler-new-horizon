@@ -181,6 +181,14 @@ impl SkillGroupKind {
             0
         }
     }
+
+    /// True for groups granted directly (at creation / `/set_class` /
+    /// level-milestone) rather than earned through the skill tree. These need
+    /// their `UnlockGroup` skill re-seeded on `load_from_database`.
+    pub fn is_directly_granted(&self) -> bool {
+        matches!(self, SkillGroupKind::Class(_) | SkillGroupKind::Feats)
+        // Future: add `| SkillGroupKind::EpicBoons` (spec 2026-06-27 §3 Q5).
+    }
 }
 
 /// A group of skills that have been unlocked by a player. Each skill group has
@@ -352,18 +360,20 @@ impl SkillSet {
         skillset.recompute_character_level();
         let mut persistence_load_error = None;
 
-        // Class skill groups are granted directly (unlock_skill_group at creation /
-        // /set_class), not earned through the skill tree, so seed their unlock skill
-        // here — both the loop below and class-gated abilities key off
+        // Directly-granted skill groups (Class, Feats — see
+        // `SkillGroupKind::is_directly_granted`) are unlocked via
+        // `unlock_skill_group` at creation / `/set_class` / level-milestone, not
+        // earned through the skill tree, so seed their unlock skill here — both
+        // the loop below and class-gated abilities key off
         // has_skill(UnlockGroup(..)). Also repairs characters saved before this
         // seeding.
-        let class_groups: Vec<SkillGroupKind> = skillset
+        let directly_granted_groups: Vec<SkillGroupKind> = skillset
             .skill_groups
             .keys()
             .copied()
-            .filter(|kind| matches!(kind, SkillGroupKind::Class(_)))
+            .filter(|kind| kind.is_directly_granted())
             .collect();
-        for kind in class_groups {
+        for kind in directly_granted_groups {
             skillset.skills.entry(Skill::UnlockGroup(kind)).or_insert(1);
         }
 
@@ -462,7 +472,10 @@ impl SkillSet {
             self.recompute_character_level();
             earned_sp
         } else {
-            warn!("Tried to add experience to a skill group that player does not have");
+            warn!(
+                ?skill_group_kind,
+                "Tried to add experience to a skill group that player does not have"
+            );
             None
         }
     }
@@ -926,6 +939,38 @@ mod character_level_tests {
         assert_eq!(
             skill_set.character_level,
             level_from_total_exp(skill_set.total_earned_exp()),
+        );
+    }
+
+    // BL-20 regression (post-#129 smoke test): `SkillSet::default()` unlocks
+    // Feats directly (both `skill_groups` and the `UnlockGroup` skill flag), but
+    // a DB round-trip used to reset `skills` and only re-seed `UnlockGroup` for
+    // `Class(_)` groups, silently dropping Feats accessibility for every
+    // character after load. Fixed via `SkillGroupKind::is_directly_granted`.
+    #[test]
+    fn feats_group_accessible_after_load_from_database() {
+        let created = SkillSet::default();
+        assert!(
+            created.skill_group_accessible(SkillGroupKind::Feats),
+            "Feats should be accessible immediately after creation"
+        );
+
+        let (loaded, err) =
+            SkillSet::load_from_database(created.skill_groups.clone(), HashMap::new());
+        assert!(err.is_none(), "round-trip should not report a load error");
+
+        assert!(
+            loaded.skill_group_accessible(SkillGroupKind::Feats),
+            "Feats should still be accessible after a DB round-trip"
+        );
+
+        let mut loaded = loaded;
+        let exp_for_one_sp = loaded.skill_point_cost(SkillGroupKind::Feats);
+        assert_eq!(
+            loaded.add_experience(SkillGroupKind::Feats, exp_for_one_sp),
+            Some(1),
+            "adding experience to Feats post-load should earn a skill point, not hit the \
+             does-not-have-group warning path"
         );
     }
 
