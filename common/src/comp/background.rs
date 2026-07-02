@@ -13,60 +13,40 @@ use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage, VecStorage};
 
 /// One variant per lore background
-/// (`docs/design/lore/chargen/20-backgrounds.md`, 44 backgrounds across 7
+/// (`docs/design/lore/chargen/20-backgrounds.md`, 24 backgrounds across 7
 /// categories). Like [`crate::comp::class::ClassKind`] this derives `Copy`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BackgroundKind {
-    // Spiritual (5)
+    // Spiritual (3)
     Acolyte,
     Hermit,
-    HauntedOne,
-    Anthropologist,
     Inquisitor,
-    // Academic (5)
+    // Academic (4)
     Sage,
-    CloisteredScholar,
     Archaeologist,
     Scribe,
     Investigator,
-    // Martial (6)
+    // Martial (2)
     Soldier,
     Guard,
-    CityWatch,
-    Marine,
-    MercenaryVeteran,
-    KnightOfAnOrder,
-    // Criminal (6)
+    // Criminal (3)
     Criminal,
     Charlatan,
-    Smuggler,
-    Gambler,
-    UrbanBountyHunter,
-    FactionAgent,
-    // Social (10)
+    BountyHunter,
+    // Social (4)
     Noble,
-    Courtier,
-    FarTraveler,
     Entertainer,
     FolkHero,
     Merchant,
-    FailedMerchant,
-    Carouser,
-    Rewarded,
-    Ruined,
-    // Trade & Craft (7)
-    GuildArtisan,
+    // Trade & Craft (4)
     Artisan,
-    Shipwright,
     Farmer,
     Fisher,
     Miner,
-    CaravanSpecialist,
-    // Wilderness (5)
+    // Wilderness (4)
     Outlander,
     Guide,
     Sailor,
-    Wayfarer,
     Urchin,
 }
 
@@ -75,50 +55,30 @@ impl BackgroundKind {
     /// [`crate::comp::class::ClassKind::ALL`]). Persistence round-trip tests
     /// and the creation-UI listing iterate this so a new variant added here
     /// cannot silently fall out of either.
-    pub const ALL: [BackgroundKind; 44] = [
+    pub const ALL: [BackgroundKind; 24] = [
         BackgroundKind::Acolyte,
         BackgroundKind::Hermit,
-        BackgroundKind::HauntedOne,
-        BackgroundKind::Anthropologist,
         BackgroundKind::Inquisitor,
         BackgroundKind::Sage,
-        BackgroundKind::CloisteredScholar,
         BackgroundKind::Archaeologist,
         BackgroundKind::Scribe,
         BackgroundKind::Investigator,
         BackgroundKind::Soldier,
         BackgroundKind::Guard,
-        BackgroundKind::CityWatch,
-        BackgroundKind::Marine,
-        BackgroundKind::MercenaryVeteran,
-        BackgroundKind::KnightOfAnOrder,
         BackgroundKind::Criminal,
         BackgroundKind::Charlatan,
-        BackgroundKind::Smuggler,
-        BackgroundKind::Gambler,
-        BackgroundKind::UrbanBountyHunter,
-        BackgroundKind::FactionAgent,
+        BackgroundKind::BountyHunter,
         BackgroundKind::Noble,
-        BackgroundKind::Courtier,
-        BackgroundKind::FarTraveler,
         BackgroundKind::Entertainer,
         BackgroundKind::FolkHero,
         BackgroundKind::Merchant,
-        BackgroundKind::FailedMerchant,
-        BackgroundKind::Carouser,
-        BackgroundKind::Rewarded,
-        BackgroundKind::Ruined,
-        BackgroundKind::GuildArtisan,
         BackgroundKind::Artisan,
-        BackgroundKind::Shipwright,
         BackgroundKind::Farmer,
         BackgroundKind::Fisher,
         BackgroundKind::Miner,
-        BackgroundKind::CaravanSpecialist,
         BackgroundKind::Outlander,
         BackgroundKind::Guide,
         BackgroundKind::Sailor,
-        BackgroundKind::Wayfarer,
         BackgroundKind::Urchin,
     ];
 
@@ -128,47 +88,27 @@ impl BackgroundKind {
         match self {
             BackgroundKind::Acolyte => "acolyte",
             BackgroundKind::Hermit => "hermit",
-            BackgroundKind::HauntedOne => "haunted_one",
-            BackgroundKind::Anthropologist => "anthropologist",
             BackgroundKind::Inquisitor => "inquisitor",
             BackgroundKind::Sage => "sage",
-            BackgroundKind::CloisteredScholar => "cloistered_scholar",
             BackgroundKind::Archaeologist => "archaeologist",
             BackgroundKind::Scribe => "scribe",
             BackgroundKind::Investigator => "investigator",
             BackgroundKind::Soldier => "soldier",
             BackgroundKind::Guard => "guard",
-            BackgroundKind::CityWatch => "city_watch",
-            BackgroundKind::Marine => "marine",
-            BackgroundKind::MercenaryVeteran => "mercenary_veteran",
-            BackgroundKind::KnightOfAnOrder => "knight_of_an_order",
             BackgroundKind::Criminal => "criminal",
             BackgroundKind::Charlatan => "charlatan",
-            BackgroundKind::Smuggler => "smuggler",
-            BackgroundKind::Gambler => "gambler",
-            BackgroundKind::UrbanBountyHunter => "urban_bounty_hunter",
-            BackgroundKind::FactionAgent => "faction_agent",
+            BackgroundKind::BountyHunter => "bounty_hunter",
             BackgroundKind::Noble => "noble",
-            BackgroundKind::Courtier => "courtier",
-            BackgroundKind::FarTraveler => "far_traveler",
             BackgroundKind::Entertainer => "entertainer",
             BackgroundKind::FolkHero => "folk_hero",
             BackgroundKind::Merchant => "merchant",
-            BackgroundKind::FailedMerchant => "failed_merchant",
-            BackgroundKind::Carouser => "carouser",
-            BackgroundKind::Rewarded => "rewarded",
-            BackgroundKind::Ruined => "ruined",
-            BackgroundKind::GuildArtisan => "guild_artisan",
             BackgroundKind::Artisan => "artisan",
-            BackgroundKind::Shipwright => "shipwright",
             BackgroundKind::Farmer => "farmer",
             BackgroundKind::Fisher => "fisher",
             BackgroundKind::Miner => "miner",
-            BackgroundKind::CaravanSpecialist => "caravan_specialist",
             BackgroundKind::Outlander => "outlander",
             BackgroundKind::Guide => "guide",
             BackgroundKind::Sailor => "sailor",
-            BackgroundKind::Wayfarer => "wayfarer",
             BackgroundKind::Urchin => "urchin",
         }
     }
@@ -217,7 +157,7 @@ mod tests {
 
     #[test]
     fn all_len_matches_const() {
-        assert_eq!(BackgroundKind::ALL.len(), 44);
+        assert_eq!(BackgroundKind::ALL.len(), 24);
     }
 
     #[test]
@@ -243,11 +183,8 @@ mod tests {
     #[test]
     fn display_name_title_cases_the_keyword() {
         assert_eq!(BackgroundKind::Acolyte.display_name(), "Acolyte");
-        assert_eq!(BackgroundKind::CityWatch.display_name(), "City Watch");
-        assert_eq!(
-            BackgroundKind::KnightOfAnOrder.display_name(),
-            "Knight Of An Order"
-        );
+        assert_eq!(BackgroundKind::BountyHunter.display_name(), "Bounty Hunter");
+        assert_eq!(BackgroundKind::FolkHero.display_name(), "Folk Hero");
     }
 
     #[test]

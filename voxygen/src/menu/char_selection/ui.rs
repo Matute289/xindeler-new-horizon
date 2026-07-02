@@ -135,53 +135,34 @@ fn fixed_label_button(
 /// `match` is the P4-smoke-speed sourcing option the spec calls out (§4.5b);
 /// keyed by `BackgroundKind` so a later variant trim needs no change here
 /// (spec §0.1). Miner is the one exception with two passives (see triage doc
-/// note); Rewarded/Ruined show the feat-point grant text (the BL-20 hook is
-/// out of scope for this UI pass).
+/// note). (Rewarded/Ruined, which used to show feat-point grant text here,
+/// were cut from the catalogue by the 2026-07-02 curation pass — see
+/// docs/design/specs/2026-07-02-backgrounds-curation-design.md §3.)
 fn background_stat_passive(kind: BackgroundKind) -> &'static str {
     match kind {
         BackgroundKind::Acolyte => "HealingReceivedMod +8%",
         BackgroundKind::Hermit => "OutOfCombatHealthRegen +12%",
-        BackgroundKind::HauntedOne => "ElementalResistance(necrotic) +10%",
-        BackgroundKind::Anthropologist => "MaxHealth +8",
         BackgroundKind::Inquisitor => "Undead/FiendDamageMod +8%",
         BackgroundKind::Sage => "SpellDamageMod +4%",
-        BackgroundKind::CloisteredScholar => "SpellDamageMod +6%",
         BackgroundKind::Archaeologist => "MaxHealth +10",
         BackgroundKind::Scribe => "MaxHealth +6",
         BackgroundKind::Investigator => "InitiativeBonus +3",
         BackgroundKind::Soldier => "MeleeDamageMod +5%",
         BackgroundKind::Guard => "PhysicalDamageReduction +2",
-        BackgroundKind::CityWatch => "InitiativeBonus +3",
-        BackgroundKind::Marine => "ElementalResistance(cold) +10%",
-        BackgroundKind::MercenaryVeteran => "MeleeDamageMod +5%",
-        BackgroundKind::KnightOfAnOrder => "PhysicalDamageReduction +3",
         BackgroundKind::Criminal => "MoveSpeed +0.8",
         BackgroundKind::Charlatan => "MaxHealth +8",
-        BackgroundKind::Smuggler => "MoveSpeed +0.8",
-        BackgroundKind::Gambler => "CritChanceMod +1%",
-        BackgroundKind::UrbanBountyHunter => "InitiativeBonus +4",
-        BackgroundKind::FactionAgent => "MaxHealth +10",
+        BackgroundKind::BountyHunter => "InitiativeBonus +4",
         BackgroundKind::Noble => "MaxHealth +10",
-        BackgroundKind::Courtier => "MaxHealth +6",
-        BackgroundKind::FarTraveler => "ElementalResistance(cold) +12%",
         BackgroundKind::Entertainer => "HealingReceivedMod +8%",
         BackgroundKind::FolkHero => "MaxHealth +10",
         BackgroundKind::Merchant => "MoveSpeed +0.8",
-        BackgroundKind::FailedMerchant => "PhysicalDamageReduction +2",
-        BackgroundKind::Carouser => "MaxHealth +12",
-        BackgroundKind::Rewarded => "1 free feat point (fallback: MaxHealth +8)",
-        BackgroundKind::Ruined => "1 free feat point (fallback: MaxHealth +8)",
-        BackgroundKind::GuildArtisan => "MeleeDamageMod +3%",
         BackgroundKind::Artisan => "PhysicalDamageReduction +3",
-        BackgroundKind::Shipwright => "ElementalResistance(cold) +10%",
         BackgroundKind::Farmer => "MaxHealth +12",
         BackgroundKind::Fisher => "ElementalResistance(cold) +10%",
         BackgroundKind::Miner => "MaxHealth +10; DarkvisionRange +10m",
-        BackgroundKind::CaravanSpecialist => "MoveSpeed +1.0",
         BackgroundKind::Outlander => "OutOfCombatHealthRegen +15%",
         BackgroundKind::Guide => "MoveSpeed +1.0",
         BackgroundKind::Sailor => "ElementalResistance(cold) +12%",
-        BackgroundKind::Wayfarer => "MoveSpeed +0.8",
         BackgroundKind::Urchin => "MoveSpeed +1.2",
     }
 }
@@ -195,17 +176,10 @@ fn background_starter_kit(kind: BackgroundKind) -> &'static str {
     match kind {
         BackgroundKind::Acolyte => "Holy symbol of the player's faith, 2x candle, prayer book",
         BackgroundKind::Hermit => "Scroll of personal discovery (flavor), pouch of herbs, blanket",
-        BackgroundKind::HauntedOne => "Silver mirror, 1x holy water flask, set of dark clothing",
-        BackgroundKind::Anthropologist => {
-            "Journal (blank tome), quill + ink, small artifact (flavor)"
-        },
         BackgroundKind::Inquisitor => {
             "Writ of hunting authority (flavor document), 1x oil flask, manacles"
         },
         BackgroundKind::Sage => "2x blank tome, ink + quill, letter of introduction to a library",
-        BackgroundKind::CloisteredScholar => {
-            "2x blank tome, ink + quill, college seal (flavor), magnifying glass"
-        },
         BackgroundKind::Archaeologist => "Bullseye lantern, 10-foot pole, rope (50ft), small tent",
         BackgroundKind::Scribe => "3x blank tome, set of inks, wax seal kit",
         BackgroundKind::Investigator => {
@@ -215,33 +189,12 @@ fn background_starter_kit(kind: BackgroundKind) -> &'static str {
             "Campaign medal (flavor), insignia of rank (flavor), set of dice (gambling)"
         },
         BackgroundKind::Guard => "Whistle, club (if not already in class kit), badge (flavor)",
-        BackgroundKind::CityWatch => "Whistle, lantern (hooded), cuffs (manacles light)",
-        BackgroundKind::Marine => "Rope (50ft), fishing kit, naval badge (flavor)",
-        BackgroundKind::MercenaryVeteran => {
-            "Contract document (flavor), 10gp equivalent loot sack, dice set"
-        },
-        BackgroundKind::KnightOfAnOrder => {
-            "Order signet ring (flavor), prayer book of the order, livery tunic"
-        },
         BackgroundKind::Criminal => "Crowbar, dark hooded cloak, dice set",
         BackgroundKind::Charlatan => {
             "Disguise kit (flavor tool), 2x false documents, fine clothing (1 set)"
         },
-        BackgroundKind::Smuggler => "Rope (50ft), hooded lantern, 2x false-bottom pouch (flavor)",
-        BackgroundKind::Gambler => {
-            "Loaded dice (flavor), deck of cards, small coin pouch (2gp equiv)"
-        },
-        BackgroundKind::UrbanBountyHunter => "Manacles, bounty document (flavor), dark clothing",
-        BackgroundKind::FactionAgent => {
-            "Encoded letter (flavor), faction insignia, 3x doses of ink (cipher)"
-        },
+        BackgroundKind::BountyHunter => "Manacles, bounty document (flavor), dark clothing",
         BackgroundKind::Noble => "Signet ring, letter of lineage (flavor), fine clothing set",
-        BackgroundKind::Courtier => {
-            "Court-approved seal (flavor), fine clothing, invitation document"
-        },
-        BackgroundKind::FarTraveler => {
-            "Exotic garment from homeland (flavor), journal, local currency pouch"
-        },
         BackgroundKind::Entertainer => {
             "Instrument (one type, flavor-only until instruments are implemented), costume, makeup \
              kit"
@@ -252,22 +205,8 @@ fn background_starter_kit(kind: BackgroundKind) -> &'static str {
         BackgroundKind::Merchant => {
             "Balance scales (flavor), 2x blank ledger pages, small coin purse"
         },
-        BackgroundKind::FailedMerchant => {
-            "Ledger (marked VOID, flavor), 1x traveler's clothes, broken seal"
-        },
-        BackgroundKind::Carouser => {
-            "Flask (full, consumable), tavern map (flavor), hangover remedy (herbalist vial)"
-        },
-        BackgroundKind::Rewarded => "Commendation plaque (flavor), 1x healing potion",
-        BackgroundKind::Ruined => "Pawned crest (flavor), 1x traveler's kit (bedroll + torches)",
-        BackgroundKind::GuildArtisan => {
-            "Set of guild tools (flavor; 1 craft tool), guild membership card, coin (5gp equiv)"
-        },
         BackgroundKind::Artisan => {
             "Personal craft tool set (flavor), samples of prior work (flavor), 2gp equiv coin"
-        },
-        BackgroundKind::Shipwright => {
-            "Carpenter's tools (flavor), set of ship blueprints (flavor), rope (50ft)"
         },
         BackgroundKind::Farmer => {
             "Shovel, 1x small animal produce (flavor consumable), work gloves (flavor)"
@@ -276,15 +215,11 @@ fn background_starter_kit(kind: BackgroundKind) -> &'static str {
         BackgroundKind::Miner => {
             "Mining pick (or use existing pickaxe), hooded lantern, 10x iron spikes"
         },
-        BackgroundKind::CaravanSpecialist => {
-            "Wagon chart (flavor map), rope (50ft), 1x trail ration x5"
-        },
         BackgroundKind::Outlander => "Hunting trap, 1x staff (if not class kit), 2x trail rations",
         BackgroundKind::Guide => "Hand-drawn regional map (flavor), rope (30ft), signal whistle",
         BackgroundKind::Sailor => {
             "Rope (50ft), navigation charts (flavor), belaying pin (improvised weapon)"
         },
-        BackgroundKind::Wayfarer => "Bedroll, tin cup, 3x trail rations",
         BackgroundKind::Urchin => {
             "Small knife (if not in class kit), 1x city district map (flavor), lucky token"
         },
@@ -2076,10 +2011,13 @@ impl Controls {
                 // only, via `BackgroundKind::display_name()` (a title-cased
                 // stand-in for the real i18n titles that pass will author).
                 const BACKGROUND_ROW_H: u16 = 40;
-                // Long display names (spec §3 must-stay list) get a smaller
-                // font fraction so they don't clip at the grid's cell width.
-                // 14 is the longest non-must-stay name ("Anthropologist");
-                // the six must-stay long names are all >= 15 chars.
+                // Long display names get a smaller font fraction so they
+                // don't clip at the grid's cell width. Post-curation (BL-31,
+                // 2026-07-02) the 24-background V1 catalogue's longest names
+                // are "Archaeologist"/"Bounty Hunter" (13 chars) and
+                // "Investigator" (12 chars) — none exceed this threshold, so
+                // the fallback branch is currently unreachable but kept as a
+                // defensive guard for future longer names.
                 const BACKGROUND_LONG_NAME_LEN: usize = 14;
                 let background_section = {
                     background_buttons.resize_with(BackgroundKind::ALL.len(), Default::default);
@@ -3311,32 +3249,15 @@ struct Sliders {
 mod background_ui_tests {
     use super::*;
 
-    /// BL-31 UI-fixes spec §3: these six long display names are on Matías's
-    /// explicit "must-stay" list (never removed by the pending variant
-    /// curation) and must render without clipping. Guard that the
-    /// long-name-detection threshold used by `background_section`'s
-    /// fill-fraction fallback (spec §3.1) actually catches all six.
-    #[test]
-    fn long_name_threshold_catches_all_must_stay_names() {
-        const BACKGROUND_LONG_NAME_LEN: usize = 14;
-        let must_stay = [
-            BackgroundKind::CloisteredScholar,
-            BackgroundKind::MercenaryVeteran,
-            BackgroundKind::KnightOfAnOrder,
-            BackgroundKind::UrbanBountyHunter,
-            BackgroundKind::FailedMerchant,
-            BackgroundKind::CaravanSpecialist,
-        ];
-        for kind in must_stay {
-            let label = kind.display_name();
-            assert!(
-                label.len() > BACKGROUND_LONG_NAME_LEN,
-                "{label:?} (len {}) should be flagged as a long name needing the smaller \
-                 fill-fraction fallback",
-                label.len()
-            );
-        }
-    }
+    // `long_name_threshold_catches_all_must_stay_names` (pre-curation
+    // BL-31 UI-fixes spec §3) was removed during the 2026-07-02 catalogue
+    // curation (see docs/design/specs/2026-07-02-backgrounds-curation-design.md
+    // §4): it asserted that six "must-stay" long display names exceeded
+    // `BACKGROUND_LONG_NAME_LEN`, but 5 of those 6 variants were cut and the
+    // 6th (`UrbanBountyHunter`) was renamed to `BountyHunter` (13 chars,
+    // under the threshold). No name in the surviving 24-background V1
+    // catalogue exceeds the threshold, so the test's premise no longer holds
+    // and it was deleted rather than rewritten against a now-empty guarantee.
 
     /// `background_stat_passive`/`background_starter_kit` must be total over
     /// `BackgroundKind::ALL` (spec §4.5) so the detail panel never shows a
