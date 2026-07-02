@@ -1778,12 +1778,17 @@ fn handle_health(
     args: Vec<String>,
     _action: &ServerChatCommand,
 ) -> CmdResult<()> {
-    if let Some(hp) = parse_cmd_args!(args, f32) {
+    let (hp, entity_target) = parse_cmd_args!(args, f32, EntityTarget);
+    if let Some(hp) = hp {
+        // Optional trailing entity target (e.g. `uid@<n>`); defaults to self.
+        let health_target = entity_target
+            .map(|entity_target| get_entity_target(entity_target, server))
+            .unwrap_or(Ok(target))?;
         if let Some(mut health) = server
             .state
             .ecs()
             .write_storage::<comp::Health>()
-            .get_mut(target)
+            .get_mut(health_target)
         {
             let time = server.state.ecs().read_resource::<Time>();
             let change = comp::HealthChange {
@@ -1797,7 +1802,7 @@ fn handle_health(
             health.change_by(change);
             Ok(())
         } else {
-            Err(Content::Plain("You have no health".into()))
+            Err(Content::Plain("Target has no health".into()))
         }
     } else {
         Err(Content::Plain("You must specify health amount!".into()))

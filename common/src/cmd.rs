@@ -755,7 +755,7 @@ impl ServerChatCommand {
                 None,
             ),
             ServerChatCommand::Health => cmd(
-                vec![Integer("hp", 100, Required)],
+                vec![Integer("hp", 100, Required), EntityTarget(Optional)],
                 Content::localized("command-health-desc"),
                 Some(Admin),
             ),
