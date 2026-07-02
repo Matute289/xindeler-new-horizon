@@ -696,7 +696,6 @@ impl PlayState for SessionState {
                 collect_target,
                 entity_target,
                 mine_target,
-                terrain_target,
                 &self.scene,
             ) {
                 Ok(input_map) => {

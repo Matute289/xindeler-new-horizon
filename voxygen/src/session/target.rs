@@ -19,7 +19,6 @@ use common_base::span;
 #[derive(Clone, Copy, Debug)]
 pub struct Target<T> {
     pub kind: T,
-    pub distance: f32,
     pub position: Vec3<f32>,
 }
 
@@ -190,26 +189,22 @@ pub(super) fn targets_under_cursor(
                 char_states.get(*e),
             );
 
-            let dist_to_player = player_cylinder.min_distance(target_cylinder);
-            if dist_to_player < MAX_TARGET_RANGE {
+            if player_cylinder.min_distance(target_cylinder) < MAX_TARGET_RANGE {
                 Some(Target {
                     kind: Entity(*e),
                     position: p,
-                    distance: dist_to_player,
                 })
             } else { None }
         });
 
     let terrain_target = obstacle_cast.map(|(d, _)| Target {
         kind: Terrain,
-        distance: d,
         position: break_tgt_pos(d),
     });
 
     let build_target = if let (true, Some((d, _))) = (can_build, build_cast) {
         Some(Target {
             kind: Build(place_tgt_pos(d)),
-            distance: d,
             position: break_tgt_pos(d),
         })
     } else {
@@ -218,13 +213,11 @@ pub(super) fn targets_under_cursor(
 
     let collect_target = collect_cast.map(|(d, _)| Target {
         kind: Collectable,
-        distance: d,
         position: break_tgt_pos(d),
     });
 
     let mine_target = mine_cast.map(|(d, _)| Target {
         kind: Mine,
-        distance: d,
         position: break_tgt_pos(d),
     });
 

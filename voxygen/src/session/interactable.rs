@@ -177,7 +177,6 @@ pub(super) fn get_interactables(
     collect_target: Option<Target<target::Collectable>>,
     entity_target: Option<Target<target::Entity>>,
     mine_target: Option<Target<target::Mine>>,
-    terrain_target: Option<Target<target::Terrain>>,
     scene: &Scene,
 ) -> Result<HashMap<GameInput, (f32, Interactable)>, GetInteractablesError> {
     span!(_guard, "select_interactable");
