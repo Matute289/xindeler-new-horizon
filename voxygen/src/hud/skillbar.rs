@@ -1218,19 +1218,18 @@ impl<'a> Skillbar<'a> {
                     } else {
                         None
                     };
-                if let Some(id) = ability_id {
-                    if let Some(ready_at) = self
+                if let Some(id) = ability_id
+                    && let Some(ready_at) = self
                         .ability_cooldowns
                         .and_then(|c| c.ready_at(id))
                         .filter(|ready_at| self.now < ready_at.0)
-                    {
-                        let remaining = (ready_at.0 - self.now).ceil();
-                        return Some((
-                            state.ids.slot_cooldown_overlays[idx],
-                            state.ids.slot_cooldown_txts[idx],
-                            remaining,
-                        ));
-                    }
+                {
+                    let remaining = (ready_at.0 - self.now).ceil();
+                    return Some((
+                        state.ids.slot_cooldown_overlays[idx],
+                        state.ids.slot_cooldown_txts[idx],
+                        remaining,
+                    ));
                 }
                 None
             })

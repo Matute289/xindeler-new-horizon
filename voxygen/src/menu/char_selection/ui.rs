@@ -716,7 +716,12 @@ impl Controls {
                     // Character Selection List
                     let mut characters = characters
                         .iter()
-                        .zip(character_buttons.chunks_exact_mut(CHAR_BUTTONS))
+                        .zip(
+                            character_buttons
+                                .as_chunks_mut::<CHAR_BUTTONS>()
+                                .0
+                                .iter_mut(),
+                        )
                         .filter_map(|(character, buttons)| {
                             let mut buttons = buttons.iter_mut();
                             // TODO: eliminate option in character id?

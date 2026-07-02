@@ -211,18 +211,22 @@ fn append_intersection_points<T: Float + core::fmt::Debug>(
                 .expect("We don't currently try to handle floats that won't fit in an i64.")
         })
     };
-    let mut lines_iter = intersection_points.chunks_exact(2).filter_map(|uv| {
-        let u_key = make_key(uv[0]);
-        let v = uv[1];
-        // NOTE: The reason we need to make sure this doesn't happen is that it's
-        // otherwise possible for two points to hash to the same value due to
-        // epsilon being too low. Because of the ordering mentioned previously,
-        // we know we should *eventually* find a pair of points starting with
-        // make_key(u) and ending with a different make_key(v) in such cases, so
-        // we just discard all the other pairs (treating them as points rather
-        // than lines).
-        (u_key != make_key(v)).then_some((u_key, v))
-    });
+    let mut lines_iter = intersection_points
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|uv| {
+            let u_key = make_key(uv[0]);
+            let v = uv[1];
+            // NOTE: The reason we need to make sure this doesn't happen is that it's
+            // otherwise possible for two points to hash to the same value due to
+            // epsilon being too low. Because of the ordering mentioned previously,
+            // we know we should *eventually* find a pair of points starting with
+            // make_key(u) and ending with a different make_key(v) in such cases, so
+            // we just discard all the other pairs (treating them as points rather
+            // than lines).
+            (u_key != make_key(v)).then_some((u_key, v))
+        });
 
     if let Some((last_key, first)) = lines_iter.next() {
         let lines = lines_iter.collect::<HashMap<_, _>>();

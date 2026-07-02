@@ -403,26 +403,12 @@ impl GnarlingFortification {
                         }
                         if num <= GOLEM_SPAWN_THRESHOLD {
                             // wooden golem (with oriented spawn)
-                            let x_offset;
-                            let y_offset;
-                            match _ori {
-                                Dir2::X => {
-                                    x_offset = 8;
-                                    y_offset = 8;
-                                },
-                                Dir2::NegX => {
-                                    x_offset = -8;
-                                    y_offset = 8;
-                                },
-                                Dir2::Y => {
-                                    x_offset = 8;
-                                    y_offset = -8;
-                                },
-                                Dir2::NegY => {
-                                    x_offset = -8;
-                                    y_offset = -8;
-                                },
-                            }
+                            let (x_offset, y_offset) = match _ori {
+                                Dir2::X => (8, 8),
+                                Dir2::NegX => (-8, 8),
+                                Dir2::Y => (8, -8),
+                                Dir2::NegY => (-8, -8),
+                            };
                             let pos = Vec3::new(
                                 wpos.x + x_offset,
                                 wpos.y + y_offset,
