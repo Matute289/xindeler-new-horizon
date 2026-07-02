@@ -790,10 +790,10 @@ pub fn convert_class_to_database(class: common::comp::CharacterClass) -> String 
     json_models::class_to_db_string(class.0)
 }
 
-/// BL-31: `background` NULL or unrecognized -> `Background(None)` ("Uncommitted",
-/// P0 §Q1). `"custom"` -> `Background(Some(Custom(note)))`, reading the
-/// freeform text from `background_custom_note` (empty string if the column
-/// is itself NULL, which should not normally happen but must not panic).
+/// BL-31: `background` NULL or unrecognized -> `Background(None)`
+/// ("Uncommitted", P0 §Q1). `"custom"` -> `Background(Some(Custom(note)))`,
+/// reading the freeform text from `background_custom_note` (empty string if the
+/// column is itself NULL, which should not normally happen but must not panic).
 pub fn convert_background_from_database(
     background: Option<&str>,
     background_custom_note: Option<&str>,

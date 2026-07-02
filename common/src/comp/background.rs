@@ -2,21 +2,23 @@
 //! docs/design/specs/2026-06-27-backgrounds-design.md and
 //! docs/design/plans/2026-07-01-backgrounds-p0-triage.md.
 //!
-//! Modelled on [`crate::comp::class::ClassKind`] / [`crate::comp::CharacterClass`]
-//! rather than [`crate::comp::Ethos`]: `Ethos` is a pair of drifting scores,
-//! which is the wrong shape for "one variant per lore background". `ClassKind`
-//! is a plain `Copy` enum with a `keyword()`/`from_keyword()` db-string
-//! mapping — the shape we want, except `BackgroundKind` needs a `Custom(String)`
-//! catch-all (P0 §Q5), so **this enum cannot derive `Copy`** (a data-carrying
-//! variant breaks `Copy`) and `keyword()`/`from_keyword()` take `&self`/return
-//! owned data where `ClassKind`'s take `self` by value.
+//! Modelled on [`crate::comp::class::ClassKind`] /
+//! [`crate::comp::CharacterClass`] rather than [`crate::comp::Ethos`]: `Ethos`
+//! is a pair of drifting scores, which is the wrong shape for "one variant per
+//! lore background". `ClassKind` is a plain `Copy` enum with a
+//! `keyword()`/`from_keyword()` db-string mapping — the shape we want, except
+//! `BackgroundKind` needs a `Custom(String)` catch-all (P0 §Q5), so **this enum
+//! cannot derive `Copy`** (a data-carrying variant breaks `Copy`) and
+//! `keyword()`/`from_keyword()` take `&self`/return owned data where
+//! `ClassKind`'s take `self` by value.
 use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage, VecStorage};
 
-/// One variant per lore background (`docs/design/lore/chargen/20-backgrounds.md`,
-/// 44 backgrounds across 7 categories) plus a `Custom(String)` catch-all for
-/// DM-approved freeform backgrounds (P0 §Q5). Unlike [`crate::comp::class::ClassKind`]
-/// this does **not** derive `Copy`: `Custom` carries an owned `String`.
+/// One variant per lore background
+/// (`docs/design/lore/chargen/20-backgrounds.md`, 44 backgrounds across 7
+/// categories) plus a `Custom(String)` catch-all for DM-approved freeform
+/// backgrounds (P0 §Q5). Unlike [`crate::comp::class::ClassKind`] this does **
+/// not** derive `Copy`: `Custom` carries an owned `String`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BackgroundKind {
     // Spiritual (5)

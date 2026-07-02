@@ -1830,8 +1830,7 @@ impl Controls {
                 const BACKGROUND_ROW_H: u16 = 40;
                 let background_section = {
                     // +1 slot for the fixed `Custom` entry, appended last.
-                    background_buttons
-                        .resize_with(BackgroundKind::ALL.len() + 1, Default::default);
+                    background_buttons.resize_with(BackgroundKind::ALL.len() + 1, Default::default);
                     let (custom_button, fixed_buttons) = background_buttons
                         .split_last_mut()
                         .expect("resized to at least 1 above");
@@ -1857,16 +1856,25 @@ impl Controls {
                                 // Re-clicking the selected entry clears back to
                                 // "Uncommitted" (P0 §Q1 — a valid, unforced
                                 // choice, not just a legacy default).
-                                Some(Message::Background(if selected { None } else { Some(kind) })),
+                                Some(Message::Background(if selected {
+                                    None
+                                } else {
+                                    Some(kind)
+                                })),
                             )
                         })
-                        .map(|el| Container::new(el).height(Length::Units(BACKGROUND_ROW_H)).into())
+                        .map(|el| {
+                            Container::new(el)
+                                .height(Length::Units(BACKGROUND_ROW_H))
+                                .into()
+                        })
                         .collect::<Vec<Element<Message>>>();
 
                     let is_custom = matches!(background.0, Some(BackgroundKind::Custom(_)));
                     let custom_entry = Container::new(neat_button(
                         custom_button,
-                        i18n.get_msg("char_selection-background_custom").into_owned(),
+                        i18n.get_msg("char_selection-background_custom")
+                            .into_owned(),
                         FILL_FRAC_ONE,
                         if is_custom {
                             style::button::Style::new(imgs.button)
@@ -1880,9 +1888,7 @@ impl Controls {
                     ))
                     .height(Length::Units(BACKGROUND_ROW_H));
 
-                    let list = Column::with_children(rows)
-                        .push(custom_entry)
-                        .spacing(4);
+                    let list = Column::with_children(rows).push(custom_entry).spacing(4);
 
                     let scrollable_list = Container::new(
                         Scrollable::new(background_scroll)
@@ -1903,8 +1909,7 @@ impl Controls {
                         children.push(
                             TextInput::new(
                                 background_custom_input,
-                                &i18n
-                                    .get_msg("char_selection-background_custom_placeholder"),
+                                &i18n.get_msg("char_selection-background_custom_placeholder"),
                                 background_custom_note,
                                 Message::BackgroundCustomNote,
                             )
@@ -1912,7 +1917,9 @@ impl Controls {
                             .into(),
                         );
                     }
-                    Column::with_children(children).spacing(8).width(Length::Fill)
+                    Column::with_children(children)
+                        .spacing(8)
+                        .width(Length::Fill)
                 };
 
                 let hardcore_checkbox = if character_id.is_some() {
@@ -2632,9 +2639,7 @@ impl Controls {
                     // `Message::BackgroundCustomNote`).
                     let background = match &background.0 {
                         Some(BackgroundKind::Custom(_)) => {
-                            Background(Some(BackgroundKind::Custom(
-                                background_custom_note.clone(),
-                            )))
+                            Background(Some(BackgroundKind::Custom(background_custom_note.clone())))
                         },
                         other => Background(other.clone()),
                     };
