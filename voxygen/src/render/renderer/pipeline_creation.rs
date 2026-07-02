@@ -16,7 +16,7 @@ use super::{
     shaders::Shaders,
 };
 use common_base::{prof_span, prof_span_alloc};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// All the pipelines
 pub struct Pipelines {
@@ -411,359 +411,335 @@ struct PipelineNeeds<'a> {
     surface_config: &'a wgpu::SurfaceConfiguration,
 }
 
-/// Creates InterfacePipelines in parallel
-fn create_interface_pipelines(
-    needs: PipelineNeeds,
-    pool: &rayon::ThreadPool,
-    tasks: [Task; 3],
-) -> InterfacePipelines {
-    prof_span!(_guard, "create_interface_pipelines");
+struct ParallelTasks<'a> {
+    tasks: Vec<Box<dyn FnOnce(&PipelineNeeds<'_>) + Send + 'a>>,
+    progress: &'a Progress,
+}
 
-    let [ui_task, premultiply_alpha_task, blit_task] = tasks;
-    // Construct a pipeline for rendering UI elements
-    let create_ui = || {
-        ui_task.run(
-            || {
-                ui::UiPipeline::new(
-                    needs.device,
-                    &needs.shaders.ui_vert,
-                    &needs.shaders.ui_frag,
-                    needs.surface_config,
-                    &needs.layouts.global,
-                    &needs.layouts.ui,
-                )
-            },
-            "ui pipeline creation",
-        )
-    };
+struct TaskHandle<T> {
+    out: Arc<OnceLock<T>>,
+}
 
-    let create_premultiply_alpha = || {
-        premultiply_alpha_task.run(
-            || {
-                ui::PremultiplyAlphaPipeline::new(
-                    needs.device,
-                    &needs.shaders.premultiply_alpha_vert,
-                    &needs.shaders.premultiply_alpha_frag,
-                    &needs.layouts.premultiply_alpha,
-                )
-            },
-            "premultiply alpha pipeline creation",
-        )
-    };
+impl<'a> ParallelTasks<'a> {
+    fn new(progress: &'a Progress) -> Self {
+        Self {
+            tasks: Vec::new(),
+            progress,
+        }
+    }
 
-    // Construct a pipeline for blitting, used during screenshotting
-    let create_blit = || {
-        blit_task.run(
-            || {
-                blit::BlitPipeline::new(
-                    needs.device,
-                    &needs.shaders.blit_vert,
-                    &needs.shaders.blit_frag,
-                    needs.surface_config,
-                    &needs.layouts.blit,
-                )
-            },
-            "blit pipeline creation",
-        )
-    };
+    /// Register a task.
+    ///
+    /// The name is used for profiling.
+    fn register<T: Send + Sync + 'static>(
+        &mut self,
+        f: impl FnOnce(&PipelineNeeds<'_>) -> T + Send + 'static,
+        name: &'static str,
+    ) -> TaskHandle<T> {
+        let out = Arc::new(OnceLock::new());
+        self.tasks.push({
+            let task = self.progress.create_task();
+            let out = Arc::clone(&out);
+            Box::new(move |needs| task.run(|| out.set(f(needs)).ok().unwrap(), name))
+        });
+        TaskHandle { out }
+    }
 
-    let (ui, (premultiply_alpha, blit)) = pool.join(create_ui, || {
-        pool.join(create_premultiply_alpha, create_blit)
-    });
-
-    InterfacePipelines {
-        ui,
-        premultiply_alpha,
-        blit,
+    /// Run registered tasks.
+    fn run(self, needs: PipelineNeeds, pool: &rayon::ThreadPool) {
+        prof_span!(_guard, "ParallelTasks::run");
+        pool.scope(|scope| {
+            for task in self.tasks {
+                scope.spawn(|_| task(&needs));
+            }
+        });
     }
 }
 
-/// Create IngamePipelines and shadow pipelines in parallel
-fn create_ingame_and_shadow_pipelines(
-    needs: PipelineNeeds,
-    pool: &rayon::ThreadPool,
-    // TODO: Reduce the boilerplate in this file
-    tasks: [Task; 20],
+impl<T> TaskHandle<T> {
+    /// # Panics
+    ///
+    /// Can panic if [`ParallelTasks::run`] hasn't completed yet.
+    fn resolve(self: TaskHandle<T>) -> T {
+        Arc::try_unwrap(self.out)
+            .ok()
+            .and_then(OnceLock::into_inner)
+            .unwrap()
+    }
+}
+
+/// Registers InterfacePipelines to be created in parallel.
+fn register_create_interface_pipelines(
+    tasks: &mut ParallelTasks<'_>,
+) -> impl FnOnce() -> InterfacePipelines + use<> {
+    // Construct a pipeline for rendering UI elements
+    let ui = tasks.register(
+        |needs| {
+            ui::UiPipeline::new(
+                needs.device,
+                &needs.shaders.ui_vert,
+                &needs.shaders.ui_frag,
+                needs.surface_config,
+                &needs.layouts.global,
+                &needs.layouts.ui,
+            )
+        },
+        "ui pipeline creation",
+    );
+
+    let premultiply_alpha = tasks.register(
+        |needs| {
+            ui::PremultiplyAlphaPipeline::new(
+                needs.device,
+                &needs.shaders.premultiply_alpha_vert,
+                &needs.shaders.premultiply_alpha_frag,
+                &needs.layouts.premultiply_alpha,
+            )
+        },
+        "premultiply alpha pipeline creation",
+    );
+
+    // Construct a pipeline for blitting, used during screenshotting
+    let blit = tasks.register(
+        |needs| {
+            blit::BlitPipeline::new(
+                needs.device,
+                &needs.shaders.blit_vert,
+                &needs.shaders.blit_frag,
+                needs.surface_config,
+                &needs.layouts.blit,
+            )
+        },
+        "blit pipeline creation",
+    );
+
+    || InterfacePipelines {
+        ui: ui.resolve(),
+        premultiply_alpha: premultiply_alpha.resolve(),
+        blit: blit.resolve(),
+    }
+}
+
+/// Registers IngameAndShadowPipelines to be created in parallel
+fn register_create_ingame_and_shadow_pipelines(
+    // TODO: move this to `needs` struct?
     format: wgpu::TextureFormat,
-) -> IngameAndShadowPipelines {
-    prof_span!(_guard, "create_ingame_and_shadow_pipelines");
-
-    let PipelineNeeds {
-        device,
-        layouts,
-        shaders,
-        pipeline_modes,
-        surface_config: sc_desc,
-    } = needs;
-
-    let [
-        debug_task,
-        skybox_task,
-        figure_task,
-        terrain_task,
-        fluid_task,
-        sprite_task,
-        lod_object_task,
-        particle_task,
-        rope_task,
-        trail_task,
-        lod_terrain_task,
-        clouds_task,
-        bloom_task,
-        postprocess_task,
-        // TODO: if these are ever actually optionally done, counting them
-        // as tasks to do beforehand seems kind of iffy since they will just
-        // be skipped
-        point_shadow_task,
-        terrain_directed_shadow_task,
-        figure_directed_shadow_task,
-        debug_directed_shadow_task,
-        terrain_directed_rain_occlusion_task,
-        figure_directed_rain_occlusion_task,
-    ] = tasks;
-
+    tasks: &mut ParallelTasks<'_>,
+) -> impl FnOnce() -> IngameAndShadowPipelines + use<> {
     // TODO: pass in format of target color buffer
 
     // Pipeline for rendering debug shapes
-    let create_debug = || {
-        debug_task.run(
-            || {
-                debug::DebugPipeline::new(
-                    device,
-                    &shaders.debug_vert,
-                    &shaders.debug_frag,
-                    &layouts.global,
-                    &layouts.debug,
-                    pipeline_modes.aa,
-                    format,
-                )
-            },
-            "debug pipeline creation",
-        )
-    };
+    let debug = tasks.register(
+        move |needs| {
+            debug::DebugPipeline::new(
+                needs.device,
+                &needs.shaders.debug_vert,
+                &needs.shaders.debug_frag,
+                &needs.layouts.global,
+                &needs.layouts.debug,
+                needs.pipeline_modes.aa,
+                format,
+            )
+        },
+        "debug pipeline creation",
+    );
     // Pipeline for rendering skyboxes
-    let create_skybox = || {
-        skybox_task.run(
-            || {
-                skybox::SkyboxPipeline::new(
-                    device,
-                    &shaders.skybox_vert,
-                    &shaders.skybox_frag,
-                    &layouts.global,
-                    pipeline_modes.aa,
-                    format,
-                )
-            },
-            "skybox pipeline creation",
-        )
-    };
+    let skybox = tasks.register(
+        move |needs| {
+            skybox::SkyboxPipeline::new(
+                needs.device,
+                &needs.shaders.skybox_vert,
+                &needs.shaders.skybox_frag,
+                &needs.layouts.global,
+                needs.pipeline_modes.aa,
+                format,
+            )
+        },
+        "skybox pipeline creation",
+    );
     // Pipeline for rendering figures
-    let create_figure = || {
-        figure_task.run(
-            || {
-                figure::FigurePipeline::new(
-                    device,
-                    &shaders.figure_vert,
-                    &shaders.figure_frag,
-                    &layouts.global,
-                    &layouts.figure,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "figure pipeline creation",
-        )
-    };
+    let figure = tasks.register(
+        move |needs| {
+            figure::FigurePipeline::new(
+                needs.device,
+                &needs.shaders.figure_vert,
+                &needs.shaders.figure_frag,
+                &needs.layouts.global,
+                &needs.layouts.figure,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "figure pipeline creation",
+    );
     // Pipeline for rendering terrain
-    let create_terrain = || {
-        terrain_task.run(
-            || {
-                terrain::TerrainPipeline::new(
-                    device,
-                    &shaders.terrain_vert,
-                    &shaders.terrain_frag,
-                    &layouts.global,
-                    &layouts.terrain,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "terrain pipeline creation",
-        )
-    };
+    let terrain = tasks.register(
+        move |needs| {
+            terrain::TerrainPipeline::new(
+                needs.device,
+                &needs.shaders.terrain_vert,
+                &needs.shaders.terrain_frag,
+                &needs.layouts.global,
+                &needs.layouts.terrain,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "terrain pipeline creation",
+    );
     // Pipeline for rendering fluids
-    let create_fluid = || {
-        fluid_task.run(
-            || {
-                fluid::FluidPipeline::new(
-                    device,
-                    &shaders.fluid_vert,
-                    &shaders.fluid_frag,
-                    &layouts.global,
-                    &layouts.terrain,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "fluid pipeline creation",
-        )
-    };
+    let fluid = tasks.register(
+        move |needs| {
+            fluid::FluidPipeline::new(
+                needs.device,
+                &needs.shaders.fluid_vert,
+                &needs.shaders.fluid_frag,
+                &needs.layouts.global,
+                &needs.layouts.terrain,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "fluid pipeline creation",
+    );
     // Pipeline for rendering sprites
-    let create_sprite = || {
-        sprite_task.run(
-            || {
-                sprite::SpritePipeline::new(
-                    device,
-                    &shaders.sprite_vert,
-                    &shaders.sprite_frag,
-                    &layouts.global,
-                    &layouts.sprite,
-                    &layouts.terrain,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "sprite pipeline creation",
-        )
-    };
+    let sprite = tasks.register(
+        move |needs| {
+            sprite::SpritePipeline::new(
+                needs.device,
+                &needs.shaders.sprite_vert,
+                &needs.shaders.sprite_frag,
+                &needs.layouts.global,
+                &needs.layouts.sprite,
+                &needs.layouts.terrain,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "sprite pipeline creation",
+    );
     // Pipeline for rendering lod objects
-    let create_lod_object = || {
-        lod_object_task.run(
-            || {
-                lod_object::LodObjectPipeline::new(
-                    device,
-                    &shaders.lod_object_vert,
-                    &shaders.lod_object_frag,
-                    &layouts.global,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "lod object pipeline creation",
-        )
-    };
+    let lod_object = tasks.register(
+        move |needs| {
+            lod_object::LodObjectPipeline::new(
+                needs.device,
+                &needs.shaders.lod_object_vert,
+                &needs.shaders.lod_object_frag,
+                &needs.layouts.global,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "lod object pipeline creation",
+    );
     // Pipeline for rendering particles
-    let create_particle = || {
-        particle_task.run(
-            || {
-                particle::ParticlePipeline::new(
-                    device,
-                    &shaders.particle_vert,
-                    &shaders.particle_frag,
-                    &layouts.global,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "particle pipeline creation",
-        )
-    };
+    let particle = tasks.register(
+        move |needs| {
+            particle::ParticlePipeline::new(
+                needs.device,
+                &needs.shaders.particle_vert,
+                &needs.shaders.particle_frag,
+                &needs.layouts.global,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "particle pipeline creation",
+    );
     // Pipeline for rendering ropes
-    let create_rope = || {
-        rope_task.run(
-            || {
-                rope::RopePipeline::new(
-                    device,
-                    &shaders.rope_vert,
-                    &shaders.rope_frag,
-                    &layouts.global,
-                    &layouts.rope,
-                    pipeline_modes.aa,
-                    format,
-                )
-            },
-            "rope pipeline creation",
-        )
-    };
+    let rope = tasks.register(
+        move |needs| {
+            rope::RopePipeline::new(
+                needs.device,
+                &needs.shaders.rope_vert,
+                &needs.shaders.rope_frag,
+                &needs.layouts.global,
+                &needs.layouts.rope,
+                needs.pipeline_modes.aa,
+                format,
+            )
+        },
+        "rope pipeline creation",
+    );
     // Pipeline for rendering weapon trails
-    let create_trail = || {
-        trail_task.run(
-            || {
-                trail::TrailPipeline::new(
-                    device,
-                    &shaders.trail_vert,
-                    &shaders.trail_frag,
-                    &layouts.global,
-                    pipeline_modes.aa,
-                    format,
-                )
-            },
-            "trail pipeline creation",
-        )
-    };
+    let trail = tasks.register(
+        move |needs| {
+            trail::TrailPipeline::new(
+                needs.device,
+                &needs.shaders.trail_vert,
+                &needs.shaders.trail_frag,
+                &needs.layouts.global,
+                needs.pipeline_modes.aa,
+                format,
+            )
+        },
+        "trail pipeline creation",
+    );
     // Pipeline for rendering terrain
-    let create_lod_terrain = || {
-        lod_terrain_task.run(
-            || {
-                lod_terrain::LodTerrainPipeline::new(
-                    device,
-                    &shaders.lod_terrain_vert,
-                    &shaders.lod_terrain_frag,
-                    &layouts.global,
-                    format,
-                    pipeline_modes,
-                )
-            },
-            "lod terrain pipeline creation",
-        )
-    };
+    let lod_terrain = tasks.register(
+        move |needs| {
+            lod_terrain::LodTerrainPipeline::new(
+                needs.device,
+                &needs.shaders.lod_terrain_vert,
+                &needs.shaders.lod_terrain_frag,
+                &needs.layouts.global,
+                format,
+                needs.pipeline_modes,
+            )
+        },
+        "lod terrain pipeline creation",
+    );
     // Pipeline for rendering our clouds (a kind of post-processing)
-    let create_clouds = || {
-        clouds_task.run(
-            || {
-                clouds::CloudsPipeline::new(
-                    device,
-                    &shaders.clouds_vert,
-                    &shaders.clouds_frag,
-                    &layouts.global,
-                    &layouts.clouds,
-                    pipeline_modes.aa,
-                    format,
-                )
-            },
-            "clouds pipeline creation",
-        )
-    };
+    let clouds = tasks.register(
+        move |needs| {
+            clouds::CloudsPipeline::new(
+                needs.device,
+                &needs.shaders.clouds_vert,
+                &needs.shaders.clouds_frag,
+                &needs.layouts.global,
+                &needs.layouts.clouds,
+                needs.pipeline_modes.aa,
+                format,
+            )
+        },
+        "clouds pipeline creation",
+    );
     // Pipelines for rendering our bloom
-    let create_bloom = || {
-        bloom_task.run(
-            || {
-                match &pipeline_modes.bloom {
-                    BloomMode::Off => None,
-                    BloomMode::On(config) => Some(config),
-                }
-                .map(|bloom_config| {
-                    bloom::BloomPipelines::new(
-                        device,
-                        &shaders.blit_vert,
-                        &shaders.dual_downsample_filtered_frag,
-                        &shaders.dual_downsample_frag,
-                        &shaders.dual_upsample_frag,
-                        format,
-                        &layouts.bloom,
-                        bloom_config,
-                    )
-                })
-            },
-            "bloom pipelines creation",
-        )
-    };
-    // Pipeline for rendering our post-processing
-    let create_postprocess = || {
-        postprocess_task.run(
-            || {
-                postprocess::PostProcessPipeline::new(
-                    device,
-                    &shaders.postprocess_vert,
-                    &shaders.postprocess_frag,
-                    sc_desc,
-                    &layouts.global,
-                    &layouts.postprocess,
+    let bloom = tasks.register(
+        move |needs| {
+            match &needs.pipeline_modes.bloom {
+                BloomMode::Off => None,
+                BloomMode::On(config) => Some(config),
+            }
+            .map(|bloom_config| {
+                bloom::BloomPipelines::new(
+                    needs.device,
+                    &needs.shaders.blit_vert,
+                    &needs.shaders.dual_downsample_filtered_frag,
+                    &needs.shaders.dual_downsample_frag,
+                    &needs.shaders.dual_upsample_frag,
+                    format,
+                    &needs.layouts.bloom,
+                    bloom_config,
                 )
-            },
-            "postprocess pipeline creation",
-        )
-    };
+            })
+        },
+        "bloom pipelines creation",
+    );
+    // Pipeline for rendering our post-processing
+    let postprocess = tasks.register(
+        move |needs| {
+            postprocess::PostProcessPipeline::new(
+                needs.device,
+                &needs.shaders.postprocess_vert,
+                &needs.shaders.postprocess_frag,
+                needs.surface_config,
+                &needs.layouts.global,
+                &needs.layouts.postprocess,
+            )
+        },
+        "postprocess pipeline creation",
+    );
 
     //
     // // Pipeline for rendering the player silhouette
@@ -789,166 +765,114 @@ fn create_ingame_and_shadow_pipelines(
     // )?;
 
     // Pipeline for rendering point light terrain shadow maps.
-    let create_point_shadow = || {
-        point_shadow_task.run(
-            || {
-                shadow::PointShadowPipeline::new(
-                    device,
-                    &shaders.point_light_shadows_vert,
-                    &layouts.global,
-                    &layouts.terrain,
-                    pipeline_modes.aa,
-                )
-            },
-            "point shadow pipeline creation",
-        )
-    };
-    // Pipeline for rendering directional light terrain shadow maps.
-    let create_terrain_directed_shadow = || {
-        terrain_directed_shadow_task.run(
-            || {
-                shadow::ShadowPipeline::new(
-                    device,
-                    &shaders.light_shadows_directed_vert,
-                    &layouts.global,
-                    &layouts.terrain,
-                    pipeline_modes.aa,
-                )
-            },
-            "terrain directed shadow pipeline creation",
-        )
-    };
-    // Pipeline for rendering directional light figure shadow maps.
-    let create_figure_directed_shadow = || {
-        figure_directed_shadow_task.run(
-            || {
-                shadow::ShadowFigurePipeline::new(
-                    device,
-                    &shaders.light_shadows_figure_vert,
-                    &layouts.global,
-                    &layouts.figure,
-                    pipeline_modes.aa,
-                )
-            },
-            "figure directed shadow pipeline creation",
-        )
-    };
-    // Pipeline for rendering directional light debug shadow maps.
-    let create_debug_directed_shadow = || {
-        debug_directed_shadow_task.run(
-            || {
-                shadow::ShadowDebugPipeline::new(
-                    device,
-                    &shaders.light_shadows_debug_vert,
-                    &layouts.global,
-                    &layouts.debug,
-                    pipeline_modes.aa,
-                )
-            },
-            "figure directed shadow pipeline creation",
-        )
-    };
-    // Pipeline for rendering directional light terrain rain occlusion maps.
-    let create_terrain_directed_rain_occlusion = || {
-        terrain_directed_rain_occlusion_task.run(
-            || {
-                rain_occlusion::RainOcclusionPipeline::new(
-                    device,
-                    &shaders.rain_occlusion_directed_vert,
-                    &layouts.global,
-                    &layouts.terrain,
-                    pipeline_modes.aa,
-                )
-            },
-            "terrain directed rain occlusion pipeline creation",
-        )
-    };
-    // Pipeline for rendering directional light figure rain occlusion maps.
-    let create_figure_directed_rain_occlusion = || {
-        figure_directed_rain_occlusion_task.run(
-            || {
-                rain_occlusion::RainOcclusionFigurePipeline::new(
-                    device,
-                    &shaders.rain_occlusion_figure_vert,
-                    &layouts.global,
-                    &layouts.figure,
-                    pipeline_modes.aa,
-                )
-            },
-            "figure directed rain occlusion pipeline creation",
-        )
-    };
-
-    let j1 = || pool.join(create_debug, || pool.join(create_skybox, create_figure));
-    let j2 = || pool.join(create_terrain, || pool.join(create_fluid, create_bloom));
-    let j3 = || pool.join(create_sprite, create_particle);
-    let j4 = || {
-        pool.join(create_lod_terrain, || {
-            pool.join(create_clouds, create_trail)
-        })
-    };
-    let j5 = || pool.join(create_postprocess, create_point_shadow);
-    let j6 = || {
-        pool.join(create_terrain_directed_shadow, || {
-            pool.join(create_figure_directed_shadow, create_debug_directed_shadow)
-        })
-    };
-    let j7 = || {
-        pool.join(create_lod_object, || {
-            pool.join(
-                create_terrain_directed_rain_occlusion,
-                create_figure_directed_rain_occlusion,
+    let point_shadow = tasks.register(
+        move |needs| {
+            shadow::PointShadowPipeline::new(
+                needs.device,
+                &needs.shaders.point_light_shadows_vert,
+                &needs.layouts.global,
+                &needs.layouts.terrain,
+                needs.pipeline_modes.aa,
             )
-        })
-    };
-    let j8 = create_rope;
-
-    // Ignore this
-    let (
-        (
-            ((debug, (skybox, figure)), (terrain, (fluid, bloom))),
-            ((sprite, particle), (lod_terrain, (clouds, trail))),
-        ),
-        (
-            (
-                (postprocess, point_shadow),
-                (terrain_directed_shadow, (figure_directed_shadow, debug_directed_shadow)),
-            ),
-            ((lod_object, (terrain_directed_rain_occlusion, figure_directed_rain_occlusion)), rope),
-        ),
-    ) = pool.join(
-        || pool.join(|| pool.join(j1, j2), || pool.join(j3, j4)),
-        || pool.join(|| pool.join(j5, j6), || pool.join(j7, j8)),
+        },
+        "point shadow pipeline creation",
+    );
+    // Pipeline for rendering directional light terrain shadow maps.
+    let terrain_directed_shadow = tasks.register(
+        move |needs| {
+            shadow::ShadowPipeline::new(
+                needs.device,
+                &needs.shaders.light_shadows_directed_vert,
+                &needs.layouts.global,
+                &needs.layouts.terrain,
+                needs.pipeline_modes.aa,
+            )
+        },
+        "terrain directed shadow pipeline creation",
+    );
+    // Pipeline for rendering directional light figure shadow maps.
+    let figure_directed_shadow = tasks.register(
+        move |needs| {
+            shadow::ShadowFigurePipeline::new(
+                needs.device,
+                &needs.shaders.light_shadows_figure_vert,
+                &needs.layouts.global,
+                &needs.layouts.figure,
+                needs.pipeline_modes.aa,
+            )
+        },
+        "figure directed shadow pipeline creation",
+    );
+    // Pipeline for rendering directional light debug shadow maps.
+    let debug_directed_shadow = tasks.register(
+        |needs| {
+            shadow::ShadowDebugPipeline::new(
+                needs.device,
+                &needs.shaders.light_shadows_debug_vert,
+                &needs.layouts.global,
+                &needs.layouts.debug,
+                needs.pipeline_modes.aa,
+            )
+        },
+        "figure directed shadow pipeline creation",
+    );
+    // Pipeline for rendering directional light terrain rain occlusion maps.
+    let terrain_directed_rain_occlusion = tasks.register(
+        |needs| {
+            rain_occlusion::RainOcclusionPipeline::new(
+                needs.device,
+                &needs.shaders.rain_occlusion_directed_vert,
+                &needs.layouts.global,
+                &needs.layouts.terrain,
+                needs.pipeline_modes.aa,
+            )
+        },
+        "terrain directed rain occlusion pipeline creation",
+    );
+    // Pipeline for rendering directional light figure rain occlusion maps.
+    let figure_directed_rain_occlusion = tasks.register(
+        |needs| {
+            rain_occlusion::RainOcclusionFigurePipeline::new(
+                needs.device,
+                &needs.shaders.rain_occlusion_figure_vert,
+                &needs.layouts.global,
+                &needs.layouts.figure,
+                needs.pipeline_modes.aa,
+            )
+        },
+        "figure directed rain occlusion pipeline creation",
     );
 
-    IngameAndShadowPipelines {
+    || IngameAndShadowPipelines {
         ingame: IngamePipelines {
-            debug,
-            figure,
-            fluid,
-            lod_terrain,
-            particle,
-            rope,
-            trail,
-            clouds,
-            bloom,
-            postprocess,
-            skybox,
-            sprite,
-            lod_object,
-            terrain,
-            // player_shadow_pipeline,
+            debug: debug.resolve(),
+            figure: figure.resolve(),
+            fluid: fluid.resolve(),
+            lod_terrain: lod_terrain.resolve(),
+            particle: particle.resolve(),
+            rope: rope.resolve(),
+            trail: trail.resolve(),
+            clouds: clouds.resolve(),
+            bloom: bloom.resolve(),
+            postprocess: postprocess.resolve(),
+            skybox: skybox.resolve(),
+            sprite: sprite.resolve(),
+            lod_object: lod_object.resolve(),
+            terrain: terrain.resolve(),
+            // player_shadow_pipeline: player_shadow_pipeline.resolve(),
         },
-        // TODO: skip creating these if the shadow map setting is not enabled
+        // TODO: If these are ever actually optionally done, ideally they will not be counted as
+        // tasks to do beforehand (i.e. implement it as skipping registering them above).
+        // TODO: Skip creating these if the shadow map setting is not enabled.
         shadow: ShadowPipelines {
-            point: Some(point_shadow),
-            directed: Some(terrain_directed_shadow),
-            figure: Some(figure_directed_shadow),
-            debug: Some(debug_directed_shadow),
+            point: Some(point_shadow.resolve()),
+            directed: Some(terrain_directed_shadow.resolve()),
+            figure: Some(figure_directed_shadow.resolve()),
+            debug: Some(debug_directed_shadow.resolve()),
         },
         rain_occlusion: RainOcclusionPipelines {
-            terrain: Some(terrain_directed_rain_occlusion),
-            figure: Some(figure_directed_rain_occlusion),
+            terrain: Some(terrain_directed_rain_occlusion.resolve()),
+            figure: Some(figure_directed_rain_occlusion.resolve()),
         },
     }
 }
@@ -1003,8 +927,13 @@ pub(super) fn initial_create_pipelines(
     // Create interface pipelines while blocking the main thread
     // Note: we use a throwaway Progress tracker here since we don't need to track
     // the progress
-    let interface_pipelines =
-        create_interface_pipelines(needs, &pool, Progress::new().create_tasks());
+    let interface_pipelines = {
+        let dummy_progress = Progress::new();
+        let mut tasks = ParallelTasks::new(&dummy_progress);
+        let interface_pipelines = register_create_interface_pipelines(&mut tasks);
+        tasks.run(needs, &pool);
+        interface_pipelines()
+    };
 
     let pool = Arc::new(pool);
     let send_pool = Arc::clone(&pool);
@@ -1027,12 +956,13 @@ pub(super) fn initial_create_pipelines(
             surface_config: &surface_config,
         };
 
-        let pipelines = create_ingame_and_shadow_pipelines(
-            needs,
-            pool,
-            progress.create_tasks(),
-            intermediate_format,
-        );
+        let pipelines = {
+            let mut tasks = ParallelTasks::new(&progress);
+            let pipelines =
+                register_create_ingame_and_shadow_pipelines(intermediate_format, &mut tasks);
+            tasks.run(needs, pool);
+            pipelines()
+        };
 
         pipeline_send.send(pipelines).expect("Channel disconnected");
     });
@@ -1089,8 +1019,10 @@ pub(super) fn recreate_pipelines(
 
         // Create tasks upfront so the total counter will be accurate
         let shader_task = progress.create_task();
-        let interface_tasks = progress.create_tasks();
-        let ingame_and_shadow_tasks = progress.create_tasks();
+        let mut tasks = ParallelTasks::new(&progress);
+        let ingame_and_shadow =
+            register_create_ingame_and_shadow_pipelines(intermediate_format, &mut tasks);
+        let interface = register_create_interface_pipelines(&mut tasks);
 
         // Process shaders into modules
         let guard = shader_task.start("process shaders");
@@ -1123,20 +1055,14 @@ pub(super) fn recreate_pipelines(
             surface_config: &surface_config,
         };
 
-        // Create interface pipelines
-        let interface = create_interface_pipelines(needs, pool, interface_tasks);
-
-        // Create the rest of the pipelines
+        // Create pipelines
+        tasks.run(needs, pool);
+        let interface = interface();
         let IngameAndShadowPipelines {
             ingame,
             shadow,
             rain_occlusion,
-        } = create_ingame_and_shadow_pipelines(
-            needs,
-            pool,
-            ingame_and_shadow_tasks,
-            intermediate_format,
-        );
+        } = ingame_and_shadow();
 
         // Send them
         result_send
@@ -1175,19 +1101,14 @@ struct Progress {
 }
 
 impl Progress {
-    pub fn new() -> Self { Self::default() }
+    fn new() -> Self { Self::default() }
 
     /// Creates a task incrementing the total number of tasks
     /// NOTE: all tasks should be created as upfront as possible so that the
     /// total reflects the amount of tasks that will need to be completed
-    pub fn create_task(&self) -> Task<'_> {
+    fn create_task(&self) -> Task<'_> {
         self.total.fetch_add(1, Ordering::Relaxed);
         Task { progress: self }
-    }
-
-    /// Helper method for creating tasks to do in bulk
-    pub fn create_tasks<const N: usize>(&self) -> [Task<'_>; N] {
-        [(); N].map(|()| self.create_task())
     }
 }
 
