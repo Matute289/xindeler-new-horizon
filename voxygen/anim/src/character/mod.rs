@@ -158,15 +158,16 @@ impl Skeleton for CharacterSkeleton {
                 * Quaternion::rotation_x((1.0 - self.squash).max(0.0) * 2.0),
             ..tr
         };
-        let transform_other = |tr: Transform<f32, f32, f32>| Transform {
-            position: tr.position * Vec3::new(1.0, 1.0, height_scale),
+        let transform_other = |stretch: f32, tr: Transform<f32, f32, f32>| Transform {
+            position: tr.position * Vec3::new(1.0, 1.0, height_scale.max(0.0).powf(stretch * 2.0)),
+            scale: tr.scale * Vec3::new(1.0, 1.0, height_scale.max(1.0).powf(stretch * 2.0)),
             ..tr
         };
 
         let torso_mat = base_mat * Mat4::<f32>::from(self.torso);
         let chest_mat = torso_mat * Mat4::<f32>::from(transform_chest(self.chest));
         let head_mat = chest_mat * Mat4::<f32>::from(transform_limb(self.head));
-        let shorts_mat = chest_mat * Mat4::<f32>::from(transform_other(self.shorts));
+        let shorts_mat = chest_mat * Mat4::<f32>::from(transform_other(0.6, self.shorts));
         let control_mat = chest_mat * Mat4::<f32>::from(self.control);
         let control_l_mat = control_mat * Mat4::<f32>::from(self.control_l);
         let control_r_mat = control_mat * Mat4::<f32>::from(self.control_r);
@@ -185,7 +186,7 @@ impl Skeleton for CharacterSkeleton {
         let computed_skeleton = ComputedCharacterSkeleton {
             head: head_mat,
             chest: chest_mat,
-            belt: chest_mat * Mat4::<f32>::from(transform_other(self.belt)),
+            belt: chest_mat * Mat4::<f32>::from(transform_other(1.1, self.belt)),
             back: chest_mat * Mat4::<f32>::from(self.back),
             shorts: shorts_mat,
             hand_l: control_l_mat * hand_l_mat,
