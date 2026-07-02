@@ -65,3 +65,217 @@ char_selection-background_detail_kit = Items (Starter Kit)
 char_selection-background_detail_pending = Contenido narrativo pendiente
 char_selection-background_social_pending = Contenido narrativo pendiente
 char_selection-background_affinity_pending = Contenido narrativo pendiente
+char_selection-background_society_label = Sociedad
+char_selection-background_detalle_acolyte =
+    Raised within a sanctuary of the Luminaries, you spent your earliest years learning
+    the cadences of the sacred rites long before you understood them. You carried
+    water and trimmed lamps, then stood at the altar as an intermediary between the
+    faithful and the light they came to venerate. Yours was a life of vigil and
+    observance — the ordering of a shrine, the tending of pilgrims, the keeping of the
+    old chants against the encroaching quiet of the Void. Whether you rose to lead a
+    rite of your own or served forever in the shadow of your elders, the temple's
+    rhythm is written into you, and the faithful of your order still owe you shelter
+    and a warm meal.
+char_selection-background_detalle_hermit =
+    You turned your back on the noise of settled places and went to live apart, in a
+    still house at the edge of the world or in the company of a handful of like-minded
+    recluses. In that long silence you were searching — for a fragment of the First
+    Song, for a rite the Luminaries had let fall out of memory, or for the shape of the
+    warning that the Void whispers to those patient enough to listen. The years of
+    solitude gave you what crowds never could: a clarity, and perhaps a single hard-won
+    truth that you now carry back into a world that has forgotten how to be quiet. Few
+    understand why you left, and fewer still what you found there.
+char_selection-background_detalle_inquisitor =
+    You served a Luminary's tribunal, riding to the remote and troubled corners of the
+    realm where something had gone wrong that ordinary law could not name. You learned
+    to read a frightened village, to sift confession from rumor, and to recognize the
+    mark the Void leaves on a soul it has begun to hollow out. Your writ granted you the
+    authority to question, to judge, and — when the proof was plain — to condemn, a
+    weight that hardened you as much as it armed you. You have seen faith curdle into
+    cruelty in others of your order, and you know how thin the line is between rooting
+    out corruption and becoming it.
+char_selection-background_detalle_sage =
+    You gave your years to the pursuit of what is written down and half-forgotten,
+    poring over crumbling manuscripts in the great arcane academies and the private
+    libraries of lords who hoard knowledge like coin. You know not only the lore itself
+    but the far rarer thing: where the lost lore sleeps, and who holds the keys to the
+    doors it lies behind. Patient, meticulous, and quietly certain, you have made
+    yourself a master of your chosen subjects, the person others seek when a question
+    has an answer that most have stopped believing exists. The dust of old pages is on
+    your hands, and the map of a hundred unread archives is in your head.
+char_selection-background_detalle_archaeologist =
+    You have spent your life among the bones of vanished peoples, reading the ruins of
+    civilizations older than the recorded age of the Luminaries themselves. Where others
+    see rubble you see grammar — the meaning in a shattered lintel, the story in a floor
+    worn smooth by feet a thousand years dust. Some who share your trade come only to
+    plunder, but for you the lost places are a summons: to learn what the world was
+    before it was this, and to carry a little of it back into the light. You have crawled
+    through collapsed halls and stood in chambers no living eye had seen, and the dark of
+    deep and forgotten places holds no fear for you.
+char_selection-background_detalle_scribe =
+    You came of age in a scriptorium or a lord's chancery, bent over a desk until a clear
+    hand and a careful eye became second nature. You copied edicts and old chronicles,
+    learned the discipline of setting down another's words without corrupting them, and
+    in doing so learned to notice everything — the erasure, the altered date, the forged
+    seal that a hurried reader would miss. Words are your craft and your weapon; you can
+    read between the lines of a document as easily as you can pen it. Wherever records
+    are kept and secrets are hidden inside them, you are the one who can find the seam
+    where the truth was quietly rewritten.
+char_selection-background_detalle_investigator =
+    You are driven by a need to know that most people are wise enough not to feel. Perhaps
+    the law failed you and you set out to make crooked things straight yourself; perhaps
+    you saw something you were never meant to and could not let it rest. You have learned
+    to talk your way past a locked door, to wear certainty like a borrowed coat, and to
+    carry papers official enough that few think to question them. You operate in the grey
+    country between the law and the truth, following a thread of clues through the parts
+    of the world where people would rather you did not look. What others bury, you dig up.
+char_selection-background_detalle_soldier =
+    War made you, for as long as you care to remember. You learned the weight of armor
+    and the discipline of the line as a youth, and you carried both through a city levy,
+    a kingdom's standing host, or a mercenary company that followed coin more than any
+    banner. You know the grim arithmetic of the battlefield — how to stay alive on it,
+    and how to spend others' lives across it — and you wear that knowledge quietly. Among
+    soldiers who served under the same colors your old rank still means something, a debt
+    of recognition that opens doors barracks-side. The war may be over, but its habits
+    never fully leave the body.
+char_selection-background_detalle_guard =
+    Your life was measured in long watches at gate, wall, and post, one eye turned outward
+    for what might come out of the dark and the other turned inward for the cutpurse
+    working the crowd. You learned the rhythm of a place — when it is calm, when it is
+    about to turn — and to read the small wrongness in a face or a step that means trouble
+    is coming before it arrives. Your feet remember every cold night on the tower stair,
+    and your instincts were honed by them into something sharper than mere vigilance. You
+    know how order is actually kept: not by walls, but by the patient, unglamorous people
+    who stand in front of them.
+char_selection-background_detalle_criminal =
+    You made your living beneath the reach of Gildmar's law, in the crooked economy of
+    theft, smuggling, and quiet violence that runs under every civilized street. You know
+    its rules, which are stricter than any court's, and you have survived by keeping them:
+    whom to trust, whom to fear, and how much a silence is worth. You still hold a
+    reliable contact who can pass a message across any distance through the shadow
+    network, a thread back into the underworld that shaped you. You are far closer than
+    most honest folk to the world of blades and broken oaths — and that closeness has
+    kept you alive this long.
+char_selection-background_detalle_charlatan =
+    You have always understood people better than they understand themselves — what they
+    long for, what they fear, and how to place the one in front of the other until they
+    hand you their purse and thank you for it. You travel with a false name, a set of
+    forged papers, and a practiced, disarming smile, working the festival roads, the
+    crowded markets, and the parlors of the credulous wealthy. The tonic that cures
+    nothing, the deed to something you don't own, the bridge that just happens to be for
+    sale — you can make the impossible sound like plain good sense. It is a talent, and
+    you have never seen a reason not to use it.
+char_selection-background_detalle_bounty_hunter =
+    You made your living tracking people who did not want to be found, threading the
+    back-channels of the city rather than the trackless wild. You keep an ear to the
+    street and a foot in two worlds at once — the criminal underworld whose quarry you
+    hunt, and the guild halls and tavern rumor-networks where the work is bought and paid
+    for. You might slip through rooftops after a burglar or move quietly through high
+    society hunting those who prey on the rich; either way you know that a name and a face
+    are only the start, and the real skill is in the finding. Patience, contacts, and a
+    long memory are your tools, and you rarely come back empty-handed.
+char_selection-background_detalle_noble =
+    You were born to one of Xindeler's great houses, into a world of wealth, land, and the
+    quiet certainty that the rules are written for other people. Whether your line is
+    ancient and secure or newly raised and anxious to prove itself, its name goes before
+    you into any fine hall, and doors open that would stay shut to the common-born. You may
+    be a pampered heir who has never known real discomfort, a disinherited scoundrel
+    trading on a title you no longer quite hold, or an honest landholder who feels the
+    weight of the people who work your fields. Whatever you are, high society assumes you
+    belong wherever fine folk gather — and you have spent your life learning to make that
+    assumption true.
+char_selection-background_detalle_entertainer =
+    You live in front of an audience, and you have never wanted to live anywhere else. With
+    a song, a tumble, or a turn of phrase you can raise a room to laughter or hush it into
+    grief, carrying a distant echo of the First Song into taverns that have never heard its
+    name. You have learned every road that leads to a warm hearth and a paying crowd, and
+    you are always welcome where coin flows and people gather to forget their troubles for
+    an hour. The applause is your true payment, though the coin is nice; your art is not
+    something you do but something you are.
+char_selection-background_detalle_folk_hero =
+    You come from humble stock, but the common people already speak your name. Once you
+    stood up — to a monster that came out of the wild places where Veradel's hand still
+    holds, to a cruel lord, or to a tithe-collector bleeding a village dry — and you were
+    remembered for it. Now ordinary folk shelter you, feed you, and pass word of your
+    coming ahead of you along the roads, because you are proof that one of their own can
+    refuse to bow. You did not set out to be a champion, but the world seems to have
+    decided otherwise, and the weight of that expectation follows you from village to
+    village.
+char_selection-background_detalle_merchant =
+    You learned the trade at a caravan master's elbow, hauling raw goods to the crafters
+    who need them and finished wares to the folk who can pay. You have traveled the road
+    and the caravan circuit until prices, routes, and the temper of every toll-gate keeper
+    are second nature to you, and you know exactly whom to bribe and by how much to keep
+    the wheels turning. Commerce is its own kind of geography — a map of debts, favors, and
+    margins that you carry in your head — and you read it fluently. Wherever goods change
+    hands, you can find your footing and turn a profit.
+char_selection-background_detalle_artisan =
+    You began sweeping floors and hauling water in a workshop before you were old enough
+    to lift a full bucket, and you learned the craft the slow way, from the ground up.
+    By the time you could make something worth selling you had also learned to charm a
+    demanding customer and to spot the flaw in another's work at a glance. You ply your
+    trade outside the rigid structure of any formal guild, and in the trade circles that
+    matter you are respected for exactly that: honest work, a fair price, and a keen eye
+    that misses nothing. Your hands know their craft, and your reputation walks a step
+    ahead of you.
+char_selection-background_detalle_farmer =
+    You grew up with your hands in the earth, through seasons of drought and blight and
+    grudging harvest, and the land taught you patience the hard way. Years of tending
+    animals and coaxing crops out of stubborn ground rewarded you with a steady health and
+    a temperament harder to rattle than most, along with a deep respect for both the
+    bounty of nature and its wrath. You know the weight of a lean winter and the small
+    mercy of a good rain, and you do not spook easily, because you have already outlasted
+    worse than whatever stands in front of you. Humble and hardy, you carry the quiet
+    endurance of people who feed the world without being thanked for it.
+char_selection-background_detalle_fisher =
+    You have spent your life by the water — hauling nets before dawn, reading the mood of
+    the waves, and combing the shallows for whatever the deep would give up. Perhaps you
+    were born to a family of fisher-folk and worked the boats to feed your village, or
+    perhaps you took to the water to escape something worse ashore; either way, you fell
+    for the sea and its endless promise of the horizon. You can wring a modest living from
+    any shore that sustains life, and the cold and wet that break other people are simply
+    the conditions you work in. The tide's rhythm is in your blood, and you are never
+    truly landlocked as long as water is near.
+char_selection-background_detalle_miner =
+    You have spent your years in the deep places of the earth, dragging ore, stone, and
+    gemstone up out of the dark for a wage that never quite made you rich. You know how to
+    read a seam, how to shore a tunnel, how to barter for supplies with the folk who live
+    below the surface, and how to find your way back up when the lamps burn low. Down there
+    you are as comfortable as most people are in daylight — the weight of the mountain over
+    your head is a familiar thing, not a fearful one. The luck you keep waiting for has not
+    struck yet, but the deep still calls to you, and you have never been able to stay away
+    from it for long.
+char_selection-background_detalle_outlander =
+    You were raised beyond the borders of settled law, in the wild reaches where Veradel's
+    hand still holds sway and no town's rules reach. You have watched herds move like slow
+    rivers across the horizon, weathered storms that would break a city-dweller's spirit,
+    and gone days without seeing another thinking soul — and found peace in it. Whether you
+    lived as a nomad, a hunter, a recluse, or a raider, the wild is written into you: you
+    carry an unerring memory for terrain and can always find food and water where others
+    would starve. Even in a country you have never crossed, you know the ways of the wild,
+    and they have never yet failed you.
+char_selection-background_detalle_guide =
+    You came of age outdoors, far from any settled land, sleeping wherever you chose to
+    spread your bedroll and learning to fend for yourself among the wonders and dangers of
+    the wilderness. You have seen strange beasts, untouched forests, and the overgrown ruins
+    of halls where giants once walked, and you learned to read the land the way others read
+    a page. People trust you to bring them safely through places that would kill them if
+    they went alone, and you rarely disappoint that trust. From time to time you have led
+    wandering priests of the wild who taught you a little of the world's deeper currents in
+    return for safe passage.
+char_selection-background_detalle_sailor =
+    You gave years of your life to a deck under your feet and salt in the wind, facing down
+    storms, monsters of the deep, and those who wanted your ship on the sea-floor. Whatever
+    your post — deckhand, navigator, cook, or something rougher — you learned the coastal
+    and river trades until the work was second nature and the horizon became the only view
+    that ever felt like home. You can still find free passage on a vessel whose crew owes
+    you a favor or respects your skill, a standing welcome among the seafaring folk of the
+    ports. The land never quite holds you; some part of you is always listening for the tide.
+char_selection-background_detalle_urchin =
+    You grew up on the streets, orphaned and poor, with no one to watch over you and nothing
+    but your own wits to keep you fed. You learned the city before you learned your letters —
+    which rooftops were safe to sleep on, which alleys to avoid, which doors were never
+    watched — and you fought fiercely for every scrap you kept. Sickness, cold, and hunger
+    were constant companions, and you outlasted all of them through some hard mix of cunning,
+    speed, and sheer stubbornness. You move through the urban sprawl unseen, at home in the
+    hidden veins of the city that respectable folk never even notice.
