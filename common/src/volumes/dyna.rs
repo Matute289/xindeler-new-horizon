@@ -5,7 +5,7 @@ use crate::vol::{
 use serde::{Deserialize, Serialize};
 use vek::*;
 
-#[derive(Debug, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum DynaError {
     OutOfBounds,
 }

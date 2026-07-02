@@ -4,10 +4,9 @@ use vek::*;
 use client::{self, Client};
 use common::{
     comp::{self, CapsulePrism, tool::ToolKind},
-    consts::MAX_PICKUP_RANGE,
+    consts::{MAX_INTERACT_RANGE, MAX_PICKUP_RANGE},
     link::Is,
     mounting::{Mount, Rider},
-    terrain::Block,
     uid::Uid,
     util::{
         find_dist::{Cylinder, FindDist},
@@ -20,7 +19,6 @@ use common_base::span;
 #[derive(Clone, Copy, Debug)]
 pub struct Target<T> {
     pub kind: T,
-    pub distance: f32,
     pub position: Vec3<f32>,
 }
 
@@ -75,68 +73,53 @@ pub(super) fn targets_under_cursor(
     let colliders = ecs.read_storage();
     let char_states = ecs.read_storage::<comp::CharacterState>();
     let player_char_state = char_states.get(player_entity);
+    let player_scale = scales.get(player_entity).copied();
     // Get the player's cylinder
     let player_cylinder = Cylinder::from_components(
         player_pos,
-        scales.get(player_entity).copied(),
+        player_scale,
         colliders.get(player_entity),
         player_char_state,
     );
+    let eye_height = ecs
+        .read_storage::<comp::Body>()
+        .get(player_entity)
+        .map(|b| b.eye_height(player_scale.map_or(1.0, |s| s.0)))
+        .unwrap_or(0.0);
+    let eye_pos = player_pos + Vec3::unit_z() * eye_height;
     let terrain = client.state().terrain();
 
-    let find_pos = |hit: fn(Block) -> bool, max_range: f32, start_pos: Vec3<f32>| {
-        let dist = 250.0;
+    // The maximum distance we might need to go, plus a safe threshold
+    const MAX_RAY_DIST: f32 = MAX_TARGET_RANGE
+        .max(MAX_PICKUP_RANGE)
+        .max(MAX_INTERACT_RANGE)
+        + 1.0;
+    let ray = terrain
+        .ray(cam_pos, cam_pos + cam_dir * MAX_RAY_DIST)
+        .max_iter(500);
 
-        let cam_ray = terrain
-            .ray(start_pos, start_pos + cam_dir * dist)
-            .max_iter(500)
-            .until(|block| hit(*block))
-            .cast();
+    let break_tgt_pos = |dist: f32| (cam_pos + cam_dir * (dist + 0.01)).map(|e| e.floor() + 0.5);
+    let place_tgt_pos = |dist: f32| (cam_pos + cam_dir * (dist - 0.01)).map(|e| e.floor() + 0.5);
 
-        let cam_ray = (cam_ray.0, cam_ray.1.map(|x| x.copied()));
-        let cam_dist = cam_ray.0;
+    let collect_cast = Some(ray.until(|b| b.is_solid() || b.is_directly_collectible()).cast())
+        .filter(|(_, b)| matches!(b, Ok(Some(b)) if b.is_directly_collectible()))
+        // Collection is limited by the player's actual position
+        .filter(|(d, _)| player_pos.distance(break_tgt_pos(*d)) < MAX_INTERACT_RANGE);
+    let mine_cast = Some(ray.until(|b| b.is_solid() || b.mine_tool().is_some()).cast())
+        // Mining is limited by the target block being mineable with the active mining tool...
+        .filter(|(_, b)| matches!(b, Ok(Some(b)) if b.mine_tool().zip(active_mine_tool).map_or(false, |(a, b)| a == b)))
+        // ...and by the distance to the player's eye position
+        .filter(|(d, _)| eye_pos.distance(break_tgt_pos(*d)) < MAX_PICKUP_RANGE);
+    let build_cast = Some(ray.until(|b| b.is_solid()).cast())
+        // Building is limited by the maximum target distance
+        .filter(|(d, _)| *d < MAX_TARGET_RANGE);
+    // Visual obstacles are limited by filled blocks
+    let obstacle_cast =
+        Some(ray.until(|b| b.is_filled()).cast()).filter(|(d, _)| *d < MAX_TARGET_RANGE);
 
-        if matches!(
-            cam_ray.1,
-            Ok(Some(_)) if player_cylinder.min_distance(start_pos + cam_dir * (cam_dist + 0.01)) <= max_range
-        ) {
-            (
-                Some(start_pos + cam_dir * (cam_dist + 0.01)),
-                Some(start_pos + cam_dir * (cam_dist - 0.01)),
-                Some(cam_ray),
-            )
-        } else {
-            (None, None, None)
-        }
-    };
-
-    let (collect_pos, _, collect_cam_ray) = find_pos(
-        |b: Block| b.is_directly_collectible(),
-        MAX_TARGET_RANGE,
-        cam_pos,
-    );
-    let (mine_pos, _, mine_cam_ray) = if active_mine_tool.is_some() {
-        find_pos(
-            |b: Block| b.mine_tool().is_some(),
-            MAX_TARGET_RANGE,
-            cam_pos,
-        )
-    } else {
-        (None, None, None)
-    };
-    let (build_pos, place_block_pos, build_cam_ray) =
-        find_pos(|b: Block| b.is_filled(), MAX_TARGET_RANGE, cam_pos);
-    let (solid_pos, _, solid_cam_ray) =
-        find_pos(|b: Block| b.is_filled(), MAX_PICKUP_RANGE, cam_pos);
-
-    // See if ray hits entities
-    // Don't cast through blocks, (hence why use shortest_cam_dist from non-entity
-    // targets) Could check for intersection with entity from last frame to
-    // narrow this down
-    let cast_dist = solid_cam_ray
-        .as_ref()
-        .map(|(d, _)| d.min(MAX_TARGET_RANGE))
-        .unwrap_or(MAX_TARGET_RANGE);
+    // The maximum distance at which entities can be targetted is based on the
+    // distance to the nearest terrain obstacle being looked at
+    let max_target_dist = obstacle_cast.map_or(MAX_TARGET_RANGE, |(d, _)| d);
 
     let uids = ecs.read_storage::<Uid>();
 
@@ -172,7 +155,7 @@ pub(super) fn targets_under_cursor(
             }
         })
         // Roughly filter out entities farther than ray distance
-        .filter(|(_, _, r, d_sqr)| *d_sqr <= cast_dist.powi(2) + 2.0 * cast_dist * r + r.powi(2))
+        .filter(|(_, _, r, d_sqr)| *d_sqr <= max_target_dist.powi(2) + 2.0 * max_target_dist * r + r.powi(2))
         // Ignore entities intersecting the camera
         .filter(|(_, _, r, d_sqr)| *d_sqr > r.powi(2))
         // Substract sphere radius from distance to the camera
@@ -183,7 +166,7 @@ pub(super) fn targets_under_cursor(
 
     let seg_ray = LineSegment3 {
         start: cam_pos,
-        end: cam_pos + cam_dir * cast_dist,
+        end: cam_pos + cam_dir * max_target_dist,
     };
     // TODO: fuzzy borders
     let entity_target = nearby
@@ -206,46 +189,36 @@ pub(super) fn targets_under_cursor(
                 char_states.get(*e),
             );
 
-            let dist_to_player = player_cylinder.min_distance(target_cylinder);
-            if dist_to_player < MAX_TARGET_RANGE {
+            if player_cylinder.min_distance(target_cylinder) < MAX_TARGET_RANGE {
                 Some(Target {
                     kind: Entity(*e),
                     position: p,
-                    distance: dist_to_player,
                 })
             } else { None }
         });
 
-    let terrain_target = solid_pos.zip(solid_cam_ray).map(|(position, ray)| Target {
+    let terrain_target = obstacle_cast.map(|(d, _)| Target {
         kind: Terrain,
-        distance: ray.0,
-        position,
+        position: break_tgt_pos(d),
     });
 
-    let build_target = if let (true, Some(ray)) = (can_build, build_cam_ray) {
-        place_block_pos
-            .zip(build_pos)
-            .map(|(place_pos, position)| Target {
-                kind: Build(place_pos),
-                distance: ray.0,
-                position,
-            })
+    let build_target = if let (true, Some((d, _))) = (can_build, build_cast) {
+        Some(Target {
+            kind: Build(place_tgt_pos(d)),
+            position: break_tgt_pos(d),
+        })
     } else {
         None
     };
 
-    let collect_target = collect_pos
-        .zip(collect_cam_ray)
-        .map(|(position, ray)| Target {
-            kind: Collectable,
-            distance: ray.0,
-            position,
-        });
+    let collect_target = collect_cast.map(|(d, _)| Target {
+        kind: Collectable,
+        position: break_tgt_pos(d),
+    });
 
-    let mine_target = mine_pos.zip(mine_cam_ray).map(|(position, ray)| Target {
+    let mine_target = mine_cast.map(|(d, _)| Target {
         kind: Mine,
-        distance: ray.0,
-        position,
+        position: break_tgt_pos(d),
     });
 
     // Return multiple possible targets

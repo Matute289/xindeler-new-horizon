@@ -6,7 +6,7 @@ use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use vek::*;
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum ChunkError {
     OutOfBounds,
 }

@@ -222,7 +222,7 @@ void main() {
     f_uv_pos = vec2((uvec2(v_atlas_pos) >> uvec2(0, 16)) & uvec2(0xFFFFu, 0xFFFFu));;
 
     // Select glowing
-    f_select = (select_pos.w > 0 && select_pos.xyz == sprite_pos) ? 1.0 : 0.0;
+    f_select = (select_pos.w > 0 && select_pos.xyz == floor(sprite_pos)) ? 1.0 : 0.0;
 
     #ifdef EXPERIMENTAL_DISCARDTRANSPARENCY
         f_inst_idx = gl_InstanceIndex;
