@@ -16,8 +16,7 @@ use super::{
     shaders::Shaders,
 };
 use common_base::{prof_span, prof_span_alloc};
-use core::{any::Any, marker::PhantomData};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// All the pipelines
 pub struct Pipelines {
@@ -413,17 +412,12 @@ struct PipelineNeeds<'a> {
 }
 
 struct ParallelTasks<'a> {
-    tasks: Vec<Box<dyn FnOnce(&PipelineNeeds<'_>) -> Box<dyn Any + Send> + Send + 'a>>,
+    tasks: Vec<Box<dyn FnOnce(&PipelineNeeds<'_>) + Send + 'a>>,
     progress: &'a Progress,
 }
 
-struct ParallelTasksOutput {
-    outputs: Vec<Option<Box<dyn Any + Send>>>,
-}
-
 struct TaskHandle<T> {
-    index: usize,
-    _marker: PhantomData<T>,
+    out: Arc<OnceLock<T>>,
 }
 
 impl<'a> ParallelTasks<'a> {
@@ -437,43 +431,39 @@ impl<'a> ParallelTasks<'a> {
     /// Register a task.
     ///
     /// The name is used for profiling.
-    fn register<T: Send + 'static>(
+    fn register<T: Send + Sync + 'static>(
         &mut self,
         f: impl FnOnce(&PipelineNeeds<'_>) -> T + Send + 'static,
         name: &'static str,
     ) -> TaskHandle<T> {
-        let index = self.tasks.len();
-        let task = self.progress.create_task();
-        self.tasks
-            .push(Box::new(|needs| task.run(|| Box::new(f(needs)), name)));
-        TaskHandle {
-            index,
-            _marker: PhantomData,
-        }
+        let out = Arc::new(OnceLock::new());
+        self.tasks.push({
+            let task = self.progress.create_task();
+            let out = Arc::clone(&out);
+            Box::new(move |needs| task.run(|| out.set(f(needs)).ok().unwrap(), name))
+        });
+        TaskHandle { out }
     }
 
-    // Run registered tasks.
-    fn run(self, needs: PipelineNeeds, pool: &rayon::ThreadPool) -> ParallelTasksOutput {
+    /// Run registered tasks.
+    fn run(self, needs: PipelineNeeds, pool: &rayon::ThreadPool) {
         prof_span!(_guard, "ParallelTasks::run");
-        let mut outputs = Vec::from_fn(self.tasks.len(), |_| None);
         pool.scope(|scope| {
-            debug_assert_eq!(outputs.len(), self.tasks.len());
-            for (output, task) in outputs.iter_mut().zip(self.tasks) {
-                scope.spawn(|_| *output = Some(task(&needs)));
+            for task in self.tasks {
+                scope.spawn(|_| task(&needs));
             }
         });
-        debug_assert!(outputs.iter().all(|o| o.is_some()));
-        ParallelTasksOutput { outputs }
     }
 }
 
-impl ParallelTasksOutput {
-    /// May panic if used with a `TaskHandle` from a different `ParallelTasks`.
-    fn take<T: 'static>(&mut self, handle: TaskHandle<T>) -> T {
-        *self.outputs[handle.index]
-            .take()
-            .unwrap()
-            .downcast::<T>()
+impl<T> TaskHandle<T> {
+    /// # Panics
+    ///
+    /// Can panic if [`ParallelTasks::run`] hasn't completed yet.
+    fn resolve(self: TaskHandle<T>) -> T {
+        Arc::try_unwrap(self.out)
+            .ok()
+            .and_then(OnceLock::into_inner)
             .unwrap()
     }
 }
@@ -481,7 +471,7 @@ impl ParallelTasksOutput {
 /// Registers InterfacePipelines to be created in parallel.
 fn register_create_interface_pipelines(
     tasks: &mut ParallelTasks<'_>,
-) -> impl FnOnce(&mut ParallelTasksOutput) -> InterfacePipelines + use<> {
+) -> impl FnOnce() -> InterfacePipelines + use<> {
     // Construct a pipeline for rendering UI elements
     let ui = tasks.register(
         |needs| {
@@ -523,10 +513,10 @@ fn register_create_interface_pipelines(
         "blit pipeline creation",
     );
 
-    |output| InterfacePipelines {
-        ui: output.take(ui),
-        premultiply_alpha: output.take(premultiply_alpha),
-        blit: output.take(blit),
+    || InterfacePipelines {
+        ui: ui.resolve(),
+        premultiply_alpha: premultiply_alpha.resolve(),
+        blit: blit.resolve(),
     }
 }
 
@@ -535,7 +525,7 @@ fn register_create_ingame_and_shadow_pipelines(
     // TODO: move this to `needs` struct?
     format: wgpu::TextureFormat,
     tasks: &mut ParallelTasks<'_>,
-) -> impl FnOnce(&mut ParallelTasksOutput) -> IngameAndShadowPipelines + use<> {
+) -> impl FnOnce() -> IngameAndShadowPipelines + use<> {
     // TODO: pass in format of target color buffer
 
     // Pipeline for rendering debug shapes
@@ -853,36 +843,36 @@ fn register_create_ingame_and_shadow_pipelines(
         "figure directed rain occlusion pipeline creation",
     );
 
-    |output| IngameAndShadowPipelines {
+    || IngameAndShadowPipelines {
         ingame: IngamePipelines {
-            debug: output.take(debug),
-            figure: output.take(figure),
-            fluid: output.take(fluid),
-            lod_terrain: output.take(lod_terrain),
-            particle: output.take(particle),
-            rope: output.take(rope),
-            trail: output.take(trail),
-            clouds: output.take(clouds),
-            bloom: output.take(bloom),
-            postprocess: output.take(postprocess),
-            skybox: output.take(skybox),
-            sprite: output.take(sprite),
-            lod_object: output.take(lod_object),
-            terrain: output.take(terrain),
-            // player_shadow_pipeline: output.take(player_shadow_pipeline),
+            debug: debug.resolve(),
+            figure: figure.resolve(),
+            fluid: fluid.resolve(),
+            lod_terrain: lod_terrain.resolve(),
+            particle: particle.resolve(),
+            rope: rope.resolve(),
+            trail: trail.resolve(),
+            clouds: clouds.resolve(),
+            bloom: bloom.resolve(),
+            postprocess: postprocess.resolve(),
+            skybox: skybox.resolve(),
+            sprite: sprite.resolve(),
+            lod_object: lod_object.resolve(),
+            terrain: terrain.resolve(),
+            // player_shadow_pipeline: player_shadow_pipeline.resolve(),
         },
         // TODO: If these are ever actually optionally done, ideally they will not be counted as
         // tasks to do beforehand (i.e. implement it as skipping registering them above).
         // TODO: Skip creating these if the shadow map setting is not enabled.
         shadow: ShadowPipelines {
-            point: Some(output.take(point_shadow)),
-            directed: Some(output.take(terrain_directed_shadow)),
-            figure: Some(output.take(figure_directed_shadow)),
-            debug: Some(output.take(debug_directed_shadow)),
+            point: Some(point_shadow.resolve()),
+            directed: Some(terrain_directed_shadow.resolve()),
+            figure: Some(figure_directed_shadow.resolve()),
+            debug: Some(debug_directed_shadow.resolve()),
         },
         rain_occlusion: RainOcclusionPipelines {
-            terrain: Some(output.take(terrain_directed_rain_occlusion)),
-            figure: Some(output.take(figure_directed_rain_occlusion)),
+            terrain: Some(terrain_directed_rain_occlusion.resolve()),
+            figure: Some(figure_directed_rain_occlusion.resolve()),
         },
     }
 }
@@ -933,8 +923,8 @@ pub(super) fn initial_create_pipelines(
         let dummy_progress = Progress::new();
         let mut tasks = ParallelTasks::new(&dummy_progress);
         let interface_pipelines = register_create_interface_pipelines(&mut tasks);
-        let mut output = tasks.run(needs, &pool);
-        interface_pipelines(&mut output)
+        tasks.run(needs, &pool);
+        interface_pipelines()
     };
 
     let pool = Arc::new(pool);
@@ -962,8 +952,8 @@ pub(super) fn initial_create_pipelines(
             let mut tasks = ParallelTasks::new(&progress);
             let pipelines =
                 register_create_ingame_and_shadow_pipelines(intermediate_format, &mut tasks);
-            let mut output = tasks.run(needs, pool);
-            pipelines(&mut output)
+            tasks.run(needs, pool);
+            pipelines()
         };
 
         pipeline_send.send(pipelines).expect("Channel disconnected");
@@ -1054,13 +1044,13 @@ pub(super) fn recreate_pipelines(
         };
 
         // Create pipelines
-        let mut output = tasks.run(needs, pool);
-        let interface = interface(&mut output);
+        tasks.run(needs, pool);
+        let interface = interface();
         let IngameAndShadowPipelines {
             ingame,
             shadow,
             rain_occlusion,
-        } = ingame_and_shadow(&mut output);
+        } = ingame_and_shadow();
 
         // Send them
         result_send
