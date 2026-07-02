@@ -2,12 +2,27 @@ use crate::persistence::{PersistedComponents, character_updater::CharacterUpdate
 use common::{
     character::CharacterId,
     comp::{
-        BASE_ABILITY_LIMIT, Body, CharacterClass, Content, Inventory, Item, SkillSet, Stats,
-        Waypoint, class::ClassKind, inventory::loadout_builder::LoadoutBuilder,
+        BASE_ABILITY_LIMIT, Background, Body, CharacterClass, Content, Inventory, Item, SkillSet,
+        Stats, Waypoint, class::ClassKind, inventory::loadout_builder::LoadoutBuilder,
         skillset::SkillGroupKind,
     },
 };
 use specs::{Entity, WriteExpect};
+
+/// BL-31 P1 stub (task BG1c.1): background kit items are content (P3,
+/// `background_features.ron` + per-background kit RONs), which does not
+/// exist yet. This hook is wired now so P3 only has to fill in the body —
+/// it never touches call sites again. Until then this is a no-op: the
+/// `LoadoutBuilder` is returned unchanged regardless of `background`.
+fn apply_background_kit(
+    _background: &Background,
+    loadout_builder: LoadoutBuilder,
+) -> LoadoutBuilder {
+    // TODO(BL-31 P3): look up `background.0`'s kit path in
+    // `assets/common/backgrounds/background_features.ron` and, if `Some`,
+    // `loadout_builder.with_asset_expect(kit_path, &mut rng, None)`.
+    loadout_builder
+}
 
 /// Per-class starter weapon whitelist (spec §3/§5). `[None, None]` is always
 /// accepted separately for unmodified clients.
@@ -87,6 +102,7 @@ pub fn create_character(
     body: Body,
     character_class: ClassKind,
     ethos: common::comp::Ethos,
+    background: Background,
     hardcore: bool,
     character_updater: &mut WriteExpect<'_, CharacterUpdater>,
     waypoint: Option<Waypoint>,
@@ -111,13 +127,15 @@ pub fn create_character(
     };
     // The client sends None if a weapon hand is empty
     let mut rng = rand::rng();
-    let loadout = LoadoutBuilder::empty()
-        .defaults()
-        .with_asset_expect(
-            &format!("common.loadout.class.{}", character_class.keyword()),
-            &mut rng,
-            None,
-        )
+    let loadout_builder = LoadoutBuilder::empty().defaults().with_asset_expect(
+        &format!("common.loadout.class.{}", character_class.keyword()),
+        &mut rng,
+        None,
+    );
+    // BL-31 P1 (task BG1c.1): background-kit grant stub, applied after the
+    // class loadout. No-op until P3 provides `background_features.ron`.
+    let loadout_builder = apply_background_kit(&background, loadout_builder);
+    let loadout = loadout_builder
         .active_mainhand(character_mainhand.map(|x| Item::new_from_asset_expect(&x)))
         .active_offhand(character_offhand.map(|x| Item::new_from_asset_expect(&x)))
         .build();
@@ -159,6 +177,9 @@ pub fn create_character(
         // Neutral if the client sends it). Sanitised — never trust the wire
         // value. Deeds then drift it in-game (P3).
         ethos: ethos.clamped(),
+        // BL-31: the background chosen at character creation, or
+        // `Background(None)` ("Uncommitted", P0 §Q1).
+        background,
     });
     Ok(())
 }
@@ -234,6 +255,28 @@ mod tests {
                 None,
             );
             Item::new_from_asset_expect(class_kit_item(class));
+        }
+    }
+
+    /// BL-31 task BG1c.2: the background-kit grant stub must not panic for
+    /// any background, including `Custom` and `None`.
+    #[test]
+    fn apply_background_kit_stub_does_not_panic_for_any_background() {
+        use common::comp::BackgroundKind;
+
+        let mut rng = rand::rng();
+        let backgrounds = std::iter::once(Background(None))
+            .chain(BackgroundKind::ALL.into_iter().map(|k| Background(Some(k))))
+            .chain(std::iter::once(Background(Some(BackgroundKind::Custom(
+                "Raised by wolves".to_string(),
+            )))));
+        for background in backgrounds {
+            let loadout_builder = LoadoutBuilder::empty().defaults().with_asset_expect(
+                &format!("common.loadout.class.{}", ClassKind::Warrior.keyword()),
+                &mut rng,
+                None,
+            );
+            let _ = apply_background_kit(&background, loadout_builder);
         }
     }
 }

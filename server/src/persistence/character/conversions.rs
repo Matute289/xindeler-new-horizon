@@ -790,6 +790,38 @@ pub fn convert_class_to_database(class: common::comp::CharacterClass) -> String 
     json_models::class_to_db_string(class.0)
 }
 
+/// BL-31: `background` NULL or unrecognized -> `Background(None)` ("Uncommitted",
+/// P0 §Q1). `"custom"` -> `Background(Some(Custom(note)))`, reading the
+/// freeform text from `background_custom_note` (empty string if the column
+/// is itself NULL, which should not normally happen but must not panic).
+pub fn convert_background_from_database(
+    background: Option<&str>,
+    background_custom_note: Option<&str>,
+) -> common::comp::Background {
+    let kind = match background {
+        None => None,
+        Some("custom") => Some(common::comp::BackgroundKind::Custom(
+            background_custom_note.unwrap_or_default().to_string(),
+        )),
+        Some(s) => json_models::db_string_to_background(s),
+    };
+    common::comp::Background(kind)
+}
+
+/// BL-31 inverse of [`convert_background_from_database`]: returns
+/// `(background_column, background_custom_note_column)`.
+pub fn convert_background_to_database(
+    background: &common::comp::Background,
+) -> (Option<String>, Option<String>) {
+    match &background.0 {
+        None => (None, None),
+        Some(common::comp::BackgroundKind::Custom(note)) => {
+            (Some("custom".to_string()), Some(note.clone()))
+        },
+        Some(kind) => (Some(json_models::background_to_db_string(kind)), None),
+    }
+}
+
 /// BL-33: the two moral-alignment scores are stored verbatim; the discrete
 /// 9-box is derived in `comp::Ethos`. To-database is just reading the public
 /// fields, so no symmetric helper is needed.
@@ -982,6 +1014,46 @@ mod tests {
         assert_eq!(
             (lawful_evil.order(), lawful_evil.moral()),
             (Order::Lawful, Moral::Evil)
+        );
+    }
+
+    /// BL-31 task BG1b.5: `None` <-> `NULL`, a fixed variant <-> its keyword,
+    /// and `Custom` <-> `("custom", note)` all round-trip through the two
+    /// `background`/`background_custom_note` columns.
+    #[test]
+    fn background_persistence_round_trips_none_fixed_and_custom() {
+        use common::comp::{Background, BackgroundKind};
+
+        // Legacy / unset: NULL column -> `Background(None)` (P0 §Q1).
+        let none = convert_background_from_database(None, None);
+        assert_eq!(none, Background(None));
+        assert_eq!(convert_background_to_database(&none), (None, None));
+
+        // A fixed variant round-trips through its keyword; no custom note.
+        let soldier = Background(Some(BackgroundKind::Soldier));
+        let (db_col, note_col) = convert_background_to_database(&soldier);
+        assert_eq!(db_col.as_deref(), Some("soldier"));
+        assert_eq!(note_col, None);
+        assert_eq!(
+            convert_background_from_database(db_col.as_deref(), note_col.as_deref()),
+            soldier
+        );
+
+        // Custom stores "custom" in the main column and the note separately.
+        let custom = Background(Some(BackgroundKind::Custom("Raised by wolves".to_string())));
+        let (db_col, note_col) = convert_background_to_database(&custom);
+        assert_eq!(db_col.as_deref(), Some("custom"));
+        assert_eq!(note_col.as_deref(), Some("Raised by wolves"));
+        assert_eq!(
+            convert_background_from_database(db_col.as_deref(), note_col.as_deref()),
+            custom
+        );
+
+        // An unrecognized string (future-version downgrade) degrades to
+        // `None` rather than panicking (P0 §Q1 / spec §1.5).
+        assert_eq!(
+            convert_background_from_database(Some("necromancer"), None),
+            Background(None)
         );
     }
 }

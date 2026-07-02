@@ -249,6 +249,7 @@ pub struct UpdateCharacterDataEvent {
         comp::ActiveAbilities,
         Option<comp::MapMarker>,
         comp::Ethos,
+        comp::Background,
     ),
     pub metadata: UpdateCharacterMetadata,
 }

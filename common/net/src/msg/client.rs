@@ -84,6 +84,9 @@ pub enum ClientGeneral {
         start_site: Option<SiteId>,
         class: comp::class::ClassKind,
         ethos: comp::Ethos,
+        // BL-31: chosen background, or `Background(None)` ("Uncommitted") for
+        // clients that don't send one.
+        background: comp::Background,
     },
     DeleteCharacter(CharacterId),
     EditCharacter {

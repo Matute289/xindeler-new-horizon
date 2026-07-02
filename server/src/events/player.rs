@@ -414,6 +414,13 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .copied()
                         .unwrap_or_default();
 
+                    let background = state
+                        .ecs()
+                        .read_storage::<comp::Background>()
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_default();
+
                     character_updater.add_pending_logout_update((
                         char_id,
                         skill_set.clone(),
@@ -424,6 +431,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         map_marker,
                         character_class,
                         ethos,
+                        background,
                     ));
                 }
             },

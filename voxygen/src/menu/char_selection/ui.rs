@@ -26,7 +26,7 @@ use common::{
     LoadoutBuilder,
     character::{CharacterId, CharacterItem, MAX_CHARACTERS_PER_PLAYER, MAX_NAME_LENGTH},
     comp::{
-        self, Inventory, Item,
+        self, Background, BackgroundKind, Inventory, Item,
         class::ClassKind,
         ethos::{Ethos, Moral, Order},
         humanoid,
@@ -219,6 +219,8 @@ pub enum Event {
         start_site: Option<SiteId>,
         class: ClassKind,
         ethos: Ethos,
+        // BL-31: background chosen in the wizard's Background step.
+        background: Background,
     },
     EditCharacter {
         alias: String,
@@ -255,6 +257,14 @@ enum Mode {
         class: ClassKind,
         /// BL-33: the starting moral alignment chosen at creation.
         ethos: Ethos,
+        /// BL-31: the background chosen at creation (`Background(None)` =
+        /// "Uncommitted", P0 §Q1 — a valid, unforced choice).
+        background: Background,
+        /// BL-31: freeform note typed into the `Custom` background's text
+        /// field. Only sent to the server when `background` is
+        /// `Some(BackgroundKind::Custom(_))`; otherwise kept but unused, so
+        /// switching away and back doesn't lose what was typed.
+        background_custom_note: String,
 
         body_type_buttons: [button::State; 2],
         species_buttons: [button::State; 6],
@@ -262,6 +272,11 @@ enum Mode {
         tool_buttons: [button::State; 6],
         ethos_moral_buttons: [button::State; 3],
         ethos_order_buttons: [button::State; 3],
+        /// BL-31: one button per `BackgroundKind::ALL` entry plus one for
+        /// `Custom`, resized on first use (mirrors `character_buttons`).
+        background_buttons: Vec<button::State>,
+        background_scroll: scrollable::State,
+        background_custom_input: text_input::State,
         sliders: Sliders,
         hardcore_enabled: bool,
         left_scroll: scrollable::State,
@@ -293,6 +308,8 @@ enum CreationStep {
     Appearance,
     Class,
     Alignment,
+    /// BL-31 P0 §Q3: locked after Alignment, before Finish.
+    Background,
     Finish,
 }
 
@@ -302,7 +319,8 @@ impl CreationStep {
             CreationStep::Body => CreationStep::Appearance,
             CreationStep::Appearance => CreationStep::Class,
             CreationStep::Class => CreationStep::Alignment,
-            CreationStep::Alignment => CreationStep::Finish,
+            CreationStep::Alignment => CreationStep::Background,
+            CreationStep::Background => CreationStep::Finish,
             CreationStep::Finish => CreationStep::Finish,
         }
     }
@@ -313,7 +331,8 @@ impl CreationStep {
             CreationStep::Appearance => CreationStep::Body,
             CreationStep::Class => CreationStep::Appearance,
             CreationStep::Alignment => CreationStep::Class,
-            CreationStep::Finish => CreationStep::Alignment,
+            CreationStep::Background => CreationStep::Alignment,
+            CreationStep::Finish => CreationStep::Background,
         }
     }
 
@@ -324,7 +343,8 @@ impl CreationStep {
             CreationStep::Appearance => 2,
             CreationStep::Class => 3,
             CreationStep::Alignment => 4,
-            CreationStep::Finish => 5,
+            CreationStep::Background => 5,
+            CreationStep::Finish => 6,
         }
     }
 }
@@ -367,12 +387,17 @@ impl Mode {
             offhand,
             class: ClassKind::Warrior,
             ethos: Ethos::default(),
+            background: Background::default(),
+            background_custom_note: String::new(),
             body_type_buttons: Default::default(),
             species_buttons: Default::default(),
             class_buttons: Default::default(),
             tool_buttons: Default::default(),
             ethos_moral_buttons: Default::default(),
             ethos_order_buttons: Default::default(),
+            background_buttons: Vec::new(),
+            background_scroll: Default::default(),
+            background_custom_input: Default::default(),
             sliders: Default::default(),
             hardcore_enabled: false,
             left_scroll: Default::default(),
@@ -406,12 +431,17 @@ impl Mode {
             offhand: None,
             class: ClassKind::Adventurer,
             ethos: Ethos::default(),
+            background: Background::default(),
+            background_custom_note: String::new(),
             body_type_buttons: Default::default(),
             species_buttons: Default::default(),
             class_buttons: Default::default(),
             tool_buttons: Default::default(),
             ethos_moral_buttons: Default::default(),
             ethos_order_buttons: Default::default(),
+            background_buttons: Vec::new(),
+            background_scroll: Default::default(),
+            background_custom_input: Default::default(),
             sliders: Default::default(),
             hardcore_enabled: false,
             left_scroll: Default::default(),
@@ -481,6 +511,13 @@ enum Message {
     Class(ClassKind),
     EthosMoral(Moral),
     EthosOrder(Order),
+    /// BL-31: select a fixed (non-`Custom`) background, or clear back to
+    /// "Uncommitted" if the currently-selected one is re-clicked.
+    Background(Option<BackgroundKind>),
+    /// BL-31: select the `Custom` entry (freeform text, P0 §Q5).
+    BackgroundCustomSelected,
+    /// BL-31: edit the `Custom` background's freeform note.
+    BackgroundCustomNote(String),
     Tool((Option<&'static str>, Option<&'static str>)),
     RandomizeCharacter,
     HardcoreEnabled(bool),
@@ -1113,6 +1150,8 @@ impl Controls {
                 offhand: _,
                 class,
                 ethos,
+                background,
+                background_custom_note,
                 left_scroll,
                 right_scroll,
                 body_type_buttons,
@@ -1121,6 +1160,9 @@ impl Controls {
                 tool_buttons,
                 ethos_moral_buttons,
                 ethos_order_buttons,
+                background_buttons,
+                background_scroll,
+                background_custom_input,
                 sliders,
                 hardcore_enabled,
                 name_input,
@@ -1775,6 +1817,104 @@ impl Controls {
                 .width(Length::Fill)
                 .max_width(ETHOS_ROW_W);
 
+                // BL-31: the Background step — a scrollable list of every
+                // `BackgroundKind`, plus a `Custom` entry with a freeform
+                // text field (P0 §Q5). Mirrors the `characters`/
+                // `characters_scroll` Vec<button::State> pattern (character
+                // select list) rather than the Ethos step's fixed 3-button
+                // grid, since 44 backgrounds don't fit a fixed layout.
+                // Per-background flavor text / category headers are BL-31 P2
+                // + P3 (Haiku content); this P1 step lists names only, via
+                // `BackgroundKind::display_name()` (a title-cased stand-in
+                // for the real i18n titles P3 will author).
+                const BACKGROUND_ROW_H: u16 = 40;
+                let background_section = {
+                    // +1 slot for the fixed `Custom` entry, appended last.
+                    background_buttons
+                        .resize_with(BackgroundKind::ALL.len() + 1, Default::default);
+                    let (custom_button, fixed_buttons) = background_buttons
+                        .split_last_mut()
+                        .expect("resized to at least 1 above");
+
+                    let rows = BackgroundKind::ALL
+                        .into_iter()
+                        .zip(fixed_buttons.iter_mut())
+                        .map(|(kind, state)| {
+                            let selected = background.0.as_ref() == Some(&kind);
+                            let label = kind.display_name();
+                            neat_button(
+                                state,
+                                label,
+                                FILL_FRAC_ONE,
+                                if selected {
+                                    style::button::Style::new(imgs.button)
+                                        .hover_image(imgs.button_hover)
+                                        .press_image(imgs.button_press)
+                                        .text_color(Color::from_rgb(0.93, 0.78, 0.28))
+                                } else {
+                                    button_style
+                                },
+                                // Re-clicking the selected entry clears back to
+                                // "Uncommitted" (P0 §Q1 — a valid, unforced
+                                // choice, not just a legacy default).
+                                Some(Message::Background(if selected { None } else { Some(kind) })),
+                            )
+                        })
+                        .map(|el| Container::new(el).height(Length::Units(BACKGROUND_ROW_H)).into())
+                        .collect::<Vec<Element<Message>>>();
+
+                    let is_custom = matches!(background.0, Some(BackgroundKind::Custom(_)));
+                    let custom_entry = Container::new(neat_button(
+                        custom_button,
+                        i18n.get_msg("char_selection-background_custom").into_owned(),
+                        FILL_FRAC_ONE,
+                        if is_custom {
+                            style::button::Style::new(imgs.button)
+                                .hover_image(imgs.button_hover)
+                                .press_image(imgs.button_press)
+                                .text_color(Color::from_rgb(0.93, 0.78, 0.28))
+                        } else {
+                            button_style
+                        },
+                        Some(Message::BackgroundCustomSelected),
+                    ))
+                    .height(Length::Units(BACKGROUND_ROW_H));
+
+                    let list = Column::with_children(rows)
+                        .push(custom_entry)
+                        .spacing(4);
+
+                    let scrollable_list = Container::new(
+                        Scrollable::new(background_scroll)
+                            .push(list)
+                            .padding(6)
+                            .scrollbar_width(5)
+                            .scroller_width(5)
+                            .width(Length::Fill)
+                            .style(style::scrollable::Style {
+                                track: None,
+                                scroller: style::scrollable::Scroller::Color(UI_MAIN),
+                            }),
+                    )
+                    .height(Length::Units(260));
+
+                    let mut children: Vec<Element<Message>> = vec![scrollable_list.into()];
+                    if is_custom {
+                        children.push(
+                            TextInput::new(
+                                background_custom_input,
+                                &i18n
+                                    .get_msg("char_selection-background_custom_placeholder"),
+                                background_custom_note,
+                                Message::BackgroundCustomNote,
+                            )
+                            .size(20)
+                            .into(),
+                        );
+                    }
+                    Column::with_children(children).spacing(8).width(Length::Fill)
+                };
+
                 let hardcore_checkbox = if character_id.is_some() {
                     Row::new()
                 } else {
@@ -1864,6 +2004,17 @@ impl Controls {
                         ),
                         kv("char_selection-summary_label_class", class_name),
                         kv("char_selection-summary_label_alignment", alignment_str),
+                        kv(
+                            "char_selection-summary_label_background",
+                            // BL-31 task BG2b.2 recap row: background name, or
+                            // "Uncommitted" (P0 §Q1) if none was chosen.
+                            match &background.0 {
+                                Some(kind) => kind.display_name(),
+                                None => i18n
+                                    .get_msg("char_selection-background_uncommitted")
+                                    .into_owned(),
+                            },
+                        ),
                     ])
                     .align_items(Align::Start)
                     .spacing(10)
@@ -1904,6 +2055,7 @@ impl Controls {
                         CreationStep::Appearance => "char_selection-step_appearance",
                         CreationStep::Class => "char_selection-step_class",
                         CreationStep::Alignment => "char_selection-step_alignment",
+                        CreationStep::Background => "char_selection-step_background",
                         CreationStep::Finish => "char_selection-step_finish",
                     };
                     let step_title: Element<Message> =
@@ -1929,6 +2081,9 @@ impl Controls {
                             vec![step_title, class_section.into(), tool.into()]
                         },
                         CreationStep::Alignment => vec![step_title, ethos_section.into()],
+                        CreationStep::Background => {
+                            vec![step_title, background_section.into()]
+                        },
                         CreationStep::Finish => vec![
                             step_title,
                             Space::new(Length::Fill, Length::Units(14)).into(),
@@ -2465,10 +2620,24 @@ impl Controls {
                     offhand,
                     class,
                     ethos,
+                    background,
+                    background_custom_note,
                     start_site_idx,
                     ..
                 } = &self.mode
                 {
+                    // BL-31: fold the freeform note into the `Custom` variant
+                    // at send-time — `background_custom_note` is the single
+                    // source of truth for its text while editing (see
+                    // `Message::BackgroundCustomNote`).
+                    let background = match &background.0 {
+                        Some(BackgroundKind::Custom(_)) => {
+                            Background(Some(BackgroundKind::Custom(
+                                background_custom_note.clone(),
+                            )))
+                        },
+                        other => Background(other.clone()),
+                    };
                     events.push(Event::AddCharacter {
                         alias: name.clone(),
                         mainhand: mainhand.map(String::from),
@@ -2477,6 +2646,7 @@ impl Controls {
                         hardcore: *hardcore_enabled,
                         class: *class,
                         ethos: *ethos,
+                        background,
                         start_site: self
                             .possible_starting_sites
                             .get(start_site_idx.unwrap_or_default())
@@ -2549,6 +2719,29 @@ impl Controls {
             Message::EthosOrder(order) => {
                 if let Mode::CreateOrEdit { ethos, .. } = &mut self.mode {
                     *ethos = Ethos::from_box(order, ethos.moral());
+                }
+            },
+            Message::Background(kind) => {
+                if let Mode::CreateOrEdit { background, .. } = &mut self.mode {
+                    background.0 = kind;
+                }
+            },
+            Message::BackgroundCustomSelected => {
+                if let Mode::CreateOrEdit { background, .. } = &mut self.mode {
+                    // The note text itself lives in `background_custom_note`
+                    // (kept across re-selection); an empty string here is
+                    // just a placeholder until `CreateCharacter` folds it in.
+                    background.0 = Some(BackgroundKind::Custom(String::new()));
+                }
+            },
+            Message::BackgroundCustomNote(value) => {
+                if let Mode::CreateOrEdit {
+                    background_custom_note,
+                    ..
+                } = &mut self.mode
+                {
+                    // P0 §Q5: DM-approved freeform note, capped at 200 chars.
+                    *background_custom_note = value.chars().take(200).collect();
                 }
             },
             Message::Tool(value) => {

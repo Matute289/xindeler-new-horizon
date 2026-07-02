@@ -1109,6 +1109,7 @@ impl Server {
                                         active_abilities,
                                         map_marker,
                                         ethos,
+                                        background,
                                     } = character_data;
                                     let character_data = (
                                         body,
@@ -1122,6 +1123,7 @@ impl Server {
                                         active_abilities,
                                         map_marker,
                                         ethos,
+                                        background,
                                     );
                                     // TODO: Does this need to be a server event? E.g. we could
                                     // just handle it here.

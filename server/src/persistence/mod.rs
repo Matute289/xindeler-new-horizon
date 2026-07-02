@@ -44,6 +44,10 @@ pub struct PersistedComponents {
     pub active_abilities: comp::ActiveAbilities,
     pub map_marker: Option<comp::MapMarker>,
     pub ethos: comp::Ethos,
+    /// BL-31: background chosen at creation. Server-authoritative default is
+    /// `Background(None)` ("Uncommitted", P0 §Q1) if the client doesn't send
+    /// one.
+    pub background: comp::Background,
 }
 
 pub type EditableComponents = (comp::Body,);

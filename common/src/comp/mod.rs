@@ -5,6 +5,7 @@ pub mod anchor;
 pub mod arcing;
 pub mod attunement;
 pub mod aura;
+pub mod background;
 pub mod beam;
 pub mod body;
 pub mod buff;
@@ -62,6 +63,7 @@ pub use self::{
         reconcile_attunement,
     },
     aura::{Aura, AuraChange, AuraKind, Auras, EnteredAuras},
+    background::{Background, BackgroundKind},
     beam::Beam,
     body::{
         AllBodies, Body, BodyData, Gender, arthropod, biped_large, biped_small, bird_large,

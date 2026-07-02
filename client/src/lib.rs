@@ -1349,6 +1349,7 @@ impl Client {
         start_site: Option<SiteId>,
         class: comp::class::ClassKind,
         ethos: comp::Ethos,
+        background: comp::Background,
     ) {
         self.character_list.loading = true;
         self.send_msg(ClientGeneral::CreateCharacter {
@@ -1360,6 +1361,7 @@ impl Client {
             start_site,
             class,
             ethos,
+            background,
         });
     }
 

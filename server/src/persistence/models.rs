@@ -8,6 +8,10 @@ pub struct Character {
     pub class: String,
     pub ethos_good_evil: i16,
     pub ethos_law_chaos: i16,
+    /// BL-31: `NULL` -> `Background(None)` ("Uncommitted", P0 §Q1).
+    pub background: Option<String>,
+    /// BL-31: only populated when `background == Some("custom")` (P0 §Q5).
+    pub background_custom_note: Option<String>,
 }
 
 #[derive(Debug)]

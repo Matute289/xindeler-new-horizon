@@ -189,6 +189,38 @@ pub fn db_string_to_class(class_string: &str) -> comp::class::ClassKind {
         })
 }
 
+/// BL-31: db-string for the fixed (non-`Custom`) `BackgroundKind` variants.
+/// `Custom` is handled by its caller (a separate `background_custom_note`
+/// column carries the freeform text; the `background` column just stores the
+/// literal `"custom"`), so this only ever sees fixed variants in practice —
+/// but it accepts any `&BackgroundKind` for symmetry with `class_to_db_string`.
+pub fn background_to_db_string(background: &comp::background::BackgroundKind) -> String {
+    background.keyword().to_string()
+}
+
+/// Unlike the skill-group converter this never panics: unknown or
+/// unrecognized strings fall back to `None` (P0 §Q1's "Uncommitted") with a
+/// warning so a DB downgrade or a future-version string never bricks a save.
+/// Deliberately does **not** reconstruct `BackgroundKind::Custom` — callers
+/// needing that combine this with the separate `background_custom_note`
+/// column (see `character::conversions::convert_background_from_database`).
+pub fn db_string_to_background(
+    background_string: &str,
+) -> Option<comp::background::BackgroundKind> {
+    comp::background::BackgroundKind::from_keyword(background_string).or_else(|| {
+        if background_string == "custom" {
+            // Handled by the caller via the custom-note column; not an error.
+            None
+        } else {
+            tracing::warn!(
+                unknown = ?background_string,
+                "Unknown background in database, defaulting to Uncommitted (None)"
+            );
+            None
+        }
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DatabaseAbilitySet {
     mainhand: String,
@@ -515,6 +547,26 @@ pub mod tests {
             super::db_string_to_class("Necromancer"),
             ClassKind::Adventurer
         );
+    }
+
+    /// BL-31 task BG1b.5: every fixed `BackgroundKind` round-trips through its
+    /// db string; an unrecognized string degrades to `None` (never panics —
+    /// P0 §Q1, a DB downgrade must never brick the server, mirroring the
+    /// class-string test above).
+    #[test]
+    fn background_db_string_round_trips_and_tolerates_unknown() {
+        use common::comp::BackgroundKind;
+        for background in BackgroundKind::ALL {
+            assert_eq!(
+                super::db_string_to_background(&super::background_to_db_string(&background)),
+                Some(background.clone()),
+                "{background:?} did not round-trip through its db string"
+            );
+        }
+        assert_eq!(super::db_string_to_background("necromancer"), None);
+        // "custom" is deliberately NOT reconstructible here — the caller
+        // combines it with the separate custom-note column instead.
+        assert_eq!(super::db_string_to_background("custom"), None);
     }
 
     #[test]

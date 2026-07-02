@@ -183,6 +183,7 @@ impl Sys {
                     start_site: _,
                 class,
                 ethos,
+                background,
             } => {
                 if censor.check(&alias) {
                     debug!(?alias, "denied alias as it contained a banned word");
@@ -231,6 +232,7 @@ impl Sys {
                         body,
                         class,
                         ethos,
+                        background,
                         hardcore,
                         character_updater,
                         waypoint,

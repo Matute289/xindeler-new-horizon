@@ -31,6 +31,7 @@ pub type CharacterUpdateData = (
     Option<comp::MapMarker>,
     comp::CharacterClass,
     comp::Ethos,
+    comp::Background,
 );
 
 pub type PetPersistenceData = (comp::Pet, comp::Body, comp::Stats);
@@ -435,6 +436,7 @@ fn execute_batch_update(
             map_marker,
             character_class,
             ethos,
+            background,
         )) => super::character::update(
             character_id,
             stats,
@@ -445,6 +447,7 @@ fn execute_batch_update(
             map_marker,
             character_class,
             ethos,
+            background,
             &mut transaction,
         ),
         DatabaseActionKind::DeleteCharacter {

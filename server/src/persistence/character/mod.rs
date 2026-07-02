@@ -13,6 +13,7 @@ use crate::{
         EditableComponents, PersistedComponents,
         character::conversions::{
             convert_active_abilities_from_database, convert_active_abilities_to_database,
+            convert_background_from_database, convert_background_to_database,
             convert_body_from_database, convert_body_to_database_json,
             convert_character_from_database, convert_class_from_database,
             convert_class_to_database, convert_ethos_from_database, convert_hardcore_from_database,
@@ -151,7 +152,9 @@ pub fn load_character_data(
                 b.variant,
                 b.body_data,
                 c.ethos_good_evil,
-                c.ethos_law_chaos
+                c.ethos_law_chaos,
+                c.background,
+                c.background_custom_note
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -170,6 +173,8 @@ pub fn load_character_data(
                 class: row.get(4)?,
                 ethos_good_evil: row.get(7)?,
                 ethos_law_chaos: row.get(8)?,
+                background: row.get(9)?,
+                background_custom_note: row.get(10)?,
             };
 
             let body_data = Body {
@@ -320,6 +325,10 @@ pub fn load_character_data(
                 character_data.ethos_good_evil,
                 character_data.ethos_law_chaos,
             ),
+            background: convert_background_from_database(
+                character_data.background.as_deref(),
+                character_data.background_custom_note.as_deref(),
+            ),
         },
         UpdateCharacterMetadata {
             skill_set_persistence_load_error,
@@ -359,6 +368,9 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 // The character-list view doesn't surface alignment; defaulted.
                 ethos_good_evil: 0,
                 ethos_law_chaos: 0,
+                // Nor background (BL-31): defaulted, same as ethos above.
+                background: None,
+                background_custom_note: None,
             })
         })?
         .map(|x| x.unwrap())
@@ -444,6 +456,7 @@ pub fn create_character(
         active_abilities,
         map_marker,
         ethos,
+        background,
     } = persisted_components;
 
     // Fetch new entity IDs for character, inventory, loadout, overflow items, and
@@ -539,6 +552,8 @@ pub fn create_character(
     ])?;
     drop(stmt);
 
+    let (background_db, background_custom_note_db) = convert_background_to_database(&background);
+
     let mut stmt = transaction.prepare_cached(
         "
         INSERT INTO character (character_id,
@@ -548,8 +563,10 @@ pub fn create_character(
                                hardcore,
                                class,
                                ethos_good_evil,
-                               ethos_law_chaos)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                               ethos_law_chaos,
+                               background,
+                               background_custom_note)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?;
 
     stmt.execute([
@@ -561,6 +578,8 @@ pub fn create_character(
         &convert_class_to_database(character_class),
         &ethos.good_evil,
         &ethos.law_chaos,
+        &background_db,
+        &background_custom_note_db,
     ])?;
     drop(stmt);
 
@@ -1096,6 +1115,7 @@ pub fn update(
     map_marker: Option<comp::MapMarker>,
     character_class: comp::CharacterClass,
     ethos: comp::Ethos,
+    background: comp::Background,
     transaction: &mut Transaction,
 ) -> Result<(), PersistenceError> {
     // Run pet persistence
@@ -1232,6 +1252,7 @@ pub fn update(
     }
 
     let db_waypoint = convert_waypoint_to_database_json(char_waypoint, map_marker);
+    let (background_db, background_custom_note_db) = convert_background_to_database(&background);
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -1239,8 +1260,10 @@ pub fn update(
         SET     waypoint = ?1,
                 class = ?2,
                 ethos_good_evil = ?3,
-                ethos_law_chaos = ?4
-        WHERE   character_id = ?5
+                ethos_law_chaos = ?4,
+                background = ?5,
+                background_custom_note = ?6
+        WHERE   character_id = ?7
     ",
     )?;
 
@@ -1249,6 +1272,8 @@ pub fn update(
         &convert_class_to_database(character_class),
         &ethos.good_evil,
         &ethos.law_chaos,
+        &background_db,
+        &background_custom_note_db,
         &char_id.0,
     ])?;
 
