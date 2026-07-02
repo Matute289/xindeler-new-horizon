@@ -120,4 +120,11 @@
     Rogue(Opportunist): Any({Rogue(KeenEdge): 1, Rogue(SureStrike): 1}),
     Rogue(Shadowstep): All({Rogue(FleetFooted): 1, Rogue(QuickHands): 1}),
     Rogue(Vanish): All({Rogue(DeadlyPrecision): 1, Rogue(FindTheGap): 1}),
+    // BL-20 feat chains (docs/design/plans/2026-07-01-feats-p0-triage.md).
+    // Other chained feats in the triage doc (Arcane College Mascot, Order's
+    // Resilience's Tyro-of-the-Gauntlet prereq, all Bloodmark/Giant chains)
+    // are either DEFERRED or explicitly waived for V1 and have no entry here.
+    Feat(GreaterAberrantBloodmark): All({Feat(AberrantBloodmark): 1}),
+    Feat(Dragonscarred): All({Feat(DraconicCultInitiate): 1}),
+    Feat(SpellfireAdept): All({Feat(SpellfireSpark): 1}),
 }

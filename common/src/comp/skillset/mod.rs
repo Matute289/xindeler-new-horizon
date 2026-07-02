@@ -115,6 +115,16 @@ lazy_static! {
             "common.skill_trees.class_skill_modifiers",
         ).into_inner()
     };
+    /// BL-20: per-level `Stats` modifiers for passive feats. Maps a feat skill
+    /// to the field(s) it boosts and the magnitude added per skill level (all
+    /// feats are max_level = 1, so this degenerates to one magnitude per
+    /// purchased feat). Active-ability feats are absent (they unlock
+    /// abilities, not stats).
+    pub static ref FEAT_MODIFIERS: HashMap<Skill, Vec<(ClassPassiveStat, f32)>> = {
+        Ron::load_expect_cloned(
+            "common.skill_trees.feat_modifiers",
+        ).into_inner()
+    };
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
@@ -122,6 +132,10 @@ pub enum SkillGroupKind {
     General,
     Weapon(ToolKind),
     Class(ClassKind),
+    // BL-20: a single, class-agnostic group available to every character
+    // (parallel to `General`). Points are granted via level-milestone
+    // (`grant_skill_point`), never via the XP-per-group economy.
+    Feats,
 }
 
 impl SkillGroupKind {
@@ -299,6 +313,9 @@ impl Default for SkillSet {
         // Insert default skill groups
         skill_group.unlock_skill_group(SkillGroupKind::General);
         skill_group.unlock_skill_group(SkillGroupKind::Weapon(ToolKind::Pick));
+        // BL-20: every character should see the Feats group from creation, even
+        // with zero points (points arrive later via level-milestone grants).
+        skill_group.unlock_skill_group(SkillGroupKind::Feats);
 
         // No XP yet — derive the level-1 baseline (unlocking groups doesn't
         // touch earned_exp, so a single recompute here suffices).
@@ -533,6 +550,19 @@ impl SkillSet {
         }
     }
 
+    /// BL-20: grants one skill point to `kind` directly, bypassing the
+    /// XP-cost economy entirely. Used for milestone-based grants (e.g. "1
+    /// feat point per 10 character levels"), as opposed to
+    /// [`Self::add_skill_points`]/[`SkillGroup::earn_skill_point`] which are
+    /// exp-driven. Unlocks the group first if it doesn't exist yet.
+    pub fn grant_skill_point(&mut self, kind: SkillGroupKind) {
+        self.unlock_skill_group(kind);
+        if let Some(skill_group) = self.skill_groups.get_mut(&kind) {
+            skill_group.earned_sp = skill_group.earned_sp.saturating_add(1);
+            skill_group.available_sp = skill_group.available_sp.saturating_add(1);
+        }
+    }
+
     /// Gets the available points for a particular skill group
     pub fn available_sp(&self, skill_group: SkillGroupKind) -> u16 {
         self.skill_group(skill_group)
@@ -726,6 +756,27 @@ impl SkillSet {
                 continue;
             }
             if let Some(modifiers) = CLASS_SKILL_MODIFIERS.get(skill) {
+                for (passive_stat, per_level) in modifiers.iter() {
+                    passive_stat.apply(stats, per_level * f32::from(*level));
+                }
+            }
+        }
+    }
+
+    /// BL-20: fold this skill set's passive feat bonuses into `stats`. Same
+    /// tick slot as [`Self::apply_class_passives`] (called right after it in
+    /// the buff system), so feats stack with class/gear/buff bonuses and need
+    /// no persistence beyond the unlocked skill levels.
+    ///
+    /// Only the unlocked skills are walked (the skill map is small), and each
+    /// is looked up in [`FEAT_MODIFIERS`]; non-feat / active-ability feats
+    /// have no entry and are skipped.
+    pub fn apply_feat_passives(&self, stats: &mut Stats) {
+        for (skill, level) in self.skills.iter() {
+            if *level == 0 {
+                continue;
+            }
+            if let Some(modifiers) = FEAT_MODIFIERS.get(skill) {
                 for (passive_stat, per_level) in modifiers.iter() {
                     passive_stat.apply(stats, per_level * f32::from(*level));
                 }

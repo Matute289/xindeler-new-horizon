@@ -161,6 +161,105 @@ fn class_skill_modifiers_manifest_integrity() {
     }
 }
 
+// ---- BL-20 feats/skills system ----
+
+#[test]
+fn feat_skill_persistence_round_trip() {
+    use crate::comp::skills::FeatSkill;
+    // Feat skills persist via serde (json) like weapon/class skills; a new
+    // variant must round-trip without a manual conversion arm.
+    let skills = vec![
+        Skill::Feat(FeatSkill::Tough),
+        Skill::Feat(FeatSkill::Lucky),
+        Skill::Feat(FeatSkill::GreaterAberrantBloodmark),
+    ];
+    let json = serde_json::to_string(&skills).expect("serialize feat skills");
+    let back: Vec<Skill> = serde_json::from_str(&json).expect("deserialize feat skills");
+    assert_eq!(skills, back);
+}
+
+#[test]
+fn default_skillset_has_feats_group_unlocked() {
+    let skill_set = SkillSet::default();
+    assert!(
+        skill_set.skill_group_accessible(SkillGroupKind::Feats),
+        "a fresh SkillSet must have the Feats group unlocked from creation"
+    );
+}
+
+#[test]
+fn grant_skill_point_bypasses_exp_economy() {
+    let mut skill_set = SkillSet::default();
+    let earned_exp_before = skill_set.total_earned_exp();
+    let available_exp_before = skill_set.available_experience(SkillGroupKind::Feats);
+
+    skill_set.grant_skill_point(SkillGroupKind::Feats);
+
+    assert_eq!(skill_set.available_sp(SkillGroupKind::Feats), 1);
+    assert_eq!(skill_set.earned_sp(SkillGroupKind::Feats), 1);
+    assert_eq!(
+        skill_set.available_experience(SkillGroupKind::Feats),
+        available_exp_before,
+        "grant_skill_point must not touch available_exp"
+    );
+    assert_eq!(
+        skill_set.total_earned_exp(),
+        earned_exp_before,
+        "grant_skill_point must not touch earned_exp"
+    );
+}
+
+#[test]
+fn grant_skill_point_unlocks_group_if_missing() {
+    // Simulate an entity that hasn't had the Feats group unlocked yet (e.g. a
+    // pre-BL-20 persisted character) — grant_skill_point should unlock it
+    // first rather than silently no-op.
+    let mut skill_set = SkillSet {
+        skill_groups: HashMap::new(),
+        skills: HashMap::new(),
+        character_level: 0,
+    };
+    assert!(!skill_set.skill_group_accessible(SkillGroupKind::Feats));
+
+    skill_set.grant_skill_point(SkillGroupKind::Feats);
+
+    assert!(skill_set.skill_group_accessible(SkillGroupKind::Feats));
+    assert_eq!(skill_set.available_sp(SkillGroupKind::Feats), 1);
+    assert_eq!(skill_set.earned_sp(SkillGroupKind::Feats), 1);
+}
+
+#[test]
+fn feat_modifiers_manifest_integrity() {
+    // Every modifier entry must be a real skill living in the Feats skill
+    // group (mirrors class_skill_modifiers_manifest_integrity).
+    for skill in FEAT_MODIFIERS.keys() {
+        let group = SKILL_GROUP_LOOKUP
+            .get(skill)
+            .unwrap_or_else(|| panic!("{skill:?} has a modifier but is in no skill group"));
+        assert!(
+            matches!(group, SkillGroupKind::Feats),
+            "{skill:?} modifier must belong to the Feats group, got {group:?}",
+        );
+    }
+}
+
+#[test]
+fn apply_feat_passives_raises_stats_field() {
+    use crate::comp::{Body, Stats, body::humanoid, skills::FeatSkill};
+
+    let body = Body::Humanoid(humanoid::Body::iter().next().expect("a humanoid body"));
+    let mut skillset = SkillSet::default();
+    // Seed a purchased passive feat directly (the unlock flow is covered
+    // elsewhere). Feats are max_level = 1.
+    skillset.skills.insert(Skill::Feat(FeatSkill::Tough), 1);
+
+    let mut stats = Stats::empty(body);
+    let before = stats.max_health_modifiers.mult_mod;
+    skillset.apply_feat_passives(&mut stats);
+    // Tough = +0.06 max-health at level 1 -> *= 1.06.
+    assert!((stats.max_health_modifiers.mult_mod - before * 1.06).abs() < 1e-5);
+}
+
 // ---- BL-06 P2b: Q5 capstone synergy ----
 
 #[cfg(test)]

@@ -1,0 +1,137 @@
+// BL-20 — per-level stat modifiers for passive feats (and the passive half of
+// ACTIVE+PASSIVE hybrid feats).
+//
+// Same shape and folding mechanism as `class_skill_modifiers.ron`: maps each
+// feat to the `Stats` field(s) it boosts and the magnitude added PER SKILL
+// LEVEL. All feats are max_level = 1, so this degenerates to one magnitude
+// per purchased feat. The buff system folds these in via
+// `SkillSet::apply_feat_passives`, right after `apply_class_passives` in the
+// per-tick stat-reassembly pass.
+//
+// Pure ACTIVE feats are NOT listed here (they unlock abilities, not passive
+// stats — P3 scope). DEFERRED feats and Epic Boons are out of scope for
+// BL-20 entirely (see docs/design/plans/2026-07-01-feats-p0-triage.md).
+//
+// APPROXIMATIONS: several feats describe mechanics with no direct engine hook
+// yet (fighting styles, proficiency, grapple, initiative order, perception
+// checks, aggro tables, etc.). Where the triage doc calls for such a
+// mechanic, the closest existing `ClassPassiveStat` variant is used instead,
+// each documented inline. Magnitudes follow the `class_skill_modifiers.ron`
+// convention for the same field (additive for the to-hit/resist layer,
+// %-multiplicative for the `*_modifier`/`mult_mod` fields), picked toward the
+// higher end of that convention's range since feats are rarer, milestone-
+// scale rewards rather than repeatable tree nodes.
+{
+    // ---------- Combat ----------
+    // Athlete: "+2.0 speed (10ft equiv)" -> MoveSpeed (%-multiplicative).
+    Feat(Athlete): [(MoveSpeed, 0.05)],
+    // CrossbowExpert: "no melee penalty when firing at close range" has no
+    // penalty-suppression flag in engine; approximated as a flat accuracy
+    // bonus (the real V1 value the triage doc calls out).
+    Feat(CrossbowExpert): [(Accuracy, 0.04)],
+    // DualWielder: "+1 AC while dual wielding" -> DamageReduction.
+    Feat(DualWielder): [(DamageReduction, 0.03)],
+    // GreatWeaponMaster: "+10 heavy two-handed damage, always-on" (the
+    // crit/kill bonus-attack half is DEFERRED) -> AttackDamage.
+    Feat(GreatWeaponMaster): [(AttackDamage, 0.08)],
+    // HeavyArmorMaster: "+3 physical damage reduction while in heavy armor"
+    // (armor-tag gating deferred to a future armor-proficiency pass) ->
+    // DamageReduction.
+    Feat(HeavyArmorMaster): [(DamageReduction, 0.05)],
+    // Mobile: "+2.5 speed" (the no-OA-after-dash half is DEFERRED) ->
+    // MoveSpeed.
+    Feat(Mobile): [(MoveSpeed, 0.06)],
+    // Piercer: per-die reroll simplified to a flat damage bonus, per the
+    // triage doc's own fallback -> AttackDamage.
+    Feat(Piercer): [(AttackDamage, 0.05)],
+    // SavageAttacker: "roll damage twice, take higher" simplified to a flat
+    // damage bonus, per the triage doc's own fallback -> AttackDamage.
+    Feat(SavageAttacker): [(AttackDamage, 0.05)],
+    // Sharpshooter: "+10 damage (opt-in trade)" simplified to an always-on
+    // smaller bonus per the triage doc -> AttackDamage.
+    Feat(Sharpshooter): [(AttackDamage, 0.06)],
+    // Slasher: proc-on-hit passives (speed debuff / crit-disadvantage) have
+    // no proc-condition engine hook yet; approximated as a small always-on
+    // CritChance bump (closest available offense-proc analogue).
+    Feat(Slasher): [(CritChance, 0.03)],
+    // Speedy: "level-4 gate + bonus-action dash" simplified to flat +5.0
+    // speed per the triage doc's own fallback -> MoveSpeed.
+    Feat(Speedy): [(MoveSpeed, 0.10)],
+    // TavernBrawler: "unarmed damage becomes d4+STR" (no unarmed-die system;
+    // no STR score) -> AttackDamage as a flat approximation.
+    Feat(TavernBrawler): [(AttackDamage, 0.05)],
+
+    // ---------- Magic ----------
+    // ElementalAdept: "spells of chosen element ignore resistance" is a
+    // penetration mechanic -> MitigationsPenetration.
+    Feat(ElementalAdept): [(MitigationsPenetration, 0.05)],
+    // FrostCaster: "cold spells pierce resistance" (the Chilled-on-hit proc
+    // is a status application, out of scope for the stat layer) ->
+    // MitigationsPenetration, same family as ElementalAdept.
+    Feat(FrostCaster): [(MitigationsPenetration, 0.05)],
+    // GiftOfTheChromaticDragon (PASSIVE half): "one energy resistance" ->
+    // ResistFire chosen as the representative element for V1 (no
+    // player-choice-at-purchase system yet).
+    Feat(GiftOfTheChromaticDragon): [(ResistFire, 0.05)],
+    // GiftOfTheMetallicDragon (PASSIVE half): "one energy resistance" ->
+    // ResistFrost chosen as the representative element (distinct from the
+    // Chromatic gift above) for V1.
+    Feat(GiftOfTheMetallicDragon): [(ResistFrost, 0.05)],
+    // MythalTouched: "+1 spell save DC, +1 spell attack" -> MagicAccuracy.
+    Feat(MythalTouched): [(MagicAccuracy, 0.04)],
+    // SpellSniper: "double spell range, ignore cover" (extra-cantrip half is
+    // DEFERRED) -> MagicAccuracy as the closest "spells land more reliably"
+    // proxy.
+    Feat(SpellSniper): [(MagicAccuracy, 0.05)],
+    // WarCaster: "advantage on concentration saves" (the cast-as-OA half is
+    // an active-ability concern, out of scope here) -> CrowdControlResistance
+    // as the closest save-advantage analogue.
+    Feat(WarCaster): [(CrowdControlResistance, 0.05)],
+
+    // ---------- Social ----------
+    // LordlyResolve: "resistance to psychic + advantage vs fear/charm
+    // saves" -> CrowdControlResistance.
+    Feat(LordlyResolve): [(CrowdControlResistance, 0.05)],
+    // TirelessReveler: "+15% out-of-combat regen" -> RecoverySpeed.
+    Feat(TirelessReveler): [(RecoverySpeed, 0.06)],
+
+    // ---------- Exploration ----------
+    // Alert: "+5 initiative" (no initiative-order system) -> Accuracy as the
+    // closest "acts/hits first" proxy.
+    Feat(Alert): [(Accuracy, 0.04)],
+    // DungeonDelver: "+20% trap resistance" (door-detection half needs a
+    // passive-perception scan not yet in engine) -> DamageReduction.
+    Feat(DungeonDelver): [(DamageReduction, 0.04)],
+    // Observant: "+5 passive perception/investigation" -> Accuracy.
+    Feat(Observant): [(Accuracy, 0.04)],
+
+    // ---------- Craft ----------
+    // OrdersResilience: "advantage on CON saves, +1 exhaustion recovery" ->
+    // CrowdControlResistance.
+    Feat(OrdersResilience): [(CrowdControlResistance, 0.05)],
+    // VampireHunter: "+10% damage vs undead" -> BonusVsUndead (exact match).
+    Feat(VampireHunter): [(BonusVsUndead, 0.10)],
+    // Dragonscarred (PASSIVE half): "one elemental resistance" -> ResistFire
+    // chosen as the representative element for V1.
+    Feat(Dragonscarred): [(ResistFire, 0.05)],
+
+    // ---------- Fate ----------
+    // Durable: CON score doesn't exist yet; simplified to a flat max-health
+    // bonus per the triage doc's own fallback -> MaxHealth.
+    Feat(Durable): [(MaxHealth, 0.05)],
+    // Resilient: "choose CON/WIS/DEX -> nearest engine resistance" simplified
+    // to a flat resistance bump, per the triage doc -> ResistMagic chosen as
+    // the representative resistance for V1 (no choice-at-purchase system).
+    Feat(Resilient): [(ResistMagic, 0.04)],
+    // Tough: "+2 HP per level, retroactive" simplified to a flat max-health
+    // bonus at purchase (feats are max_level 1, so no further per-level
+    // scaling applies here) -> MaxHealth.
+    Feat(Tough): [(MaxHealth, 0.06)],
+    // VampireTouched: "+5% nonmagical damage resistance" (darkvision +
+    // presence aura are flavor/cosmetic, no stat hook) -> DamageReduction.
+    Feat(VampireTouched): [(DamageReduction, 0.05)],
+    // VampiresPlaything: "undead ignore you unless attacked first" is an
+    // aggro-table behavior flag with no engine hook; approximated as a small
+    // Evasion bump (closest "harder to be targeted/hit" proxy).
+    Feat(VampiresPlaything): [(Evasion, 0.03)],
+}

@@ -4743,6 +4743,10 @@ fn parse_skill_tree(skill_tree: &str) -> CmdResult<comp::skillset::SkillGroupKin
         "mage" => Ok(SkillGroupKind::Class(ClassKind::Mage)),
         "cleric" => Ok(SkillGroupKind::Class(ClassKind::Cleric)),
         "rogue" => Ok(SkillGroupKind::Class(ClassKind::Rogue)),
+        // BL-20: `/skill_point feats <n>` grants test feat points via the
+        // existing exp-based path (admin/testing convenience; the real grant
+        // path is milestone-based, see `SkillSet::grant_skill_point`).
+        "feats" => Ok(SkillGroupKind::Feats),
         _ => Err(Content::localized_with_args(
             "command-invalid-skill-group",
             [("group", skill_tree)],

@@ -93,6 +93,7 @@ pub fn skill_group_to_db_string(skill_group: comp::skillset::SkillGroupKind) -> 
         Class(ClassKind::Monk) => "Class Monk",
         Class(ClassKind::Artificer) => "Class Artificer",
         Class(ClassKind::BloodSlayer) => "Class BloodSlayer",
+        Feats => "Feats",
         // Adventurer has no class tree; a Class(Adventurer) group reaching
         // persistence is a bug, consistent with the unsupported-weapon arm.
         Class(ClassKind::Adventurer) => panic!(
@@ -145,6 +146,7 @@ pub fn db_string_to_skill_group(skill_group_string: &str) -> comp::skillset::Ski
         "Class Monk" => Class(ClassKind::Monk),
         "Class Artificer" => Class(ClassKind::Artificer),
         "Class BloodSlayer" => Class(ClassKind::BloodSlayer),
+        "Feats" => Feats,
 
         _ => panic!(
             "Tried to convert an unsupported string from the database: {}",

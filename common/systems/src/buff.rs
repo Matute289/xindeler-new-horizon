@@ -580,6 +580,9 @@ impl<'a> System<'a> for Sys {
                     // the per-class attribute scaling (derived from purchased
                     // skill levels → no persistence beyond the SkillSet).
                     skill_set.apply_class_passives(&mut stat);
+                    // BL-20: passive feat bonuses, same per-tick slot as the
+                    // class-skill passives above.
+                    skill_set.apply_feat_passives(&mut stat);
                 }
             }
 
