@@ -5660,7 +5660,7 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Bleeding => imgs.debuff_bleeding_mark,
         BuffKind::BleedingMark => imgs.debuff_bleeding_mark,
         BuffKind::Blinded => imgs.debuff_blinded,
-        BuffKind::Bloodfeast => imgs.buff_plus_0,
+        BuffKind::Bloodfeast => imgs.buff_bloodfeast,
         BuffKind::Burning => imgs.debuff_burning,
         BuffKind::Charmed => imgs.debuff_charmed,
         BuffKind::Chilled => imgs.debuff_chilled,

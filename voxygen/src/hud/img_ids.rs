@@ -997,6 +997,7 @@ image_ids! {
         buff_ardent_hunter: "voxygen.element.de_buffs.buff_ardent_hunter",
         buff_septic_shot: "voxygen.element.de_buffs.buff_septic_shot",
         buff_freedom_of_movement: "voxygen.element.de_buffs.buff_freedom_of_movement",
+        buff_bloodfeast: "voxygen.element.de_buffs.buff_bloodfeast",
         debuff_cursed_0: "voxygen.element.de_buffs.debuff_cursed_0",
         debuff_bleed_0: "voxygen.element.de_buffs.debuff_bleed_0",
         debuff_burning_0: "voxygen.element.de_buffs.debuff_burning_0",
