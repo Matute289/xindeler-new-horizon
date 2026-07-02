@@ -1,5 +1,5 @@
 ItemDef(
-    legacy_name: "Draugr Test Blade",
+    legacy_name: "Dhampir Test Blade",
     legacy_description: "Used for equipment-restriction tests, do not delete.",
     kind: Tool((
         kind: Sword,

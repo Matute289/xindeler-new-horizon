@@ -91,7 +91,7 @@ common-items-testing-test_bag_9_slot = Test 9 slot bag
 common-items-testing-test_boots = Testing Boots
     .desc = Hopefully this test doesn't break!
 
-common-items-testing-test_draugr_blade = Draugr Test Blade
+common-items-testing-test_draugr_blade = Dhampir Test Blade
     .desc = Used for equipment-restriction tests, do not delete.
 
 common-items-weapons-empty-empty = Empty Item

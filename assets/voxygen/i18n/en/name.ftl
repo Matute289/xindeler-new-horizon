@@ -261,8 +261,8 @@ name-custom-wild-peaceful-arctic_fox =
 
 ## Creature Names
 name-body-humanoid-danari =
-    .fem = Danari
-    .masc = Danari
+    .fem = Gnome
+    .masc = Gnome
 name-body-humanoid-dwarf =
     .fem = Dwarf
     .masc = Dwarf
@@ -276,8 +276,8 @@ name-body-humanoid-orc =
     .fem = Orc
     .masc = Orc
 name-body-humanoid-draugr =
-    .fem = Draugr
-    .masc = Draugr
+    .fem = Dhampir
+    .masc = Dhampir
 name-body-quadruped_small-pig =
     .fem = Pig
     .masc = Pig

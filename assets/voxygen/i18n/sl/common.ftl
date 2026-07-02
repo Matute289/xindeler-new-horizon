@@ -56,8 +56,8 @@ common-species-orc = Ork
 common-species-human = Človek
 common-species-dwarf = Škrat
 common-species-elf = Vilinec
-common-species-draugr = Draugar
-common-species-danari = Danarec
+common-species-draugr = Dhampir
+common-species-danari = Gnom
 
 ## Tools
 
