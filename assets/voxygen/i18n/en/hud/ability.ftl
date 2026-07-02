@@ -558,6 +558,6 @@ class-cleric-mendinglight = Mending Light
 class-cleric-radiantchannel = Radiant Channel
     .desc = Channel a powerful healing aura over time.
 class-rogue-ambush = Ambush
-    .desc = A precise opening strike — devastating from behind.
+    .desc = A precise opening strike - devastating from behind.
 class-rogue-vanish = Vanish
     .desc = A sudden burst of mobility to slip away. Stronger with more ranks in Deadly Precision.

@@ -64,7 +64,7 @@ hud-skill-class-mage-mana_efficiency = Efficient channeling increases maximum en
 hud-skill-class-mage-overcharge_title = Overcharge
 hud-skill-class-mage-overcharge = Push spells beyond their limits, greatly increasing spell power.
 hud-skill-class-mage-arcane_mastery_title = Arcane Mastery
-hud-skill-class-mage-arcane_mastery = True command of the arcane — unleash a devastating spell barrage.
+hud-skill-class-mage-arcane_mastery = True command of the arcane - unleash a devastating spell barrage.
 
 ## BL-06 P3a — Cleric class skill strings
 
@@ -116,7 +116,7 @@ hud-skill-class-rogue-toxin_tolerance = Exposure to toxins builds resistance to 
 hud-skill-class-rogue-opportunist_title = Opportunist
 hud-skill-class-rogue-opportunist = Attack damage increases when you have the upper hand.
 hud-skill-class-rogue-shadowstep_title = Shadowstep
-hud-skill-class-rogue-shadowstep = Master of movement — evasion is greatly increased.
+hud-skill-class-rogue-shadowstep = Master of movement - evasion is greatly increased.
 hud-skill-class-rogue-vanish_title = Vanish
 hud-skill-class-rogue-vanish = Disappear from sight entirely, then strike with lethal precision.
 

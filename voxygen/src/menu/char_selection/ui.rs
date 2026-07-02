@@ -374,13 +374,27 @@ fn background_detail_panel<'a>(
             "char_selection-background_detail_lore",
             body(i18n.get_msg(background_detalle(kind)).into_owned()),
         ),
-        // 3. Beneficios e Interacciones Sociales — PLACEHOLDER.
+        // 3. Beneficios e Interacciones Sociales — PLACEHOLDER, plus the
+        // "Sociedad: <label>" flavor line (BL-31 V3 spec §6 / plan step 4;
+        // moved here from the Habilidades section now that items 1-2 relieve
+        // the panel's vertical pressure). Placeholder renders first so a
+        // future content pass can insert real narrative text above the
+        // Sociedad line without another render-order change.
         section(
             "char_selection-background_detail_social",
-            placeholder(
-                i18n.get_msg("char_selection-background_social_pending")
-                    .into_owned(),
-            ),
+            Column::with_children(vec![
+                placeholder(
+                    i18n.get_msg("char_selection-background_social_pending")
+                        .into_owned(),
+                ),
+                body(format!(
+                    "{}: {}",
+                    i18n.get_msg("char_selection-background_society_label"),
+                    background_society_type(kind)
+                )),
+            ])
+            .spacing(4)
+            .into(),
         ),
         // 4. Te codeas mejor con... — PLACEHOLDER.
         section(
@@ -391,20 +405,19 @@ fn background_detail_panel<'a>(
             ),
         ),
         // 5. Habilidades — REAL (triage doc stat passives, now two per
-        // BL-31 V2 spec §3.1/§3.3), plus the "Sociedad: <label>" flavor line
-        // (spec §3.2 — kept inside this section rather than as a 7th
-        // top-level section, to avoid worsening the panel's vertical
-        // pressure).
+        // BL-31 V2 spec §3.1/§3.3), rendered as one `•`-bulleted line per
+        // ability (BL-31 V3 spec §5 / plan step 3), split at render time on
+        // the existing "; " separator used by every `background_stat_passive`
+        // arm. The "Sociedad: <label>" flavor line moved to the "...Social"
+        // section (V3 spec §6).
         section(
             "char_selection-background_detail_skills",
-            Column::with_children(vec![
-                body(background_stat_passive(kind).to_string()),
-                body(format!(
-                    "{}: {}",
-                    i18n.get_msg("char_selection-background_society_label"),
-                    background_society_type(kind)
-                )),
-            ])
+            Column::with_children(
+                background_stat_passive(kind)
+                    .split("; ")
+                    .map(|ability| body(format!("• {}", ability)))
+                    .collect::<Vec<Element<'a, Message>>>(),
+            )
             .spacing(2)
             .into(),
         ),
@@ -2215,10 +2228,13 @@ impl Controls {
                                 scroller: style::scrollable::Scroller::Color(UI_MAIN),
                             }),
                     )
-                    // Roughly double the old single-column height (260) so
-                    // the 2-column grid needs little to no scrolling
-                    // (spec §4.2).
-                    .height(Length::Units(520))
+                    // 12 rows × BACKGROUND_ROW_H (40) + 11×spacing(4) +
+                    // padding(12) ≈ 536px of real content (BL-31 V3 spec
+                    // §1); floor matches the right detail panel's
+                    // `BACKGROUND_DETAIL_CONTENT_HEIGHT` (620) so both
+                    // side-by-side columns clear their content with room to
+                    // spare and read as visually symmetric.
+                    .height(Length::Units(620))
                     .width(Length::Fill)
                 };
 

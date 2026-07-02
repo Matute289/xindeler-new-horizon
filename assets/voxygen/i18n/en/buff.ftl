@@ -95,7 +95,7 @@ buff-bleed = Bleeding
     .desc = Inflicts regular damage.
 ## Bleeding Mark (bleed-detonate, BL-05)
 buff-bleeding_mark = Bleeding Mark
-    .desc = Bleeds over time, then detonates for a burst when it runs out — cleanse it to stop the blast.
+    .desc = Bleeds over time, then detonates for a burst when it runs out - cleanse it to stop the blast.
 ## Curse
 buff-cursed = Cursed
     .desc = You are cursed.
@@ -107,19 +107,19 @@ buff-crippled = Crippled
     .desc = Your movement is crippled as your legs are heavily injured.
 ## Difficult Terrain (BL-03)
 buff-difficult_terrain = Difficult Terrain
-    .desc = The ground fights every step — you move at reduced speed.
+    .desc = The ground fights every step - you move at reduced speed.
 buff-freedom_of_movement = Freedom of Movement
     .desc = You move unhindered, ignoring difficult terrain.
 ## Antimagic (BL-36)
 buff-antimagic = Antimagic
-    .desc = Magic fails here — you cannot cast and your magic items lie dormant.
+    .desc = Magic fails here - you cannot cast and your magic items lie dormant.
 ## Spell riders (BL-05)
 buff-anchored = Anchored
-    .desc = A dimensional anchor holds you fast — you cannot teleport or blink.
+    .desc = A dimensional anchor holds you fast - you cannot teleport or blink.
 buff-asleep = Asleep
-    .desc = You are sunk in magical sleep — unable to move or act.
+    .desc = You are sunk in magical sleep - unable to move or act.
 buff-blinded = Blinded
-    .desc = You cannot see to aim — your attacks deal reduced damage.
+    .desc = You cannot see to aim - your attacks deal reduced damage.
 ## Slowed (BL-66 d)
 buff-slowed = Slowed
     .desc = Your movement speed is reduced.
