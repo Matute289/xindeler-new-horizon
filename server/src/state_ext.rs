@@ -751,8 +751,6 @@ impl StateExt for State {
             let class_kind = character_class.0;
             self.write_component_ignore_entity_dead(entity, character_class);
             self.write_component_ignore_entity_dead(entity, ethos);
-            // BL-31: background is not `Copy` (Custom(String) variant), unlike
-            // ClassKind/Ethos above, but nothing after this needs it by value.
             self.write_component_ignore_entity_dead(entity, background);
             self.write_component_ignore_entity_dead(entity, active_abilities);
             self.write_component_ignore_entity_dead(entity, comp::AbilityCooldowns::default());

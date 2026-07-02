@@ -259,17 +259,14 @@ mod tests {
     }
 
     /// BL-31 task BG1c.2: the background-kit grant stub must not panic for
-    /// any background, including `Custom` and `None`.
+    /// any background, including `None`.
     #[test]
     fn apply_background_kit_stub_does_not_panic_for_any_background() {
         use common::comp::BackgroundKind;
 
         let mut rng = rand::rng();
         let backgrounds = std::iter::once(Background(None))
-            .chain(BackgroundKind::ALL.into_iter().map(|k| Background(Some(k))))
-            .chain(std::iter::once(Background(Some(BackgroundKind::Custom(
-                "Raised by wolves".to_string(),
-            )))));
+            .chain(BackgroundKind::ALL.into_iter().map(|k| Background(Some(k))));
         for background in backgrounds {
             let loadout_builder = LoadoutBuilder::empty().defaults().with_asset_expect(
                 &format!("common.loadout.class.{}", ClassKind::Warrior.keyword()),

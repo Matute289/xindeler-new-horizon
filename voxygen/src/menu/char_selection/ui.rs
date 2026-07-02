@@ -129,6 +129,256 @@ fn fixed_label_button(
         .into()
 }
 
+/// BL-31 UI-fixes (spec §4.4/§4.5): the mechanical stat passive granted by
+/// each background, transcribed from `docs/design/plans/
+/// 2026-07-01-backgrounds-p0-triage.md`'s "V1 Stat Passive" column. A plain
+/// `match` is the P4-smoke-speed sourcing option the spec calls out (§4.5b);
+/// keyed by `BackgroundKind` so a later variant trim needs no change here
+/// (spec §0.1). Miner is the one exception with two passives (see triage doc
+/// note); Rewarded/Ruined show the feat-point grant text (the BL-20 hook is
+/// out of scope for this UI pass).
+fn background_stat_passive(kind: BackgroundKind) -> &'static str {
+    match kind {
+        BackgroundKind::Acolyte => "HealingReceivedMod +8%",
+        BackgroundKind::Hermit => "OutOfCombatHealthRegen +12%",
+        BackgroundKind::HauntedOne => "ElementalResistance(necrotic) +10%",
+        BackgroundKind::Anthropologist => "MaxHealth +8",
+        BackgroundKind::Inquisitor => "Undead/FiendDamageMod +8%",
+        BackgroundKind::Sage => "SpellDamageMod +4%",
+        BackgroundKind::CloisteredScholar => "SpellDamageMod +6%",
+        BackgroundKind::Archaeologist => "MaxHealth +10",
+        BackgroundKind::Scribe => "MaxHealth +6",
+        BackgroundKind::Investigator => "InitiativeBonus +3",
+        BackgroundKind::Soldier => "MeleeDamageMod +5%",
+        BackgroundKind::Guard => "PhysicalDamageReduction +2",
+        BackgroundKind::CityWatch => "InitiativeBonus +3",
+        BackgroundKind::Marine => "ElementalResistance(cold) +10%",
+        BackgroundKind::MercenaryVeteran => "MeleeDamageMod +5%",
+        BackgroundKind::KnightOfAnOrder => "PhysicalDamageReduction +3",
+        BackgroundKind::Criminal => "MoveSpeed +0.8",
+        BackgroundKind::Charlatan => "MaxHealth +8",
+        BackgroundKind::Smuggler => "MoveSpeed +0.8",
+        BackgroundKind::Gambler => "CritChanceMod +1%",
+        BackgroundKind::UrbanBountyHunter => "InitiativeBonus +4",
+        BackgroundKind::FactionAgent => "MaxHealth +10",
+        BackgroundKind::Noble => "MaxHealth +10",
+        BackgroundKind::Courtier => "MaxHealth +6",
+        BackgroundKind::FarTraveler => "ElementalResistance(cold) +12%",
+        BackgroundKind::Entertainer => "HealingReceivedMod +8%",
+        BackgroundKind::FolkHero => "MaxHealth +10",
+        BackgroundKind::Merchant => "MoveSpeed +0.8",
+        BackgroundKind::FailedMerchant => "PhysicalDamageReduction +2",
+        BackgroundKind::Carouser => "MaxHealth +12",
+        BackgroundKind::Rewarded => "1 free feat point (fallback: MaxHealth +8)",
+        BackgroundKind::Ruined => "1 free feat point (fallback: MaxHealth +8)",
+        BackgroundKind::GuildArtisan => "MeleeDamageMod +3%",
+        BackgroundKind::Artisan => "PhysicalDamageReduction +3",
+        BackgroundKind::Shipwright => "ElementalResistance(cold) +10%",
+        BackgroundKind::Farmer => "MaxHealth +12",
+        BackgroundKind::Fisher => "ElementalResistance(cold) +10%",
+        BackgroundKind::Miner => "MaxHealth +10; DarkvisionRange +10m",
+        BackgroundKind::CaravanSpecialist => "MoveSpeed +1.0",
+        BackgroundKind::Outlander => "OutOfCombatHealthRegen +15%",
+        BackgroundKind::Guide => "MoveSpeed +1.0",
+        BackgroundKind::Sailor => "ElementalResistance(cold) +12%",
+        BackgroundKind::Wayfarer => "MoveSpeed +0.8",
+        BackgroundKind::Urchin => "MoveSpeed +1.2",
+    }
+}
+
+/// BL-31 UI-fixes (spec §4.4/§4.5): the starting-kit flavor description for
+/// each background, transcribed from the triage doc's "Starting kit summary"
+/// table. These are flavor/text descriptions only — the actual kit *items*
+/// don't exist as real game assets yet (background-kit granting remains a
+/// P3 stub, see `server::character_creator::apply_background_kit`).
+fn background_starter_kit(kind: BackgroundKind) -> &'static str {
+    match kind {
+        BackgroundKind::Acolyte => "Holy symbol of the player's faith, 2x candle, prayer book",
+        BackgroundKind::Hermit => "Scroll of personal discovery (flavor), pouch of herbs, blanket",
+        BackgroundKind::HauntedOne => "Silver mirror, 1x holy water flask, set of dark clothing",
+        BackgroundKind::Anthropologist => {
+            "Journal (blank tome), quill + ink, small artifact (flavor)"
+        },
+        BackgroundKind::Inquisitor => {
+            "Writ of hunting authority (flavor document), 1x oil flask, manacles"
+        },
+        BackgroundKind::Sage => "2x blank tome, ink + quill, letter of introduction to a library",
+        BackgroundKind::CloisteredScholar => {
+            "2x blank tome, ink + quill, college seal (flavor), magnifying glass"
+        },
+        BackgroundKind::Archaeologist => "Bullseye lantern, 10-foot pole, rope (50ft), small tent",
+        BackgroundKind::Scribe => "3x blank tome, set of inks, wax seal kit",
+        BackgroundKind::Investigator => {
+            "Magnifying glass, 2x paper sheets, hand-drawn map (flavor)"
+        },
+        BackgroundKind::Soldier => {
+            "Campaign medal (flavor), insignia of rank (flavor), set of dice (gambling)"
+        },
+        BackgroundKind::Guard => "Whistle, club (if not already in class kit), badge (flavor)",
+        BackgroundKind::CityWatch => "Whistle, lantern (hooded), cuffs (manacles light)",
+        BackgroundKind::Marine => "Rope (50ft), fishing kit, naval badge (flavor)",
+        BackgroundKind::MercenaryVeteran => {
+            "Contract document (flavor), 10gp equivalent loot sack, dice set"
+        },
+        BackgroundKind::KnightOfAnOrder => {
+            "Order signet ring (flavor), prayer book of the order, livery tunic"
+        },
+        BackgroundKind::Criminal => "Crowbar, dark hooded cloak, dice set",
+        BackgroundKind::Charlatan => {
+            "Disguise kit (flavor tool), 2x false documents, fine clothing (1 set)"
+        },
+        BackgroundKind::Smuggler => "Rope (50ft), hooded lantern, 2x false-bottom pouch (flavor)",
+        BackgroundKind::Gambler => {
+            "Loaded dice (flavor), deck of cards, small coin pouch (2gp equiv)"
+        },
+        BackgroundKind::UrbanBountyHunter => "Manacles, bounty document (flavor), dark clothing",
+        BackgroundKind::FactionAgent => {
+            "Encoded letter (flavor), faction insignia, 3x doses of ink (cipher)"
+        },
+        BackgroundKind::Noble => "Signet ring, letter of lineage (flavor), fine clothing set",
+        BackgroundKind::Courtier => {
+            "Court-approved seal (flavor), fine clothing, invitation document"
+        },
+        BackgroundKind::FarTraveler => {
+            "Exotic garment from homeland (flavor), journal, local currency pouch"
+        },
+        BackgroundKind::Entertainer => {
+            "Instrument (one type, flavor-only until instruments are implemented), costume, makeup \
+             kit"
+        },
+        BackgroundKind::FolkHero => {
+            "Shovel or pitchfork (or equivalent simple tool), hand-carved token (flavor)"
+        },
+        BackgroundKind::Merchant => {
+            "Balance scales (flavor), 2x blank ledger pages, small coin purse"
+        },
+        BackgroundKind::FailedMerchant => {
+            "Ledger (marked VOID, flavor), 1x traveler's clothes, broken seal"
+        },
+        BackgroundKind::Carouser => {
+            "Flask (full, consumable), tavern map (flavor), hangover remedy (herbalist vial)"
+        },
+        BackgroundKind::Rewarded => "Commendation plaque (flavor), 1x healing potion",
+        BackgroundKind::Ruined => "Pawned crest (flavor), 1x traveler's kit (bedroll + torches)",
+        BackgroundKind::GuildArtisan => {
+            "Set of guild tools (flavor; 1 craft tool), guild membership card, coin (5gp equiv)"
+        },
+        BackgroundKind::Artisan => {
+            "Personal craft tool set (flavor), samples of prior work (flavor), 2gp equiv coin"
+        },
+        BackgroundKind::Shipwright => {
+            "Carpenter's tools (flavor), set of ship blueprints (flavor), rope (50ft)"
+        },
+        BackgroundKind::Farmer => {
+            "Shovel, 1x small animal produce (flavor consumable), work gloves (flavor)"
+        },
+        BackgroundKind::Fisher => "Fishing kit, rope (30ft), 1x salt-preserved food (consumable)",
+        BackgroundKind::Miner => {
+            "Mining pick (or use existing pickaxe), hooded lantern, 10x iron spikes"
+        },
+        BackgroundKind::CaravanSpecialist => {
+            "Wagon chart (flavor map), rope (50ft), 1x trail ration x5"
+        },
+        BackgroundKind::Outlander => "Hunting trap, 1x staff (if not class kit), 2x trail rations",
+        BackgroundKind::Guide => "Hand-drawn regional map (flavor), rope (30ft), signal whistle",
+        BackgroundKind::Sailor => {
+            "Rope (50ft), navigation charts (flavor), belaying pin (improvised weapon)"
+        },
+        BackgroundKind::Wayfarer => "Bedroll, tin cup, 3x trail rations",
+        BackgroundKind::Urchin => {
+            "Small knife (if not in class kit), 1x city district map (flavor), lucky token"
+        },
+    }
+}
+
+/// BL-31 UI-fixes (spec §4.3): the companion detail panel for the
+/// currently-selected background, shown in the right column while on the
+/// Background step. Rebuilt from `background.0` every `view()` pass, so it
+/// live-updates as the player clicks around the grid — no extra wiring
+/// needed (iced immediate-mode). `kind` is always `Some(_)` in practice once
+/// the wizard's Background step has rendered (spec §1's pre-selection
+/// invariant), but `None` is handled defensively (empty panel) rather than
+/// panicking, since this reads the same `Option<BackgroundKind>` as the
+/// data-layer `Background` component.
+fn background_detail_panel<'a>(
+    kind: Option<BackgroundKind>,
+    i18n: &Localization,
+    fonts: &Fonts,
+) -> Vec<Element<'a, Message>> {
+    let Some(kind) = kind else {
+        return Vec::new();
+    };
+
+    let heading = |text: String| -> Element<'a, Message> {
+        Text::new(text)
+            .size(fonts.cyri.scale(22))
+            .color(Color::from_rgb(0.93, 0.78, 0.28))
+            .into()
+    };
+    let body = |text: String| -> Element<'a, Message> {
+        Text::new(text)
+            .size(fonts.cyri.scale(18))
+            .color(TEXT_COLOR)
+            .into()
+    };
+    // Sections 2-4 (spec §4.4) have no authored lore yet; the placeholder is
+    // styled dimmed/muted so it clearly reads as intentional, not a bug.
+    let placeholder = |text: String| -> Element<'a, Message> {
+        Text::new(text)
+            .size(fonts.cyri.scale(16))
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.5))
+            .into()
+    };
+    let section = |label_key: &str, content: Element<'a, Message>| -> Element<'a, Message> {
+        Column::with_children(vec![heading(i18n.get_msg(label_key).into_owned()), content])
+            .spacing(4)
+            .width(Length::Fill)
+            .into()
+    };
+
+    vec![
+        // 1. Nombre del background — REAL (display_name()).
+        section(
+            "char_selection-background_detail_name",
+            body(kind.display_name()),
+        ),
+        // 2. Detalle — PLACEHOLDER (no lore authored yet).
+        section(
+            "char_selection-background_detail_lore",
+            placeholder(
+                i18n.get_msg("char_selection-background_detail_pending")
+                    .into_owned(),
+            ),
+        ),
+        // 3. Beneficios e Interacciones Sociales — PLACEHOLDER.
+        section(
+            "char_selection-background_detail_social",
+            placeholder(
+                i18n.get_msg("char_selection-background_social_pending")
+                    .into_owned(),
+            ),
+        ),
+        // 4. Te codeas mejor con... — PLACEHOLDER.
+        section(
+            "char_selection-background_detail_affinity",
+            placeholder(
+                i18n.get_msg("char_selection-background_affinity_pending")
+                    .into_owned(),
+            ),
+        ),
+        // 5. Habilidades — REAL (triage doc stat passive).
+        section(
+            "char_selection-background_detail_skills",
+            body(background_stat_passive(kind).to_string()),
+        ),
+        // 6. Items (Starter Kit) — REAL (triage doc kit description).
+        section(
+            "char_selection-background_detail_kit",
+            body(background_starter_kit(kind).to_string()),
+        ),
+    ]
+}
+
 // TODO: what does this comment mean?
 // // Use in future MR to make this a starter weapon
 
@@ -257,14 +507,14 @@ enum Mode {
         class: ClassKind,
         /// BL-33: the starting moral alignment chosen at creation.
         ethos: Ethos,
-        /// BL-31: the background chosen at creation (`Background(None)` =
-        /// "Uncommitted", P0 §Q1 — a valid, unforced choice).
+        /// BL-31: the background chosen at creation. During the creation
+        /// wizard this is always `Some(_)` — the Background step pre-selects
+        /// `BackgroundKind::ALL[0]` and every click always selects (never
+        /// toggles off), so exactly one background is selected at all times
+        /// (UI-fixes spec §1). `Background(None)` ("Uncommitted", P0 §Q1)
+        /// remains a valid data-layer state for legacy characters, which
+        /// don't run the creation wizard.
         background: Background,
-        /// BL-31: freeform note typed into the `Custom` background's text
-        /// field. Only sent to the server when `background` is
-        /// `Some(BackgroundKind::Custom(_))`; otherwise kept but unused, so
-        /// switching away and back doesn't lose what was typed.
-        background_custom_note: String,
 
         body_type_buttons: [button::State; 2],
         species_buttons: [button::State; 6],
@@ -272,11 +522,10 @@ enum Mode {
         tool_buttons: [button::State; 6],
         ethos_moral_buttons: [button::State; 3],
         ethos_order_buttons: [button::State; 3],
-        /// BL-31: one button per `BackgroundKind::ALL` entry plus one for
-        /// `Custom`, resized on first use (mirrors `character_buttons`).
+        /// BL-31: one button per `BackgroundKind::ALL` entry, resized on
+        /// first use (mirrors `character_buttons`).
         background_buttons: Vec<button::State>,
         background_scroll: scrollable::State,
-        background_custom_input: text_input::State,
         sliders: Sliders,
         hardcore_enabled: bool,
         left_scroll: scrollable::State,
@@ -387,8 +636,10 @@ impl Mode {
             offhand,
             class: ClassKind::Warrior,
             ethos: Ethos::default(),
-            background: Background::default(),
-            background_custom_note: String::new(),
+            // BL-31 UI-fixes spec §1: the creation wizard never renders the
+            // Background step with nothing selected; seed the first entry in
+            // declaration order (count-agnostic — spec §0.1).
+            background: Background(Some(BackgroundKind::ALL[0])),
             body_type_buttons: Default::default(),
             species_buttons: Default::default(),
             class_buttons: Default::default(),
@@ -397,7 +648,6 @@ impl Mode {
             ethos_order_buttons: Default::default(),
             background_buttons: Vec::new(),
             background_scroll: Default::default(),
-            background_custom_input: Default::default(),
             sliders: Default::default(),
             hardcore_enabled: false,
             left_scroll: Default::default(),
@@ -431,8 +681,10 @@ impl Mode {
             offhand: None,
             class: ClassKind::Adventurer,
             ethos: Ethos::default(),
-            background: Background::default(),
-            background_custom_note: String::new(),
+            // BL-31 UI-fixes spec §1: the creation wizard never renders the
+            // Background step with nothing selected; seed the first entry in
+            // declaration order (count-agnostic — spec §0.1).
+            background: Background(Some(BackgroundKind::ALL[0])),
             body_type_buttons: Default::default(),
             species_buttons: Default::default(),
             class_buttons: Default::default(),
@@ -441,7 +693,6 @@ impl Mode {
             ethos_order_buttons: Default::default(),
             background_buttons: Vec::new(),
             background_scroll: Default::default(),
-            background_custom_input: Default::default(),
             sliders: Default::default(),
             hardcore_enabled: false,
             left_scroll: Default::default(),
@@ -511,13 +762,11 @@ enum Message {
     Class(ClassKind),
     EthosMoral(Moral),
     EthosOrder(Order),
-    /// BL-31: select a fixed (non-`Custom`) background, or clear back to
-    /// "Uncommitted" if the currently-selected one is re-clicked.
+    /// BL-31: select a background. The creation wizard's Background step is
+    /// a single-select radio group — clicking any entry always selects it
+    /// (UI-fixes spec §1); `None` remains reachable only as the legacy
+    /// "Uncommitted" data-layer state (never sent by the wizard).
     Background(Option<BackgroundKind>),
-    /// BL-31: select the `Custom` entry (freeform text, P0 §Q5).
-    BackgroundCustomSelected,
-    /// BL-31: edit the `Custom` background's freeform note.
-    BackgroundCustomNote(String),
     Tool((Option<&'static str>, Option<&'static str>)),
     RandomizeCharacter,
     HardcoreEnabled(bool),
@@ -1151,7 +1400,6 @@ impl Controls {
                 class,
                 ethos,
                 background,
-                background_custom_note,
                 left_scroll,
                 right_scroll,
                 body_type_buttons,
@@ -1162,7 +1410,6 @@ impl Controls {
                 ethos_order_buttons,
                 background_buttons,
                 background_scroll,
-                background_custom_input,
                 sliders,
                 hardcore_enabled,
                 name_input,
@@ -1817,34 +2064,41 @@ impl Controls {
                 .width(Length::Fill)
                 .max_width(ETHOS_ROW_W);
 
-                // BL-31: the Background step — a scrollable list of every
-                // `BackgroundKind`, plus a `Custom` entry with a freeform
-                // text field (P0 §Q5). Mirrors the `characters`/
-                // `characters_scroll` Vec<button::State> pattern (character
-                // select list) rather than the Ethos step's fixed 3-button
-                // grid, since 44 backgrounds don't fit a fixed layout.
-                // Per-background flavor text / category headers are BL-31 P2
-                // + P3 (Haiku content); this P1 step lists names only, via
-                // `BackgroundKind::display_name()` (a title-cased stand-in
-                // for the real i18n titles P3 will author).
+                // BL-31 UI-fixes (spec §4): the Background step — a 2-column
+                // grid of every `BackgroundKind`, radio-select (spec §1: the
+                // wizard always has exactly one background selected; clicking
+                // any entry always selects it, never toggles off). Mirrors the
+                // `characters`/`characters_scroll` Vec<button::State> pattern
+                // (character select list) rather than the Ethos step's fixed
+                // 3-button grid, since dozens of backgrounds don't fit a
+                // fixed layout. Per-background flavor text / category headers
+                // are a future content pass (spec §5); this step lists names
+                // only, via `BackgroundKind::display_name()` (a title-cased
+                // stand-in for the real i18n titles that pass will author).
                 const BACKGROUND_ROW_H: u16 = 40;
+                // Long display names (spec §3 must-stay list) get a smaller
+                // font fraction so they don't clip at the grid's cell width.
+                // 14 is the longest non-must-stay name ("Anthropologist");
+                // the six must-stay long names are all >= 15 chars.
+                const BACKGROUND_LONG_NAME_LEN: usize = 14;
                 let background_section = {
-                    // +1 slot for the fixed `Custom` entry, appended last.
-                    background_buttons.resize_with(BackgroundKind::ALL.len() + 1, Default::default);
-                    let (custom_button, fixed_buttons) = background_buttons
-                        .split_last_mut()
-                        .expect("resized to at least 1 above");
+                    background_buttons.resize_with(BackgroundKind::ALL.len(), Default::default);
 
-                    let rows = BackgroundKind::ALL
+                    let buttons = BackgroundKind::ALL
                         .into_iter()
-                        .zip(fixed_buttons.iter_mut())
+                        .zip(background_buttons.iter_mut())
                         .map(|(kind, state)| {
-                            let selected = background.0.as_ref() == Some(&kind);
+                            let selected = background.0 == Some(kind);
                             let label = kind.display_name();
-                            neat_button(
+                            let fill_fraction = if label.len() > BACKGROUND_LONG_NAME_LEN {
+                                FILL_FRAC_TWO
+                            } else {
+                                FILL_FRAC_ONE
+                            };
+                            let el = neat_button(
                                 state,
                                 label,
-                                FILL_FRAC_ONE,
+                                fill_fraction,
                                 if selected {
                                     style::button::Style::new(imgs.button)
                                         .hover_image(imgs.button_hover)
@@ -1853,46 +2107,48 @@ impl Controls {
                                 } else {
                                     button_style
                                 },
-                                // Re-clicking the selected entry clears back to
-                                // "Uncommitted" (P0 §Q1 — a valid, unforced
-                                // choice, not just a legacy default).
-                                Some(Message::Background(if selected {
-                                    None
-                                } else {
-                                    Some(kind)
-                                })),
-                            )
-                        })
-                        .map(|el| {
+                                // Clicking always selects (spec §1): the
+                                // Background step is a single-select radio
+                                // group and never renders with nothing
+                                // selected, so re-clicking the current entry
+                                // is a no-op rather than clearing it.
+                                Some(Message::Background(Some(kind))),
+                            );
                             Container::new(el)
+                                .width(Length::Fill)
                                 .height(Length::Units(BACKGROUND_ROW_H))
                                 .into()
                         })
                         .collect::<Vec<Element<Message>>>();
 
-                    let is_custom = matches!(background.0, Some(BackgroundKind::Custom(_)));
-                    let custom_entry = Container::new(neat_button(
-                        custom_button,
-                        i18n.get_msg("char_selection-background_custom")
-                            .into_owned(),
-                        FILL_FRAC_ONE,
-                        if is_custom {
-                            style::button::Style::new(imgs.button)
-                                .hover_image(imgs.button_hover)
-                                .press_image(imgs.button_press)
-                                .text_color(Color::from_rgb(0.93, 0.78, 0.28))
-                        } else {
-                            button_style
-                        },
-                        Some(Message::BackgroundCustomSelected),
-                    ))
-                    .height(Length::Units(BACKGROUND_ROW_H));
+                    // Chunk into rows of two so the grid stays agnostic to the
+                    // total variant count (spec §0.1) — trimming the enum
+                    // later just yields fewer rows, no code change needed.
+                    // `Element` isn't `Clone`, so pair up by draining the
+                    // owned `Vec` two at a time instead of `.chunks()`.
+                    let mut buttons = buttons.into_iter();
+                    let mut rows: Vec<Element<Message>> = Vec::new();
+                    loop {
+                        let Some(first) = buttons.next() else {
+                            break;
+                        };
+                        let mut row_children = vec![first];
+                        if let Some(second) = buttons.next() {
+                            row_children.push(second);
+                        }
+                        rows.push(
+                            Row::with_children(row_children)
+                                .spacing(6)
+                                .width(Length::Fill)
+                                .into(),
+                        );
+                    }
 
-                    let list = Column::with_children(rows).push(custom_entry).spacing(4);
+                    let grid = Column::with_children(rows).spacing(4).width(Length::Fill);
 
-                    let scrollable_list = Container::new(
+                    Container::new(
                         Scrollable::new(background_scroll)
-                            .push(list)
+                            .push(grid)
                             .padding(6)
                             .scrollbar_width(5)
                             .scroller_width(5)
@@ -1902,24 +2158,11 @@ impl Controls {
                                 scroller: style::scrollable::Scroller::Color(UI_MAIN),
                             }),
                     )
-                    .height(Length::Units(260));
-
-                    let mut children: Vec<Element<Message>> = vec![scrollable_list.into()];
-                    if is_custom {
-                        children.push(
-                            TextInput::new(
-                                background_custom_input,
-                                &i18n.get_msg("char_selection-background_custom_placeholder"),
-                                background_custom_note,
-                                Message::BackgroundCustomNote,
-                            )
-                            .size(20)
-                            .into(),
-                        );
-                    }
-                    Column::with_children(children)
-                        .spacing(8)
-                        .width(Length::Fill)
+                    // Roughly double the old single-column height (260) so
+                    // the 2-column grid needs little to no scrolling
+                    // (spec §4.2).
+                    .height(Length::Units(520))
+                    .width(Length::Fill)
                 };
 
                 let hardcore_checkbox = if character_id.is_some() {
@@ -2104,6 +2347,12 @@ impl Controls {
                 // The start-zone map panel renders only on the Finish step (and
                 // never in edit mode).
                 let show_map = character_id.is_none() && step == CreationStep::Finish;
+                // BL-31 UI-fixes (spec §4.3): the companion detail panel for
+                // the currently-selected background renders only on the
+                // Background step (and never in edit mode), mirroring
+                // `show_map`'s gating pattern.
+                let show_background_detail =
+                    character_id.is_none() && step == CreationStep::Background;
                 let right_column_content = if show_map {
                     let map_sz = Vec2::new(500, 500);
                     let map_img = Image::new(self.map_img)
@@ -2213,12 +2462,24 @@ impl Controls {
 
                         vec![site_slider, map, site_buttons]
                     }
+                } else if show_background_detail {
+                    background_detail_panel(background.0, i18n, fonts)
                 } else {
                     // If we're editing an existing character, don't display the world column
                     Vec::new()
                 };
 
-                let column_left = |column_content, scroll| {
+                // BL-31 UI-fixes (spec §4.2): the Background step's 2-column
+                // grid needs a wider left column than the other steps'
+                // single-column content, so `column_left` takes the target
+                // width instead of hardcoding it.
+                let left_column_width =
+                    if character_id.is_none() && step == CreationStep::Background {
+                        480
+                    } else {
+                        320
+                    };
+                let column_left = |column_content, scroll, width: u16| {
                     let column = Container::new(
                         Scrollable::new(scroll)
                             .push(
@@ -2236,7 +2497,7 @@ impl Controls {
                                 scroller: style::scrollable::Scroller::Color(UI_MAIN),
                             }),
                     )
-                    .width(Length::Units(320)) // TODO: see if we can get iced to work with settings below
+                    .width(Length::Units(width)) // TODO: see if we can get iced to work with settings below
                     // .max_width(360)
                     // .width(Length::Fill)
                     .height(Length::Fill);
@@ -2247,12 +2508,12 @@ impl Controls {
                                 0,
                                 BANNER_ALPHA,
                             )))
-                            .width(Length::Units(320))
+                            .width(Length::Units(width))
                             .center_x()
                             .into(),
                         Image::new(imgs.frame_bottom)
                             .height(Length::Units(40))
-                            .width(Length::Units(320))
+                            .width(Length::Units(width))
                             .color(Rgba::from_translucent(0, BANNER_ALPHA))
                             .into(),
                     ])
@@ -2280,9 +2541,10 @@ impl Controls {
                     // .max_width(360)
                     // .width(Length::Fill)
                     .height(Length::Fill);
-                    // Only the Finish step (in creation mode) shows the framed map
-                    // panel; everything else keeps the right column empty/bare.
-                    if show_map {
+                    // Only the Finish step's map panel and the Background
+                    // step's detail panel (both creation-mode only) show the
+                    // framed right column; everything else keeps it empty/bare.
+                    if show_map || show_background_detail {
                         Column::with_children(vec![
                             Container::new(column)
                                 .style(style::container::Style::color(Rgba::from_translucent(
@@ -2308,7 +2570,7 @@ impl Controls {
                     MouseDetector::new(&mut self.mouse_detector, Length::Fill, Length::Fill);
 
                 let top = Row::with_children(vec![
-                    column_left(left_column_content, left_scroll).into(),
+                    column_left(left_column_content, left_scroll, left_column_width).into(),
                     Column::with_children(
                         if let Some(warning_container) = warning_container.take() {
                             vec![warning_container.into(), mouse_area.into()]
@@ -2628,21 +2890,10 @@ impl Controls {
                     class,
                     ethos,
                     background,
-                    background_custom_note,
                     start_site_idx,
                     ..
                 } = &self.mode
                 {
-                    // BL-31: fold the freeform note into the `Custom` variant
-                    // at send-time — `background_custom_note` is the single
-                    // source of truth for its text while editing (see
-                    // `Message::BackgroundCustomNote`).
-                    let background = match &background.0 {
-                        Some(BackgroundKind::Custom(_)) => {
-                            Background(Some(BackgroundKind::Custom(background_custom_note.clone())))
-                        },
-                        other => Background(other.clone()),
-                    };
                     events.push(Event::AddCharacter {
                         alias: name.clone(),
                         mainhand: mainhand.map(String::from),
@@ -2651,7 +2902,7 @@ impl Controls {
                         hardcore: *hardcore_enabled,
                         class: *class,
                         ethos: *ethos,
-                        background,
+                        background: *background,
                         start_site: self
                             .possible_starting_sites
                             .get(start_site_idx.unwrap_or_default())
@@ -2729,24 +2980,6 @@ impl Controls {
             Message::Background(kind) => {
                 if let Mode::CreateOrEdit { background, .. } = &mut self.mode {
                     background.0 = kind;
-                }
-            },
-            Message::BackgroundCustomSelected => {
-                if let Mode::CreateOrEdit { background, .. } = &mut self.mode {
-                    // The note text itself lives in `background_custom_note`
-                    // (kept across re-selection); an empty string here is
-                    // just a placeholder until `CreateCharacter` folds it in.
-                    background.0 = Some(BackgroundKind::Custom(String::new()));
-                }
-            },
-            Message::BackgroundCustomNote(value) => {
-                if let Mode::CreateOrEdit {
-                    background_custom_note,
-                    ..
-                } = &mut self.mode
-                {
-                    // P0 §Q5: DM-approved freeform note, capped at 200 chars.
-                    *background_custom_note = value.chars().take(200).collect();
                 }
             },
             Message::Tool(value) => {
@@ -3072,4 +3305,55 @@ struct Sliders {
     accessory: slider::State,
     beard: slider::State,
     starting_site: slider::State,
+}
+
+#[cfg(test)]
+mod background_ui_tests {
+    use super::*;
+
+    /// BL-31 UI-fixes spec §3: these six long display names are on Matías's
+    /// explicit "must-stay" list (never removed by the pending variant
+    /// curation) and must render without clipping. Guard that the
+    /// long-name-detection threshold used by `background_section`'s
+    /// fill-fraction fallback (spec §3.1) actually catches all six.
+    #[test]
+    fn long_name_threshold_catches_all_must_stay_names() {
+        const BACKGROUND_LONG_NAME_LEN: usize = 14;
+        let must_stay = [
+            BackgroundKind::CloisteredScholar,
+            BackgroundKind::MercenaryVeteran,
+            BackgroundKind::KnightOfAnOrder,
+            BackgroundKind::UrbanBountyHunter,
+            BackgroundKind::FailedMerchant,
+            BackgroundKind::CaravanSpecialist,
+        ];
+        for kind in must_stay {
+            let label = kind.display_name();
+            assert!(
+                label.len() > BACKGROUND_LONG_NAME_LEN,
+                "{label:?} (len {}) should be flagged as a long name needing the smaller \
+                 fill-fraction fallback",
+                label.len()
+            );
+        }
+    }
+
+    /// `background_stat_passive`/`background_starter_kit` must be total over
+    /// `BackgroundKind::ALL` (spec §4.5) so the detail panel never shows a
+    /// blank Habilidades/Items section — the `match` itself is exhaustive at
+    /// compile time, so this test just guards against a future match arm
+    /// returning an empty string by mistake.
+    #[test]
+    fn stat_passive_and_starter_kit_are_non_empty_for_all_backgrounds() {
+        for kind in BackgroundKind::ALL {
+            assert!(
+                !background_stat_passive(kind).is_empty(),
+                "{kind:?} has an empty stat passive description"
+            );
+            assert!(
+                !background_starter_kit(kind).is_empty(),
+                "{kind:?} has an empty starter kit description"
+            );
+        }
+    }
 }

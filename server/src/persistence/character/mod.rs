@@ -325,10 +325,7 @@ pub fn load_character_data(
                 character_data.ethos_good_evil,
                 character_data.ethos_law_chaos,
             ),
-            background: convert_background_from_database(
-                character_data.background.as_deref(),
-                character_data.background_custom_note.as_deref(),
-            ),
+            background: convert_background_from_database(character_data.background.as_deref()),
         },
         UpdateCharacterMetadata {
             skill_set_persistence_load_error,
@@ -552,7 +549,7 @@ pub fn create_character(
     ])?;
     drop(stmt);
 
-    let (background_db, background_custom_note_db) = convert_background_to_database(&background);
+    let (background_db, background_custom_note_db) = convert_background_to_database(background);
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -1252,7 +1249,7 @@ pub fn update(
     }
 
     let db_waypoint = convert_waypoint_to_database_json(char_waypoint, map_marker);
-    let (background_db, background_custom_note_db) = convert_background_to_database(&background);
+    let (background_db, background_custom_note_db) = convert_background_to_database(background);
 
     let mut stmt = transaction.prepare_cached(
         "

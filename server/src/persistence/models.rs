@@ -10,7 +10,10 @@ pub struct Character {
     pub ethos_law_chaos: i16,
     /// BL-31: `NULL` -> `Background(None)` ("Uncommitted", P0 §Q1).
     pub background: Option<String>,
-    /// BL-31: only populated when `background == Some("custom")` (P0 §Q5).
+    /// Dead column (BL-31 UI-fixes pass): `BackgroundKind::Custom` was
+    /// removed, so this is never populated with real data anymore. Left in
+    /// place to avoid a migration (nullable, zero live rows referenced it).
+    #[expect(dead_code)]
     pub background_custom_note: Option<String>,
 }
 

@@ -418,7 +418,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .ecs()
                         .read_storage::<comp::Background>()
                         .get(entity)
-                        .cloned()
+                        .copied()
                         .unwrap_or_default();
 
                     character_updater.add_pending_logout_update((
