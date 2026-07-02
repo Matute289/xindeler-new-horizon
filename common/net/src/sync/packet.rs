@@ -8,7 +8,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroU64,
 };
-use tracing::error;
+use tracing::{debug, error};
 
 // TODO: apply_{insert,modify,remove} all take the entity and call
 // `write_storage` once per entity per component, instead of once per update
@@ -33,13 +33,27 @@ pub fn handle_insert<C: Component>(comp: C, entity: Entity, world: &World) {
 }
 /// Useful for implementing CompPacket trait
 pub fn handle_modify<C: Component + Debug>(comp: C, entity: Entity, world: &World) {
-    if let Some(mut c) = world.write_storage::<C>().get_mut(entity) {
+    let mut storage = world.write_storage::<C>();
+    if let Some(mut c) = storage.get_mut(entity) {
         *c.access_mut() = comp
     } else {
-        error!(
+        // Benign, known race: components like `Beam`/`Melee` are inserted and
+        // removed via `LazyUpdate` and mutated in-place every tick they're
+        // alive, while `entity_sync` broadcasts updates to a client's
+        // multiple subscribed regions from separate rayon jobs with no
+        // ordering guarantee across ticks (e.g. when the owning entity
+        // crosses a region boundary). That can let a Modified packet for
+        // this tick arrive after the client missed the original Inserted or
+        // already applied a later Removed. Since Modified packets always
+        // carry the full component value (not a diff), self-heal by
+        // inserting rather than dropping the update.
+        debug!(
             ?comp,
-            "Error modifying synced component, it doesn't seem to exist"
+            "Modified packet raced with insert/remove; inserting instead"
         );
+        if let Err(e) = storage.insert(entity, comp) {
+            error!(?e, "Error inserting");
+        }
     }
 }
 /// Useful for implementing CompPacket trait
