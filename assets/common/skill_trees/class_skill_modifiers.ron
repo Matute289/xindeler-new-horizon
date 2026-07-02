@@ -50,7 +50,9 @@
     Cleric(SacredWards): [(ResistMagic, 0.04)],
     Cleric(SteadfastFaith): [(CrowdControlResistance, 0.05)],
     Cleric(PurifyingGrace): [(ResistPoison, 0.04)],
-    Cleric(DivineConduit): [(EnergyReward, 0.06)],
+    // BL-66 d: HealPower makes heal_power a live lever (scales instant heals AND
+    // healing auras like Mending Light). rank 3 → +18% healing at max.
+    Cleric(DivineConduit): [(EnergyReward, 0.06), (HealPower, 0.06)],
     Cleric(SmitingStrikes): [(SpellPower, 0.04), (BonusVsUndead, 0.10)],
     Cleric(ArmorOfFaith): [(DamageReduction, 0.02)],
     Cleric(Aegis): [(DamageReduction, 0.05)],

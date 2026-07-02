@@ -3128,6 +3128,17 @@ impl Diary<'_> {
         let skill_strings = skill_strings(skill);
         let (title, description) =
             skill_strings.localize(self.localized_strings, self.skill_set, skill);
+        // BL-06 UX: append the next-rank SP cost to the tooltip so the red
+        // "insufficient points" colour is self-explanatory (cost scales with rank:
+        // rank N costs N SP). Mirrors the active-ability button. Omitted at max level.
+        let description = if self.skill_set.is_at_max_level(skill) {
+            format!("{description}")
+        } else {
+            format!(
+                "{description}\n{}",
+                sp(self.localized_strings, self.skill_set, skill)
+            )
+        };
 
         let button = Button::image(skill_image)
             .w_h(74.0, 74.0)
