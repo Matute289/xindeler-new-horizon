@@ -112,6 +112,11 @@ buff-burn = En llamas
 buff-crippled = Incapacitado
     .desc = Te mueves con dificultad a causa de las heridas en tus piernas.
 
+## Ralentizado (BL-66 d)
+
+buff-slowed = Ralentizado
+    .desc = Tu velocidad de movimiento está reducida.
+
 ## Congelado
 
 buff-frozen = Congelado

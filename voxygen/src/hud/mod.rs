@@ -5706,6 +5706,7 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::ScornfulTaunt => imgs.buff_scornful_taunt,
         BuffKind::SepticShot => imgs.buff_septic_shot,
         BuffKind::Shielded => imgs.buff_shielded,
+        BuffKind::Slowed => imgs.debuff_slowed,
         BuffKind::Sunderer => imgs.buff_sunderer,
         BuffKind::Tenacity => imgs.buff_tenacity,
         BuffKind::Terrified => imgs.debuff_terrified,

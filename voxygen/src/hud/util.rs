@@ -342,6 +342,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Anchored => "buff-anchored",
         BuffKind::Asleep => "buff-asleep",
         BuffKind::Blinded => "buff-blinded",
+        BuffKind::Slowed => "buff-slowed",
         // Neutral
         BuffKind::Polymorphed => "buff-polymorphed",
         // Positive
@@ -502,7 +503,8 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Antimagic
                         | BuffKind::Anchored
                         | BuffKind::Asleep
-                        | BuffKind::Blinded => Cow::Borrowed(""),
+                        | BuffKind::Blinded
+                        | BuffKind::Slowed => Cow::Borrowed(""),
                     };
 
                     write!(&mut description, "{}", buff_desc).unwrap();

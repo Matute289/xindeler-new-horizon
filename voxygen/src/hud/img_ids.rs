@@ -973,6 +973,12 @@ image_ids! {
         debuff_off_balance: "voxygen.element.de_buffs.debuff_off_balance",
         debuff_ardent_hunted: "voxygen.element.de_buffs.debuff_ardent_hunted",
         debuff_polymorphed: "voxygen.element.de_buffs.debuff_polymorphed",
+        debuff_slowed: "voxygen.element.de_buffs.debuff_slowed",
+        // BL-67 staged: asset ready, mapped when the host feature lands.
+        debuff_sick: "voxygen.element.de_buffs.debuff_sick",
+        debuff_spider_web: "voxygen.element.de_buffs.debuff_spider_web",
+        buff_forging: "voxygen.element.de_buffs.buff_forging",
+        buff_hunter_mark: "voxygen.element.de_buffs.buff_hunter_mark",
         buff_shielded: "voxygen.element.de_buffs.buff_shielded",
         buff_regeneration: "voxygen.element.de_buffs.buff_regeneration",
         buff_saturation: "voxygen.element.de_buffs.buff_saturation",

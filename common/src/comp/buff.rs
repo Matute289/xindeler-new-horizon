@@ -311,6 +311,12 @@ pub enum BuffKind {
     /// damage dealt. The action-combat analogue of "attack disadvantage";
     /// vision occlusion is a deferred client-only effect.
     Blinded,
+    /// Generic movement slow (BL-66 d), for Slow spells and other sources
+    /// that should reduce movement speed without any other side effect.
+    /// Mirrors `Crippled`'s movement-speed curve but WITHOUT the HP drain.
+    /// Strength scales the movement speed debuff non-linearly, 0.5 is 50%
+    /// speed, 1.0 is 33% speed.
+    Slowed,
     // =================
     //      COMPLEX
     // =================
@@ -402,7 +408,8 @@ impl BuffKind {
             | BuffKind::Antimagic
             | BuffKind::Anchored
             | BuffKind::Asleep
-            | BuffKind::Blinded => BuffDescriptor::SimpleNegative,
+            | BuffKind::Blinded
+            | BuffKind::Slowed => BuffDescriptor::SimpleNegative,
             BuffKind::Polymorphed => BuffDescriptor::Complex,
         }
     }
@@ -413,6 +420,15 @@ impl BuffKind {
             BuffDescriptor::SimplePositive => true,
             BuffDescriptor::SimpleNegative | BuffDescriptor::Complex => false,
         }
+    }
+
+    /// Healing kinds whose strength should scale with the caster's
+    /// `heal_power`.
+    pub fn is_heal(self) -> bool {
+        matches!(
+            self,
+            BuffKind::Regeneration | BuffKind::Saturation | BuffKind::RestingHeal
+        )
     }
 
     pub fn is_simple(self) -> bool {
@@ -621,6 +637,9 @@ impl BuffKind {
             ],
             // BL-05 rider: blinded — reduced outgoing attack damage (can't aim).
             BuffKind::Blinded => vec![BuffEffect::AttackDamage((1.0 - data.strength).max(0.0))],
+            // BL-66 d: generic movement slow, mirrors Crippled's speed curve
+            // without the HP drain.
+            BuffKind::Slowed => vec![BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength))],
             BuffKind::Hastened => vec![
                 BuffEffect::MovementSpeed(1.0 + data.strength),
                 BuffEffect::AttackSpeed(1.0 + data.strength),
@@ -1523,6 +1542,27 @@ pub mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], BuffEffect::AttackDamage(d) if (d - 0.5).abs() < 1e-6));
         assert!(!BuffKind::Blinded.is_buff(), "should be a debuff");
+    }
+
+    #[test]
+    fn is_heal_flags_healing_kinds_only() {
+        // BL-66 d: heal_power should scale exactly the positive
+        // HealthChangeOverTime kinds, not arbitrary buffs/debuffs.
+        assert!(BuffKind::Regeneration.is_heal());
+        assert!(!BuffKind::Slowed.is_heal());
+    }
+
+    #[test]
+    fn slowed_reduces_movement_speed_only() {
+        // BL-66 d: Slowed mirrors Crippled's movement curve without the HP
+        // drain, and is a debuff.
+        assert!(!BuffKind::Slowed.is_buff(), "should be a debuff");
+        let effects = BuffKind::Slowed.effects(&BuffData::new(0.5, None), None);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::MovementSpeed(s) if *s < 1.0))
+        );
     }
 
     #[test]

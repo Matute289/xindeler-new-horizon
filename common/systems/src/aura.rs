@@ -281,6 +281,17 @@ fn activate_aura(
             // and is of at least the same strength
             // and of at least the same duration.
             // If no such buff is present, adds the buff.
+            // BL-66 d: bake the aura applier's heal_power into healing aura
+            // strength (same approach combat.rs uses for instant heals) BEFORE the
+            // dedup check, so the check compares like-for-like scaled strengths and
+            // doesn't re-emit every tick when heal_power < 1.0. Non-healing buffs
+            // are untouched. `data`/`BuffData` is Copy, so this reads the aura's base
+            // each tick — no compounding.
+            let mut data = data;
+            if kind.is_heal() {
+                let hp = read_data.stats.get(applier).map_or(1.0, |s| s.heal_power);
+                data.strength *= hp;
+            }
             let emit_buff = !target_buffs.buffs.iter().any(|(_, buff)| {
                 buff.cat_ids
                     .iter()

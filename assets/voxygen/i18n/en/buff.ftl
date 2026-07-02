@@ -120,6 +120,9 @@ buff-asleep = Asleep
     .desc = You are sunk in magical sleep — unable to move or act.
 buff-blinded = Blinded
     .desc = You cannot see to aim — your attacks deal reduced damage.
+## Slowed (BL-66 d)
+buff-slowed = Slowed
+    .desc = Your movement speed is reduced.
 ## Freeze
 buff-frozen = Frozen
     .desc = Your movements and attacks are slowed.

@@ -432,7 +432,8 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Antimagic
         | BuffKind::Anchored
         | BuffKind::Asleep
-        | BuffKind::Blinded => {
+        | BuffKind::Blinded
+        | BuffKind::Slowed => {
             tracing::error!("Player was killed by a debuff that doesn't do damage!");
             "mysterious"
         },
