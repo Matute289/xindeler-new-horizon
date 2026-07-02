@@ -236,6 +236,8 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
             comp::class::ClassKind::Warrior,
             // BL-33: bots start True Neutral.
             comp::Ethos::default(),
+            // BL-31: bots start with no background.
+            comp::Background::default(),
         );
         client.load_character_list();
         guard = 0;

@@ -200,10 +200,10 @@ mod tests {
     #[test]
     fn background_none_is_clone_eq_stable() {
         let a = Background(None);
-        let b = a.clone();
+        let b = a; // Background is Copy (a stays valid); verifies Eq of copies.
         assert_eq!(a, b);
         let c = Background(Some(BackgroundKind::Soldier));
-        let d = c.clone();
+        let d = c;
         assert_eq!(c, d);
         assert_ne!(a, c);
     }

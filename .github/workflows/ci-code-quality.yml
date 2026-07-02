@@ -1,0 +1,64 @@
+name: Code Quality (PR)
+
+# BL-70: run the SAME gate as .github/scripts/code-quality.sh
+# (cargo clippy ×3 with -D warnings + cargo fmt --all --check) on every PR to
+# development/main, so code that doesn't compile / has clippy warnings / isn't
+# rustfmt-clean cannot merge. This is what #129/#130 slipped past (GH Actions
+# previously ran only the branch-target guards).
+#
+# CODE CI ONLY — never pulls LFS: binary assets live on the VPS, and
+# compile/lint/fmt don't need them (CLAUDE.md rule).
+
+on:
+  pull_request:
+    branches: [development, main]
+  workflow_dispatch:
+
+# One run per PR ref; cancel superseded runs to save minutes.
+concurrency:
+  group: code-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    env:
+      # Defensive: clippy doesn't load assets, but code-quality.sh exports nothing.
+      VELOREN_ASSETS: ${{ github.workspace }}/assets
+    steps:
+      - name: Checkout (no LFS — assets are on the VPS, not GitHub)
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        # `mold` — the repo's .cargo/config.toml forces `-fuse-ld=mold` globally,
+        # so the linker MUST be present or every build fails with "cannot find ld".
+        # alsa/udev dev headers — voxygen (clippy'd by code-quality.sh) needs them to
+        # compile. binutils/pkg-config — general build. No X11/wayland headers needed
+        # for a compile-only (clippy) build — winit/wgpu dlopen those at runtime.
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        # Read the pin dynamically so this stays in sync with the monthly bump
+        # (unlike publish-docker.yml which hardcodes an old nightly).
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          echo "Pinned toolchain: $TOOLCHAIN"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+          rustup default "$TOOLCHAIN"
+          rustc --version && cargo clippy --version && cargo fmt --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: code-quality
+
+      - name: Clippy (×3 feature sets) + rustfmt --check
+        run: bash .github/scripts/code-quality.sh
