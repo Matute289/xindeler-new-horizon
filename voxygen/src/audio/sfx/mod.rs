@@ -81,7 +81,7 @@ use crate::{
         AudioFrontend,
         channel::{SFX_DIST_LIMIT_SQR, UiChannelTag},
     },
-    scene::{Camera, Terrain},
+    scene::{Camera, FigureMgr, Terrain},
 };
 
 use client::Client;
@@ -422,6 +422,7 @@ impl SfxMgr {
         camera: &Camera,
         terrain: &Terrain<TerrainChunk>,
         client: &Client,
+        figure_mgr: &FigureMgr,
     ) {
         // Checks if the SFX volume is set to zero or audio is disabled
         // This prevents us from running all the following code unnecessarily
@@ -469,6 +470,7 @@ impl SfxMgr {
             &triggers,
             terrain,
             client,
+            figure_mgr,
         );
     }
 
@@ -490,7 +492,7 @@ impl SfxMgr {
         match outcome {
             Outcome::Explosion { pos, power, .. } => {
                 let sfx_trigger_item = triggers.0.get_key_value(&SfxEvent::Explosion);
-                audio.emit_sfx(sfx_trigger_item, *pos, Some((power.abs() / 2.5).min(1.5)));
+                audio.emit_sfx(sfx_trigger_item, *pos, Some(power.abs()));
             },
             Outcome::Lightning { pos } => {
                 let distance = pos.distance(audio.get_listener_pos());
@@ -988,14 +990,17 @@ impl SfxMgr {
 
                 if energy > 0.0 {
                     let (sfx, volume) = if energy < 10.0 {
-                        (SfxEvent::SplashSmall, energy / 20.0)
+                        (SfxEvent::SplashSmall, (energy / 20.0).max(0.25))
                     } else if energy < 100.0 {
-                        (SfxEvent::SplashMedium, (energy - 10.0) / 90.0 + 0.5)
+                        (SfxEvent::SplashMedium, ((energy - 10.0) / 50.0 + 0.9))
                     } else {
-                        (SfxEvent::SplashBig, (energy / 100.0).sqrt() + 0.5)
+                        (
+                            SfxEvent::SplashBig,
+                            ((energy / 100.0).sqrt() + 0.5).min(2.0),
+                        )
                     };
                     let sfx_trigger_item = triggers.0.get_key_value(&sfx);
-                    audio.emit_sfx(sfx_trigger_item, *pos, Some(volume.min(2.0)));
+                    audio.emit_sfx(sfx_trigger_item, *pos, Some(volume));
                 }
             },
             Outcome::ExpChange { .. } | Outcome::ComboChange { .. } => {},

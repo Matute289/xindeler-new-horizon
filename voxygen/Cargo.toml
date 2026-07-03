@@ -105,12 +105,12 @@ clap = { workspace = true }
 # Utility
 backtrace = "0.3.40"
 chrono = { workspace = true }
-chumsky = "0.12"
+chumsky = "0.13"
 crossbeam-utils = { workspace = true }
 crossbeam-channel = { workspace = true }
 directories-next = "2.0"
 dot_vox = "5.1"
-guillotiere = "0.6.2"
+guillotiere = "0.7.0"
 hashbrown = { workspace = true }
 image = { workspace = true, features = ["ico"] }
 kira = { version = "0.12", default-features = false, features = [
@@ -130,7 +130,7 @@ rayon = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { version = "1.0.50" }
-serde_with = { version = "3", features = ["hashbrown_0_16"] }
+serde_with = { version = "3", features = ["hashbrown_0_17"] }
 slab = { workspace = true }
 strum = { workspace = true }
 tracing = { workspace = true }

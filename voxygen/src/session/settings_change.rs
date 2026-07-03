@@ -31,6 +31,7 @@ pub enum Audio {
     AdjustAmbienceVolume(f32),
     MuteAmbienceVolume(bool),
     RainAmbience(bool),
+    IndoorAmbience(bool),
     AdjustMusicSpacing(f32),
     ToggleCombatMusic(bool),
     SetNumSfxChannels(SfxChannelSettings),
@@ -327,6 +328,9 @@ impl SettingsChange {
                     Audio::RainAmbience(rain_ambience_enabled) => {
                         settings.audio.rain_ambience_enabled = rain_ambience_enabled;
                     },
+                    Audio::IndoorAmbience(indoor_ambience_enabled) => {
+                        settings.audio.indoor_ambience_enabled = indoor_ambience_enabled;
+                    },
                     Audio::AdjustMusicSpacing(multiplier) => {
                         global_state.audio.set_music_spacing(multiplier);
 
@@ -354,6 +358,7 @@ impl SettingsChange {
                         audio.set_ambience_volume(settings.audio.ambience_volume.get_checked());
                         audio.set_sfx_volume(settings.audio.sfx_volume.get_checked());
                         audio.set_music_spacing(settings.audio.music_spacing);
+                        audio.set_num_sfx_channels(settings.audio.num_sfx_channels);
                     },
                 }
             },
