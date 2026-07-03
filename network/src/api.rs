@@ -249,13 +249,13 @@ impl Network {
     ///
     /// [`Pid::new()`]: network_protocol::Pid::new
     /// [`Runtime`]: tokio::runtime::Runtime
-    pub fn new(participant_id: Pid, runtime: &Runtime, output_limit: usize) -> Self {
+    pub fn new(participant_id: Pid, runtime: &Runtime) -> Self {
         Self::internal_new(
             participant_id,
             runtime,
             #[cfg(feature = "metrics")]
             None,
-            output_limit,
+            usize::MAX,
         )
     }
 
@@ -265,6 +265,9 @@ impl Network {
     /// * `registry` - Provide a Registry in order to collect Prometheus metrics
     ///   by this `Network`, `None` will deactivate Tracing. Tracing is done via
     ///   [`prometheus`]
+    /// * `output_limit` - Specify an approximate upper bound on the size of
+    ///   uncompressed network messages, to mitigate the potential for DoS
+    ///   attacks.
     ///
     /// # Examples
     /// ```rust

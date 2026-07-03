@@ -853,7 +853,7 @@ mod tests {
             let sid = Sid::new(1000);
             let metrics = Arc::new(NetworkMetrics::new(&local_pid).unwrap());
 
-            BParticipant::new(local_pid, remote_pid, sid, Arc::clone(&metrics))
+            BParticipant::new(local_pid, remote_pid, sid, Arc::clone(&metrics), usize::MAX)
         });
 
         let handle = runtime_clone.spawn(bparticipant.run(b2s_prio_statistic_s));

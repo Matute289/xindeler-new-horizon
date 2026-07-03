@@ -473,7 +473,7 @@ impl Client {
         let _ = rustls::crypto::ring::default_provider().install_default(); // needs to be initialized before usage
         // Use `usize::MAX` as the output limit: we implicitly trust servers to not send
         // us too much data (TODO: should we?)
-        let network = Network::new(Pid::new(), &runtime, usize::MAX);
+        let network = Network::new(Pid::new(), &runtime);
 
         init_stage_update(ClientInitStage::ConnectionEstablish);
 

@@ -101,7 +101,7 @@ fn main() {
 
 fn server(address: ListenAddr) {
     let r = Arc::new(Runtime::new().unwrap());
-    let mut server = Network::new(Pid::new(), &r, 1 << 20);
+    let mut server = Network::new(Pid::new(), &r);
     let participants = Arc::new(RwLock::new(Vec::new()));
     r.block_on(async {
         server.listen(address).await.unwrap();
@@ -141,7 +141,7 @@ async fn client_connection(mut s1: Stream, participants: Arc<RwLock<Vec<Particip
 
 fn client(address: ConnectAddr) {
     let r = Arc::new(Runtime::new().unwrap());
-    let client = Network::new(Pid::new(), &r, 1 << 20);
+    let client = Network::new(Pid::new(), &r);
 
     r.block_on(async {
         let p1 = client.connect(address.clone()).await.unwrap(); //remote representation of p1
