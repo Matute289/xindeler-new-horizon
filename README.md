@@ -1,3 +1,12 @@
+> [!IMPORTANT]
+> ## ⚠️ DISCONTINUED — this codebase has been superseded
+> **As of 2026-07-02, active development of Xindeler moved to a new architecture built on the
+> [Bevy](https://bevy.org) engine, at [`Matute289/xindeler`](https://github.com/Matute289/xindeler).**
+>
+> This repository (`xindeler-old`) contains the previous engine generation (Veloren's bespoke
+> wgpu/specs stack) and is kept as **historical reference** and as the **interim playable build**
+> until the Bevy client reaches feature parity. Only critical fixes land here — no new features.
+
 <!-- SPDX-SnippetBegin -->
 <!-- SPDX-SnippetCopyrightText: 2025 Hrom -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
