@@ -179,6 +179,7 @@ hud-settings-subtitles = Subtitles
 hud-settings-show_all_recipes = Show All Recipes
 hud-settings-gamepad = Gamepad
 hud-settings-keyboard = Keyboard
+hud-settings-keyboard-binding = Keybindings
 hud-settings-game_buttons = Game Buttons
 hud-settings-game_layers = Game Layers
 hud-settings-menu_buttons = Menu Buttons

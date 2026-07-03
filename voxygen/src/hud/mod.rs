@@ -20,6 +20,7 @@ mod prompt_dialog;
 mod quest;
 mod settings_window;
 mod skillbar;
+mod slot_grid;
 mod slots;
 mod social;
 mod subtitles;
@@ -60,6 +61,7 @@ use quest::Quest;
 use serde::{Deserialize, Serialize};
 use settings_window::{SettingsTab, SettingsWindow};
 use skillbar::Skillbar;
+use slot_grid::SlotGrid;
 use social::Social;
 use subtitles::Subtitles;
 use trade::Trade;
@@ -90,7 +92,7 @@ use crate::{
         img_ids::Rotations,
         slot::{self, SlotKey},
     },
-    window::Event as WinEvent,
+    window::{Event as WinEvent, MenuInput},
 };
 use client::{Client, UserNotification};
 use common::{
@@ -901,6 +903,12 @@ impl TradeAmountInput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowId {
+    None,
+    Bag,
+}
+
 pub struct Show {
     ui: bool,
     intro: bool,
@@ -932,11 +940,65 @@ pub struct Show {
     camera_clamp: bool,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
+    // A stack of open menus; the menu in focus should be on top
+    focus: Vec<WindowId>,
 }
+
+impl Default for Show {
+    fn default() -> Self { Self::new() }
+}
+
 impl Show {
+    pub fn new() -> Self {
+        Self {
+            ui: true,
+            intro: false,
+            crafting: false,
+            bag: false,
+            bag_inv: false,
+            bag_details: false,
+            trade: false,
+            trade_details: false,
+            social: false,
+            diary: false,
+            group: false,
+            quest: false,
+            group_menu: false,
+            esc_menu: false,
+            open_windows: Windows::None,
+            map: false,
+            ingame: true,
+            chat_tab_settings_index: None,
+            settings_tab: SettingsTab::Interface,
+            diary_fields: diary::DiaryShow::default(),
+            crafting_fields: crafting::CraftingShow::default(),
+            social_search_key: None,
+            want_grab: true,
+            stats: false,
+            free_look: false,
+            auto_walk: false,
+            zoom_lock: ChangeNotification::default(),
+            camera_clamp: false,
+            prompt_dialog: None,
+            trade_amount_input_key: None,
+            focus: Vec::new(),
+        }
+    }
+
+    // Changing a window state must go through these functions
+    fn set_bag_state(&mut self, state: bool) {
+        if state {
+            self.focus.push(WindowId::Bag); // use hashset to avoid duplicates?
+            self.bag = true;
+        } else {
+            self.focus.retain(|x| *x != WindowId::Bag);
+            self.bag = false;
+        }
+    }
+
     fn bag(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.crafting_fields.salvage = false;
 
@@ -948,9 +1010,11 @@ impl Show {
         }
     }
 
+    pub fn bag_print(&self) -> bool { self.bag }
+
     fn trade(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.trade = open;
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
@@ -960,7 +1024,7 @@ impl Show {
     fn map(&mut self, open: bool) {
         if !self.esc_menu {
             self.map = open;
-            self.bag = false;
+            self.set_bag_state(false);
             self.crafting = false;
             self.crafting_fields.salvage = false;
             self.social = false;
@@ -1000,7 +1064,7 @@ impl Show {
             self.crafting = open;
             self.crafting_fields.salvage = false;
             self.crafting_fields.recipe_inputs = HashMap::new();
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
         }
@@ -1030,7 +1094,7 @@ impl Show {
             self.quest = false;
             self.crafting = false;
             self.crafting_fields.salvage = false;
-            self.bag = false;
+            self.set_bag_state(false);
             self.map = false;
             self.diary_fields = diary::DiaryShow::default();
             self.diary = open;
@@ -1045,7 +1109,7 @@ impl Show {
             } else {
                 Windows::None
             };
-            self.bag = false;
+            self.set_bag_state(false);
             self.social = false;
             self.quest = false;
             self.crafting = false;
@@ -1103,7 +1167,7 @@ impl Show {
 
     fn toggle_windows(&mut self, global_state: &mut GlobalState) {
         if self.any_window_requires_cursor() {
-            self.bag = false;
+            self.set_bag_state(false);
             self.trade = false;
             self.esc_menu = false;
             self.intro = false;
@@ -1134,7 +1198,7 @@ impl Show {
         self.open_windows = Windows::Settings;
         self.esc_menu = false;
         self.settings_tab = tab;
-        self.bag = false;
+        self.set_bag_state(false);
         self.want_grab = false;
     }
 
@@ -1280,9 +1344,6 @@ pub struct Hud {
     content_bubbles: Vec<(Vec3<f32>, comp::SpeechBubble)>,
     pub persisted_state: Rc<RefCell<PersistedHudState>>,
     pub show: Show,
-    //never_show: bool,
-    //intro: bool,
-    //intro_2: bool,
     to_focus: Option<Option<widget::Id>>,
     force_ungrab: bool,
     force_chat_input: Option<String>,
@@ -1293,6 +1354,7 @@ pub struct Hud {
     slot_manager: slots::SlotManager,
     hotbar: hotbar::State,
     events: Vec<Event>,
+    menu_events: Vec<MenuInput>,
     crosshair_opacity: f32,
     floaters: Floaters,
     voxel_minimap: VoxelMinimap,
@@ -1385,43 +1447,8 @@ impl Hud {
             persisted_state,
             speech_bubbles: HashMap::new(),
             content_bubbles: Vec::new(),
-            //intro: false,
-            //intro_2: false,
-            show: Show {
-                intro: false,
-                bag: false,
-                bag_inv: false,
-                bag_details: false,
-                trade: false,
-                trade_details: false,
-                esc_menu: false,
-                open_windows: Windows::None,
-                map: false,
-                crafting: false,
-                ui: true,
-                social: false,
-                diary: false,
-                group: false,
-                // Change this before implementation!
-                quest: false,
-                group_menu: false,
-                chat_tab_settings_index: None,
-                settings_tab: SettingsTab::Interface,
-                diary_fields: diary::DiaryShow::default(),
-                crafting_fields: crafting::CraftingShow::default(),
-                social_search_key: None,
-                want_grab: true,
-                ingame: true,
-                stats: false,
-                free_look: false,
-                auto_walk: false,
-                zoom_lock: ChangeNotification::default(),
-                camera_clamp: false,
-                prompt_dialog: None,
-                trade_amount_input_key: None,
-            },
+            show: Show::new(),
             to_focus: None,
-            //never_show: false,
             force_ungrab: false,
             force_chat_input: None,
             force_chat_cursor: None,
@@ -1431,6 +1458,7 @@ impl Hud {
             slot_manager,
             hotbar: hotbar_state,
             events: Vec::new(),
+            menu_events: Vec::new(),
             crosshair_opacity: 0.0,
             floaters: Floaters {
                 exp_floaters: Vec::new(),
@@ -3524,6 +3552,7 @@ impl Hud {
                 &msm,
                 &rbm,
                 poise,
+                &self.menu_events,
             )
             .set(self.ids.bag, ui_widgets)
             {
@@ -3703,12 +3732,6 @@ impl Hud {
 
         self.new_messages.clear();
         self.new_notifications.clear();
-
-        // Windows
-
-        // Char Window will always appear at the left side. Other Windows default to the
-        // left side, but when the Char Window is opened they will appear to the right
-        // of it.
 
         // Settings
         if let Windows::Settings = self.show.open_windows {
@@ -4703,6 +4726,10 @@ impl Hud {
             }
         }
 
+        // if a menu is open, notify window so it can restrict GameInputs
+        global_state.window.menu_open = !self.show.focus.is_empty();
+
+        self.menu_events.clear(); // clear all menu inputs after they have been read
         events
     }
 
@@ -4971,11 +4998,23 @@ impl Hud {
                         self.slot_manager.idle();
                     }
                     self.show.toggle_windows(global_state);
+                    self.force_ungrab = false;
                 }
                 true
             },
 
             // Press key while not typing
+            // MenuInput
+            WinEvent::MenuInput(key, state) if !self.typing() => {
+                if state {
+                    self.menu_events.push(key);
+                    true
+                } else {
+                    false
+                }
+            },
+
+            // GameInput
             WinEvent::InputUpdate(key, state) if !self.typing() => {
                 let gs_audio = &global_state.settings.audio;
                 let mut toggle_mute = |audio: Audio| {

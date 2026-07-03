@@ -1,9 +1,9 @@
 use super::{
-    CRITICAL_HP_COLOR, HudInfo, LOW_HP_COLOR, Show, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN, cr_color,
+    CRITICAL_HP_COLOR, HudInfo, LOW_HP_COLOR, Show, SlotGrid, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN,
+    cr_color,
     img_ids::{Imgs, ImgsRot},
     item_imgs::ItemImgs,
-    slots::{ArmorSlot, EquipSlot, InventorySlot, SlotManager},
-    util,
+    slots::{ArmorSlot, EquipSlot, SlotManager},
 };
 use crate::{
     GlobalState,
@@ -21,15 +21,15 @@ use crate::{
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
+    window::MenuInput,
 };
 use client::Client;
 use common::{
-    assets::AssetExt,
     combat::{Damage, combat_rating, perception_dist_multiplier_from_stealth},
     comp::{
         Body, Energy, Health, Inventory, Poise, SkillSet, Stats,
-        inventory::{InventorySortOrder, slot::Slot},
-        item::{ItemDef, ItemDesc, ItemI18n, MaterialStatManifest, Quality},
+        inventory::InventorySortOrder,
+        item::{ItemDesc, ItemI18n, MaterialStatManifest},
     },
     recipe::RecipeBookManifest,
 };
@@ -41,18 +41,14 @@ use conrod_core::{
 use i18n::Localization;
 use std::borrow::Cow;
 
-use crate::hud::slots::SlotKind;
 use specs::Entity as EcsEntity;
-use std::{borrow::Borrow, sync::Arc};
 use vek::{Vec2, approx::AbsDiffEq};
 
 widget_ids! {
     pub struct InventoryScrollerIds {
         draggable_area,
         inv_alignment,
-        inv_slots[],
-        inv_slot_names[],
-        inv_slot_amounts[],
+        slot_grid,
         //coin_ico,
         space_txt,
         //coin_txt,
@@ -71,6 +67,8 @@ pub struct InventoryScrollerState {
 
 pub enum InventoryScrollerEvent {
     Drag(Vec2<f64>),
+    ChangeLocalFocus(usize),
+    Close,
 }
 
 #[derive(WidgetCommon)]
@@ -84,6 +82,8 @@ pub struct InventoryScroller<'a> {
     item_tooltip_manager: &'a mut ItemTooltipManager,
     slot_manager: &'a mut SlotManager,
     pulse: f32,
+    menu_events: &'a Vec<MenuInput>,
+    active_content: usize,
     localized_strings: &'a Localization,
     item_i18n: &'a ItemI18n,
     show_stats: bool,
@@ -111,6 +111,8 @@ impl<'a> InventoryScroller<'a> {
         item_tooltip_manager: &'a mut ItemTooltipManager,
         slot_manager: &'a mut SlotManager,
         pulse: f32,
+        menu_events: &'a Vec<MenuInput>,
+        active_content: usize,
         localized_strings: &'a Localization,
         item_i18n: &'a ItemI18n,
         show_stats: bool,
@@ -134,6 +136,8 @@ impl<'a> InventoryScroller<'a> {
             item_tooltip_manager,
             slot_manager,
             pulse,
+            menu_events,
+            active_content,
             localized_strings,
             item_i18n,
             show_stats,
@@ -243,8 +247,28 @@ impl<'a> InventoryScroller<'a> {
     fn scrollbar_and_slots(
         &mut self,
         state: &mut ConrodState<'_, InventoryScrollerState>,
+        events: &mut Vec<InventoryScrollerEvent>,
         ui: &mut UiCell<'_>,
     ) {
+        // MENU INPUTS: change the inventory button/filter focus
+        // LocalFocus: change local window focus
+        if self.active_content == 1 {
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::LocalFocus => {
+                        events.push(InventoryScrollerEvent::ChangeLocalFocus(2));
+                    },
+                    MenuInput::Apply => {
+                        // TODO
+                    },
+                    MenuInput::Back => {
+                        events.push(InventoryScrollerEvent::Close);
+                    },
+                    _ => {},
+                }
+            }
+        }
+
         let space_max = self.inventory.slots().count();
 
         // Slots Scrollbar
@@ -320,213 +344,41 @@ impl<'a> InventoryScroller<'a> {
 
         // Bag Slots
         // Create available inventory slot widgets
-        if state.ids.inv_slots.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids.inv_slots.resize(
-                    self.inventory.capacity() + self.inventory.overflow_items().count(),
-                    &mut ui.widget_id_generator(),
-                );
-            });
-        }
-        if state.ids.inv_slot_names.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids
-                    .inv_slot_names
-                    .resize(self.inventory.capacity(), &mut ui.widget_id_generator());
-            });
-        }
-        if state.ids.inv_slot_amounts.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids
-                    .inv_slot_amounts
-                    .resize(self.inventory.capacity(), &mut ui.widget_id_generator());
-            });
-        }
-        // Determine the range of inventory slots that are provided by the loadout item
-        // that the mouse is over
-        let mouseover_loadout_slots = self
-            .slot_manager
-            .mouse_over_slot
-            .and_then(|x| {
-                if let SlotKind::Equip(e) = x {
-                    self.inventory.get_slot_range_for_equip_slot(e)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0usize..0usize);
-
-        // Display inventory contents
-        let mut slot_maker = SlotMaker {
-            empty_slot: self.imgs.inv_slot,
-            filled_slot: self.imgs.inv_slot,
-            selected_slot: self.imgs.inv_slot_sel,
-            background_color: Some(UI_MAIN),
-            content_size: ContentSize {
-                width_height_ratio: 1.0,
-                max_fraction: 0.75,
-            },
-            selected_content_scale: 1.067,
-            amount_font: self.fonts.cyri.conrod_id,
-            amount_margins: Vec2::new(-4.0, 0.0),
-            amount_font_size: self.fonts.cyri.scale(12),
-            amount_text_color: TEXT_COLOR,
-            content_source: self.inventory,
-            image_source: self.item_imgs,
-            slot_manager: Some(self.slot_manager),
-            pulse: self.pulse,
-        };
-
-        let mut i = 0;
-        let mut items = self
-            .inventory
-            .slots_with_id()
-            .map(|(slot, item)| (Slot::Inventory(slot), item.as_ref()))
-            .chain(
-                self.inventory
-                    .overflow_items()
-                    .enumerate()
-                    .map(|(i, item)| (Slot::Overflow(i), Some(item))),
-            )
-            .collect::<Vec<_>>();
-        if self.details_mode && !self.is_us {
-            items.sort_by_cached_key(|(_, item)| {
-                (
-                    item.is_none(),
-                    item.as_ref().map(|i| {
-                        (
-                            std::cmp::Reverse(i.quality()),
-                            {
-                                // TODO: we do double the work here, optimize?
-                                let (name, _) =
-                                    util::item_text(i, self.localized_strings, self.item_i18n);
-                                name
-                            },
-                            i.amount(),
-                        )
-                    }),
-                )
-            });
-        }
-        for (pos, item) in items.into_iter() {
-            if self.details_mode && !self.is_us && item.is_none() {
-                continue;
+        for event in SlotGrid::new(
+            self.client,
+            self.imgs,
+            self.item_imgs,
+            self.fonts,
+            self.item_tooltip_manager,
+            self.slot_manager,
+            self.inventory,
+            self.item_tooltip,
+            self.localized_strings,
+            self.item_i18n,
+            self.entity,
+            &self.global_state.window.last_input(),
+            self.pulse,
+            self.menu_events,
+            self.active_content,
+        )
+        .columns(9) // 6 columns and default spacing is better imo
+        .spacing(0.0)
+        .is_us(self.is_us)
+        .details_mode(self.details_mode)
+        .show_salvage(self.show_salvage)
+        .slot_size(if self.details_mode { 20.0 } else { 40.0 }) // 55.0 for 6 columns
+        .wh_of(state.ids.inv_alignment)
+        .top_left_of(state.ids.inv_alignment)
+        .set(state.ids.slot_grid, ui)
+        {
+            match event {
+                super::slot_grid::SlotEvents::ChangeLocalFocus(change) => {
+                    events.push(InventoryScrollerEvent::ChangeLocalFocus(change));
+                },
+                super::slot_grid::SlotEvents::Close => {
+                    events.push(InventoryScrollerEvent::Close);
+                },
             }
-            let (x, y) = if self.details_mode {
-                (0, i)
-            } else {
-                (i % 9, i / 9)
-            };
-            let slot_size = if self.details_mode { 20.0 } else { 40.0 };
-
-            // Slot
-            let mut slot_widget = slot_maker
-                .fabricate(
-                    InventorySlot {
-                        slot: pos,
-                        ours: self.is_us,
-                        entity: self.entity,
-                    },
-                    [slot_size as f32; 2],
-                )
-                .top_left_with_margins_on(
-                    state.ids.inv_alignment,
-                    0.0 + y as f64 * slot_size,
-                    0.0 + x as f64 * slot_size,
-                );
-
-            // Highlight slots are provided by the loadout item that the mouse is over
-            if mouseover_loadout_slots.contains(&i) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
-            }
-
-            if self.show_salvage && item.as_ref().is_some_and(|item| item.is_salvageable()) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
-            }
-
-            // Highlight in red slots that are overflow
-            if matches!(pos, Slot::Overflow(_)) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 0.0, 0.0, 1.0));
-            }
-
-            if let Some(item) = item {
-                let quality_col_img = match item.quality() {
-                    Quality::Low => self.imgs.inv_slot_grey,
-                    Quality::Common => self.imgs.inv_slot_common,
-                    Quality::Moderate => self.imgs.inv_slot_green,
-                    Quality::High => self.imgs.inv_slot_blue,
-                    Quality::Epic => self.imgs.inv_slot_purple,
-                    Quality::Legendary => self.imgs.inv_slot_gold,
-                    Quality::Artifact => self.imgs.inv_slot_orange,
-                    _ => self.imgs.inv_slot_red,
-                };
-
-                let prices_info = self
-                    .client
-                    .pending_trade()
-                    .as_ref()
-                    .and_then(|(_, _, prices)| prices.clone());
-
-                if self.show_salvage && item.is_salvageable() {
-                    let salvage_result: Vec<_> = item
-                        .salvage_output()
-                        .map(|(material_id, _)| Arc::<ItemDef>::load_expect_cloned(material_id))
-                        .map(|item| item as Arc<dyn ItemDesc>)
-                        .collect();
-
-                    let items = salvage_result
-                        .iter()
-                        .map(|item| item.borrow())
-                        .chain(core::iter::once(item as &dyn ItemDesc));
-
-                    slot_widget
-                        .filled_slot(quality_col_img)
-                        .with_item_tooltip(
-                            self.item_tooltip_manager,
-                            items,
-                            &prices_info,
-                            self.item_tooltip,
-                        )
-                        .set(state.ids.inv_slots[i], ui);
-                } else {
-                    slot_widget
-                        .filled_slot(quality_col_img)
-                        .with_item_tooltip(
-                            self.item_tooltip_manager,
-                            core::iter::once(item as &dyn ItemDesc),
-                            &prices_info,
-                            self.item_tooltip,
-                        )
-                        .set(state.ids.inv_slots[i], ui);
-                }
-                if self.details_mode {
-                    let (name, _) = util::item_text(item, self.localized_strings, self.item_i18n);
-                    Text::new(&name)
-                        .top_left_with_margins_on(
-                            state.ids.inv_alignment,
-                            0.0 + y as f64 * slot_size,
-                            30.0 + x as f64 * slot_size,
-                        )
-                        .font_id(self.fonts.cyri.conrod_id)
-                        .font_size(self.fonts.cyri.scale(14))
-                        .color(color::WHITE)
-                        .set(state.ids.inv_slot_names[i], ui);
-
-                    Text::new(&format!("{}", item.amount()))
-                        .top_left_with_margins_on(
-                            state.ids.inv_alignment,
-                            0.0 + y as f64 * slot_size,
-                            grid_width - 40.0 + x as f64 * slot_size,
-                        )
-                        .font_id(self.fonts.cyri.conrod_id)
-                        .font_size(self.fonts.cyri.scale(14))
-                        .color(color::WHITE)
-                        .set(state.ids.inv_slot_amounts[i], ui);
-                }
-            } else {
-                slot_widget.set(state.ids.inv_slots[i], ui);
-            }
-            i += 1;
         }
     }
 
@@ -669,7 +521,7 @@ impl Widget for InventoryScroller<'_> {
         let mut events = Vec::new();
         self.background(ui);
         self.title(state, ui);
-        self.scrollbar_and_slots(state, ui);
+        self.scrollbar_and_slots(state, &mut events, ui);
         self.footer_metrics(state, ui);
         if self
             .global_state
@@ -755,6 +607,7 @@ pub struct Bag<'a> {
     msm: &'a MaterialStatManifest,
     rbm: &'a RecipeBookManifest,
     poise: &'a Poise,
+    menu_events: &'a Vec<MenuInput>,
 }
 
 impl<'a> Bag<'a> {
@@ -782,6 +635,7 @@ impl<'a> Bag<'a> {
         msm: &'a MaterialStatManifest,
         rbm: &'a RecipeBookManifest,
         poise: &'a Poise,
+        menu_events: &'a Vec<MenuInput>,
     ) -> Self {
         Self {
             client,
@@ -807,6 +661,7 @@ impl<'a> Bag<'a> {
             msm,
             rbm,
             poise,
+            menu_events,
         }
     }
 }
@@ -822,6 +677,9 @@ const STATS: [&str; 6] = [
 pub struct BagState {
     ids: BagIds,
     bg_ids: BackgroundIds,
+
+    active_content: usize,
+    active_gear_slot: usize,
 }
 
 pub enum Event {
@@ -846,6 +704,8 @@ impl Widget for Bag<'_> {
                 bg_frame: id_gen.next(),
             },
             ids: BagIds::new(id_gen),
+            active_content: 0,
+            active_gear_slot: 1,
         }
     }
 
@@ -857,6 +717,220 @@ impl Widget for Bag<'_> {
         let i18n = &self.localized_strings;
 
         let mut events = Vec::new();
+
+        // If I change local focus to 0 immidiately, it will also be read by the
+        // inventory which will also register the same input and change it 1. A fix for
+        // the current set-up is to just change focus after the inventory has
+        // been calculated
+        let mut change_local_focus = false;
+
+        // MENU INPUTS: manage gear elements
+        // LocalFocus: change which parts of the screen you interact with (0 =
+        // inventory, 1 = inventory filters/buttons, 2 = gear)
+        // Up: try to go up in the gear list
+        // Down: try to go down the gear list
+        // Left: try to move left in the gear list
+        // Right: try to move right in the gear list
+        // Apply: TODO
+        // Back: close the bag when gear menu is in focus
+        if state.active_content == 2 {
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::LocalFocus => {
+                        // Reset back to 0 (inventory)
+                        // This whole interaction logic should probably be improved sometime
+                        change_local_focus = true;
+                    },
+                    MenuInput::Up => state.update(|s| {
+                        // So many values to manual set...
+                        match s.active_gear_slot {
+                            // weapon switch button
+                            0 => {},
+                            // primary weapon left
+                            1 => s.active_gear_slot = 5,
+                            // secondary weapon left
+                            2 => s.active_gear_slot = 6,
+                            // secondary weapon right
+                            3 => s.active_gear_slot = 6,
+                            // primary weapon right
+                            4 => s.active_gear_slot = 7,
+                            // back
+                            5 => s.active_gear_slot = 8,
+                            // pants
+                            6 => s.active_gear_slot = 9,
+                            // shoes
+                            7 => s.active_gear_slot = 10,
+                            // jewelry left
+                            8 => s.active_gear_slot = 11,
+                            // belt
+                            9 => s.active_gear_slot = 12,
+                            // jewelry right
+                            10 => s.active_gear_slot = 13,
+                            // shoulder
+                            11 => s.active_gear_slot = 14,
+                            // chest
+                            12 => s.active_gear_slot = 14,
+                            // hands/gloves
+                            13 => s.active_gear_slot = 14,
+                            // jewelry center
+                            14 => s.active_gear_slot = 15,
+                            // hat
+                            15 => {},
+                            // tabard
+                            16 => s.active_gear_slot = 17,
+                            // glider
+                            17 => s.active_gear_slot = 18,
+                            // lantern
+                            18 => {},
+                            // reset to 0 if unexpected
+                            _ => s.active_gear_slot = 0,
+                        }
+                    }),
+                    MenuInput::Down => state.update(|s| {
+                        match s.active_gear_slot {
+                            // weapon switch button
+                            0 => {},
+                            // primary weapon 1
+                            1 => {},
+                            // secondary weapon 1
+                            2 => {},
+                            // secondary weapon 2
+                            3 => {},
+                            // primary weapon 1
+                            4 => {},
+                            // back
+                            5 => s.active_gear_slot = 1,
+                            // pants
+                            6 => s.active_gear_slot = 2,
+                            // shoes
+                            7 => s.active_gear_slot = 4,
+                            // jewelry left
+                            8 => s.active_gear_slot = 5,
+                            // belt
+                            9 => s.active_gear_slot = 6,
+                            // jewelry right
+                            10 => s.active_gear_slot = 7,
+                            // shoulder
+                            11 => s.active_gear_slot = 8,
+                            // chest
+                            12 => s.active_gear_slot = 9,
+                            // hands/gloves
+                            13 => s.active_gear_slot = 10,
+                            // jewelry center
+                            14 => s.active_gear_slot = 12,
+                            // hat
+                            15 => s.active_gear_slot = 14,
+                            // tabard
+                            16 => {},
+                            // glider
+                            17 => s.active_gear_slot = 16,
+                            // lantern
+                            18 => s.active_gear_slot = 17,
+                            // reset to 0 if unexpected
+                            _ => s.active_gear_slot = 0,
+                        }
+                    }),
+                    MenuInput::Left => state.update(|s| {
+                        match s.active_gear_slot {
+                            // weapon switch button
+                            0 => {},
+                            // primary weapon 1
+                            1 => s.active_gear_slot = 0 + 1,
+                            // secondary weapon 1
+                            2 => s.active_gear_slot = 1,
+                            // secondary weapon 2
+                            3 => s.active_gear_slot = 2,
+                            // primary weapon 1
+                            4 => s.active_gear_slot = 3,
+                            // back
+                            5 => {},
+                            // pants
+                            6 => s.active_gear_slot = 5,
+                            // shoes
+                            7 => s.active_gear_slot = 6,
+                            // jewelry left
+                            8 => {},
+                            // belt
+                            9 => s.active_gear_slot = 8,
+                            // jewelry right
+                            10 => s.active_gear_slot = 9,
+                            // shoulder
+                            11 => {},
+                            // chest
+                            12 => s.active_gear_slot = 11,
+                            // hands/gloves
+                            13 => s.active_gear_slot = 12,
+                            // jewelry center
+                            14 => {},
+                            // hat
+                            15 => {},
+                            // tabard
+                            16 => s.active_gear_slot = 13,
+                            // glider
+                            17 => s.active_gear_slot = 14,
+                            // lantern
+                            18 => s.active_gear_slot = 15,
+                            // reset to 0 if unexpected
+                            _ => s.active_gear_slot = 0,
+                        }
+                    }),
+                    MenuInput::Right => state.update(|s| {
+                        match s.active_gear_slot {
+                            // weapon switch button
+                            0 => s.active_gear_slot = 1,
+                            // primary weapon 1
+                            1 => s.active_gear_slot = 2,
+                            // secondary weapon 1
+                            2 => s.active_gear_slot = 3,
+                            // secondary weapon 2
+                            3 => s.active_gear_slot = 4,
+                            // primary weapon 1
+                            4 => s.active_gear_slot = 16,
+                            // back
+                            5 => s.active_gear_slot = 6,
+                            // pants
+                            6 => s.active_gear_slot = 7,
+                            // shoes
+                            7 => s.active_gear_slot = 16,
+                            // jewelry left
+                            8 => s.active_gear_slot = 9,
+                            // belt
+                            9 => s.active_gear_slot = 10,
+                            // jewelry right
+                            10 => s.active_gear_slot = 16,
+                            // shoulder
+                            11 => s.active_gear_slot = 12,
+                            // chest
+                            12 => s.active_gear_slot = 13,
+                            // hands/gloves
+                            13 => s.active_gear_slot = 16,
+                            // jewelry center
+                            14 => s.active_gear_slot = 17,
+                            // hat
+                            15 => s.active_gear_slot = 18,
+                            // tabard
+                            16 => {},
+                            // glider
+                            17 => {},
+                            // lantern
+                            18 => {},
+                            // reset to 0 if unexpected
+                            _ => s.active_gear_slot = 0,
+                        }
+                    }),
+                    MenuInput::Apply => {
+                        // TODO
+                    },
+                    MenuInput::Back => {
+                        // Typically, we want child widgets to handle their own back events
+                        // This back event only applies to the gear, which is in this widget
+                        events.push(Event::Close);
+                    },
+                    _ => {},
+                }
+            }
+        }
+
         let bag_tooltip = Tooltip::new({
             // Edge images [t, b, r, l]
             // Corner images [tr, tl, br, bl]
@@ -934,6 +1008,8 @@ impl Widget for Bag<'_> {
                 self.item_tooltip_manager,
                 self.slot_manager,
                 self.pulse,
+                self.menu_events,
+                state.active_content,
                 self.localized_strings,
                 self.item_i18n,
                 self.show.stats,
@@ -950,9 +1026,25 @@ impl Widget for Bag<'_> {
             )
             .set(state.ids.inventory_scroller, ui)
             {
-                // Bubble events from the InventoryScroller widget
-                let InventoryScrollerEvent::Drag(pos) = event;
-                events.push(Event::MoveBag(pos));
+                match event {
+                    InventoryScrollerEvent::Drag(pos) => {
+                        events.push(Event::MoveBag(pos));
+                    },
+                    InventoryScrollerEvent::ChangeLocalFocus(change) => state.update(|s| {
+                        s.active_content = change;
+                    }),
+                    InventoryScrollerEvent::Close => {
+                        events.push(Event::Close);
+                    },
+                }
+            }
+
+            // change local focus from gear to inventory after inventory actions have been
+            // registered
+            if change_local_focus {
+                state.update(|s| {
+                    s.active_content = 0;
+                })
             }
 
             // Char Pixel-Art
@@ -1078,6 +1170,7 @@ impl Widget for Bag<'_> {
             // Armor Slots
             let mut slot_maker = SlotMaker {
                 empty_slot: self.imgs.armor_slot_empty,
+                hovered_slot: self.imgs.skillbar_index,
                 filled_slot: self.imgs.armor_slot,
                 selected_slot: self.imgs.armor_slot_sel,
                 background_color: Some(UI_HIGHLIGHT_0),
@@ -1095,6 +1188,7 @@ impl Widget for Bag<'_> {
                 content_source: inventory,
                 image_source: self.item_imgs,
                 slot_manager: Some(self.slot_manager),
+                last_input: &self.global_state.window.last_input(),
                 pulse: self.pulse,
             };
 
@@ -1258,10 +1352,15 @@ impl Widget for Bag<'_> {
                     .set(state.ids.stat_txts[i.0], ui);
                 }
                 // Loadout Slots
-                //  Head
+                // Head
                 let item_slot = EquipSlot::Armor(ArmorSlot::Head);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 15 && state.active_content == 2,
+                        false,
+                    )
                     .mid_top_with_margin_on(state.bg_ids.bg_frame, 60.0)
                     .with_icon(self.imgs.head_bg, Vec2::new(32.0, 40.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1269,10 +1368,15 @@ impl Widget for Bag<'_> {
                 let slot_id = state.ids.head_slot;
                 set_tooltip!(slot, slot_id, item_slot, "hud-bag-head");
 
-                //  Necklace
+                // Necklace
                 let item_slot = EquipSlot::Armor(ArmorSlot::Neck);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 14 && state.active_content == 2,
+                        false,
+                    )
                     .mid_bottom_with_margin_on(state.ids.head_slot, -55.0)
                     .with_icon(self.imgs.necklace_bg, Vec2::new(40.0, 31.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1284,7 +1388,12 @@ impl Widget for Bag<'_> {
                 //Image::new(self.imgs.armor_slot) // different graphics for empty/non empty
                 let item_slot = EquipSlot::Armor(ArmorSlot::Chest);
                 let slot = slot_maker
-                    .fabricate(item_slot, [85.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [85.0; 2],
+                        state.active_gear_slot == 12 && state.active_content == 2,
+                        false,
+                    )
                     .mid_bottom_with_margin_on(state.ids.neck_slot, -95.0)
                     .with_icon(self.imgs.chest_bg, Vec2::new(64.0, 42.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1292,10 +1401,15 @@ impl Widget for Bag<'_> {
                 let slot_id = state.ids.chest_slot;
                 set_tooltip!(slot, slot_id, item_slot, "hud-bag-chest");
 
-                //  Shoulders
+                // Shoulders
                 let item_slot = EquipSlot::Armor(ArmorSlot::Shoulders);
                 let slot = slot_maker
-                    .fabricate(item_slot, [70.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [70.0; 2],
+                        state.active_gear_slot == 11 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_left_with_margins_on(state.ids.chest_slot, 0.0, -80.0)
                     .with_icon(self.imgs.shoulders_bg, Vec2::new(60.0, 36.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1306,7 +1420,12 @@ impl Widget for Bag<'_> {
                 // Hands
                 let item_slot = EquipSlot::Armor(ArmorSlot::Hands);
                 let slot = slot_maker
-                    .fabricate(item_slot, [70.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [70.0; 2],
+                        state.active_gear_slot == 13 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_right_with_margins_on(state.ids.chest_slot, 0.0, -80.0)
                     .with_icon(self.imgs.hands_bg, Vec2::new(55.0, 60.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1317,7 +1436,12 @@ impl Widget for Bag<'_> {
                 // Belt
                 let item_slot = EquipSlot::Armor(ArmorSlot::Belt);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 9 && state.active_content == 2,
+                        false,
+                    )
                     .mid_bottom_with_margin_on(state.ids.chest_slot, -55.0)
                     .with_icon(self.imgs.belt_bg, Vec2::new(40.0, 23.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1328,7 +1452,12 @@ impl Widget for Bag<'_> {
                 // Legs
                 let item_slot = EquipSlot::Armor(ArmorSlot::Legs);
                 let slot = slot_maker
-                    .fabricate(item_slot, [85.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [85.0; 2],
+                        state.active_gear_slot == 6 && state.active_content == 2,
+                        false,
+                    )
                     .mid_bottom_with_margin_on(state.ids.belt_slot, -95.0)
                     .with_icon(self.imgs.legs_bg, Vec2::new(48.0, 70.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1336,10 +1465,15 @@ impl Widget for Bag<'_> {
                 let slot_id = state.ids.legs_slot;
                 set_tooltip!(slot, slot_id, item_slot, "hud-bag-legs");
 
-                // Ring
+                // Ring right
                 let item_slot = EquipSlot::Armor(ArmorSlot::Ring1);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 10 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_left_with_margins_on(state.ids.hands_slot, -55.0, 0.0)
                     .with_icon(self.imgs.ring_bg, Vec2::new(36.0, 40.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1347,10 +1481,15 @@ impl Widget for Bag<'_> {
                 let slot_id = state.ids.ring1_slot;
                 set_tooltip!(slot, slot_id, item_slot, "hud-bag-ring");
 
-                // Ring 2
+                // Ring left
                 let item_slot = EquipSlot::Armor(ArmorSlot::Ring2);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 8 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_right_with_margins_on(state.ids.shoulders_slot, -55.0, 0.0)
                     .with_icon(self.imgs.ring_bg, Vec2::new(36.0, 40.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1361,7 +1500,12 @@ impl Widget for Bag<'_> {
                 // Back
                 let item_slot = EquipSlot::Armor(ArmorSlot::Back);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 5 && state.active_content == 2,
+                        false,
+                    )
                     .down_from(state.ids.ring2_slot, 10.0)
                     .with_icon(self.imgs.back_bg, Vec2::new(33.0, 40.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1372,7 +1516,12 @@ impl Widget for Bag<'_> {
                 // Foot
                 let item_slot = EquipSlot::Armor(ArmorSlot::Feet);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 7 && state.active_content == 2,
+                        false,
+                    )
                     .down_from(state.ids.ring1_slot, 10.0)
                     .with_icon(self.imgs.feet_bg, Vec2::new(32.0, 40.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1383,7 +1532,12 @@ impl Widget for Bag<'_> {
                 // Lantern
                 let item_slot = EquipSlot::Lantern;
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 18 && state.active_content == 2,
+                        false,
+                    )
                     .top_right_with_margins_on(state.bg_ids.bg_frame, 60.0, 5.0)
                     .with_icon(self.imgs.lantern_bg, Vec2::new(24.0, 38.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1394,7 +1548,12 @@ impl Widget for Bag<'_> {
                 // Glider
                 let item_slot = EquipSlot::Glider;
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 17 && state.active_content == 2,
+                        false,
+                    )
                     .down_from(state.ids.lantern_slot, 5.0)
                     .with_icon(self.imgs.glider_bg, Vec2::new(38.0, 38.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1405,7 +1564,12 @@ impl Widget for Bag<'_> {
                 // Tabard
                 let item_slot = EquipSlot::Armor(ArmorSlot::Tabard);
                 let slot = slot_maker
-                    .fabricate(item_slot, [45.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [45.0; 2],
+                        state.active_gear_slot == 16 && state.active_content == 2,
+                        false,
+                    )
                     .down_from(state.ids.glider_slot, 5.0)
                     .with_icon(self.imgs.tabard_bg, Vec2::new(38.0, 38.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1416,7 +1580,12 @@ impl Widget for Bag<'_> {
                 // Active Mainhand/Left-Slot
                 let item_slot = EquipSlot::ActiveMainhand;
                 let slot = slot_maker
-                    .fabricate(item_slot, [85.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [85.0; 2],
+                        state.active_gear_slot == 1 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_right_with_margins_on(state.ids.back_slot, -95.0, 0.0)
                     .with_icon(self.imgs.mainhand_bg, Vec2::new(75.0, 75.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1427,7 +1596,12 @@ impl Widget for Bag<'_> {
                 // Active Offhand/Right-Slot
                 let item_slot = EquipSlot::ActiveOffhand;
                 let slot = slot_maker
-                    .fabricate(item_slot, [85.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [85.0; 2],
+                        state.active_gear_slot == 4 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_left_with_margins_on(state.ids.feet_slot, -95.0, 0.0)
                     .with_icon(self.imgs.offhand_bg, Vec2::new(75.0, 75.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1438,7 +1612,12 @@ impl Widget for Bag<'_> {
                 // Inactive Mainhand/Left-Slot
                 let item_slot = EquipSlot::InactiveMainhand;
                 let slot = slot_maker
-                    .fabricate(item_slot, [40.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [40.0; 2],
+                        state.active_gear_slot == 2 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_right_with_margins_on(state.ids.active_mainhand_slot, 3.0, -47.0)
                     .with_icon(self.imgs.mainhand_bg, Vec2::new(35.0, 35.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1449,7 +1628,12 @@ impl Widget for Bag<'_> {
                 // Inactive Offhand/Right-Slot
                 let item_slot = EquipSlot::InactiveOffhand;
                 let slot = slot_maker
-                    .fabricate(item_slot, [40.0; 2])
+                    .fabricate(
+                        item_slot,
+                        [40.0; 2],
+                        state.active_gear_slot == 3 && state.active_content == 2,
+                        false,
+                    )
                     .bottom_left_with_margins_on(state.ids.active_offhand_slot, 3.0, -47.0)
                     .with_icon(self.imgs.offhand_bg, Vec2::new(35.0, 35.0), Some(UI_MAIN))
                     .filled_slot(filled_slot);
@@ -1494,7 +1678,7 @@ impl Widget for Bag<'_> {
             // Bag 1
             let item_slot = EquipSlot::Armor(ArmorSlot::Bag1);
             let slot = slot_maker
-                .fabricate(item_slot, [35.0; 2])
+                .fabricate(item_slot, [35.0; 2], false, false)
                 .bottom_left_with_margins_on(
                     state.bg_ids.bg_frame,
                     if self.show.bag_inv { 600.0 } else { 167.0 },
@@ -1509,7 +1693,7 @@ impl Widget for Bag<'_> {
             // Bag 2
             let item_slot = EquipSlot::Armor(ArmorSlot::Bag2);
             let slot = slot_maker
-                .fabricate(item_slot, [35.0; 2])
+                .fabricate(item_slot, [35.0; 2], false, false)
                 .down_from(state.ids.bag1_slot, 2.0)
                 .with_icon(self.imgs.bag_bg, Vec2::new(28.0, 24.0), Some(UI_MAIN))
                 .filled_slot(filled_slot);
@@ -1520,7 +1704,7 @@ impl Widget for Bag<'_> {
             // Bag 3
             let item_slot = EquipSlot::Armor(ArmorSlot::Bag3);
             let slot = slot_maker
-                .fabricate(item_slot, [35.0; 2])
+                .fabricate(item_slot, [35.0; 2], false, false)
                 .down_from(state.ids.bag2_slot, 2.0)
                 .with_icon(self.imgs.bag_bg, Vec2::new(28.0, 24.0), Some(UI_MAIN))
                 .filled_slot(filled_slot);
@@ -1531,7 +1715,7 @@ impl Widget for Bag<'_> {
             // Bag 4
             let item_slot = EquipSlot::Armor(ArmorSlot::Bag4);
             let slot = slot_maker
-                .fabricate(item_slot, [35.0; 2])
+                .fabricate(item_slot, [35.0; 2], false, false)
                 .down_from(state.ids.bag3_slot, 2.0)
                 .with_icon(self.imgs.bag_bg, Vec2::new(28.0, 24.0), Some(UI_MAIN))
                 .filled_slot(filled_slot);

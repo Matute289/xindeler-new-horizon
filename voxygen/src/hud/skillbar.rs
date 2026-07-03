@@ -1024,6 +1024,7 @@ impl<'a> Skillbar<'a> {
         let mut slot_maker = SlotMaker {
             // TODO: is a separate image needed for the frame?
             empty_slot: self.imgs.skillbar_slot,
+            hovered_slot: self.imgs.skillbar_index,
             filled_slot: self.imgs.skillbar_slot,
             selected_slot: self.imgs.inv_slot_sel,
             background_color: None,
@@ -1040,6 +1041,7 @@ impl<'a> Skillbar<'a> {
             content_source: &content_source,
             image_source: &image_source,
             slot_manager: Some(self.slot_manager),
+            last_input: &self.global_state.window.last_input(),
             pulse: self.pulse,
         };
 
@@ -1134,7 +1136,7 @@ impl<'a> Skillbar<'a> {
         let slots = slot_entries(state, slot_offset);
         for entry in slots {
             let slot = slot_maker
-                .fabricate(entry.slot, [40.0; 2])
+                .fabricate(entry.slot, [40.0; 2], false, false)
                 .filled_slot(self.imgs.skillbar_slot)
                 .position(entry.position);
             // if there is an item attached, show item tooltip
@@ -1180,11 +1182,12 @@ impl<'a> Skillbar<'a> {
                             Image::new(selection_image)
                                 .w_h(42.0, 42.0)
                                 .middle_of(entry.widget_id)
+                                .graphics_for(entry.widget_id)
                                 .set(state.ids.slot_highlight, ui);
                         }
                     }
                 },
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     // enable UI if keyboard binding is set for CurrentSlot
                     if self
                         .global_state
@@ -1201,6 +1204,7 @@ impl<'a> Skillbar<'a> {
                             Image::new(selection_image)
                                 .w_h(42.0, 42.0)
                                 .middle_of(entry.widget_id)
+                                .graphics_for(entry.widget_id)
                                 .set(state.ids.slot_highlight, ui);
                         }
                     }
@@ -1239,7 +1243,7 @@ impl<'a> Skillbar<'a> {
         // M1 is primary slot on mouse, M2 is primary slot on controller
         let (primary_id, primary_bg, secondary_id, secondary_bg) =
             match self.global_state.window.last_input() {
-                LastInput::KeyboardMouse => (
+                LastInput::Keyboard | LastInput::Mouse => (
                     state.ids.m1_content,
                     state.ids.m1_slot_bg,
                     state.ids.m2_content,
@@ -1345,7 +1349,7 @@ impl<'a> Skillbar<'a> {
 
         // M1 and M2 icons
         match self.global_state.window.last_input() {
-            LastInput::KeyboardMouse => {
+            LastInput::Keyboard | LastInput::Mouse => {
                 Image::new(self.imgs.m1_ico)
                     .w_h(16.0, 18.0)
                     .mid_bottom_with_margin_on(state.ids.m1_content, -11.0)

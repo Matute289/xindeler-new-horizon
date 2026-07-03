@@ -57,6 +57,10 @@ pub enum Control {
     RemoveBindingKeyboard(GameInput),
     ResetKeyBindingsKeyboard,
 
+    // change keyboard menu bindings
+    ChangeBindingKeyboardMenu(MenuInput),
+    RemoveBindingKeyboardMenu(MenuInput),
+
     // reset all gamepad bindings
     ResetKeyBindingsGamepad,
 
@@ -416,6 +420,14 @@ impl SettingsChange {
                 },
                 Control::RemoveBindingKeyboard(game_input) => {
                     settings.controls.remove_binding(game_input);
+                },
+                Control::ChangeBindingKeyboardMenu(menu_input) => {
+                    global_state.window.set_remapping_mode(
+                        crate::window::RemappingMode::RemapKeyboardMenu(menu_input),
+                    );
+                },
+                Control::RemoveBindingKeyboardMenu(menu_input) => {
+                    settings.controls.remove_menu_binding(menu_input);
                 },
                 Control::ResetKeyBindingsKeyboard => {
                     settings.controls = ControlSettings::default();

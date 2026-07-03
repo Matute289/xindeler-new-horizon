@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Softer rain/ambience when indoors
 - Tall characters will now squat when under low obstacles
 - You can now customise your character's height
+- Initial menu input support was added (starting with the player inventory)
+- Menu inputs can now be remapped in settings->controls
+- Selecting an inventory slot will now open a new context menu
   
 ### Changed
 
