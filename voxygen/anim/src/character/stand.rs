@@ -134,6 +134,7 @@ impl Animation for StandAnimation {
         );
 
         next.torso.position = Vec3::new(0.0, 0.0, 0.0);
+        next.torso.orientation = Quaternion::default();
 
         if let (None, Some(Hands::Two)) = hands {
             next.second = next.main;

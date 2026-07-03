@@ -551,7 +551,9 @@ impl Server {
 
         state.ecs_mut().insert(DeletedEntities::default());
 
-        let network = Network::new_with_registry(Pid::new(), &runtime, &registry);
+        // Only allow clients to send us a maximum of 1 MB per uncompressed message, to
+        // reduce the effectiveness of a DoS attack
+        let network = Network::new_with_registry(Pid::new(), &runtime, &registry, 1 << 20);
         let (chat_cache, chat_tracker) = ChatCache::new(Duration::from_secs(60), &runtime);
         state.ecs_mut().insert(chat_tracker);
 

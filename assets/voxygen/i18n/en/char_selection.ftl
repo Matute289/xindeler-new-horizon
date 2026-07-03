@@ -15,6 +15,7 @@ char_selection-eye_color = Eye Color
 char_selection-skin = Skin
 char_selection-eyeshape = Eye Details
 char_selection-accessories = Accessories
+char_selection-height_scale = Height
 char_selection-hardcore = Hardcore
 char_selection-hardcore_tooltip = Hardcore characters will be deleted upon death, no other changes in difficulty.
     

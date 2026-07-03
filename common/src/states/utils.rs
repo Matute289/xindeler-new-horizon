@@ -312,7 +312,9 @@ impl Body {
                 Body::Dragon(_) => 50.0 * self.mass().0,
                 // Humanoids are a bit different: we try to give them thrusts that result in similar
                 // speeds for gameplay reasons
-                Body::Humanoid(_) => 1_500_000.0 / self.mass().0,
+                Body::Humanoid(body) => {
+                    return Some(6_500_000.0 / self.mass().0 * body.scaler().powi(2));
+                },
                 Body::Theropod(body) => match body.species {
                     theropod::Species::Sandraptor
                     | theropod::Species::Snowraptor

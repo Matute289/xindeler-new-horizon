@@ -16,7 +16,11 @@ pub struct HumanoidBody {
     pub hair_color: u8,
     pub skin: u8,
     pub eye_color: u8,
+    #[serde(default = "default_height_scale")]
+    pub height_scale: u8,
 }
+
+fn default_height_scale() -> u8 { u8::MAX / 2 }
 
 impl From<&comp::humanoid::Body> for HumanoidBody {
     fn from(body: &comp::humanoid::Body) -> Self {
@@ -30,6 +34,7 @@ impl From<&comp::humanoid::Body> for HumanoidBody {
             hair_color: body.hair_color,
             skin: body.skin,
             eye_color: body.eye_color,
+            height_scale: body.height_scale,
         }
     }
 }

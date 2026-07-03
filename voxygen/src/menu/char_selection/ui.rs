@@ -352,6 +352,7 @@ enum Message {
     EyeColor(u8),
     Accessory(u8),
     Beard(u8),
+    HeightScale(u8),
     StartingSite(usize),
     PrevStartingSite,
     NextStartingSite,
@@ -1355,6 +1356,14 @@ impl Controls {
                         Message::Beard,
                         (fonts, imgs),
                     ),
+                    char_slider(
+                        i18n.get_msg("char_selection-height_scale").into_owned(),
+                        &mut sliders.height_scale,
+                        255,
+                        body.height_scale,
+                        Message::HeightScale,
+                        (fonts, imgs),
+                    ),
                 ])
                 .max_width(200)
                 .padding(5);
@@ -1938,6 +1947,7 @@ impl Controls {
                     body.skin = rng.random_range(0..species.num_skin_colors());
                     body.eye_color = rng.random_range(0..species.num_eye_colors());
                     body.eyes = rng.random_range(0..species.num_eyes(body_type));
+                    body.height_scale = rng.random();
                 }
             },
             Message::HardcoreEnabled(checked) => {
@@ -1997,6 +2007,12 @@ impl Controls {
             Message::Beard(value) => {
                 if let Mode::CreateOrEdit { body, .. } = &mut self.mode {
                     body.beard = value;
+                    body.validate();
+                }
+            },
+            Message::HeightScale(value) => {
+                if let Mode::CreateOrEdit { body, .. } = &mut self.mode {
+                    body.height_scale = value;
                     body.validate();
                 }
             },
@@ -2200,6 +2216,8 @@ impl CharSelectionUi {
     }
 
     pub fn render<'a>(&'a self, drawer: &mut UiDrawer<'_, 'a>) { self.ui.render(drawer); }
+
+    pub fn is_edit(&self) -> bool { matches!(&self.controls.mode, Mode::CreateOrEdit { .. }) }
 }
 
 #[derive(Default)]
@@ -2211,5 +2229,6 @@ struct Sliders {
     eye_color: slider::State,
     accessory: slider::State,
     beard: slider::State,
+    height_scale: slider::State,
     starting_site: slider::State,
 }
