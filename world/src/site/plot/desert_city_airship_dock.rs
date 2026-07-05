@@ -113,31 +113,39 @@ impl DesertCityAirshipDock {
             floors,
         }
     }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            trees: {
-                // dock is 5 tiles = 30 blocks in radius
-                // airships are 39 blocks wide.
-                // Tree can be up to 20 blocks in radius.
-                // Don't allow trees within 30 + 39 + 20 = 89 blocks of the dock center
-                const AIRSHIP_MIN_TREE_DIST: i32 = 89;
-                !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST)
-            },
-            waypoints: false,
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for DesertCityAirshipDock {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_desertcityairshipdock\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_desertcityairshipdock")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((
+            Self::as_dyn_impl(self),
+            "as_dyn_structure_desertcityairshipdock",
+        ))
+    }
 
-    #[cfg_attr(
-        feature = "be-dyn-lib",
-        unsafe(export_name = "render_desertcityairshipdock")
-    )]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+        // dock is 5 tiles = 30 blocks in radius
+        // airships are 39 blocks wide.
+        // Tree can be up to 20 blocks in radius.
+        // Don't allow trees within 30 + 39 + 20 = 89 blocks of the dock center
+        const AIRSHIP_MIN_TREE_DIST: i32 = 89;
+        spawn_rules.trees &= !within_distance(wpos, self.center, AIRSHIP_MIN_TREE_DIST);
+
+        const MIN_FLAT_DIST: f32 = 12.0;
+        const SLOPE_LENGTH: f32 = 16.0;
+        let dist = wpos.as_::<f32>().distance(self.center.as_());
+        let weight = (1.0 - (dist - MIN_FLAT_DIST).max(0.0) / SLOPE_LENGTH).max(0.0);
+        spawn_rules.prefer_alt(self.alt as f32, weight);
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let sandstone = Fill::Sampling(Arc::new(|center| {
             Some(match (RandomField::new(0).get(center)) % 37 {

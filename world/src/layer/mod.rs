@@ -91,14 +91,14 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
 
             let PathLocals {
                 riverless_alt,
-                alt: _,
+                alt,
                 water_dist: _,
                 bridge_offset: _,
                 depth: _,
             } = PathLocals::new(&canvas.info(), col, path_nearest);
 
             let depth = 4;
-            let surface_z = riverless_alt.floor() as i32;
+            let surface_z = riverless_alt.min(alt).floor() as i32;
 
             for z in inset - depth..inset {
                 let wpos = Vec3::new(wpos2d.x, wpos2d.y, surface_z + z);

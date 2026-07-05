@@ -57,10 +57,22 @@ impl Barn {
 }
 
 impl Structure for Barn {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_barn\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_barn")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_barn"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_barn"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(4) * 25.0);
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let base = self.alt;
         let plot_center = self.bounds.center();
@@ -150,11 +162,11 @@ impl Structure for Barn {
             ));
     }
 
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         wpos: Vec2<i32>,
         old: Block,
-        _rng: &mut R,
+        _rng: &mut ChaCha8Rng,
         col: &ColumnSample,
         z_off: i32,
         _site: &Site,

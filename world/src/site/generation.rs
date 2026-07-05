@@ -1,7 +1,6 @@
-#[cfg(feature = "use-dyn-lib")]
-use {crate::LIB, std::ffi::CStr};
+#[cfg(feature = "use-dyn-lib")] use crate::LIB;
 
-use super::*;
+use super::{plot::*, *};
 use crate::{
     CanvasInfo, ColumnSample,
     block::block_from_structure,
@@ -19,6 +18,7 @@ use common::{
     vol::ReadVol,
 };
 use num::cast::AsPrimitive;
+use rand_chacha::ChaCha8Rng;
 use std::{
     cell::RefCell,
     f32::consts::{PI, TAU},
@@ -1671,41 +1671,74 @@ impl<const N: usize> PrimitiveTransform for [PrimitiveRef<'_>; N] {
     }
 }
 
-pub trait Structure {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8];
+pub trait Structure: core::any::Any {
+    // Utility function, used to generate a vtable for the structure inside the
+    // guest dynamic library rather than using the host's library.
+    fn as_dyn_impl(x: &dyn core::any::Any) -> &dyn Structure
+    where
+        Self: Sized,
+    {
+        x.downcast_ref::<Self>().unwrap()
+    }
 
-    fn render_inner(&self, _site: &Site, _land: &Land, _painter: &Painter) {}
+    /// Defaults to no support for hot linking.
+    ///
+    /// Overload this function and provide a unique `export_name` (as
+    /// demonstrated by existing plots) to have the plot support
+    /// hot-reloading.
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> { None }
 
-    fn render(&self, site: &Site, land: &Land, painter: &Painter) {
-        #[cfg(not(feature = "use-dyn-lib"))]
-        {
-            self.render_inner(site, land, painter);
-        }
+    // Function is designed such that it should be 'zero-cost' when dynamic linking
+    // is disabled because both `Self` and `dyn Structure` implement
+    // `Structure`.
+    fn as_dyn(&self) -> &(impl Structure + ?Sized)
+    where
+        Self: Sized,
+    {
+        // When hot-linking is enabled, and the current structure supports it, look up
+        // the vtable generator function in the guest dynamic library and use it
+        // to generate a dyn pointer to the structure using the *guest's*
+        // vtables.
         #[cfg(feature = "use-dyn-lib")]
-        {
+        if let Some((_, fn_name)) = self.as_dyn_outer() {
             let lock = LIB.lock().unwrap();
             let lib = &lock.as_ref().unwrap().lib;
 
-            let update_fn: common_dynlib::Symbol<fn(&Self, &Site, &Land, &Painter)> = unsafe {
-                //let start = std::time::Instant::now();
-                // Overhead of 0.5-5 us (could use hashmap to mitigate if this is an issue)
-                lib.get(Self::UPDATE_FN)
-                //println!("{}", start.elapsed().as_nanos());
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Trying to use: {} but had error: {:?}",
-                    CStr::from_bytes_with_nul(Self::UPDATE_FN)
-                        .map(CStr::to_str)
-                        .unwrap()
-                        .unwrap(),
-                    e
-                )
-            });
-
-            update_fn(self, site, land, painter);
+            let f: common_dynlib::Symbol<fn(&Self) -> Option<(&dyn Structure, &'static str)>> =
+                unsafe {
+                    // Overhead of 0.5-5 us (could use hashmap to mitigate if this is an issue)
+                    lib.get(fn_name)
+                }
+                .unwrap_or_else(|e| panic!("Trying to use: {fn_name} but had error: {e:?}"));
+            return f(self).unwrap().0;
         }
+        self
+    }
+
+    fn render_inner(&self, _site: &Site, _land: &Land, _painter: &Painter) {}
+
+    fn render(&self, site: &Site, land: &Land, painter: &Painter)
+    where
+        Self: Sized,
+    {
+        self.as_dyn().render_inner(site, land, painter)
+    }
+
+    fn spawn_rules_inner(
+        &self,
+        _spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+    }
+
+    fn spawn_rules(&self, spawn_rules: &mut SpawnRules, land: &Land, wpos: Vec2<i32>, weight: f32)
+    where
+        Self: Sized,
+    {
+        self.as_dyn()
+            .spawn_rules_inner(spawn_rules, land, wpos, weight);
     }
 
     // Generate a primitive tree and fills for this structure
@@ -1717,7 +1750,10 @@ pub trait Structure {
         Store<Primitive>,
         Vec<(Id<Primitive>, Fill)>,
         Vec<EntityInfo>,
-    ) {
+    )
+    where
+        Self: Sized,
+    {
         let painter = Painter {
             prims: RefCell::new(Store::default()),
             fills: RefCell::new(Vec::new()),
@@ -1740,17 +1776,40 @@ pub trait Structure {
     /// column.
     fn rel_terrain_offset(&self, col: &ColumnSample) -> i32 { col.alt as i32 }
 
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         _wpos: Vec2<i32>,
         _old: Block,
-        _rng: &mut R,
+        _rng: &mut ChaCha8Rng,
         _col: &ColumnSample,
         _z_off: i32,
         _site: &Site,
     ) -> Option<Block> {
         None
     }
+
+    fn terrain_surface_at(
+        &self,
+        wpos: Vec2<i32>,
+        old: Block,
+        rng: &mut ChaCha8Rng,
+        col: &ColumnSample,
+        z_off: i32,
+        site: &Site,
+    ) -> Option<Block>
+    where
+        Self: Sized,
+    {
+        self.as_dyn()
+            .terrain_surface_at_inner(wpos, old, rng, col, z_off, site)
+    }
+
+    fn airship_dock_info(&self) -> Option<AirshipDockInfo<'_>> { None }
+
+    fn door_tile(&self) -> Option<Vec2<i32>> { None }
+
+    // TODO: Something more principled than this
+    fn render_ordering(&self) -> u32 { 0 }
 }
 
 /// Extend a 2d AABR to a 3d AABB

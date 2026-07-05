@@ -68,6 +68,11 @@ impl<'a> Land<'a> {
         self.sim.and_then(|sim| sim.get_wpos(wpos))
     }
 
+    pub fn get_approx_chunk_terrain_normal(&self, wpos: Vec2<i32>) -> Option<Vec3<f32>> {
+        self.sim
+            .and_then(|sim| sim.approx_chunk_terrain_normal(wpos))
+    }
+
     pub fn get_nearest_path(
         &self,
         wpos: Vec2<i32>,

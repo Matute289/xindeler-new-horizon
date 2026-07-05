@@ -39,7 +39,7 @@ use common::{
 use hashbrown::DefaultHashBuilder;
 use namegen::NameGen;
 use rand::{SeedableRng, prelude::*, seq::IndexedRandom};
-use rand_chacha::ChaChaRng;
+use rand_chacha::{ChaCha8Rng, ChaChaRng};
 use std::ops::Range;
 use vek::*;
 
@@ -59,18 +59,35 @@ pub struct SpawnRules {
     pub max_warp: f32,
     pub paths: bool,
     pub waypoints: bool,
+    // (alt, total_weight, max_factor)
+    // factor = 0.0: no effect
+    // factor = 1.0: exact alt
+    pub preferred_alt: (f32, f32, f32),
 }
 
 impl SpawnRules {
-    #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        // Should be commutative
-        Self {
-            trees: self.trees && other.trees,
-            max_warp: self.max_warp.min(other.max_warp),
-            paths: self.paths && other.paths,
-            waypoints: self.waypoints && other.waypoints,
-        }
+    /// Specify that the column these rules relates to should prefer to use the
+    /// given `alt` as an altitude (causing the terrain to shift up or down).
+    ///
+    /// The `weight` parameter indicates how strong this pull should be: 0.0
+    /// indicates no change, >= 1.0 indicates *exactly* the given altitude.
+    ///
+    /// Successive calls to this method will collect a weighted average. If you
+    /// wish to strongly override the preferred altitude, a weight > 1.0 might
+    /// be desirable.
+    pub fn prefer_alt(&mut self, alt: f32, weight: f32) {
+        self.preferred_alt.0 += alt * weight;
+        self.preferred_alt.1 += weight;
+        self.preferred_alt.2 = self.preferred_alt.2.max(weight);
+    }
+
+    // Returns (alt, factor)
+    pub fn get_preferred_alt(&self) -> (f32, f32) {
+        // + 0.1 is a hack, prevents precision issues
+        (
+            self.preferred_alt.0 / self.preferred_alt.1.max(0.0001) + 0.1,
+            self.preferred_alt.2,
+        )
     }
 }
 
@@ -81,6 +98,7 @@ impl Default for SpawnRules {
             max_warp: 1.0,
             paths: true,
             waypoints: true,
+            preferred_alt: (0.0, 0.0, f32::NEG_INFINITY),
         }
     }
 }
@@ -247,7 +265,7 @@ impl Site {
             * TILE_SIZE as i32) as f32
     }
 
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
+    pub fn spawn_rules(&self, spawn_rules: &mut SpawnRules, land: &Land, wpos: Vec2<i32>) {
         let tile_pos = self.wpos_tile_pos(wpos);
         let max_warp = SQUARE_9
             .iter()
@@ -264,36 +282,32 @@ impl Site {
             .min_by_key(|d2| *d2 as i32)
             .map(|d2| d2.sqrt() / TILE_SIZE as f32)
             .unwrap_or(1.0);
-        let base_spawn_rules = SpawnRules {
-            trees: max_warp == 1.0,
-            max_warp,
-            paths: max_warp > f32::EPSILON,
-            waypoints: true,
-        };
-        self.plots
-            .values()
-            .filter_map(|plot| match &plot.kind {
-                PlotKind::Gnarling(g) => Some(g.spawn_rules(wpos)),
-                PlotKind::Adlet(ad) => Some(ad.spawn_rules(wpos)),
-                PlotKind::SeaChapel(p) => Some(p.spawn_rules(wpos)),
-                PlotKind::Haniwa(ha) => Some(ha.spawn_rules(wpos)),
-                PlotKind::TerracottaPalace(tp) => Some(tp.spawn_rules(wpos)),
-                PlotKind::TerracottaHouse(th) => Some(th.spawn_rules(wpos)),
-                PlotKind::TerracottaYard(ty) => Some(ty.spawn_rules(wpos)),
-                PlotKind::Cultist(cl) => Some(cl.spawn_rules(wpos)),
-                PlotKind::Sahagin(sg) => Some(sg.spawn_rules(wpos)),
-                PlotKind::DwarvenMine(dm) => Some(dm.spawn_rules(wpos)),
-                PlotKind::VampireCastle(vc) => Some(vc.spawn_rules(wpos)),
-                PlotKind::MyrmidonArena(ma) => Some(ma.spawn_rules(wpos)),
-                PlotKind::MyrmidonHouse(mh) => Some(mh.spawn_rules(wpos)),
-                PlotKind::AirshipDock(ad) => Some(ad.spawn_rules(wpos)),
-                PlotKind::CoastalAirshipDock(cad) => Some(cad.spawn_rules(wpos)),
-                PlotKind::CliffTownAirshipDock(clad) => Some(clad.spawn_rules(wpos)),
-                PlotKind::DesertCityAirshipDock(dcad) => Some(dcad.spawn_rules(wpos)),
-                PlotKind::SavannahAirshipDock(sad) => Some(sad.spawn_rules(wpos)),
-                _ => None,
-            })
-            .fold(base_spawn_rules, |a, b| a.combine(b))
+        SQUARE_9.iter().for_each(|rpos| {
+            let tile_pos = tile_pos + rpos;
+            let tile = self.tiles.get(tile_pos);
+            let clamped = wpos.clamped(self.tile_wpos(tile_pos), self.tile_wpos(tile_pos + 1) - 1);
+            let dist = clamped.as_::<f32>().distance(wpos.as_::<f32>()) / TILE_SIZE as f32;
+            let weight = (1.0 - dist).clamped(0.001, 1.0);
+            // Special case: roads get their altitude from the tile, not the plot
+            // TODO: Should this be true of all tiles?
+            if let TileKind::Road { alt, .. } = &tile.kind {
+                spawn_rules.prefer_alt(*alt, weight.powi(4) * 25.0);
+            } else if let TileKind::Path { closest_pos, path } = &tile.kind
+                && let Some(hard_alt) = tile.hard_alt
+            {
+                spawn_rules.prefer_alt(
+                    hard_alt as f32,
+                    (1.0 - (closest_pos.distance(wpos.as_()) - path.width * 1.25).max(0.0) * 0.15)
+                        .clamped(0.001, 1.0)
+                        .powi(2),
+                );
+            } else if let Some(plot) = tile.plot {
+                self.plot(plot).spawn_rules(spawn_rules, land, wpos, weight);
+            }
+        });
+
+        spawn_rules.trees &= max_warp == 1.0;
+        spawn_rules.max_warp = spawn_rules.max_warp.min(max_warp);
     }
 
     pub fn bounds(&self) -> Aabr<i32> {
@@ -329,46 +343,69 @@ impl Site {
         b: Vec2<i32>,
         w: u16,
         kind: plot::RoadKind,
-    ) -> Option<Id<Plot>> {
+        (src, src_alt): (Id<Plot>, f32),
+        (dst, dst_alt): (Id<Plot>, f32),
+    ) {
         const MAX_ITERS: usize = 4096;
         let range = &(-(w as i32) / 2..w as i32 - (w as i32 + 1) / 2);
         // Manhattan distance.
         let heuristic =
             |(tile, _): &(Vec2<i32>, Vec2<i32>)| (tile - b).map(|e| e.abs()).sum() as f32;
-        let (path, _cost) = Astar::new(MAX_ITERS, (a, Vec2::zero()), DefaultHashBuilder::default())
-            .poll(
-                MAX_ITERS,
-                &heuristic,
-                |(tile, prev_dir)| {
-                    let tile = *tile;
-                    let prev_dir = *prev_dir;
-                    let this = &self;
-                    CARDINALS.iter().map(move |dir| {
-                        let neighbor = (tile + *dir, *dir);
+        let Some((path, _cost)) =
+            Astar::new(MAX_ITERS, (a, Vec2::zero()), DefaultHashBuilder::default())
+                .poll(
+                    MAX_ITERS,
+                    &heuristic,
+                    |(tile, prev_dir)| {
+                        let tile = *tile;
+                        let prev_dir = *prev_dir;
+                        let this = &self;
+                        CARDINALS.iter().map(move |dir| {
+                            let neighbor = (tile + *dir, *dir);
 
-                        // Transition cost
-                        let alt_a = land.get_alt_approx(this.tile_center_wpos(tile));
-                        let alt_b = land.get_alt_approx(this.tile_center_wpos(neighbor.0));
-                        let mut cost = 1.0
-                            + (alt_a - alt_b).abs() / TILE_SIZE as f32
-                            + (prev_dir != *dir) as i32 as f32;
+                            // Transition cost
+                            let alt_a = land.get_alt_approx(this.tile_center_wpos(tile));
+                            let alt_b = land.get_alt_approx(this.tile_center_wpos(neighbor.0));
+                            let mut cost = 1.0
+                                + (alt_a - alt_b).abs() / TILE_SIZE as f32
+                                + (prev_dir != *dir) as i32 as f32;
 
-                        for i in range.clone() {
-                            let orth = dir.yx() * i;
-                            let tile = this.tiles.get(neighbor.0 + orth);
-                            if tile.is_obstacle() {
-                                cost += 1000.0;
-                            } else if !tile.is_empty() && !tile.is_road() {
-                                cost += 25.0;
+                            for i in range.clone() {
+                                let orth = dir.yx() * i;
+                                let tile = this.tiles.get(neighbor.0 + orth);
+                                if tile.is_obstacle() {
+                                    cost += 1000.0;
+                                } else if !tile.is_empty() && !tile.is_road() {
+                                    cost += 25.0;
+                                }
                             }
-                        }
 
-                        (neighbor, cost)
-                    })
-                },
-                |(tile, _)| *tile == b,
-            )
-            .into_path()?;
+                            (neighbor, cost)
+                        })
+                    },
+                    |(tile, _)| self.tiles.get(*tile).plot == Some(dst),
+                )
+                .into_path()
+        else {
+            return;
+        };
+
+        // Skip tiles in the src plot
+        let mut path = path.nodes();
+        while let Some((tile, _)) = path.first()
+            && self.tiles.get(*tile).plot == Some(src)
+        {
+            path = &path[1..];
+        }
+        let Some((a, _)) = path.first().copied() else {
+            return;
+        };
+
+        // Start and end altitudes, to clamp road tile altitudes relative to
+        // let [alt_a, alt_b] = [a, b].map(|tile_pos|
+        //     match_some!(&self.tiles.get(tile_pos).kind, TileKind::Road { alt, .. } =>
+        // *alt)     .unwrap_or_else(||
+        // land.get_alt_approx(self.tile_center_wpos(tile_pos))));
 
         let plot = self.create_plot(Plot {
             kind: PlotKind::Road(plot::Road {
@@ -385,25 +422,34 @@ impl Site {
             for y in range.clone() {
                 for x in range.clone() {
                     let tile = tile + Vec2::new(x, y);
+                    let old_tile = self.tiles.get(tile);
                     if matches!(
-                        self.tiles.get(tile).kind,
-                        TileKind::Empty | TileKind::Path { .. }
+                        old_tile.kind,
+                        TileKind::Empty | TileKind::Path { .. } /* | TileKind::Road { .. } */
                     ) {
                         self.tiles.set(tile, Tile {
                             kind: TileKind::Road {
                                 a: i.saturating_sub(1) as u16,
                                 b: (i + 1).min(path.len() - 1) as u16,
                                 w,
+                                alt: land.get_alt_approx(self.tile_center_wpos(tile))
+                                    // Clamp roads to an altitude that means they can always reach their destination with less than a 45 degree slope
+                                    .clamp(
+                                        src_alt - i as f32 * tile::TILE_SIZE as f32,
+                                        src_alt + i as f32 * tile::TILE_SIZE as f32,
+                                    )
+                                    .clamp(
+                                        dst_alt - path.len().saturating_sub(i + 1) as f32 * tile::TILE_SIZE as f32,
+                                        dst_alt + path.len().saturating_sub(i + 1) as f32 * tile::TILE_SIZE as f32,
+                                    ),//Lerp::lerp(alt_a, alt_b, i as f32 / path.len() as f32),
                             },
-                            plot: Some(plot),
+                            plot: old_tile.plot.or(Some(plot)),
                             hard_alt: Some(land.get_alt_approx(self.tile_center_wpos(tile)) as i32),
                         });
                     }
                 }
             }
         }
-
-        Some(plot)
     }
 
     pub fn find_aabr(
@@ -417,13 +463,17 @@ impl Site {
                 let dir = CARDINALS
                     .iter()
                     .find(|dir| self.tiles.get(center + *dir).is_road())?;
-                let hard_alt = self.tiles.get(center + *dir).plot.and_then(|plot| {
-                    if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
-                        p.hard_alt
-                    } else {
-                        None
-                    }
-                });
+                let hard_alt = self.tiles.get(center + *dir).hard_alt.or(self
+                    .tiles
+                    .get(center + *dir)
+                    .plot
+                    .and_then(|plot| {
+                        if let PlotKind::Plaza(p) = self.plots.get(plot).kind() {
+                            Some(p.hard_alt.unwrap_or(p.alt))
+                        } else {
+                            None
+                        }
+                    }));
                 self.tiles
                     .grow_aabr(center, area_range.clone(), min_dims)
                     .ok()
@@ -442,18 +492,27 @@ impl Site {
             .map(|_| rng.random_range(-1.0..1.0))
             .normalized();
         let search_pos = if rng.random() {
-            let plaza = self.plot(*self.plazas.choose(rng)?);
-            let sz = plaza.find_bounds().size();
-            plaza.root_tile + dir.map(|e: f32| e.round() as i32) * (sz + 1)
+            let plot = self.plot(*self.plazas.choose(rng)?);
+            let sz = plot.find_bounds().size();
+            plot.root_tile + dir.map(|e: f32| e.round() as i32) * (sz + 1)
         } else if let PlotKind::Road(plot::Road { path, .. }) =
             &self.plot(*self.roads.choose(rng)?).kind
         {
             *path.nodes().choose(rng)? + (dir * 1.0).map(|e: f32| e.round() as i32)
         } else {
-            unreachable!()
+            return None;
         };
 
-        self.find_aabr(search_pos, area_range, min_dims)
+        let (aabr, door_pos, door_dir, hard_alt) =
+            self.find_aabr(search_pos, area_range, min_dims)?;
+
+        let alt = if let TileKind::Road { alt, .. } = &self.tiles.get(door_pos + door_dir).kind {
+            Some(*alt as i32 - 1)
+        } else {
+            None
+        };
+
+        Some((aabr, door_pos, door_dir, hard_alt.or(alt)))
     }
 
     pub fn find_rural_aabr(
@@ -500,7 +559,12 @@ impl Site {
         });
         self.plazas.push(plaza);
         self.blit_aabr(tile_aabr, Tile {
-            kind: TileKind::Plaza,
+            kind: TileKind::Road {
+                a: 0,
+                b: 0,
+                w: 0,
+                alt: plaza_alt as f32,
+            },
             plot: Some(plaza),
             hard_alt: Some(plaza_alt),
         });
@@ -527,6 +591,8 @@ impl Site {
                         })
                 })
                 .min_by_key(|&&p| self.plot(p).root_tile.distance_squared(tpos))
+                && let PlotKind::Plaza(src_plaza) = &self.plot(p).kind
+                && let PlotKind::Plaza(dst_plaza) = &self.plot(plaza).kind
             {
                 self.create_road(
                     land,
@@ -534,6 +600,8 @@ impl Site {
                     tpos,
                     2, /* + i */
                     road_kind,
+                    (p, src_plaza.alt as f32),
+                    (plaza, dst_plaza.alt as f32),
                 );
                 already_pathed.push(p);
             } else {
@@ -554,7 +622,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         generator_stats.attempt(site_name, GenStatPlotKind::Plaza);
-        let plaza_radius = rng.random_range(1..4);
+        let plaza_radius = rng.random_range(1..3);
         let plaza_dist = 6.5 + plaza_radius as f32 * 3.0;
         let aabr = attempt(32, || {
             self.plazas
@@ -636,7 +704,8 @@ impl Site {
                                 tile.kind = TileKind::Path {
                                     closest_pos: path_wpos,
                                     path,
-                                }
+                                };
+                                tile.hard_alt = Some(land.get_alt_approx(path_wpos.as_()) as i32);
                             });
                     }
                 }
@@ -734,7 +803,7 @@ impl Site {
         road_kind: plot::RoadKind,
     ) -> Option<Id<Plot>> {
         // The plaza radius can be 1, 2, or 3.
-        let plaza_radius = rng.random_range(1..4);
+        let plaza_radius = rng.random_range(1..3);
         // look for plaza locations within a ring with an outer dimension
         // of 24 tiles and an inner dimension that will offset the plaza from the town
         // center.
@@ -1416,7 +1485,12 @@ impl Site {
                                 max: aabr.max - 1,
                             },
                             Tile {
-                                kind: TileKind::Road { a: 0, b: 0, w: 0 },
+                                kind: TileKind::Road {
+                                    a: 0,
+                                    b: 0,
+                                    w: 0,
+                                    alt: castle_alt as f32,
+                                },
                                 plot: Some(plot),
                                 hard_alt: Some(castle_alt),
                             },
@@ -2504,7 +2578,7 @@ impl Site {
             // their size. They need a relatively flat area.
             let gradient_avg = get_gradient_average(bounds, land);
 
-            if gradient_avg > 0.05 {
+            if gradient_avg > 0.5 {
                 false
             } else {
                 let barn = plot::Barn::generate(
@@ -3029,7 +3103,7 @@ impl Site {
                     max: self.tile_wpos(tpos + 1).map(|e| e as f32) - 1.0,
                 };
                 match tile.kind {
-                    TileKind::Road { a, b, w } => {
+                    TileKind::Road { a, b, w, .. } => {
                         if let Some(PlotKind::Road(road)) = tile.plot.map(|p| &self.plot(p).kind) {
                             let start = road.path.nodes[a as usize];
                             let end = road.path.nodes[b as usize];
@@ -3047,14 +3121,13 @@ impl Site {
                             .as_();
                             Some(aabr)
                         } else {
-                            None
+                            Some(tile_aabr)
                         }
                     },
                     TileKind::Bridge | TileKind::Plaza => Some(tile_aabr),
                     _ => tile
                         .plot
-                        .and_then(|plot| self.plot(plot).kind().meta())
-                        .and_then(|meta| meta.door_tile())
+                        .and_then(|plot| self.plot(plot).door_tile())
                         .is_some_and(|door_tile| door_tile == npos)
                         .then_some(tile_aabr),
                 }
@@ -3097,7 +3170,7 @@ impl Site {
         }
     }
 
-    pub fn render(&self, canvas: &mut Canvas, dynamic_rng: &mut impl Rng) {
+    pub fn render(&self, canvas: &mut Canvas, dynamic_rng: &mut ChaCha8Rng) {
         let tile_aabr = Aabr {
             min: self.wpos_tile_pos(canvas.wpos()) - 1,
             max: self
@@ -3121,25 +3194,12 @@ impl Site {
         canvas.foreach_col(|canvas, wpos2d, col| {
             let tile = self.wpos_tile(wpos2d);
             for z_off in (-2..4).rev() {
-                if let Some(plot) = tile.plot.map(|p| &self.plots[p]) {
+                if let Some(plot) = tile.plot.map(|p| self.plot(p)) {
                     canvas.map_resource(
-                        Vec3::new(
-                            wpos2d.x,
-                            wpos2d.y,
-                            foreach_plot!(&plot.kind, plot => plot.rel_terrain_offset(col)) + z_off,
-                        ),
+                        wpos2d.with_z(plot.rel_terrain_offset(col) + z_off),
                         |block| {
-                            foreach_plot!(
-                                &plot.kind,
-                                plot => plot.terrain_surface_at(
-                                    wpos2d,
-                                    block,
-                                    dynamic_rng,
-                                    col,
-                                    z_off,
-                                    self,
-                                ).unwrap_or(block),
-                            )
+                            plot.terrain_surface_at(wpos2d, block, dynamic_rng, col, z_off, self)
+                                .unwrap_or(block)
                         },
                     );
                 }
@@ -3155,8 +3215,7 @@ impl Site {
 
         let mut plots_to_render = plots.into_iter().collect::<Vec<_>>();
         // First sort by priority, then id.
-        plots_to_render
-            .sort_unstable_by_key(|plot| (self.plots[*plot].kind.render_ordering(), *plot));
+        plots_to_render.sort_unstable_by_key(|plot| (self.plot(*plot).render_ordering(), *plot));
 
         let wpos2d = canvas.info().wpos();
         let chunk_aabr = Aabr {
@@ -3167,8 +3226,7 @@ impl Site {
         let info = canvas.info();
 
         for plot in plots_to_render {
-            let (prim_tree, fills, mut entities) =
-                foreach_plot!(&self.plots[plot].kind, plot => plot.render_collect(self, canvas));
+            let (prim_tree, fills, mut entities) = self.plot(plot).render_collect(self, canvas);
 
             let mut spawn = |pos, last_block| {
                 if let Some(entity) = match &self.plots[plot].kind {

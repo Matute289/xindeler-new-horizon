@@ -468,69 +468,6 @@ impl Civs {
         // Tick
         //=== old economy is gone
 
-        // Flatten ground around sites
-        prof_span!(guard, "Flatten ground around sites");
-        for site in this.sites.values() {
-            let wpos = site.center * TerrainChunkSize::RECT_SIZE.map(|e: u32| e as i32);
-
-            let (radius, flatten_radius) = match &site.kind {
-                SiteKind::Refactor => (32i32, 10.0),
-                SiteKind::CliffTown => (2i32, 1.0),
-                SiteKind::SavannahTown => (48i32, 25.0),
-                SiteKind::CoastalTown => (64i32, 35.0),
-                SiteKind::JungleRuin => (8i32, 3.0),
-                SiteKind::DesertCity => (64i32, 25.0),
-                SiteKind::ChapelSite => (36i32, 10.0),
-                SiteKind::Terracotta => (64i32, 35.0),
-                SiteKind::GiantTree => (12i32, 8.0),
-                SiteKind::Gnarling => (16i32, 10.0),
-                SiteKind::Citadel => (16i32, 0.0),
-                SiteKind::Bridge(_, _) => (0, 0.0),
-                SiteKind::Adlet => (16i32, 0.0),
-                SiteKind::Haniwa => (32i32, 16.0),
-                SiteKind::PirateHideout => (8i32, 3.0),
-                SiteKind::RockCircle => (8i32, 3.0),
-                SiteKind::TrollCave => (4i32, 1.5),
-                SiteKind::Camp => (4i32, 1.5),
-                SiteKind::DwarvenMine => (8i32, 3.0),
-                SiteKind::Cultist => (24i32, 10.0),
-                SiteKind::Sahagin => (8i32, 3.0),
-                SiteKind::VampireCastle => (10i32, 16.0),
-                SiteKind::GliderCourse => (0, 0.0),
-                SiteKind::Myrmidon => (64i32, 35.0),
-            };
-
-            // Flatten ground
-            if let Some(center_alt) = ctx.sim.get_alt_approx(wpos) {
-                for offs in Spiral2d::new().take(radius.pow(2) as usize) {
-                    let pos = site.center + offs;
-                    let factor = ((1.0
-                        - (site.center - pos).map(|e| e as f32).magnitude()
-                            / f32::max(flatten_radius, 0.01))
-                        * 1.25)
-                        .min(1.0);
-                    let rng = &mut ctx.rng;
-                    ctx.sim
-                        .get_mut(pos)
-                        // Don't disrupt chunks that are near water
-                        .filter(|chunk| !chunk.river.near_water())
-                        .map(|chunk| {
-                            let diff = Lerp::lerp_precise(chunk.alt, center_alt, factor) - chunk.alt;
-                            // Make sure we don't fall below sea level (fortunately, we don't have
-                            // to worry about the case where water_alt is already set to a correct
-                            // value higher than alt, since this chunk should have been filtered
-                            // out in that case).
-                            chunk.water_alt = CONFIG.sea_level.max(chunk.water_alt + diff);
-                            chunk.alt += diff;
-                            chunk.basement += diff;
-                            chunk.rockiness = 0.0;
-                            chunk.surface_veg *= 1.0 - factor * rng.random_range(0.25..0.9);
-                        });
-                }
-            }
-        }
-        drop(guard);
-
         // Place sites in world
         prof_span!(guard, "Place sites in world");
         let mut cnt = 0;
@@ -869,6 +806,8 @@ impl Civs {
                         .map(|town_attrs| (loc, town_attrs.score()))
                 })
             })
+            // Compare just a few different potential locations (produces diversity)
+            .take(4)
             .reduce(|a, b| if a.1 > b.1 { a } else { b })?
             .0;
 
@@ -1689,11 +1628,11 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
                         if c.river.is_ocean() {
                             ocean_chunks += 1;
                         }
-                        if c.tree_density > 0.7 {
+                        if c.tree_density > 0.3 {
                             tree_chunks += 1;
                         }
-                        if c.rockiness < 0.3 && c.temp > CONFIG.snow_temp {
-                            if c.surface_veg > 0.5 {
+                        if c.rockiness < 0.4 && c.temp > CONFIG.snow_temp {
+                            if c.surface_veg > 0.35 {
                                 farmable_chunks += 1;
                             } else {
                                 match c.get_biome() {
@@ -1720,7 +1659,7 @@ fn town_attributes_of_site(loc: Vec2<i32>, sim: &WorldSim) -> Option<TownSiteAtt
         }
         let has_river = river_chunks > 1;
         let has_lake = lake_chunks > 1;
-        let vegetation_implies_potable_water = chunk.tree_density > 0.4
+        let vegetation_implies_potable_water = chunk.tree_density > 0.3
             && !matches!(chunk.get_biome(), common::terrain::BiomeKind::Swamp);
         let has_many_rocks = chunk.rockiness > 1.2;
         let warm_or_firewood = chunk.temp > CONFIG.snow_temp || tree_chunks > 2;
@@ -1773,7 +1712,7 @@ pub struct TownSiteAttributes {
 
 impl TownSiteAttributes {
     pub fn score(&self) -> f32 {
-        3.0 * (self.food_score as f32 + 1.0).log2()
+        1.5 * (self.food_score as f32 + 1.0).log2()
             + 2.0 * (self.forestry_score as f32 + 1.0).log2()
             + (self.mining_score as f32 + 1.0).log2()
             + (self.trading_score as f32 + 1.0).log2()

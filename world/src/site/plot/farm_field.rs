@@ -121,6 +121,7 @@ pub struct FarmField {
     pub(crate) alt: i32,
     ori: Vec2<f32>,
     is_desert: bool,
+    step_size: Option<f32>,
 }
 
 impl FarmField {
@@ -138,8 +139,6 @@ impl FarmField {
             max: site.tile_wpos(tile_aabr.max),
         };
 
-        let ori = rng.random_range(0.0..std::f32::consts::TAU);
-
         let crop = if is_desert {
             Crop::Cactus
         } else {
@@ -149,33 +148,84 @@ impl FarmField {
                 .unwrap()
         };
 
+        // Stepped terrain, but only on slopes
+        let center_grad = land.get_gradient_approx(bounds.center());
+        let step_size = if center_grad > 0.25 {
+            Some((center_grad * 8.0).clamped(3.0, 12.0))
+        } else {
+            None
+        };
+
         Self {
             bounds,
             alt: land.get_alt_approx(site.tile_center_wpos(door_tile + door_dir)) as i32,
-            ori: Vec2::new(ori.sin(), ori.cos()),
+            ori: {
+                let norm = land
+                    .get_approx_chunk_terrain_normal(bounds.center())
+                    .unwrap_or_default();
+                let ori = rng.random_range(0.0..std::f32::consts::TAU);
+                norm.xy() * 5.0 + Vec2::new(ori.sin(), ori.cos())
+            },
             crop,
             is_desert,
+            step_size,
+        }
+    }
+
+    /// Returns the properties of banked steps for this field (fract, alt)
+    fn step(&self, alt: f32) -> Option<(f32, f32)> {
+        const STEP_POW: i32 = 8;
+
+        if let Some(step_size) = self.step_size {
+            let step_alt = alt / step_size;
+            let step_fract = step_alt.fract();
+            let h_fract = if step_fract < 0.5 {
+                (step_fract * 2.0).powi(STEP_POW) * 0.5
+            } else {
+                1.0 - ((1.0 - step_fract) * 2.0).powi(STEP_POW) * 0.5
+            };
+            Some((step_fract, (step_alt.floor() + h_fract) * step_size))
+        } else {
+            None
         }
     }
 }
 
 impl Structure for FarmField {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_farmfield\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_farmfield")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_farmfield"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_farmfield"))]
-    fn render_inner(&self, _site: &Site, _land: &Land, _painter: &Painter) {}
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        land: &Land,
+        wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        if let Some((_, step_alt)) = self.step(land.get_alt_approx(wpos)) {
+            spawn_rules.prefer_alt(step_alt, weight);
+        }
+    }
 
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         wpos: Vec2<i32>,
         old: Block,
-        rng: &mut R,
+        rng: &mut ChaCha8Rng,
         col: &ColumnSample,
         z_off: i32,
         _site: &Site,
     ) -> Option<Block> {
-        let t = (self.ori * wpos.as_()).magnitude();
+        let t = (self.ori.yx() * wpos.as_()).magnitude();
+
+        // Don't grow crops on steep terrain
+        let is_bank = self
+            .step(col.alt)
+            .is_some_and(|(step_fract, _)| (step_fract - 0.5).abs() < 0.45);
+
         let is_trench = self
             .crop
             .row_spacing()
@@ -194,22 +244,7 @@ impl Structure for FarmField {
             && (hit_max_x_bounds || hit_min_x_bounds)
             && is_bounds;
 
-        if z_off == 0 {
-            // soil
-            Some(Block::new(
-                if self.is_desert {
-                    BlockKind::Sand
-                } else {
-                    BlockKind::Grass
-                },
-                (Lerp::lerp(
-                    col.surface_color,
-                    col.sub_surface_color * 0.5,
-                    is_trench as i32 as f32,
-                ) * 255.0)
-                    .as_(),
-            ))
-        } else if z_off == 1 && is_bounds {
+        if z_off == 1 && is_bounds {
             // fence
             let adjacent_type = if is_corner {
                 RelativeNeighborPosition::L
@@ -247,6 +282,24 @@ impl Structure for FarmField {
                     .with_adjacent_type(adjacent_type)
                     .unwrap(),
             )
+        } else if is_bank {
+            // Don't grow anything on banks
+            None
+        } else if matches!(old.kind(), BlockKind::Grass | BlockKind::Sand) {
+            // soil
+            Some(Block::new(
+                if self.is_desert {
+                    BlockKind::Sand
+                } else {
+                    BlockKind::Grass
+                },
+                (Lerp::lerp(
+                    col.surface_color,
+                    col.sub_surface_color * 0.5,
+                    is_trench as i32 as f32,
+                ) * 255.0)
+                    .as_(),
+            ))
         } else if z_off == 1 && (is_trench || self.crop.row_spacing().is_none()) {
             // crops
             self.crop

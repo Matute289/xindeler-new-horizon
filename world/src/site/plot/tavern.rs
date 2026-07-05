@@ -19,7 +19,7 @@ use vek::*;
 
 use crate::{
     IndexRef, Land,
-    site::{Dir2, Fill, Site, Structure, generation::PrimitiveTransform, namegen},
+    site::{Dir2, Fill, Site, SpawnRules, Structure, generation::PrimitiveTransform, namegen},
     util::RandomField,
 };
 
@@ -1287,10 +1287,24 @@ fn aabb(mut aabb: Aabb<i32>) -> Aabb<i32> {
 }
 
 impl Structure for Tavern {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_tavern\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_tavern")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_tavern"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_tavern"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        spawn_rules.prefer_alt(self.door_wpos.z as f32 - 1.0, weight * 2.0);
+    }
+
+    fn door_tile(&self) -> Option<Vec2<i32>> { Some(self.door_tile) }
+
     fn render_inner(&self, _site: &Site, land: &Land, painter: &crate::site::Painter) {
         let field = RandomField::new(740384);
         let field_choose = RandomField::new(134598);
