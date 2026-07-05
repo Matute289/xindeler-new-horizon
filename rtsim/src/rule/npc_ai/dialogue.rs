@@ -2,7 +2,7 @@ use crate::{data::quest::Payload, rule::npc_ai::quest::get_nearest_spot};
 
 use super::*;
 
-pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S> {
+pub fn general<S: State>(tgt: ActorId, session: DialogueSession) -> impl Action<S> {
     now(move |ctx, _| {
         let mut responses = Vec::new();
 
@@ -25,7 +25,8 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                     quest::quest_request(session).boxed(),
                 ));
 
-                let can_be_hired = matches!(ctx.npc.profession(), Some(Profession::Adventurer(_)));
+                let can_be_hired =
+                    matches!(ctx.actor.profession(), Some(Profession::Adventurer(_)));
                 if can_be_hired {
                     responses.push((
                         Response::from(Content::localized("dialogue-question-hire")),
@@ -35,7 +36,7 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
             },
         }
 
-        for quest_id in ctx.data.quests.related_to(ctx.npc_id) {
+        for quest_id in ctx.data.quests.related_to(ctx.actor_id) {
             let Some(quest) = ctx.data.quests.get(quest_id) else {
                 continue;
             };
@@ -44,7 +45,7 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                     escortee,
                     escorter,
                     to,
-                } if *escortee == Actor::Npc(ctx.npc_id) && *escorter == tgt => {
+                } if *escortee == ctx.actor_id && *escorter == tgt => {
                     let to_name =
                         util::site_name(ctx, *to).unwrap_or_else(|| "<unknown>".to_string());
                     let dst_wpos = ctx
@@ -62,7 +63,7 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                                         Content::localized("hud-map-escort-label")
                                             .with_arg(
                                                 "name",
-                                                ctx.npc
+                                                ctx.actor
                                                     .get_name()
                                                     .unwrap_or_else(|| "<unknown>".to_string()),
                                             )
@@ -80,14 +81,10 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                     ));
                 },
                 QuestKind::Slay { target, slayer }
-                    if quest.arbiter == Actor::Npc(ctx.npc_id) && *slayer == tgt =>
+                    if quest.arbiter == ctx.actor_id && *slayer == tgt =>
                 {
-                    // TODO: Work for non-NPCs?
-                    let Actor::Npc(target_npc_id) = target else {
-                        continue;
-                    };
                     // Is the monster dead?
-                    if let Some(target_npc) = ctx.data.npcs.get(*target_npc_id) {
+                    if let Some(target_npc) = ctx.data.actors.get(*target) {
                         responses.push((
                             Response::from(
                                 Content::localized("dialogue-question-quest-slay-where")
@@ -140,17 +137,15 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                     // It is possible for a courier quest to start and end with
                     // the same NPC, so the responses can cover both situations
                     // simultaneously
-                    let is_talking_to_original_quest_giver = instance.source_actor
-                        == Actor::Npc(ctx.npc_id)
-                        && instance.messenger == tgt;
+                    let is_talking_to_original_quest_giver =
+                        instance.source_actor == ctx.actor_id && instance.messenger == tgt;
                     let is_talking_to_courier_target =
-                        quest.arbiter == Actor::Npc(ctx.npc_id) && instance.messenger == tgt;
+                        quest.arbiter == ctx.actor_id && instance.messenger == tgt;
 
                     // many dialogue options are the same regardless of if
                     // you're talking to the quest giver or the target
                     if (is_talking_to_original_quest_giver || is_talking_to_courier_target)
-                        && let Actor::Npc(target_npc_id) = quest.arbiter
-                        && let Some(target_npc) = ctx.data.npcs.get(target_npc_id)
+                        && let Some(target_npc) = ctx.data.actors.get(quest.arbiter)
                     {
                         // will need to do a bit of cloning due to all the
                         // closures we have to enter
@@ -187,6 +182,7 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                         // clone these values before entering the next closure
                         let target_npc_wpos = target_npc.wpos.xy();
                         let tgt_npc_name = npc_name.clone();
+                        let tgt_npc_id = quest.arbiter;
 
                         // Determine the "what items are needed again?" dialogue
                         // items in advance for cleanliness
@@ -216,7 +212,7 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                                             get_nearest_spot(
                                                 ctx,
                                                 quest.kind,
-                                                ctx.npc.wpos.xy().wpos_to_cpos().as_(),
+                                                ctx.actor.wpos.xy().wpos_to_cpos().as_(),
                                             )
                                             .map(|chunk_pos| {
                                                 session.give_marker(
@@ -231,10 +227,10 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
                                                 // provide a map marker that points to the
                                                 // courier target as a fallback
                                                 session.give_marker(
-                                                    quest.get_quest_npc_target_marker(
+                                                    quest.get_quest_actor_target_marker(
                                                         target_npc_wpos,
                                                         tgt_npc_name,
-                                                        target_npc_id,
+                                                        tgt_npc_id,
                                                     ),
                                                 )
                                             })
@@ -277,7 +273,7 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
             }
         }
 
-        if let Some(Profession::Captain) = &ctx.npc.profession() {
+        if let Some(Profession::Captain) = &ctx.actor.profession() {
             responses.push((
                 Response::from(Content::localized("dialogue-question-where-ship-going")),
                 dialogue::where_are_we_going_next(session).boxed(),
@@ -322,14 +318,14 @@ pub fn general<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S>
 
 fn about_site<S: State>(session: DialogueSession) -> impl Action<S> {
     now(move |ctx, _| {
-        if let Some(site_name) = util::site_name(ctx, ctx.npc.current_site) {
+        if let Some(site_name) = util::site_name(ctx, ctx.actor.current_site) {
             let mut action = session
                 .say_statement(
                     Content::localized("npc-info-current_site").with_arg("site", site_name),
                 )
                 .boxed();
 
-            if let Some(current_site) = ctx.npc.current_site
+            if let Some(current_site) = ctx.actor.current_site
                 && let Some(current_site) = ctx.data.sites.get(current_site)
             {
                 for mention_site in &current_site.nearby_sites_by_size {
@@ -353,10 +349,10 @@ fn about_site<S: State>(session: DialogueSession) -> impl Action<S> {
 fn about_self<S: State>(session: DialogueSession) -> impl Action<S> {
     now(move |ctx, _| {
         let name = Content::localized("npc-info-self_name")
-            .with_arg("name", ctx.npc.get_name().as_deref().unwrap_or("unknown"));
+            .with_arg("name", ctx.actor.get_name().as_deref().unwrap_or("unknown"));
 
         let job = ctx
-            .npc
+            .actor
             .profession()
             .map(|p| match p {
                 Profession::Farmer => "noun-role-farmer",
@@ -375,7 +371,7 @@ fn about_self<S: State>(session: DialogueSession) -> impl Action<S> {
             .map(|p| Content::localized("npc-info-role").with_arg("role", Content::localized(p)))
             .unwrap_or_else(|| Content::localized("noun-role-none"));
 
-        let home = if let Some(site_name) = util::site_name(ctx, ctx.npc.home) {
+        let home = if let Some(site_name) = util::site_name(ctx, ctx.actor.home) {
             Content::localized("npc-info-self_home").with_arg("site", site_name)
         } else {
             Content::localized("npc-info-self_homeless")
@@ -389,10 +385,10 @@ fn about_self<S: State>(session: DialogueSession) -> impl Action<S> {
 }
 
 fn where_are_we_going_next<S: State>(session: DialogueSession) -> impl Action<S> {
-    now(move |ctx, _| match ctx.npc.profession() {
+    now(move |ctx, _| match ctx.actor.profession() {
         Some(Profession::Captain) => {
             let msg = if let Some(assigned_route) =
-                ctx.data.airship_sim.assigned_routes.get(&ctx.npc_id)
+                ctx.data.airship_sim.assigned_routes.get(&ctx.actor_id)
             {
                 let dests = ctx.data.airship_sim.next_destinations(
                     &ctx.world.civs().airships,
@@ -417,10 +413,10 @@ fn where_are_we_going_next<S: State>(session: DialogueSession) -> impl Action<S>
                         .unwrap_or("Unknown Site")
                         .to_string();
 
-                    let first_site_vec = dests.0.approach_transition_pos - ctx.npc.wpos.xy();
+                    let first_site_vec = dests.0.approach_transition_pos - ctx.actor.wpos.xy();
                     let first_site_dir = Direction::from_dir(first_site_vec).localize_npc();
 
-                    let next_site_vec = dests.1.approach_transition_pos - ctx.npc.wpos.xy();
+                    let next_site_vec = dests.1.approach_transition_pos - ctx.actor.wpos.xy();
                     let next_site_dir = Direction::from_dir(next_site_vec).localize_npc();
 
                     Content::localized("npc-speech-pilot-where_heading_now")
@@ -443,7 +439,7 @@ fn where_are_we_going_next<S: State>(session: DialogueSession) -> impl Action<S>
     })
 }
 
-fn sentiments<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S> {
+fn sentiments<S: State>(tgt: ActorId, session: DialogueSession) -> impl Action<S> {
     session.ask_question(Content::Plain("...".to_string()), [(
         Content::localized("dialogue-me"),
         now(move |ctx, _| {
@@ -458,10 +454,10 @@ fn sentiments<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S> 
     )])
 }
 
-fn hire<S: State>(tgt: Actor, session: DialogueSession) -> impl Action<S> {
+fn hire<S: State>(tgt: ActorId, session: DialogueSession) -> impl Action<S> {
     now(move |ctx, _| {
-        if ctx.npc.job.is_none() && ctx.npc.rng(38792).random_bool(0.5) {
-            let hire_level = match ctx.npc.profession() {
+        if ctx.npc.job.is_none() && ctx.actor.rng(38792).random_bool(0.5) {
+            let hire_level = match ctx.actor.profession() {
                 Some(Profession::Adventurer(l)) => l,
                 _ => 0,
             };
@@ -523,7 +519,7 @@ fn directions<S: State>(session: DialogueSession) -> impl Action<S> {
         for actor in ctx.data
             .quests
             .related_actors(session.target)
-            .filter(|actor| *actor != Actor::Npc(ctx.npc_id))
+            .filter(|actor| *actor != ctx.actor_id)
             // Avoid mentioning too many actors
             .take(32)
         {
@@ -549,7 +545,7 @@ fn directions<S: State>(session: DialogueSession) -> impl Action<S> {
             }
         }
 
-        if let Some(current_site) = ctx.npc.current_site
+        if let Some(current_site) = ctx.actor.current_site
             && let Some(ws_id) = ctx.data.sites[current_site].world_site
         {
             let direction_to_nearest =
@@ -559,7 +555,7 @@ fn directions<S: State>(session: DialogueSession) -> impl Action<S> {
                         let ws = ctx.index.sites.get(ws_id);
                         if let Some(p) = ws.plots().filter(f).min_by_key(|p| {
                             ws.tile_center_wpos(p.root_tile())
-                                .distance_squared(ctx.npc.wpos.xy().as_())
+                                .distance_squared(ctx.actor.wpos.xy().as_())
                         }) {
                             session
                                 .give_marker(

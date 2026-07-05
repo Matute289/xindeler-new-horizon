@@ -1,12 +1,15 @@
 use crate::{
     RtState, Rule, RuleError,
-    data::{Sentiment, npc::SimulationMode},
+    data::{
+        Sentiment,
+        actor::{ActorKind, SimulationMode},
+    },
     event::{EventCtx, OnHealthChange, OnHelped, OnMountVolume, OnTick},
 };
 use common::{
     comp::{self, Body, agent::FlightMode},
     mounting::{Volume, VolumePos},
-    rtsim::{Actor, NpcAction, NpcActivity, NpcInput},
+    rtsim::{NpcAction, NpcActivity},
     terrain::{CoordinateConversions, TerrainChunkSize},
     vol::RectVolSize,
 };
@@ -34,11 +37,11 @@ fn on_mount_volume(ctx: EventCtx<SimulateNpcs, OnMountVolume>) {
         kind: Volume::Entity(vehicle),
         ..
     } = ctx.event.pos
-        && let Some(link) = data.npcs.mounts.get_steerer_link(vehicle)
-        && let Actor::Npc(driver) = link.rider
-        && let Some(driver) = data.npcs.get_mut(driver)
+        && let Some(link) = data.actors.mounts.get_steerer_link(vehicle)
+        && let Some(driver) = data.actors.actors.get_mut(link.rider)
+        && let Some(driver_npc) = driver.npc_mut()
     {
-        driver.controller.actions.push(NpcAction::Say(
+        driver_npc.controller.actions.push(NpcAction::Say(
             Some(ctx.event.actor),
             comp::Content::localized("npc-speech-welcome-aboard"),
         ))
@@ -49,8 +52,8 @@ fn on_health_changed(ctx: EventCtx<SimulateNpcs, OnHealthChange>) {
     let data = &mut *ctx.state.data_mut();
 
     if let Some(cause) = ctx.event.cause
-        && let Actor::Npc(npc) = ctx.event.actor
-        && let Some(npc) = data.npcs.get_mut(npc)
+        && let Some(actor) = data.actors.get_mut(ctx.event.actor)
+        && let Some(npc) = actor.npc_mut()
     {
         if ctx.event.change < 0.0 {
             npc.sentiments
@@ -68,8 +71,8 @@ fn on_helped(ctx: EventCtx<SimulateNpcs, OnHelped>) {
     let data = &mut *ctx.state.data_mut();
 
     if let Some(saver) = ctx.event.saver
-        && let Actor::Npc(npc) = ctx.event.actor
-        && let Some(npc) = data.npcs.get_mut(npc)
+        && let Some(actor) = data.actors.get_mut(ctx.event.actor)
+        && let Some(npc) = actor.npc_mut()
     {
         npc.controller.actions.push(NpcAction::Say(
             Some(ctx.event.actor),
@@ -85,63 +88,53 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
     let data = &mut *ctx.state.data_mut();
 
     // Maintain links
-    let ids = data.npcs.mounts.ids().collect::<Vec<_>>();
+    let ids = data.actors.mounts.ids().collect::<Vec<_>>();
     let mut mount_activity = SecondaryMap::new();
     for link_id in ids {
-        if let Some(link) = data.npcs.mounts.get(link_id) {
-            if let Some(mount) = data
-                .npcs
-                .npcs
-                .get(link.mount)
-                .filter(|mount| !mount.is_dead())
-            {
+        if let Some(link) = data.actors.mounts.get(link_id) {
+            if let Some(mount) = data.actors.get(link.mount).filter(|mount| !mount.is_dead()) {
                 let wpos = mount.wpos;
-                if let Actor::Npc(rider) = link.rider {
-                    if let Some(rider) = data
-                        .npcs
-                        .npcs
-                        .get_mut(rider)
-                        .filter(|rider| !rider.is_dead())
-                    {
-                        rider.wpos = wpos;
-                        mount_activity.insert(link.mount, rider.controller.activity);
-                    } else {
-                        data.npcs.mounts.dismount(link.rider)
+                if let Some(rider) = data
+                    .actors
+                    .actors
+                    .get_mut(link.rider)
+                    .filter(|rider| !rider.is_dead())
+                {
+                    rider.wpos = wpos;
+                    if let Some(rider_npc) = rider.npc_mut() {
+                        mount_activity.insert(link.mount, rider_npc.controller.activity);
                     }
+                } else {
+                    data.actors.mounts.dismount(link.rider)
                 }
             } else {
-                data.npcs.mounts.remove_mount(link.mount)
+                data.actors.mounts.remove_mount(link.mount)
             }
         }
     }
 
-    let mut npc_inputs = Vec::new();
+    let actor_inputs = Vec::new();
 
-    for (npc_id, npc) in data.npcs.npcs.iter_mut().filter(|(_, npc)| !npc.is_dead()) {
-        npc.controller.actions.retain(|action| match action {
-            // NPC-to-NPC messages never leave rtsim
-            NpcAction::Msg { to, msg } => {
-                if let Actor::Npc(to) = to {
-                    npc_inputs.push((*to, NpcInput::Msg {
-                        from: npc_id.into(),
-                        msg: msg.clone(),
-                    }));
-                } else {
-                    // TODO: Send to players?
-                }
-                false
-            },
-            // All other cases are handled by the game when loaded
-            NpcAction::Say(_, _) | NpcAction::Attack(_) | NpcAction::Dialogue(_, _) => {
-                matches!(npc.mode, SimulationMode::Loaded)
-            },
-        });
+    for (actor_id, actor) in data
+        .actors
+        .actors
+        .iter_mut()
+        .filter(|(_, actor)| !actor.is_dead())
+    {
+        let ActorKind::Npc(npc) = &mut actor.kind else {
+            continue;
+        };
 
-        if matches!(npc.mode, SimulationMode::Simulated) {
-            let activity = if data.npcs.mounts.get_mount_link(npc_id).is_some() {
+        // TODO: simulate important NPC actions (like attacking)
+        npc.controller
+            .actions
+            .retain(|_| matches!(actor.mode, SimulationMode::Loaded));
+
+        if matches!(actor.mode, SimulationMode::Simulated) {
+            let activity = if data.actors.mounts.get_mount_link(actor_id).is_some() {
                 // We are riding, nothing to do.
                 continue;
-            } else if let Some(activity) = mount_activity.get(npc_id) {
+            } else if let Some(activity) = mount_activity.get(actor_id) {
                 *activity
             } else {
                 npc.controller.activity
@@ -150,17 +143,17 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
             match activity {
                 // Move NPCs if they have a target destination
                 Some(NpcActivity::Goto(target, speed_factor)) => {
-                    let diff = target - npc.wpos;
+                    let diff = target - actor.wpos;
                     let dist2 = diff.magnitude_squared();
 
                     if dist2 > 0.5f32.powi(2) {
                         let offset = diff
-                            * (npc.body.max_speed_approx() * speed_factor * ctx.event.dt
+                            * (actor.body.max_speed_approx() * speed_factor * ctx.event.dt
                                 / dist2.sqrt())
                             .min(1.0);
-                        let new_wpos = npc.wpos + offset;
+                        let new_wpos = actor.wpos + offset;
 
-                        let is_valid = match npc.body {
+                        let is_valid = match actor.body {
                             // Don't move water bound bodies outside of water.
                             Body::Ship(comp::ship::Body::SailBoat | comp::ship::Body::Galleon)
                             | Body::FishMedium(_)
@@ -176,21 +169,21 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                         };
 
                         if is_valid {
-                            npc.wpos = new_wpos;
+                            actor.wpos = new_wpos;
                         }
 
-                        npc.dir = (target.xy() - npc.wpos.xy())
+                        actor.dir = (target.xy() - actor.wpos.xy())
                             .try_normalized()
-                            .unwrap_or(npc.dir);
+                            .unwrap_or(actor.dir);
                     }
                 },
                 // Move Flying NPCs like airships if they have a target destination
                 Some(NpcActivity::GotoFlying(target, speed_factor, height, dir, mode)) => {
-                    let diff = target - npc.wpos;
+                    let diff = target - actor.wpos;
                     let dist2 = diff.magnitude_squared();
 
                     if dist2 > 0.5f32.powi(2) {
-                        match npc.body {
+                        match actor.body {
                             Body::Ship(comp::ship::Body::DefaultAirship) => {
                                 // RTSim NPCs don't interract with terrain, and their position is
                                 // independent of ground level.
@@ -219,16 +212,16 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                 // and will not get stuck.
 
                                 // Move in x,y
-                                let diffxy = target.xy() - npc.wpos.xy();
+                                let diffxy = target.xy() - actor.wpos.xy();
                                 let distxy2 = diffxy.magnitude_squared();
                                 if distxy2 > 0.5f32.powi(2) {
                                     let offsetxy = diffxy
-                                        * (npc.body.max_speed_approx()
+                                        * (actor.body.max_speed_approx()
                                             * speed_factor
                                             * ctx.event.dt
                                             / distxy2.sqrt());
-                                    npc.wpos.x += offsetxy.x;
-                                    npc.wpos.y += offsetxy.y;
+                                    actor.wpos.x += offsetxy.x;
+                                    actor.wpos.y += offsetxy.y;
                                 }
                                 // The diff is not computed for z like x,y. Rather, the altitude is
                                 // set directly so that when the
@@ -236,28 +229,30 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                 // or at the ground level and risk getting stuck.
                                 let base_height =
                                     if mode == FlightMode::FlyThrough || height.is_some() {
-                                        ctx.world.sim().get_surface_alt_approx(npc.wpos.xy().as_())
+                                        ctx.world
+                                            .sim()
+                                            .get_surface_alt_approx(actor.wpos.xy().as_())
                                     } else {
                                         0.0
                                     };
                                 let ship_z = match mode {
                                     FlightMode::FlyThrough => {
-                                        base_height + height.unwrap_or(npc.body.flying_height())
+                                        base_height + height.unwrap_or(actor.body.flying_height())
                                     },
                                     FlightMode::Braking(_) => {
                                         (base_height + height.unwrap_or(0.0)).max(target.z)
                                     },
                                 };
-                                npc.wpos.z = ship_z;
+                                actor.wpos.z = ship_z;
                             },
                             _ => {
                                 let offset = diff
-                                    * (npc.body.max_speed_approx() * speed_factor * ctx.event.dt
+                                    * (actor.body.max_speed_approx() * speed_factor * ctx.event.dt
                                         / dist2.sqrt())
                                     .min(1.0);
-                                let new_wpos = npc.wpos + offset;
+                                let new_wpos = actor.wpos + offset;
 
-                                let is_valid = match npc.body {
+                                let is_valid = match actor.body {
                                     // Don't move water bound bodies outside of water.
                                     Body::Ship(
                                         comp::ship::Body::SailBoat | comp::ship::Body::Galleon,
@@ -274,17 +269,17 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
                                 };
 
                                 if is_valid {
-                                    npc.wpos = new_wpos;
+                                    actor.wpos = new_wpos;
                                 }
                             },
                         }
 
                         if let Some(dir_override) = dir {
-                            npc.dir = dir_override.xy().try_normalized().unwrap_or(npc.dir);
+                            actor.dir = dir_override.xy().try_normalized().unwrap_or(actor.dir);
                         } else {
-                            npc.dir = (target.xy() - npc.wpos.xy())
+                            actor.dir = (target.xy() - actor.wpos.xy())
                                 .try_normalized()
-                                .unwrap_or(npc.dir);
+                                .unwrap_or(actor.dir);
                         }
                     }
                 },
@@ -303,24 +298,24 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
             }
 
             // Make sure NPCs remain in a valid location
-            let clamped_wpos = npc.wpos.xy().clamped(
+            let clamped_wpos = actor.wpos.xy().clamped(
                 Vec2::zero(),
                 (ctx.world.sim().get_size() * TerrainChunkSize::RECT_SIZE).as_(),
             );
-            match npc.body {
+            match actor.body {
                 // Don't force air ships to be at flying_height, else they can't land at docks.
                 Body::Ship(comp::ship::Body::DefaultAirship | comp::ship::Body::AirBalloon) => {
-                    npc.wpos = clamped_wpos.with_z(
+                    actor.wpos = clamped_wpos.with_z(
                         ctx.world
                             .sim()
                             .get_surface_alt_approx(clamped_wpos.as_())
-                            .max(npc.wpos.z),
+                            .max(actor.wpos.z),
                     );
                 },
                 _ => {
-                    npc.wpos = clamped_wpos.with_z(
+                    actor.wpos = clamped_wpos.with_z(
                         ctx.world.sim().get_surface_alt_approx(clamped_wpos.as_())
-                            + npc.body.flying_height(),
+                            + actor.body.flying_height(),
                     );
                 },
             }
@@ -329,31 +324,32 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
         // Move home if required
         if let Some(new_home) = npc.controller.new_home.take() {
             // Remove the NPC from their old home population
-            if let Some(old_home) = npc.home
+            if let Some(old_home) = actor.home
                 && let Some(old_home) = data.sites.get_mut(old_home)
             {
-                old_home.population.remove(&npc_id);
+                old_home.population.remove(&actor_id);
             }
             // Add the NPC to their new home population
             if let Some(new_home) = new_home
                 && let Some(new_home) = data.sites.get_mut(new_home)
             {
-                new_home.population.insert(npc_id);
+                new_home.population.insert(actor_id);
             }
-            npc.home = new_home;
+            actor.home = new_home;
         }
 
         // Create registered quests
         for (id, quest) in core::mem::take(&mut npc.controller.quests_to_create) {
             data.quests.create(id, quest);
         }
-
         // Set job status
         npc.job = npc.controller.job.clone();
     }
 
-    for (npc_id, input) in npc_inputs {
-        if let Some(npc) = data.npcs.get_mut(npc_id) {
+    for (actor_id, input) in actor_inputs {
+        if let Some(actor) = data.actors.get_mut(actor_id)
+            && let Some(npc) = actor.npc_mut()
+        {
             npc.inbox.push_back(input);
         }
     }

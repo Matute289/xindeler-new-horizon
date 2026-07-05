@@ -1,7 +1,7 @@
 use common::{
     comp::{self, Body},
     resources::TimeOfDay,
-    rtsim::{Actor, Personality, Profession, Role},
+    rtsim::{Personality, Profession, Role},
     terrain::CoordinateConversions,
 };
 use rand::{
@@ -13,7 +13,7 @@ use world::{CONFIG, IndexRef, World, sim::SimChunk, site::SiteKind};
 use crate::{
     Data, EventCtx, OnTick, RtState,
     data::{
-        Npc,
+        Actor,
         architect::{Death, TrackedPopulation},
     },
     event::OnDeath,
@@ -45,10 +45,10 @@ impl Rule for Architect {
 fn on_death(ctx: EventCtx<Architect, OnDeath>) {
     let data = &mut *ctx.state.data_mut();
 
-    if let Actor::Npc(npc_id) = ctx.event.actor
-        && let Some(npc) = data.npcs.get(npc_id)
+    if let Some(actor) = data.actors.get(ctx.event.actor)
+        && actor.npc().is_some()
     {
-        data.architect.on_death(npc, data.time_of_day);
+        data.architect.on_death(actor, data.time_of_day);
     }
 }
 
@@ -309,8 +309,8 @@ fn spawn_anywhere(
             let wpos = cpos.cpos_to_wpos_center();
             let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
 
-            data.spawn_npc(
-                Npc::new(rng.random(), wpos, body, death.role.clone())
+            data.spawn_actor(
+                Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                     .with_personality(personality),
             );
             return true;
@@ -356,13 +356,13 @@ fn spawn_at_plot(
         let wpos = wpos
             .as_()
             .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
-        let mut npc = Npc::new(rng.random(), wpos, body, death.role.clone())
+        let mut npc = Actor::new_npc(rng.random(), wpos, body, death.role.clone())
             .with_personality(personality)
             .with_home(id);
         if let Some(faction) = data.sites[id].faction {
             npc = npc.with_faction(faction);
         }
-        data.spawn_npc(npc);
+        data.spawn_actor(npc);
 
         true
     } else {
@@ -394,7 +394,7 @@ fn spawn_profession(
                     // Don't spawn multiple captains at the same site.
                     if captain
                         && data.sites[s].population.iter().any(|npc| {
-                            data.npcs.get(*npc).is_some_and(|npc| {
+                            data.actors.get(*npc).is_some_and(|npc| {
                                 matches!(npc.profession(), Some(Profession::Pirate(true)))
                             })
                         })
@@ -436,8 +436,8 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
             let wpos = wpos
                 .as_()
                 .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
-            data.spawn_npc(
-                Npc::new(rng.random(), wpos, body, death.role.clone())
+            data.spawn_actor(
+                Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                     .with_personality(personality)
                     .with_home(id)
                     .with_faction(faction_id),
@@ -504,8 +504,8 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                     let wpos = wpos
                         .as_()
                         .with_z(world.sim().get_alt_approx(wpos).unwrap_or(0.0));
-                    data.spawn_npc(
-                        Npc::new(rng.random(), wpos, body, death.role.clone())
+                    data.spawn_actor(
+                        Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                             .with_personality(personality)
                             .with_home(id),
                     );
@@ -565,8 +565,8 @@ fn spawn_npc(data: &mut Data, world: &World, index: IndexRef, death: &Death) -> 
                         let wpos = cpos.cpos_to_wpos_center();
                         let wpos = wpos.as_().with_z(world.sim().get_surface_alt_approx(wpos));
 
-                        data.spawn_npc(
-                            Npc::new(rng.random(), wpos, body, death.role.clone())
+                        data.spawn_actor(
+                            Actor::new_npc(rng.random(), wpos, body, death.role.clone())
                                 .with_personality(personality),
                         );
                         return true;

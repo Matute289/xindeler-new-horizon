@@ -5,13 +5,12 @@ use common::{
         gizmos::{GizmoSubscription, Gizmos, RtsimGizmos},
     },
     resources::Time,
-    rtsim::RtSimEntity,
+    rtsim::{ActorId, RtSimEntity},
     uid::IdMaps,
 };
 use common_ecs::{Job, Origin, Phase, System};
 use common_net::msg::ServerGeneral;
 use hashbrown::HashSet;
-use rtsim::data::NpcId;
 use specs::{Entity, Join, Read, ReadExpect, ReadStorage, WriteExpect, shred};
 use vek::{Rgb, Rgba, Vec3};
 
@@ -31,14 +30,19 @@ pub struct ReadData<'a> {
 
 struct RtsimGizmoTracker<'a> {
     gizmos: &'a mut RtsimGizmos,
-    request: HashSet<NpcId>,
+    request: HashSet<ActorId>,
 }
 
 impl RtsimGizmoTracker<'_> {
-    fn get(&mut self, npc: NpcId) -> impl Iterator<Item = Gizmos> + use<'_> {
-        self.request.insert(npc);
+    fn get(&mut self, actor: ActorId) -> impl Iterator<Item = Gizmos> + use<'_> {
+        self.request.insert(actor);
 
-        self.gizmos.tracked.get(npc).into_iter().flatten().cloned()
+        self.gizmos
+            .tracked
+            .get(actor)
+            .into_iter()
+            .flatten()
+            .cloned()
     }
 }
 
@@ -98,8 +102,8 @@ impl<'a> System<'a> for Sys {
             tracker.request.remove(&id)
         });
 
-        for npc in tracker.request {
-            tracker.gizmos.tracked.insert(npc, Vec::new());
+        for actor in tracker.request {
+            tracker.gizmos.tracked.insert(actor, Vec::new());
         }
     }
 }
@@ -155,8 +159,8 @@ fn pathfind_gizmos(gizmos: &mut Vec<Gizmos>, pos: &comp::Pos, agent: &comp::Agen
     gizmos.push(Gizmos::sphere(above, size, color));
 }
 
-fn rtsim_gizmos(gizmos: &mut Vec<Gizmos>, npc: NpcId, rtsim_tracker: &mut RtsimGizmoTracker) {
-    gizmos.extend(rtsim_tracker.get(npc));
+fn rtsim_gizmos(gizmos: &mut Vec<Gizmos>, actor: ActorId, rtsim_tracker: &mut RtsimGizmoTracker) {
+    gizmos.extend(rtsim_tracker.get(actor));
 }
 
 fn gizmos_for_target(
@@ -176,8 +180,8 @@ fn gizmos_for_target(
             }
         },
         GizmoSubscription::Rtsim => {
-            if let Some(npc) = data.rtsim_entities.get(target) {
-                rtsim_gizmos(gizmos, *npc, rtsim_tracker);
+            if let Some(actor) = data.rtsim_entities.get(target) {
+                rtsim_gizmos(gizmos, *actor, rtsim_tracker);
             }
         },
     }

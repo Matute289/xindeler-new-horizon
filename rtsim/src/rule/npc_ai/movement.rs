@@ -184,7 +184,7 @@ pub fn goto<S: State>(wpos: Vec3<f32>, speed_factor: f32, goal_dist: f32) -> imp
     just(move |ctx, waypoint: &mut Option<Vec3<f32>>| {
         // If we're close to the next waypoint, complete it
         if waypoint.is_some_and(|waypoint: Vec3<f32>| {
-            ctx.npc.wpos.xy().distance_squared(waypoint.xy()) < WAYPOINT_DIST.powi(2)
+            ctx.actor.wpos.xy().distance_squared(waypoint.xy()) < WAYPOINT_DIST.powi(2)
         }) {
             *waypoint = None;
         }
@@ -198,24 +198,24 @@ pub fn goto<S: State>(wpos: Vec3<f32>, speed_factor: f32, goal_dist: f32) -> imp
     })
     .repeat()
     .stop_if(move |ctx: &mut NpcCtx| {
-        ctx.npc.wpos.xy().distance_squared(wpos.xy()) < goal_dist.powi(2)
+        ctx.actor.wpos.xy().distance_squared(wpos.xy()) < goal_dist.powi(2)
     })
     .with_state(None)
     .debug(move || format!("goto {}, {}, {}", wpos.x, wpos.y, wpos.z))
     .map(|_, _| {})
 }
 
-pub fn follow_actor<S: State>(actor: Actor, distance: f32) -> impl Action<S> {
+pub fn follow_actor<S: State>(actor: ActorId, distance: f32) -> impl Action<S> {
     // const STEP_DIST: f32 = 30.0;
     just(move |ctx, _| {
         if let Some(tgt_wpos) = util::locate_actor(ctx, actor)
-            && let dist_sqr = tgt_wpos.xy().distance_squared(ctx.npc.wpos.xy())
+            && let dist_sqr = tgt_wpos.xy().distance_squared(ctx.actor.wpos.xy())
             && dist_sqr > distance.powi(2)
         {
             // // Don't try to path too far in one go
             // let tgt_wpos = if dist_sqr > STEP_DIST.powi(2) {
-            //     let tgt_wpos_2d = ctx.npc.wpos.xy() + (tgt_wpos -
-            // ctx.npc.wpos).xy().normalized() * STEP_DIST;     tgt_wpos_2d.
+            //     let tgt_wpos_2d = ctx.actor.wpos.xy() + (tgt_wpos -
+            // ctx.actor.wpos).xy().normalized() * STEP_DIST;     tgt_wpos_2d.
             // with_z(ctx.world.sim().get_surface_alt_approx(tgt_wpos_2d.as_()))
             // } else {
             //     tgt_wpos
@@ -233,11 +233,11 @@ pub fn follow_actor<S: State>(actor: Actor, distance: f32) -> impl Action<S> {
     .map(|_, _| ())
 }
 
-pub fn goto_actor<S: State>(actor: Actor, distance: f32) -> impl Action<S> {
+pub fn goto_actor<S: State>(actor: ActorId, distance: f32) -> impl Action<S> {
     follow_actor(actor, distance)
         .stop_if(move |ctx: &mut NpcCtx| {
             if let Some(wpos) = util::locate_actor(ctx, actor) {
-                wpos.xy().distance_squared(ctx.npc.wpos.xy()) < distance.powi(2)
+                wpos.xy().distance_squared(ctx.actor.wpos.xy()) < distance.powi(2)
             } else {
                 false
             }
@@ -258,16 +258,16 @@ fn goto_flying<S: State>(
     just(move |ctx, waypoint: &mut Option<Vec3<f32>>| {
         // If we're close to the next waypoint, complete it
         if waypoint.is_some_and(|waypoint: Vec3<f32>| {
-            ctx.npc.wpos.distance_squared(waypoint) < waypoint_dist.powi(2)
+            ctx.actor.wpos.distance_squared(waypoint) < waypoint_dist.powi(2)
         }) {
             *waypoint = None;
         }
 
         // Get the next waypoint on the route toward the goal
         let waypoint = waypoint.get_or_insert_with(|| {
-            let rpos = wpos - ctx.npc.wpos;
+            let rpos = wpos - ctx.actor.wpos;
             let len = rpos.magnitude();
-            let wpos = ctx.npc.wpos + (rpos / len) * len.min(step_dist);
+            let wpos = ctx.actor.wpos + (rpos / len) * len.min(step_dist);
 
             wpos.with_z(ctx.world.sim().get_surface_alt_approx(wpos.xy().as_()) + height_offset)
         });
@@ -277,7 +277,7 @@ fn goto_flying<S: State>(
     .repeat()
     .boxed()
     .with_state(None)
-    .stop_if(move |ctx: &mut NpcCtx| ctx.npc.wpos.distance_squared(wpos) < goal_dist.powi(2))
+    .stop_if(move |ctx: &mut NpcCtx| ctx.actor.wpos.distance_squared(wpos) < goal_dist.powi(2))
     .debug(move || {
         format!(
             "goto flying ({}, {}, {}), goal dist {}",
@@ -356,7 +356,7 @@ where
                 .unwrap_or(false)
         };
 
-        let npc_wpos = ctx.npc.wpos;
+        let npc_wpos = ctx.actor.wpos;
 
         // If we're traversing within a site, do intra-site pathfinding
         if let Some(site) = wpos_site(npc_wpos.xy()) {
@@ -413,7 +413,7 @@ where
 pub fn travel_to_point<S: State>(wpos: Vec2<f32>, speed_factor: f32) -> impl Action<S> {
     now(move |ctx, _| {
         const WAYPOINT: f32 = 48.0;
-        let start = ctx.npc.wpos.xy();
+        let start = ctx.actor.wpos.xy();
         let diff = wpos - start;
         let n = (diff.magnitude() / WAYPOINT).max(1.0);
         let mut points = (1..n as usize + 1).map(move |i| start + diff * (i as f32 / n));
@@ -431,7 +431,7 @@ pub fn travel_to_site<S: State>(tgt_site: SiteId, speed_factor: f32) -> impl Act
 
         // If we're currently in a site, try to find a path to the target site via
         // tracks
-        if let Some(current_site) = ctx.npc.current_site
+        if let Some(current_site) = ctx.actor.current_site
             && let Some(tracks) = path_between_towns(current_site, tgt_site, sites, ctx.world)
         {
 
@@ -473,7 +473,7 @@ pub fn travel_to_site<S: State>(tgt_site: SiteId, speed_factor: f32) -> impl Act
             finish().boxed()
         }
             // Stop the NPC early if we're near the site to prevent huddling around the centre
-            .stop_if(move |ctx: &mut NpcCtx| site_wpos.is_some_and(|site_wpos| ctx.npc.wpos.xy().distance_squared(site_wpos) < 16f32.powi(2)))
+            .stop_if(move |ctx: &mut NpcCtx| site_wpos.is_some_and(|site_wpos| ctx.actor.wpos.xy().distance_squared(site_wpos) < 16f32.powi(2)))
     })
         .debug(move || format!("travel_to_site {:?}", tgt_site))
         .map(|_, _| ())

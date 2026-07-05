@@ -17,8 +17,6 @@ use crate::{
     state_ext::StateExt,
     sys::terrain::{NpcData, SAFE_ZONE_RADIUS, SpawnEntityData},
 };
-#[cfg(feature = "worldgen")]
-use common::rtsim::{Actor, RtSimEntity};
 use common::{
     CachedSpatialGrid, Damage, DamageKind, DamageSource, GroupTarget, RadiusEffect,
     assets::{AssetExt, Ron},
@@ -67,6 +65,8 @@ use common::{
     util::Dir,
     vol::ReadVol,
 };
+#[cfg(feature = "worldgen")]
+use common::rtsim;
 use common_net::{msg::ServerGeneral, sync::WorldSyncExt, synced_components::Heads};
 use common_state::{AreasContainer, BlockChange, NoDurabilityArea, ScheduledBlockChange};
 use hashbrown::HashSet;
@@ -201,21 +201,6 @@ impl ServerEvent for PoiseChangeEvent {
     }
 }
 
-#[cfg(feature = "worldgen")]
-pub fn entity_as_actor(
-    entity: Entity,
-    rtsim_entities: &ReadStorage<RtSimEntity>,
-    presences: &ReadStorage<Presence>,
-) -> Option<Actor> {
-    if let Some(rtsim_entity) = rtsim_entities.get(entity).copied() {
-        Some(Actor::Npc(rtsim_entity))
-    } else if let Some(PresenceKind::Character(character)) = presences.get(entity).map(|p| p.kind) {
-        Some(Actor::Character(character))
-    } else {
-        None
-    }
-}
-
 #[derive(SystemData)]
 pub struct HealthChangeEventData<'a> {
     entities: Entities<'a>,
@@ -233,9 +218,7 @@ pub struct HealthChangeEventData<'a> {
     positions: ReadStorage<'a, Pos>,
     uids: ReadStorage<'a, Uid>,
     #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, Presence>,
-    #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
+    rtsim_entities: ReadStorage<'a, rtsim::ActorId>,
     inventories: ReadStorage<'a, Inventory>,
     agents: WriteStorage<'a, Agent>,
     healths: WriteStorage<'a, Health>,
@@ -290,8 +273,7 @@ impl ServerEvent for HealthChangeEvent {
 
                 #[cfg(feature = "worldgen")]
                 if changed {
-                    let entity_as_actor =
-                        |entity| entity_as_actor(entity, &data.rtsim_entities, &data.presences);
+                    let entity_as_actor = |entity| data.rtsim_entities.get(entity).copied();
                     if let Some(actor) = entity_as_actor(ev.entity) {
                         let cause = ev
                             .change
@@ -372,9 +354,7 @@ pub struct HelpDownedEventData<'a> {
     #[cfg(feature = "worldgen")]
     index: ReadExpect<'a, IndexOwned>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
-    #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, Presence>,
+    rtsim_entities: ReadStorage<'a, rtsim::ActorId>,
     character_states: WriteStorage<'a, comp::CharacterState>,
     healths: WriteStorage<'a, comp::Health>,
 }
@@ -395,8 +375,7 @@ impl ServerEvent for HelpDownedEvent {
                 }
 
                 #[cfg(feature = "worldgen")]
-                let entity_as_actor =
-                    |entity| entity_as_actor(entity, &data.rtsim_entities, &data.presences);
+                let entity_as_actor = |entity| data.rtsim_entities.get(entity).copied();
                 #[cfg(feature = "worldgen")]
                 if let Some(actor) = entity_as_actor(entity) {
                     let saver = ev
@@ -584,9 +563,7 @@ pub struct DestroyEventData<'a> {
     stats: ReadStorage<'a, Stats>,
     agents: ReadStorage<'a, Agent>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
-    #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, Presence>,
+    rtsim_entities: ReadStorage<'a, rtsim::ActorId>,
     masses: ReadStorage<'a, comp::Mass>,
     event_buses: DestroyEvents<'a>,
     buffs: ReadStorage<'a, comp::Buffs>,
@@ -1427,33 +1404,31 @@ impl ServerEvent for DestroyEvent {
             }
 
             #[cfg(feature = "worldgen")]
-            let entity_as_actor =
-                |entity| entity_as_actor(entity, &data.rtsim_entities, &data.presences);
-
-            #[cfg(feature = "worldgen")]
-            if let Some(actor) = entity_as_actor(ev.entity)
-                // Skip the death hook for rtsim entities if they aren't deleted, otherwise
-                // we'll end up with rtsim respawning an entity that wasn't actually
-                // removed, producing 2 entities having the same RtsimEntityId.
-                // Additionally, the death of a player should trigger an event.
-                && (matches!(actor, Actor::Character(_)) || should_delete)
             {
-                data.rtsim.hook_rtsim_actor_death(
-                    &data.world,
-                    data.index.as_index_ref(),
-                    actor,
-                    data.positions.get(ev.entity).map(|p| p.0),
-                    ev.cause
-                        .by
-                        .as_ref()
-                        .and_then(
-                            |(DamageContributor::Solo(entity_uid)
-                             | DamageContributor::Group { entity_uid, .. })| {
-                                data.id_maps.uid_entity(*entity_uid)
-                            },
-                        )
-                        .and_then(entity_as_actor),
-                );
+                let entity_as_actor = |entity| data.rtsim_entities.get(entity).copied();
+                if let Some(actor) = entity_as_actor(ev.entity)
+                    // Skip the death hook for rtsim entities if they aren't deleted, otherwise
+                    // we'll end up with rtsim respawning an entity that wasn't actually
+                    // removed, producing 2 entities having the same ActorId.
+                    && should_delete
+                {
+                    data.rtsim.hook_rtsim_actor_death(
+                        &data.world,
+                        data.index.as_index_ref(),
+                        actor,
+                        data.positions.get(ev.entity).map(|p| p.0),
+                        ev.cause
+                            .by
+                            .as_ref()
+                            .and_then(
+                                |(DamageContributor::Solo(entity_uid)
+                                | DamageContributor::Group { entity_uid, .. })| {
+                                    data.id_maps.uid_entity(*entity_uid)
+                                },
+                            )
+                            .and_then(entity_as_actor),
+                    );
+                }
             }
 
             if should_delete {

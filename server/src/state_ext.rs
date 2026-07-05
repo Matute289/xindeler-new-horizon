@@ -24,7 +24,7 @@ use common::{
     link::{Is, Link, LinkHandle},
     mounting::{Mounting, Rider, VolumeMounting, VolumeRider},
     resources::{Secs, Time},
-    rtsim::{Actor, RtSimEntity},
+    rtsim,
     tether::Tethered,
     uid::{IdMaps, Uid},
     util::Dir,
@@ -174,8 +174,6 @@ pub trait StateExt {
         &mut self,
         entity: EcsEntity,
     ) -> Result<(), specs::error::WrongGeneration>;
-    /// Get the given entity as an [`Actor`], if it is one.
-    fn entity_as_actor(&self, entity: EcsEntity) -> Option<Actor>;
     /// Mutate the position of an entity or, if the entity is mounted, the
     /// mount.
     ///
@@ -1227,7 +1225,7 @@ impl StateExt for State {
             .get(entity)
             .map(|p| (p.kind.character_id(), p.kind.sync_me()))
             .unzip();
-        let maybe_rtsim = self.read_component_copied::<RtSimEntity>(entity);
+        let maybe_rtsim = self.read_component_copied::<rtsim::ActorId>(entity);
 
         self.mut_resource::<IdMaps>().remove_entity(
             Some(entity),
@@ -1237,26 +1235,6 @@ impl StateExt for State {
         );
 
         delete_entity_common(self, entity, maybe_uid, sync_me.unwrap_or(true))
-    }
-
-    fn entity_as_actor(&self, entity: EcsEntity) -> Option<Actor> {
-        if let Some(rtsim_entity) = self
-            .ecs()
-            .read_storage::<RtSimEntity>()
-            .get(entity)
-            .copied()
-        {
-            Some(Actor::Npc(rtsim_entity))
-        } else if let Some(PresenceKind::Character(character)) = self
-            .ecs()
-            .read_storage::<Presence>()
-            .get(entity)
-            .map(|p| p.kind)
-        {
-            Some(Actor::Character(character))
-        } else {
-            None
-        }
     }
 
     fn position_mut<T>(

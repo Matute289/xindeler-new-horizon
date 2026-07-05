@@ -1,7 +1,7 @@
 use crate::data::{ReportId, Reports};
 pub use common::rtsim::SiteId;
 use common::{
-    rtsim::{FactionId, NpcId},
+    rtsim::{ActorId, FactionId},
     store::Id,
 };
 use hashbrown::{HashMap, HashSet};
@@ -44,7 +44,7 @@ pub struct Site {
 
     // Note: there's currently no guarantee that site populations are non-intersecting
     #[serde(skip_serializing, skip_deserializing)]
-    pub population: HashSet<NpcId>,
+    pub population: HashSet<ActorId>,
 
     /// A list of the nearby sites where each elements is both further and
     /// larger (currently based on number of plots) than the next.

@@ -42,7 +42,7 @@ use crate::{
     },
     data::{
         ReportKind, Sentiment, Sites,
-        npc::{Brain, DialogueSession, Job, PathData, SimulationMode},
+        actor::{Brain, DialogueSession, Job, PathData, SimulationMode},
         quest::{Quest, QuestKind},
     },
     event::OnTick,
@@ -60,8 +60,8 @@ use common::{
     path::Path,
     resources::Time,
     rtsim::{
-        Actor, DialogueKind, ItemResource, NpcInput, NpcMsg, PersonalityTrait, Profession, QuestId,
-        Response, Role, SiteId, TerrainResource,
+        ActorId, DialogueKind, ItemResource, NpcInput, NpcMsg, PersonalityTrait, Profession,
+        QuestId, Response, Role, SiteId, TerrainResource,
     },
     spiral::Spiral2d,
     store::Id,
@@ -121,13 +121,14 @@ impl Rule for NpcAi {
             // checker
             let mut npc_data = {
                 let mut data = ctx.state.data_mut();
-                data.npcs
+                data.actors
                     .iter_mut()
-                    // Don't run AI for dead NPCs
-                    .filter(|(_, npc)| !npc.is_dead() && !matches!(npc.role, Role::Vehicle))
-                    // Don't run AI for simulated NPCs every tick
-                    .filter(|(_, npc)| matches!(npc.mode, SimulationMode::Loaded) || (npc.seed as u64 + ctx.event.tick).is_multiple_of(SIMULATED_TICK_SKIP))
-                    .map(|(npc_id, npc)| {
+                    // Don't run AI for dead actors
+                    .filter(|(_, actor)| !actor.is_dead() && !matches!(actor.role, Role::Vehicle))
+                    // Don't run AI for simulated actors every tick
+                    .filter(|(_, actor)| matches!(actor.mode, SimulationMode::Loaded) || (actor.seed as u64 + ctx.event.tick).is_multiple_of(SIMULATED_TICK_SKIP))
+                    .filter_map(|(actor_id, actor)| {
+                        let npc = actor.npc_mut()?;
                         let controller = std::mem::take(&mut npc.controller);
                         let inbox = std::mem::take(&mut npc.inbox);
                         let sentiments = std::mem::take(&mut npc.sentiments);
@@ -138,7 +139,7 @@ impl Rule for NpcAi {
                                 move_home_timer: every_range(400.0..2000.0).chance(0.5),
                             })),
                         });
-                        (npc_id, controller, inbox, sentiments, known_reports, brain, ctx.system_data.rtsim_gizmos.tracked.remove(npc_id))
+                        Some((actor_id, controller, inbox, sentiments, known_reports, brain, ctx.system_data.rtsim_gizmos.tracked.remove(actor_id)))
                     })
                     .collect::<Vec<_>>()
             };
@@ -153,8 +154,9 @@ impl Rule for NpcAi {
 
                 npc_data
                     .par_iter_mut()
-                    .for_each(|(npc_id, controller, inbox, sentiments, known_reports, brain, gizmos)| {
-                        let npc = &data.npcs[*npc_id];
+                    .for_each(|(actor_id, controller, inbox, sentiments, known_reports, brain, gizmos)| {
+                        let actor = &data.actors[*actor_id];
+                        let npc = actor.npc().expect("only NPCs have brains");
 
                         controller.reset(npc);
 
@@ -165,13 +167,14 @@ impl Rule for NpcAi {
                             index: ctx.index,
                             time_of_day: ctx.event.time_of_day,
                             time: ctx.event.time,
+                            actor,
                             npc,
-                            npc_id: *npc_id,
+                            actor_id: *actor_id,
                             controller,
                             inbox,
                             known_reports,
                             sentiments,
-                            dt: if matches!(npc.mode, SimulationMode::Loaded) {
+                            dt: if matches!(actor.mode, SimulationMode::Loaded) {
                                 ctx.event.dt
                             } else {
                                 simulated_dt
@@ -192,11 +195,12 @@ impl Rule for NpcAi {
             let mut to_update = Vec::with_capacity(npc_data.len());
             for (npc_id, controller, inbox, sentiments, known_reports, brain, gizmos) in npc_data {
                 to_update.push(npc_id);
-                data.npcs[npc_id].controller = controller;
-                data.npcs[npc_id].brain = Some(brain);
-                data.npcs[npc_id].inbox = inbox;
-                data.npcs[npc_id].sentiments = sentiments;
-                data.npcs[npc_id].known_reports = known_reports;
+                let npc = data.actors[npc_id].npc_mut().expect("only NPCs have brains");
+                npc.controller = controller;
+                npc.brain = Some(brain);
+                npc.inbox = inbox;
+                npc.sentiments = sentiments;
+                npc.known_reports = known_reports;
 
                 if let Some(gizmos) = gizmos {
                     ctx.system_data.rtsim_gizmos.tracked.insert(npc_id, gizmos);
@@ -212,7 +216,7 @@ fn idle<S: State>() -> impl Action<S> + Clone {
     just(|ctx, _| ctx.controller.do_idle()).debug(|| "idle")
 }
 
-fn talk_to<S: State>(tgt: Actor) -> impl Action<S> {
+fn talk_to<S: State>(tgt: ActorId) -> impl Action<S> {
     now(move |ctx, _| {
         if ctx.sentiments.toward(tgt).is(Sentiment::ENEMY) {
             just(move |ctx, _| {
@@ -220,7 +224,9 @@ fn talk_to<S: State>(tgt: Actor) -> impl Action<S> {
                     .say(tgt, Content::localized("npc-speech-reject_rival"))
             })
             .boxed()
-        } else if matches!(tgt, Actor::Character(_)) {
+        } else if let Some(actor) = ctx.data.actors.get(tgt)
+            && actor.character().is_some()
+        {
             do_dialogue(tgt, move |session| dialogue::general(tgt, session)).boxed()
         } else {
             smalltalk_to(tgt).boxed()
@@ -237,12 +243,14 @@ fn tell_site_content(ctx: &NpcCtx, site: SiteId) -> Option<Content> {
                 .with_arg("site", site_name)
                 .with_arg(
                     "dir",
-                    Direction::from_dir(world_site.wpos.as_() - ctx.npc.wpos.xy()).localize_npc(),
+                    Direction::from_dir(world_site.wpos.as_() - ctx.actor.wpos.xy()).localize_npc(),
                 )
                 .with_arg(
                     "dist",
-                    Distance::from_length(world_site.wpos.as_().distance(ctx.npc.wpos.xy()) as i32)
-                        .localize_npc(),
+                    Distance::from_length(
+                        world_site.wpos.as_().distance(ctx.actor.wpos.xy()) as i32
+                    )
+                    .localize_npc(),
                 ),
         )
     } else {
@@ -250,9 +258,12 @@ fn tell_site_content(ctx: &NpcCtx, site: SiteId) -> Option<Content> {
     }
 }
 
-fn smalltalk_to<S: State>(tgt: Actor) -> impl Action<S> {
+fn smalltalk_to<S: State>(tgt: ActorId) -> impl Action<S> {
     now(move |ctx, _| {
-        if matches!(tgt, Actor::Npc(_)) && ctx.rng.random_bool(0.2) {
+        if let Some(tgt) = ctx.data.actors.get(tgt)
+            && tgt.npc().is_some()
+            && ctx.rng.random_bool(0.2)
+        {
             // Cut off the conversation sometimes to avoid infinite conversations (but only
             // if the target is an NPC!) TODO: Don't special case this, have
             // some sort of 'bored of conversation' system
@@ -260,7 +271,7 @@ fn smalltalk_to<S: State>(tgt: Actor) -> impl Action<S> {
         } else {
             // Mention nearby sites
             let comment = if ctx.rng.random_bool(0.3)
-                && let Some(current_site) = ctx.npc.current_site
+                && let Some(current_site) = ctx.actor.current_site
                 && let Some(current_site) = ctx.data.sites.get(current_site)
                 && let Some(mention_site) = current_site.nearby_sites_by_size.choose(&mut ctx.rng)
                 && let Some(content) = tell_site_content(ctx, *mention_site)
@@ -268,7 +279,7 @@ fn smalltalk_to<S: State>(tgt: Actor) -> impl Action<S> {
                 content
             // Mention current site
             } else if ctx.rng.random_bool(0.3)
-                && let Some(current_site) = ctx.npc.current_site
+                && let Some(current_site) = ctx.actor.current_site
                 && let Some(current_site_name) = util::site_name(ctx, current_site)
             {
                 Content::localized("npc-speech-site").with_arg("site", current_site_name)
@@ -277,27 +288,29 @@ fn smalltalk_to<S: State>(tgt: Actor) -> impl Action<S> {
             } else if ctx.rng.random_bool(0.3)
                 && let Some(monster) = ctx
                     .data
-                    .npcs
+                    .actors
                     .values()
                     .filter(|other| matches!(&other.role, Role::Monster))
-                    .min_by_key(|other| other.wpos.xy().distance(ctx.npc.wpos.xy()) as i32)
+                    .min_by_key(|other| other.wpos.xy().distance(ctx.actor.wpos.xy()) as i32)
             {
                 Content::localized("npc-speech-tell_monster")
                     .with_arg("body", monster.body.localize_npc())
                     .with_arg(
                         "dir",
-                        Direction::from_dir(monster.wpos.xy() - ctx.npc.wpos.xy()).localize_npc(),
+                        Direction::from_dir(monster.wpos.xy() - ctx.actor.wpos.xy()).localize_npc(),
                     )
                     .with_arg(
                         "dist",
-                        Distance::from_length(monster.wpos.xy().distance(ctx.npc.wpos.xy()) as i32)
-                            .localize_npc(),
+                        Distance::from_length(
+                            monster.wpos.xy().distance(ctx.actor.wpos.xy()) as i32
+                        )
+                        .localize_npc(),
                     )
             // Specific night dialog
             } else if ctx.rng.random_bool(0.6) && DayPeriod::from(ctx.time_of_day.0).is_dark() {
                 Content::localized("npc-speech-night")
             } else if ctx.rng.random_bool(0.3)
-                && let Some(profession_comment) = match_some!(ctx.npc.profession(),
+                && let Some(profession_comment) = match_some!(ctx.actor.profession(),
                     Some(Profession::Pirate(_)) => Content::localized("npc-speech-pirate"),
                 )
             {
@@ -306,7 +319,9 @@ fn smalltalk_to<S: State>(tgt: Actor) -> impl Action<S> {
                 ctx.npc.personality.get_generic_comment(&mut ctx.rng)
             };
             // TODO: Don't special-case players
-            let wait = if matches!(tgt, Actor::Character(_)) {
+            let wait = if let Some(tgt) = ctx.data.actors.get(tgt)
+                && tgt.character().is_some()
+            {
                 0.0
             } else {
                 1.5
@@ -323,7 +338,7 @@ fn smalltalk_to<S: State>(tgt: Actor) -> impl Action<S> {
 fn socialize() -> impl Action<EveryRange> {
     now(move |ctx, socialize: &mut EveryRange| {
         // Skip most socialising actions if we're not loaded
-        if matches!(ctx.npc.mode, SimulationMode::Loaded)
+        if matches!(ctx.actor.mode, SimulationMode::Loaded)
             && socialize.should(ctx)
             && !ctx.npc.personality.is(PersonalityTrait::Introverted)
         {
@@ -339,8 +354,8 @@ fn socialize() -> impl Action<EveryRange> {
             // Talk to nearby NPCs
             } else if let Some(other) = ctx
                 .data
-                .npcs
-                .nearby(Some(ctx.npc_id), ctx.npc.wpos, 8.0)
+                .actors
+                .nearby(Some(ctx.actor_id), ctx.actor.wpos, 8.0)
                 .choose(&mut ctx.rng)
             {
                 return smalltalk_to(other)
@@ -357,10 +372,10 @@ fn socialize() -> impl Action<EveryRange> {
 fn pirate(is_leader: bool) -> impl Action<DefaultState> {
     choose(move |ctx: &mut NpcCtx, _, consider| {
         if is_leader
-            && let Some(home) = ctx.npc.home
-            && ctx.npc.current_site == Some(home)
+            && let Some(home) = ctx.actor.home
+            && ctx.actor.current_site == Some(home)
             && let Some(site) = ctx.data.sites.get(home)
-            && let Some(faction) = ctx.npc.faction
+            && let Some(faction) = ctx.actor.faction
             // Approx. once an hour.
             && ctx.chance(1.0 / 1200.0)
             && let Some(site_to_raid) = site
@@ -369,7 +384,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                 .filter(|site| {
                     ctx.data.sites.get(**site).is_some_and(|site| {
                         // Don't go further than 10km
-                        site.wpos.as_::<f32>().distance_squared(ctx.npc.wpos.xy())
+                        site.wpos.as_::<f32>().distance_squared(ctx.actor.wpos.xy())
                             < 10000.0f32.powi(2)
                     })
                 })
@@ -379,7 +394,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                 .population
                 .iter()
                 .filter(|npc_id| {
-                    ctx.data.npcs.get(**npc_id).is_some_and(|npc| {
+                    ctx.data.actors.get(**npc_id).is_some_and(|npc| {
                         !npc.is_dead()
                             && npc.current_site == Some(home)
                             && npc.faction == Some(faction)
@@ -397,7 +412,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .population
                             .iter()
                             .filter(|npc_id| {
-                                ctx.data.npcs.get(**npc_id).is_some_and(|npc| {
+                                ctx.data.actors.get(**npc_id).is_some_and(|npc| {
                                     !npc.is_dead()
                                         && npc.current_site == Some(home)
                                         && npc.faction == Some(faction)
@@ -411,12 +426,12 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .choose(&mut ctx.rng)
                     {
                         let npc = *npc;
-                        follow_actor(Actor::Npc(npc), 5.0)
+                        follow_actor(npc, 5.0)
                             .stop_if(move |ctx: &mut NpcCtx| {
-                                let Some(follow_npc) = ctx.data.npcs.get(npc) else {
+                                let Some(follow_npc) = ctx.data.actors.get(npc) else {
                                     return true;
                                 };
-                                ctx.npc.wpos.distance_squared(follow_npc.wpos) < 6.0f32.powi(2)
+                                ctx.actor.wpos.distance_squared(follow_npc.wpos) < 6.0f32.powi(2)
                             })
                             .then(just(move |ctx, _| ctx.controller.send_msg(npc, NpcMsg::RequestHire)))
                             .debug(|| "inviting raid participant")
@@ -432,11 +447,11 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .population
                             .iter()
                             .filter(|npc_id| {
-                                ctx.data.npcs.get(**npc_id).is_some_and(|npc| {
+                                ctx.data.actors.get(**npc_id).is_some_and(|npc| {
                                     !npc.is_dead()
                                         && npc
                                             .hired()
-                                            .is_some_and(|(a, _)| a == Actor::Npc(ctx.npc_id))
+                                            .is_some_and(|(a, _)| a == ctx.actor_id)
                                 })
                             })
                             .count();
@@ -445,7 +460,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .population
                             .iter()
                             .filter(|npc_id| {
-                                ctx.data.npcs.get(**npc_id).is_some_and(|npc| {
+                                ctx.data.actors.get(**npc_id).is_some_and(|npc| {
                                     !npc.is_dead()
                                         && npc.current_site == Some(home)
                                         && npc.faction == Some(faction)
@@ -483,14 +498,14 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                 .then(travel_to_site(home, 0.6).debug(|| "traveling home from raid"))
                 // End hiring of hirlings
                 .then(just(|ctx, _| {
-                    if let Some(site) = ctx.npc.home
+                    if let Some(site) = ctx.actor.home
                         && let Some(site) = ctx.data.sites.get(site)
                     {
                         for &npc_id in site.population.iter() {
-                            if let Some(npc) = ctx.data.npcs.get(npc_id)
+                            if let Some(npc) = ctx.data.actors.get(npc_id)
                                 && npc
                                     .hired()
-                                    .is_some_and(|(actor, _)| actor == Actor::Npc(ctx.npc_id))
+                                    .is_some_and(|(actor, _)| actor == ctx.actor_id)
                             {
                                 ctx.controller.send_msg(npc_id, NpcMsg::EndHire);
                             }
@@ -499,17 +514,17 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                 }))
                 .map(|_, _| ()),
             )
-        } else if let Some((leader, _)) = ctx.npc.hired() {
+        } else if let Some((leader, _)) = ctx.actor.hired() {
             consider.important(
                 follow_actor(leader, 5.0)
                     .stop_if(move |ctx: &mut NpcCtx| {
-                        ctx.npc
+                        ctx.actor
                             .hired()
                             .is_none_or(move |(actor, _)| actor != leader)
                     })
                     .map(|_, _| ()),
             )
-        } else if let Some(home) = ctx.npc.home {
+        } else if let Some(home) = ctx.actor.home {
             consider.casual(now(move |ctx, _| {
                 let pos = ctx.data.sites.get(home).and_then(|site| {
                     let ws = ctx.index.sites.get(site.world_site?);
@@ -556,7 +571,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                         .min_by_key(|(_, site)| {
                             site.wpos
                                 .as_::<i64>()
-                                .distance_squared(ctx.npc.wpos.xy().as_())
+                                .distance_squared(ctx.actor.wpos.xy().as_())
                         })
                 {
                     ctx.controller.set_new_home(site);
@@ -573,13 +588,13 @@ fn adventure() -> impl Action<DefaultState> {
             .sites
             .iter()
             .filter(|(site_id, site)| {
-                site.world_site.is_some_and(|ws| ctx.index.sites.get(ws).any_plot(|p| p.is_workshop())) && (ctx.npc.current_site != Some(*site_id))
+                site.world_site.is_some_and(|ws| ctx.index.sites.get(ws).any_plot(|p| p.is_workshop())) && (ctx.actor.current_site != Some(*site_id))
                     && ctx.rng.random_bool(0.25)
             })
-            .min_by_key(|(_, site)| site.wpos.as_().distance(ctx.npc.wpos.xy()) as i32)
+            .min_by_key(|(_, site)| site.wpos.as_().distance(ctx.actor.wpos.xy()) as i32)
             .map(|(site_id, _)| site_id)
         {
-            let wait_time = if matches!(ctx.npc.profession(), Some(Profession::Merchant)) {
+            let wait_time = if matches!(ctx.actor.profession(), Some(Profession::Merchant)) {
                 60.0 * 15.0
             } else {
                 60.0 * 3.0
@@ -597,14 +612,14 @@ fn adventure() -> impl Action<DefaultState> {
     .debug(move || "adventure")
 }
 
-fn hired(tgt: Actor) -> impl Action<DefaultState> {
+fn hired(tgt: ActorId) -> impl Action<DefaultState> {
     follow_actor(tgt, 5.0)
         // Stop following if we're no longer hired
-        .stop_if(move |ctx: &mut NpcCtx| ctx.npc.hired().is_none_or(|(a, _)| a != tgt))
+        .stop_if(move |ctx: &mut NpcCtx| ctx.actor.hired().is_none_or(|(a, _)| a != tgt))
         .debug(move|| format!("hired by {tgt:?}"))
         .interrupt_with(move |ctx, _| {
             // End hiring for various reasons
-            if let Some((tgt, expires)) = ctx.npc.hired() {
+            if let Some((tgt, expires)) = ctx.actor.hired() {
                 // Hiring period has expired
                 if ctx.time > expires {
                     ctx.controller.end_hiring();
@@ -632,13 +647,13 @@ fn hired(tgt: Actor) -> impl Action<DefaultState> {
                     }
                 }
 
-                if let Some(visiting) = ctx.npc.current_site &&
+                if let Some(visiting) = ctx.actor.current_site &&
                    let Some(visiting_site) = ctx.data.sites.get(visiting) &&
                    let Some(visiting_ws) = visiting_site.world_site &&
                    let Some(pos) = util::locate_actor(ctx, tgt) &&
                    let Some(chunk) = ctx.world.sim().get_wpos(pos.xy().as_()) &&
                    chunk.sites.contains(&visiting_ws) &&
-                   let Some((pid, tavern)) = ctx.index.sites.get(visiting_ws).plots.iter().filter_map(|(pid, plot)| match_some!(plot.kind(), PlotKind::Tavern(t) => (pid, t))).choose(&mut ctx.npc.rng(14))
+                   let Some((pid, tavern)) = ctx.index.sites.get(visiting_ws).plots.iter().filter_map(|(pid, plot)| match_some!(plot.kind(), PlotKind::Tavern(t) => (pid, t))).choose(&mut ctx.actor.rng(14))
                    {
                     let tavern_name = tavern.name.clone();
                     return Some(just(move |ctx, _| {
@@ -650,7 +665,7 @@ fn hired(tgt: Actor) -> impl Action<DefaultState> {
                     })
                     .then(
                         go_to_tavern(visiting, pid).stop_if(move |ctx: &mut NpcCtx<'_, '_>| {
-                            ctx.npc.hired().is_none_or(|(tgt, _)| {
+                            ctx.actor.hired().is_none_or(|(tgt, _)| {
                                 util::locate_actor(ctx, tgt).is_none_or(|pos|
                                     ctx.world.sim()
                                         .get_wpos(pos.xy().as_())
@@ -689,7 +704,7 @@ fn hunt_animals<S: State>() -> impl Action<S> {
 }
 
 fn find_forest(ctx: &mut NpcCtx) -> Option<Vec2<f32>> {
-    let chunk_pos = ctx.npc.wpos.xy().as_().wpos_to_cpos();
+    let chunk_pos = ctx.actor.wpos.xy().as_().wpos_to_cpos();
     Spiral2d::new()
         .skip(ctx.rng.random_range(1..=64))
         .take(24)
@@ -732,8 +747,8 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
     choose(move |ctx, state: &mut DefaultState, consider| {
         // Consider moving home if the home site gets too full
         if state.move_home_timer.should(ctx)
-            && let Some(home) = ctx.npc.home
-            && Some(home) == ctx.npc.current_site
+            && let Some(home) = ctx.actor.home
+            && Some(home) == ctx.actor.current_site
             && let Some(home_pop_ratio) = ctx.data.sites.get(home)
                 .and_then(|site| Some((site, ctx.index.sites.get(site.world_site?))))
                 .and_then(|(site, world_site)| { let houses = world_site.filter_plots(|p| p.is_house()).count(); if houses == 0 { return None } Some(site.population.len() as f32 / houses as f32) } )
@@ -743,7 +758,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                 .sites
                 .iter()
                 // Don't try to move to the site that's currently our home
-                .filter(|(site_id, _)| Some(*site_id) != ctx.npc.home)
+                .filter(|(site_id, _)| Some(*site_id) != ctx.actor.home)
                 // Only consider towns as potential homes
                 .filter_map(|(site_id, site)| {
                     let world_site = site.world_site.map(|ws| ctx.index.sites.get(ws))?;
@@ -757,7 +772,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                 // Only select sites that are less densely populated than our own
                 .filter(|(_, site, houses)| (site.population.len() as f32 / *houses as f32) < home_pop_ratio)
                 // Find the closest of the candidate sites
-                .min_by_key(|(_, site, _)| site.wpos.as_().distance(ctx.npc.wpos.xy()) as i32)
+                .min_by_key(|(_, site, _)| site.wpos.as_().distance(ctx.actor.wpos.xy()) as i32)
                 .map(|(site_id, _, _)| site_id)
         {
             let site_name = util::site_name(ctx, new_home);
@@ -770,17 +785,17 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                 .then(just(move |ctx, _| ctx.controller.set_new_home(new_home))));
         }
 
-        let day_period = ctx.npc.get_day_period(ctx.time_of_day);
+        let day_period = ctx.actor.get_day_period(ctx.time_of_day);
         let is_weekend = (ctx.time_of_day.day() as u64).is_multiple_of(6);
         let is_evening = day_period == DayPeriod::Evening;
 
         let is_free_time = is_weekend || is_evening;
 
-        let is_raining = ctx.system_data.weather_grid.is_raining(ctx.npc.wpos.xy());
+        let is_raining = ctx.system_data.weather_grid.is_raining(ctx.actor.wpos.xy());
 
         // Go to a house if it's dark
         if day_period.is_dark()
-            && !matches!(ctx.npc.profession(), Some(Profession::Guard))
+            && !matches!(ctx.actor.profession(), Some(Profession::Guard))
         {
             consider.important(
                 now(move |ctx, _| {
@@ -804,7 +819,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                         .then(travel_to_point(house_wpos, 0.65))
                         .debug(|| "walk to house")
                         .then(socialize().repeat().map_state(|state: &mut DefaultState| &mut state.socialize_timer).debug(|| "wait in house"))
-                        .stop_if(|ctx: &mut NpcCtx| ctx.npc.get_day_period(ctx.time_of_day).is_light())
+                        .stop_if(|ctx: &mut NpcCtx| ctx.actor.get_day_period(ctx.time_of_day).is_light())
                         .then(just(|ctx, _| {
                             ctx.controller
                                 .say(None, Content::localized("npc-speech-day_time"))
@@ -820,7 +835,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
         }
 
         // Go to a house if its raining
-        if is_raining && !matches!(ctx.npc.profession(), Some(Profession::Guard)) {
+        if is_raining && !matches!(ctx.actor.profession(), Some(Profession::Guard)) {
             consider.important(
                 now(move |ctx, _| {
                     if let Some(house_wpos) = ctx.data
@@ -843,7 +858,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
                         .debug(|| "walk to house (rain)")
                         .then(socialize().repeat().map_state(|state: &mut DefaultState| &mut state.socialize_timer).debug(|| "wait in house (rain)"))
                         .stop_if(|ctx: &mut NpcCtx| {
-                                    let is_raining = ctx.system_data.weather_grid.is_raining(ctx.npc.wpos.xy());
+                                    let is_raining = ctx.system_data.weather_grid.is_raining(ctx.actor.wpos.xy());
                                     !is_raining
                     })
                         .then(just(|ctx, _| {
@@ -862,7 +877,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
         // Go do something fun on evenings and holidays, or on random days.
         if
             // Ain't no rest for the wicked
-            !matches!(ctx.npc.profession(), Some(Profession::Guard | Profession::Chef))
+            !matches!(ctx.actor.profession(), Some(Profession::Guard | Profession::Chef))
             && (matches!(day_period, DayPeriod::Evening) || is_free_time || ctx.rng.random_bool(0.05))
         {
             let mut fun_activities = Vec::new();
@@ -920,7 +935,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
         }
 
         // Villagers with roles should perform those roles
-        if matches!(ctx.npc.profession(), Some(Profession::Herbalist))
+        if matches!(ctx.actor.profession(), Some(Profession::Herbalist))
             && ctx.rng.random_bool(0.8)
             && let Some(forest_wpos) = find_forest(ctx)
         {
@@ -935,7 +950,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
             );
         }
 
-        if matches!(ctx.npc.profession(), Some(Profession::Farmer))
+        if matches!(ctx.actor.profession(), Some(Profession::Farmer))
             && ctx.rng.random_bool(0.8)
             && let Some(farm_wpos) = find_farm(ctx, visiting_site)
         {
@@ -950,7 +965,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
             );
         }
 
-        if matches!(ctx.npc.profession(), Some(Profession::Hunter))
+        if matches!(ctx.actor.profession(), Some(Profession::Hunter))
             && ctx.rng.random_bool(0.8)
             && let Some(forest_wpos) = find_forest(ctx)
         {
@@ -969,7 +984,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
             );
         }
 
-        if matches!(ctx.npc.profession(), Some(Profession::Guard))
+        if matches!(ctx.actor.profession(), Some(Profession::Guard))
             && ctx.rng.random_bool(0.7)
             && let Some(plaza_wpos) = choose_plaza(ctx, visiting_site)
         {
@@ -990,13 +1005,12 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
             );
         }
 
-        if matches!(ctx.npc.profession(), Some(Profession::Merchant)) && ctx.rng.random_bool(0.8) {
+        if matches!(ctx.actor.profession(), Some(Profession::Merchant)) && ctx.rng.random_bool(0.8) {
             consider.casual(
                 just(|ctx, _| {
                     // Try to direct our speech at nearby actors, if there are any
-                    let (target, phrase) = if ctx.rng.random_bool(0.3) && let Some(other) = ctx.data
-                        .npcs
-                        .nearby(Some(ctx.npc_id), ctx.npc.wpos, 8.0)
+                    let (target, phrase) = if ctx.rng.random_bool(0.3) && let Some(other) = ctx.data.actors
+                        .nearby(Some(ctx.actor_id), ctx.actor.wpos, 8.0)
                         .choose(&mut ctx.rng)
                     {
                         (Some(other), "npc-speech-merchant_sell_directed")
@@ -1015,7 +1029,7 @@ fn villager(visiting_site: SiteId) -> impl Action<DefaultState> {
             );
         }
 
-        if matches!(ctx.npc.profession(), Some(Profession::Chef))
+        if matches!(ctx.actor.profession(), Some(Profession::Chef))
             && ctx.rng.random_bool(0.8)
             && let Some(ws_id) = ctx.data.sites[visiting_site].world_site
             && let Some(tavern) = ctx.index.sites.get(ws_id).plots().filter_map(|p| match_some!(p.kind(), PlotKind::Tavern(a) => a)).choose(&mut ctx.rng)
@@ -1165,7 +1179,7 @@ fn pilot<S: State>(ship: common::comp::ship::Body) -> impl Action<S> {
             .data
             .sites
             .iter()
-            .filter(|(id, _)| Some(*id) != ctx.npc.current_site)
+            .filter(|(id, _)| Some(*id) != ctx.actor.current_site)
             .filter_map(|(_, site)| Some(ctx.index.sites.get(site.world_site?)))
             .flat_map(|site| {
                 site.filter_plots(|p| p.airship_dock_info().is_some())
@@ -1202,7 +1216,7 @@ fn pilot<S: State>(ship: common::comp::ship::Body) -> impl Action<S> {
 fn captain<S: State>() -> impl Action<S> {
     // For now just randomly travel the sea
     now(|ctx, _| {
-        let chunk = ctx.npc.wpos.xy().as_().wpos_to_cpos();
+        let chunk = ctx.actor.wpos.xy().as_().wpos_to_cpos();
         if let Some(chunk) = NEIGHBORS
             .into_iter()
             .map(|neighbor| chunk + neighbor)
@@ -1243,16 +1257,21 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
 
                 match report.kind {
                     ReportKind::Death { killer, actor, .. }
-                        if matches!(&ctx.npc.role, Role::Civilised(_)) =>
+                        if matches!(&ctx.actor.role, Role::Civilised(_)) =>
                     {
                         // TODO: Don't report self
                         let phrase = if let Some(killer) = killer {
                             // TODO: For now, we don't make sentiment changes if the killer was an
                             // NPC in some cases because some NPCs can't hurt one-another.
                             // This should be changed in the future.
-                            let can_damage_killer = if let Actor::Npc(killer) = killer {
-                                ctx.data.npcs.get(killer).is_some_and(|killer| {
-                                    match (&ctx.npc.role, &killer.role) {
+                            let can_damage_killer = if ctx
+                                .data
+                                .actors
+                                .get(killer)
+                                .map_or(true, |k| k.npc().is_some())
+                            {
+                                ctx.data.actors.get(killer).is_some_and(|killer| {
+                                    match (&ctx.actor.role, &killer.role) {
                                         (Role::Vehicle, _) | (_, Role::Vehicle) => false,
                                         (Role::Civilised(prof_a), Role::Civilised(prof_b)) => {
                                             match (prof_a, prof_b) {
@@ -1293,40 +1312,33 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
 
                             // TODO: Roles themselves are kind of a hack, and so is this. This is
                             // mostly a fix for npcs getting angry if you kill for example an ogre.
-                            let is_victim_inherent_enemy = if let Actor::Npc(victim) = actor {
-                                ctx.data.npcs.get(victim).is_some_and(|victim| {
-                                    match (&ctx.npc.role, &victim.role) {
-                                        (Role::Civilised(prof), Role::Civilised(victim_prof)) => {
-                                            match (prof, victim_prof) {
-                                                (
-                                                    Some(
-                                                        Profession::Pirate(_) | Profession::Cultist,
-                                                    ),
-                                                    Some(
-                                                        Profession::Pirate(_) | Profession::Cultist,
-                                                    ),
-                                                ) => false,
-                                                (
-                                                    Some(
-                                                        Profession::Pirate(_) | Profession::Cultist,
-                                                    ),
-                                                    _,
-                                                )
-                                                | (
-                                                    _,
-                                                    Some(
-                                                        Profession::Pirate(_) | Profession::Cultist,
-                                                    ),
-                                                ) => true,
+                            let is_victim_inherent_enemy = if let Some(actor) =
+                                ctx.data.actors.get(actor)
+                                && actor.npc().is_some()
+                            {
+                                match (&ctx.actor.role, &actor.role) {
+                                    (Role::Civilised(prof), Role::Civilised(victim_prof)) => {
+                                        match (prof, victim_prof) {
+                                            (
+                                                Some(Profession::Pirate(_) | Profession::Cultist),
+                                                Some(Profession::Pirate(_) | Profession::Cultist),
+                                            ) => false,
+                                            (
+                                                Some(Profession::Pirate(_) | Profession::Cultist),
+                                                _,
+                                            )
+                                            | (
+                                                _,
+                                                Some(Profession::Pirate(_) | Profession::Cultist),
+                                            ) => true,
 
-                                                _ => false,
-                                            }
-                                        },
+                                            _ => false,
+                                        }
+                                    },
 
-                                        (Role::Civilised(_), Role::Monster) => true,
-                                        _ => false,
-                                    }
-                                })
+                                    (Role::Civilised(_), Role::Monster) => true,
+                                    _ => false,
+                                }
                             } else {
                                 false
                             };
@@ -1350,7 +1362,12 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
 
                             // This is a murder of a player. Feel bad for the player and stop
                             // attacking them.
-                            if let Actor::Character(_) = actor {
+                            if ctx
+                                .data
+                                .actors
+                                .get(actor)
+                                .map_or(false, |a| a.character().is_some())
+                            {
                                 ctx.sentiments.toward_mut(actor).limit_below(0.1);
                                 ctx.sentiments
                                     .toward_mut(actor)
@@ -1384,7 +1401,7 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                     } => {
                         // Check if this happened at home, where we know what belongs to who
                         if let Some(site) = site
-                            && ctx.npc.home == Some(site)
+                            && ctx.actor.home == Some(site)
                         {
                             // TODO: Don't hardcode sentiment change.
                             ctx.sentiments
@@ -1392,13 +1409,14 @@ fn check_inbox<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
                                 .change_by(-0.2, Sentiment::ENEMY);
                             ctx.known_reports.insert(*report_id);
 
-                            let phrase = if matches!(ctx.npc.profession(), Some(Profession::Farmer))
-                                && matches!(sprite.category(), sprite::Category::Plant)
-                            {
-                                "npc-speech-witness_theft_owned"
-                            } else {
-                                "npc-speech-witness_theft"
-                            };
+                            let phrase =
+                                if matches!(ctx.actor.profession(), Some(Profession::Farmer))
+                                    && matches!(sprite.category(), sprite::Category::Plant)
+                                {
+                                    "npc-speech-witness_theft_owned"
+                                } else {
+                                    "npc-speech-witness_theft"
+                                };
 
                             if ctx.time_of_day.0 - report.at_tod.0 < REPORT_RESPONSE_TIME {
                                 action = Some(
@@ -1466,8 +1484,8 @@ fn check_for_enemies<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<
     // suddenly make a nearby actor an enemy) as well as variable NPC tick
     // rates!
     ctx.data
-        .npcs
-        .nearby(Some(ctx.npc_id), ctx.npc.wpos, 24.0)
+        .actors
+        .nearby(Some(ctx.actor_id), ctx.actor.wpos, 24.0)
         .find(|actor| ctx.sentiments.toward(*actor).is(Sentiment::ENEMY))
         .map(|enemy| just(move |ctx, _| ctx.controller.attack(enemy)))
 }
@@ -1481,9 +1499,9 @@ fn react_to_events<S: State>(ctx: &mut NpcCtx, _: &mut S) -> Option<impl Action<
 
 fn humanoid() -> impl Action<DefaultState> {
     choose(|ctx, _, consider| {
-        if let Some(riding) = &ctx.data.npcs.mounts.get_mount_link(ctx.npc_id) {
+        if let Some(riding) = &ctx.data.actors.mounts.get_mount_link(ctx.actor_id) {
             if riding.is_steering {
-                if let Some(vehicle) = ctx.data.npcs.get(riding.mount) {
+                if let Some(vehicle) = ctx.data.actors.get(riding.mount) {
                     match vehicle.body {
                         comp::Body::Ship(body @ comp::ship::Body::AirBalloon) => {
                             consider.important(pilot(body));
@@ -1523,7 +1541,7 @@ fn humanoid() -> impl Action<DefaultState> {
                             escortee,
                             escorter,
                             to,
-                        }) if *escortee == Actor::Npc(ctx.npc_id) => {
+                        }) if *escortee == ctx.actor_id => {
                             consider.important(quest::escorted(*quest_id, *escorter, *to));
                         },
                         // A quest job that can't be acted upon gets ended
@@ -1532,11 +1550,11 @@ fn humanoid() -> impl Action<DefaultState> {
                 },
             };
         } else {
-            let action = match ctx.npc.profession() {
+            let action = match ctx.actor.profession() {
                 Some(Profession::Adventurer(_) | Profession::Merchant) => adventure().l().l(),
                 Some(Profession::Pirate(is_leader)) => pirate(is_leader).l().r(),
                 _ => {
-                    if let Some(home) = ctx.npc.home {
+                    if let Some(home) = ctx.actor.home {
                         villager(home).r().l()
                     } else {
                         idle().r().r() // Homeless
@@ -1557,9 +1575,9 @@ fn bird_large() -> impl Action<DefaultState> {
             .try_normalized()
             .unwrap_or_default();
         let bearing_dist = 15.0;
-        let mut pos = ctx.npc.wpos.xy() + *bearing * bearing_dist;
+        let mut pos = ctx.actor.wpos.xy() + *bearing * bearing_dist;
         let is_deep_water =
-            matches!(ctx.npc.body, common::comp::Body::BirdLarge(b) if matches!(b.species, bird_large::Species::SeaWyvern))
+            matches!(ctx.actor.body, common::comp::Body::BirdLarge(b) if matches!(b.species, bird_large::Species::SeaWyvern))
                 || ctx
                 .world
                 .sim()
@@ -1568,10 +1586,10 @@ fn bird_large() -> impl Action<DefaultState> {
                 });
         if is_deep_water {
             *bearing *= -1.0;
-            pos = ctx.npc.wpos.xy() + *bearing * bearing_dist;
+            pos = ctx.actor.wpos.xy() + *bearing * bearing_dist;
         };
         // when high tree_density fly high, otherwise fly low-mid
-        let npc_pos = ctx.npc.wpos.xy();
+        let npc_pos = ctx.actor.wpos.xy();
         let trees = ctx
             .world
             .sim()
@@ -1584,8 +1602,8 @@ fn bird_large() -> impl Action<DefaultState> {
 
         // without destination site fly to next waypoint
         let mut dest_site = pos;
-        if let Some(home) = ctx.npc.home {
-            let is_home = ctx.npc.current_site == Some(home);
+        if let Some(home) = ctx.actor.home {
+            let is_home = ctx.actor.current_site == Some(home);
             if is_home {
                 if let Some((id, _)) = ctx.data
                     .sites
@@ -1593,7 +1611,7 @@ fn bird_large() -> impl Action<DefaultState> {
                     .filter(|(id, site)| {
                         *id != home
                             && site.world_site.is_some_and(|site| {
-                            match ctx.npc.body {
+                            match ctx.actor.body {
                                 common::comp::Body::BirdLarge(b) => match b.species {
                                     bird_large::Species::Phoenix => matches!(ctx.index.sites.get(site).kind,
                                     Some(SiteKind::Terracotta
@@ -1648,12 +1666,12 @@ fn bird_large() -> impl Action<DefaultState> {
             bearing_dist,
             8.0,
             8.0,
-            ctx.npc.body.flying_height() * height_factor,
+            ctx.actor.body.flying_height() * height_factor,
         )
             // If we are too far away from our waypoint position we can stop since we aren't going to a specific place.
             // If waypoint position is further away from destination site find a new waypoint
             .stop_if(move |ctx: &mut NpcCtx| {
-                ctx.npc.wpos.xy().distance_squared(pos) > (bearing_dist + 5.0).powi(2)
+                ctx.actor.wpos.xy().distance_squared(pos) > (bearing_dist + 5.0).powi(2)
                     || dest_site.distance_squared(pos) > dest_site.distance_squared(npc_pos)
             })
             // If waypoint position wasn't reached within 10 seconds we're probably stuck and need to find a new waypoint.
@@ -1698,7 +1716,7 @@ fn monster() -> impl Action<DefaultState> {
             }
             .unwrap_or_else(|| {
                 *roam_location_timestamp = ctx.time;
-                ctx.npc
+                ctx.actor
                     .wpos
                     .xy()
                     .map(|e| e + ctx.rng.random_range(-500.0..500.0))
@@ -1707,13 +1725,13 @@ fn monster() -> impl Action<DefaultState> {
             *roam_location = Some(desired_roam_location);
 
             // Tend to want to move back towards the roam location
-            *bearing += (desired_roam_location - ctx.npc.wpos.xy()) * ctx.dt;
+            *bearing += (desired_roam_location - ctx.actor.wpos.xy()) * ctx.dt;
             *bearing = bearing
                 .map(|e| e + ctx.rng.random_range(-1.0..1.0) * ctx.dt)
                 .try_normalized()
                 .unwrap_or_default();
             let bearing_dist = 24.0;
-            let mut pos = ctx.npc.wpos.xy() + *bearing * bearing_dist;
+            let mut pos = ctx.actor.wpos.xy() + *bearing * bearing_dist;
             let is_deep_water = ctx
                 .world
                 .sim()
@@ -1726,13 +1744,13 @@ fn monster() -> impl Action<DefaultState> {
         } else {
             *bearing *= -1.0;
 
-            pos = ctx.npc.wpos.xy() + *bearing * 24.0;
+            pos = ctx.actor.wpos.xy() + *bearing * 24.0;
 
             goto_2d(pos, 0.7, 8.0)
         }
         // If we are too far away from our goal position we can stop since we aren't going to a specific place.
         .stop_if(move |ctx: &mut NpcCtx| {
-            ctx.npc.wpos.xy().distance_squared(pos) > (bearing_dist + 5.0).powi(2)
+            ctx.actor.wpos.xy().distance_squared(pos) > (bearing_dist + 5.0).powi(2)
         })
         .debug({
             let bearing = *bearing;
@@ -1746,10 +1764,10 @@ fn monster() -> impl Action<DefaultState> {
 }
 
 fn think() -> impl Action<DefaultState> {
-    now(|ctx, _| match ctx.npc.body {
+    now(|ctx, _| match ctx.actor.body {
         common::comp::Body::Humanoid(_) => humanoid().l().l().l(),
         common::comp::Body::BirdLarge(_) => bird_large().r().l().l(),
-        _ => match &ctx.npc.role {
+        _ => match &ctx.actor.role {
             Role::Civilised(_) => socialize()
                 .map_state(|state: &mut DefaultState| &mut state.socialize_timer)
                 .l()

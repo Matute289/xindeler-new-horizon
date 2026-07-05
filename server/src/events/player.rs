@@ -135,7 +135,7 @@ pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persisten
         .get(entity)
         .map(|p| (p.kind.character_id(), p.kind.sync_me()))
         .unzip();
-    let maybe_rtsim = state.read_component_copied::<common::rtsim::RtSimEntity>(entity);
+    let maybe_rtsim = state.read_component_copied::<common::rtsim::ActorId>(entity);
     state.mut_resource::<IdMaps>().remove_entity(
         Some(entity),
         None, // Uid re-mapped, we don't want to remove the mapping
@@ -156,7 +156,7 @@ pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persisten
             .hook_rtsim_actor_death(
                 &world,
                 index.as_index_ref(),
-                common::rtsim::Actor::Npc(rtsim_entity),
+                rtsim_entity,
                 pos.map(|p| p.0),
                 None,
             );

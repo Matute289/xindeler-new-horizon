@@ -1,17 +1,17 @@
+pub mod actor;
 pub mod airship;
 pub mod architect;
 pub mod faction;
 pub mod nature;
-pub mod npc;
 pub mod quest;
 pub mod report;
 pub mod sentiment;
 pub mod site;
 
 pub use self::{
+    actor::{Actor, Actors},
     faction::{Faction, FactionId, Factions},
     nature::Nature,
-    npc::{Npc, NpcId, Npcs},
     quest::Quests,
     report::{Report, ReportId, ReportKind, Reports},
     sentiment::{Sentiment, Sentiments},
@@ -19,7 +19,7 @@ pub use self::{
 };
 use airship::AirshipSim;
 use architect::Architect;
-use common::resources::TimeOfDay;
+use common::{resources::TimeOfDay, rtsim::ActorId};
 use enum_map::{EnumArray, EnumMap, enum_map};
 use serde::{Deserialize, Serialize, de, ser};
 use std::{
@@ -34,7 +34,7 @@ use std::{
 /// Note that this number does *not* need incrementing on every change: most
 /// field removals/additions are fine. This number should only be incremented
 /// when we wish to perform a *hard purge* of rtsim data.
-pub const CURRENT_VERSION: u32 = 10;
+pub const CURRENT_VERSION: u32 = 11;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Data {
@@ -44,7 +44,7 @@ pub struct Data {
 
     pub nature: Nature,
     #[serde(default)]
-    pub npcs: Npcs,
+    pub actors: Actors,
     #[serde(default)]
     pub sites: Sites,
     #[serde(default)]
@@ -87,9 +87,9 @@ impl fmt::Debug for ReadError {
 pub type WriteError = rmp_serde::encode::Error;
 
 impl Data {
-    pub fn spawn_npc(&mut self, npc: Npc) -> NpcId {
-        let home = npc.home;
-        let id = self.npcs.create_npc(npc);
+    pub fn spawn_actor(&mut self, actor: Actor) -> ActorId {
+        let home = actor.home;
+        let id = self.actors.create_actor(actor);
         if let Some(home) = home.and_then(|home| self.sites.get_mut(home)) {
             home.population.insert(id);
         }

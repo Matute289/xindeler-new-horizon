@@ -619,7 +619,7 @@ impl AgentData<'_> {
                 },
                 Some(NpcActivity::Talk(target)) => {
                     if agent.target.is_none()
-                        && let Some(target) = read_data.id_maps.actor_entity(target)
+                        && let Some(target) = read_data.id_maps.rtsim_entity(target)
                         && let Some(target_uid) = read_data.uids.get(target)
                     {
                         // We're always aware of someone we're talking to

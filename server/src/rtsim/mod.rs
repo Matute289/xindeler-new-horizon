@@ -6,7 +6,7 @@ use atomicwrites::{AtomicFile, OverwriteBehavior};
 use common::{
     grid::Grid,
     mounting::VolumePos,
-    rtsim::{Actor, NpcId, RtSimEntity, TerrainResource, WorldSettings},
+    rtsim::{ActorId, TerrainResource, WorldSettings},
     terrain::{CoordinateConversions, SpriteKind},
 };
 use common_ecs::{System, dispatch};
@@ -15,7 +15,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use enum_map::EnumMap;
 use rtsim::{
     RtState,
-    data::{Data, ReadError, npc::SimulationMode},
+    data::{Data, ReadError, actor::SimulationMode},
     event::{OnDeath, OnHealthChange, OnHelped, OnMountVolume, OnSetup, OnTheft},
 };
 use specs::DispatcherBuilder;
@@ -152,8 +152,8 @@ impl RtSim {
         &mut self,
         world: &World,
         index: IndexRef,
-        pos: VolumePos<NpcId>,
-        actor: Actor,
+        pos: VolumePos<ActorId>,
+        actor: ActorId,
     ) {
         self.state
             .emit(OnMountVolume { actor, pos }, &mut (), world, index)
@@ -165,7 +165,7 @@ impl RtSim {
         index: IndexRef,
         sprite: SpriteKind,
         wpos: Vec3<i32>,
-        actor: Actor,
+        actor: ActorId,
     ) {
         let site = world.sim().get(wpos.xy().wpos_to_cpos()).and_then(|chunk| {
             chunk
@@ -243,14 +243,14 @@ impl RtSim {
             .emit(event::OnBlockChange { changes }, &mut (), world, index);
     }
 
-    pub fn hook_rtsim_entity_unload(&mut self, entity: RtSimEntity) {
+    pub fn hook_rtsim_entity_unload(&mut self, actor_id: ActorId) {
         let data = self.state.get_data_mut();
 
-        if let Some(npc) = data.npcs.get_mut(entity) {
-            if matches!(npc.mode, SimulationMode::Simulated) {
+        if let Some(actor) = data.actors.get_mut(actor_id) {
+            if matches!(actor.mode, SimulationMode::Simulated) {
                 error!("Unloaded already unloaded entity");
             }
-            npc.mode = SimulationMode::Simulated;
+            actor.mode = SimulationMode::Simulated;
         }
     }
 
@@ -258,8 +258,8 @@ impl RtSim {
         &mut self,
         world: &World,
         index: IndexRef,
-        actor: Actor,
-        cause: Option<Actor>,
+        actor: ActorId,
+        cause: Option<ActorId>,
         new_hp_fraction: f32,
         change: f32,
     ) {
@@ -280,9 +280,9 @@ impl RtSim {
         &mut self,
         world: &World,
         index: IndexRef,
-        actor: Actor,
+        actor: ActorId,
         wpos: Option<Vec3<f32>>,
-        killer: Option<Actor>,
+        killer: Option<ActorId>,
     ) {
         self.state.emit(
             OnDeath {
@@ -300,8 +300,8 @@ impl RtSim {
         &mut self,
         world: &World,
         index: IndexRef,
-        actor: Actor,
-        saver: Option<Actor>,
+        actor: ActorId,
+        saver: Option<ActorId>,
     ) {
         self.state
             .emit(OnHelped { actor, saver }, &mut (), world, index);

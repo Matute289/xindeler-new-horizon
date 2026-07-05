@@ -59,7 +59,7 @@ use common::{
     outcome::Outcome,
     parse_cmd_args,
     resources::{BattleMode, ProgramTime, Secs, Time, TimeOfDay, TimeScale},
-    rtsim::{Actor, Role},
+    rtsim::Role,
     spiral::Spiral2d,
     terrain::{Block, BlockKind, CoordinateConversions, SpriteKind, StructureSprite},
     tether::Tethered,
@@ -1930,7 +1930,7 @@ fn handle_rtsim_tp(
             .read_resource::<RtSim>()
             .state()
             .data()
-            .npcs
+            .actors
             .values()
             .find(|npc| npc.uid == id)
             .ok_or_else(|| Content::Plain(format!("No NPC has the id {id}")))?
@@ -1973,47 +1973,51 @@ fn handle_rtsim_info(
                 .read_storage::<common::rtsim::RtSimEntity>()
                 .get(entity)?;
 
-            Some(Ok(rtsim.state().data().npcs.get(npc_id)?.uid))
+            Some(Ok(rtsim.state().data().actors.get(npc_id)?.uid))
         })
         .transpose()?;
 
     if let Some(id) = id {
         let data = rtsim.state().data();
-        let (id, npc) = data
-            .npcs
+        let (id, actor) = data
+            .actors
             .iter()
-            .find(|(_, npc)| npc.uid == id)
-            .ok_or_else(|| Content::Plain(format!("No NPC has the id {id}")))?;
+            .find(|(_, actor)| actor.uid == id)
+            .ok_or_else(|| Content::Plain(format!("No actor has the id {id}")))?;
 
         let mut info = String::new();
 
         let _ = writeln!(&mut info, "-- General Information --");
-        let _ = writeln!(&mut info, "Seed: {}", npc.seed);
-        let _ = writeln!(&mut info, "Pos: {:?}", npc.wpos);
-        let _ = writeln!(&mut info, "Role: {:?}", npc.role);
-        let _ = writeln!(&mut info, "Home: {:?}", npc.home);
-        let _ = writeln!(&mut info, "Faction: {:?}", npc.faction);
-        let _ = writeln!(&mut info, "Personality: {:?}", npc.personality);
+        let _ = writeln!(&mut info, "Seed: {}", actor.seed);
+        let _ = writeln!(&mut info, "Pos: {:?}", actor.wpos);
+        let _ = writeln!(&mut info, "Role: {:?}", actor.role);
+        let _ = writeln!(&mut info, "Home: {:?}", actor.home);
+        let _ = writeln!(&mut info, "Faction: {:?}", actor.faction);
+        if let Some(npc) = actor.npc() {
+            let _ = writeln!(&mut info, "Personality: {:?}", npc.personality);
+        }
         let _ = writeln!(&mut info, "-- Status --");
-        let _ = writeln!(&mut info, "Current site: {:?}", npc.current_site);
-        let _ = writeln!(&mut info, "Current mode: {:?}", npc.mode);
+        let _ = writeln!(&mut info, "Current site: {:?}", actor.current_site);
+        let _ = writeln!(&mut info, "Current mode: {:?}", actor.mode);
         let _ = writeln!(
             &mut info,
             "Riding: {:?}",
-            data.npcs
+            data.actors
                 .mounts
                 .get_mount_link(id)
-                .map(|link| data.npcs.get(link.mount).map_or(0, |mount| mount.uid))
+                .map(|link| data.actors.get(link.mount).map_or(0, |mount| mount.uid))
         );
         let _ = writeln!(&mut info, "-- Action State --");
-        if let Some(brain) = &npc.brain {
+        if let Some(npc) = actor.npc()
+            && let Some(brain) = &npc.brain
+        {
             let mut bt = Vec::new();
             brain.action.backtrace(&mut bt);
             for (i, action) in bt.into_iter().enumerate() {
                 let _ = writeln!(&mut info, "[{}] {}", i, action);
             }
         } else {
-            let _ = writeln!(&mut info, "<NPC has no brain>");
+            let _ = writeln!(&mut info, "<actor has no brain>");
         }
 
         server.notify_client(
@@ -2044,28 +2048,31 @@ fn handle_rtsim_npc(
         let npc_names = &common::npc::NPC_NAMES.read();
         let rtsim = server.state.ecs().read_resource::<RtSim>();
         let data = rtsim.state().data();
-        let mut npcs = data
-            .npcs
+        let mut actors = data
+            .actors
             .values()
-            .filter(|npc| {
+            .filter(|actor| {
                 let mut tags = vec![
-                    npc.profession()
+                    actor
+                        .profession()
                         .map(|p| format!("{:?}", p))
                         .unwrap_or_default(),
-                    match &npc.role {
+                    match &actor.role {
                         Role::Civilised(_) => "civilised".to_string(),
                         Role::Wild => "wild".to_string(),
                         Role::Monster => "monster".to_string(),
                         Role::Vehicle => "vehicle".to_string(),
                     },
-                    format!("{:?}", npc.mode),
-                    format!("{}", npc.uid),
-                    npc_names[&npc.body].keyword.clone(),
+                    format!("{:?}", actor.mode),
+                    format!("{}", actor.uid),
+                    npc_names[&actor.body].keyword.clone(),
                 ];
-                if let Some(species_meta) = npc_names.get_species_meta(&npc.body) {
+                if let Some(species_meta) = npc_names.get_species_meta(&actor.body) {
                     tags.push(species_meta.keyword.clone());
                 }
-                if let Some(brain) = &npc.brain {
+                if let Some(npc) = actor.npc()
+                    && let Some(brain) = &npc.brain
+                {
                     rtsim::ai::Action::backtrace(&brain.action, &mut tags);
                 }
                 terms.iter().all(|term| {
@@ -2075,26 +2082,26 @@ fn handle_rtsim_npc(
             })
             .collect::<Vec<_>>();
         if let Ok(pos) = position(server, target, "target") {
-            npcs.sort_by_key(|npc| (npc.wpos.distance_squared(pos.0) * 10.0) as u64);
+            actors.sort_by_key(|actor| (actor.wpos.distance_squared(pos.0) * 10.0) as u64);
         }
 
         let mut info = String::new();
 
         let _ = writeln!(&mut info, "-- NPCs matching [{}] --", terms.join(", "));
-        for npc in npcs.iter().take(count.unwrap_or(!0) as usize) {
+        for actor in actors.iter().take(count.unwrap_or(!0) as usize) {
             let _ = write!(
                 &mut info,
                 "{} ({}), ",
-                npc.get_name().as_deref().unwrap_or("<unknown>"),
-                npc.uid
+                actor.get_name().as_deref().unwrap_or("<unknown>"),
+                actor.uid
             );
         }
         let _ = writeln!(&mut info);
         let _ = writeln!(
             &mut info,
             "Showing {}/{} matching NPCs.",
-            count.unwrap_or(npcs.len() as u32),
-            npcs.len()
+            count.unwrap_or(actors.len() as u32),
+            actors.len()
         );
 
         server.notify_client(
@@ -3129,7 +3136,7 @@ fn handle_kill_npcs(
                     rtsim.hook_rtsim_actor_death(
                         &ecs.read_resource::<Arc<world::World>>(),
                         ecs.read_resource::<world::IndexOwned>().as_index_ref(),
-                        Actor::Npc(rtsim_entity),
+                        rtsim_entity,
                         Some(pos.0),
                         None,
                     );
@@ -4900,7 +4907,7 @@ fn get_entity_target(entity_target: EntityTarget, server: &Server) -> CmdResult<
                 .read_resource::<crate::rtsim::RtSim>()
                 .state()
                 .data()
-                .npcs
+                .actors
                 .iter()
                 .find(|(_, npc)| npc.uid == id)
                 .ok_or(Content::Plain(format!(
