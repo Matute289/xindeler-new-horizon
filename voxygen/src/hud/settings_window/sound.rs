@@ -36,6 +36,10 @@ widget_ids! {
         sfx_volume_slider,
         sfx_volume_number,
         sfx_volume_muted,
+        instrument_volume_text,
+        instrument_volume_slider,
+        instrument_volume_number,
+        instrument_volume_muted,
         ambience_volume_text,
         ambience_volume_slider,
         ambience_volume_number,
@@ -351,13 +355,70 @@ impl Widget for Sound<'_> {
         .color(non_master_volume_text_color)
         .set(state.ids.sfx_volume_number, ui);
 
+        // Instrument Volume
+        Text::new(
+            &self
+                .localized_strings
+                .get_msg("hud-settings-instrument_volume"),
+        )
+        .down_from(state.ids.sfx_volume_muted, 10.0)
+        .font_size(self.fonts.cyri.scale(14))
+        .font_id(self.fonts.cyri.conrod_id)
+        .color(TEXT_COLOR)
+        .set(state.ids.instrument_volume_text, ui);
+        // Instrument Volume Muted Indicator
+        let instrument_muted = ToggleButton::new(
+            self.global_state.settings.audio.instrument_volume.muted,
+            if sfx_muted {
+                self.imgs.button_muted
+            } else {
+                self.imgs.button_mute
+            },
+            self.imgs.button_muted,
+        )
+        .w_h(24.0, 25.0)
+        .down_from(state.ids.instrument_volume_text, 10.0)
+        .hover_images(self.imgs.button_mute_hover, self.imgs.button_muted_hover)
+        .press_images(self.imgs.button_mute_press, self.imgs.button_muted_press)
+        .set(state.ids.instrument_volume_muted, ui);
+        if instrument_muted != self.global_state.settings.audio.instrument_volume.muted {
+            events.push(MuteInstrumentVolume(instrument_muted));
+        }
+        // SFX Volume Slider
+        if let Some(new_val) = ImageSlider::continuous(
+            self.global_state.settings.audio.instrument_volume.volume,
+            0.0,
+            1.0,
+            self.imgs.slider_indicator,
+            self.imgs.slider,
+        )
+        .w_h(104.0, 22.0)
+        .right_from(state.ids.instrument_volume_muted, 8.0)
+        .track_breadth(12.0)
+        .slider_length(10.0)
+        .pad_track((5.0, 5.0))
+        .set(state.ids.instrument_volume_slider, ui)
+        {
+            events.push(AdjustInstrumentVolume(new_val));
+        }
+        // Instrument Volume Number
+        Text::new(&format!(
+            "{:2.0}%",
+            self.global_state.settings.audio.instrument_volume.volume * 100.0
+        ))
+        .right_from(state.ids.instrument_volume_slider, 8.0)
+        .font_size(self.fonts.cyri.scale(14))
+        .font_id(self.fonts.cyri.conrod_id)
+        .color(non_master_volume_text_color)
+        .set(state.ids.instrument_volume_number, ui);
+
         // Ambience Volume
         Text::new(
             &self
                 .localized_strings
                 .get_msg("hud-settings-ambience_volume"),
         )
-        .down_from(state.ids.sfx_volume_muted, 10.0)
+        .down_from(state.ids.instrument_volume_muted, 10.0)
         .font_size(self.fonts.cyri.scale(14))
         .font_id(self.fonts.cyri.conrod_id)
         .color(TEXT_COLOR)
