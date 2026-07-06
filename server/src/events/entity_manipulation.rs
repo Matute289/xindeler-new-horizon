@@ -17,6 +17,7 @@ use crate::{
     state_ext::StateExt,
     sys::terrain::{NpcData, SAFE_ZONE_RADIUS, SpawnEntityData},
 };
+#[cfg(feature = "worldgen")] use common::rtsim;
 use common::{
     CachedSpatialGrid, Damage, DamageKind, DamageSource, GroupTarget, RadiusEffect,
     assets::{AssetExt, Ron},
@@ -65,8 +66,6 @@ use common::{
     util::Dir,
     vol::ReadVol,
 };
-#[cfg(feature = "worldgen")]
-use common::rtsim;
 use common_net::{msg::ServerGeneral, sync::WorldSyncExt, synced_components::Heads};
 use common_state::{AreasContainer, BlockChange, NoDurabilityArea, ScheduledBlockChange};
 use hashbrown::HashSet;

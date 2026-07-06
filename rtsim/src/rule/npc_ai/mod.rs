@@ -124,7 +124,7 @@ impl Rule for NpcAi {
                 data.actors
                     .iter_mut()
                     // Don't run AI for dead actors
-                    .filter(|(_, actor)| !actor.is_dead() && !matches!(actor.role, Role::Vehicle))
+                    .filter(|(_, actor)| actor.is_present_and_alive() && !matches!(actor.role, Role::Vehicle))
                     // Don't run AI for simulated actors every tick
                     .filter(|(_, actor)| matches!(actor.mode, SimulationMode::Loaded) || (actor.seed as u64 + ctx.event.tick).is_multiple_of(SIMULATED_TICK_SKIP))
                     .filter_map(|(actor_id, actor)| {
@@ -395,7 +395,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                 .iter()
                 .filter(|npc_id| {
                     ctx.data.actors.get(**npc_id).is_some_and(|npc| {
-                        !npc.is_dead()
+                        npc.is_present_and_alive()
                             && npc.current_site == Some(home)
                             && npc.faction == Some(faction)
                             && npc.hired().is_none()
@@ -413,7 +413,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .iter()
                             .filter(|npc_id| {
                                 ctx.data.actors.get(**npc_id).is_some_and(|npc| {
-                                    !npc.is_dead()
+                                    npc.is_present_and_alive()
                                         && npc.current_site == Some(home)
                                         && npc.faction == Some(faction)
                                         && npc.hired().is_none()
@@ -448,7 +448,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .iter()
                             .filter(|npc_id| {
                                 ctx.data.actors.get(**npc_id).is_some_and(|npc| {
-                                    !npc.is_dead()
+                                    npc.is_present_and_alive()
                                         && npc
                                             .hired()
                                             .is_some_and(|(a, _)| a == ctx.actor_id)
@@ -461,7 +461,7 @@ fn pirate(is_leader: bool) -> impl Action<DefaultState> {
                             .iter()
                             .filter(|npc_id| {
                                 ctx.data.actors.get(**npc_id).is_some_and(|npc| {
-                                    !npc.is_dead()
+                                    npc.is_present_and_alive()
                                         && npc.current_site == Some(home)
                                         && npc.faction == Some(faction)
                                         && npc.hired().is_none()

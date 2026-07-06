@@ -92,13 +92,17 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
     let mut mount_activity = SecondaryMap::new();
     for link_id in ids {
         if let Some(link) = data.actors.mounts.get(link_id) {
-            if let Some(mount) = data.actors.get(link.mount).filter(|mount| !mount.is_dead()) {
+            if let Some(mount) = data
+                .actors
+                .get(link.mount)
+                .filter(|mount| mount.is_present_and_alive())
+            {
                 let wpos = mount.wpos;
                 if let Some(rider) = data
                     .actors
                     .actors
                     .get_mut(link.rider)
-                    .filter(|rider| !rider.is_dead())
+                    .filter(|rider| rider.is_present_and_alive())
                 {
                     rider.wpos = wpos;
                     if let Some(rider_npc) = rider.npc_mut() {
@@ -119,7 +123,7 @@ fn on_tick(ctx: EventCtx<SimulateNpcs, OnTick>) {
         .actors
         .actors
         .iter_mut()
-        .filter(|(_, actor)| !actor.is_dead())
+        .filter(|(_, actor)| actor.is_present_and_alive())
     {
         let ActorKind::Npc(npc) = &mut actor.kind else {
             continue;

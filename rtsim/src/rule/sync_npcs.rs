@@ -73,17 +73,20 @@ fn on_health_change(ctx: EventCtx<SyncNpcs, OnHealthChange>) {
     // health fraction to 0 (dead)
     if ctx.event.new_health_fraction != 0.0
         && let Some(actor) = data.actors.get_mut(ctx.event.actor)
+        && let Some(presence) = &mut actor.presence
     {
-        actor.health_fraction = ctx.event.new_health_fraction;
+        presence.health_fraction = ctx.event.new_health_fraction;
     }
 }
 
 fn on_death(ctx: EventCtx<SyncNpcs, OnDeath>) {
     let data = &mut *ctx.state.data_mut();
 
-    if let Some(actor) = data.actors.get_mut(ctx.event.actor) {
+    if let Some(actor) = data.actors.get_mut(ctx.event.actor)
+        && let Some(presence) = &mut actor.presence
+    {
         // Mark the actor as dead, allowing us to clear them up later
-        actor.health_fraction = 0.0;
+        presence.health_fraction = 0.0;
     }
 }
 
@@ -121,8 +124,12 @@ fn on_tick(ctx: EventCtx<SyncNpcs, OnTick>) {
         }
 
         // Update the actor's grid cell
-        let chunk_pos = actor.wpos.xy().as_().wpos_to_cpos();
-        if actor.chunk_pos != Some(chunk_pos) {
+        let chunk_pos = if actor.presence.is_some() {
+            Some(actor.wpos.xy().as_().wpos_to_cpos())
+        } else {
+            None
+        };
+        if actor.chunk_pos != chunk_pos {
             if let Some(cell) = actor
                 .chunk_pos
                 .and_then(|chunk_pos| data.actors.actor_grid.get_mut(chunk_pos))
@@ -130,10 +137,23 @@ fn on_tick(ctx: EventCtx<SyncNpcs, OnTick>) {
             {
                 cell.actors.swap_remove(index);
             }
-            actor.chunk_pos = Some(chunk_pos);
-            if let Some(cell) = data.actors.actor_grid.get_mut(chunk_pos) {
+            actor.chunk_pos = chunk_pos;
+            if let Some(chunk_pos) = chunk_pos
+                && let Some(cell) = data.actors.actor_grid.get_mut(chunk_pos)
+            {
                 cell.actors.push(actor_id);
             }
+        }
+
+        // Make characters that haven't been seen since the penultimate tick be no
+        // longer present (likely because the player they represent has logged
+        // off) TODO: Prune characters that we've not seen for a *long* time
+        // once we hit some arbitrary cap
+        if let Some(character) = actor.character()
+            && let Some(last_present_at) = character.last_present_at
+            && data.tick > last_present_at + 1
+        {
+            actor.presence = None;
         }
     }
 }

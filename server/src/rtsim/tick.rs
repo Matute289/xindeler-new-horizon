@@ -4,7 +4,7 @@ use common::{
     LoadoutBuilder,
     calendar::Calendar,
     comp::{
-        self, Body, Item, Presence,
+        self, Body, Item,
         inventory::trade_pricing::TradePricing,
         item::{ItemDefinitionIdOwned, Quality},
         slot::ArmorSlot,
@@ -26,7 +26,7 @@ use rtsim::{
     ai::ActorSystemData,
     data::{
         Sites,
-        actor::{Actor, Profession, SimulationMode},
+        actor::{Actor, Presence, Profession, SimulationMode},
     },
 };
 use specs::{Entities, Join, LendJoin, Read, ReadExpect, ReadStorage, WriteExpect, WriteStorage};
@@ -458,12 +458,11 @@ impl<'a> System<'a> for Sys {
         ReadExpect<'a, world::IndexOwned>,
         ReadExpect<'a, SlowJobPool>,
         ReadStorage<'a, comp::Pos>,
-        WriteStorage<'a, RtSimEntity>,
+        ReadStorage<'a, RtSimEntity>,
         WriteStorage<'a, comp::Agent>,
-        ReadStorage<'a, Presence>,
         ReadStorage<'a, Body>,
         ReadExpect<'a, Calendar>,
-        WriteExpect<'a, IdMaps>,
+        ReadExpect<'a, IdMaps>,
         ReadExpect<'a, ServerConstants>,
         ReadExpect<'a, WeatherGrid>,
         WriteStorage<'a, comp::Inventory>,
@@ -491,12 +490,11 @@ impl<'a> System<'a> for Sys {
             index,
             slow_jobs,
             positions,
-            mut rtsim_entities,
+            rtsim_entities,
             mut agents,
-            presences,
             bodies,
             calendar,
-            mut id_maps,
+            id_maps,
             server_constants,
             weather_grid,
             inventories,
@@ -523,7 +521,7 @@ impl<'a> System<'a> for Sys {
         rtsim.state.tick(
             &mut ActorSystemData {
                 positions: positions.clone(),
-                id_maps: &id_maps,
+                id_maps,
                 server_constants,
                 weather_grid,
                 inventories: Mutex::new(inventories),
@@ -579,8 +577,10 @@ impl<'a> System<'a> for Sys {
                         agent.rtsim_outbox = Some(Default::default());
                     }
 
-                    if let Some(health) = &mut npc_builder.health {
-                        health.set_fraction(actor.health_fraction);
+                    if let Some(health) = &mut npc_builder.health
+                        && let Some(presence) = &actor.presence
+                    {
+                        health.set_fraction(presence.health_fraction);
                     }
 
                     create_npc_emitter.emit(CreateNpcEvent {
@@ -651,8 +651,6 @@ impl<'a> System<'a> for Sys {
         }
 
         // Load in NPCs.
-        // Note that players *should* never be loaded because they are never
-        // `SimulationMode::Simulated`.
         for (actor_id, actor) in data.actors.actors.iter_mut() {
             let chunk = actor.wpos.xy().as_::<i32>().wpos_to_cpos();
 
@@ -664,12 +662,15 @@ impl<'a> System<'a> for Sys {
                 && data.actors.mounts.get_mount_link(actor_id).is_none()
             {
                 actor.mode = SimulationMode::Loaded;
-                create_event(actor_id, actor, None);
+                // Don't 'spawn in' players, their entities are managed by the server
+                if actor.character().is_none() {
+                    create_event(actor_id, actor, None);
+                }
             }
         }
 
         // Synchronise rtsim NPC with entity data
-        for (entity, pos, body, rtsim_entity, agent) in (
+        for (entity, pos, body, rtsim_entity, mut agent) in (
             &entities,
             &positions,
             &bodies,
@@ -679,16 +680,25 @@ impl<'a> System<'a> for Sys {
             .join()
         {
             if let Some(actor) = data.actors.get_mut(*rtsim_entity) {
+                // Update actor state
+                actor.wpos = pos.0;
+                actor.body = *body;
+
+                // For players, let rtsim know that the character is present in the world
+                if let Some(character) = actor.character_mut() {
+                    character.last_present_at = Some(data.tick);
+                    actor.presence.get_or_insert(Presence {
+                        // TODO: This isn't correct, use the actual health %
+                        health_fraction: 1.0,
+                    });
+                }
+
+                // TODO: Update other attributes here
+
                 match actor.mode {
                     SimulationMode::Loaded => {
-                        // Update actor state
-                        actor.wpos = pos.0;
-                        actor.body = *body;
-
-                        // TODO: Update other attributes
-
                         // Update entity state
-                        if let Some(agent) = agent
+                        if let Some(agent) = &mut agent
                             && let Some(npc) = actor.npc_mut()
                         {
                             agent.rtsim_controller.personality = npc.personality;
@@ -704,39 +714,12 @@ impl<'a> System<'a> for Sys {
                         }
                     },
                     SimulationMode::Simulated => {
-                        delete_emitter.emit(DeleteEvent(entity));
+                        // Never try to 'dissolve' players back into the rtsim matrix
+                        if actor.character().is_none() {
+                            delete_emitter.emit(DeleteEvent(entity));
+                        }
                     },
                 }
-            }
-        }
-
-        // Remove any character actors that no longer correspond to an in-game character
-        // (usually because the player logged out)
-        // TODO: Persist player actors across sessions! (requires having rtsim track
-        // 'not present' as a distinct state an actor can be in)
-        data.actors.retain(|_, actor| {
-            if let Some(character) = actor.character() {
-                id_maps.character_entity(character.id).is_some()
-            } else {
-                true
-            }
-        });
-
-        // Create actors for any players that don't have one
-        // TODO: This logic might be worth moving to login
-        for (entity, pos, body, presence) in (&entities, &positions, &bodies, &presences).join() {
-            if let comp::PresenceKind::Character(id) = presence.kind
-                && rtsim_entities.get(entity).is_none()
-            {
-                let actor_id = data.actors.create_actor(Actor::new_character(
-                    id,
-                    !(id.0 as u32), // TODO: This is a rubbish seed
-                    pos.0,
-                    *body,
-                    SimulationMode::Loaded,
-                ));
-                _ = rtsim_entities.insert(entity, actor_id);
-                id_maps.add_rtsim(actor_id, entity);
             }
         }
     }

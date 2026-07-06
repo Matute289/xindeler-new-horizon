@@ -119,7 +119,7 @@ impl NpcCtx<'_, '_> {
 #[derive(SystemData)]
 pub struct ActorSystemData<'a> {
     pub positions: ReadStorage<'a, comp::Pos>,
-    pub id_maps: &'a WriteExpect<'a, IdMaps>,
+    pub id_maps: ReadExpect<'a, IdMaps>,
     pub server_constants: ReadExpect<'a, ServerConstants>,
     pub weather_grid: ReadExpect<'a, WeatherGrid>,
     pub rtsim_gizmos: WriteExpect<'a, RtsimGizmos>,

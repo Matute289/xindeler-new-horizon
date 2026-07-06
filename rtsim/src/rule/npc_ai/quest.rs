@@ -851,6 +851,7 @@ fn roll_courier_quest(ctx: &mut NpcCtx, messenger: ActorId) -> Option<CourierQue
             .data
             .actors
             .iter()
+            .filter(|(_, actor)| actor.npc().is_some())
             .filter_map(|(npc_id, npc)| match &npc.role {
                 Role::Civilised(Some(Profession::Hunter))
                 | Role::Civilised(Some(Profession::Farmer))

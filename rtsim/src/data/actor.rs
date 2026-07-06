@@ -299,6 +299,9 @@ pub struct Npc {
 #[derive(Serialize, Deserialize)]
 pub struct Character {
     pub id: CharacterId,
+    // The tick on which the character was last present. If this value falls behind the global
+    // rtsim tick, we assume the character has logged off and remove its presence
+    pub last_present_at: Option<u64>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -323,8 +326,7 @@ pub struct Actor {
     pub role: Role,
     pub home: Option<SiteId>,
     pub faction: Option<FactionId>,
-    /// The current health of the NPC, < 0.0 is dead and 1.0 is max.
-    pub health_fraction: f32,
+    pub presence: Option<Presence>,
 
     // Unpersisted state
     #[serde(skip)]
@@ -352,6 +354,12 @@ pub enum Job {
     Quest(QuestId),
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Presence {
+    /// The current health of the NPC, < 0.0 is dead and 1.0 is max.
+    pub health_fraction: f32,
+}
+
 impl Clone for Actor {
     fn clone(&self) -> Self {
         Self {
@@ -365,7 +373,10 @@ impl Clone for Actor {
                     inbox: Default::default(),
                     brain: Default::default(),
                 }),
-                ActorKind::Character(c) => ActorKind::Character(Character { id: c.id }),
+                ActorKind::Character(c) => ActorKind::Character(Character {
+                    id: c.id,
+                    last_present_at: c.last_present_at,
+                }),
             },
             uid: self.uid,
             seed: self.seed,
@@ -374,7 +385,7 @@ impl Clone for Actor {
             role: self.role.clone(),
             home: self.home,
             faction: self.faction,
-            health_fraction: self.health_fraction,
+            presence: self.presence.clone(),
             body: self.body,
             // Not persisted
             chunk_pos: None,
@@ -409,7 +420,9 @@ impl Actor {
             role,
             home: None,
             faction: None,
-            health_fraction: 1.0,
+            presence: Some(Presence {
+                health_fraction: 1.0,
+            }),
             chunk_pos: None,
             current_site: None,
             mode: SimulationMode::Simulated,
@@ -438,7 +451,10 @@ impl Actor {
         mode: SimulationMode,
     ) -> Self {
         Self {
-            kind: ActorKind::Character(Character { id }),
+            kind: ActorKind::Character(Character {
+                id,
+                last_present_at: None,
+            }),
             // To be assigned later
             uid: 0,
             seed,
@@ -448,7 +464,8 @@ impl Actor {
             role: Role::Civilised(None),
             home: None,
             faction: None,
-            health_fraction: 1.0,
+            // The server will give the actor a presence by itself
+            presence: None,
             chunk_pos: None,
             current_site: None,
             mode,
@@ -462,7 +479,24 @@ impl Actor {
         }
     }
 
-    pub fn is_dead(&self) -> bool { self.health_fraction <= 0.0 }
+    pub fn character_mut(&mut self) -> Option<&mut Character> {
+        match &mut self.kind {
+            ActorKind::Character(character) => Some(character),
+            _ => None,
+        }
+    }
+
+    pub fn is_present_and_alive(&self) -> bool {
+        self.presence
+            .as_ref()
+            .map_or(false, |p| p.health_fraction > 0.0)
+    }
+
+    pub fn is_present_and_dead(&self) -> bool {
+        self.presence
+            .as_ref()
+            .map_or(false, |p| p.health_fraction <= 0.0)
+    }
 
     // TODO: have a dedicated `NpcBuilder` type for this.
     pub fn with_personality(mut self, personality: Personality) -> Self {
@@ -802,10 +836,9 @@ impl Actors {
             .flat_map(move |neighbor| {
                 self.actor_grid.get(chunk_pos + neighbor).map(move |cell| {
                     cell.actors.iter().copied().filter(move |actor_id| {
-                        self.actors
-                            .get(*actor_id)
-                            .is_some_and(|actor| actor.wpos.distance_squared(wpos) < r_sqr)
-                            && Some(*actor_id) != this_actor
+                        self.actors.get(*actor_id).is_some_and(|actor| {
+                            actor.presence.is_some() && actor.wpos.distance_squared(wpos) < r_sqr
+                        }) && Some(*actor_id) != this_actor
                     })
                 })
             })
