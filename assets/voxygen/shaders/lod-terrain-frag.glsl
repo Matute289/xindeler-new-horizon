@@ -120,7 +120,7 @@ void main() {
     float f_ao = 1.0;
     vec3 voxel_norm = f_norm;
     const float VOXELIZE_DIST = 200000;
-    float voxelize_factor = clamp(1.0 - (distance(cam_pos.xy, f_pos.xy) - view_distance.x) * (1.0 / VOXELIZE_DIST), 0, 1);
+    float voxelize_factor = clamp(1.0 - (distance(cam_pos.xy, f_pos.xy) - view_distance.x) * (1.0 / VOXELIZE_DIST), 0, 1) / (1.0 + pow(f_norm.z, 10) * 0.2);
     vec3 cam_dir = cam_to_frag;
     #ifdef EXPERIMENTAL_NOLODVOXELS
         //vec3 side_norm = normalize(vec3(my_norm.xy, 0.01));
@@ -149,13 +149,13 @@ void main() {
                 vec3 to_center = abs(block_pos - (wpos - cam_dir * t));
                 voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
                 voxel_norm = mix(f_norm, voxel_norm, voxelize_factor);
-                f_ao = mix(1.0, clamp(1.0 + (t - nz_offset) / block_sz * 0.5, 0.1, 1.0), voxelize_factor * max(0.0, -dot(cam_dir, f_norm)));
+                f_ao = mix(1.0, clamp(1.0 + (t - nz_offset) / block_sz * 0.5, 0.1, 1.0), voxelize_factor / (f_norm.z * 3.0));
                 break;
             }
         }
     #endif
     
-    vec3 f_col_raw = mix(lod_col(block_pos.xy - floor(focus_off.xy * block_sz) / block_sz), vec3(0), clamp(pull_down / 30, 0, 1));
+    vec3 f_col_raw = mix(lod_col(f_pos.xy/*block_pos.xy - floor(focus_off.xy * block_sz) / block_sz*/), vec3(0), clamp(pull_down / 30, 0, 1));
 
     /* vec3 sun_dir = get_sun_dir(time_of_day.x);
     vec3 moon_dir = get_moon_dir(time_of_day.x); */
