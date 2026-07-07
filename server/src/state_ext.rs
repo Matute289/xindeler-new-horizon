@@ -858,7 +858,10 @@ impl StateExt for State {
                                 char_id,
                                 !(char_id.0 as u32), // TODO: This is a rubbish seed
                                 player_pos.map_or(Vec3::zero(), |p| p.0),
-                                // This sucks. 
+                                // This sucks. Because the character body is not retrieved from
+                                // storage immedaitely, we have to give players a 'default body' for
+                                // a brief moment until it arrives. Don't worry, it gets replaced
+                                // very soon afterwards as part of server <-> rtsim sync.
                                 comp::Body::default(),
                                 SimulationMode::Loaded,
                             )))

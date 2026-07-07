@@ -30,20 +30,19 @@ impl Rule for CleanUp {
                 .filter_map(|a| a.npc_mut())
                 .for_each(|npc| npc.sentiments.decay(&mut rng, ctx.event.dt * NPC_SENTIMENT_TICK_SKIP as f32));
 
-            // Remove dead NPCs
+            // Remove dead NPCs. Never remove dead players, since they can respawn.
             // TODO: Don't do this every tick, find a sensible way to gradually remove dead NPCs after they've been
             // forgotten
-            data.actors
-                .retain(|npc_id, npc| if npc.is_present_and_dead() {
-                    // Remove NPC from home population
-                    if let Some(home) = npc.home.and_then(|home| data.sites.get_mut(home)) {
-                        home.population.remove(&npc_id);
-                    }
-                    tracing::debug!(?npc_id, "Cleaning up dead NPC");
-                    false
-                } else {
-                    true
-                });
+            data.actors.retain(|npc_id, npc| if npc.is_present_and_dead() && npc.character().is_none() {
+                // Remove NPC from home population
+                if let Some(home) = npc.home.and_then(|home| data.sites.get_mut(home)) {
+                    home.population.remove(&npc_id);
+                }
+                tracing::debug!(?npc_id, "Cleaning up dead NPC");
+                false
+            } else {
+                true
+            });
 
             // Clean up site population.
             data.sites.iter_mut()
