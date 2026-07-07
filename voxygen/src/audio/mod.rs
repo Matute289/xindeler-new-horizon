@@ -58,6 +58,7 @@ struct Tracks {
     music: TrackHandle,
     ui: TrackHandle,
     sfx: TrackHandle,
+    instrument: TrackHandle,
     ambience: TrackHandle,
 }
 
@@ -161,6 +162,7 @@ pub struct ActiveChannels {
 #[derive(Default)]
 struct Volumes {
     sfx: f32,
+    instrument: f32,
     ambience: f32,
     music: f32,
     master: f32,
@@ -232,6 +234,13 @@ impl AudioFrontendInner {
             ori: Vec3::unit_x(),
         };
 
+        let mut sfx_track = manager
+            .add_sub_track(sfx_track_builder)
+            .map_err(AudioCreationError::Track)?;
+        let instrument_track = sfx_track
+            .add_sub_track(TrackBuilder::new())
+            .map_err(AudioCreationError::Track)?;
+
         let mut tracks = Tracks {
             music: manager
                 .add_sub_track(TrackBuilder::new())
@@ -239,9 +248,8 @@ impl AudioFrontendInner {
             ui: manager
                 .add_sub_track(TrackBuilder::new())
                 .map_err(AudioCreationError::Track)?,
-            sfx: manager
-                .add_sub_track(sfx_track_builder)
-                .map_err(AudioCreationError::Track)?,
+            sfx: sfx_track,
+            instrument: instrument_track,
             ambience: manager
                 .add_sub_track(ambience_track_builder)
                 .map_err(AudioCreationError::Track)?,
@@ -635,16 +643,27 @@ impl AudioFrontend {
                 let source_volume = volume.unwrap_or(1.0);
                 let source = sound.volume(to_decibels(source_volume * 5.0 * ratio));
 
+                let is_instrument = matches!(trigger_item, Some((SfxEvent::Music(_, _), _)));
+
                 // We build new tracks here because we have to set the emitter position
                 // initially, which isn't possible to synchronize with the start of a new sound.
                 let sfx_track_builder = SpatialTrackBuilder::new()
                     .distances((1.0, SFX_DIST_LIMIT))
                     .attenuation_function(Some(kira::Easing::OutPowf(0.66)));
-                if let Ok(track) = inner.tracks.sfx.add_spatial_sub_track(
-                    listener_id,
-                    emitter_pos,
-                    sfx_track_builder,
-                ) {
+                let track = if is_instrument {
+                    inner.tracks.instrument.add_spatial_sub_track(
+                        listener_id,
+                        emitter_pos,
+                        sfx_track_builder,
+                    )
+                } else {
+                    inner.tracks.sfx.add_spatial_sub_track(
+                        listener_id,
+                        emitter_pos,
+                        sfx_track_builder,
+                    )
+                };
+                if let Ok(track) = track {
                     Some(SfxHandle {
                         channel_idx,
                         play_id: channel.play(source, source_volume, track),
@@ -876,6 +895,17 @@ impl AudioFrontend {
                 .tracks
                 .sfx
                 .set_volume(to_decibels(sfx_volume), Tween::default())
+        }
+    }
+
+    pub fn set_instrument_volume(&mut self, instrument_volume: f32) {
+        self.volumes.instrument = instrument_volume;
+
+        if let Some(inner) = self.inner.as_mut() {
+            inner
+                .tracks
+                .instrument
+                .set_volume(to_decibels(instrument_volume), Tween::default())
         }
     }
 
