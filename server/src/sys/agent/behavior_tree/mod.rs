@@ -12,7 +12,7 @@ use common::{
     consts::MAX_INTERACT_RANGE,
     interaction::InteractionKind,
     path::TraversalConfig,
-    rtsim::{NpcAction, RtSimEntity},
+    rtsim::{self, NpcAction},
 };
 use rand::{RngExt, prelude::ThreadRng};
 use server_agent::{data::AgentEmitters, util::is_steering};
@@ -319,7 +319,7 @@ fn target_if_attacked(bdata: &mut BehaviorData) -> bool {
                     // Remember this attack if we're an RtSim entity
                     /*
                     if let Some(attacker_stats) =
-                        bdata.rtsim_entity.and(bdata.read_data.stats.get(attacker))
+                        bdata.rtsim_actor.and(bdata.read_data.stats.get(attacker))
                     {
                         bdata
                             .agent
@@ -368,7 +368,7 @@ fn untarget_if_dead(bdata: &mut BehaviorData) -> bool {
                 .is_none_or(|tgt_health| tgt_health.is_dead)
         {
             /*
-            if let Some(tgt_stats) = bdata.rtsim_entity.and(bdata.read_data.stats.get(target)) {
+            if let Some(tgt_stats) = bdata.rtsim_actor.and(bdata.read_data.stats.get(target)) {
                 bdata.agent.forget_enemy(&tgt_stats.name);
             }
             */
@@ -992,10 +992,10 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                         &target_data,
                         read_data,
                         emitters,
-                        remembers_fight_with(agent_data.rtsim_entity, read_data, target),
+                        remembers_fight_with(agent_data.rtsim_actor, read_data, target),
                     );
                     // TODO: Reimplement in rtsim2
-                    // remember_fight(agent_data.rtsim_entity, read_data, agent,
+                    // remember_fight(agent_data.rtsim_actor, read_data, agent,
                     // target);
                 }
             }
@@ -1009,16 +1009,16 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
 }
 
 fn remembers_fight_with(
-    _rtsim_entity: Option<&RtSimEntity>,
+    _rtsim_actor: Option<&rtsim::ActorId>,
     _read_data: &ReadData,
     _other: EcsEntity,
 ) -> bool {
     // TODO: implement for rtsim2
     // let name = || read_data.stats.get(other).map(|stats| stats.name.clone());
 
-    // rtsim_entity.map_or(false, |rtsim_entity| {
+    // rtsim_actor.map_or(false, |rtsim_actor| {
     //     name().map_or(false, |name| {
-    //         rtsim_entity.brain.remembers_fight_with_character(&name)
+    //         rtsim_actor.brain.remembers_fight_with_character(&name)
     //     })
     // })
     false
@@ -1026,11 +1026,11 @@ fn remembers_fight_with(
 
 // /// Remember target.
 // fn remember_fight(
-//     rtsim_entity: Option<&RtSimEntity>,
+//     rtsim_actor: Option<&rtsim::ActorId>,
 //     read_data: &ReadData,
 //     agent: &mut Agent,
 //     target: EcsEntity,
-// ) { rtsim_entity.is_some().then(|| { read_data .stats .get(target)
+// ) { rtsim_actor.is_some().then(|| { read_data .stats .get(target)
 //   .map(|stats| agent.add_fight_to_memory(&stats.name,
 // read_data.time.0))     });
 // }

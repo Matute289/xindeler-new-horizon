@@ -126,7 +126,7 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         anchor,
         loot,
         pets,
-        rtsim_entity,
+        rtsim_actor,
         projectile,
         heads,
         death_effects,
@@ -170,8 +170,8 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
     };
 
     // Rtsim entity added to IdMaps below.
-    let entity = if let Some(rtsim_entity) = rtsim_entity {
-        entity.with(rtsim_entity).with(RepositionToFreeSpace {
+    let entity = if let Some(rtsim_actor) = rtsim_actor {
+        entity.with(rtsim_actor).with(RepositionToFreeSpace {
             needs_ground: false,
             modify_waypoints: true,
         })
@@ -187,12 +187,12 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
 
     let new_entity = entity.build();
 
-    if let Some(rtsim_entity) = rtsim_entity {
+    if let Some(rtsim_actor) = rtsim_actor {
         server
             .state()
             .ecs()
             .write_resource::<IdMaps>()
-            .add_rtsim(rtsim_entity, new_entity);
+            .add_rtsim(rtsim_actor, new_entity);
     }
 
     // Add to group system if a pet
@@ -329,17 +329,17 @@ pub fn handle_create_ship(server: &mut Server, ev: CreateShipEvent) {
         entity = entity.with(agent);
     }
     */
-    if let Some(rtsim_vehicle) = ev.rtsim_entity {
+    if let Some(rtsim_vehicle) = ev.rtsim_actor {
         entity = entity.with(rtsim_vehicle);
     }
     let entity = entity.build();
 
-    if let Some(rtsim_entity) = ev.rtsim_entity {
+    if let Some(rtsim_actor) = ev.rtsim_actor {
         server
             .state()
             .ecs()
             .write_resource::<IdMaps>()
-            .add_rtsim(rtsim_entity, entity);
+            .add_rtsim(rtsim_actor, entity);
     }
 
     if let Some(driver) = ev.driver {

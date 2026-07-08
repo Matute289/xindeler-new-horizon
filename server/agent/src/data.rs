@@ -24,7 +24,7 @@ use common::{
     mounting::{Mount, Rider, VolumeRider},
     path::TraversalConfig,
     resources::{DeltaTime, Time, TimeOfDay},
-    rtsim::RtSimEntity,
+    rtsim,
     states::utils::{ForcedMovement, StageSection},
     terrain::TerrainGrid,
     uid::{IdMaps, Uid},
@@ -73,7 +73,7 @@ pub struct AgentData<'a> {
     pub stance: Option<&'a Stance>,
     pub cached_spatial_grid: &'a common::CachedSpatialGrid,
     pub msm: &'a MaterialStatManifest,
-    pub rtsim_entity: Option<&'a RtSimEntity>,
+    pub rtsim_actor: Option<&'a rtsim::ActorId>,
 }
 
 pub struct TargetData<'a> {
@@ -472,7 +472,7 @@ pub struct ReadData<'a> {
     pub light_emitter: ReadStorage<'a, LightEmitter>,
     #[cfg(feature = "worldgen")]
     pub world: ReadExpect<'a, std::sync::Arc<world::World>>,
-    pub rtsim_entities: ReadStorage<'a, RtSimEntity>,
+    pub rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     pub buffs: ReadStorage<'a, Buffs>,
     pub combos: ReadStorage<'a, Combo>,
     pub active_abilities: ReadStorage<'a, ActiveAbilities>,

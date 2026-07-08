@@ -80,7 +80,7 @@ pub fn handle_inbox_dialogue(bdata: &mut BehaviorData) -> bool {
     if let Some(AgentEvent::Dialogue(sender, dialogue)) = agent.inbox.pop_front()
         && let Some(rtsim_outbox) = &mut agent.rtsim_outbox
         && let Some(sender_entity) = read_data.id_maps.uid_entity(sender)
-        && let Some(sender_actor_id) = read_data.rtsim_entities.get(sender_entity)
+        && let Some(sender_actor_id) = read_data.rtsim_actors.get(sender_entity)
     {
         rtsim_outbox.push_back(NpcInput::Dialogue(*sender_actor_id, dialogue));
         return false;
@@ -103,7 +103,7 @@ pub fn handle_inbox_talk(bdata: &mut BehaviorData) -> bool {
 
         if let Some(rtsim_outbox) = &mut agent.rtsim_outbox
             && let Some(by_entity) = by_entity
-            && let Some(actor_id) = read_data.rtsim_entities.get(by_entity)
+            && let Some(actor_id) = read_data.rtsim_actors.get(by_entity)
         {
             rtsim_outbox.push_back(NpcInput::Interaction(*actor_id));
             return false;

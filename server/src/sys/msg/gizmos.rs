@@ -5,7 +5,7 @@ use common::{
         gizmos::{GizmoSubscription, Gizmos, RtsimGizmos},
     },
     resources::Time,
-    rtsim::{ActorId, RtSimEntity},
+    rtsim,
     uid::IdMaps,
 };
 use common_ecs::{Job, Origin, Phase, System};
@@ -24,17 +24,17 @@ pub struct ReadData<'a> {
     subscribers: ReadStorage<'a, GizmoSubscriber>,
     agents: ReadStorage<'a, comp::Agent>,
     position: ReadStorage<'a, comp::Pos>,
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     client: ReadStorage<'a, Client>,
 }
 
 struct RtsimGizmoTracker<'a> {
     gizmos: &'a mut RtsimGizmos,
-    request: HashSet<ActorId>,
+    request: HashSet<rtsim::ActorId>,
 }
 
 impl RtsimGizmoTracker<'_> {
-    fn get(&mut self, actor: ActorId) -> impl Iterator<Item = Gizmos> + use<'_> {
+    fn get(&mut self, actor: rtsim::ActorId) -> impl Iterator<Item = Gizmos> + use<'_> {
         self.request.insert(actor);
 
         self.gizmos
@@ -159,7 +159,11 @@ fn pathfind_gizmos(gizmos: &mut Vec<Gizmos>, pos: &comp::Pos, agent: &comp::Agen
     gizmos.push(Gizmos::sphere(above, size, color));
 }
 
-fn rtsim_gizmos(gizmos: &mut Vec<Gizmos>, actor: ActorId, rtsim_tracker: &mut RtsimGizmoTracker) {
+fn rtsim_gizmos(
+    gizmos: &mut Vec<Gizmos>,
+    actor: rtsim::ActorId,
+    rtsim_tracker: &mut RtsimGizmoTracker,
+) {
     gizmos.extend(rtsim_tracker.get(actor));
 }
 
@@ -180,7 +184,7 @@ fn gizmos_for_target(
             }
         },
         GizmoSubscription::Rtsim => {
-            if let Some(actor) = data.rtsim_entities.get(target) {
+            if let Some(actor) = data.rtsim_actors.get(target) {
                 rtsim_gizmos(gizmos, *actor, rtsim_tracker);
             }
         },

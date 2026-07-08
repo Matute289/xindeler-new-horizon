@@ -16,7 +16,7 @@ use crate::{
     mounting::VolumePos,
     outcome::Outcome,
     resources::{BattleMode, Secs},
-    rtsim::{self, RtSimEntity},
+    rtsim,
     states::basic_summon::BeamPillarIndicatorSpecifier,
     terrain::SpriteKind,
     trade::{TradeAction, TradeId},
@@ -65,7 +65,7 @@ pub struct NpcBuilder {
     pub anchor: Option<comp::Anchor>,
     pub loot: LootSpec<String>,
     pub pets: Vec<(NpcBuilder, Vec3<f32>)>,
-    pub rtsim_entity: Option<RtSimEntity>,
+    pub rtsim_actor: Option<rtsim::ActorId>,
     pub projectile: Option<comp::Projectile>,
     pub heads: Option<comp::body::parts::Heads>,
     pub death_effects: Option<DeathEffects>,
@@ -87,7 +87,7 @@ impl NpcBuilder {
             scale: comp::Scale(1.0),
             anchor: None,
             loot: LootSpec::Nothing,
-            rtsim_entity: None,
+            rtsim_actor: None,
             projectile: None,
             pets: Vec::new(),
             heads: None,
@@ -128,8 +128,8 @@ impl NpcBuilder {
         self
     }
 
-    pub fn with_rtsim(mut self, rtsim: RtSimEntity) -> Self {
-        self.rtsim_entity = Some(rtsim);
+    pub fn with_rtsim(mut self, actor: rtsim::ActorId) -> Self {
+        self.rtsim_actor = Some(actor);
         self
     }
 
@@ -196,7 +196,7 @@ pub struct CreateShipEvent {
     pub pos: Pos,
     pub ori: Ori,
     pub ship: comp::ship::Body,
-    pub rtsim_entity: Option<RtSimEntity>,
+    pub rtsim_actor: Option<rtsim::ActorId>,
     pub driver: Option<NpcBuilder>,
 }
 

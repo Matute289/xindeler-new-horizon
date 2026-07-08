@@ -217,7 +217,7 @@ pub struct HealthChangeEventData<'a> {
     positions: ReadStorage<'a, Pos>,
     uids: ReadStorage<'a, Uid>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, rtsim::ActorId>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     inventories: ReadStorage<'a, Inventory>,
     agents: WriteStorage<'a, Agent>,
     healths: WriteStorage<'a, Health>,
@@ -272,7 +272,7 @@ impl ServerEvent for HealthChangeEvent {
 
                 #[cfg(feature = "worldgen")]
                 if changed {
-                    let entity_as_actor = |entity| data.rtsim_entities.get(entity).copied();
+                    let entity_as_actor = |entity| data.rtsim_actors.get(entity).copied();
                     if let Some(actor) = entity_as_actor(ev.entity) {
                         let cause = ev
                             .change
@@ -353,7 +353,7 @@ pub struct HelpDownedEventData<'a> {
     #[cfg(feature = "worldgen")]
     index: ReadExpect<'a, IndexOwned>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, rtsim::ActorId>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     character_states: WriteStorage<'a, comp::CharacterState>,
     healths: WriteStorage<'a, comp::Health>,
 }
@@ -374,7 +374,7 @@ impl ServerEvent for HelpDownedEvent {
                 }
 
                 #[cfg(feature = "worldgen")]
-                let entity_as_actor = |entity| data.rtsim_entities.get(entity).copied();
+                let entity_as_actor = |entity| data.rtsim_actors.get(entity).copied();
                 #[cfg(feature = "worldgen")]
                 if let Some(actor) = entity_as_actor(entity) {
                     let saver = ev
@@ -562,7 +562,7 @@ pub struct DestroyEventData<'a> {
     stats: ReadStorage<'a, Stats>,
     agents: ReadStorage<'a, Agent>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, rtsim::ActorId>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     masses: ReadStorage<'a, comp::Mass>,
     event_buses: DestroyEvents<'a>,
     buffs: ReadStorage<'a, comp::Buffs>,
@@ -1404,7 +1404,7 @@ impl ServerEvent for DestroyEvent {
 
             #[cfg(feature = "worldgen")]
             {
-                let entity_as_actor = |entity| data.rtsim_entities.get(entity).copied();
+                let entity_as_actor = |entity| data.rtsim_actors.get(entity).copied();
                 if let Some(actor) = entity_as_actor(ev.entity)
                     // Skip the death hook for rtsim entities if they aren't deleted, otherwise
                     // we'll end up with rtsim respawning an entity that wasn't actually

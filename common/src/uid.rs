@@ -68,7 +68,7 @@ impl IdMaps {
         self.character_to_ecs.get(&id).copied()
     }
 
-    /// Given a `RtSimEntity` retrieve the corresponding `Entity`.
+    /// Given a `rtsim::ActorId` retrieve the corresponding `Entity`.
     pub fn rtsim_entity(&self, id: rtsim::ActorId) -> Option<Entity> {
         self.rtsim_to_ecs.get(&id).copied()
     }

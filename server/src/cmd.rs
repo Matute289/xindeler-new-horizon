@@ -1970,7 +1970,7 @@ fn handle_rtsim_info(
             let npc_id = *server
                 .state
                 .ecs()
-                .read_storage::<common::rtsim::RtSimEntity>()
+                .read_storage::<common::rtsim::ActorId>()
                 .get(entity)?;
 
             Some(Ok(rtsim.state().data().actors.get(npc_id)?.uid))
@@ -3073,7 +3073,7 @@ fn handle_kill_npcs(
         let healths = ecs.write_storage::<comp::Health>();
         let players = ecs.read_storage::<comp::Player>();
         let alignments = ecs.read_storage::<Alignment>();
-        let rtsim_entities = ecs.read_storage::<common::rtsim::RtSimEntity>();
+        let rtsim_actors = ecs.read_storage::<common::rtsim::ActorId>();
         let mut rtsim = ecs.write_resource::<crate::rtsim::RtSim>();
         let spatial_grid;
 
@@ -3132,11 +3132,11 @@ fn handle_kill_npcs(
                 };
 
             if should_kill {
-                if let Some(rtsim_entity) = rtsim_entities.get(entity).copied() {
+                if let Some(actor) = rtsim_actors.get(entity).copied() {
                     rtsim.hook_rtsim_actor_death(
                         &ecs.read_resource::<Arc<world::World>>(),
                         ecs.read_resource::<world::IndexOwned>().as_index_ref(),
-                        rtsim_entity,
+                        actor,
                         Some(pos.0),
                         None,
                     );
@@ -4901,7 +4901,7 @@ fn get_entity_target(entity_target: EntityTarget, server: &Server) -> CmdResult<
     match entity_target {
         EntityTarget::Player(alias) => Ok(find_alias(server.state.ecs(), &alias, true)?.0),
         EntityTarget::RtsimNpc(id) => {
-            let (npc_id, _) = server
+            let (actor_id, _) = server
                 .state
                 .ecs()
                 .read_resource::<crate::rtsim::RtSim>()
@@ -4917,7 +4917,7 @@ fn get_entity_target(entity_target: EntityTarget, server: &Server) -> CmdResult<
                 .state()
                 .ecs()
                 .read_resource::<common::uid::IdMaps>()
-                .rtsim_entity(npc_id)
+                .rtsim_entity(actor_id)
                 .ok_or(Content::Plain(format!("Npc with id {id} isn't loaded.")))
         },
         EntityTarget::Uid(uid) => server

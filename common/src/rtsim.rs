@@ -38,9 +38,7 @@ slotmap::new_key_type! { pub struct ReportId; }
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestId(pub u64);
 
-pub type RtSimEntity = ActorId; // TODO: Remove this, alias is needed for historical reasons
-
-impl Component for RtSimEntity {
+impl Component for ActorId {
     type Storage = specs::VecStorage<Self>;
 }
 

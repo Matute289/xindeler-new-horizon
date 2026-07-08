@@ -12,7 +12,7 @@ use common::{
     event::{CreateNpcEvent, CreateShipEvent, DeleteEvent, EventBus, NpcBuilder},
     generation::{BodyBuilder, EntityConfig, EntityInfo},
     resources::{DeltaTime, Time, TimeOfDay},
-    rtsim::{ActorId, RtSimEntity},
+    rtsim::ActorId,
     slowjob::SlowJobPool,
     terrain::CoordinateConversions,
     trade::{Good, SiteInformation},
@@ -458,7 +458,7 @@ impl<'a> System<'a> for Sys {
         ReadExpect<'a, world::IndexOwned>,
         ReadExpect<'a, SlowJobPool>,
         ReadStorage<'a, comp::Pos>,
-        ReadStorage<'a, RtSimEntity>,
+        ReadStorage<'a, ActorId>,
         WriteStorage<'a, comp::Agent>,
         ReadStorage<'a, Body>,
         ReadExpect<'a, Calendar>,
@@ -490,7 +490,7 @@ impl<'a> System<'a> for Sys {
             index,
             slow_jobs,
             positions,
-            rtsim_entities,
+            rtsim_actors,
             mut agents,
             bodies,
             calendar,
@@ -556,7 +556,7 @@ impl<'a> System<'a> for Sys {
                         pos: comp::Pos(actor.wpos),
                         ori: comp::Ori::from(Dir::new(actor.dir.with_z(0.0))),
                         ship: body,
-                        rtsim_entity: Some(actor_id),
+                        rtsim_actor: Some(actor_id),
                         driver: steering,
                     });
                 },
@@ -670,16 +670,16 @@ impl<'a> System<'a> for Sys {
         }
 
         // Synchronise rtsim NPC with entity data
-        for (entity, pos, body, rtsim_entity, mut agent) in (
+        for (entity, pos, body, rtsim_actor, mut agent) in (
             &entities,
             &positions,
             &bodies,
-            &rtsim_entities,
+            &rtsim_actors,
             (&mut agents).maybe(),
         )
             .join()
         {
-            if let Some(actor) = data.actors.get_mut(*rtsim_entity) {
+            if let Some(actor) = data.actors.get_mut(*rtsim_actor) {
                 // Update actor state
                 actor.wpos = pos.0;
                 actor.body = *body;
