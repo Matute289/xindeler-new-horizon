@@ -66,3 +66,6 @@ hud-bag-split_swap_slots_drop_items =
         [1] Esto resultará en que 1 objeto caiga al suelo. ¿Estás seguro?
        *[other] Esto resultará en que { $slot_deficit } objetos caigan al suelo. ¿Estás seguro?
     }
+hud-context-menu-cancel = Cancelar
+hud-context-menu-drop = Soltar
+hud-context-menu-use = Usar

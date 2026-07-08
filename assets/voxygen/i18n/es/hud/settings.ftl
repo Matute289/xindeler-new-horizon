@@ -183,3 +183,4 @@ hud-settings-game_layers = Capas de Juego
 hud-settings-menu_buttons = Botones de Menú
 hud-settings-row_background_opacity = Opacidad del Fondo de la Fila
 hud-settings-indoor_ambience = Detección de Ambiente en Interiores
+hud-settings-keyboard-binding = Atajos de teclado
