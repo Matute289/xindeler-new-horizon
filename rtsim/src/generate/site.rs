@@ -55,8 +55,6 @@ impl Site {
         };
 
         Self {
-            // This is assigned later
-            uid: 0,
             seed: rng.random(),
             wpos,
             world_site: Some(world_site_id),

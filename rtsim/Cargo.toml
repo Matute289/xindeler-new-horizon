@@ -18,7 +18,7 @@ rmp-serde = "1.1.0"
 anymap2 = "0.13"
 tracing = { workspace = true }
 atomic_refcell = { workspace = true }
-slotmap = { version = "1.0.6", features = ["serde"] }
+slotmap = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 fxhash = { workspace = true }

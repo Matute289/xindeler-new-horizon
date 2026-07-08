@@ -315,7 +315,6 @@ pub enum ActorKind {
 pub struct Actor {
     pub kind: ActorKind,
 
-    pub uid: u64,
     // Persisted state
     pub seed: u32,
     /// Represents the location of the NPC.
@@ -378,7 +377,6 @@ impl Clone for Actor {
                     last_present_at: c.last_present_at,
                 }),
             },
-            uid: self.uid,
             seed: self.seed,
             wpos: self.wpos,
             dir: self.dir,
@@ -411,8 +409,6 @@ impl Actor {
                 inbox: Default::default(),
                 brain: None,
             }),
-            // To be assigned later
-            uid: 0,
             seed,
             wpos,
             dir: Vec2::unit_x(),
@@ -455,8 +451,6 @@ impl Actor {
                 id,
                 last_present_at: None,
             }),
-            // To be assigned later
-            uid: 0,
             seed,
             wpos,
             dir: Vec2::unit_x(),
@@ -780,7 +774,6 @@ pub struct MountData {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Actors {
-    pub uid_counter: u64,
     pub actors: DenseSlotMap<ActorId, Actor>,
     pub mounts: ActorLinks,
     // TODO: This feels like it should be its own rtsim resource
@@ -792,7 +785,6 @@ pub struct Actors {
 impl Default for Actors {
     fn default() -> Self {
         Self {
-            uid_counter: 0,
             actors: Default::default(),
             mounts: Default::default(),
             actor_grid: construct_actor_grid(),
@@ -814,11 +806,7 @@ pub enum MountingError {
 }
 
 impl Actors {
-    pub fn create_actor(&mut self, mut actor: Actor) -> ActorId {
-        actor.uid = self.uid_counter;
-        self.uid_counter += 1;
-        self.actors.insert(actor)
-    }
+    pub fn create_actor(&mut self, actor: Actor) -> ActorId { self.actors.insert(actor) }
 
     /// Queries nearby npcs, not garantueed to work if radius > 32.0
     // TODO: Find a more efficient way to implement this, it's currently

@@ -327,7 +327,7 @@ lazy_static! {
 
 pub enum EntityTarget {
     Player(String),
-    RtsimNpc(u64),
+    RtsimNpc(String),
     Uid(crate::uid::Uid),
 }
 
@@ -338,9 +338,7 @@ impl FromStr for EntityTarget {
         // NOTE: `@` is an invalid character in usernames, so we can use it here.
         if let Some((spec, data)) = s.split_once('@') {
             match spec {
-                "rtsim" => Ok(EntityTarget::RtsimNpc(u64::from_str(data).map_err(
-                    |_| format!("Expected a valid number after 'rtsim@' but found {data}."),
-                )?)),
+                "rtsim" => Ok(EntityTarget::RtsimNpc(data.to_string())),
                 "uid" => {
                     let raw = u64::from_str(data).map_err(|_| {
                         format!("Expected a valid number after 'uid@' but found {data}.")

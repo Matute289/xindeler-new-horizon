@@ -8955,6 +8955,7 @@ dependencies = [
  "schnellru",
  "serde",
  "serde_json",
+ "slotmap",
  "specs",
  "strum",
  "tokio",

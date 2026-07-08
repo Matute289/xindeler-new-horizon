@@ -27,13 +27,12 @@ use std::{collections::VecDeque, sync::Arc};
 use strum::{EnumIter, IntoEnumIterator};
 use vek::*;
 
-slotmap::new_key_type! { pub struct ActorId; }
-
-slotmap::new_key_type! { pub struct SiteId; }
-
-slotmap::new_key_type! { pub struct FactionId; }
-
-slotmap::new_key_type! { pub struct ReportId; }
+slotmap::new_key_type! {
+    pub struct ActorId;
+    pub struct SiteId;
+    pub struct FactionId;
+    pub struct ReportId;
+}
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestId(pub u64);

@@ -20,6 +20,7 @@ use crate::{
 };
 #[cfg(feature = "worldgen")]
 use common::{cmd::SPOT_PARSER, spot::Spot};
+use slotmap::Key as _;
 
 use assets::{AssetExt, Ron};
 use authc::Uuid;
@@ -248,6 +249,17 @@ fn do_command(
     };
 
     handler(server, client, target, args, cmd)
+}
+
+fn key_matches(key: impl slotmap::Key, query: &str) -> bool {
+    let key = format!("{:?}", key.data());
+    if query.contains("v") {
+        key == query
+    } else if let Some((idx, _)) = key.split_once('v') {
+        idx == query
+    } else {
+        false
+    }
 }
 
 // Fallibly get position of entity with the given descriptor (used for error
@@ -1365,10 +1377,6 @@ fn resolve_site(
     Option<common::store::Id<world::site::Plot>>,
 )> {
     if let Some(id) = key.strip_prefix("rtsim@") {
-        let id = id
-            .parse::<u64>()
-            .map_err(|_| Content::Plain(format!("Expected number after 'rtsim@', got {id}")))?;
-
         let ws = server
             .state
             .ecs()
@@ -1376,9 +1384,9 @@ fn resolve_site(
             .state()
             .data()
             .sites
-            .values()
-            .find(|site| site.uid == id)
-            .map(|site| site.world_site)
+            .iter()
+            .find(|(site_id, _)| key_matches(*site_id, id))
+            .map(|(_, site)| site.world_site)
             .ok_or(Content::Plain(format!(
                 "Could not find rtsim site with id {id}."
             )))?;
@@ -1922,8 +1930,8 @@ fn handle_rtsim_tp(
     action: &ServerChatCommand,
 ) -> CmdResult<()> {
     use crate::rtsim::RtSim;
-    let (npc_id, dismount_volume) = parse_cmd_args!(args, u64, bool);
-    let pos = if let Some(id) = npc_id {
+    let (id, dismount_volume) = parse_cmd_args!(args, String, bool);
+    let pos = if let Some(id) = id {
         server
             .state
             .ecs()
@@ -1931,8 +1939,9 @@ fn handle_rtsim_tp(
             .state()
             .data()
             .actors
-            .values()
-            .find(|npc| npc.uid == id)
+            .iter()
+            .find(|(actor_id, _)| key_matches(*actor_id, &id))
+            .map(|(_, actor)| actor)
             .ok_or_else(|| Content::Plain(format!("No NPC has the id {id}")))?
             .wpos
     } else {
@@ -1958,7 +1967,7 @@ fn handle_rtsim_info(
 ) -> CmdResult<()> {
     use crate::rtsim::RtSim;
     let rtsim = server.state.ecs().read_resource::<RtSim>();
-    let id = parse_cmd_args!(args.clone(), u64)
+    let id = parse_cmd_args!(args.clone(), String)
         .map(Ok)
         .or_else(|| {
             let entity = parse_cmd_args!(args, EntityTarget)?;
@@ -1967,13 +1976,14 @@ fn handle_rtsim_info(
                 Err(e) => return Some(Err(e)),
             };
 
-            let npc_id = *server
-                .state
-                .ecs()
-                .read_storage::<common::rtsim::ActorId>()
-                .get(entity)?;
-
-            Some(Ok(rtsim.state().data().actors.get(npc_id)?.uid))
+            Some(Ok(format!(
+                "{:?}",
+                server
+                    .state
+                    .ecs()
+                    .read_storage::<common::rtsim::ActorId>()
+                    .get(entity)?
+            )))
         })
         .transpose()?;
 
@@ -1982,7 +1992,7 @@ fn handle_rtsim_info(
         let (id, actor) = data
             .actors
             .iter()
-            .find(|(_, actor)| actor.uid == id)
+            .min_by_key(|(actor_id, _)| key_matches(*actor_id, &id))
             .ok_or_else(|| Content::Plain(format!("No actor has the id {id}")))?;
 
         let mut info = String::new();
@@ -2005,7 +2015,7 @@ fn handle_rtsim_info(
             data.actors
                 .mounts
                 .get_mount_link(id)
-                .map(|link| data.actors.get(link.mount).map_or(0, |mount| mount.uid))
+                .map(|link| format!("{:?}", link.mount.data()))
         );
         let _ = writeln!(&mut info, "-- Action State --");
         if let Some(npc) = actor.npc()
@@ -2050,8 +2060,8 @@ fn handle_rtsim_npc(
         let data = rtsim.state().data();
         let mut actors = data
             .actors
-            .values()
-            .filter(|actor| {
+            .iter()
+            .filter(|(actor_id, actor)| {
                 let mut tags = vec![
                     actor
                         .profession()
@@ -2064,7 +2074,7 @@ fn handle_rtsim_npc(
                         Role::Vehicle => "vehicle".to_string(),
                     },
                     format!("{:?}", actor.mode),
-                    format!("{}", actor.uid),
+                    format!("{:?}", actor_id.data()),
                     npc_names[&actor.body].keyword.clone(),
                 ];
                 if let Some(species_meta) = npc_names.get_species_meta(&actor.body) {
@@ -2082,18 +2092,18 @@ fn handle_rtsim_npc(
             })
             .collect::<Vec<_>>();
         if let Ok(pos) = position(server, target, "target") {
-            actors.sort_by_key(|actor| (actor.wpos.distance_squared(pos.0) * 10.0) as u64);
+            actors.sort_by_key(|(_, actor)| (actor.wpos.distance_squared(pos.0) * 10.0) as u64);
         }
 
         let mut info = String::new();
 
         let _ = writeln!(&mut info, "-- NPCs matching [{}] --", terms.join(", "));
-        for actor in actors.iter().take(count.unwrap_or(!0) as usize) {
+        for (actor_id, actor) in actors.iter().take(count.unwrap_or(!0) as usize) {
             let _ = write!(
                 &mut info,
-                "{} ({}), ",
+                "{} ({:?}), ",
                 actor.get_name().as_deref().unwrap_or("<unknown>"),
-                actor.uid
+                actor_id.data(),
             );
         }
         let _ = writeln!(&mut info);
@@ -4901,15 +4911,15 @@ fn get_entity_target(entity_target: EntityTarget, server: &Server) -> CmdResult<
     match entity_target {
         EntityTarget::Player(alias) => Ok(find_alias(server.state.ecs(), &alias, true)?.0),
         EntityTarget::RtsimNpc(id) => {
-            let (actor_id, _) = server
+            let actor_id = server
                 .state
                 .ecs()
                 .read_resource::<crate::rtsim::RtSim>()
                 .state()
                 .data()
                 .actors
-                .iter()
-                .find(|(_, npc)| npc.uid == id)
+                .keys()
+                .find(|actor_id| key_matches(*actor_id, &id))
                 .ok_or(Content::Plain(format!(
                     "Could not find rtsim npc with id {id}."
                 )))?;
