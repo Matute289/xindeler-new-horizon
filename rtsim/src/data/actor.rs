@@ -3,7 +3,7 @@ use crate::{
     data::{Reports, Sentiments, quest::Quest},
     generate::name,
 };
-pub use common::rtsim::{NpcId, Profession};
+pub use common::rtsim::{ActorId, Profession};
 use common::{
     character::CharacterId,
     comp::{self, agent::FlightMode, item::ItemDef},
@@ -11,8 +11,8 @@ use common::{
     map::Marker,
     resources::{Time, TimeOfDay},
     rtsim::{
-        Actor, Dialogue, DialogueId, DialogueKind, FactionId, NpcAction, NpcActivity, NpcInput,
-        NpcMsg, Personality, QuestId, ReportId, Response, Role, SiteId, TerrainResource,
+        Dialogue, DialogueId, DialogueKind, FactionId, NpcAction, NpcActivity, NpcInput, NpcMsg,
+        Personality, QuestId, ReportId, Response, Role, SiteId, TerrainResource,
     },
     store::Id,
     terrain::CoordinateConversions,
@@ -93,7 +93,7 @@ impl Controller {
 
     pub fn do_idle(&mut self) { self.activity = None; }
 
-    pub fn do_talk(&mut self, tgt: Actor) { self.activity = Some(NpcActivity::Talk(tgt)); }
+    pub fn do_talk(&mut self, tgt: ActorId) { self.activity = Some(NpcActivity::Talk(tgt)); }
 
     pub fn do_goto(&mut self, wpos: Vec3<f32>, speed_factor: f32) {
         self.activity = Some(NpcActivity::Goto(wpos, speed_factor));
@@ -131,19 +131,17 @@ impl Controller {
         self.activity = Some(NpcActivity::Sit(dir, pos));
     }
 
-    pub fn say(&mut self, target: impl Into<Option<Actor>>, content: comp::Content) {
+    pub fn say(&mut self, target: impl Into<Option<ActorId>>, content: comp::Content) {
         self.actions.push(NpcAction::Say(target.into(), content));
     }
 
-    pub fn attack(&mut self, target: impl Into<Actor>) {
-        self.actions.push(NpcAction::Attack(target.into()));
-    }
+    pub fn attack(&mut self, target: ActorId) { self.actions.push(NpcAction::Attack(target)); }
 
     pub fn set_new_home(&mut self, new_home: impl Into<Option<SiteId>>) {
         self.new_home = Some(new_home.into());
     }
 
-    pub fn set_newly_hired(&mut self, actor: Actor, expires: Time) {
+    pub fn set_newly_hired(&mut self, actor: ActorId, expires: Time) {
         self.job = Some(Job::Hired(actor, expires));
     }
 
@@ -159,14 +157,12 @@ impl Controller {
         }
     }
 
-    pub fn send_msg(&mut self, to: impl Into<Actor>, msg: NpcMsg) {
-        self.actions.push(NpcAction::Msg { to: to.into(), msg });
+    pub fn send_msg(&mut self, to: ActorId, msg: NpcMsg) {
+        self.actions.push(NpcAction::Msg { to, msg });
     }
 
     /// Start a new dialogue.
-    pub fn dialogue_start(&mut self, target: impl Into<Actor>) -> DialogueSession {
-        let target = target.into();
-
+    pub fn dialogue_start(&mut self, target: ActorId) -> DialogueSession {
         let session = DialogueSession {
             target,
             id: DialogueId(rand::rng().random()),
@@ -270,7 +266,7 @@ impl Controller {
 // Represents an ongoing dialogue with another actor.
 #[derive(Copy, Clone)]
 pub struct DialogueSession {
-    pub target: Actor,
+    pub target: ActorId,
     pub id: DialogueId,
 }
 
@@ -280,20 +276,6 @@ pub struct Brain {
 
 #[derive(Serialize, Deserialize)]
 pub struct Npc {
-    pub uid: u64,
-    // Persisted state
-    pub seed: u32,
-    /// Represents the location of the NPC.
-    pub wpos: Vec3<f32>,
-    pub dir: Vec2<f32>,
-
-    pub body: comp::Body,
-    pub role: Role,
-    pub home: Option<SiteId>,
-    pub faction: Option<FactionId>,
-    /// The current health of the NPC, < 0.0 is dead and 1.0 is max.
-    pub health_fraction: f32,
-
     /// The [`crate::data::Report`]s that the NPC is aware of.
     pub known_reports: HashSet<ReportId>,
 
@@ -305,26 +287,58 @@ pub struct Npc {
     #[serde(default)]
     pub job: Option<Job>,
 
+    #[serde(skip)]
+    pub controller: Controller,
+    #[serde(skip)]
+    pub inbox: VecDeque<NpcInput>,
+
+    #[serde(skip)]
+    pub brain: Option<Brain>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Character {
+    pub id: CharacterId,
+    // The tick on which the character was last present. If this value falls behind the global
+    // rtsim tick, we assume the character has logged off and remove its presence
+    pub last_present_at: Option<u64>,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize)]
+pub enum ActorKind {
+    Npc(Npc),
+    Character(Character),
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Actor {
+    pub kind: ActorKind,
+
+    // Persisted state
+    pub seed: u32,
+    /// Represents the location of the NPC.
+    pub wpos: Vec3<f32>,
+    pub dir: Vec2<f32>,
+
+    pub body: comp::Body,
+    pub role: Role,
+    pub home: Option<SiteId>,
+    pub faction: Option<FactionId>,
+    pub presence: Option<Presence>,
+
     // Unpersisted state
     #[serde(skip)]
     pub chunk_pos: Option<Vec2<i32>>,
     #[serde(skip)]
     pub current_site: Option<SiteId>,
 
-    #[serde(skip)]
-    pub controller: Controller,
-    #[serde(skip)]
-    pub inbox: VecDeque<NpcInput>,
-
-    /// Whether the NPC is in simulated or loaded mode (when rtsim is run on the
-    /// server, loaded corresponds to being within a loaded chunk). When in
-    /// loaded mode, the interactions of the NPC should not be simulated but
-    /// should instead be derived from the game.
+    /// Whether the actor is in simulated or loaded mode (when rtsim is run on
+    /// the server, loaded corresponds to being within a loaded chunk). When
+    /// in loaded mode, the interactions of the actor should not be
+    /// simulated but should instead be derived from the game.
     #[serde(skip)]
     pub mode: SimulationMode,
-
-    #[serde(skip)]
-    pub brain: Option<Brain>,
 }
 
 /// A job is a long-running, persistent, non-stackable occupation that an NPC
@@ -334,73 +348,157 @@ pub struct Npc {
 pub enum Job {
     /// An NPC can temporarily become a hired hand (`(hiring_actor,
     /// termination_time)`).
-    Hired(Actor, Time),
+    Hired(ActorId, Time),
     /// NPC is helping to perform a quest
     Quest(QuestId),
 }
 
-impl Clone for Npc {
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Presence {
+    /// The current health of the NPC, < 0.0 is dead and 1.0 is max.
+    pub health_fraction: f32,
+}
+
+impl Clone for Actor {
     fn clone(&self) -> Self {
         Self {
-            uid: self.uid,
+            kind: match &self.kind {
+                ActorKind::Npc(npc) => ActorKind::Npc(Npc {
+                    known_reports: npc.known_reports.clone(),
+                    personality: npc.personality,
+                    sentiments: npc.sentiments.clone(),
+                    job: npc.job.clone(),
+                    controller: Default::default(),
+                    inbox: Default::default(),
+                    brain: Default::default(),
+                }),
+                ActorKind::Character(c) => ActorKind::Character(Character {
+                    id: c.id,
+                    last_present_at: c.last_present_at,
+                }),
+            },
             seed: self.seed,
             wpos: self.wpos,
             dir: self.dir,
             role: self.role.clone(),
             home: self.home,
             faction: self.faction,
-            health_fraction: self.health_fraction,
-            known_reports: self.known_reports.clone(),
+            presence: self.presence.clone(),
             body: self.body,
-            personality: self.personality,
-            sentiments: self.sentiments.clone(),
-            job: self.job.clone(),
             // Not persisted
             chunk_pos: None,
             current_site: Default::default(),
-            controller: Default::default(),
-            inbox: Default::default(),
             mode: Default::default(),
-            brain: Default::default(),
         }
     }
 }
 
-impl Npc {
+impl Actor {
     pub const PERM_ENTITY_CONFIG: u32 = 1;
     const PERM_NAME: u32 = 0;
     const PERM_TIME: u32 = 2;
 
-    pub fn new(seed: u32, wpos: Vec3<f32>, body: comp::Body, role: Role) -> Self {
+    pub fn new_npc(seed: u32, wpos: Vec3<f32>, body: comp::Body, role: Role) -> Self {
         Self {
-            // To be assigned later
-            uid: 0,
+            kind: ActorKind::Npc(Npc {
+                personality: Default::default(),
+                sentiments: Default::default(),
+                job: None,
+                known_reports: Default::default(),
+                controller: Default::default(),
+                inbox: Default::default(),
+                brain: None,
+            }),
             seed,
             wpos,
             dir: Vec2::unit_x(),
             body,
-            personality: Default::default(),
-            sentiments: Default::default(),
-            job: None,
             role,
             home: None,
             faction: None,
-            health_fraction: 1.0,
-            known_reports: Default::default(),
+            presence: Some(Presence {
+                health_fraction: 1.0,
+            }),
             chunk_pos: None,
             current_site: None,
-            controller: Default::default(),
-            inbox: Default::default(),
             mode: SimulationMode::Simulated,
-            brain: None,
         }
     }
 
-    pub fn is_dead(&self) -> bool { self.health_fraction <= 0.0 }
+    pub fn npc(&self) -> Option<&Npc> {
+        match &self.kind {
+            ActorKind::Npc(npc) => Some(npc),
+            _ => None,
+        }
+    }
+
+    pub fn npc_mut(&mut self) -> Option<&mut Npc> {
+        match &mut self.kind {
+            ActorKind::Npc(npc) => Some(npc),
+            _ => None,
+        }
+    }
+
+    pub fn new_character(
+        id: CharacterId,
+        seed: u32,
+        wpos: Vec3<f32>,
+        body: comp::Body,
+        mode: SimulationMode,
+    ) -> Self {
+        Self {
+            kind: ActorKind::Character(Character {
+                id,
+                last_present_at: None,
+            }),
+            seed,
+            wpos,
+            dir: Vec2::unit_x(),
+            body,
+            role: Role::Civilised(None),
+            home: None,
+            faction: None,
+            // The server will give the actor a presence by itself
+            presence: None,
+            chunk_pos: None,
+            current_site: None,
+            mode,
+        }
+    }
+
+    pub fn character(&self) -> Option<&Character> {
+        match &self.kind {
+            ActorKind::Character(character) => Some(character),
+            _ => None,
+        }
+    }
+
+    pub fn character_mut(&mut self) -> Option<&mut Character> {
+        match &mut self.kind {
+            ActorKind::Character(character) => Some(character),
+            _ => None,
+        }
+    }
+
+    pub fn is_present_and_alive(&self) -> bool {
+        self.presence
+            .as_ref()
+            .map_or(false, |p| p.health_fraction > 0.0)
+    }
+
+    pub fn is_present_and_dead(&self) -> bool {
+        self.presence
+            .as_ref()
+            .map_or(false, |p| p.health_fraction <= 0.0)
+    }
 
     // TODO: have a dedicated `NpcBuilder` type for this.
     pub fn with_personality(mut self, personality: Personality) -> Self {
-        self.personality = personality;
+        if let ActorKind::Npc(npc) = &mut self.kind {
+            npc.personality = personality;
+        } else {
+            panic!("Cannot set personality for non-NPC");
+        }
         self
     }
 
@@ -452,8 +550,8 @@ impl Npc {
         }
     }
 
-    pub fn hired(&self) -> Option<(Actor, Time)> {
-        if let Some(Job::Hired(actor, time)) = self.job {
+    pub fn hired(&self) -> Option<(ActorId, Time)> {
+        if let Some(Job::Hired(actor, time)) = self.npc()?.job {
             Some((actor, time))
         } else {
             None
@@ -461,28 +559,30 @@ impl Npc {
     }
 
     pub fn cleanup(&mut self, reports: &Reports) {
-        // Clear old or superfluous sentiments
-        // TODO: It might be worth giving more important NPCs a higher sentiment
-        // 'budget' than less important ones.
-        self.sentiments
-            .cleanup(crate::data::sentiment::NPC_MAX_SENTIMENTS);
-        // Clear reports that have been forgotten
-        self.known_reports
-            .retain(|report| reports.contains_key(*report));
-        // TODO: Limit number of reports
-        // TODO: Clear old inbox items
+        if let ActorKind::Npc(npc) = &mut self.kind {
+            // Clear old or superfluous sentiments
+            // TODO: It might be worth giving more important NPCs a higher sentiment
+            // 'budget' than less important ones.
+            npc.sentiments
+                .cleanup(crate::data::sentiment::NPC_MAX_SENTIMENTS);
+            // Clear reports that have been forgotten
+            npc.known_reports
+                .retain(|report| reports.contains_key(*report));
+            // TODO: Limit number of reports
+            // TODO: Clear old inbox items
+        }
     }
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct GridCell {
-    pub npcs: Vec<NpcId>,
+    pub actors: Vec<ActorId>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct NpcLink {
-    pub mount: NpcId,
-    pub rider: Actor,
+pub struct ActorLink {
+    pub mount: ActorId,
+    pub rider: ActorId,
     pub is_steering: bool,
 }
 
@@ -494,17 +594,17 @@ struct Riders {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(
-    from = "DenseSlotMap<MountId, NpcLink>",
-    into = "DenseSlotMap<MountId, NpcLink>"
+    from = "DenseSlotMap<MountId, ActorLink>",
+    into = "DenseSlotMap<MountId, ActorLink>"
 )]
-pub struct NpcLinks {
-    links: DenseSlotMap<MountId, NpcLink>,
-    mount_map: slotmap::SecondaryMap<NpcId, Riders>,
-    rider_map: HashMap<Actor, MountId>,
+pub struct ActorLinks {
+    links: DenseSlotMap<MountId, ActorLink>,
+    mount_map: slotmap::SecondaryMap<ActorId, Riders>,
+    rider_map: HashMap<ActorId, MountId>,
 }
 
-impl NpcLinks {
-    pub fn remove_mount(&mut self, mount: NpcId) {
+impl ActorLinks {
+    pub fn remove_mount(&mut self, mount: ActorId) {
         if let Some(riders) = self.mount_map.remove(mount) {
             for link in riders
                 .riders
@@ -518,7 +618,7 @@ impl NpcLinks {
     }
 
     /// Internal function, only removes from `mount_map`.
-    fn remove_rider(&mut self, id: MountId, link: &NpcLink) {
+    fn remove_rider(&mut self, id: MountId, link: &ActorLink) {
         if let Some(riders) = self.mount_map.get_mut(link.mount) {
             if link.is_steering && riders.steerer == Some(id) {
                 riders.steerer = None;
@@ -539,8 +639,8 @@ impl NpcLinks {
         }
     }
 
-    pub fn dismount(&mut self, rider: impl Into<Actor>) {
-        if let Some(id) = self.rider_map.remove(&rider.into())
+    pub fn dismount(&mut self, rider: ActorId) {
+        if let Some(id) = self.rider_map.remove(&rider)
             && let Some(link) = self.links.remove(id)
         {
             self.remove_rider(id, &link);
@@ -551,20 +651,17 @@ impl NpcLinks {
     // And it ensures that there isn't link chaining
     pub fn add_mounting(
         &mut self,
-        mount: NpcId,
-        rider: impl Into<Actor>,
+        mount: ActorId,
+        rider: ActorId,
         steering: bool,
     ) -> Result<MountId, MountingError> {
-        let rider = rider.into();
-        if Actor::Npc(mount) == rider {
+        if mount == rider {
             return Err(MountingError::MountSelf);
         }
-        if let Actor::Npc(rider) = rider
-            && self.mount_map.contains_key(rider)
-        {
+        if self.mount_map.contains_key(rider) {
             return Err(MountingError::RiderIsMounted);
         }
-        if self.rider_map.contains_key(&Actor::Npc(mount)) {
+        if self.rider_map.contains_key(&mount) {
             return Err(MountingError::MountIsRiding);
         }
         if let Some(mount_entry) = self.mount_map.entry(mount) {
@@ -573,7 +670,7 @@ impl NpcLinks {
 
                 if steering {
                     if riders.steerer.is_none() {
-                        let id = self.links.insert(NpcLink {
+                        let id = self.links.insert(ActorLink {
                             mount,
                             rider,
                             is_steering: true,
@@ -586,7 +683,7 @@ impl NpcLinks {
                     }
                 } else {
                     // TODO: Maybe have some limit on the number of riders depending on the mount?
-                    let id = self.links.insert(NpcLink {
+                    let id = self.links.insert(ActorLink {
                         mount,
                         rider,
                         is_steering: false,
@@ -603,45 +700,37 @@ impl NpcLinks {
         }
     }
 
-    pub fn steer(
-        &mut self,
-        mount: NpcId,
-        rider: impl Into<Actor>,
-    ) -> Result<MountId, MountingError> {
+    pub fn steer(&mut self, mount: ActorId, rider: ActorId) -> Result<MountId, MountingError> {
         self.add_mounting(mount, rider, true)
     }
 
-    pub fn ride(
-        &mut self,
-        mount: NpcId,
-        rider: impl Into<Actor>,
-    ) -> Result<MountId, MountingError> {
+    pub fn ride(&mut self, mount: ActorId, rider: ActorId) -> Result<MountId, MountingError> {
         self.add_mounting(mount, rider, false)
     }
 
-    pub fn get_mount_link(&self, rider: impl Into<Actor>) -> Option<&NpcLink> {
+    pub fn get_mount_link(&self, rider: ActorId) -> Option<&ActorLink> {
         self.rider_map
-            .get(&rider.into())
+            .get(&rider)
             .and_then(|link| self.links.get(*link))
     }
 
-    pub fn get_steerer_link(&self, mount: NpcId) -> Option<&NpcLink> {
+    pub fn get_steerer_link(&self, mount: ActorId) -> Option<&ActorLink> {
         self.mount_map
             .get(mount)
             .and_then(|mount| self.links.get(mount.steerer?))
     }
 
-    pub fn get(&self, id: MountId) -> Option<&NpcLink> { self.links.get(id) }
+    pub fn get(&self, id: MountId) -> Option<&ActorLink> { self.links.get(id) }
 
     pub fn ids(&self) -> impl Iterator<Item = MountId> + '_ { self.links.keys() }
 
-    pub fn iter(&self) -> impl Iterator<Item = &NpcLink> + '_ { self.links.values() }
+    pub fn iter(&self) -> impl Iterator<Item = &ActorLink> + '_ { self.links.values() }
 
-    pub fn iter_mounts(&self) -> impl Iterator<Item = NpcId> + '_ { self.mount_map.keys() }
+    pub fn iter_mounts(&self) -> impl Iterator<Item = ActorId> + '_ { self.mount_map.keys() }
 }
 
-impl From<DenseSlotMap<MountId, NpcLink>> for NpcLinks {
-    fn from(mut value: DenseSlotMap<MountId, NpcLink>) -> Self {
+impl From<DenseSlotMap<MountId, ActorLink>> for ActorLinks {
+    fn from(mut value: DenseSlotMap<MountId, ActorLink>) -> Self {
         let mut from_map = slotmap::SecondaryMap::new();
         let mut to_map = HashMap::with_capacity(value.len());
         let mut delete = Vec::new();
@@ -671,8 +760,8 @@ impl From<DenseSlotMap<MountId, NpcLink>> for NpcLinks {
     }
 }
 
-impl From<NpcLinks> for DenseSlotMap<MountId, NpcLink> {
-    fn from(other: NpcLinks) -> Self { other.links }
+impl From<ActorLinks> for DenseSlotMap<MountId, ActorLink> {
+    fn from(other: ActorLinks) -> Self { other.links }
 }
 slotmap::new_key_type! {
     pub struct MountId;
@@ -684,31 +773,26 @@ pub struct MountData {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Npcs {
-    pub uid_counter: u64,
-    pub npcs: DenseSlotMap<NpcId, Npc>,
-    pub mounts: NpcLinks,
+pub struct Actors {
+    pub actors: DenseSlotMap<ActorId, Actor>,
+    pub mounts: ActorLinks,
     // TODO: This feels like it should be its own rtsim resource
     // TODO: Consider switching to `common::util::SpatialGrid` instead
-    #[serde(skip, default = "construct_npc_grid")]
-    pub npc_grid: Grid<GridCell>,
-    #[serde(skip)]
-    pub character_map: HashMap<Vec2<i32>, Vec<(CharacterId, Vec3<f32>)>>,
+    #[serde(skip, default = "construct_actor_grid")]
+    pub actor_grid: Grid<GridCell>,
 }
 
-impl Default for Npcs {
+impl Default for Actors {
     fn default() -> Self {
         Self {
-            uid_counter: 0,
-            npcs: Default::default(),
+            actors: Default::default(),
             mounts: Default::default(),
-            npc_grid: construct_npc_grid(),
-            character_map: Default::default(),
+            actor_grid: construct_actor_grid(),
         }
     }
 }
 
-fn construct_npc_grid() -> Grid<GridCell> { Grid::new(Vec2::zero(), Default::default()) }
+fn construct_actor_grid() -> Grid<GridCell> { Grid::new(Vec2::zero(), Default::default()) }
 
 #[derive(Debug)]
 pub enum MountingError {
@@ -721,65 +805,41 @@ pub enum MountingError {
     MountSelf,
 }
 
-impl Npcs {
-    pub fn create_npc(&mut self, mut npc: Npc) -> NpcId {
-        npc.uid = self.uid_counter;
-        self.uid_counter += 1;
-        self.npcs.insert(npc)
-    }
+impl Actors {
+    pub fn create_actor(&mut self, actor: Actor) -> ActorId { self.actors.insert(actor) }
 
     /// Queries nearby npcs, not garantueed to work if radius > 32.0
     // TODO: Find a more efficient way to implement this, it's currently
     // (theoretically) O(n^2).
     pub fn nearby(
         &self,
-        this_npc: Option<NpcId>,
+        this_actor: Option<ActorId>,
         wpos: Vec3<f32>,
         radius: f32,
-    ) -> impl Iterator<Item = Actor> + '_ {
+    ) -> impl Iterator<Item = ActorId> + '_ {
         let chunk_pos = wpos.xy().as_().wpos_to_cpos();
         let r_sqr = radius * radius;
         LOCALITY
             .into_iter()
             .flat_map(move |neighbor| {
-                self.npc_grid.get(chunk_pos + neighbor).map(move |cell| {
-                    cell.npcs
-                        .iter()
-                        .copied()
-                        .filter(move |npc| {
-                            self.npcs
-                                .get(*npc)
-                                .is_some_and(|npc| npc.wpos.distance_squared(wpos) < r_sqr)
-                                && Some(*npc) != this_npc
-                        })
-                        .map(Actor::Npc)
+                self.actor_grid.get(chunk_pos + neighbor).map(move |cell| {
+                    cell.actors.iter().copied().filter(move |actor_id| {
+                        self.actors.get(*actor_id).is_some_and(|actor| {
+                            actor.presence.is_some() && actor.wpos.distance_squared(wpos) < r_sqr
+                        }) && Some(*actor_id) != this_actor
+                    })
                 })
             })
             .flatten()
-            .chain(
-                self.character_map
-                    .get(&chunk_pos)
-                    .map(|characters| {
-                        characters.iter().filter_map(move |(character, c_wpos)| {
-                            if c_wpos.distance_squared(wpos) < r_sqr {
-                                Some(Actor::Character(*character))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .into_iter()
-                    .flatten(),
-            )
     }
 }
 
-impl Deref for Npcs {
-    type Target = DenseSlotMap<NpcId, Npc>;
+impl Deref for Actors {
+    type Target = DenseSlotMap<ActorId, Actor>;
 
-    fn deref(&self) -> &Self::Target { &self.npcs }
+    fn deref(&self) -> &Self::Target { &self.actors }
 }
 
-impl DerefMut for Npcs {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.npcs }
+impl DerefMut for Actors {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.actors }
 }

@@ -24,7 +24,7 @@ use common::{
     link::{Is, Link, LinkHandle},
     mounting::{Mounting, Rider, VolumeMounting, VolumeRider},
     resources::{Secs, Time},
-    rtsim::{Actor, RtSimEntity},
+    rtsim,
     tether::Tethered,
     uid::{IdMaps, Uid},
     util::Dir,
@@ -174,8 +174,6 @@ pub trait StateExt {
         &mut self,
         entity: EcsEntity,
     ) -> Result<(), specs::error::WrongGeneration>;
-    /// Get the given entity as an [`Actor`], if it is one.
-    fn entity_as_actor(&self, entity: EcsEntity) -> Option<Actor>;
     /// Mutate the position of an entity or, if the entity is mounted, the
     /// mount.
     ///
@@ -808,19 +806,24 @@ impl StateExt for State {
                 error!("Player has no pos, cannot load {} pets", pets.len());
             }
 
-            let settings = self.ecs().read_resource::<Settings>();
-            let mut char_battle_mode = settings.gameplay.battle_mode.default_mode();
-            let presences = self.ecs().read_storage::<Presence>();
-            let presence = presences.get(entity);
-            if let Some(Presence {
-                kind: PresenceKind::Character(char_id),
-                ..
-            }) = presence
-            {
-                let battlemode_buffer = self.ecs().fetch::<BattleModeBuffer>();
-                let mut players = self.ecs().write_storage::<comp::Player>();
-                if let Some(mut player_info) = players.get_mut(entity) {
-                    if let Some((mode, change)) = battlemode_buffer.get(char_id) {
+            let mut char_battle_mode = self
+                .ecs()
+                .read_resource::<Settings>()
+                .gameplay
+                .battle_mode
+                .default_mode();
+            let presence_kind = self
+                .ecs()
+                .read_storage::<Presence>()
+                .get(entity)
+                .map(|p| p.kind);
+            if let Some(PresenceKind::Character(char_id)) = presence_kind {
+                if let Some(mut player_info) =
+                    self.ecs().write_storage::<comp::Player>().get_mut(entity)
+                {
+                    if let Some((mode, change)) =
+                        self.ecs().fetch::<BattleModeBuffer>().get(&char_id)
+                    {
                         char_battle_mode = *mode;
                         player_info.last_battlemode_change = Some(*change);
                     } else {
@@ -837,6 +840,36 @@ impl StateExt for State {
                     }
 
                     player_info.battle_mode = char_battle_mode;
+                }
+
+                #[cfg(feature = "worldgen")]
+                {
+                    use ::rtsim::data::{Actor, actor::SimulationMode};
+                    let actor_id = {
+                        let rtsim = self.ecs().write_resource::<RtSim>();
+                        let mut data = rtsim.state().data_mut();
+                        data
+                            .actors
+                            .iter()
+                            .find(|(_, a)| a.character().map_or(false, |c| c.id == char_id))
+                            .map(|(id, _)| id)
+                            // Create actors for characters that don't have one
+                            .unwrap_or_else(|| data.actors.create_actor(Actor::new_character(
+                                char_id,
+                                !(char_id.0 as u32), // TODO: This is a rubbish seed
+                                player_pos.map_or(Vec3::zero(), |p| p.0),
+                                // This sucks. Because the character body is not retrieved from
+                                // storage immedaitely, we have to give players a 'default body' for
+                                // a brief moment until it arrives. Don't worry, it gets replaced
+                                // very soon afterwards as part of server <-> rtsim sync.
+                                comp::Body::default(),
+                                SimulationMode::Loaded,
+                            )))
+                    };
+                    self.write_component_ignore_entity_dead(entity, actor_id);
+                    self.ecs()
+                        .write_resource::<IdMaps>()
+                        .add_rtsim(actor_id, entity);
                 }
             }
 
@@ -1227,7 +1260,7 @@ impl StateExt for State {
             .get(entity)
             .map(|p| (p.kind.character_id(), p.kind.sync_me()))
             .unzip();
-        let maybe_rtsim = self.read_component_copied::<RtSimEntity>(entity);
+        let maybe_rtsim = self.read_component_copied::<rtsim::ActorId>(entity);
 
         self.mut_resource::<IdMaps>().remove_entity(
             Some(entity),
@@ -1237,26 +1270,6 @@ impl StateExt for State {
         );
 
         delete_entity_common(self, entity, maybe_uid, sync_me.unwrap_or(true))
-    }
-
-    fn entity_as_actor(&self, entity: EcsEntity) -> Option<Actor> {
-        if let Some(rtsim_entity) = self
-            .ecs()
-            .read_storage::<RtSimEntity>()
-            .get(entity)
-            .copied()
-        {
-            Some(Actor::Npc(rtsim_entity))
-        } else if let Some(PresenceKind::Character(character)) = self
-            .ecs()
-            .read_storage::<Presence>()
-            .get(entity)
-            .map(|p| p.kind)
-        {
-            Some(Actor::Character(character))
-        } else {
-            None
-        }
     }
 
     fn position_mut<T>(

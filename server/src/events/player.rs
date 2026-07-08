@@ -135,32 +135,13 @@ pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persisten
         .get(entity)
         .map(|p| (p.kind.character_id(), p.kind.sync_me()))
         .unzip();
-    let maybe_rtsim = state.read_component_copied::<common::rtsim::RtSimEntity>(entity);
+    let maybe_rtsim = state.read_component_copied::<common::rtsim::ActorId>(entity);
     state.mut_resource::<IdMaps>().remove_entity(
         Some(entity),
         None, // Uid re-mapped, we don't want to remove the mapping
         maybe_character.flatten(),
         maybe_rtsim,
     );
-
-    // If the character had a RtSim id (possibly from possesing an rtsim entity),
-    // make rtsim aware that this entity can now be respawned.
-    #[cfg(feature = "worldgen")]
-    if let Some(rtsim_entity) = maybe_rtsim {
-        let world = state.ecs().read_resource::<std::sync::Arc<world::World>>();
-        let index = state.ecs().read_resource::<world::index::IndexOwned>();
-        let pos = state.read_component_copied::<comp::Pos>(entity);
-        state
-            .ecs()
-            .write_resource::<crate::rtsim::RtSim>()
-            .hook_rtsim_actor_death(
-                &world,
-                index.as_index_ref(),
-                common::rtsim::Actor::Npc(rtsim_entity),
-                pos.map(|p| p.0),
-                None,
-            );
-    }
 
     // We don't want to use delete_entity_recorded since we are transfering the
     // Uid to a new entity (and e.g. don't want it to be unmapped).

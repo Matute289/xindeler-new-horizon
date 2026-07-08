@@ -116,9 +116,7 @@ pub struct InventoryManipData<'a> {
     pets: ReadStorage<'a, comp::Pet>,
     masses: ReadStorage<'a, comp::Mass>,
     #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, comp::Presence>,
-    #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, common::rtsim::RtSimEntity>,
+    rtsim_actors: ReadStorage<'a, common::rtsim::ActorId>,
 }
 
 impl ServerEvent for InventoryManipEvent {
@@ -362,11 +360,7 @@ impl ServerEvent for InventoryManipEvent {
                             // Send event to rtsim if something was stolen.
                             #[cfg(feature = "worldgen")]
                             if block.is_owned()
-                                && let Some(actor) = super::entity_manipulation::entity_as_actor(
-                                    entity,
-                                    &data.rtsim_entities,
-                                    &data.presences,
-                                )
+                                && let Some(actor) = data.rtsim_actors.get(entity).copied()
                             {
                                 data.rtsim.hook_pickup_owned_sprite(
                                     &data.world,

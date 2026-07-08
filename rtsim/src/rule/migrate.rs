@@ -2,8 +2,8 @@ use crate::{
     RtState, Rule, RuleError,
     data::{
         Site,
+        actor::Profession,
         architect::{Population, TrackedPopulation},
-        npc::Profession,
     },
     event::OnSetup,
     generate::wanted_population,
@@ -75,7 +75,7 @@ impl Rule for Migrate {
             // Keep track of airship captains separately, as they need to be handled
             // differently.
             let mut airship_captains = Vec::new();
-            for (key, npc) in data.npcs.iter_mut() {
+            for (key, npc) in data.actors.iter_mut() {
                 // For airships, just collect the captains for now
                 if matches!(npc.profession(), Some(Profession::Captain)) {
                     airship_captains.push(key);
@@ -150,15 +150,15 @@ impl Rule for Migrate {
             // mutable access to data.
             let mut captains_to_register = Vec::new();
             for captain_id in airship_captains.iter() {
-                if let Some(mount_link) = data.npcs.mounts.get_mount_link(*captain_id) {
+                if let Some(mount_link) = data.actors.mounts.get_mount_link(*captain_id) {
                     let airship_id = mount_link.mount;
                     assert!(data.airship_sim.assigned_routes.get(captain_id).is_none());
                     if let Some(spawning_location) = spawning_locations.pop() {
                         captains_to_register.push((*captain_id, airship_id, spawning_location));
                     } else {
                         // delete the captain (& airship) pair
-                        data.npcs.remove(*captain_id);
-                        data.npcs.remove(airship_id);
+                        data.actors.remove(*captain_id);
+                        data.actors.remove(airship_id);
                     }
                 }
             }
@@ -178,20 +178,20 @@ impl Rule for Migrate {
                     *captain_id,
                     *airship_id,
                     ctx.world,
-                    &mut data.npcs,
+                    &mut data.actors,
                 );
             }
 
             // Group the airship captains by route
             data.airship_sim
-                .configure_route_pilots(&ctx.world.civs().airships, &data.npcs);
+                .configure_route_pilots(&ctx.world.civs().airships, &data.actors);
 
             // Calculate architect populations
             data.architect.wanted_population = wanted_population(ctx.world, ctx.index);
 
             data.architect.population = Population::default();
 
-            for npc in data.npcs.values() {
+            for npc in data.actors.values() {
                 let pop = TrackedPopulation::from_body_and_role(&npc.body, &npc.role);
                 data.architect.population.add(pop, 1);
             }

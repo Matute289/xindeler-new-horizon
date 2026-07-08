@@ -9,7 +9,7 @@ use common::{
     uid::Uid,
 };
 #[cfg(feature = "worldgen")]
-use common::{rtsim::RtSimEntity, uid::IdMaps};
+use common::{rtsim, uid::IdMaps};
 use specs::{Entity as EcsEntity, WorldExt};
 use vek::Vec3;
 
@@ -137,10 +137,14 @@ fn handle_mount_volume(server: &mut Server, rider: EcsEntity, volume_pos: Volume
             if _link_successful {
                 let uid_allocator = state.ecs().read_resource::<IdMaps>();
                 if let Some(rider_entity) = uid_allocator.uid_entity(rider_uid)
-                    && let Some(rider_actor) = state.entity_as_actor(rider_entity)
+                    && let Some(rider_actor) = state
+                        .ecs()
+                        .read_storage::<rtsim::ActorId>()
+                        .get(rider_entity)
+                        .copied()
                     && let Some(volume_pos) = volume_pos.try_map_entity(|uid| {
                         let entity = uid_allocator.uid_entity(uid)?;
-                        state.read_storage::<RtSimEntity>().get(entity).copied()
+                        state.read_storage::<rtsim::ActorId>().get(entity).copied()
                     })
                 {
                     state

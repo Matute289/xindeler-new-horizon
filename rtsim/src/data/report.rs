@@ -1,6 +1,6 @@
 use common::{
     resources::TimeOfDay,
-    rtsim::{Actor, SiteId},
+    rtsim::{ActorId, SiteId},
     terrain::SpriteKind,
 };
 use serde::{Deserialize, Serialize};
@@ -50,11 +50,11 @@ impl Report {
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub enum ReportKind {
     Death {
-        actor: Actor,
-        killer: Option<Actor>,
+        actor: ActorId,
+        killer: Option<ActorId>,
     },
     Theft {
-        thief: Actor,
+        thief: ActorId,
         /// Where the theft happened.
         site: Option<SiteId>,
         /// What was stolen.

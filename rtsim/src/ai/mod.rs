@@ -5,7 +5,7 @@ use rand::RngExt;
 
 use crate::data::{
     Data, ReportId, Sentiments,
-    npc::{Controller, Npc, NpcId},
+    actor::{Actor, ActorId, Controller, Npc},
 };
 use common::{
     comp::{self, gizmos::RtsimGizmos},
@@ -18,7 +18,7 @@ use common::{
 use hashbrown::HashSet;
 use itertools::Either;
 use rand_chacha::ChaChaRng;
-use specs::{Read, ReadExpect, ReadStorage, SystemData, WriteExpect, WriteStorage, shred};
+use specs::{ReadExpect, ReadStorage, SystemData, WriteExpect, WriteStorage, shred};
 use std::{any::Any, collections::VecDeque, marker::PhantomData, ops::ControlFlow, sync::Mutex};
 use world::{IndexRef, World};
 
@@ -66,7 +66,8 @@ pub struct NpcCtx<'a, 'd> {
     pub time_of_day: TimeOfDay,
     pub time: Time,
 
-    pub npc_id: NpcId,
+    pub actor_id: ActorId,
+    pub actor: &'a Actor,
     pub npc: &'a Npc,
     pub controller: &'a mut Controller,
     pub inbox: &'a mut VecDeque<NpcInput>, // TODO: Allow more inbox items
@@ -77,7 +78,7 @@ pub struct NpcCtx<'a, 'd> {
     /// The delta time since this npcs ai was last ran.
     pub dt: f32,
     pub rng: ChaChaRng,
-    pub system_data: &'a NpcSystemData<'d>,
+    pub system_data: &'a ActorSystemData<'d>,
 
     /// Used to determine the current action priority. Lower priority actions
     /// may be overridden by higher priority actions in a different part of
@@ -116,9 +117,9 @@ impl NpcCtx<'_, '_> {
 }
 
 #[derive(SystemData)]
-pub struct NpcSystemData<'a> {
+pub struct ActorSystemData<'a> {
     pub positions: ReadStorage<'a, comp::Pos>,
-    pub id_maps: Read<'a, IdMaps>,
+    pub id_maps: ReadExpect<'a, IdMaps>,
     pub server_constants: ReadExpect<'a, ServerConstants>,
     pub weather_grid: ReadExpect<'a, WeatherGrid>,
     pub rtsim_gizmos: WriteExpect<'a, RtsimGizmos>,

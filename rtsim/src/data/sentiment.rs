@@ -1,7 +1,4 @@
-use common::{
-    character::CharacterId,
-    rtsim::{Actor, FactionId, NpcId},
-};
+use common::rtsim::{ActorId, FactionId};
 use hashbrown::HashMap;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,27 +22,15 @@ const DECAY_TIME_FACTOR: f32 = 2500.0;
 // - etc.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum Target {
-    Character(CharacterId),
-    Npc(NpcId),
+    Actor(ActorId),
     Faction(FactionId),
 }
 
-impl From<NpcId> for Target {
-    fn from(npc: NpcId) -> Self { Self::Npc(npc) }
+impl From<ActorId> for Target {
+    fn from(actor_id: ActorId) -> Self { Self::Actor(actor_id) }
 }
 impl From<FactionId> for Target {
     fn from(faction: FactionId) -> Self { Self::Faction(faction) }
-}
-impl From<CharacterId> for Target {
-    fn from(character: CharacterId) -> Self { Self::Character(character) }
-}
-impl From<Actor> for Target {
-    fn from(actor: Actor) -> Self {
-        match actor {
-            Actor::Character(character) => Self::Character(character),
-            Actor::Npc(npc) => Self::Npc(npc),
-        }
-    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]

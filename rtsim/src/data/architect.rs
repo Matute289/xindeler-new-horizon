@@ -8,7 +8,7 @@ use common::{
 use enum_map::EnumMap;
 use serde::{Deserialize, Serialize};
 
-use super::Npc;
+use super::Actor;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Death {
@@ -146,12 +146,12 @@ pub struct Architect {
 }
 
 impl Architect {
-    pub fn on_death(&mut self, npc: &Npc, time: TimeOfDay) {
+    pub fn on_death(&mut self, actor: &Actor, time: TimeOfDay) {
         let death = Death {
             time,
-            body: npc.body,
-            role: npc.role.clone(),
-            faction: npc.faction,
+            body: actor.body,
+            role: actor.role.clone(),
+            faction: actor.faction,
         };
         self.deaths.push_back(death)
     }

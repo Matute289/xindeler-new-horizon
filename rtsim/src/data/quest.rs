@@ -1,6 +1,6 @@
 use common::{
     resources::Time,
-    rtsim::{Actor, ItemResource, QuestId, SiteId},
+    rtsim::{ActorId, ItemResource, QuestId, SiteId},
 };
 use hashbrown::{HashMap, HashSet};
 use itertools::Either;
@@ -31,7 +31,7 @@ pub struct Quests {
     id_counter: AtomicU64,
     quests: HashMap<QuestId, Quest>,
     #[serde(skip)]
-    related_quests: HashMap<Actor, HashSet<QuestId>>,
+    related_quests: HashMap<ActorId, HashSet<QuestId>>,
 }
 
 impl Clone for Quests {
@@ -70,7 +70,7 @@ impl Quests {
 
     pub fn get(&self, id: QuestId) -> Option<&Quest> { self.quests.get(&id) }
 
-    pub fn related_to(&self, actor: impl Into<Actor>) -> impl Iterator<Item = QuestId> + '_ {
+    pub fn related_to(&self, actor: impl Into<ActorId>) -> impl Iterator<Item = QuestId> + '_ {
         match self.related_quests.get(&actor.into()) {
             Some(quests) => Either::Left(
                 quests.iter()
@@ -85,8 +85,8 @@ impl Quests {
     /// Find all of the actors that are related to another actor via a quest
     pub fn related_actors(
         &self,
-        actor: impl Into<Actor>,
-    ) -> impl ExactSizeIterator<Item = Actor> + '_ {
+        actor: impl Into<ActorId>,
+    ) -> impl ExactSizeIterator<Item = ActorId> + '_ {
         let actor = actor.into();
         let mut related = HashSet::new();
         for quest_id in self.related_to(actor) {
@@ -128,7 +128,7 @@ pub struct Quest {
     /// In the future, this can be extended to include factions, multiple
     /// actors, or even some system in the world (such as a noticeboard
     /// system, so that players can assign one-another quests).
-    pub arbiter: Actor,
+    pub arbiter: ActorId,
 
     /// A machine-intelligible description of the quest and its completion
     /// conditions.
@@ -153,7 +153,7 @@ impl Quest {
     /// escortee to a destination.
     ///
     /// The escortee is considered to be the quest arbiter.
-    pub fn escort(escortee: Actor, escorter: Actor, to: SiteId) -> Self {
+    pub fn escort(escortee: ActorId, escorter: ActorId, to: SiteId) -> Self {
         Self {
             arbiter: escortee,
             kind: QuestKind::Escort {
@@ -168,7 +168,7 @@ impl Quest {
     }
 
     /// Create a new slay quest that requires the slayer to kill a target.
-    pub fn slay(arbiter: Actor, target: Actor, slayer: Actor) -> Self {
+    pub fn slay(arbiter: ActorId, target: ActorId, slayer: ActorId) -> Self {
         Self {
             arbiter,
             kind: QuestKind::Slay { target, slayer },
@@ -183,7 +183,7 @@ impl Quest {
     /// expecting to receive the package, and the source is the individual
     /// that created the quest opportunity. The messenger is the individual
     /// making the journey with the package in hand.
-    pub fn courier(arbiter: Actor, instance: CourierQuestInstance) -> Self {
+    pub fn courier(arbiter: ActorId, instance: CourierQuestInstance) -> Self {
         Self {
             arbiter,
             kind: QuestKind::Courier { instance },
@@ -225,8 +225,8 @@ impl Quest {
     /// The `requester` parameter is a sanity test: you should pass the actor
     /// that originated the request to resolve, and the function will ensure
     /// that this matches the quest's designated arbiter.
-    pub fn resolve(&self, requester: impl Into<Actor>, res: bool) -> Option<QuestOutcome> {
-        if self.arbiter != requester.into() {
+    pub fn resolve(&self, requester: ActorId, res: bool) -> Option<QuestOutcome> {
+        if self.arbiter != requester {
             // Actor that requested quest resolution did not match the designated arbiter,
             // resolution not permitted!
             None
@@ -246,7 +246,7 @@ impl Quest {
 
     pub fn resolution(&self) -> Option<bool> { self.res.get() }
 
-    pub fn get_related_actors(&self) -> HashSet<Actor> {
+    pub fn get_related_actors(&self) -> HashSet<ActorId> {
         let mut related = HashSet::default();
         self.for_related_actors(|actor| {
             related.insert(actor);
@@ -254,7 +254,7 @@ impl Quest {
         related
     }
 
-    fn for_related_actors(&self, mut f: impl FnMut(Actor)) {
+    fn for_related_actors(&self, mut f: impl FnMut(ActorId)) {
         f(self.arbiter);
         match &self.kind {
             QuestKind::Escort {
@@ -323,13 +323,13 @@ pub struct QuestOutcome {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum QuestKind {
     Escort {
-        escortee: Actor,
-        escorter: Actor,
+        escortee: ActorId,
+        escorter: ActorId,
         to: SiteId,
     },
     Slay {
-        target: Actor,
-        slayer: Actor,
+        target: ActorId,
+        slayer: ActorId,
     },
     Courier {
         instance: CourierQuestInstance,
@@ -411,13 +411,13 @@ pub struct CourierQuestInstance {
     /// want to keep it available in case we need to have dialogue that says
     /// something like "Wow, you came all the way from <site> to send me this?"
     pub source_site: Option<SiteId>,
-    pub source_actor: Actor,
+    pub source_actor: ActorId,
     /// This is `source_actor` for fetch quests.
-    pub target_actor: Actor,
+    pub target_actor: ActorId,
     /// Target actor's site, if available.
     pub target_site: Option<SiteId>,
     /// Usually this is the player.
-    pub messenger: Actor,
+    pub messenger: ActorId,
     /// The distance to be traversed, calculated once at quest start.
     pub distance: NonZeroU32,
 }
