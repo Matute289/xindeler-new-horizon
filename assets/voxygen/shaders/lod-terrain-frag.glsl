@@ -127,7 +127,7 @@ void main() {
         //vec3 top_norm = vec3(0, 0, 1);
         voxel_norm = f_norm;//normalize(mix(side_norm, top_norm, max(cam_dir.z, 0.0)));
     #else
-        float block_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001))) * 50.0, 1.0, 128.0);
+        float block_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(f_pos.xy * 0.05) * 0.05))) * 50.0, 1.0, 128.0);
         
         #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
             float nz_offset = floor((noise_2d(floor(f_pos.xy + focus_off.xy) * 0.01) - 0.5) * 3.0 / max(f_norm.z, 0.01));
