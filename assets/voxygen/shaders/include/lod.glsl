@@ -379,7 +379,7 @@ vec3 water_diffuse(vec3 color, vec3 dir, float max_dist) {
 }
 
 float lod_voxel_noise(vec3 voxel_pos, float voxel_sz, vec3 f_norm) {
-    return (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5) * voxel_sz * 15.0 / (1.0 + floor(pow(f_norm.z, 4) * 10.0));
+    return (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5) * voxel_sz * 10.0 / (1.0 + floor(pow(f_norm.z, 4) * 10.0));
 }
 
 void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, out vec3 voxel_norm, out float voxel_sz, out float f_ao) {
@@ -393,7 +393,7 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
         vec3 cam_dir = cam_to_frag;
         vec3 wpos = f_pos + focus_off.xyz;
         
-        voxel_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(f_pos.xy * 0.01) * 0.02) * 3) / 3) * VOXEL_SCALE_FACTOR, 1.0, 128.0);
+        voxel_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(wpos.xy * 0.01) * 0.02) * 3) / 3) * VOXEL_SCALE_FACTOR, 1.0, 128.0);
         
         #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
             const float MARCH_THRESHOLD = 4.0;
