@@ -3568,6 +3568,10 @@ impl Hud {
                         } else {
                             self.force_ungrab = true
                         };
+                        // Also closes any open trade windows
+                        if self.show.trade {
+                            self.events.push(Event::TradeAction(TradeAction::Decline));
+                        }
                     },
                     bag::Event::ChangeInventorySortOrder(sort_order) => {
                         self.events
@@ -5005,12 +5009,24 @@ impl Hud {
 
             // Press key while not typing
             // MenuInput
-            WinEvent::MenuInput(key, state) if !self.typing() => {
-                if state {
-                    self.menu_events.push(key);
-                    true
+            WinEvent::MenuInput(key, state) => {
+                if self.typing() {
+                    // Close an opened chat using MenuInputs
+                    if key == MenuInput::Back {
+                        self.ui.focus_widget(None);
+                        self.force_chat = false;
+                        true
+                    } else {
+                        false
+                    }
                 } else {
-                    false
+                    // Pass MenuInputs along to the UI
+                    if state {
+                        self.menu_events.push(key);
+                        true
+                    } else {
+                        false
+                    }
                 }
             },
 
