@@ -255,8 +255,16 @@ vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, con
 
         float sun_access = max(sample_.x, 0);
         float moon_access = max(sample_.y, 0);
-        float cloud_scatter_factor = density_integrals.x;
-        float global_scatter_factor = density_integrals.y;
+        #ifdef EXPERIMENTAL_NOCLOUDS
+            const float cloud_scatter_factor = 0.0;
+        #else
+            float cloud_scatter_factor = density_integrals.x;
+        #endif
+        #ifdef EXPERIMENTAL_NOHAZE
+            const float global_scatter_factor = 0.0;
+        #else
+            float global_scatter_factor = density_integrals.y;
+        #endif
 
         float step = (ldist - cdist) * 0.01;
         float cloud_darken = pow(1.0 / (1.0 + cloud_scatter_factor), step);

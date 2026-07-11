@@ -320,7 +320,7 @@ void main() {
 
     /*
     // Apply clouds to `aa_color`
-    #if (CLOUD_MODE != CLOUD_MODE_NONE)
+    #if (CLOUD_MODE != CLOUD_MODE_FLAT)
         vec3 wpos = wpos_at(uv);
         float dist = distance(wpos, cam_pos.xyz);
         vec3 dir = (wpos - cam_pos.xyz) / dist;

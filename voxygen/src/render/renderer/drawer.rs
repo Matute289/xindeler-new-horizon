@@ -238,10 +238,6 @@ impl<'frame> Drawer<'frame> {
     /// Returns None if the rain occlusion renderer is not enabled at some
     /// level, the pipelines are not available yet or clouds are disabled.
     pub fn rain_occlusion_pass(&mut self) -> Option<RainOcclusionPassDrawer<'_>> {
-        if !self.borrow.pipeline_modes.cloud.is_enabled() {
-            return None;
-        }
-
         if let RainOcclusionMap::Enabled(ref rain_occlusion_renderer) = self.borrow.shadow?.rain_map
         {
             let mut render_pass = self.encoder.scoped_render_pass(

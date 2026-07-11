@@ -88,7 +88,7 @@ impl GraphicsSettings {
             lod_detail: 80,
             render_mode: RenderMode {
                 aa: AaMode::FxUpscale,
-                cloud: CloudMode::Minimal,
+                cloud: CloudMode::Flat,
                 reflection: ReflectionMode::Low,
                 fluid: FluidMode::Low,
                 lighting: LightingMode::Lambertian,
