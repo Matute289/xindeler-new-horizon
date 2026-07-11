@@ -95,28 +95,28 @@ vec4 cloud_at(vec3 pos, float dist, vec3 dir, out vec3 emission, out float not_u
         ;
 
         // Sample twice to allow for self-shadowing
-        float cloud_p0 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 - sun_dir.xyz * 150) * vec3(0.55, 0.55, 1) / (cloud_scale() * 20000.0));
-        float cloud_p1 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 + sun_dir.xyz * 150) * vec3(0.55, 0.55, 1) / (cloud_scale() * 20000.0));
+        float cloud_p0 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 - sun_dir.xyz * 150) * vec3(0.55, 0.55, 2) / (cloud_scale() * 20000.0));
+        float cloud_p1 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 + sun_dir.xyz * 150) * vec3(0.55, 0.55, 2) / (cloud_scale() * 20000.0));
 
-        float cloud_factor = pow(max(((cloud_p0 + cloud_p1) * 0.5
+        float cloud_factor = pow(max(((cloud_p0 + cloud_p1) * 0.45
             - 0.5
             - small_nz * 0.1
-            + cloud_tendency * 0.3
+            + cloud_tendency * 0.5
             )
         , 0.0) * 120.0 * cloud_tendency, 5.0)
             * falloff(abs(pos.z - cloud_alt) / CLOUD_DEPTH);
 
-        cloud = cloud_factor * 10;
+        cloud = cloud_factor * 5;
 
         // What proportion of sunlight is *not* being blocked by nearby cloud? (approximation)
         // Basically, just throw together a few values that roughly approximate this term and come up with an average
         cloud_sun_access = clamp(
-            0.7
-                + pow(abs(cloud_p1 - cloud_p0), 0.5) * sign(cloud_p1 - cloud_p0) * 0.75
+            0.8
+                + pow(abs(cloud_p1 - cloud_p0), 0.5) * sign(cloud_p1 - cloud_p0) * 0.5
                 + (pos.z - cloud_alt) / CLOUD_DEPTH * 0.2
-                - pow(cloud * 10000000.0, 0.2) * 0.0075
+                - pow(cloud * 1000000.0, 0.25) * 0.0075
             ,
-            0.15,
+            0.2,
             10.0
         ) + small_nz * 0.2;
         // Since we're assuming the sun/moon is always above (not always correct) it's the same for the moon
