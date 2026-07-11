@@ -378,8 +378,8 @@ vec3 water_diffuse(vec3 color, vec3 dir, float max_dist) {
     }
 }
 
-float lod_voxel_noise(vec3 voxel_pos, float voxel_sz) {
-    return (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5) * 3.0 * voxel_sz;
+float lod_voxel_noise(vec3 voxel_pos, float voxel_sz, vec3 f_norm) {
+    return (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5) * voxel_sz * 15.0 / (1.0 + floor(pow(f_norm.z, 4) * 10.0));
 }
 
 void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, out vec3 voxel_norm, out float voxel_sz, out float f_ao) {
@@ -410,7 +410,7 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
 
             voxel_pos = (floor((wpos - cam_dir * t) / voxel_sz) + 0.5) * voxel_sz;
             #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-                float surf_depth = lod_voxel_noise(voxel_pos, voxel_sz);
+                float surf_depth = lod_voxel_noise(voxel_pos, voxel_sz, f_norm);
             #else
                 const float surf_depth = 0.0;
             #endif
