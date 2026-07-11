@@ -383,7 +383,7 @@ float lod_voxel_noise(vec3 voxel_pos, float voxel_sz) {
 }
 
 void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, out vec3 voxel_norm, out float voxel_sz, out float f_ao) {
-    voxel_pos = f_pos;
+    voxel_pos = f_pos + focus_off.xyz;
     voxel_norm = f_norm;
     voxel_sz = 1.0;
     f_ao = 1.0;
