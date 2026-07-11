@@ -23,19 +23,19 @@ const vec3 SKY_DAWN_TOP = vec3(0.10, 0.1, 0.10);
 const vec3 SKY_DAWN_MID = vec3(1.2, 0.3, 0.2);
 const vec3 SKY_DAWN_BOT = vec3(0.0, 0.1, 0.23);
 const vec3 DAWN_LIGHT   = vec3(5.0, 2.0, 1.15);
-const vec3 SUN_HALO_DAWN = vec3(8.2, 3.0, 2.1);
+const vec3 SUN_HALO_DAWN = vec3(3.0, 0.5, 0.1);
 
 const vec3 SKY_DAY_TOP = vec3(0.1, 0.5, 0.9);
 const vec3 SKY_DAY_MID = vec3(0.18, 0.28, 0.6);
 const vec3 SKY_DAY_BOT = vec3(0.1, 0.2, 0.3);
 const vec3 DAY_LIGHT   = vec3(3.8, 3.0, 1.8);
-const vec3 SUN_HALO_DAY = vec3(0.25, 0.25, 0.001);
+const vec3 SUN_HALO_DAY = vec3(0.15, 0.15, 0.001);
 
 const vec3 SKY_DUSK_TOP = vec3(1.06, 0.1, 0.20);
 const vec3 SKY_DUSK_MID = vec3(2.5, 0.3, 0.1);
 const vec3 SKY_DUSK_BOT = vec3(0.0, 0.1, 0.23);
 const vec3 DUSK_LIGHT   = vec3(8.0, 1.5, 0.15);
-const vec3 SUN_HALO_DUSK = vec3(10.2, 3.0, 0.1);
+const vec3 SUN_HALO_DUSK = vec3(3.0, 0.5, 0.05);
 
 const vec3 SKY_NIGHT_TOP = vec3(0.001, 0.001, 0.0025);
 const vec3 SKY_NIGHT_MID = vec3(0.001, 0.005, 0.02);
@@ -616,11 +616,7 @@ vec3 get_sky_color(vec3 dir, vec3 origin, vec3 f_pos, float quality, bool with_f
     );
 
     float sun_halo_power = 20.0;
-    #if (CLOUD_MODE == CLOUD_MODE_FLAT)
-        if (true) {
-    #else
-        if (fake_clouds || medium.x == MEDIUM_WATER) {
-    #endif
+    if (fake_clouds || medium.x == MEDIUM_WATER) {
         sun_halo_power = 30.0;
         sun_halo_color *= 0.01;
     }

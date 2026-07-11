@@ -10,8 +10,8 @@ vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, flo
     vec3 haze_color = mix(sky_light, sky_light * vec3(0.1, 0.3, 0.5), min(rain_density * 4, 1.0));
     
     #ifndef EXPERIMENTAL_NOHAZE
-        float haze_factor = mix(0.001, 0.01, rain_density);
-        surf_color = mix(haze_color, surf_color, 1.0 / exp(min(max_dist, 1000.0) * haze_factor));
+        float haze_factor = mix(0.00025, 0.01, rain_density);
+        surf_color = mix(haze_color, surf_color, 1.0 / exp(min(max_dist, 8000.0) * haze_factor));
     #endif
     
     // This is rubbish... but fast

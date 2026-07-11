@@ -31,7 +31,7 @@ vec4 cloud_at(vec3 pos, float dist, vec3 dir, out vec3 emission, out float not_u
     // because the earth has curvature and so there is an upper bound on the amount of atmosphere that a sunset must
     // travel through. We 'simulate' this by fading out the atmosphere density with distance.
     float flat_earth_hack = max(0.0, 1.0 - dist * 0.00003 * pow(max(0.0, dir.z), 0.2));
-    float air = 0.025 * clamp((atmosphere_alt - pos.z) / 20000, 0, 1) * flat_earth_hack;
+    float air = 0.015 * clamp((atmosphere_alt - pos.z) / 20000, 0, 1) * flat_earth_hack;
 
     float alt = alt_at(pos.xy - focus_off.xy);
 

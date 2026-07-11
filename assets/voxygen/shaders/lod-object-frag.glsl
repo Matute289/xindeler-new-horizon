@@ -34,10 +34,6 @@ layout(location = 1) out uvec4 tgt_mat;
 #include <light.glsl>
 #include <lod.glsl>
 
-float lod_voxel_noise(vec3 block_pos) {
-    return floor((noise_3d((block_pos + focus_off.xyz) * 0.01) - 0.5) * 5.0);
-}
-
 void main() {
 #ifdef EXPERIMENTAL_BAREMINIMUM
     tgt_color = vec4(simple_lighting(f_pos.xyz, f_col.rgb, 1.0), 1);
@@ -70,6 +66,11 @@ void main() {
     vec3 k_d = vec3(1.0);
     vec3 k_s = vec3(0.5 - abs(view_dir.z) * 0.5);
 
+    float f_ao = 1.0;
+    vec3 voxel_norm;
+    lod_voxels(f_pos, cam_to_frag, f_norm, voxel_norm, f_ao);
+    
+    /*
     vec3 voxel_norm = f_norm;
     float my_alt = f_pos.z + focus_off.z;
     float f_ao = 1.0;
@@ -99,6 +100,7 @@ void main() {
             }
         }
     #endif
+    */
 
     vec3 emitted_light, reflected_light;
 

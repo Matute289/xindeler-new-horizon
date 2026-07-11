@@ -116,44 +116,10 @@ void main() {
 
     vec3 cam_to_frag = normalize(f_pos - cam_pos.xyz);
     vec3 view_dir = -cam_to_frag;
-
+    
     float f_ao = 1.0;
-    vec3 voxel_norm = f_norm;
-    const float VOXELIZE_DIST = 200000;
-    float voxelize_factor = clamp(1.0 - (distance(cam_pos.xy, f_pos.xy) - view_distance.x) * (1.0 / VOXELIZE_DIST), 0, 1) / (1.0 + pow(f_norm.z, 10) * 0.2);
-    vec3 cam_dir = cam_to_frag;
-    #ifdef EXPERIMENTAL_NOLODVOXELS
-        //vec3 side_norm = normalize(vec3(my_norm.xy, 0.01));
-        //vec3 top_norm = vec3(0, 0, 1);
-        voxel_norm = f_norm;//normalize(mix(side_norm, top_norm, max(cam_dir.z, 0.0)));
-    #else
-        float block_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(f_pos.xy * 0.01) * 0.02) * 3) / 3) * 40.0, 1.0, 128.0);
-        
-        #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-            float nz_offset = floor((noise_2d(floor(f_pos.xy + focus_off.xy) * 0.01) - 0.5) * 3.0 / max(f_norm.z, 0.01));
-        #else
-            const float nz_offset = 0.0;
-        #endif
-        
-        float t = -2.0 * block_sz + nz_offset;
-        vec3 wpos = f_pos + focus_off.xyz;
-        vec3 block_pos = wpos;
-        while (t < 2.0 * block_sz + nz_offset) {
-            vec3 deltas = (step(vec3(0), -cam_dir * block_sz) - fract((wpos - cam_dir * t) / block_sz)) / -cam_dir * block_sz;
-            float m = min(min(deltas.x, deltas.y), deltas.z);
-
-            t += max(m, 0.01);
-
-            block_pos = (floor((wpos - cam_dir * t) / block_sz) + 0.5) * block_sz;
-            if (dot(block_pos - wpos - nz_offset * f_norm, -f_norm) < 0.0) {
-                vec3 to_center = abs(block_pos - (wpos - cam_dir * t));
-                voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
-                voxel_norm = mix(f_norm, voxel_norm, voxelize_factor);
-                f_ao = mix(1.0, clamp(1.0 + (t - nz_offset) / block_sz * 0.5, 0.1, 1.0), voxelize_factor / (f_norm.z * 3.0));
-                break;
-            }
-        }
-    #endif
+    vec3 voxel_norm;
+    lod_voxels(f_pos, cam_to_frag, f_norm, voxel_norm, f_ao);
     
     vec3 f_col_raw = mix(lod_col(f_pos.xy/*block_pos.xy - floor(focus_off.xy * block_sz) / block_sz*/), vec3(0), clamp(pull_down / 30, 0, 1));
 
