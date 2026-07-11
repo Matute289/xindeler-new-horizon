@@ -307,19 +307,6 @@ vec3 lod_norm(vec2 f_pos/*vec3 pos*/) {
 
     vec3 norm = lod_norm(f_pos, vec4(f_pos - vec2(SAMPLE_W), f_pos + vec2(SAMPLE_W)));
 
-    #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-        vec2 wpos = f_pos + focus_off.xy;
-        norm.xy += vec2(
-            textureLod(sampler2D(t_noise, s_noise), wpos / 250, 0).x - 0.5,
-            textureLod(sampler2D(t_noise, s_noise), wpos / 250 + 0.5, 0).x - 0.5
-        ) * 0.25 / pow(norm.z + 0.1, 3);
-        norm.xy += vec2(
-            textureLod(sampler2D(t_noise, s_noise), wpos / 100, 0).x - 0.5,
-            textureLod(sampler2D(t_noise, s_noise), wpos / 100 + 0.5, 0).x - 0.5
-        ) * 0.25 / pow(norm.z + 0.1, 3);
-        norm = normalize(norm);
-    #endif
-
     return norm;
 }
 
@@ -391,39 +378,47 @@ vec3 water_diffuse(vec3 color, vec3 dir, float max_dist) {
     }
 }
 
-float lod_voxel_noise(vec3 block_pos) {
-    return floor((noise_3d((block_pos + focus_off.xyz) * 0.01) - 0.5) * 5.0);
+float lod_voxel_noise(vec3 voxel_pos, float voxel_sz) {
+    return (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5) * 3.0 * voxel_sz;
 }
 
-void lod_voxels(vec3 f_pos, vec3 cam_to_frag, vec3 f_norm, out vec3 voxel_norm, out float f_ao) {
+void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, out vec3 voxel_norm, out float voxel_sz, out float f_ao) {
+    voxel_pos = f_pos;
+    voxel_norm = f_norm;
+    voxel_sz = 1.0;
     f_ao = 1.0;
-    const float VOXELIZE_DIST = 200000;
-    float voxelize_factor = 1.0 / (1.0 + abs(f_norm.z));//clamp(1.0 - (distance(cam_pos.xy, f_pos.xy) - view_distance.x) * (1.0 / VOXELIZE_DIST), 0, 1) / (1.0 + pow(max(f_norm.z, 0.1), 10) * 0.2);
-    vec3 cam_dir = cam_to_frag;
-    #ifdef EXPERIMENTAL_NOLODVOXELS
-        //vec3 side_norm = normalize(vec3(my_norm.xy, 0.01));
-        //vec3 top_norm = vec3(0, 0, 1);
-        voxel_norm = f_norm;//normalize(mix(side_norm, top_norm, max(cam_dir.z, 0.0)));
-    #else
-        voxel_norm = f_norm;
-        
-        // float base_surf_depth = lod_voxel_noise(floor(f_pos));
-        float block_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(f_pos.xy * 0.01) * 0.02) * 3) / 3) * 40.0, 1.0, 128.0);
-        
-        float t = -2.0 * block_sz;
+    
+    #ifndef EXPERIMENTAL_NOLODVOXELS
+        const float VOXEL_SCALE_FACTOR = 30.0;
+        vec3 cam_dir = cam_to_frag;
         vec3 wpos = f_pos + focus_off.xyz;
-        while (t < 2.0 * block_sz) {
-            vec3 deltas = (step(vec3(0), -cam_dir * block_sz) - fract((wpos - cam_dir * t) / block_sz)) / -cam_dir * block_sz;
+        
+        voxel_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(f_pos.xy * 0.01) * 0.02) * 3) / 3) * VOXEL_SCALE_FACTOR, 1.0, 128.0);
+        
+        #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
+            const float MARCH_THRESHOLD = 4.0;
+        #else
+            const float MARCH_THRESHOLD = 2.0;
+        #endif
+        
+        float t = -MARCH_THRESHOLD * voxel_sz;
+        while (t < MARCH_THRESHOLD * voxel_sz) {
+            vec3 deltas = (step(vec3(0), -cam_dir * voxel_sz) - fract((wpos - cam_dir * t) / voxel_sz)) / -cam_dir * voxel_sz;
             float m = min(min(deltas.x, deltas.y), deltas.z);
 
             t += max(m, 0.01);
 
-            vec3 block_pos = (floor((wpos - cam_dir * t) / block_sz) + 0.5) * block_sz;
-            if (dot(block_pos - wpos, -f_norm) < 0.0) {
-                vec3 to_center = abs(block_pos - (wpos - cam_dir * t));
+            voxel_pos = (floor((wpos - cam_dir * t) / voxel_sz) + 0.5) * voxel_sz;
+            #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
+                float surf_depth = lod_voxel_noise(voxel_pos, voxel_sz);
+            #else
+                const float surf_depth = 0.0;
+            #endif
+            if (dot(voxel_pos - wpos, -f_norm) < surf_depth) {
+                vec3 to_center = abs(voxel_pos - (wpos - cam_dir * t));
                 voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
-                voxel_norm = mix(f_norm, voxel_norm, voxelize_factor);
-                f_ao = mix(1.0, clamp(1.0 + (t / block_sz - 0.75) * 0.5, 0.0, 1.0), voxelize_factor);
+                float dist = dot(f_norm * surf_depth - cam_dir * t, f_norm);
+                f_ao = clamp(dist / voxel_sz * 0.5 + 0.5, 0.0, 1.0);
                 break;
             }
         }

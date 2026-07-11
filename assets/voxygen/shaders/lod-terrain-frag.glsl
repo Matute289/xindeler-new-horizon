@@ -117,11 +117,13 @@ void main() {
     vec3 cam_to_frag = normalize(f_pos - cam_pos.xyz);
     vec3 view_dir = -cam_to_frag;
     
-    float f_ao = 1.0;
+    vec3 voxel_pos;
     vec3 voxel_norm;
-    lod_voxels(f_pos, cam_to_frag, f_norm, voxel_norm, f_ao);
+    float voxel_sz;
+    float f_ao;
+    lod_voxels(f_pos, f_norm, cam_to_frag, voxel_pos, voxel_norm, voxel_sz, f_ao);
     
-    vec3 f_col_raw = mix(lod_col(f_pos.xy/*block_pos.xy - floor(focus_off.xy * block_sz) / block_sz*/), vec3(0), clamp(pull_down / 30, 0, 1));
+    vec3 f_col_raw = mix(lod_col(voxel_pos.xy - floor(focus_off.xy * voxel_sz) / voxel_sz), vec3(0), clamp(pull_down / 30, 0, 1));
 
     /* vec3 sun_dir = get_sun_dir(time_of_day.x);
     vec3 moon_dir = get_moon_dir(time_of_day.x); */

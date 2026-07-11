@@ -66,41 +66,11 @@ void main() {
     vec3 k_d = vec3(1.0);
     vec3 k_s = vec3(0.5 - abs(view_dir.z) * 0.5);
 
-    float f_ao = 1.0;
+    vec3 voxel_pos;
     vec3 voxel_norm;
-    lod_voxels(f_pos, cam_to_frag, f_norm, voxel_norm, f_ao);
-    
-    /*
-    vec3 voxel_norm = f_norm;
-    float my_alt = f_pos.z + focus_off.z;
-    float f_ao = 1.0;
-    const float VOXELIZE_DIST = 5000;
-    float voxelize_factor = clamp(1.0 - (distance(cam_pos.xy, f_pos.xy) - view_distance.x) * (1.0 / VOXELIZE_DIST), 0, 1.0);
-    vec3 cam_dir = cam_to_frag;
-    #ifdef EXPERIMENTAL_NOLODVOXELS
-        voxel_norm = f_norm;
-    #else
-        float base_surf_depth = lod_voxel_noise(floor(f_pos));
-        float t = -1.5;
-        while (t < 5.0) {
-            vec3 deltas = (step(vec3(0), -cam_dir) - fract(f_pos - cam_dir * t)) / -cam_dir;
-            float m = min(min(deltas.x, deltas.y), deltas.z);
-
-            t += max(m, 0.01);
-
-            vec3 block_pos = floor(f_pos - cam_dir * t) + 0.5;
-            float surf_depth = 0.5 + lod_voxel_noise(block_pos);
-            if (dot(block_pos - f_pos - f_norm * surf_depth, -f_norm) < 0.0) {
-                vec3 to_center = abs(block_pos - (f_pos - cam_dir * t));
-                voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
-                voxel_norm = mix(f_norm, voxel_norm, voxelize_factor);
-                surf_color *= 0.5 + hash_three(uvec3(block_pos + focus_off.xyz)) * 0.5;
-                f_ao = mix(1.0, clamp(1.0 + t - surf_depth, 0.1, 1.0), voxelize_factor * max(0.0, -dot(cam_dir, f_norm)));
-                break;
-            }
-        }
-    #endif
-    */
+    float voxel_sz;
+    float f_ao;
+    lod_voxels(f_pos, f_norm, cam_to_frag, voxel_pos, voxel_norm, voxel_sz, f_ao);
 
     vec3 emitted_light, reflected_light;
 
