@@ -28,7 +28,7 @@ pub const UNBOUND_KEY: &str = ":none:";
 
 /// gets a string output for the controller input
 ///
-/// a multi-input action will return like ":mod2: + "mod1: + :main:"
+/// a multi-input action will return like ":mod2: + :mod1: + :main:"
 pub fn get_controller_input_string(
     input: GameInput,
     settings: &Settings,
@@ -121,7 +121,7 @@ pub fn get_controller_icon_id_from_string(name: &str, imgs: &Imgs) -> ConrodImag
         "select_n" => imgs.select_button_nin,
         "select_p" => imgs.select_button_ps,
         "mode" => imgs.start_button_xbox, // TODO: add `mode` button for xbox, nin, ps
-        // gilrs supports c and z buttons, so here they are (I'm not making custom icons though)
+        // gilrs supports c and z buttons, so here they are (no custom icons though)
         "c" => imgs.south_button_a,
         "z" => imgs.east_button_b,
         _ => imgs.no_button,

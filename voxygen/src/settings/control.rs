@@ -301,17 +301,17 @@ impl ControlSettings {
         //let char = |s| Key::Character(winit::keyboard::SmolStr::new(s));
 
         Some(KeyMouse::Key(match menu_input {
-            MenuInput::Up => Key::Named(NamedKey::ArrowUp),
-            MenuInput::Down => Key::Named(NamedKey::ArrowDown),
-            MenuInput::Left => Key::Named(NamedKey::ArrowLeft),
-            MenuInput::Right => Key::Named(NamedKey::ArrowRight),
+            MenuInput::Up => return None,
+            MenuInput::Down => return None,
+            MenuInput::Left => return None,
+            MenuInput::Right => return None,
             MenuInput::ScrollUp => return None,
             MenuInput::ScrollDown => return None,
             MenuInput::ScrollLeft => return None,
             MenuInput::ScrollRight => return None,
             MenuInput::PageDown => return None, //char("Q"),
             MenuInput::PageUp => return None,   //char("E"),
-            MenuInput::Apply => Key::Named(NamedKey::Enter),
+            MenuInput::Apply => return None,
             MenuInput::Back => Key::Named(NamedKey::Escape),
             MenuInput::Exit => return None,
             MenuInput::LocalFocus => return None,

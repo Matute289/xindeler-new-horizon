@@ -493,9 +493,10 @@ impl Widget for Overhead<'_> {
                         .collect(),
                 };
 
-                // create two strings for inputs and actions. Actions should be left aligned
+                // Create two strings for inputs and actions. Actions should be left aligned
                 // with each other, and should not be influenced by multi-input input strings
-                // icons string
+
+                // Icons string
                 let mut temp_list: Vec<String> = Vec::new();
                 for i in &interactions {
                     // take the string element
@@ -504,7 +505,7 @@ impl Widget for Overhead<'_> {
                 }
                 let icons_input = temp_list.join("\n");
 
-                // actions string
+                // Actions string
                 let mut temp_list: Vec<String> = Vec::new();
                 for i in &interactions {
                     let s = i.1.clone();
