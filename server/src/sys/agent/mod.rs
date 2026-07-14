@@ -68,7 +68,7 @@ impl<'a> System<'a> for Sys {
             read_data.groups.maybe(),
             read_data.rtsim_actors.maybe(),
             (
-                !&read_data.is_mounts,
+                read_data.is_mounts.maybe(),
                 read_data.is_riders.maybe(),
                 read_data.is_volume_riders.maybe(),
             ),
@@ -94,10 +94,14 @@ impl<'a> System<'a> for Sys {
                     light_emitter,
                     group,
                     rtsim_actor,
-                    (_, is_rider, is_volume_rider),
+                    (is_mount, is_rider, is_volume_rider),
                 )| {
                     let mut emitters = events.get_emitters();
                     let mut rng = rng();
+
+                    if is_mount.is_some() && body.is_none_or(|body| !body.has_free_will()) {
+                        return;
+                    }
 
                     // The entity that is moving, if riding it's the mount, otherwise it's itself
                     let moving_entity = is_rider
