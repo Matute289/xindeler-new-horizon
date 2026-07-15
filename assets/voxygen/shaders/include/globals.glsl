@@ -26,6 +26,7 @@ layout(std140, set = 0, binding = 0) uniform u_globals {
     vec4 gamma_exposure;
     vec4 last_lightning;
     vec2 wind_vel;
+    vec2 internal_res;
     float ambiance;
     // 0 - FirstPerson
     // 1 - ThirdPerson

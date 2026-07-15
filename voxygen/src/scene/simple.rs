@@ -274,6 +274,7 @@ impl Scene {
             scene_data.time,
             0.0,
             renderer.resolution().as_(),
+            renderer.internal_resolution().as_(),
             Vec2::new(SHADOW_NEAR, SHADOW_FAR),
             lantern_light.is_some() as usize,
             0,

@@ -70,12 +70,13 @@ pub struct Globals {
     gamma_exposure: [f32; 4],
     last_lightning: [f32; 4],
     wind_vel: [f32; 2],
+    internal_res: [f32; 2],
     ambiance: f32,
     cam_mode: u32,
     sprite_render_distance: f32,
     player_ori: f32,
     screen_fade: f32,
-    globals_dummy: f32,
+    globals_dummy: [f32; 3],
 }
 /// Make sure Globals is 16-byte-aligned.
 const _: () = assert!(core::mem::size_of::<Globals>().is_multiple_of(16));
@@ -111,6 +112,7 @@ impl Globals {
         tick: f64,
         client_tick: f64,
         screen_res: Vec2<u16>,
+        internal_res: Vec2<u16>,
         shadow_planes: Vec2<f32>,
         light_count: usize,
         shadow_count: usize,
@@ -193,12 +195,13 @@ impl Globals {
                 .with_w((last_lightning.1 % TIME_OVERFLOW) as f32)
                 .into_array(),
             wind_vel: wind_vel.into_array(),
+            internal_res: internal_res.as_().into_array(),
             ambiance: ambiance.clamped(0.0, 1.0),
             cam_mode: cam_mode as u32,
             sprite_render_distance,
             player_ori,
             screen_fade: screen_fade.clamp(0.0, 1.0),
-            globals_dummy: 0.0,
+            globals_dummy: [0.0; 3],
         }
     }
 }
@@ -216,6 +219,7 @@ impl Default for Globals {
             0.0,
             0.0,
             0.0,
+            Vec2::new(800, 500),
             Vec2::new(800, 500),
             Vec2::new(1.0, 25.0),
             0,

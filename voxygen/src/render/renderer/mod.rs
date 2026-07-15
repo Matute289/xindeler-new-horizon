@@ -1044,6 +1044,13 @@ impl Renderer {
     /// Get the resolution of the render target.
     pub fn resolution(&self) -> Vec2<u32> { self.resolution }
 
+    /// Get the internal resolution of the render target.
+    pub fn internal_resolution(&self) -> Vec2<u32> {
+        self.resolution
+            .map(|e| e as f32 * self.other_modes.upscale_mode.factor)
+            .as_()
+    }
+
     /// Get the resolution of the shadow render target.
     pub fn get_shadow_resolution(&self) -> (Vec2<u32>, Vec2<u32>) {
         match &self.state {

@@ -389,11 +389,11 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
     f_ao = 1.0;
     
     #ifndef EXPERIMENTAL_NOLODVOXELS
-        const float VOXEL_SCALE_FACTOR = 30.0;
+        const float VOXEL_SCALE_FACTOR = 100000.0;
         vec3 cam_dir = cam_to_frag;
         vec3 wpos = f_pos + focus_off.xyz;
         
-        voxel_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(wpos.xy * 0.01) * 0.02) * 3) / 3) * VOXEL_SCALE_FACTOR, 1.0, 128.0);
+        voxel_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(wpos.xy * 0.01) * 0.02) * 3) / 3) * VOXEL_SCALE_FACTOR / (internal_res.x + internal_res.y), 1.0, 128.0);
         
         #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
             const float MARCH_THRESHOLD = 4.0;
