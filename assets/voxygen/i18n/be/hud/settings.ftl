@@ -184,3 +184,4 @@ hud-settings-menu_buttons = Кнопкі Меню
 hud-settings-row_background_opacity = Празрыстасць Фону Радка
 hud-settings-indoor_ambience = Вызначэнне атмасферы ў памяшканні
 hud-settings-keyboard-binding = Спалучэнні клавіш
+hud-settings-instrument_volume = Гучнасць Інструментаў
