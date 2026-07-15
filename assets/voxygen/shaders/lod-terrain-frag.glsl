@@ -71,7 +71,7 @@ void main() {
     // which_norm = mix(0.0, 1.0, which_norm > 0.0);
     // vec3 normals[6] = vec3[](vec3(-1,0,0), vec3(1,0,0), vec3(0,-1,0), vec3(0,1,0), vec3(0,0,-1), vec3(0,0,1));
     vec3 f_norm = lod_norm(f_pos.xy);//mix(faceforward(f_norm, cam_pos.xyz - f_pos, -f_norm), my_norm, which_norm);
-    vec3 f_pos = mix(f_pos, my_pos, f_norm);
+    vec3 f_pos = mix(f_pos, my_pos, 1);
     // vec3 fract_pos = fract(f_pos);
     /* if (length(f_pos - cam_pos.xyz) <= view_distance.x + 32.0) {
         vec4 new_f_pos;

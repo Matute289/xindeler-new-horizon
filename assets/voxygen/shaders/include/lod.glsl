@@ -337,10 +337,10 @@ vec3 lod_col(vec2 pos) {
         vec2 shift = vec2(
             textureLod(sampler2D(t_noise, s_noise), wpos / 200, 0).x - 0.5,
             textureLod(sampler2D(t_noise, s_noise), wpos / 200 + 0.5, 0).x - 0.5
-        ) * 64 + vec2(
+        ) * 32 + vec2(
             textureLod(sampler2D(t_noise, s_noise), wpos / 50, 0).x - 0.5,
             textureLod(sampler2D(t_noise, s_noise), wpos / 50 + 0.5, 0).x - 0.5
-        ) * 48;
+        ) * 16;
         pos += shift;
         wpos += shift;
     #endif
@@ -416,7 +416,7 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
                 vec3 to_center = abs(voxel_pos - wpos + cam_dir * t);
                 voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
                 float dist = dot(cam_dir * t, -f_norm) + surf_depth;
-                f_ao = clamp(dist / voxel_sz * (1.25 - f_norm.z) + f_norm.z - 0.25, 0.25, 1.0);
+                f_ao = clamp(dist / voxel_sz + max(f_norm.z, 0.0), 0.0, 1.0);
                 voxel_pos -= focus_off.xyz;
                 break;
             }
