@@ -25,7 +25,7 @@ ChargedRanged(
     initial_projectile_speed: 125.0,
     scaled_projectile_speed: 25.0,
     marker: Some(IgniteArrow),
-    move_speed: 0.0,
+    move_speed: 0.3,
     meta: (
         init_event: Some(EnterStance(None)),
     ),

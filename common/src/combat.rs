@@ -383,10 +383,11 @@ impl Attack {
             (None, None) => None,
         };
 
-        let precision_power = self.precision_multiplier
-            * attacker
-                .and_then(|a| a.stats)
-                .map_or(1.0, |s| s.precision_power_mult);
+        let precision_power = 1.0
+            + ((self.precision_multiplier - 1.0)
+                * attacker
+                    .and_then(|a| a.stats)
+                    .map_or(1.0, |s| s.precision_power_mult));
 
         let attacked_modifiers = AttackedModification::attacked_modifiers(
             target,
