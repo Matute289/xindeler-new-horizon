@@ -408,7 +408,7 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
 
             voxel_pos = (floor((wpos - cam_dir * t) / voxel_sz) + 0.5) * voxel_sz;
             #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-                float surf_depth = lod_voxel_noise(voxel_pos + focus_off.xyz, voxel_sz, f_norm);
+                float surf_depth = lod_voxel_noise(voxel_pos, voxel_sz, f_norm);
             #else
                 const float surf_depth = 0.0;
             #endif
@@ -416,7 +416,7 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
                 vec3 to_center = abs(voxel_pos - wpos + cam_dir * t);
                 voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
                 float dist = dot(cam_dir * t, -f_norm) + surf_depth;
-                f_ao = clamp(dist / voxel_sz * (1.25 - f_norm.z) + f_norm.z - 0.25, 0.0, 1.0);
+                f_ao = clamp(dist / voxel_sz * (1.25 - f_norm.z) + f_norm.z - 0.25, 0.25, 1.0);
                 voxel_pos -= focus_off.xyz;
                 break;
             }
