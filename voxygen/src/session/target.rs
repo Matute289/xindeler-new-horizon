@@ -120,6 +120,10 @@ pub(super) fn targets_under_cursor(
     // The maximum distance at which entities can be targetted is based on the
     // distance to the nearest terrain obstacle being looked at
     let max_target_dist = obstacle_cast.map_or(MAX_TARGET_RANGE, |(d, _)| d);
+    let cam_segment = LineSegment3 {
+        start: cam_pos,
+        end: cam_pos + cam_dir * max_target_dist,
+    };
 
     let uids = ecs.read_storage::<Uid>();
 
@@ -161,11 +165,19 @@ pub(super) fn targets_under_cursor(
         .filter(|(_, _, r, d_sqr)| *d_sqr <= max_target_dist.powi(2) + 2.0 * max_target_dist * r + r.powi(2))
         // Ignore entities intersecting the camera, unless the player is wielding (heuristic used to decide if player is trying to target an entity with an ability)
         .filter(|(_, _, r, d_sqr)| player_wielding || *d_sqr > r.powi(2))
-        // Substract sphere radius from distance to the camera if not wielding
-        .map(|(e, p, r, d_sqr)| (e, p, r, d_sqr.sqrt() - if player_wielding { 0.0 } else { r }))
+        // Substract sphere radius from distance to the camera
+        .map(|(e, p, r, d_sqr)| {
+            (e, p, r, d_sqr.sqrt() - r, cam_segment.distance_to_point(p))
+        })
         .collect::<Vec<_>>();
-    // Sort by distance
-    nearby.sort_unstable_by(|a, b| a.3.partial_cmp(&b.3).unwrap());
+
+    // If player is wielding, sort by distance to the ray, otherwise sort by
+    // distance to the camera
+    if player_wielding {
+        nearby.sort_unstable_by(|a, b| a.4.partial_cmp(&b.4).unwrap());
+    } else {
+        nearby.sort_unstable_by(|a, b| a.3.partial_cmp(&b.3).unwrap());
+    }
 
     let seg_ray = LineSegment3 {
         start: cam_pos,
@@ -174,7 +186,7 @@ pub(super) fn targets_under_cursor(
     // TODO: fuzzy borders
     let entity_target = nearby
         .iter()
-        .map(|(e, p, r, _)| (e, *p, r))
+        .map(|(e, p, r, _, _)| (e, *p, r))
         // Find first one that intersects the ray segment, allow for entities nearby to the camera ray when wielding a weapon (as some abilities target an entity)
         .find(|(_, p, r)| {
             if player_wielding {
