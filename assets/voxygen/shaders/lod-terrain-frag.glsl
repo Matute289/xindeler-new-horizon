@@ -19,6 +19,8 @@
 
 #define HAS_LOD_FULL_INFO
 
+#define IS_LOD_TERRAIN
+
 #include <globals.glsl>
 #include <cloud.glsl>
 #include <lod.glsl>
@@ -58,7 +60,7 @@ void main() {
         view_mat *
         vec4(f_pos, 1);
     gl_Position.z = -1000.0 / (gl_Position.z + 10000.0); */
-    vec3 my_pos = vec3(f_pos.xy, my_alt);
+    vec3 f_pos = vec3(f_pos.xy, my_alt);
     //vec3 my_norm = lod_norm(f_pos.xy/*, f_square*/);
 
     //float which_norm = dot(my_norm, normalize(cam_pos.xyz - my_pos));
@@ -70,8 +72,7 @@ void main() {
 
     // which_norm = mix(0.0, 1.0, which_norm > 0.0);
     // vec3 normals[6] = vec3[](vec3(-1,0,0), vec3(1,0,0), vec3(0,-1,0), vec3(0,1,0), vec3(0,0,-1), vec3(0,0,1));
-    vec3 f_norm = lod_norm(f_pos.xy);//mix(faceforward(f_norm, cam_pos.xyz - f_pos, -f_norm), my_norm, which_norm);
-    vec3 f_pos = mix(f_pos, my_pos, 1);
+    // vec3 f_norm = lod_norm(f_pos.xy);//mix(faceforward(f_norm, cam_pos.xyz - f_pos, -f_norm), my_norm, which_norm);
     // vec3 fract_pos = fract(f_pos);
     /* if (length(f_pos - cam_pos.xyz) <= view_distance.x + 32.0) {
         vec4 new_f_pos;
