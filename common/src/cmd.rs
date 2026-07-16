@@ -427,6 +427,7 @@ pub enum ServerChatCommand {
     Location,
     MakeBlock,
     MakeNpc,
+    MakeParty,
     MakeSprite,
     MakeTestChar,
     MakeVolume,
@@ -842,6 +843,27 @@ impl ServerChatCommand {
                 Content::localized("command-make_npc-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::MakeParty => {
+                let class_kinds = || {
+                    // Single source of truth — don't hardcode the class list.
+                    crate::comp::class::ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword().to_owned())
+                        .collect::<Vec<_>>()
+                };
+                cmd(
+                    vec![
+                        Enum("class1", class_kinds(), Required),
+                        Integer("level1", 1, Required),
+                        Enum("class2", class_kinds(), Required),
+                        Integer("level2", 1, Required),
+                        Enum("class3", class_kinds(), Required),
+                        Integer("level3", 1, Required),
+                    ],
+                    Content::localized("command-make_party-desc"),
+                    Some(Admin),
+                )
+            },
             ServerChatCommand::MakeSprite => cmd(
                 vec![Enum("sprite", SPRITE_KINDS.clone(), Required)],
                 Content::localized("command-make_sprite-desc"),
@@ -1288,6 +1310,7 @@ impl ServerChatCommand {
             ServerChatCommand::Light => "light",
             ServerChatCommand::MakeBlock => "make_block",
             ServerChatCommand::MakeNpc => "make_npc",
+            ServerChatCommand::MakeParty => "make_party",
             ServerChatCommand::MakeSprite => "make_sprite",
             ServerChatCommand::Motd => "motd",
             ServerChatCommand::Object => "object",

@@ -76,6 +76,7 @@ command-location-desc = Teleport to a location
 command-make_block-desc = Make a block at your location with a color
 command-make_npc-desc = Spawn entity from config near you.
   For an example or to auto complete use Tab.
+command-make_party-desc = (Admin) Spawn 3 NPCs near you, each a given class and level, with a random name/race and a moral alignment compatible with your own, then group them with you: class1 level1 class2 level2 class3 level3
 command-make_sprite-desc = Make a sprite at your location, to define sprite attributes use ron syntax for a StructureSprite.
 command-make_volume-desc = Create a volume (experimental)
 command-motd-desc = View the server description

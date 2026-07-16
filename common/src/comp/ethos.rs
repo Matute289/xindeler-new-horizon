@@ -23,6 +23,21 @@ pub enum Order {
     Chaotic,
 }
 
+impl Moral {
+    /// The `Moral` alignments a party NPC may be rolled as, given the calling
+    /// player's own `Moral` (BL-82 `/make_party`): a Good player never gets
+    /// an Evil companion and vice versa; Neutral tolerates any of the three.
+    /// Pure/data-only — no ECS access — so it's cheaply unit-testable in
+    /// isolation from the rest of `/make_party`.
+    pub fn compatible_npc_morals(self) -> &'static [Moral] {
+        match self {
+            Moral::Good => &[Moral::Good, Moral::Neutral],
+            Moral::Neutral => &[Moral::Good, Moral::Neutral, Moral::Evil],
+            Moral::Evil => &[Moral::Evil, Moral::Neutral],
+        }
+    }
+}
+
 /// A character's moral/ethical alignment. Two scores in `[-BOUND, BOUND]`
 /// (`good_evil`: −Evil…+Good, `law_chaos`: −Chaotic…+Lawful); the classic 9-box
 /// (Lawful Good … Chaotic Evil) is derived via
@@ -214,6 +229,34 @@ mod tests {
             pc.nudge(dge, dlc);
         }
         assert_eq!(pc.moral(), Moral::Evil);
+    }
+
+    #[test]
+    fn compatible_npc_morals_excludes_the_opposite_pole() {
+        assert_eq!(Moral::Good.compatible_npc_morals(), &[
+            Moral::Good,
+            Moral::Neutral
+        ]);
+        assert_eq!(Moral::Evil.compatible_npc_morals(), &[
+            Moral::Evil,
+            Moral::Neutral
+        ]);
+        assert_eq!(Moral::Neutral.compatible_npc_morals(), &[
+            Moral::Good,
+            Moral::Neutral,
+            Moral::Evil
+        ]);
+        // A Good player never rolls an Evil companion, and vice versa.
+        assert!(!Moral::Good.compatible_npc_morals().contains(&Moral::Evil));
+        assert!(!Moral::Evil.compatible_npc_morals().contains(&Moral::Good));
+        // Neutral is always in range (never excluded from a compatible party).
+        for player_moral in [Moral::Good, Moral::Neutral, Moral::Evil] {
+            assert!(
+                player_moral
+                    .compatible_npc_morals()
+                    .contains(&Moral::Neutral)
+            );
+        }
     }
 
     #[test]

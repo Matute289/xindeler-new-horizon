@@ -15,7 +15,7 @@ use crate::{
         server_description::ServerDescription,
         server_physics::ServerPhysicsForceRecord,
     },
-    sys::terrain::SpawnEntityData,
+    sys::terrain::{NpcData, SpawnEntityData},
     wiring::{self, OutputFormula},
 };
 #[cfg(feature = "worldgen")]
@@ -190,6 +190,7 @@ fn do_command(
         ServerChatCommand::Light => handle_light,
         ServerChatCommand::MakeBlock => handle_make_block,
         ServerChatCommand::MakeNpc => handle_make_npc,
+        ServerChatCommand::MakeParty => handle_make_party,
         ServerChatCommand::MakeSprite => handle_make_sprite,
         ServerChatCommand::Motd => handle_motd,
         ServerChatCommand::Object => handle_object,
@@ -973,6 +974,221 @@ fn handle_make_npc(
                 ("n", number.to_string()),
                 ("config", entity_config),
             ]),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/make_party <class1> <level1> <class2> <level2> <class3> <level3>` —
+/// admin-only test tool (BL-82): spawns 3 NPCs near the caller, each with a
+/// given class/level, a random name and race, and a moral alignment
+/// ([`Moral`]) compatible with the caller's own current `Ethos` (see
+/// [`Moral::compatible_npc_morals`] for the exact compatibility table), then
+/// groups all 3 with the caller as leader — a party of 4. Unblocks manual
+/// testing of the party-frames HUD (BL-82 EM-5.17) without needing 3 human
+/// players online.
+///
+/// Deliberately out of scope (BL-57, not started): class-specific starter
+/// gear — NPCs spawn with only the generic per-body default loadout, same as
+/// any other bare humanoid NPC.
+fn handle_make_party(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{
+        class::{CharacterClass, ClassKind},
+        ethos::{Ethos, Order},
+        group::GroupManager,
+        skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind},
+    };
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /make_party.".to_string(),
+        ));
+    }
+
+    let (class1, level1, class2, level2, class3, level3) =
+        parse_cmd_args!(args, String, u16, String, u16, String, u16);
+
+    let mut members = Vec::with_capacity(3);
+    for (class_arg, level) in [(class1, level1), (class2, level2), (class3, level3)] {
+        let class_arg = class_arg.ok_or_else(|| action.help_content())?;
+        let class =
+            ClassKind::from_keyword(class_arg.to_lowercase().as_str()).ok_or_else(|| {
+                Content::Plain(format!(
+                    "Unknown class '{class_arg}'. Options: {}.",
+                    ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+        let level = level.ok_or_else(|| action.help_content())?;
+        if !(1..=MAX_CHARACTER_LEVEL).contains(&level) {
+            return Err(Content::Plain(format!(
+                "Level must be between 1 and {MAX_CHARACTER_LEVEL}."
+            )));
+        }
+        members.push((class, level));
+    }
+
+    // The calling player's own moral alignment gates which NPCs can roll in
+    // (BL-33 `Ethos`; default = True Neutral for characters that never picked
+    // one).
+    let player_moral = server
+        .state
+        .ecs()
+        .read_storage::<Ethos>()
+        .get(target)
+        .copied()
+        .unwrap_or_default()
+        .moral();
+    let allowed_morals = player_moral.compatible_npc_morals();
+
+    let comp::Pos(spawn_pos) = position(server, target, "target")?;
+
+    let mut roll_rng = rng();
+    let mut npc_entities = Vec::with_capacity(members.len());
+    for (class, level) in members {
+        let order = match roll_rng.random_range(0..3usize) {
+            0 => Order::Lawful,
+            1 => Order::Neutral,
+            _ => Order::Chaotic,
+        };
+        let moral = allowed_morals[roll_rng.random_range(0..allowed_morals.len())];
+
+        // Random race + name: `EntityInfo::at` defaults to a random humanoid
+        // body, and `with_automatic_name` derives a name from that body (the
+        // same "random race + name" mechanism used by other auto-named entity
+        // configs, e.g. `assets/common/entity/dungeon/vampire/strigoi.ron`).
+        let entity_info = EntityInfo::at(spawn_pos)
+            .with_alignment(Alignment::Npc)
+            .with_automatic_name()
+            .with_ethos(Ethos::from_box(order, moral));
+        // Generic per-body default gear only — class starter kits are BL-57,
+        // not started; see the doc comment above.
+        let loadout = LoadoutBuilder::from_default(&entity_info.body);
+        let entity_info = entity_info.with_loadout(loadout);
+
+        let NpcData {
+            pos,
+            stats,
+            skill_set,
+            health,
+            poise,
+            inventory,
+            agent,
+            body,
+            alignment,
+            ethos,
+            scale,
+            ..
+        } = SpawnEntityData::from_entity_info(entity_info)
+            .into_npc_data_inner()
+            .expect("EntityInfo without special_entity always yields SpawnEntityData::Npc");
+
+        let npc_entity = server
+            .state
+            .create_npc(
+                pos,
+                comp::Ori::default(),
+                stats,
+                skill_set,
+                health,
+                poise,
+                inventory,
+                body,
+                scale,
+            )
+            .with(alignment)
+            .maybe_with(ethos)
+            .maybe_with(agent)
+            .build();
+
+        let _ = server
+            .state
+            .ecs_mut()
+            .write_storage::<CharacterClass>()
+            .insert(npc_entity, CharacterClass(class));
+        if let Some(mut skill_set) = server
+            .state
+            .ecs_mut()
+            .write_storage::<comp::SkillSet>()
+            .get_mut(npc_entity)
+        {
+            let class_group = SkillGroupKind::Class(class);
+            skill_set.unlock_skill_group(class_group);
+            skill_set.set_level(level);
+            // `set_level` only tops up the General group's earned exp — the
+            // freshly-unlocked Class group starts at 0 SP, so without this the
+            // `level` arg would leave the class tree totally inert (no
+            // signature/capstone/passives spendable at any level). Grant SP
+            // via the same exp-driven path `/skill_point` uses, so a levelled
+            // party member actually has a functioning class kit to test.
+            const SKILL_POINTS_PER_LEVEL: u16 = 1;
+            skill_set.add_skill_points(class_group, level * SKILL_POINTS_PER_LEVEL);
+        }
+
+        npc_entities.push(npc_entity);
+    }
+
+    // Group the 3 NPCs with the caller as leader — a party of 4. `target` (not
+    // one of the NPCs) leads, so this calls `GroupManager::add_group_member`
+    // directly rather than reusing `CreateNpcGroupEvent`/
+    // `handle_create_npc_group` (which always treats the first spawned NPC as
+    // leader). Mirrors `handle_invite_accept`'s notifier (`server/src/events/
+    // invite.rs`) so the caller's party-frames HUD updates immediately.
+    {
+        let ecs = server.state.ecs();
+        let entities = ecs.entities();
+        let uids = ecs.read_storage::<Uid>();
+        let alignments = ecs.read_storage::<Alignment>();
+        let clients = ecs.read_storage::<Client>();
+        let map_markers = ecs.read_storage::<comp::MapMarker>();
+        let mut groups = ecs.write_storage::<comp::Group>();
+        let mut group_manager = ecs.write_resource::<GroupManager>();
+
+        for npc_entity in &npc_entities {
+            group_manager.add_group_member(
+                target,
+                *npc_entity,
+                &entities,
+                &mut groups,
+                &alignments,
+                &uids,
+                |entity, group_change| {
+                    group_change
+                        .try_map_ref(|e| uids.get(*e).copied())
+                        .zip(clients.get(entity))
+                        .map(|(g, c)| {
+                            crate::events::shared::update_map_markers(
+                                &map_markers,
+                                &uids,
+                                c,
+                                &group_change,
+                            );
+                            c.send_fallible(ServerGeneral::GroupUpdate(g));
+                        });
+                },
+            );
+        }
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Party spawned: 3 NPCs (moral alignment compatible with {player_moral:?}) grouped \
+                 with you."
+            )),
         ),
     );
 
