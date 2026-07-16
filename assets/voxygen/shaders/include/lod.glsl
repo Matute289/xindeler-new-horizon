@@ -418,9 +418,10 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_to_frag, out vec3 voxel_pos, o
                 float dist = dot(cam_dir * t, -f_norm) + surf_depth;
                 f_ao = clamp(dist / voxel_sz + max(f_norm.z, 0.0), 0.0, 1.0);
                 voxel_pos -= focus_off.xyz;
-                break;
+                return;
             }
         }
+        voxel_pos = f_pos;
     #endif
 }
 
