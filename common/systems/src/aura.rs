@@ -287,19 +287,26 @@ fn activate_aura(
                     stats: read_data.stats.get(target),
                     mass: read_data.masses.get(target),
                 };
+                let buff_cats = {
+                    let mut vec = vec![BuffCategory::FromActiveAura(applier_uid, key)];
+                    if let Some(cat) = category {
+                        vec.push(cat.clone());
+                    }
+                    vec
+                };
                 emitters.emit(BuffEvent {
                     entity: target,
                     buff_change: BuffChange::Add(Buff::new(
                         kind,
                         data,
-                        vec![
-                            category.clone(),
-                            BuffCategory::FromActiveAura(applier_uid, key),
-                        ],
+                        buff_cats,
                         source,
                         *read_data.time,
                         dest_info,
                         read_data.masses.get(applier),
+                        // Auras, after the initial creation, do not have a specific target that an
+                        // ability is designating
+                        None,
                     )),
                 });
             }

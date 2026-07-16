@@ -10,7 +10,10 @@ ComboMelee2(
                 ),
                 range: 4.0,
                 angle: 15.0,
-                damage_effect: Some(BuffsVulnerable(0.4, Parried)),
+                attack_effect: Some((
+                    AdditionalDamage(0.4),
+                    TargetHasBuff(Parried),
+                )),
             ),
             buildup_duration: 0.5,
             swing_duration: 0.1,

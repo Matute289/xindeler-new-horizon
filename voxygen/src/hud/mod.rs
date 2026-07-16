@@ -108,7 +108,7 @@ use common::{
         },
         item::{
             ItemDefinitionIdOwned, ItemDesc, ItemI18n, MaterialStatManifest, Quality,
-            tool::{AbilityContext, ToolKind},
+            tool::ToolKind,
         },
         loot_owner::LootOwnerKind,
         skillset::{SkillGroupKind, SkillsPersistenceError, skills::Skill},
@@ -215,6 +215,7 @@ const WORLD_COLOR: Color = Color::Rgba(0.95, 1.0, 0.95, 1.0);
 //Nametags
 const GROUP_MEMBER: Color = Color::Rgba(0.47, 0.84, 1.0, 1.0);
 const DEFAULT_NPC: Color = Color::Rgba(1.0, 1.0, 1.0, 1.0);
+const MARKED_NPC: Color = Color::Rgba(1.0, 0.8, 0.0, 1.0);
 
 // UI Color-Theme
 const UI_MAIN: Color = Color::Rgba(0.61, 0.70, 0.70, 1.0); // Greenish Blue
@@ -2382,6 +2383,7 @@ impl Hud {
             }
 
             let speech_bubbles = &self.speech_bubbles;
+            let my_stats = stats.get(me);
             // Render overhead name tags and health bars
             for (
                 entity,
@@ -2445,6 +2447,8 @@ impl Hud {
                         let is_me = entity == me;
                         let dist_sqr = pos.distance_squared(player_pos);
 
+                        let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid));
+
                         // Determine whether to display nametag and healthbar based on whether the
                         // entity is mounted, has been damaged, is targeted/selected, or is in your
                         // group
@@ -2458,7 +2462,8 @@ impl Hud {
                             && ((info.target_entity == Some(entity))
                                 || info.selected_entity.is_some_and(|s| s.0 == entity)
                                 || health.is_none_or(overhead::should_show_healthbar)
-                                || in_group)
+                                || in_group
+                                || is_marked)
                             && dist_sqr
                                 < (if in_group {
                                     NAMETAG_GROUP_RANGE
@@ -2488,6 +2493,7 @@ impl Hud {
                             },
                             hardcore: hardcore.contains(entity),
                             stance,
+                            marked: is_marked,
                         });
                         // Only render bubble if nearby or if its me and setting is on
                         let bubble = if (dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
@@ -3254,9 +3260,6 @@ impl Hud {
             skillsets.get(entity),
             bodies.get(entity),
         ) {
-            let stance = stances.get(entity);
-            let context = AbilityContext::from(stance, Some(inventory), combo);
-
             let skillbar_events = Skillbar::new(
                 client,
                 &info,
@@ -3284,11 +3287,11 @@ impl Hud {
                 &msm,
                 &rbm,
                 self.floaters.combo_floater,
-                &context,
                 combo,
                 char_states.get(entity),
-                stance,
+                stances.get(entity),
                 stats.get(entity),
+                buffs.get(entity),
             )
             .set(self.ids.skillbar, ui_widgets);
 
@@ -3919,7 +3922,6 @@ impl Hud {
                 poises.get(entity),
                 uids.get(entity),
             ) {
-                let context = AbilityContext::from(stances.get(entity), Some(inventory), combo);
                 for event in Diary::new(
                     &self.show,
                     client,
@@ -3943,8 +3945,10 @@ impl Hud {
                     tooltip_manager,
                     &mut self.slot_manager,
                     self.pulse,
-                    &context,
+                    stances.get(entity),
+                    combo,
                     stats.get(entity),
+                    buffs.get(entity),
                 )
                 .set(self.ids.diary, ui_widgets)
                 {
@@ -5602,12 +5606,13 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Berserk => imgs.buff_reckless,
         BuffKind::ScornfulTaunt => imgs.buff_scornfultaunt,
         BuffKind::Tenacity => imgs.buff_tenacity,
-        BuffKind::OwlTalon => imgs.buff_owltalon,
-        BuffKind::HeavyNock => imgs.buff_heavynock,
-        BuffKind::Heartseeker => imgs.buff_heartseeker,
+        BuffKind::StormChaser => imgs.buff_stormchaser,
         BuffKind::EagleEye => imgs.buff_eagleeye,
-        BuffKind::ArdentHunter => imgs.buff_ardenthunter,
-        BuffKind::SepticShot => imgs.buff_septicshot,
+        BuffKind::ArdentHunt => imgs.buff_ardenthunt,
+        BuffKind::IgniteArrow => imgs.bow_ignite_arrow,
+        BuffKind::FreezeArrow => imgs.bow_freeze_arrow,
+        BuffKind::DrenchArrow => imgs.bow_drench_arrow,
+        BuffKind::JoltArrow => imgs.bow_jolt_arrow,
         //  Debuffs
         BuffKind::Bleeding => imgs.debuff_bleed_0,
         BuffKind::Cursed => imgs.debuff_cursed_0,
@@ -5626,7 +5631,6 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Amnesia => imgs.debuff_amnesia_0,
         BuffKind::OffBalance => imgs.debuff_offbalance_0,
         BuffKind::Chilled => imgs.debuff_chilled,
-        BuffKind::ArdentHunted => imgs.debuff_ardenthunted,
     }
 }
 

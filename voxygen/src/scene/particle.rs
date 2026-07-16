@@ -218,6 +218,17 @@ impl ParticleMgr {
                                 },
                             );
                         },
+                        Some(Reagent::Earth) => {
+                            self.particles.resize_with(self.particles.len() + 150, || {
+                                Particle::new(
+                                    Duration::from_millis(250),
+                                    time,
+                                    ParticleMode::BigShrapnel,
+                                    *pos,
+                                    scene_data,
+                                )
+                            })
+                        },
                         _ => {},
                     }
                 } else {
@@ -240,6 +251,7 @@ impl ParticleMgr {
                                     Some(Reagent::Yellow) => ParticleMode::FireworkYellow,
                                     Some(Reagent::FireRain) => ParticleMode::FireworkYellow,
                                     Some(Reagent::FireGigas) => ParticleMode::FireGigasExplosion,
+                                    Some(Reagent::Earth) => ParticleMode::BigShrapnel,
                                     None => ParticleMode::Shrapnel,
                                 },
                                 *pos,
@@ -725,7 +737,6 @@ impl ParticleMgr {
             self.maintain_aura_particles(scene_data);
             self.maintain_buff_particles(scene_data);
             self.maintain_fluid_particles(scene_data);
-            self.maintain_stance_particles(scene_data);
             self.maintain_marker_particles(scene_data);
             self.maintain_arcing_particles(scene_data);
             self.maintain_pool_particles(scene_data);
@@ -2510,7 +2521,7 @@ impl ParticleMgr {
                                 );
 
                                 let nose_pos = pos + look_dir * 3.0;
-                                let nose_angle: f32 = 2.8; // 
+                                let nose_angle: f32 = 2.8; //
                                 let nose_range = 3.0_f32;
                                 self.particles.resize_with(
                                     self.particles.len() + usize::from(heartbeats) * 6,
@@ -3332,6 +3343,134 @@ impl ParticleMgr {
                                 )
                             },
                         )
+                    },
+                    BuffKind::IgniteArrow => {
+                        self.particles.resize_with(
+                            self.particles.len()
+                                + usize::from(
+                                    self.scheduler.heartbeats(Duration::from_millis(150)),
+                                ),
+                            || {
+                                let start_pos = pos
+                                    + Vec3::unit_z() * body.height() * 0.45
+                                    + ori.look_dir().xy().rotated_z(0.6)
+                                        * body.front_radius()
+                                        * 2.5
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.05;
+                                let end_pos = start_pos
+                                    + Vec3::unit_z() * 0.7
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.05;
+                                Particle::new_directed(
+                                    Duration::from_secs(1),
+                                    time,
+                                    ParticleMode::FlameThrower,
+                                    start_pos,
+                                    end_pos,
+                                    scene_data,
+                                )
+                            },
+                        );
+                    },
+                    BuffKind::FreezeArrow => {
+                        self.particles.resize_with(
+                            self.particles.len()
+                                + usize::from(
+                                    self.scheduler.heartbeats(Duration::from_millis(400)),
+                                ),
+                            || {
+                                let start_pos = pos
+                                    + Vec3::unit_z() * body.height() * 0.45
+                                    + ori.look_dir().xy().rotated_z(0.6)
+                                        * body.front_radius()
+                                        * 2.5
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.05;
+                                let end_pos = start_pos
+                                    + Vec3::unit_z() * 1.0
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.05;
+                                Particle::new_directed(
+                                    Duration::from_millis(500),
+                                    time,
+                                    ParticleMode::Ice,
+                                    start_pos,
+                                    end_pos,
+                                    scene_data,
+                                )
+                            },
+                        );
+                    },
+                    BuffKind::DrenchArrow => {
+                        self.particles.resize_with(
+                            self.particles.len()
+                                + usize::from(
+                                    self.scheduler.heartbeats(Duration::from_millis(500)),
+                                ),
+                            || {
+                                let start_pos = pos
+                                    + Vec3::unit_z() * body.height() * 0.45
+                                    + ori.look_dir().xy().rotated_z(0.6)
+                                        * body.front_radius()
+                                        * 2.5
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.05;
+                                let end_pos = start_pos - Vec3::unit_z() * 0.7
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.05;
+                                Particle::new_directed(
+                                    Duration::from_secs(1),
+                                    time,
+                                    ParticleMode::CultistFlame,
+                                    start_pos,
+                                    end_pos,
+                                    scene_data,
+                                )
+                            },
+                        );
+                    },
+                    BuffKind::JoltArrow => {
+                        self.particles.resize_with(
+                            self.particles.len()
+                                + usize::from(self.scheduler.heartbeats(Duration::from_millis(20))),
+                            || {
+                                let start_pos = pos
+                                    + Vec3::unit_z() * body.height() * 0.45
+                                    + ori.look_dir().xy().rotated_z(0.6)
+                                        * body.front_radius()
+                                        * 2.5
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.2;
+                                let end_pos = start_pos
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * 0.5;
+                                Particle::new_directed(
+                                    Duration::from_millis(150),
+                                    time,
+                                    ParticleMode::ElectricSparks,
+                                    start_pos,
+                                    end_pos,
+                                    scene_data,
+                                )
+                            },
+                        );
                     },
                     _ => {},
                 }
@@ -4266,33 +4405,30 @@ impl ParticleMgr {
         }
     }
 
-    fn maintain_stance_particles(&mut self, scene_data: &SceneData) {
+    fn maintain_marker_particles(&mut self, scene_data: &SceneData) {
         let state = scene_data.state;
         let ecs = state.ecs();
         let time = state.get_time();
         let mut rng = rand::rng();
 
-        for (interp, pos, stance, body, ori) in (
+        for (interp, pos, vel, marker) in (
             ecs.read_storage::<Interpolated>().maybe(),
             &ecs.read_storage::<Pos>(),
-            &ecs.read_storage::<comp::Stance>(),
-            &ecs.read_storage::<Body>(),
-            &ecs.read_storage::<Ori>(),
+            ecs.read_storage::<Vel>().maybe(),
+            &ecs.read_storage::<comp::FrontendMarker>(),
         )
             .join()
         {
             let pos = interp.map_or(pos.0, |i| i.pos);
 
-            use comp::ability::{BowStance, Stance};
-            match stance {
-                Stance::Bow(BowStance::IgniteArrow) => {
+            use comp::{FrontendMarker, visual::TorusMode};
+            match marker {
+                FrontendMarker::IgniteArrow => {
                     self.particles.resize_with(
                         self.particles.len()
                             + usize::from(self.scheduler.heartbeats(Duration::from_millis(150))),
                         || {
                             let start_pos = pos
-                                + Vec3::unit_z() * body.height() * 0.45
-                                + ori.look_dir().xy().rotated_z(0.6) * body.front_radius() * 2.5
                                 + Vec3::<f32>::zero()
                                     .map(|_| rng.random_range(-1.0..1.0))
                                     .normalized()
@@ -4314,42 +4450,12 @@ impl ParticleMgr {
                         },
                     );
                 },
-                Stance::Bow(BowStance::DrenchArrow) => {
-                    self.particles.resize_with(
-                        self.particles.len()
-                            + usize::from(self.scheduler.heartbeats(Duration::from_millis(500))),
-                        || {
-                            let start_pos = pos
-                                + Vec3::unit_z() * body.height() * 0.45
-                                + ori.look_dir().xy().rotated_z(0.6) * body.front_radius() * 2.5
-                                + Vec3::<f32>::zero()
-                                    .map(|_| rng.random_range(-1.0..1.0))
-                                    .normalized()
-                                    * 0.05;
-                            let end_pos = start_pos - Vec3::unit_z() * 0.7
-                                + Vec3::<f32>::zero()
-                                    .map(|_| rng.random_range(-1.0..1.0))
-                                    .normalized()
-                                    * 0.05;
-                            Particle::new_directed(
-                                Duration::from_secs(1),
-                                time,
-                                ParticleMode::CultistFlame,
-                                start_pos,
-                                end_pos,
-                                scene_data,
-                            )
-                        },
-                    );
-                },
-                Stance::Bow(BowStance::FreezeArrow) => {
+                FrontendMarker::FreezeArrow => {
                     self.particles.resize_with(
                         self.particles.len()
                             + usize::from(self.scheduler.heartbeats(Duration::from_millis(400))),
                         || {
                             let start_pos = pos
-                                + Vec3::unit_z() * body.height() * 0.45
-                                + ori.look_dir().xy().rotated_z(0.6) * body.front_radius() * 2.5
                                 + Vec3::<f32>::zero()
                                     .map(|_| rng.random_range(-1.0..1.0))
                                     .normalized()
@@ -4371,27 +4477,25 @@ impl ParticleMgr {
                         },
                     );
                 },
-                Stance::Bow(BowStance::JoltArrow) => {
+                FrontendMarker::DrenchArrow => {
                     self.particles.resize_with(
                         self.particles.len()
-                            + usize::from(self.scheduler.heartbeats(Duration::from_millis(20))),
+                            + usize::from(self.scheduler.heartbeats(Duration::from_millis(500))),
                         || {
                             let start_pos = pos
-                                + Vec3::unit_z() * body.height() * 0.45
-                                + ori.look_dir().xy().rotated_z(0.6) * body.front_radius() * 2.5
                                 + Vec3::<f32>::zero()
                                     .map(|_| rng.random_range(-1.0..1.0))
                                     .normalized()
-                                    * 0.2;
-                            let end_pos = start_pos
+                                    * 0.05;
+                            let end_pos = start_pos - Vec3::unit_z() * 0.7
                                 + Vec3::<f32>::zero()
                                     .map(|_| rng.random_range(-1.0..1.0))
                                     .normalized()
-                                    * 0.5;
+                                    * 0.05;
                             Particle::new_directed(
-                                Duration::from_millis(150),
+                                Duration::from_secs(1),
                                 time,
-                                ParticleMode::ElectricSparks,
+                                ParticleMode::CultistFlame,
                                 start_pos,
                                 end_pos,
                                 scene_data,
@@ -4399,29 +4503,6 @@ impl ParticleMgr {
                         },
                     );
                 },
-                _ => {},
-            }
-        }
-    }
-
-    fn maintain_marker_particles(&mut self, scene_data: &SceneData) {
-        let state = scene_data.state;
-        let ecs = state.ecs();
-        let time = state.get_time();
-        let mut rng = rand::rng();
-
-        for (interp, pos, vel, marker) in (
-            ecs.read_storage::<Interpolated>().maybe(),
-            &ecs.read_storage::<Pos>(),
-            ecs.read_storage::<Vel>().maybe(),
-            &ecs.read_storage::<comp::FrontendMarker>(),
-        )
-            .join()
-        {
-            let pos = interp.map_or(pos.0, |i| i.pos);
-
-            use comp::{FrontendMarker, visual::TorusMode};
-            match marker {
                 FrontendMarker::JoltArrow => {
                     self.particles.resize_with(
                         self.particles.len()

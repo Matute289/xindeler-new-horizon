@@ -1,9 +1,9 @@
 use crate::{
     comp::{
-        self, ActiveAbilities, Alignment, Beam, Body, CharacterActivity, CharacterState, Combo,
-        ControlAction, Controller, ControllerInputs, Density, Energy, Health, InputAttr, InputKind,
-        Inventory, InventoryAction, Mass, Melee, Ori, PhysicsState, Pos, PreviousPhysCache, Scale,
-        SkillSet, Stance, StateUpdate, Stats, Vel,
+        self, ActiveAbilities, Alignment, Beam, Body, Buffs, CharacterActivity, CharacterState,
+        Combo, ControlAction, Controller, ControllerInputs, Density, Energy, Health, InputAttr,
+        InputKind, Inventory, InventoryAction, Mass, Melee, Ori, PhysicsState, Pos,
+        PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats, Vel,
         body::parts::Heads,
         character_state::OutputEvents,
         item::{MaterialStatManifest, tool::AbilityMap},
@@ -171,6 +171,7 @@ pub struct JoinData<'a> {
     pub alignments: &'a ReadStorage<'a, Alignment>,
     pub prev_phys_caches: &'a ReadStorage<'a, PreviousPhysCache>,
     pub bodies: &'a ReadStorage<'a, Body>,
+    pub buffs: Option<&'a Buffs>,
 }
 
 pub struct JoinStruct<'a> {
@@ -206,6 +207,7 @@ pub struct JoinStruct<'a> {
     pub alignments: &'a ReadStorage<'a, Alignment>,
     pub prev_phys_caches: &'a ReadStorage<'a, PreviousPhysCache>,
     pub bodies: &'a ReadStorage<'a, Body>,
+    pub buffs: Option<&'a Buffs>,
 }
 
 impl<'a> JoinData<'a> {
@@ -255,6 +257,7 @@ impl<'a> JoinData<'a> {
             alignments: j.alignments,
             prev_phys_caches: j.prev_phys_caches,
             bodies: j.bodies,
+            buffs: j.buffs,
         }
     }
 }

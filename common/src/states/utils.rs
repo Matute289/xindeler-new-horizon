@@ -13,11 +13,7 @@ use crate::{
         controller::InventoryManip,
         crustacean, golem,
         inventory::slot::{ArmorSlot, EquipSlot, Slot},
-        item::{
-            Hands, ItemKind, ToolKind,
-            armor::Friction,
-            tool::{self, AbilityContext},
-        },
+        item::{Hands, ItemKind, ToolKind, armor::Friction, tool},
         object, quadruped_low, quadruped_medium, quadruped_small, ship,
         skills::{SKILL_MODIFIERS, Skill, SwimSkill},
         theropod,
@@ -477,7 +473,15 @@ pub fn handle_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f3
 
 /// Updates components to move player as if theyre on ground or in air
 fn basic_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
-    let efficiency = efficiency * data.stats.move_speed_modifier * data.stats.friction_modifier;
+    let section_modifier = match data.character.stage_section() {
+        Some(StageSection::Buildup) => data.stats.buildup_move_speed_modifier,
+        Some(StageSection::Charge) => data.stats.charge_move_speed_modifier,
+        _ => 1.0,
+    };
+    let efficiency = efficiency
+        * data.stats.move_speed_modifier
+        * data.stats.friction_modifier
+        * section_modifier;
 
     let accel = if let Some(block) = data.physics.on_ground {
         // FRIC_GROUND temporarily used to normalize things around expected values
@@ -1441,7 +1445,6 @@ fn handle_ability(
     output_events: &mut OutputEvents,
     input: InputKind,
 ) -> bool {
-    let context = AbilityContext::from(data.stance, data.inventory, data.combo);
     if let Some(ability_input) = input.into()
         && let Some((ability, from_offhand, spec_ability)) = data
             .active_abilities
@@ -1452,14 +1455,21 @@ fn handle_ability(
                     data.skill_set,
                     Some(data.body),
                     Some(data.character),
-                    &context,
+                    data.stance,
+                    data.combo,
                     Some(data.stats),
+                    data.buffs,
                 )
             })
             .map(|(mut a, f, s)| {
-                if let Some(contextual_stats) = a.ability_meta().contextual_stats {
-                    a = a.adjusted_by_stats(contextual_stats.equivalent_stats(data))
-                }
+                let mut contextual_stats =
+                    if let Some(contextual_stats) = a.ability_meta().contextual_stats {
+                        contextual_stats.equivalent_stats(data)
+                    } else {
+                        tool::Stats::one()
+                    };
+                contextual_stats.energy_efficiency *= data.stats.energy_efficiency_modifier;
+                a = a.adjusted_by_stats(contextual_stats);
                 (a, f, s)
             })
             .filter(|(ability, _, _)| ability.requirements_paid(data, update))
@@ -1488,14 +1498,23 @@ fn handle_ability(
         )) {
             Ok(character_state) => {
                 let tool_kind = character_state.ability_info().and_then(|ai| ai.tool);
+                let target_uid = character_state
+                    .ability_info()
+                    .and_then(|ai| ai.input_attr)
+                    .and_then(|ia| ia.target_entity);
                 update.character = character_state;
 
-                if let Some(init_event) = ability.ability_meta().init_event {
+                for init_event in ability
+                    .ability_meta()
+                    .init_event
+                    .iter()
+                    .chain(ability.ability_meta().init_event2.iter())
+                {
                     match init_event {
                         AbilityInitEvent::EnterStance(stance) => {
                             output_events.emit_server(ChangeStanceEvent {
                                 entity: data.entity,
-                                stance,
+                                stance: *stance,
                             });
                         },
                         AbilityInitEvent::GainBuff {
@@ -1510,8 +1529,8 @@ fn handle_ability(
                             output_events.emit_server(BuffEvent {
                                 entity: data.entity,
                                 buff_change: BuffChange::Add(Buff::new(
-                                    kind,
-                                    BuffData::new(strength, duration),
+                                    *kind,
+                                    BuffData::new(*strength, *duration),
                                     vec![BuffCategory::SelfBuff],
                                     BuffSource::Character {
                                         by: *data.uid,
@@ -1520,7 +1539,14 @@ fn handle_ability(
                                     *data.time,
                                     dest_info,
                                     Some(data.mass),
+                                    target_uid,
                                 )),
+                            });
+                        },
+                        AbilityInitEvent::RemoveBuff(buff) => {
+                            output_events.emit_server(BuffEvent {
+                                entity: data.entity,
+                                buff_change: BuffChange::RemoveByKind(*buff),
                             });
                         },
                     }
@@ -1707,10 +1733,16 @@ fn checked_tick_attack(
     timer: Duration,
     other_modifier: Option<f32>,
 ) -> Option<Duration> {
+    let section_modifier = match data.character.stage_section() {
+        Some(StageSection::Buildup) => data.stats.buildup_speed_modifier,
+        Some(StageSection::Charge) => data.stats.charge_speed_modifier,
+        Some(StageSection::Recover) => data.stats.recovery_speed_modifier,
+        _ => 1.0,
+    };
     checked_tick(
         data,
         timer,
-        Some(data.stats.attack_speed_modifier * other_modifier.unwrap_or(1.0)),
+        Some(data.stats.attack_speed_modifier * section_modifier * other_modifier.unwrap_or(1.0)),
     )
 }
 
@@ -1956,7 +1988,7 @@ fn loadout_change_hook(data: &JoinData<'_>, output_events: &mut OutputEvents, cl
 #[serde(deny_unknown_fields)]
 pub struct MovementModifier {
     pub buildup: Option<f32>,
-    pub swing: Option<f32>,
+    pub action: Option<f32>,
     pub recover: Option<f32>,
 }
 
@@ -1964,7 +1996,7 @@ pub struct MovementModifier {
 #[serde(deny_unknown_fields)]
 pub struct OrientationModifier {
     pub buildup: Option<f32>,
-    pub swing: Option<f32>,
+    pub action: Option<f32>,
     pub recover: Option<f32>,
 }
 

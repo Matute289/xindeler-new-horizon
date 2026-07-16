@@ -7,10 +7,10 @@ use super::{
 use crate::ui::slot::{self, SlotKey, SumSlot};
 use common::{
     comp::{
-        ActiveAbilities, Body, CharacterState, Combo, Energy, Inventory, Item, ItemKey, SkillSet,
-        Stance, Stats,
+        ActiveAbilities, Body, Buffs, CharacterState, Combo, Energy, Inventory, Item, ItemKey,
+        SkillSet, Stance, Stats,
         ability::{Ability, AbilityInput, AuxiliaryAbility},
-        item::tool::{AbilityContext, ToolKind},
+        item::tool::ToolKind,
         slot::{InvSlotId, Slot},
     },
     recipe::ComponentRecipeBook,
@@ -129,11 +129,11 @@ type HotbarSource<'a> = (
     &'a SkillSet,
     Option<&'a ActiveAbilities>,
     &'a Body,
-    &'a AbilityContext,
     Option<&'a Combo>,
     Option<&'a CharacterState>,
     Option<&'a Stance>,
     Option<&'a Stats>,
+    Option<&'a Buffs>,
 );
 type HotbarImageSource<'a> = (&'a ItemImgs, &'a img_ids::Imgs);
 
@@ -149,11 +149,11 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
             skillset,
             active_abilities,
             body,
-            contexts,
             combo,
             char_state,
             stance,
             stats,
+            buffs,
         ): &HotbarSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         const GREYED_OUT: Color = Color::Rgba(0.3, 0.3, 0.3, 0.8);
@@ -174,7 +174,9 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                 *char_state,
                                 Some(inventory),
                                 Some(skillset),
-                                contexts,
+                                *stance,
+                                *combo,
+                                *buffs,
                             )
                         })
                 });
@@ -190,8 +192,10 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     skillset,
                                     Some(body),
                                     *char_state,
-                                    contexts,
+                                    *stance,
+                                    *combo,
                                     *stats,
+                                    *buffs,
                                 )
                             })
                             .map(|(ability, _, _)| {
@@ -248,9 +252,11 @@ type AbilitiesSource<'a> = (
     &'a ActiveAbilities,
     &'a Inventory,
     &'a SkillSet,
-    &'a AbilityContext,
+    Option<&'a Stance>,
+    Option<&'a Combo>,
     Option<&'a CharacterState>,
     Option<&'a Stats>,
+    Option<&'a Buffs>,
 );
 
 impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
@@ -258,7 +264,9 @@ impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
 
     fn image_key(
         &self,
-        (active_abilities, inventory, skillset, contexts, char_state, stats): &AbilitiesSource<'a>,
+        (active_abilities, inventory, skillset, stance, combo, char_state, stats, buffs): &AbilitiesSource<
+            'a,
+        >,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         let ability_id = match self {
             Self::Slot(index) => active_abilities
@@ -268,12 +276,21 @@ impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
                     Some(skillset),
                     *stats,
                 )
-                .ability_id(*char_state, Some(inventory), Some(skillset), contexts),
+                .ability_id(
+                    *char_state,
+                    Some(inventory),
+                    Some(skillset),
+                    *stance,
+                    *combo,
+                    *buffs,
+                ),
             Self::Ability(ability) => Ability::from(*ability).ability_id(
                 *char_state,
                 Some(inventory),
                 Some(skillset),
-                contexts,
+                *stance,
+                *combo,
+                *buffs,
             ),
         };
 

@@ -116,7 +116,7 @@ impl CharacterBehavior for Data {
             },
             StageSection::Charge => {
                 if input_is_pressed(data, self.static_data.ability_info.input)
-                    && update.energy.current() >= self.static_data.energy_cost
+                    && update.energy.current() >= 1.0
                     && self.timer < self.static_data.charge_duration
                 {
                     let charge = (self.timer.as_secs_f32()
@@ -134,7 +134,7 @@ impl CharacterBehavior for Data {
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);
                 } else if input_is_pressed(data, self.static_data.ability_info.input)
-                    && update.energy.current() >= self.static_data.energy_cost
+                    && update.energy.current() >= 1.0
                 {
                     // Maintains charge
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
@@ -150,8 +150,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
                         c.stage_section = StageSection::Action;
                         c.timer = Duration::default();
-                        c.movement_modifier = self.static_data.movement_modifier.swing;
-                        c.ori_modifier = self.static_data.ori_modifier.swing;
+                        c.movement_modifier = self.static_data.movement_modifier.action;
+                        c.ori_modifier = self.static_data.ori_modifier.action;
                     }
                 }
             },
@@ -224,11 +224,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

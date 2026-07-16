@@ -494,7 +494,7 @@ impl StateExt for State {
     fn create_safezone(&mut self, range: Option<f32>, pos: comp::Pos) -> EcsEntityBuilder<'_> {
         use comp::{
             aura::{Aura, AuraKind, AuraTarget, Auras},
-            buff::{BuffCategory, BuffData, BuffKind, BuffSource},
+            buff::{BuffData, BuffKind, BuffSource},
         };
         let time = self.get_time();
         // TODO: Consider using the area system for this
@@ -505,7 +505,7 @@ impl StateExt for State {
                 AuraKind::Buff {
                     kind: BuffKind::Invulnerability,
                     data: BuffData::new(1.0, Some(Secs(1.0))),
-                    category: BuffCategory::Natural,
+                    category: None,
                     source: BuffSource::World,
                 },
                 range.unwrap_or(100.0),

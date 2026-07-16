@@ -5,9 +5,10 @@ use specs::{
 
 use common::{
     comp::{
-        self, ActiveAbilities, Beam, Body, CharacterActivity, CharacterState, Combo, Controller,
-        Density, Energy, Health, Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState, Poise,
-        Pos, PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats, Vel,
+        self, ActiveAbilities, Beam, Body, Buffs, CharacterActivity, CharacterState, Combo,
+        Controller, Density, Energy, Health, Inventory, InventoryManip, Mass, Melee, Ori,
+        PhysicsState, Poise, Pos, PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats,
+        Vel,
         character_state::{CharacterStateEvents, OutputEvents},
         inventory::item::{MaterialStatManifest, tool::AbilityMap},
     },
@@ -55,6 +56,7 @@ pub struct ReadData<'a> {
     inventories: ReadStorage<'a, Inventory>,
     stances: ReadStorage<'a, Stance>,
     prev_phys_caches: ReadStorage<'a, PreviousPhysCache>,
+    buffs: ReadStorage<'a, Buffs>,
 }
 
 /// ## Character Behavior System
@@ -229,6 +231,7 @@ impl<'a> System<'a> for Sys {
                 alignments: &read_data.alignments,
                 prev_phys_caches: &read_data.prev_phys_caches,
                 bodies: &read_data.bodies,
+                buffs: read_data.buffs.get(entity),
             };
 
             for action in actions {

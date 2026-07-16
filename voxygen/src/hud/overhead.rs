@@ -1,7 +1,7 @@
 use super::{
     DEFAULT_NPC, ENEMY_HP_COLOR, FACTION_COLOR, GROUP_COLOR, GROUP_MEMBER, HP_COLOR, LOW_HP_COLOR,
-    QUALITY_EPIC, REGION_COLOR, SAY_COLOR, STAMINA_COLOR, TELL_COLOR, TEXT_BG, TEXT_COLOR,
-    cr_color, img_ids::Imgs,
+    MARKED_NPC, QUALITY_EPIC, REGION_COLOR, SAY_COLOR, STAMINA_COLOR, TELL_COLOR, TEXT_BG,
+    TEXT_COLOR, cr_color, img_ids::Imgs,
 };
 use crate::{
     GlobalState,
@@ -75,6 +75,7 @@ pub struct Info<'a> {
     pub combat_rating: Option<f32>,
     pub hardcore: bool,
     pub stance: Option<&'a Stance>,
+    pub marked: bool,
 }
 
 /// Determines whether to show the healthbar
@@ -165,6 +166,7 @@ impl Widget for Overhead<'_> {
             combat_rating,
             hardcore,
             stance,
+            marked,
         }) = self.info
         {
             // Used to set healthbar colours based on hp_percentage
@@ -291,6 +293,8 @@ impl Widget for Overhead<'_> {
                     GROUP_MEMBER
                 /*} else if targets player { //TODO: Add a way to see if the entity is trying to attack the player, their pet(s) or a member of their group and recolour their nametag accordingly
                 DEFAULT_NPC*/
+                } else if marked {
+                    MARKED_NPC
                 } else {
                     DEFAULT_NPC
                 })

@@ -12,7 +12,10 @@ FinisherMelee(
         ),
         range: 4.0,
         angle: 15.0,
-        damage_effect: Some(StunnedVulnerable(2.5)),
+        attack_effect: Some((
+            AdditionalDamage(2.5),
+            TargetPoised,
+        )),
     ),
     minimum_combo: 20,
     meta: (

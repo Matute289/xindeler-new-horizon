@@ -189,11 +189,13 @@ impl CharacterBehavior for Data {
                             (base_pos, base_dir)
                         };
 
-                    let projectile = self.static_data.projectile.clone().create_projectile(
-                        Some(*data.uid),
-                        precision_mult,
-                        Some(self.static_data.ability_info),
-                    );
+                    let (projectile, marker) =
+                        self.static_data.projectile.clone().create_projectile(
+                            Some(*data.uid),
+                            precision_mult,
+                            Some(self.static_data.ability_info),
+                            Some(data.stats),
+                        );
                     output_events.emit_server(ShootEvent {
                         entity: Some(data.entity),
                         source_vel: Some(*data.vel),
@@ -202,9 +204,9 @@ impl CharacterBehavior for Data {
                         body: self.static_data.projectile_body,
                         projectile,
                         light: self.static_data.projectile_light,
-                        speed: self.static_data.projectile_speed,
+                        speed: self.static_data.projectile_speed * data.stats.projectile_speed_mult,
                         object: None,
-                        marker: None,
+                        marker,
                     });
 
                     // Removes energy from character when arrow is fired
@@ -241,11 +243,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recover from attack
                     if let CharacterState::RapidRanged(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

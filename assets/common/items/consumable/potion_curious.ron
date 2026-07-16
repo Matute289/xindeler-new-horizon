@@ -11,7 +11,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Frog, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Polymorphed,
@@ -20,7 +20,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Rabbit, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Polymorphed,
@@ -29,7 +29,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Rat, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Polymorphed,
@@ -38,7 +38,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Squirrel, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Polymorphed,
@@ -47,7 +47,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Cat, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Polymorphed,
@@ -56,7 +56,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Fungome, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Polymorphed,
@@ -65,7 +65,7 @@ ItemDef(
                     duration: Some(60),
                     misc_data: Some(Body(QuadrupedSmall(( species: Pig, body_type: Female )))),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ])
     ),

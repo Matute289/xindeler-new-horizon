@@ -3,7 +3,7 @@ BasicRanged(
     buildup_duration: 1.0,
     recover_duration: 0.4,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 6,
             buff: Some((
@@ -12,6 +12,7 @@ BasicRanged(
                 strength: DamageFraction(0.1),
                 chance: 0.1,
             )),
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(Arrow),

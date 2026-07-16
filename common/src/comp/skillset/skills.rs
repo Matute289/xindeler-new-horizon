@@ -106,7 +106,7 @@ pub enum BowSkill {
     Foothold,
     HeavyNock,
     ArdentHunt,
-    OwlTalon,
+    StormChaser,
     EagleEye,
     Heartseeker,
     Hawkstrike,
@@ -117,7 +117,7 @@ pub enum BowSkill {
     JoltArrow,
     Barrage,
     PiercingGale,
-    Scatterburst,
+    ThornStake,
     Fusillade,
     DeathVolley,
 }

@@ -3,16 +3,20 @@ BasicRanged(
     buildup_duration: 1.5,
     recover_duration: 1.75,
     projectile: (
-        kind: ExplosiveHazard(
+        kind: Explosive(
             radius: 2,
             min_falloff: 0.3,
             reagent: Some(Yellow),
-            is_sticky: false,
-            duration: 10,
+            target: EntityOnly,
         ),
         attack: Some((
             damage: 25,
+            damage_kind: Energy,
         )),
+        lifetime_override: Some(10.0),
+        is_point: false,
+        is_sticky: false,
+        hazard: true,
     ),
     projectile_body: Object(Mine),
     projectile_light: None,

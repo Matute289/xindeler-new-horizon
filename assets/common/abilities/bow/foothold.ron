@@ -18,9 +18,10 @@ LeapRanged(
     )),
     melee_required: true,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 12,
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(Arrow),

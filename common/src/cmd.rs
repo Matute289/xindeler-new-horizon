@@ -178,14 +178,14 @@ lazy_static! {
             BuffKind::OffBalance => "off_balance",
             BuffKind::Tenacity => "tenacity",
             BuffKind::Resilience => "resilience",
-            BuffKind::OwlTalon => "owl_talon",
-            BuffKind::HeavyNock => "heavy_nock",
-            BuffKind::Heartseeker => "heartseeker",
+            BuffKind::StormChaser => "storm_chaser",
             BuffKind::EagleEye => "eagle_eye",
             BuffKind::Chilled => "chilled",
-            BuffKind::ArdentHunter => "ardent_hunter",
-            BuffKind::ArdentHunted => "ardent_hunted",
-            BuffKind::SepticShot => "septic_shot",
+            BuffKind::ArdentHunt => "ardent_hunt",
+            BuffKind::IgniteArrow => "ignite_arrow",
+            BuffKind::FreezeArrow => "freeze_arrow",
+            BuffKind::DrenchArrow => "drench_arrow",
+            BuffKind::JoltArrow => "jolt_arrow",
         };
         let mut buff_parser = HashMap::new();
         for kind in BuffKind::iter() {

@@ -14,7 +14,6 @@ use common::{
         },
         buff::BuffKind,
         fluid_dynamics::LiquidKind,
-        item::tool::AbilityContext,
         skills::{AxeSkill, BowSkill, HammerSkill, SceptreSkill, Skill, StaffSkill, SwordSkill},
     },
     consts::GRAVITY,
@@ -2108,7 +2107,7 @@ impl AgentData<'_> {
                 );
                 if tactics.is_empty() {
                     try_tactic(
-                        BowSkill::OwlTalon,
+                        BowSkill::StormChaser,
                         BowTactics::HunterIntermediate,
                         &mut tactics,
                     );
@@ -2181,14 +2180,14 @@ impl AgentData<'_> {
                 BowTactics::HunterIntermediate => {
                     // ardent hunt
                     set_ability(controller, 0, 2);
-                    // foothold, heavy nock, owl talon, or eagle eye
+                    // foothold, heavy nock, storm chaser, or eagle eye
                     let mut options = vec![0, 1, 3, 4];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::HunterAdvanced => {
-                    // ardent hunt, owl talon, eagle eye, heartseeker, or hawkstrike
+                    // ardent hunt, storm chaser, eagle eye, heartseeker, or hawkstrike
                     let mut options = vec![2, 3, 4, 5, 6];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2235,14 +2234,14 @@ impl AgentData<'_> {
                 BowTactics::ArtilleryIntermediate => {
                     // barrage
                     set_ability(controller, 0, 12);
-                    // foothold, heavy nock, piercing gale, or scatterburst
+                    // foothold, heavy nock, piercing gale, or thorn stake
                     let mut options = vec![0, 1, 13, 14];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
                     set_random(controller, 3, &mut options);
                 },
                 BowTactics::ArtilleryAdvanced => {
-                    // barrage, piercing gale, scatterburst, fusillade, death volley
+                    // barrage, piercing gale, thorn stake, fusillade, death volley
                     let mut options = vec![12, 13, 14, 15, 16];
                     set_random(controller, 1, &mut options);
                     set_random(controller, 2, &mut options);
@@ -2522,24 +2521,10 @@ impl AgentData<'_> {
                     *next_input = Some(current_input);
                 }
             };
-            let prefer_m1m2 = matches!(
-                self.stance,
-                Some(Stance::Bow(
-                    BowStance::Scatterburst
-                        | BowStance::IgniteArrow
-                        | BowStance::DrenchArrow
-                        | BowStance::FreezeArrow
-                        | BowStance::JoltArrow
-                ))
-            );
             let prefer_m2 = matches!(
                 self.stance,
                 Some(Stance::Bow(
-                    BowStance::Barrage
-                        | BowStance::PiercingGale
-                        | BowStance::Hawkstrike
-                        | BowStance::Fusillade
-                        | BowStance::DeathVolley
+                    BowStance::Barrage | BowStance::Hawkstrike | BowStance::Heartseeker
                 ))
             );
             let current_input = self.char_state.ability_info().map(|ai| ai.input);
@@ -2550,12 +2535,6 @@ impl AgentData<'_> {
             let mut next_input = None;
             if let Some(input) = current_input {
                 continue_current_input(input, &mut next_input);
-            } else if prefer_m1m2 {
-                if rng.random_bool(0.3) {
-                    next_input = Some(InputKind::Primary);
-                } else {
-                    next_input = Some(InputKind::Secondary);
-                }
             } else if prefer_m2 {
                 if could_use_input(InputKind::Secondary, ability_preferences) {
                     next_input = Some(InputKind::Secondary);
@@ -2622,11 +2601,20 @@ impl AgentData<'_> {
             }
             if let Some(input) = next_input {
                 if could_use_input(input, ability_preferences) {
-                    if matches!(input, InputKind::Secondary)
-                        && matches!(self.stance, Some(Stance::Bow(BowStance::DeathVolley)))
-                    {
+                    let is_death_volley = if let Some(ability_input) = input.into() {
+                        let raw_input = self.active_abilities.get_ability(
+                            ability_input,
+                            Some(self.inventory),
+                            Some(self.skill_set),
+                            self.stats,
+                        );
+                        raw_input == Ability::MainWeaponAux(16)
+                    } else {
+                        false
+                    };
+                    if is_death_volley {
                         controller.push_action(ControlAction::StartInput {
-                            input: InputKind::Secondary,
+                            input,
                             target_entity: None,
                             select_pos: Some(tgt_data.pos.0),
                         });
@@ -2679,7 +2667,6 @@ impl AgentData<'_> {
         enum ActionStateConditions {
             ConditionStaffCanShockwave = 0,
         }
-        let context = AbilityContext::from(self.stance, Some(self.inventory), self.combo);
         let extract_ability = |input: AbilityInput| {
             self.active_abilities
                 .activate_ability(
@@ -2688,8 +2675,10 @@ impl AgentData<'_> {
                     self.skill_set,
                     self.body,
                     Some(self.char_state),
-                    &context,
+                    self.stance,
+                    self.combo,
                     self.stats,
+                    self.buffs,
                 )
                 .map_or(Default::default(), |a| a.0)
         };

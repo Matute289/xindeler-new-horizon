@@ -180,29 +180,29 @@ buff-tenacity = Tenacity
 buff-resilience = Resilience
     .desc = After having just taken a debilitating attack, you become more resilient to future incapaciting effects.
 ## Owl Talon
-buff-owltalon = Owl Talon
-    .desc = Taking advantage of your target not knowing of your presence, your next attack will be more precise and deal more damage.
-## Heavy Nock
-buff-heavynock = Heavy Nock
-    .desc = Nock a heavier arrow to your bow, allowing your next shot to stagger the target. The heavier arrow will have less momentum at longer ranges though.
-## Heartseeker
-buff-heartseeker = Heartseeker
-    .desc = Your next arrow will strike your enemy as if it'd dealt a heartwound, causing a more serious wound and giving you energy.
+buff-stormchaser = Storm Chaser
+    .desc = You revel in violence, when your arrows strike true your attacks and movements become faster.
 ## Eagle Eye
 buff-eagleeye = Eagle Eye
     .desc = You can clearly see the vulnerable areas on your targets, and have the agility required to direct every arrow to those areas.
 ## Chilled
 buff-chilled = Chilled
     .desc = The intense cold makes you a little slower and leaves you more vulnerable to forceful attacks.
-## Ardent Hunter
-buff-ardenthunter = Ardent Hunter
-    .desc = Your fervor causes your arrows to be more lethal to a specific target, and your energy to rise as you see your arrows strike them.
-## Aredent Hunted
-buff-ardenthunted = Ardent Hunted
-    .desc = You have been marked as a target by a fervent archer.
-## Septic Shot
-buff-septicshot = Septic Shot
-    .desc = Your next arrow will cause infection in the target, making it more deadly if the target has any ongoing conditions.
+## Ardent Hunt
+buff-ardenthunt = Ardent Hunt
+    .desc = Your fervor causes your arrows to be more lethal to a specific target, at the cost of them being weaker against other targets.
+## Ignite Arrow
+buff-ignitearrow = Ignite Arrow
+    .desc = You've ignited your next arrow, which will cause it to burn the target it strikes, and may be explosive if fired in a certain way.
+## Freeze Arrow
+buff-freezearrow = Freeze Arrow
+    .desc = You've frozen your next arrow, which will cause it to freeze the target it strikes, and it may explode in a cloud of frost if fired in a certain way.
+## Drench Arrow
+buff-drencharrow = Drench Arrow
+    .desc = You've drenched your next arrow in poison, which will cause it to poison the target it strikes, and it may explode in a cloud of poison if fired in a certain way.
+## Jolt Arrow
+buff-joltarrow = Jolt Arrow
+    .desc = You've statically charged your next arrow, which will create arcs of electricity from the target it strikes, and it may be attracted to targets if fired in a certain way.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

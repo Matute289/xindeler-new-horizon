@@ -16,6 +16,7 @@ BasicRanged(
                 strength: DamageFraction(0.8),
                 chance: 1.0,
             )),
+            damage_kind: Energy,
         )),
     ),
     projectile_body: Object(FireworkGreen),

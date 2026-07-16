@@ -10,14 +10,14 @@ use common::{
         Object, Ori, Pos, ThrownItem, TradingBehavior, Vel, WaypointArea,
         aura::{Aura, AuraKind, AuraTarget},
         body,
-        buff::{BuffCategory, BuffData, BuffKind, BuffSource},
+        buff::{BuffCategory, BuffChange, BuffData, BuffKind, BuffSource},
         item::MaterialStatManifest,
         ship::figuredata::VOXEL_COLLIDER_MANIFEST,
         tool::AbilityMap,
     },
     consts::MAX_CAMPFIRE_RANGE,
     event::{
-        ArcingEvent, CreateAuraEntityEvent, CreateItemDropEvent, CreateNpcEvent,
+        ArcingEvent, BuffEvent, CreateAuraEntityEvent, CreateItemDropEvent, CreateNpcEvent,
         CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent, CreateShipEvent,
         CreateSpecialEntityEvent, EventBus, InitializeCharacterEvent, InitializeSpectatorEvent,
         NpcBuilder, ShockwaveEvent, ShootEvent, SummonBeamPillarsEvent, ThrowEvent,
@@ -430,6 +430,20 @@ pub fn handle_shoot(server: &mut Server, ev: ShootEvent) {
             vel,
         });
 
+    if let Some(owner) = ev.entity {
+        state
+            .ecs()
+            .read_resource::<EventBus<BuffEvent>>()
+            .emit_now(BuffEvent {
+                entity: owner,
+                buff_change: BuffChange::RemoveByCategory {
+                    all_required: vec![BuffCategory::WeaponCoating],
+                    any_required: Vec::new(),
+                    none_required: Vec::new(),
+                },
+            });
+    }
+
     state
         .create_projectile(Pos(pos), Vel(vel), ev.body, ev.projectile)
         .maybe_with(ev.light)
@@ -545,7 +559,7 @@ pub fn handle_create_special_entity(server: &mut Server, ev: CreateSpecialEntity
                         AuraKind::Buff {
                             kind: BuffKind::RestingHeal,
                             data: BuffData::new(0.02, Some(Secs(1.0))),
-                            category: BuffCategory::Natural,
+                            category: None,
                             source: BuffSource::World,
                         },
                         MAX_CAMPFIRE_RANGE,
@@ -558,7 +572,7 @@ pub fn handle_create_special_entity(server: &mut Server, ev: CreateSpecialEntity
                         AuraKind::Buff {
                             kind: BuffKind::Burning,
                             data: BuffData::new(2.0, Some(Secs(10.0))),
-                            category: BuffCategory::Natural,
+                            category: None,
                             source: BuffSource::World,
                         },
                         0.7,
@@ -665,7 +679,7 @@ pub fn handle_create_object(
                             secondary_duration: None,
                             misc_data: None,
                         },
-                        category: BuffCategory::Magical,
+                        category: None,
                         source: BuffSource::World,
                     },
                     range,

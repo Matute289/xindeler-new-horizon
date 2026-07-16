@@ -106,11 +106,7 @@ impl CharacterBehavior for Data {
                     };
                     if self.timer < recover_duration {
                         // Recovery
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     } else {
                         // Done
                         end_melee_ability(data, &mut update);

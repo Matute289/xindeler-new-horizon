@@ -204,12 +204,13 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::ScornfulTaunt => "buff-scornfultaunt",
         BuffKind::Tenacity => "buff-tenacity",
         BuffKind::Resilience => "buff-resilience",
-        BuffKind::OwlTalon => "buff-owltalon",
-        BuffKind::HeavyNock => "buff-heavynock",
-        BuffKind::Heartseeker => "buff-heartseeker",
+        BuffKind::StormChaser => "buff-stormchaser",
         BuffKind::EagleEye => "buff-eagleeye",
-        BuffKind::ArdentHunter => "buff-ardenthunter",
-        BuffKind::SepticShot => "buff-septicshot",
+        BuffKind::ArdentHunt => "buff-ardenthunt",
+        BuffKind::IgniteArrow => "buff-ignitearrow",
+        BuffKind::FreezeArrow => "buff-freezearrow",
+        BuffKind::DrenchArrow => "buff-drencharrow",
+        BuffKind::JoltArrow => "buff-joltarrow",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
         BuffKind::Cursed => "buff-cursed",
@@ -227,7 +228,6 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Amnesia => "buff-amnesia",
         BuffKind::OffBalance => "buff-offbalance",
         BuffKind::Chilled => "buff-chilled",
-        BuffKind::ArdentHunted => "buff-ardenthunted",
         // Neutral
         BuffKind::Polymorphed => "buff-polymorphed",
     }
@@ -368,14 +368,14 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::OffBalance
                         | BuffKind::Tenacity
                         | BuffKind::Resilience
-                        | BuffKind::OwlTalon
-                        | BuffKind::HeavyNock
-                        | BuffKind::Heartseeker
+                        | BuffKind::StormChaser
                         | BuffKind::EagleEye
                         | BuffKind::Chilled
-                        | BuffKind::ArdentHunter
-                        | BuffKind::ArdentHunted
-                        | BuffKind::SepticShot => Cow::Borrowed(""),
+                        | BuffKind::ArdentHunt
+                        | BuffKind::IgniteArrow
+                        | BuffKind::FreezeArrow
+                        | BuffKind::DrenchArrow
+                        | BuffKind::JoltArrow => Cow::Borrowed(""),
                     };
 
                     write!(&mut description, "{}", buff_desc).unwrap();
@@ -647,36 +647,41 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         "common.abilities.bow.foothold" => imgs.bow_foothold,
         "common.abilities.bow.heavy_nock" => imgs.bow_heavy_nock,
         "common.abilities.bow.ardent_hunt" => imgs.bow_ardent_hunt,
-        "common.abilities.bow.owl_talon" => imgs.bow_owl_talon,
+        "common.abilities.bow.ardent_hunt_clear" => imgs.bow_ardent_hunt,
+        "common.abilities.bow.storm_chaser" => imgs.bow_storm_chaser,
+        "common.abilities.bow.storm_chaser_clear" => imgs.bow_storm_chaser,
         "common.abilities.bow.eagle_eye" => imgs.bow_eagle_eye,
         "common.abilities.bow.heartseeker" => imgs.bow_heartseeker,
+        "common.abilities.bow.heartseeker_shot" => imgs.bow_heartseeker,
+        "common.abilities.bow.burning_heartseeker_shot" => imgs.bow_burning_heartseeker,
+        "common.abilities.bow.freezing_heartseeker_shot" => imgs.bow_freezing_heartseeker,
+        "common.abilities.bow.poison_heartseeker_shot" => imgs.bow_poison_heartseeker,
+        "common.abilities.bow.lightning_heartseeker_shot" => imgs.bow_lightning_heartseeker,
         "common.abilities.bow.hawkstrike" => imgs.bow_hawkstrike,
         "common.abilities.bow.hawkstrike_shot" => imgs.bow_hawkstrike,
+        "common.abilities.bow.burning_hawkstrike_shot" => imgs.bow_burning_hawkstrike,
+        "common.abilities.bow.freezing_hawkstrike_shot" => imgs.bow_freezing_hawkstrike,
+        "common.abilities.bow.poison_hawkstrike_shot" => imgs.bow_poison_hawkstrike,
+        "common.abilities.bow.lightning_hawkstrike_shot" => imgs.bow_lightning_hawkstrike,
         "common.abilities.bow.septic_shot" => imgs.bow_septic_shot,
         "common.abilities.bow.ignite_arrow" => imgs.bow_ignite_arrow,
-        "common.abilities.bow.burning_arrow" => imgs.bow_burning_arrow,
         "common.abilities.bow.burning_broadhead" => imgs.bow_burning_broadhead,
         "common.abilities.bow.drench_arrow" => imgs.bow_drench_arrow,
-        "common.abilities.bow.poison_arrow" => imgs.bow_poison_arrow,
         "common.abilities.bow.poison_broadhead" => imgs.bow_poison_broadhead,
         "common.abilities.bow.freeze_arrow" => imgs.bow_freeze_arrow,
-        "common.abilities.bow.freezing_arrow" => imgs.bow_freezing_arrow,
         "common.abilities.bow.freezing_broadhead" => imgs.bow_freezing_broadhead,
         "common.abilities.bow.jolt_arrow" => imgs.bow_jolt_arrow,
-        "common.abilities.bow.lightning_arrow" => imgs.bow_lightning_arrow,
         "common.abilities.bow.lightning_broadhead" => imgs.bow_lightning_broadhead,
         "common.abilities.bow.barrage" => imgs.bow_barrage,
         "common.abilities.bow.barrage_shot" => imgs.bow_barrage,
         "common.abilities.bow.piercing_gale" => imgs.bow_piercing_gale,
-        "common.abilities.bow.piercing_gale_shot" => imgs.bow_piercing_gale,
-        "common.abilities.bow.scatterburst" => imgs.bow_scatterburst,
-        "common.abilities.bow.lesser_scatterburst" => imgs.bow_lesser_scatterburst,
-        "common.abilities.bow.greater_scatterburst" => imgs.bow_greater_scatterburst,
         "common.abilities.bow.fusillade" => imgs.bow_fusillade,
-        "common.abilities.bow.fusillade_shot" => imgs.bow_fusillade,
         "common.abilities.bow.death_volley" => imgs.bow_death_volley,
-        "common.abilities.bow.death_volley_shot" => imgs.bow_death_volley,
-        "common.abilities.bow.death_volley_heavy_shot" => imgs.bow_death_volley,
+        "common.abilities.bow.thorn_stake" => imgs.bow_thorn_stake,
+        "common.abilities.bow.burning_thorn_stake" => imgs.bow_burning_thorn_stake,
+        "common.abilities.bow.freezing_thorn_stake" => imgs.bow_freezing_thorn_stake,
+        "common.abilities.bow.poison_thorn_stake" => imgs.bow_poison_thorn_stake,
+        "common.abilities.bow.lightning_thorn_stake" => imgs.bow_lightning_thorn_stake,
         // Staff
         "common.abilities.staff.firebomb" => imgs.fireball,
         "common.abilities.staff.flamethrower" => imgs.flamethrower,

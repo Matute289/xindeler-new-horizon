@@ -10,7 +10,7 @@ ItemDef(
                     strength: 0.1,
                     duration: Some(30)
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: PotionSickness,
@@ -18,7 +18,7 @@ ItemDef(
                     strength: 0.15,
                     duration: Some(30),
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ]),
         container: Some(Simple("common.items.crafting_ing.empty_vial")),
