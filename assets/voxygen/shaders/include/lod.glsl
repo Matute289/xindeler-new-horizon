@@ -260,7 +260,7 @@ float horizon_at2(vec4 f_horizons, float alt, vec3 pos, vec4 light_dir) {
 vec2 splay(vec2 pos) {
     vec2 scale = textureSize(sampler2D(t_alt, s_alt), 0) * 32.0;
     float lod_dist = view_distance.x * 0.95 / max(scale.x, scale.y);
-    float dist = max(abs(pos.x), abs(pos.y));
+    float dist = abs(pos.x) + abs(pos.y);
     float stretch = (pow(dist, 5.5) * 0.75 + dist * 0.25) * (1.0 - lod_dist) + lod_dist;
     vec2 splayed = pos * stretch * scale;
     if (abs(pos.x) > 0.99 || abs(pos.y) > 0.99) {
@@ -413,13 +413,15 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_dir, out vec3 voxel_pos, out v
             if (dot(voxel_pos - wpos, -f_norm) > surf_depth) {
                 vec3 to_center = abs(voxel_pos - (wpos + cam_dir * t));
                 voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
-                float dist = dot(cam_dir * t, f_norm) + surf_depth;// * dot(f_norm, -cam_dir);
-                f_ao = clamp(dist / voxel_sz + max(f_norm.z, 0.5), 0.0, 1.0);
+                float dist = dot(cam_dir * t, f_norm) + surf_depth;
+                f_ao = clamp(dist / voxel_sz + max(f_norm.z, 0.5), 0.25, 1.0);
                 voxel_pos -= focus_off.xyz;
                 return;
             }
         }
         voxel_pos = f_pos;
+        // Fallback, if we didn't hit any voxels
+        voxel_norm = step(max(max(f_norm.x, f_norm.y), f_norm.z), f_norm) * sign(-cam_dir);
     #endif
 }
 
