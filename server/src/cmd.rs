@@ -29,7 +29,7 @@ use common::{
     assets,
     calendar::Calendar,
     cmd::{
-        AreaKind, BUFF_PACK, BUFF_PARSER, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
+        AreaKind, BUFF_PACK, BUFF_PARSER, CommandEnumArg, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
         PRESET_MANIFEST_PATH, ServerChatCommand,
     },
     combat,
@@ -169,6 +169,7 @@ fn do_command(
         ServerChatCommand::Explosion => handle_explosion,
         ServerChatCommand::Faction => handle_faction,
         ServerChatCommand::GiveItem => handle_give_item,
+        ServerChatCommand::GiveItemQuality => handle_give_item_quality,
         ServerChatCommand::Gizmos => handle_gizmos,
         ServerChatCommand::GizmosRange => handle_gizmos_range,
         ServerChatCommand::Goto => handle_goto,
@@ -684,6 +685,143 @@ fn handle_give_item(
                     Content::localized_with_args("command-give-inventory-success", [
                         ("total", LocalizationArg::from(give_amount as u64)),
                         ("item", LocalizationArg::from(item_name)),
+                    ]),
+                );
+                server.notify_client(client, msg);
+            }
+
+            let mut inventory_update_buffers = server
+                .state
+                .ecs_mut()
+                .write_storage::<comp::InventoryUpdateBuffer>();
+            if let Some(buf) = inventory_update_buffers.get_mut(target) {
+                buf.push(comp::InventoryUpdateEvent::Given);
+            }
+
+            res
+        } else {
+            Err(Content::localized_with_args("command-invalid-item", [(
+                "item", item_name,
+            )]))
+        }
+    } else {
+        Err(action.help_content())
+    }
+}
+
+/// `/give_item_quality <item> <quality> [num]` — admin-only test tool (BL-82
+/// EM-5.18): spawns an item at a chosen [`Quality`] tier, so the equipment
+/// panel's rarity-tier slot border rendering can be compared side by side
+/// without needing a matching item to naturally drop/craft at every tier.
+/// Otherwise identical to `/give_item` (same asset loading, same
+/// non-stackable amount cap), plus a quality override applied via
+/// [`Item::set_quality_override`]. Server-authoritative: gated by
+/// `needs_role: Admin` AND re-checked here via `real_role(..) == Admin`, same
+/// pattern as `/set_level`.
+///
+/// NOTE: the quality override is a per-instance runtime property, not
+/// persisted to the database (see `Item::set_quality_override` doc) — an
+/// item given this way that survives a server restart reverts to its item
+/// definition's baseline quality on reload. Acceptable for its purpose
+/// (live-session visual comparison); not fixed here as it would require a
+/// DB schema change for a testing-only command.
+///
+/// NOTE: for a **stackable** asset (e.g. a potion), `quality_override` isn't
+/// part of `Item`'s `PartialEq`/stack-merge check, so giving it a tier that
+/// differs from an existing stack of the same item already in the target's
+/// inventory will silently merge into that stack (adopting whichever
+/// quality was already there) rather than showing the new tier. Harmless in
+/// practice: the intended use (comparing equipment slot-border rendering)
+/// targets non-stackable gear, which never takes this path (each unit lands
+/// in its own slot via the `duplicate()` loop below).
+fn handle_give_item_quality(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    // Defense in depth beyond `needs_role`: re-verify against the authoritative
+    // admin source (same pattern as `/set_level`/`/set_class`).
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /give_item_quality.".to_string(),
+        ));
+    }
+
+    if let (Some(item_name), Some(quality_str), give_amount_opt) =
+        parse_cmd_args!(args, String, String, u32)
+    {
+        let quality = Quality::from_str(quality_str.to_lowercase().as_str()).map_err(|_| {
+            Content::Plain(format!(
+                "Unknown quality '{quality_str}'. Options: {}.",
+                Quality::all_options().join(", ")
+            ))
+        })?;
+
+        let give_amount = give_amount_opt.unwrap_or(1);
+        if let Ok(item) = Item::new_from_asset(&item_name.replace(['/', '\\'], "."))
+            .inspect_err(|error| error!(?error, "Failed to parse item asset!"))
+        {
+            let mut item: Item = item;
+            item.set_quality_override(quality);
+            let mut res = Ok(());
+
+            const MAX_GIVE_AMOUNT: u32 = 2000;
+            // Cap give_amount for non-stackable items
+            let give_amount = if item.is_stackable() {
+                give_amount
+            } else {
+                give_amount.min(MAX_GIVE_AMOUNT)
+            };
+
+            if let Ok(()) = item.set_amount(give_amount) {
+                server
+                    .state
+                    .ecs()
+                    .write_storage::<Inventory>()
+                    .get_mut(target)
+                    .map(|mut inv| {
+                        // NOTE: Deliberately ignores items that couldn't be pushed.
+                        if inv.push(item).is_err() {
+                            res = Err(Content::localized_with_args(
+                                "command-give-inventory-full",
+                                [("total", give_amount as u64), ("given", 0)],
+                            ));
+                        }
+                    });
+            } else {
+                let ability_map = server.state.ecs().read_resource::<AbilityMap>();
+                let msm = server.state.ecs().read_resource::<MaterialStatManifest>();
+                // This item can't stack. Give each item in a loop. `duplicate`
+                // carries the quality override over to each copy.
+                server
+                    .state
+                    .ecs()
+                    .write_storage::<Inventory>()
+                    .get_mut(target)
+                    .map(|mut inv| {
+                        for i in 0..give_amount {
+                            // NOTE: Deliberately ignores items that couldn't be pushed.
+                            if inv.push(item.duplicate(&ability_map, &msm)).is_err() {
+                                res = Err(Content::localized_with_args(
+                                    "command-give-inventory-full",
+                                    [("total", give_amount as u64), ("given", i as u64)],
+                                ));
+                                break;
+                            }
+                        }
+                    });
+            }
+
+            if res.is_ok() {
+                let msg = ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::localized_with_args("command-give_item_quality-success", [
+                        ("total", LocalizationArg::from(give_amount as u64)),
+                        ("item", LocalizationArg::from(item_name)),
+                        ("quality", LocalizationArg::from(quality_str)),
                     ]),
                 );
                 server.notify_client(client, msg);

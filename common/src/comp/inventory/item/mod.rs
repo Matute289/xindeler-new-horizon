@@ -494,6 +494,16 @@ pub struct Item {
     /// converted into the items durability. Only tracked for tools and armor
     /// currently.
     durability_lost: Option<u32>,
+    /// Per-instance override of this item's [`Quality`] tier, independent of
+    /// the (possibly shared, `Arc`'d) [`ItemDef`] backing it. `None` (the
+    /// common case) means `quality()` falls back to the definition's
+    /// baseline. Only set via [`Item::set_quality_override`], currently used
+    /// by admin/testing tooling (`/give_item_quality`) to spawn a chosen
+    /// tier of an item without mutating the shared definition, which is
+    /// cached and reused by every other `Item` loaded from the same asset.
+    /// NOTE: not persisted to the database — items reloaded from storage
+    /// revert to their definition's baseline quality.
+    quality_override: Option<Quality>,
 }
 
 /// Newtype around [`Item`] used for frontend events to prevent it accidentally
@@ -1093,6 +1103,7 @@ impl Item {
             item_config: None,
             hash: 0,
             durability_lost: None,
+            quality_override: None,
         };
         item.durability_lost = item.has_durability().then_some(0);
         item.update_item_state(ability_map, msm);
@@ -1203,6 +1214,9 @@ impl Item {
             "`new_item` has the same `item_def` and as an invariant, \
              self.set_amount(self.amount()) should always succeed.",
         );
+        if let Some(quality) = self.quality_override {
+            new_item.set_quality_override(quality);
+        }
         new_item.slots_mut().iter_mut().zip(self.slots()).for_each(
             |(new_item_slot, old_item_slot)| {
                 *new_item_slot = old_item_slot
@@ -1454,14 +1468,30 @@ impl Item {
     pub fn num_slots(&self) -> u16 { self.item_base.num_slots() }
 
     pub fn quality(&self) -> Quality {
-        match &self.item_base {
-            ItemBase::Simple(item_def) => item_def.quality.max(
-                self.components
-                    .iter()
-                    .fold(Quality::MIN, |a, b| a.max(b.quality())),
-            ),
-            ItemBase::Modular(mod_base) => mod_base.compute_quality(self.components()),
-        }
+        self.quality_override
+            .unwrap_or_else(|| match &self.item_base {
+                ItemBase::Simple(item_def) => item_def.quality.max(
+                    self.components
+                        .iter()
+                        .fold(Quality::MIN, |a, b| a.max(b.quality())),
+                ),
+                ItemBase::Modular(mod_base) => mod_base.compute_quality(self.components()),
+            })
+    }
+
+    /// Overrides this item instance's [`Quality`] tier, independent of its
+    /// (possibly shared) [`ItemDef`]. Mutating the definition's `quality`
+    /// field directly is not an option: `ItemBase::Simple` holds an
+    /// `Arc<ItemDef>` shared with (and cached for) every other `Item` loaded
+    /// from the same asset, so doing so would corrupt every other instance.
+    ///
+    /// Currently only used by admin/testing tooling (`/give_item_quality`,
+    /// BL-82 EM-5.18) to compare the equipment panel's rarity-tier slot
+    /// border rendering across quality tiers of the same item. NOTE: this
+    /// override is **not** persisted — an item saved to the database and
+    /// reloaded reverts to its definition's baseline quality.
+    pub fn set_quality_override(&mut self, quality: Quality) {
+        self.quality_override = Some(quality);
     }
 
     pub fn components(&self) -> &[Item] { &self.components }
@@ -2345,6 +2375,53 @@ mod tests {
         if !errs.is_empty() {
             panic!("item i18n manifest misses translation-id for following items {errs:#?}")
         }
+    }
+
+    #[test]
+    fn set_quality_override_changes_quality() {
+        let mut item = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        // The asset's baseline quality (see starter.ron) is Low.
+        assert_eq!(item.quality(), Quality::Low);
+
+        item.set_quality_override(Quality::Legendary);
+        assert_eq!(item.quality(), Quality::Legendary);
+    }
+
+    #[test]
+    fn set_quality_override_does_not_corrupt_other_properties() {
+        let mut item = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        let definition_id_before = item.item_definition_id().to_owned();
+        let amount_before = item.amount();
+
+        item.set_quality_override(Quality::Artifact);
+
+        assert_eq!(item.item_definition_id().to_owned(), definition_id_before);
+        assert_eq!(item.amount(), amount_before);
+    }
+
+    #[test]
+    fn set_quality_override_does_not_leak_across_instances_of_the_same_asset() {
+        // `ItemBase::Simple` holds an `Arc<ItemDef>` shared with (and cached
+        // for) every `Item` loaded from the same asset path. Overriding one
+        // instance's quality must not corrupt the shared definition and leak
+        // into a sibling instance loaded from the same asset.
+        let mut overridden = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        overridden.set_quality_override(Quality::Legendary);
+
+        let sibling = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        assert_eq!(sibling.quality(), Quality::Low);
+    }
+
+    #[test]
+    fn duplicate_propagates_quality_override() {
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        let mut item = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        item.set_quality_override(Quality::Epic);
+
+        let duplicated = item.duplicate(&ability_map, &msm);
+        assert_eq!(duplicated.quality(), Quality::Epic);
     }
 
     #[test]

@@ -52,6 +52,7 @@ command-dummy-desc = Spawns a training dummy
 command-explosion-desc = Explodes the ground around you
 command-faction-desc = Send messages to your faction
 command-give_item-desc = Give yourself some items. For an example or to auto complete use Tab.
+command-give_item_quality-desc = (Admin) Give yourself an item at a chosen quality tier, for comparing rarity-tier rendering: item quality [num]
 command-gizmos-desc = Manage gizmo subscriptions.
 command-gizmos_range-desc = Change the range of gizmo subscriptions.
 command-goto-desc = Teleport to a position
@@ -199,6 +200,7 @@ command-give-inventory-full = Player inventory full. Gave { $given ->
   *[other] { $given }
 } of { $total } items.
 command-give-inventory-success = Added { $total } x { $item } to the inventory.
+command-give_item_quality-success = Added { $total } x { $item } ({ $quality } quality) to the inventory.
 command-invalid-item = Invalid item: { $item }
 command-invalid-block-kind = Invalid block kind: { $kind }
 command-nof-entities-at-least = Number of entities should be at least 1

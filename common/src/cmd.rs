@@ -2,8 +2,10 @@ use crate::{
     assets::{AssetCombined, Ron},
     combat::GroupTarget,
     comp::{
-        self, AdminRole as Role, Skill, aura::AuraKindVariant, buff::BuffKind,
-        inventory::item::try_all_item_defs,
+        self, AdminRole as Role, Skill,
+        aura::AuraKindVariant,
+        buff::BuffKind,
+        inventory::item::{Quality, try_all_item_defs},
     },
     generation::try_all_entity_configs,
     npc, outcome,
@@ -404,6 +406,7 @@ pub enum ServerChatCommand {
     Explosion,
     Faction,
     GiveItem,
+    GiveItemQuality,
     Gizmos,
     GizmosRange,
     Goto,
@@ -693,6 +696,15 @@ impl ServerChatCommand {
                     Integer("num", 1, Optional),
                 ],
                 Content::localized("command-give_item-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::GiveItemQuality => cmd(
+                vec![
+                    AssetPath("item", "common.items.", ITEM_SPECS.clone(), Required),
+                    Enum("quality", Quality::all_options(), Required),
+                    Integer("num", 1, Optional),
+                ],
+                Content::localized("command-give_item_quality-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::Gizmos => cmd(
@@ -1288,6 +1300,7 @@ impl ServerChatCommand {
             ServerChatCommand::Explosion => "explosion",
             ServerChatCommand::Faction => "faction",
             ServerChatCommand::GiveItem => "give_item",
+            ServerChatCommand::GiveItemQuality => "give_item_quality",
             ServerChatCommand::Gizmos => "gizmos",
             ServerChatCommand::GizmosRange => "gizmos_range",
             ServerChatCommand::Goto => "goto",
@@ -1652,6 +1665,17 @@ impl_from_to_str_cmd!(AuraKindVariant, (
     Buff => "buff",
     FriendlyFire => "friendly_fire",
     ForcePvP => "force_pvp"
+));
+
+impl_from_to_str_cmd!(Quality, (
+    Low => "low",
+    Common => "common",
+    Moderate => "moderate",
+    High => "high",
+    Epic => "epic",
+    Legendary => "legendary",
+    Artifact => "artifact",
+    Debug => "debug"
 ));
 
 impl_from_to_str_cmd!(GroupTarget, (
