@@ -135,8 +135,9 @@ impl AaMode {
 /// Cloud modes
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum CloudMode {
-    /// No clouds. As cheap as it gets.
-    None,
+    /// No volumetrics, flat cloud texture.
+    #[serde(alias = "None")]
+    Flat,
     /// Clouds, but barely. Ideally, any machine should be able to handle this
     /// just fine.
     Minimal,
@@ -153,10 +154,6 @@ pub enum CloudMode {
     #[serde(other)]
     #[default]
     High,
-}
-
-impl CloudMode {
-    pub fn is_enabled(&self) -> bool { *self != CloudMode::None }
 }
 
 /// Fluid modes
@@ -608,6 +605,10 @@ pub enum ExperimentalShader {
     Outlines,
     /// Display various kinds of mesh in wireframe mode.
     Wireframe,
+    /// Disable haze due to Rayleigh scattering.
+    NoHaze,
+    /// Disable cloud rendering entirely.
+    NoClouds,
 }
 
 impl ExperimentalShader {

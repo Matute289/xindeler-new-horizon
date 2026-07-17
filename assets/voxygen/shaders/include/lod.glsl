@@ -137,7 +137,7 @@ vec2 textureBicubic16(texture2D tex, sampler sampl, vec2 texCoords) {
 // Gets the altitude at a position relative to focus_off.
 float alt_at(vec2 pos) {
     vec4 alt_sample = textureLod/*textureBicubic16*/(sampler2D(t_alt, s_alt), wpos_to_uv(focus_off.xy + pos), 0);
-    return (/*round*/((alt_sample.r / 256.0 + alt_sample.g) * (/*1300.0*//*1278.7266845703125*/view_distance.w)) + /*140.0*/view_distance.z - focus_off.z);
+    return (/*round*/((alt_sample.r * (1.0 / 256.0) + alt_sample.g) * (/*1300.0*//*1278.7266845703125*/view_distance.w)) + /*140.0*/view_distance.z - focus_off.z);
     //+ (texture(t_noise, pos * 0.002).x - 0.5) * 64.0;
 
     // return 0.0
@@ -260,7 +260,7 @@ float horizon_at2(vec4 f_horizons, float alt, vec3 pos, vec4 light_dir) {
 vec2 splay(vec2 pos) {
     vec2 scale = textureSize(sampler2D(t_alt, s_alt), 0) * 32.0;
     float lod_dist = view_distance.x * 0.95 / max(scale.x, scale.y);
-    float dist = max(abs(pos.x), abs(pos.y));
+    float dist = abs(pos.x) + abs(pos.y);
     float stretch = (pow(dist, 5.5) * 0.75 + dist * 0.25) * (1.0 - lod_dist) + lod_dist;
     vec2 splayed = pos * stretch * scale;
     if (abs(pos.x) > 0.99 || abs(pos.y) > 0.99) {
@@ -307,19 +307,6 @@ vec3 lod_norm(vec2 f_pos/*vec3 pos*/) {
 
     vec3 norm = lod_norm(f_pos, vec4(f_pos - vec2(SAMPLE_W), f_pos + vec2(SAMPLE_W)));
 
-    #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-        vec2 wpos = f_pos + focus_off.xy;
-        norm.xy += vec2(
-            textureLod(sampler2D(t_noise, s_noise), wpos / 250, 0).x - 0.5,
-            textureLod(sampler2D(t_noise, s_noise), wpos / 250 + 0.5, 0).x - 0.5
-        ) * 0.25 / pow(norm.z + 0.1, 3);
-        norm.xy += vec2(
-            textureLod(sampler2D(t_noise, s_noise), wpos / 100, 0).x - 0.5,
-            textureLod(sampler2D(t_noise, s_noise), wpos / 100 + 0.5, 0).x - 0.5
-        ) * 0.25 / pow(norm.z + 0.1, 3);
-        norm = normalize(norm);
-    #endif
-
     return norm;
 }
 
@@ -350,10 +337,10 @@ vec3 lod_col(vec2 pos) {
         vec2 shift = vec2(
             textureLod(sampler2D(t_noise, s_noise), wpos / 200, 0).x - 0.5,
             textureLod(sampler2D(t_noise, s_noise), wpos / 200 + 0.5, 0).x - 0.5
-        ) * 64 + vec2(
+        ) * 32 + vec2(
             textureLod(sampler2D(t_noise, s_noise), wpos / 50, 0).x - 0.5,
             textureLod(sampler2D(t_noise, s_noise), wpos / 50 + 0.5, 0).x - 0.5
-        ) * 48;
+        ) * 16;
         pos += shift;
         wpos += shift;
     #endif
@@ -389,6 +376,53 @@ vec3 water_diffuse(vec3 color, vec3 dir, float max_dist) {
     } else {
         return color;
     }
+}
+
+void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_dir, out vec3 voxel_pos, out vec3 voxel_norm, out float voxel_sz, out float f_ao) {
+    voxel_pos = f_pos;
+    voxel_norm = f_norm;
+    voxel_sz = 1.0;
+    f_ao = 1.0;
+    
+    #ifndef EXPERIMENTAL_NOLODVOXELS
+        const float VOXEL_SCALE_FACTOR = 100000.0;
+        vec3 wpos = f_pos + focus_off.xyz;
+        
+        voxel_sz = clamp(exp(floor(log(distance(cam_pos.xy, f_pos.xy) * 0.0001 + noise_2d(wpos.xy * 0.01) * 0.02) * 3) / 3) * VOXEL_SCALE_FACTOR / (internal_res.x + internal_res.y), 1.0, 128.0);
+        
+        #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
+            const float MARCH_THRESHOLD = 4.0;
+        #else
+            const float MARCH_THRESHOLD = 2.0;
+        #endif
+        
+        float t = -MARCH_THRESHOLD * voxel_sz;
+        int i = 0;
+        while (t < MARCH_THRESHOLD * voxel_sz && i++<40) {
+            vec3 deltas = (fract((wpos + cam_dir * t) / voxel_sz) - step(vec3(0), cam_dir * voxel_sz)) / -cam_dir * voxel_sz;
+            t += max(min(min(deltas.x, deltas.y), deltas.z), 0.001);
+
+            voxel_pos = (floor((wpos + cam_dir * t) / voxel_sz) + 0.5) * voxel_sz;
+            float surf_depth = 0.0;
+            #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
+                surf_depth = (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5)
+                    * 10.0
+                    * voxel_sz
+                    * pow(mix(0.0, mix(1.0, 0.0, max(f_norm.z, 0.0)), max(f_norm.z, 0.0)), 0.5);
+            #endif
+            if (dot(voxel_pos - wpos, -f_norm) > surf_depth) {
+                vec3 to_center = abs(voxel_pos - (wpos + cam_dir * t));
+                voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
+                float dist = dot(cam_dir * t, f_norm) + surf_depth;
+                f_ao = clamp(dist / voxel_sz + max(f_norm.z, 0.5), 0.25, 1.0);
+                voxel_pos -= focus_off.xyz;
+                return;
+            }
+        }
+        voxel_pos = f_pos;
+        // Fallback, if we didn't hit any voxels
+        voxel_norm = step(max(max(f_norm.x, f_norm.y), f_norm.z), f_norm) * sign(-cam_dir);
+    #endif
 }
 
 #endif

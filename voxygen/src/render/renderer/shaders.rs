@@ -46,7 +46,7 @@ impl Asset for Shaders {
             "antialias.msaa-x16",
             "antialias.hqx",
             "antialias.fxupscale",
-            "include.cloud.none",
+            "include.cloud.flat",
             "include.cloud.regular",
             "figure-vert",
             "light-shadows-figure-vert",

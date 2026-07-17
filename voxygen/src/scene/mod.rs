@@ -987,6 +987,7 @@ impl Scene {
             scene_data.state.get_time(),
             self.local_time,
             renderer.resolution().as_(),
+            renderer.internal_resolution().as_(),
             Vec2::new(SHADOW_NEAR, SHADOW_FAR),
             lights.len(),
             shadows.len(),

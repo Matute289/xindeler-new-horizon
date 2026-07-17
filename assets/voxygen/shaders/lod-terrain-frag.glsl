@@ -58,7 +58,7 @@ void main() {
         view_mat *
         vec4(f_pos, 1);
     gl_Position.z = -1000.0 / (gl_Position.z + 10000.0); */
-    vec3 my_pos = vec3(f_pos.xy, my_alt);
+    vec3 f_pos = vec3(f_pos.xy, my_alt);
     //vec3 my_norm = lod_norm(f_pos.xy/*, f_square*/);
 
     //float which_norm = dot(my_norm, normalize(cam_pos.xyz - my_pos));
@@ -70,8 +70,7 @@ void main() {
 
     // which_norm = mix(0.0, 1.0, which_norm > 0.0);
     // vec3 normals[6] = vec3[](vec3(-1,0,0), vec3(1,0,0), vec3(0,-1,0), vec3(0,1,0), vec3(0,0,-1), vec3(0,0,1));
-    vec3 f_norm = lod_norm(f_pos.xy);//mix(faceforward(f_norm, cam_pos.xyz - f_pos, -f_norm), my_norm, which_norm);
-    vec3 f_pos = mix(f_pos, my_pos, f_norm);
+    // vec3 f_norm = lod_norm(f_pos.xy);//mix(faceforward(f_norm, cam_pos.xyz - f_pos, -f_norm), my_norm, which_norm);
     // vec3 fract_pos = fract(f_pos);
     /* if (length(f_pos - cam_pos.xyz) <= view_distance.x + 32.0) {
         vec4 new_f_pos;
@@ -112,45 +111,18 @@ void main() {
     // mat4 invfoo = foo * inverse(foo * all_mat);
     // vec3 old_coord = all_mat * vec4(f_pos.xyz, 1.0);
     // vec4 new_f_pos = invfoo * (old_coord);//vec4(f_pos, 1.0);
-    vec3 f_col_raw = mix(lod_col(f_pos.xy), vec3(0), clamp(pull_down / 30, 0, 1));
     // tgt_color = vec4(f_col, 1.0);
 
     vec3 cam_to_frag = normalize(f_pos - cam_pos.xyz);
     vec3 view_dir = -cam_to_frag;
-
-    float f_ao = 1.0;
-    vec3 voxel_norm = f_norm;
-    const float VOXELIZE_DIST = 2000;
-    float voxelize_factor = clamp(1.0 - (distance(cam_pos.xy, f_pos.xy) - view_distance.x) * (1.0 / VOXELIZE_DIST), 0, 1);
-    vec3 cam_dir = cam_to_frag;
-    #ifdef EXPERIMENTAL_NOLODVOXELS
-        //vec3 side_norm = normalize(vec3(my_norm.xy, 0.01));
-        //vec3 top_norm = vec3(0, 0, 1);
-        voxel_norm = f_norm;//normalize(mix(side_norm, top_norm, max(cam_dir.z, 0.0)));
-    #else
-        #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-            float nz_offset = floor((noise_2d((floor(f_pos.xy) + focus_off.xy) * 0.01) - 0.5) * 3.0 / max(f_norm.z, 0.01));
-        #else
-            const float nz_offset = 0.0;
-        #endif
-
-        float t = -2.0 + nz_offset;
-        while (t < 2.0 + nz_offset) {
-            vec3 deltas = (step(vec3(0), -cam_dir) - fract(f_pos - cam_dir * t)) / -cam_dir;
-            float m = min(min(deltas.x, deltas.y), deltas.z);
-
-            t += max(m, 0.01);
-
-            vec3 block_pos = floor(f_pos - cam_dir * t) + 0.5;
-            if (dot(block_pos - f_pos - nz_offset * f_norm, -f_norm) < 0.0) {
-                vec3 to_center = abs(block_pos - (f_pos - cam_dir * t));
-                voxel_norm = step(max(max(to_center.x, to_center.y), to_center.z), to_center) * sign(-cam_dir);
-                voxel_norm = mix(f_norm, voxel_norm, voxelize_factor);
-                f_ao = mix(1.0, clamp(1.0 + (t - nz_offset) * 0.5, 0.1, 1.0), voxelize_factor * max(0.0, -dot(cam_dir, f_norm)));
-                break;
-            }
-        }
-    #endif
+    
+    vec3 voxel_pos;
+    vec3 voxel_norm;
+    float voxel_sz;
+    float f_ao;
+    lod_voxels(f_pos, f_norm, cam_to_frag, voxel_pos, voxel_norm, voxel_sz, f_ao);
+    
+    vec3 f_col_raw = mix(lod_col(f_pos.xy), vec3(0), clamp(pull_down / 30, 0, 1));
 
     /* vec3 sun_dir = get_sun_dir(time_of_day.x);
     vec3 moon_dir = get_moon_dir(time_of_day.x); */

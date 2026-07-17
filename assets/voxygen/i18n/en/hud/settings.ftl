@@ -97,6 +97,7 @@ hud-settings-reflection_rendering_mode = Reflection Rendering Mode
 hud-settings-reflection_rendering_mode-low = Low
 hud-settings-reflection_rendering_mode-medium = Medium
 hud-settings-reflection_rendering_mode-high = High
+hud-settings-cloud_rendering_mode-flat = Flat
 hud-settings-cloud_rendering_mode-minimal = Minimal
 hud-settings-cloud_rendering_mode-low = Low
 hud-settings-cloud_rendering_mode-medium = Medium
