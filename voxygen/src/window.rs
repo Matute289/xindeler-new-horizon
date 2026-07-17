@@ -763,16 +763,16 @@ impl Window {
                     .push(Event::Moved(Vec2::new(x as u32, y as u32)));
             },
             WindowEvent::MouseInput { button, state, .. } => {
+                let map_input = Window::map_input(
+                    KeyMouse::Mouse(button),
+                    controls,
+                    &mut self.remapping_mode,
+                    &mut self.last_input,
+                    self.menu_open,
+                );
                 // Mouse input not mapped to input if it is not grabbed
                 if self.cursor_grabbed
-                    && let Some(mapped_inputs) = Window::map_input(
-                        KeyMouse::Mouse(button),
-                        controls,
-                        &mut self.remapping_mode,
-                        &mut self.last_input,
-                        self.menu_open,
-                    )
-                    && let MappedInput::Game(game_inputs) = mapped_inputs
+                    && let Some(MappedInput::Game(game_inputs)) = map_input
                 {
                     for game_input in game_inputs {
                         self.events.push(Event::InputUpdate(
