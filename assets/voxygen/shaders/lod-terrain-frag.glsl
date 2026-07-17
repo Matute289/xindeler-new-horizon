@@ -19,8 +19,6 @@
 
 #define HAS_LOD_FULL_INFO
 
-#define IS_LOD_TERRAIN
-
 #include <globals.glsl>
 #include <cloud.glsl>
 #include <lod.glsl>

@@ -404,11 +404,11 @@ void lod_voxels(vec3 f_pos, vec3 f_norm, vec3 cam_dir, out vec3 voxel_pos, out v
 
             voxel_pos = (floor((wpos + cam_dir * t) / voxel_sz) + 0.5) * voxel_sz;
             float surf_depth = 0.0;
-            #ifdef IS_LOD_TERRAIN
-                #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
-                    surf_depth = (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5) * voxel_sz * 10.0 * pow(mix(0.0, mix(1.0, 0.0, f_norm.z), f_norm.z), 0.5);
-                #endif
-                // if (alt_at(voxel_pos.xy - focus_off.xy) > voxel_pos.z - focus_off.z + surf_depth) {
+            #ifdef EXPERIMENTAL_PROCEDURALLODDETAIL
+                surf_depth = (noise_3d(voxel_pos / voxel_sz * 0.01) - 0.5)
+                    * 10.0
+                    * voxel_sz
+                    * pow(mix(0.0, mix(1.0, 0.0, max(f_norm.z, 0.0)), max(f_norm.z, 0.0)), 0.5);
             #endif
             if (dot(voxel_pos - wpos, -f_norm) > surf_depth) {
                 vec3 to_center = abs(voxel_pos - (wpos + cam_dir * t));
