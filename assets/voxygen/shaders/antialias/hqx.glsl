@@ -39,7 +39,6 @@ vec4 aa_apply(
     vec2 ip = fragCoord / upscale;
     //start with nearest pixel as 'background'
     vec4 s = texelFetch(sampler2D(tex, smplr), ivec2(ip), 0);
-    //vec4 s = texture(sampler2D(tex, smplr), fragCoord / resolution);
 
     float aa_scale = upscale.x * 0.5;
 

@@ -21,8 +21,6 @@
 
 // Currently, we only need globals for focus_off.
 #include <globals.glsl>
-// For shadow locals.
-// #include <shadows.glsl>
 
 layout (std140, set = 0, binding = 14)
 uniform u_rain_occlusion {
@@ -41,9 +39,6 @@ uniform u_rain_occlusion {
  * */
 
 layout(location = 0) in uint v_pos_norm;
-// in uint v_col_light;
-// in vec4 v_pos;
-// layout(location = 1) in uint v_atlas_pos;
 
 // Light projection matrices.
 layout (std140, set = 1,  binding = 0)
@@ -52,8 +47,6 @@ uniform u_locals {
     ivec4 atlas_offs;
     float load_time;
 };
-
-// out vec4 shadowMapCoord;
 
 const float EXTRA_NEG_Z = 32768.0;
 

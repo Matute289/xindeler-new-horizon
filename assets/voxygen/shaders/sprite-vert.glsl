@@ -85,7 +85,7 @@ void main() {
     inst_mat[0] = inst_mat0;
     inst_mat[1] = inst_mat1;
     inst_mat[2] = inst_mat2;
-    inst_mat[3] = inst_mat3;// + vec4(-14.5, -16.5, 0.0, 0.0);
+    inst_mat[3] = inst_mat3;
 
     inst_mat = model_mat * inst_mat;
 
@@ -112,7 +112,6 @@ void main() {
 
     // Expand the model vertex position bits into float values
     // TODO: Use this instead, see [https://gitlab.com/veloren/veloren/-/merge_requests/3091]
-    //vec3 v_pos = vec3(ivec3((uvec3(v_pos_norm) >> uvec3(0, 8, 16)) & uvec3(0xFFu, 0xFFu, 0x0FFFu)) - ivec3(VERT_EXTRA_NEG_XY, VERT_EXTRA_NEG_XY, VERT_EXTRA_NEG_Z));
     vec3 v_pos = vec3(
         float(v_pos_norm & 0xFFu) - VERT_EXTRA_NEG_XY,
         float((v_pos_norm >> 8) & 0xFFu) - VERT_EXTRA_NEG_XY,
@@ -140,7 +139,6 @@ void main() {
     // TODO: dx12 doesn't like dynamic index
     // TODO: use mix?
     // Shader@0x000001AABD89BEE0(112,43-53): error X4576: Input array signature parameter  cannot be indexed dynamically.
-    //vec3 norm = (inst_mat[(v_pos_norm >> 30u) & 3u].xyz);
     uint index = v_pos_norm >> 30u & 3u;
     vec3 norm;
     if (index == 0) {
@@ -200,7 +198,6 @@ void main() {
             wind_wave(f_pos.x * 0.1, 1.1, wind_vel.y, wind_vel.x)
         ))
             * model_wind_sway
-            //* mix(10.0, abs(v_pos.z), 1.0 / (1.0 + abs(v_pos.z) * 0.1))
             * abs(v_pos.z)
             * model_z_scale
             * SCALE_FACTOR;

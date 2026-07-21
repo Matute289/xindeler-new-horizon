@@ -18,7 +18,6 @@
 #include <lod.glsl>
 
 layout(location = 0) in vec3 v_pos;
-// in uint v_col;
 layout(location = 1) in uint v_norm_ao;
 layout(location = 2) in float inst_time;
 layout(location = 3) in float inst_lifespan;
@@ -32,8 +31,6 @@ layout(location = 9) in vec2 inst_voxel_light;
 layout(location = 0) out vec3 f_pos;
 layout(location = 1) flat out vec3 f_norm;
 layout(location = 2) out vec4 f_col;
-//layout(location = x) out float f_ao;
-//layout(location = x) out float f_light;
 layout(location = 3) out float f_reflect;
 layout(location = 4) flat out int f_mode;
 layout(location = 5) out vec2 f_voxel_light;
@@ -1367,11 +1364,8 @@ void main() {
         vec4(0,0,-1,0),
         vec4(0,0,1,0)
     );
-    f_norm =
-        // inst_pos *
-        normalize(((normals[(v_norm_ao >> 0) & 0x7u]) * attr.rot).xyz);
+    f_norm = normalize(((normals[(v_norm_ao >> 0) & 0x7u]) * attr.rot).xyz);
 
-    //vec3 col = vec3((uvec3(v_col) >> uvec3(0, 8, 16)) & uvec3(0xFFu)) / 255.0;
     f_col = vec4(attr.col.rgb, attr.col.a);
 
     f_mode = inst_mode;
