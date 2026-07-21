@@ -27,19 +27,6 @@
 // and the far plane (scene_res.z).
 #include <globals.glsl>
 #include <shadows.glsl>
-// // Currently, we only need lights for the light position
-// #include <light.glsl>
-
-/* struct Light {
-    vec4 light_pos;
-    vec4 light_col;
-    // mat4 light_proj;
-};
-
-layout (std140)
-uniform u_lights {
-    Light lights[31];
-}; */
 
 // Since our output primitive is a triangle strip, we have to render three vertices
 // each.
@@ -183,87 +170,25 @@ uniform u_lights {
 
 layout (triangles/*, invocations = 6*/) in;
 
-layout (triangle_strip, max_vertices = /*MAX_LAYER_VERTICES_PER_FACE*//*96*/18) out;
-
-//struct ShadowLocals {
-//  mat4 shadowMatrices;
-//    mat4 texture_mat;
-//};
-//
-//layout (std140)
-//uniform u_light_shadows {
-//    ShadowLocals shadowMats[/*MAX_LAYER_FACES*/192];
-//};
-
-// NOTE: We choose not to output FragPos currently to save on space limitations
-// (see extensive documentation above).  However, as these limitations have been
-// relaxed (unless the total of all our varying output components can't exceed
-// 128, which would mean FragPos would sum to 4 * 3 * 32 = 384; this could be
-// remedied only by setting MAX_POINT_LIGHTS to ), we might enable it again soon.
-//
-// out vec3 FragPos; // FragPos from GS (output per emitvertex)
-// flat out int FragLayer; // Current layer
-
-// const vec3 normals[6] = vec3[](vec3(-1,0,0), vec3(1,0,0), vec3(0,-1,0), vec3(0,1,0), vec3(0,0,-1), vec3(0,0,1));
+layout (triangle_strip, max_vertices = /*MAX_LAYER_VERTICES_PER_FACE*/18) out;
 
 void main() {
-    // NOTE: Assuming that light_shadow_count.x < MAX_POINT_LIGHTS.  We could min
-    // it, but that might make this less optimized, and I'd like to keep this loop as
-    // optimized as is reasonably possible.
-    // int face = gl_InvocationID;
-
-    // Part 1: emit directed lights.
-    /* if (face <= light_shadow_count.z) {
-        // Directed light.
-        for(int i = 0; i < VERTICES_PER_FACE; ++i) // for each triangle vertex
-        {
-            // NOTE: See above, we don't make FragPos a uniform.
-            FragPos = gl_in[i].gl_Position;
-            FragLayer = 0; // 0 is the directed light layer.
-            // vec4 FragPos = gl_in[i].gl_Position;
-            gl_Layer = i; // built-in variable that specifies to which face we render.
-            gl_Position = shadowMats[i].shadowMatrices * FragPos;
-            EmitVertex();
-        }
-        EndPrimitive();
-    } */
-
-    // Part 2: emit point lights.
+    // Emit point lights.
 #if (SHADOW_MODE == SHADOW_MODE_MAP)
     for (uint layer = 1u; layer <= min(light_shadow_count.x, 1u); ++layer)
     {
         int layer_base = int(layer) * FACES_PER_POINT_LIGHT;
         // We use instancing here in order to increase the number of emitted vertices.
-        // int face = gl_InvocationID;
         for(int face = 0; face < FACES_PER_POINT_LIGHT; ++face)
         {
-            // int layer_face = layer * FACES_PER_POINT_LIGHT + face;
-            // int layer_face = layer * FACES_PER_POINT_LIGHT + face;
-            // for(int i = VERTICES_PER_FACE - 1; i >= 0; --i) // for each triangle vertex
             for(int i = 0; i < VERTICES_PER_FACE; ++i) // for each triangle vertex
             {
                 // NOTE: See above, we don't make FragPos a uniform.
                 vec3 fragPos = gl_in[i].gl_Position.xyz;
-                // FragPos = fragPos - (lights[((/*FragLayer*/layer - 1u) & 31u)].light_pos.xyz - focus_off.xyz);
-                // FragLayer = layer;
-                // float lightDistance = length(FragPos - lights[((layer - 1) & 31)].light_pos.xyz);
-                // lightDistance /= screen_res.w;
-
-                // vec4 FragPos = gl_in[i].gl_Position;
-                // NOTE: Our normals map to the same thing as cube map normals, *except* that their normal direction is
-                // swapped; we can fix this by doing normal ^ 0x1u.  However, we also want to cull back faces, not front
-                // faces, so we only care about the shadow cast by the *back* of the triangle, which means we ^ 0x1u
-                // again and cancel it out.
-                // int face = int(((floatBitsToUint(gl_Position.w) >> 29) & 0x7u) ^ 0x1u);
+                
                 int layer_face = layer_base + face;
-                gl_Layer = face;//layer_face; // built-in variable that specifies to which face we render.
+                gl_Layer = face; // built-in variable that specifies to which face we render.
                 gl_Position = shadowMats[layer_face].shadowMatrices * vec4(fragPos, 1.0);
-                // gl_Position.z = -((gl_Position.z + screen_res.z) / (screen_res.w - screen_res.z)) * lightDistance;
-                // gl_Position.z = gl_Position.z / screen_res.w;
-                // gl_Position.z = gl_Position.z / gl_Position.w;
-                // gl_Position.z = -1000.0 / (gl_Position.z + 10000.0);
-                // lightDistance = -(lightDistance + screen_res.z) / (screen_res.w - screen_res.z);
-                // gl_Position.z = lightDistance;
                 EmitVertex();
             }
             EndPrimitive();
