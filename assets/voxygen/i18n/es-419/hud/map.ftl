@@ -54,3 +54,5 @@ hud-map-sahagin = Isla Sahagin
 hud-map-myrmidon = Mazmorra Mirmidón
 hud-map-terracotta = Ruinas terracota
 hud-map-vampire_castle = Castillo Vampiro
+hud-map-objectives = OBJETIVOS
+hud-map-full_map_instructions = Mapa del mundo (M / Esc para cerrar, rueda para zoom, arrastrar para desplazar)

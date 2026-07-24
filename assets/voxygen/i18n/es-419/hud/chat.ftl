@@ -55,8 +55,8 @@ hud-chat-all = Global
 hud-chat-chat_tab_hover_tooltip = Click derecho para opciones
 hud-loot-pickup-msg =
     { $amount ->
-        [1] { $actor } picked up { $item }
-       *[other] { $actor } picked up { $amount }x { $item }
+        [1] { $actor } recogió { $item }
+       *[other] { $actor } recogió { $amount }x { $item }
     }
 hud-chat-goodbye = ¡Adiós!
 hud-chat-connection_lost = Conexión perdida. Saliendo en { $time } segundos.
@@ -70,8 +70,9 @@ hud-chat-message-in-group = ({ $group }) [{ $alias }]: { $msg }
 hud-chat-message-in-group-with-name = ({ $group }) [{ $alias }] { $name }: { $msg }
 hud-loot-pickup-msg-you =
     { $amount ->
-        [1] { $item }
-       *[other] { $amount }x { $item }
+        [1] Recogiste { $item }
+       *[other] Recogiste { $amount }x { $item }
     }
 hud-chat-singleplayer-motd1 = ¡Todo un mundo para ti! Hora de estirar...
 hud-chat-singleplayer-motd2 = ¿Qué tal la serenidad?
+hud-chat-tab_whisper = Susurro
