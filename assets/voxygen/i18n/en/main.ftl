@@ -28,7 +28,7 @@ main-login_process =
     Please note that you need an account to play on servers with authentication enabled.
 
     You can create an account at:
-    https://veloren.net/account/
+    https://xindeler.com/
 main-singleplayer-new = New
 main-singleplayer-delete = Delete
 main-singleplayer-regenerate = Regenerate

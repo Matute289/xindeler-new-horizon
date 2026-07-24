@@ -859,7 +859,7 @@ impl Controls {
         world_sz: Vec2<u32>,
         has_rules: bool,
     ) -> Self {
-        let version = format!("Veloren {}", *common::util::DISPLAY_VERSION);
+        let version = format!("Xindeler {}", *common::util::DISPLAY_VERSION);
         let server_mismatched_version = (*common::util::GIT_HASH != server_info.git_hash
             || *common::util::GIT_TIMESTAMP != server_info.git_timestamp)
             .then(|| {

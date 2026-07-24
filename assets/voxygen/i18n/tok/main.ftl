@@ -24,7 +24,7 @@ main-login_process =
     o sona e ni: sina wile musi lon kulupu pi wile sijelo la, sina o jo e sijelo.
 
     sina ken pali e sijelo kepeken lipu ni:
-    https://veloren.net/account/
+    https://xindeler.com/
 main-singleplayer-delete = o weka
 main-connecting = mi toki tawa kulupu
 main-creating_world = mi pali e ma
