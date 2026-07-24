@@ -54,7 +54,7 @@ inventory before writing Rust—many effects are already expressible.
    a nuke), adjust numbers per the balance table.
 3. Register in `assets/common/abilities/ability_set_manifest.ron` under the right
    `AbilitySpec`, with its `Skill` gate.
-4. `VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common` — asset-loading tests
+4. `VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common` — asset-loading tests
    (e.g. `AbilityMap` load) must pass; a typo'd RON fails here, not at runtime.
 5. In-game check via `xindeler-run` (hot-reloading picks up RON edits in dev).
 

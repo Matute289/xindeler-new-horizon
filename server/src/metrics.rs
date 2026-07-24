@@ -543,7 +543,7 @@ impl QueryServerMetrics {
 
     pub fn apply(
         &self,
-        veloren_query_server::server::Metrics {
+        xindeler_query_server::server::Metrics {
             received_packets,
             dropped_packets,
             invalid_packets,
@@ -554,7 +554,7 @@ impl QueryServerMetrics {
             failed_responses,
             timed_out_responses,
             ratelimited,
-        }: veloren_query_server::server::Metrics,
+        }: xindeler_query_server::server::Metrics,
     ) {
         self.received_packets.inc_by(received_packets as u64);
         self.dropped_packets.inc_by(dropped_packets as u64);

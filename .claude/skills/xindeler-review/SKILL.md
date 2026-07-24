@@ -37,7 +37,7 @@ cargo ci-clippy -- -D warnings
 ```bash
 cargo ci-clippy2
 # expands to:
-# cargo clippy -p veloren-voxygen --locked \
+# cargo clippy -p xindeler-voxygen --locked \
 #   --no-default-features --features="default-publish"
 ```
 

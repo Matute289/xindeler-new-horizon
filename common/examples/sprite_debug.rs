@@ -1,4 +1,4 @@
-use veloren_common::terrain::sprite::{Attributes, Category, SpriteKind};
+use xindeler_common::terrain::sprite::{Attributes, Category, SpriteKind};
 
 fn main() {
     for cat in Category::all() {

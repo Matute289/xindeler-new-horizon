@@ -37,6 +37,6 @@ description: Use when implementing character levels, classes, races, XP curves, 
 
 ## Test checklist
 
-- Unit tests in the owning crate (`VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common`).
+- Unit tests in the owning crate (`VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common`).
 - If persistence touched: round-trip test via `json_models` converters + fresh-character creation on a scratch DB.
 - In-game smoke via `xindeler-run`; session analysis via `xindeler-telemetry`.

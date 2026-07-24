@@ -28,7 +28,7 @@ main-login_process =
     Для гульні на серверах з аўтарызацыяй неабходна мець уліковы запіс.
 
     Стварыць уліковы запіс можна па спасылцы:
-    https://veloren.net/account/
+    https://xindeler.com/
 main-login-server_not_found = Сервер не знойдзены.
 main-login-authentication_error = Памылка аўтэнтыфікацыі на серверы.
 main-login-internal_error = Унутраная памылка кліента. Падказка: Мабыць персанаж гульца быў выдалены.

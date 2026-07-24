@@ -37,12 +37,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release \
         --no-default-features \
         --features default-publish \
-        -p veloren-server-cli \
-    && cp target/release/veloren-server-cli /tmp/veloren-server-cli \
+        -p xindeler-server-cli \
+    && cp target/release/xindeler-server-cli /tmp/xindeler-server-cli \
     && objcopy --compress-debug-sections=zlib \
-        /tmp/veloren-server-cli \
-        /tmp/veloren-server-cli-compressed \
-    && mv /tmp/veloren-server-cli-compressed /tmp/veloren-server-cli
+        /tmp/xindeler-server-cli \
+        /tmp/xindeler-server-cli-compressed \
+    && mv /tmp/xindeler-server-cli-compressed /tmp/xindeler-server-cli
 
 # Stage 2: Minimal runtime image
 FROM debian:stable-slim
@@ -57,11 +57,11 @@ RUN apt-get update \
         net-tools \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /tmp/veloren-server-cli /opt/veloren-server-cli
+COPY --from=builder /tmp/xindeler-server-cli /opt/xindeler-server-cli
 COPY --from=builder /src/assets/common       /opt/assets/common
 COPY --from=builder /src/assets/server       /opt/assets/server
 COPY --from=builder /src/assets/world        /opt/assets/world
 
 WORKDIR /opt
 ENV RUST_BACKTRACE=full
-ENTRYPOINT ["/opt/veloren-server-cli"]
+ENTRYPOINT ["/opt/xindeler-server-cli"]

@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use tracing_subscriber::prelude::*;
-use veloren_common_frontend::TelemetryLayer;
+use xindeler_common_frontend::TelemetryLayer;
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     let dir = std::env::temp_dir().join(format!("veloren-telemetry-bench-{}", std::process::id()));

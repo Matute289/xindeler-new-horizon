@@ -58,7 +58,7 @@ impl QueryServer {
     /// level for this crate (when outside of debugging contexts).
     ///
     /// NOTE: TRACE and DEBUG levels are disabled by default for this crate when
-    /// using `veloren-common-frontend`.
+    /// using `xindeler-common-frontend`.
     pub async fn run(&mut self, metrics: Arc<Mutex<Metrics>>) -> Result<(), tokio::io::Error> {
         let mut socket = UdpSocket::bind(self.addr).await?;
 

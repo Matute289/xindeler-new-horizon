@@ -41,16 +41,16 @@ Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024
 
 ```bash
 # Run the game client (hot-reloading enabled by default in dev builds)
-cargo run --bin veloren-voxygen
+cargo run --bin xindeler-voxygen
 
 # Run the server
-cargo run --bin veloren-server-cli
+cargo run --bin xindeler-server-cli
 
 # Tests require the assets path
 VELOREN_ASSETS="$(pwd)/assets" cargo test
 
 # Single crate test
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common
 
 # Lint (matches CI exactly)
 cargo clippy --all-targets --locked \
@@ -58,7 +58,7 @@ cargo clippy --all-targets --locked \
   -- -D warnings
 
 # Clippy for voxygen publish profile (no hot-reloading)
-cargo clippy -p veloren-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
+cargo clippy -p xindeler-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
 
 # Format check
 cargo fmt --all -- --check
@@ -153,7 +153,7 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 **Where each build runs:**
 - **Code CI** (build / check / test / lint on PRs) → **GitHub Actions** (public repo = free, unlimited minutes). It must **not** pull LFS — compilation and tests don't need the binary assets.
 - **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`. **TODO before first use**: this script was written for the sibling repos and needs to be checked/adapted server-side to build from `xindeler-new-horizon` (checkout path, binary name, output path) before a real `v*` tag push is made here.
-- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `veloren-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
+- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
 - **Client release** (voxygen desktop installer + Airshipper) → **deferred**, same as the sibling repo.
 - **Repo secrets**: this is a brand-new repo — `secrets.VPS_SSH_KEY` has NOT been configured yet (`gh secret set VPS_SSH_KEY < path/to/key`, or via the GitHub UI). CI that needs VPS SSH will fail until this is added.
 

@@ -49,7 +49,7 @@ pub trait AssetExt: Sized + Send + Sync + 'static {
     /// Function used to load assets from the filesystem or the cache.
     /// Example usage:
     /// ```no_run
-    /// use veloren_common_assets::{AssetExt, Image};
+    /// use xindeler_common_assets::{AssetExt, Image};
     ///
     /// let my_image = Image::load("core.ui.backgrounds.city").unwrap();
     /// ```
@@ -74,7 +74,7 @@ pub trait AssetExt: Sized + Send + Sync + 'static {
     /// Function used to load essential assets from the filesystem or the cache.
     /// It will panic if the asset is not found. Example usage:
     /// ```no_run
-    /// use veloren_common_assets::{AssetExt, Image};
+    /// use xindeler_common_assets::{AssetExt, Image};
     ///
     /// let my_image = Image::load_expect("core.ui.backgrounds.city");
     /// ```

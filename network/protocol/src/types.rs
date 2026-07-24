@@ -76,7 +76,7 @@ impl Pid {
     ///
     /// # Example
     /// ```rust
-    /// use veloren_network_protocol::Pid;
+    /// use xindeler_network_protocol::Pid;
     ///
     /// let pid = Pid::new();
     /// ```

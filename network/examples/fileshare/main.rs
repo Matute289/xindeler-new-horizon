@@ -8,7 +8,7 @@ use std::{path::PathBuf, sync::Arc, thread, time::Duration};
 use tokio::{io, io::AsyncBufReadExt, runtime::Runtime, sync::mpsc};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
-use veloren_network::{ConnectAddr, ListenAddr};
+use xindeler_network::{ConnectAddr, ListenAddr};
 mod commands;
 mod server;
 use commands::{FileInfo, LocalCommand};
@@ -18,7 +18,7 @@ fn main() {
     let matches = Command::new("File Server")
         .version("0.1.0")
         .author("Marcel Märtens <marcel.cochem@googlemail.com>")
-        .about("example file server implemented with veloren-network")
+        .about("example file server implemented with xindeler-network")
         .arg(
             Arg::new("port")
                 .short('p')

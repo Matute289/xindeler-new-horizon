@@ -49,10 +49,10 @@ jobs:
         env:
           VELOREN_USERDATA_STRATEGY: executable
         run: |
-          cargo build --release --no-default-features --features default-publish -p veloren-server-cli
+          cargo build --release --no-default-features --features default-publish -p xindeler-server-cli
           objcopy --compress-debug-sections=zlib \
-            target/release/veloren-server-cli \
-            veloren-server-cli
+            target/release/xindeler-server-cli \
+            xindeler-server-cli
 
       - name: Determine Docker tag
         id: tag

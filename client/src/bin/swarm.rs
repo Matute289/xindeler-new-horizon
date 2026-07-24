@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::runtime::Runtime;
 use vek::*;
-use veloren_client::{Client, ClientType, addr::ConnectionArgs};
+use xindeler_client::{Client, ClientType, addr::ConnectionArgs};
 
 const CHUNK_SIZE: f32 = TerrainChunkSize::RECT_SIZE.x as f32;
 
@@ -107,7 +107,7 @@ fn run_client(
     runtime: Arc<Runtime>,
     opt: Opt,
     finished_init: Arc<AtomicU32>,
-) -> Result<(), veloren_client::Error> {
+) -> Result<(), xindeler_client::Error> {
     let mut client = loop {
         // Connect to localhost
         let addr = ConnectionArgs::Tcp {
@@ -136,7 +136,7 @@ fn run_client(
 
     let mut clock = common::clock::Clock::new(Duration::from_secs_f32(1.0 / 30.0));
 
-    let mut tick = |client: &mut Client| -> Result<(), veloren_client::Error> {
+    let mut tick = |client: &mut Client| -> Result<(), xindeler_client::Error> {
         clock.tick();
         client.tick_network(clock.real_dt())?;
         Ok(())
