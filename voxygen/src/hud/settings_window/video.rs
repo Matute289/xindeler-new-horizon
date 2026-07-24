@@ -1072,7 +1072,7 @@ impl Widget for Video<'_> {
         .set(state.ids.cloud_mode_text, ui);
 
         let mode_list = [
-            CloudMode::None,
+            CloudMode::Flat,
             CloudMode::Minimal,
             CloudMode::Low,
             CloudMode::Medium,
@@ -1080,7 +1080,8 @@ impl Widget for Video<'_> {
             CloudMode::Ultra,
         ];
         let mode_label_list = [
-            self.localized_strings.get_msg("common-none"),
+            self.localized_strings
+                .get_msg("hud-settings-cloud_rendering_mode-flat"),
             self.localized_strings
                 .get_msg("hud-settings-cloud_rendering_mode-minimal"),
             self.localized_strings

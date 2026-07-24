@@ -12,6 +12,7 @@ BasicRanged(
         attack: Some((
             damage: 14,
             energy: Some(5),
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(BoltFire),

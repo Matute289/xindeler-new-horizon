@@ -23,7 +23,7 @@ ComboMelee2(
             ),
             ori_modifier: (
                 buildup: Some(0.75),
-                swing: Some(0.25),
+                action: Some(0.25),
                 recover: Some(0.15),
             ),
         ),
@@ -56,7 +56,7 @@ ComboMelee2(
             ),
             ori_modifier: (
                 buildup: Some(0.75),
-                swing: Some(0.25),
+                action: Some(0.25),
                 recover: Some(0.15),
             ),
         ),

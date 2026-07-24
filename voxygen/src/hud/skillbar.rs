@@ -27,13 +27,13 @@ use i18n::Localization;
 use client::{self, Client};
 use common::{
     comp::{
-        self, Ability, AbilityCooldowns, AbilityPool, ActiveAbilities, Body, CharacterState, Combo,
-        Energy, Hardcore, Health, Inventory, Poise, PoiseState, SkillSet, Stats,
+        self, Ability, AbilityCooldowns, AbilityPool, ActiveAbilities, Body, Buffs, CharacterState,
+        Combo, Energy, Hardcore, Health, Inventory, Poise, PoiseState, SkillSet, Stats,
         ability::{AbilityInput, Stance},
         is_downed,
         item::{
             ItemDesc, ItemI18n, MaterialStatManifest,
-            tool::{AbilityContext, AbilityMap, ToolKind},
+            tool::{AbilityMap, ToolKind},
         },
         skillset::SkillGroupKind,
     },
@@ -299,13 +299,13 @@ pub struct Skillbar<'a> {
     ability_map: &'a AbilityMap,
     rbm: &'a RecipeBookManifest,
     combo_floater: Option<ComboFloater>,
-    context: &'a AbilityContext,
     combo: Option<&'a Combo>,
     char_state: Option<&'a CharacterState>,
     stance: Option<&'a Stance>,
     stats: Option<&'a Stats>,
     ability_cooldowns: Option<&'a AbilityCooldowns>,
     now: f64,
+    buffs: Option<&'a Buffs>,
 }
 
 impl<'a> Skillbar<'a> {
@@ -337,13 +337,13 @@ impl<'a> Skillbar<'a> {
         ability_map: &'a AbilityMap,
         rbm: &'a RecipeBookManifest,
         combo_floater: Option<ComboFloater>,
-        context: &'a AbilityContext,
         combo: Option<&'a Combo>,
         char_state: Option<&'a CharacterState>,
         stance: Option<&'a Stance>,
         stats: Option<&'a Stats>,
         ability_cooldowns: Option<&'a AbilityCooldowns>,
         now: f64,
+        buffs: Option<&'a Buffs>,
     ) -> Self {
         Self {
             client,
@@ -373,13 +373,13 @@ impl<'a> Skillbar<'a> {
             ability_map,
             rbm,
             combo_floater,
-            context,
             combo,
             char_state,
             stance,
             stats,
             ability_cooldowns,
             now,
+            buffs,
         }
     }
 
@@ -1062,11 +1062,11 @@ impl<'a> Skillbar<'a> {
             self.active_abilities,
             self.ability_pool,
             self.body,
-            self.context,
             self.combo,
             self.char_state,
             self.stance,
             self.stats,
+            self.buffs,
             self.ability_map,
         );
 
@@ -1074,6 +1074,7 @@ impl<'a> Skillbar<'a> {
         let mut slot_maker = SlotMaker {
             // TODO: is a separate image needed for the frame?
             empty_slot: self.imgs.skillbar_slot,
+            hovered_slot: self.imgs.skillbar_index,
             filled_slot: self.imgs.skillbar_slot,
             selected_slot: self.imgs.inv_slot_sel,
             background_color: None,
@@ -1090,6 +1091,7 @@ impl<'a> Skillbar<'a> {
             content_source: &content_source,
             image_source: &image_source,
             slot_manager: Some(self.slot_manager),
+            last_input: &self.global_state.window.last_input(),
             pulse: self.pulse,
         };
 
@@ -1152,8 +1154,21 @@ impl<'a> Skillbar<'a> {
 
         // Helper
         let tooltip_text = |slot| {
-            let (hotbar, inventory, _, skill_set, active_abilities, ability_pool, _, contexts, ..) =
-                content_source;
+            let (
+                hotbar,
+                inventory,
+                _,
+                skill_set,
+                active_abilities,
+                ability_pool,
+                _,
+                combo,
+                _,
+                stance,
+                _,
+                buffs,
+                ..,
+            ) = content_source;
             hotbar.get(slot).and_then(|content| match content {
                 hotbar::SlotContents::Inventory(i, _) => inventory.get_by_hash(i).map(|item| {
                     let (title, desc) =
@@ -1171,7 +1186,9 @@ impl<'a> Skillbar<'a> {
                                     Some(inventory),
                                     Some(skill_set),
                                     ability_pool,
-                                    contexts,
+                                    stance,
+                                    combo,
+                                    buffs,
                                 )
                             })
                     })
@@ -1199,7 +1216,11 @@ impl<'a> Skillbar<'a> {
                             active_abilities,
                             ability_pool,
                             _,
-                            contexts,
+                            combo,
+                            _,
+                            stance,
+                            _,
+                            buffs,
                             ..,
                         ) = content_source;
                         active_abilities.and_then(|a| {
@@ -1211,7 +1232,9 @@ impl<'a> Skillbar<'a> {
                                         Some(inventory),
                                         Some(skill_set),
                                         ability_pool,
-                                        contexts,
+                                        stance,
+                                        combo,
+                                        buffs,
                                     )
                                 })
                         })
@@ -1237,7 +1260,7 @@ impl<'a> Skillbar<'a> {
 
         for entry in slots {
             let slot = slot_maker
-                .fabricate(entry.slot, [40.0; 2])
+                .fabricate(entry.slot, [40.0; 2], false, false)
                 .filled_slot(self.imgs.skillbar_slot)
                 .position(entry.position);
             // if there is an item attached, show item tooltip
@@ -1283,11 +1306,12 @@ impl<'a> Skillbar<'a> {
                             Image::new(selection_image)
                                 .w_h(42.0, 42.0)
                                 .middle_of(entry.widget_id)
+                                .graphics_for(entry.widget_id)
                                 .set(state.ids.slot_highlight, ui);
                         }
                     }
                 },
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     // enable UI if keyboard binding is set for CurrentSlot
                     if self
                         .global_state
@@ -1304,6 +1328,7 @@ impl<'a> Skillbar<'a> {
                             Image::new(selection_image)
                                 .w_h(42.0, 42.0)
                                 .middle_of(entry.widget_id)
+                                .graphics_for(entry.widget_id)
                                 .set(state.ids.slot_highlight, ui);
                         }
                     }
@@ -1359,7 +1384,7 @@ impl<'a> Skillbar<'a> {
         // M1 is primary slot on mouse, M2 is primary slot on controller
         let (primary_id, primary_bg, secondary_id, secondary_bg) =
             match self.global_state.window.last_input() {
-                LastInput::KeyboardMouse => (
+                LastInput::Keyboard | LastInput::Mouse => (
                     state.ids.m1_content,
                     state.ids.m1_slot_bg,
                     state.ids.m2_content,
@@ -1385,7 +1410,9 @@ impl<'a> Skillbar<'a> {
                 Some(self.inventory),
                 Some(self.skillset),
                 self.ability_pool,
-                self.context,
+                self.stance,
+                self.combo,
+                self.buffs,
             )
         });
 
@@ -1417,7 +1444,9 @@ impl<'a> Skillbar<'a> {
                 Some(self.inventory),
                 Some(self.skillset),
                 self.ability_pool,
-                self.context,
+                self.stance,
+                self.combo,
+                self.buffs,
             )
         });
 
@@ -1440,8 +1469,10 @@ impl<'a> Skillbar<'a> {
                         self.skillset,
                         Some(self.body),
                         self.char_state,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         self.stats,
+                        self.buffs,
                         self.ability_pool,
                         self.ability_map,
                     )
@@ -1470,7 +1501,7 @@ impl<'a> Skillbar<'a> {
 
         // M1 and M2 icons
         match self.global_state.window.last_input() {
-            LastInput::KeyboardMouse => {
+            LastInput::Keyboard | LastInput::Mouse => {
                 Image::new(self.imgs.m1_ico)
                     .w_h(16.0, 18.0)
                     .mid_bottom_with_margin_on(state.ids.m1_content, -11.0)

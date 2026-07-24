@@ -847,7 +847,7 @@ impl Widget for Group<'_> {
                     self.global_state.window.controller_type(),
                 )
                 .unwrap_or_else(|| icon_utils::UNBOUND_KEY.to_string()),
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     let key_text = self
                         .settings
                         .controls
@@ -893,7 +893,7 @@ impl Widget for Group<'_> {
                     self.global_state.window.controller_type(),
                 )
                 .unwrap_or_else(|| icon_utils::UNBOUND_KEY.to_string()),
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     let key_text = self
                         .settings
                         .controls

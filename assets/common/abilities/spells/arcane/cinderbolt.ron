@@ -18,6 +18,7 @@ BasicRanged(
                 strength: DamageFraction(0.1),
                 chance: 0.2,
             )),
+            damage_kind: Fire,
         )),
     ),
     projectile_body: Object(BoltFire),

@@ -10,6 +10,7 @@ ChargedRanged(
         ),
         attack: Some((
             damage: 1,
+            damage_kind: Energy,
         )),
         scaled: Some((
             damage: 13,
@@ -23,8 +24,9 @@ ChargedRanged(
     projectile_light: None,
     initial_projectile_speed: 50.0,
     scaled_projectile_speed: 150.0,
+    marker: Some(IgniteArrow),
     move_speed: 0.4,
     meta: (
-        init_event: Some(EnterStance(None)),
+        init_event: Some(RemoveBuff(IgniteArrow)),
     ),
 )

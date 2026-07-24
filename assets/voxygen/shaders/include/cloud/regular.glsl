@@ -31,7 +31,7 @@ vec4 cloud_at(vec3 pos, float dist, vec3 dir, out vec3 emission, out float not_u
     // because the earth has curvature and so there is an upper bound on the amount of atmosphere that a sunset must
     // travel through. We 'simulate' this by fading out the atmosphere density with distance.
     float flat_earth_hack = max(0.0, 1.0 - dist * 0.00003 * pow(max(0.0, dir.z), 0.2));
-    float air = 0.025 * clamp((atmosphere_alt - pos.z) / 20000, 0, 1) * flat_earth_hack;
+    float air = 0.015 * clamp((atmosphere_alt - pos.z) / 20000, 0, 1) * flat_earth_hack;
 
     float alt = alt_at(pos.xy - focus_off.xy);
 
@@ -95,28 +95,28 @@ vec4 cloud_at(vec3 pos, float dist, vec3 dir, out vec3 emission, out float not_u
         ;
 
         // Sample twice to allow for self-shadowing
-        float cloud_p0 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 - sun_dir.xyz * 150) * vec3(0.55, 0.55, 1) / (cloud_scale() * 20000.0));
-        float cloud_p1 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 + sun_dir.xyz * 150) * vec3(0.55, 0.55, 1) / (cloud_scale() * 20000.0));
+        float cloud_p0 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 - sun_dir.xyz * 150) * vec3(0.55, 0.55, 2) / (cloud_scale() * 20000.0));
+        float cloud_p1 = noise_3d((wind_pos + vec3(0, 0, small_nz) * 150 + sun_dir.xyz * 150) * vec3(0.55, 0.55, 2) / (cloud_scale() * 20000.0));
 
-        float cloud_factor = pow(max(((cloud_p0 + cloud_p1) * 0.5
+        float cloud_factor = pow(max(((cloud_p0 + cloud_p1) * 0.45
             - 0.5
             - small_nz * 0.1
-            + cloud_tendency * 0.3
+            + cloud_tendency * 0.5
             )
         , 0.0) * 120.0 * cloud_tendency, 5.0)
             * falloff(abs(pos.z - cloud_alt) / CLOUD_DEPTH);
 
-        cloud = cloud_factor * 10;
+        cloud = cloud_factor * 5;
 
         // What proportion of sunlight is *not* being blocked by nearby cloud? (approximation)
         // Basically, just throw together a few values that roughly approximate this term and come up with an average
         cloud_sun_access = clamp(
-            0.7
-                + pow(abs(cloud_p1 - cloud_p0), 0.5) * sign(cloud_p1 - cloud_p0) * 0.75
+            0.8
+                + pow(abs(cloud_p1 - cloud_p0), 0.5) * sign(cloud_p1 - cloud_p0) * 0.5
                 + (pos.z - cloud_alt) / CLOUD_DEPTH * 0.2
-                - pow(cloud * 10000000.0, 0.2) * 0.0075
+                - pow(cloud * 1000000.0, 0.25) * 0.0075
             ,
-            0.15,
+            0.2,
             10.0
         ) + small_nz * 0.2;
         // Since we're assuming the sun/moon is always above (not always correct) it's the same for the moon
@@ -255,8 +255,16 @@ vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, con
 
         float sun_access = max(sample_.x, 0);
         float moon_access = max(sample_.y, 0);
-        float cloud_scatter_factor = density_integrals.x;
-        float global_scatter_factor = density_integrals.y;
+        #ifdef EXPERIMENTAL_NOCLOUDS
+            const float cloud_scatter_factor = 0.0;
+        #else
+            float cloud_scatter_factor = density_integrals.x;
+        #endif
+        #ifdef EXPERIMENTAL_NOHAZE
+            const float global_scatter_factor = 0.0;
+        #else
+            float global_scatter_factor = density_integrals.y;
+        #endif
 
         float step = (ldist - cdist) * 0.01;
         float cloud_darken = pow(1.0 / (1.0 + cloud_scatter_factor), step);

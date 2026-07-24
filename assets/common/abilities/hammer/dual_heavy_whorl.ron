@@ -18,7 +18,7 @@ BasicMelee(
     ),
     ori_modifier: (
         buildup: Some(0.2),
-        swing: Some(0.2),
+        action: Some(0.2),
         recover: Some(0.2),
     ),
 )

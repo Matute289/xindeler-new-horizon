@@ -4,7 +4,16 @@ use crate::{
         CombatBuffStrength, CombatEffect, CombatModification, CombatRequirement, ScalingKind,
         StatEffect, StatEffectTarget,
     },
-    comp::{Mass, Stats, aura::AuraKey, stats::ResistKind, tool::ToolKind},
+    comp::{
+        FrontendMarker, Mass, Stats,
+        aura::AuraKey,
+        projectile::{
+            ProjectileArcingProperties, ProjectileConstructorEffect,
+            ProjectileConstructorEffectKind,
+        },
+        stats::ResistKind,
+        tool::ToolKind,
+    },
     link::DynWeakLinkHandle,
     match_some,
     resources::{Secs, Time},
@@ -160,6 +169,16 @@ pub enum BuffKind {
     /// Strength linearly decreases the duration of newly applied, affected
     /// debuffs, 0.5 is a 50% reduction.
     Resilience,
+    /// Causes successful bow weapon attacks to cause you to gain the hastened
+    /// buff for a few seconds.
+    /// StormChaser strength is used as strength for Hastened.
+    StormChaser,
+    /// Causes projectile attacks to have more precision power, and to guarantee
+    /// a minimum precision multiplier.
+    /// Strength linearly increases both. The minimum precision power is
+    /// equivalent to the buff strength, and the additional precision power is
+    /// 50% of the buff strength.
+    EagleEye,
     /// Causes the next attack to have precision of 1.0 if the target is not
     /// wielding their weapon, and also generally increases damage.
     /// Strength linearly increases the damage increase.
@@ -173,12 +192,6 @@ pub enum BuffKind {
     /// energy.
     /// Strength linearly increases the precision override and energy restored.
     Heartseeker,
-    /// Causes projectile attacks to have more precision power, and to guarantee
-    /// a minimum precision multiplier.
-    /// Strength linearly increases both. The minimum precision power is
-    /// equivalent to the buff strength, and the additional precision power is
-    /// 50% of the buff strength.
-    EagleEye,
     /// Causes the next projectile fired to debuff the target with ArdentHunted.
     /// Projectiles fired at the target generate additional combo, and
     /// increase energy reward by a percentage.
@@ -190,6 +203,31 @@ pub enum BuffKind {
     /// a bow.
     /// Strength linearly increases the amount of additional damage.
     SepticShot,
+    /// Marks a specific entity to be affected by projectiles fired while this
+    /// buff is active.
+    /// Projectiles fired at this target deal additional damage, while
+    /// projectiles fired at other targets deal reduced damage.
+    /// Strength linearly increases the amount of additional damage dealt to the
+    /// target. Damage reduction against other targets is fixed at -25%.
+    ArdentHunt,
+    /// Causes the next projectile fired by a bow to add the burning debuff to
+    /// the target.
+    /// Strength linearly increases the fraction of damage converted to burning
+    /// (0.5 -> +50%, 1.0 -> +100%).
+    IgniteArrow,
+    /// Causes the next projectile fired by a bow to add the frozen debuff to
+    /// the target.
+    /// The strength of this buff becomes the strength of the frozen debuff.
+    FreezeArrow,
+    /// Causes the next projectile fired by a bow to add the poisoned debuff to
+    /// the target.
+    /// The strength of this buff becomes the strength of the poisoned debuff.
+    DrenchArrow,
+    /// Causes the next projectile fired by a bow to change to an arcing
+    /// projectile.
+    /// The strength of this buff is multiplied by the damage on the original
+    /// projectile to determine the arcing damage.
+    JoltArrow,
     // =================
     //      DEBUFFS
     // =================
@@ -376,12 +414,18 @@ impl BuffKind {
             | BuffKind::ScornfulTaunt
             | BuffKind::Tenacity
             | BuffKind::Resilience
+            | BuffKind::StormChaser
+            | BuffKind::EagleEye
             | BuffKind::OwlTalon
             | BuffKind::HeavyNock
             | BuffKind::Heartseeker
-            | BuffKind::EagleEye
             | BuffKind::ArdentHunter
             | BuffKind::SepticShot
+            | BuffKind::ArdentHunt
+            | BuffKind::IgniteArrow
+            | BuffKind::FreezeArrow
+            | BuffKind::DrenchArrow
+            | BuffKind::JoltArrow
             | BuffKind::FreedomOfMovement => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
@@ -459,12 +503,17 @@ impl BuffKind {
         )
     }
 
-    pub fn effects(&self, data: &BuffData, source_entity: Option<Uid>) -> Vec<BuffEffect> {
+    pub fn effects(
+        &self,
+        data: &BuffData,
+        target_entity: Option<Uid>,
+        source_entity: Option<Uid>,
+    ) -> Vec<BuffEffect> {
         // Normalized nonlinear scaling
         // TODO: Do we want to make denominator term parameterized. Come back to if we
         // add nn_scaling3.
         let nn_scaling = |a: f32| a.abs() / (a.abs() + 0.5) * a.signum();
-        let nn_scaling2 = |a: f32| a.abs() / (a.abs() + 1.0) * a.signum();
+        let nn_scaling_custom = |a: f32, b: f32| a.abs() / (a.abs() + b.max(0.1)) * a.signum();
         let instance = rand::random();
         match self {
             BuffKind::Bleeding => vec![BuffEffect::HealthChangeOverTime {
@@ -610,6 +659,24 @@ impl BuffKind {
                 BuffEffect::GroundFriction(1.0 - nn_scaling(data.strength)),
                 BuffEffect::BuffImmunity(BuffKind::Burning),
             ],
+            BuffKind::ArdentHunted => {
+                let projectile_req = CombatRequirement::AttackSource(AttackSource::Projectile);
+                let mut energy_reward_effect =
+                    AttackedModification::new(AttackedModifier::EnergyReward(data.strength))
+                        .with_requirement(projectile_req);
+                let mut damage_mult_effect =
+                    AttackedModification::new(AttackedModifier::DamageMultiplier(data.strength))
+                        .with_requirement(projectile_req);
+                if let Some(uid) = source_entity {
+                    let attacker_req = CombatRequirement::Attacker(uid);
+                    energy_reward_effect = energy_reward_effect.with_requirement(attacker_req);
+                    damage_mult_effect = damage_mult_effect.with_requirement(attacker_req);
+                }
+                vec![
+                    BuffEffect::AttackedModification(energy_reward_effect),
+                    BuffEffect::AttackedModification(damage_mult_effect),
+                ]
+            },
             BuffKind::Ensnared => vec![BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength))],
             // BL-03: linear slow so strength 0.5 = exactly half speed (tunable per
             // zone). Intended strength range is [0, 1); strength >= 1.0 floors at a
@@ -729,7 +796,7 @@ impl BuffKind {
             ],
             BuffKind::Rooted => vec![BuffEffect::MovementSpeed(0.0)],
             BuffKind::Winded => vec![
-                BuffEffect::MovementSpeed(1.0 - nn_scaling2(data.strength)),
+                BuffEffect::MovementSpeed(1.0 - nn_scaling_custom(data.strength, 1.0)),
                 BuffEffect::EnergyReward(1.0 - nn_scaling(data.strength)),
             ],
             BuffKind::Amnesia => vec![BuffEffect::DisableAuxiliaryAbilities],
@@ -743,6 +810,31 @@ impl BuffKind {
                 )),
             ],
             BuffKind::Resilience => vec![BuffEffect::CrowdControlResistance(data.strength)],
+            BuffKind::StormChaser => {
+                vec![BuffEffect::AttackEffect(
+                    AttackEffect::new(
+                        None,
+                        CombatEffect::SelfBuff(CombatBuff {
+                            kind: BuffKind::Hastened,
+                            dur_secs: data.secondary_duration.unwrap_or(Secs(1.0)),
+                            strength: CombatBuffStrength::Value(data.strength),
+                            chance: 1.0,
+                        }),
+                    )
+                    .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
+                )]
+            },
+            BuffKind::EagleEye => {
+                vec![
+                    BuffEffect::PrecisionModifier(
+                        Some(CombatRequirement::AttackSource(AttackSource::Projectile)),
+                        data.strength,
+                        false,
+                    ),
+                    BuffEffect::PrecisionPowerMult(1.0 + data.strength * 0.5),
+                    BuffEffect::EnergyReward(0.5),
+                ]
+            },
             BuffKind::OwlTalon => vec![
                 BuffEffect::PrecisionModifier(Some(CombatRequirement::TargetUnwielded), 0.8, false),
                 BuffEffect::AttackDamage(1.0 + data.strength),
@@ -779,17 +871,6 @@ impl BuffKind {
                     BuffEffect::AttackEffect(energy),
                 ]
             },
-            BuffKind::EagleEye => {
-                vec![
-                    BuffEffect::PrecisionModifier(
-                        Some(CombatRequirement::AttackSource(AttackSource::Projectile)),
-                        data.strength,
-                        false,
-                    ),
-                    BuffEffect::PrecisionPowerMult(1.0 + data.strength * 0.5),
-                    BuffEffect::EnergyReward(0.25 + data.strength * 0.25),
-                ]
-            },
             BuffKind::ArdentHunter => vec![BuffEffect::AttackEffect(
                 AttackEffect::new(
                     None,
@@ -802,24 +883,6 @@ impl BuffKind {
                 )
                 .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
             )],
-            BuffKind::ArdentHunted => {
-                let projectile_req = CombatRequirement::AttackSource(AttackSource::Projectile);
-                let mut energy_reward_effect =
-                    AttackedModification::new(AttackedModifier::EnergyReward(data.strength))
-                        .with_requirement(projectile_req);
-                let mut damage_mult_effect =
-                    AttackedModification::new(AttackedModifier::DamageMultiplier(data.strength))
-                        .with_requirement(projectile_req);
-                if let Some(uid) = source_entity {
-                    let attacker_req = CombatRequirement::Attacker(uid);
-                    energy_reward_effect = energy_reward_effect.with_requirement(attacker_req);
-                    damage_mult_effect = damage_mult_effect.with_requirement(attacker_req);
-                }
-                vec![
-                    BuffEffect::AttackedModification(energy_reward_effect),
-                    BuffEffect::AttackedModification(damage_mult_effect),
-                ]
-            },
             BuffKind::SepticShot => vec![BuffEffect::AttackEffect(
                 AttackEffect::new(None, CombatEffect::DebuffsVulnerable {
                     mult: data.strength,
@@ -829,6 +892,19 @@ impl BuffKind {
                 })
                 .with_requirement(CombatRequirement::AttackSource(AttackSource::Projectile)),
             )],
+            BuffKind::ArdentHunt => {
+                const GENERAL_MULT: f32 = 0.75;
+                let hunt_mult = (1.0 / GENERAL_MULT.max(0.1)) + data.strength;
+                let mut effects = vec![BuffEffect::AttackDamage(GENERAL_MULT)];
+                if let Some(target) = target_entity {
+                    effects.push(BuffEffect::AttackEffect(
+                        AttackEffect::new(None, CombatEffect::AdditionalDamage(hunt_mult - 1.0))
+                            .with_requirement(CombatRequirement::Target(target)),
+                    ));
+                    effects.push(BuffEffect::MarkEntity(target));
+                }
+                effects
+            },
             BuffKind::Terrified => {
                 // BL-05 Fear rider, redesigned on the BL-52 combat-resolution
                 // engine: slowed AND fights at a disadvantage. The flee behaviour
@@ -846,6 +922,93 @@ impl BuffKind {
                 value: 1.0 - (0.08 * data.strength).min(0.4),
                 kind: ModifierKind::Multiplicative,
             }],
+            BuffKind::IgniteArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::AttackEffect(
+                        AttackEffect::new(
+                            None,
+                            CombatEffect::Buff(CombatBuff {
+                                kind: BuffKind::Burning,
+                                dur_secs: data.secondary_duration.unwrap_or(Secs(10.0)),
+                                strength: CombatBuffStrength::DamageFraction(data.strength),
+                                chance: 1.0,
+                            }),
+                        )
+                        .with_requirement(CombatRequirement::AttackSource(
+                            AttackSource::Projectile,
+                        )),
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::IgniteArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
+            BuffKind::FreezeArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::AttackEffect(
+                        AttackEffect::new(
+                            None,
+                            CombatEffect::Buff(CombatBuff {
+                                kind: BuffKind::Frozen,
+                                dur_secs: data.secondary_duration.unwrap_or(Secs(10.0)),
+                                strength: CombatBuffStrength::Value(data.strength),
+                                chance: 1.0,
+                            }),
+                        )
+                        .with_requirement(CombatRequirement::AttackSource(
+                            AttackSource::Projectile,
+                        )),
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::FreezeArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
+            BuffKind::DrenchArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::AttackEffect(
+                        AttackEffect::new(
+                            None,
+                            CombatEffect::Buff(CombatBuff {
+                                kind: BuffKind::Poisoned,
+                                dur_secs: data.secondary_duration.unwrap_or(Secs(10.0)),
+                                strength: CombatBuffStrength::Value(data.strength),
+                                chance: 1.0,
+                            }),
+                        )
+                        .with_requirement(CombatRequirement::AttackSource(
+                            AttackSource::Projectile,
+                        )),
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::DrenchArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
+            BuffKind::JoltArrow => vec![
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::ConvertKindToArcing(
+                        ProjectileArcingProperties {
+                            distance: 8.0,
+                            arcs: 3,
+                            min_delay: Secs(0.25),
+                            max_delay: Secs(1.0),
+                            targets_owner: false,
+                        },
+                    ),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+                BuffEffect::ProjectileConstructorEffect(ProjectileConstructorEffect {
+                    kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::JoltArrow),
+                    tool_filter: Some(ToolKind::Bow),
+                }),
+            ],
         }
     }
 
@@ -990,9 +1153,23 @@ pub enum BuffCategory {
     PersistOnDeath,
     FromActiveAura(Uid, AuraKey),
     FromLink(DynWeakLinkHandle),
+    /// Buffs with this category are removed in the EntityAttackedHook event
+    /// handler
     RemoveOnAttack,
+    /// Buffs with this category are removed by any loadout changes triggered
+    /// from the character state system, buffs added by the self buff character
+    /// state automatically have this buff category
     RemoveOnLoadoutChange,
+    /// Ensures only 1 buff with this category can be present on an entity,
+    /// enforced in self buff character state
+    // TODO: Do we want to enforce this category similarly to how WeaponCoating is enforced?
     SelfBuff,
+    /// Ensures only 1 buff with this category can be present on an entity,
+    /// enforced in buff event handling. Currently cleared in the event handler
+    /// for shooting a projectile.
+    // TODO: If we need to clear buffs with this category in another place (e.g. on melee attacks),
+    // then logic will need to be added.
+    WeaponCoating,
     /// Sustained by concentration (ENG-C2 / M5): only one such buff is held at
     /// a time (a new one removes the prior), and it is removed when the
     /// bearer takes a hit at or above the break threshold. Tag
@@ -1070,10 +1247,18 @@ pub enum BuffEffect {
     },
     /// Modifies move speed of target
     MovementSpeed(f32),
+    /// Modifies charging move speed of target
+    ChargeMoveSpeed(f32),
+    /// Modifies buildup move speed of target
+    BuildupMoveSpeed(f32),
     /// Modifies attack speed of target
     AttackSpeed(f32),
     /// Modifies recovery speed of target
     RecoverySpeed(f32),
+    /// Modifies charging speed of target
+    ChargingSpeed(f32),
+    /// Modifies buildup speed of target
+    BuildupSpeed(f32),
     /// Modifies ground friction of target
     GroundFriction(f32),
     /// Reduces poise damage taken after armor is accounted for by this fraction
@@ -1100,6 +1285,8 @@ pub enum BuffEffect {
     MitigationsPenetration(f32),
     /// Modifies energy rewarded on successful strikes
     EnergyReward(f32),
+    /// Modifies energy efficiency of using abilities
+    EnergyEfficiency(f32),
     /// Add an effect to the entity when damaged by an attack
     DamagedEffect(StatEffect),
     /// Add an effect to the entity when killed
@@ -1136,6 +1323,12 @@ pub enum BuffEffect {
     PrecisionPowerMult(f32),
     /// Multiplies knockback dealt by attacks
     KnockbackMult(f32),
+    /// Multiplier to speed of projectiles fired by the target
+    ProjectileSpeedMult(f32),
+    /// Adds effects to projectiles when they are constructed from a projectile
+    /// constructor
+    ProjectileConstructorEffect(ProjectileConstructorEffect),
+    MarkEntity(Uid),
 }
 
 /// Actual de/buff.
@@ -1194,6 +1387,9 @@ impl Buff {
         dest_info: DestInfo,
         // Create source_info if we need more parameters from source
         source_mass: Option<&Mass>,
+        // Note: This refers to the target of the ability that caused a new buff, which is not
+        // necessarily the target of the buff
+        target_uid: Option<Uid>,
     ) -> Self {
         let data = kind.modify_data(data, source_mass, dest_info, source);
         let source_uid = if let BuffSource::Character { by, .. } = source {
@@ -1201,7 +1397,7 @@ impl Buff {
         } else {
             None
         };
-        let effects = kind.effects(&data, source_uid);
+        let effects = kind.effects(&data, target_uid, source_uid);
         let cat_ids = kind.extend_cat_ids(cat_ids);
         let start_time = Time(time.0 + data.delay.map_or(0.0, |delay| delay.0));
         let end_time = if cat_ids.iter().any(|cat_id| {
@@ -1451,6 +1647,44 @@ impl Buffs {
             })
         }
     }
+
+    pub fn remove_by_category(
+        &mut self,
+        all_required: Vec<BuffCategory>,
+        any_required: Vec<BuffCategory>,
+        none_required: Vec<BuffCategory>,
+    ) {
+        let mut keys_to_remove = Vec::new();
+        for (key, buff) in self.buffs.iter() {
+            let mut required_met = true;
+            for required in &all_required {
+                if !buff.cat_ids.iter().any(|cat| cat == required) {
+                    required_met = false;
+                    break;
+                }
+            }
+            let mut any_met = any_required.is_empty();
+            for any in &any_required {
+                if buff.cat_ids.iter().any(|cat| cat == any) {
+                    any_met = true;
+                    break;
+                }
+            }
+            let mut none_met = true;
+            for none in &none_required {
+                if buff.cat_ids.iter().any(|cat| cat == none) {
+                    none_met = false;
+                    break;
+                }
+            }
+            if required_met && any_met && none_met {
+                keys_to_remove.push(key);
+            }
+        }
+        for key in keys_to_remove {
+            self.remove(key);
+        }
+    }
 }
 
 impl Component for Buffs {
@@ -1480,13 +1714,14 @@ pub mod tests {
             time,
             DestInfo::default(),
             None,
+            None,
         )
     }
 
     #[test]
     fn difficult_terrain_halves_speed_at_half_strength() {
         // BL-03: linear slow, strength 0.5 -> exactly half move speed.
-        let effects = BuffKind::DifficultTerrain.effects(&BuffData::new(0.5, None), None);
+        let effects = BuffKind::DifficultTerrain.effects(&BuffData::new(0.5, None), None, None);
         assert!(effects.iter().any(|e| matches!(
             e,
             BuffEffect::MovementSpeed(s) if (*s - 0.5).abs() < f32::EPSILON
@@ -1497,7 +1732,7 @@ pub mod tests {
     #[test]
     fn antimagic_disables_magic() {
         // BL-36: the antimagic debuff sets the disable-magic flag and nothing else.
-        let effects = BuffKind::Antimagic.effects(&BuffData::new(1.0, None), None);
+        let effects = BuffKind::Antimagic.effects(&BuffData::new(1.0, None), None, None);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], BuffEffect::DisableMagic));
         assert!(!BuffKind::Antimagic.is_buff(), "should be a debuff");
@@ -1506,7 +1741,7 @@ pub mod tests {
     #[test]
     fn anchored_disables_teleport_only() {
         // BL-05 rider: anchor sets the disable-teleport flag and nothing else.
-        let effects = BuffKind::Anchored.effects(&BuffData::new(1.0, None), None);
+        let effects = BuffKind::Anchored.effects(&BuffData::new(1.0, None), None, None);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], BuffEffect::DisableTeleport));
         assert!(!BuffKind::Anchored.is_buff(), "should be a debuff");
@@ -1515,7 +1750,7 @@ pub mod tests {
     #[test]
     fn asleep_incapacitates() {
         // BL-05 rider: sleep roots (MovementSpeed 0) + locks auxiliary abilities.
-        let effects = BuffKind::Asleep.effects(&BuffData::new(1.0, None), None);
+        let effects = BuffKind::Asleep.effects(&BuffData::new(1.0, None), None, None);
         assert!(
             effects
                 .iter()
@@ -1538,7 +1773,7 @@ pub mod tests {
     #[test]
     fn blinded_reduces_attack_damage() {
         // BL-05 rider: blind reduces outgoing damage by strength (0.5 -> half).
-        let effects = BuffKind::Blinded.effects(&BuffData::new(0.5, None), None);
+        let effects = BuffKind::Blinded.effects(&BuffData::new(0.5, None), None, None);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], BuffEffect::AttackDamage(d) if (d - 0.5).abs() < 1e-6));
         assert!(!BuffKind::Blinded.is_buff(), "should be a debuff");
@@ -1557,7 +1792,7 @@ pub mod tests {
         // BL-66 d: Slowed mirrors Crippled's movement curve without the HP
         // drain, and is a debuff.
         assert!(!BuffKind::Slowed.is_buff(), "should be a debuff");
-        let effects = BuffKind::Slowed.effects(&BuffData::new(0.5, None), None);
+        let effects = BuffKind::Slowed.effects(&BuffData::new(0.5, None), None, None);
         assert!(
             effects
                 .iter()
@@ -1570,7 +1805,7 @@ pub mod tests {
         // BL-05 Fear rider on the BL-52 engine: slows AND lowers accuracy
         // (fights at a disadvantage — more misses, same damage); flee behaviour
         // is in the agent AI.
-        let effects = BuffKind::Terrified.effects(&BuffData::new(1.0, None), None);
+        let effects = BuffKind::Terrified.effects(&BuffData::new(1.0, None), None, None);
         assert!(
             effects
                 .iter()
@@ -1586,7 +1821,7 @@ pub mod tests {
     #[test]
     fn freedom_of_movement_grants_difficult_terrain_immunity() {
         // BL-03: the immunity source negates DifficultTerrain and nothing else.
-        let effects = BuffKind::FreedomOfMovement.effects(&BuffData::new(1.0, None), None);
+        let effects = BuffKind::FreedomOfMovement.effects(&BuffData::new(1.0, None), None, None);
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             effects[0],
@@ -1599,7 +1834,7 @@ pub mod tests {
     fn bleeding_mark_bleeds_and_is_a_debuff() {
         // BL-05 RD-7: bleeds over time (DoT) like Bleeding; the on-expire
         // detonation burst is emitted by the buff system, not as an effect here.
-        let effects = BuffKind::BleedingMark.effects(&BuffData::new(5.0, None), None);
+        let effects = BuffKind::BleedingMark.effects(&BuffData::new(5.0, None), None, None);
         assert!(matches!(
             effects.as_slice(),
             [BuffEffect::HealthChangeOverTime { rate, .. }] if *rate < 0.0
@@ -1612,7 +1847,7 @@ pub mod tests {
         // BL-05 RD-6: the absorb pool is granted on buff-add (server) and
         // consumed in `Health::change_by`, so the buff itself has no per-tick
         // effect; it's a positive marker buff.
-        let effects = BuffKind::Shielded.effects(&BuffData::new(30.0, None), None);
+        let effects = BuffKind::Shielded.effects(&BuffData::new(30.0, None), None, None);
         assert!(effects.is_empty());
         assert!(BuffKind::Shielded.is_buff(), "should be positive");
     }

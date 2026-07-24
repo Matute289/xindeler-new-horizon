@@ -38,21 +38,26 @@ impl MyrmidonHouse {
             }),
         }
     }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            waypoints: false,
-            trees: !within_distance(wpos, self.bounds.center(), 85),
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for MyrmidonHouse {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_myrmidon_house\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_myrmidonhouse")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_myrmidonhouse"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_myrmidon_house"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+        spawn_rules.trees &= !within_distance(wpos, self.bounds.center(), 85);
+        spawn_rules.waypoints = false;
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let base = self.alt + 3;
         let center = self.bounds.center();

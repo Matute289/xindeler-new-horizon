@@ -94,8 +94,8 @@ impl CharacterBehavior for Data {
                     update.character = CharacterState::Explosion(Data {
                         timer: Duration::default(),
                         stage_section: StageSection::Action,
-                        movement_modifier: self.static_data.movement_modifier.swing,
-                        ori_modifier: self.static_data.ori_modifier.swing,
+                        movement_modifier: self.static_data.movement_modifier.action,
+                        ori_modifier: self.static_data.ori_modifier.action,
                         ..*self
                     });
                 }
@@ -176,11 +176,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovery
                     update.character = CharacterState::Explosion(Data {
-                        timer: tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        ),
+                        timer: tick_attack_or_default(data, self.timer, None),
                         movement_modifier: self.static_data.movement_modifier.recover,
                         ori_modifier: self.static_data.ori_modifier.recover,
                         ..*self

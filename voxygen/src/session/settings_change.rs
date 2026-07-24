@@ -28,6 +28,8 @@ pub enum Audio {
     MuteMusicVolume(bool),
     AdjustSfxVolume(f32),
     MuteSfxVolume(bool),
+    AdjustInstrumentVolume(f32),
+    MuteInstrumentVolume(bool),
     AdjustAmbienceVolume(f32),
     MuteAmbienceVolume(bool),
     RainAmbience(bool),
@@ -56,6 +58,10 @@ pub enum Control {
     ChangeBindingKeyboard(GameInput),
     RemoveBindingKeyboard(GameInput),
     ResetKeyBindingsKeyboard,
+
+    // change keyboard menu bindings
+    ChangeBindingKeyboardMenu(MenuInput),
+    RemoveBindingKeyboardMenu(MenuInput),
 
     // reset all gamepad bindings
     ResetKeyBindingsGamepad,
@@ -314,6 +320,17 @@ impl SettingsChange {
 
                         global_state.audio.set_sfx_volume(volume_checked);
                     },
+                    Audio::AdjustInstrumentVolume(instrument_volume) => {
+                        global_state.audio.set_instrument_volume(instrument_volume);
+
+                        settings.audio.instrument_volume.volume = instrument_volume;
+                    },
+                    Audio::MuteInstrumentVolume(instrument_muted) => {
+                        let volume_checked =
+                            update_muted(&mut settings.audio.instrument_volume, instrument_muted);
+
+                        global_state.audio.set_instrument_volume(volume_checked);
+                    },
                     Audio::AdjustAmbienceVolume(ambience_volume) => {
                         global_state.audio.set_ambience_volume(ambience_volume);
 
@@ -357,6 +374,7 @@ impl SettingsChange {
                         audio.set_music_volume(settings.audio.music_volume.get_checked());
                         audio.set_ambience_volume(settings.audio.ambience_volume.get_checked());
                         audio.set_sfx_volume(settings.audio.sfx_volume.get_checked());
+                        audio.set_instrument_volume(settings.audio.instrument_volume.get_checked());
                         audio.set_music_spacing(settings.audio.music_spacing);
                         audio.set_num_sfx_channels(settings.audio.num_sfx_channels);
                     },
@@ -416,6 +434,14 @@ impl SettingsChange {
                 },
                 Control::RemoveBindingKeyboard(game_input) => {
                     settings.controls.remove_binding(game_input);
+                },
+                Control::ChangeBindingKeyboardMenu(menu_input) => {
+                    global_state.window.set_remapping_mode(
+                        crate::window::RemappingMode::RemapKeyboardMenu(menu_input),
+                    );
+                },
+                Control::RemoveBindingKeyboardMenu(menu_input) => {
+                    settings.controls.remove_menu_binding(menu_input);
                 },
                 Control::ResetKeyBindingsKeyboard => {
                     settings.controls = ControlSettings::default();

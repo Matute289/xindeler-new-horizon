@@ -11,7 +11,7 @@ BasicAura(
             kind: DifficultTerrain,
             strength: 0.5,
             duration: Some(2),
-            category: Magical,
+            category: Some(Magical),
         ),
     ],
     aura_duration: Some(8.0),

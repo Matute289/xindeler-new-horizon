@@ -76,12 +76,14 @@ pub struct Scheduler {
     channel_listener: Mutex<HashMap<ProtocolInfo, oneshot::Sender<()>>>,
     metrics: Arc<NetworkMetrics>,
     protocol_metrics: Arc<ProtocolMetrics>,
+    output_limit: usize,
 }
 
 impl Scheduler {
     pub fn new(
         local_pid: Pid,
         #[cfg(feature = "metrics")] registry: Option<&Registry>,
+        output_limit: usize,
     ) -> (
         Self,
         mpsc::UnboundedSender<A2sListen>,
@@ -137,6 +139,7 @@ impl Scheduler {
                 channel_listener: Mutex::new(HashMap::new()),
                 metrics,
                 protocol_metrics,
+                output_limit,
             },
             a2s_listen_s,
             a2s_connect_s,
@@ -395,6 +398,7 @@ impl Scheduler {
         let metrics = Arc::clone(&self.metrics);
         let local_pid = self.local_pid;
         let local_secret = self.local_secret;
+        let output_limit = self.output_limit;
         // this is necessary for UDP to work at all and to remove code duplication
         tokio::spawn(
             async move {
@@ -422,7 +426,13 @@ impl Scheduler {
                                 s2b_create_channel_s,
                                 s2b_shutdown_bparticipant_s,
                                 b2a_bandwidth_stats_r,
-                            ) = BParticipant::new(local_pid, pid, sid, Arc::clone(&metrics));
+                            ) = BParticipant::new(
+                                local_pid,
+                                pid,
+                                sid,
+                                Arc::clone(&metrics),
+                                output_limit,
+                            );
 
                             let participant = Participant::new(
                                 local_pid,

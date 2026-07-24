@@ -10,7 +10,7 @@ ItemDef(
                     strength: 100.0,
                     duration: Some(1),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: PotionSickness,
@@ -19,7 +19,7 @@ ItemDef(
                     duration: Some(45),
                     delay: Some(1)
                 ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ])
     ),

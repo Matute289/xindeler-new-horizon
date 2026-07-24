@@ -44,10 +44,12 @@ impl Camp {
 }
 
 impl Structure for Camp {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_camp\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_camp")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_camp"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_camp"))]
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         let center = self.bounds.center();
         let base = land.get_alt_approx(center) as i32;

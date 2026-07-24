@@ -10,7 +10,7 @@ ItemDef(
                     strength: 4.0,
                     duration: Some(6),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ),
         container: Some(Simple("common.items.crafting_ing.twigs")),

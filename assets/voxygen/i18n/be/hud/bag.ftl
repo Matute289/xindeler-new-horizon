@@ -74,3 +74,6 @@ hud-bag-split_swap_slots_drop_items =
         [many] Гэта прывядзе да таго, што{ $slot_deficit } прадметаў выпадуць на зямлю. Вы ўпэўнены?
        *[other] Гэта прывядзе да таго, што { $slot_deficit } прадметаў выпадуць на зямлю. Вы ўпэўнены?
     }
+hud-context-menu-use = Выкарыстоўваць
+hud-context-menu-drop = Выкінуць
+hud-context-menu-cancel = Скасаваць

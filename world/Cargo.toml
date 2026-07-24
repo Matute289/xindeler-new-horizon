@@ -8,8 +8,9 @@ license.workspace = true
 workspace = true
 
 [features]
-use-dyn-lib = ["common-dynlib"]
-be-dyn-lib = []
+use-dyn-lib = ["common-dynlib", "dyn-lib"]
+be-dyn-lib = ["dyn-lib"]
+dyn-lib = []
 simd = ["vek/platform_intrinsics"]
 bin_compression = [
     "lz-fear",

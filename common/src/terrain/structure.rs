@@ -70,7 +70,7 @@ impl Default for StructureBlock {
     fn default() -> Self { StructureBlock::None }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum StructureError {
     OutOfBounds,
 }

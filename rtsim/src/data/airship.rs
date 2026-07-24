@@ -1,5 +1,5 @@
-use crate::data::Npcs;
-use common::{rtsim::NpcId, terrain::MapSizeLg};
+use crate::data::Actors;
+use common::{rtsim::ActorId, terrain::MapSizeLg};
 use std::cmp::Ordering;
 use vek::*;
 use world::{
@@ -13,14 +13,14 @@ use world::{
 /// Data for airship operations. This is part of RTSimData and is NOT persisted.
 #[derive(Clone, Default, Debug)]
 pub struct AirshipSim {
-    /// The pilot route assignments. The key is the pilot NpcId, the value is
+    /// The pilot route assignments. The key is the pilot ActorId, the value is
     /// a tuple. The first element is the index for the outer Airships::routes
     /// Vec (the route loop index), and the second element is the index for the
     /// pilot's initial route leg in the inner Airships::routes Vec.
-    pub assigned_routes: DHashMap<NpcId, (usize, usize)>,
+    pub assigned_routes: DHashMap<ActorId, (usize, usize)>,
 
     /// The pilots assigned to a route in the order they fly the route.
-    pub route_pilots: DHashMap<usize, Vec<NpcId>>,
+    pub route_pilots: DHashMap<usize, Vec<ActorId>>,
 }
 
 #[cfg(debug_assertions)]
@@ -52,10 +52,10 @@ impl AirshipSim {
     pub fn register_airship_captain(
         &mut self,
         location: &AirshipSpawningLocation,
-        captain_id: NpcId,
-        airship_id: NpcId,
+        captain_id: ActorId,
+        airship_id: ActorId,
         world: &World,
-        npcs: &mut Npcs,
+        actors: &mut Actors,
     ) {
         self.assigned_routes
             .insert(captain_id, (location.route_index, location.leg_index));
@@ -77,7 +77,7 @@ impl AirshipSim {
             ),
             _ => location.pos.with_z(location.height),
         };
-        let airship_mount_offset = if let Some(airship) = npcs.get_mut(airship_id) {
+        let airship_mount_offset = if let Some(airship) = actors.get_mut(airship_id) {
             airship.wpos = airship_wpos3d;
             airship.dir = location.dir;
             airship.body.mount_offset()
@@ -89,7 +89,7 @@ impl AirshipSim {
             );
             Vec3::new(0.0, 0.0, 0.0)
         };
-        if let Some(captain) = npcs.get_mut(captain_id) {
+        if let Some(captain) = actors.get_mut(captain_id) {
             let captain_pos = airship_wpos3d
                 + Vec3::new(
                     location.dir.x * airship_mount_offset.x,
@@ -115,7 +115,7 @@ impl AirshipSim {
     /// they will fly the route. This provides for determining the "next
     /// pilot" on a route, which is used for deconfliction and
     /// "traffic control" of airships.
-    pub fn configure_route_pilots(&mut self, airships: &Airships, npcs: &Npcs) {
+    pub fn configure_route_pilots(&mut self, airships: &Airships, actors: &Actors) {
         debug_airships!(4, "Airship Assigned Routes: {:?}", self.assigned_routes);
         // for each route index and leg index, find all pilots that are assigned to
         // the route index and leg index. Sort them by their distance to the starting
@@ -137,8 +137,12 @@ impl AirshipSim {
                     // Sort pilots by their distance to the starting position of the leg.
                     let start_pos = airships.route_leg_departure_location(route_index, leg_index);
                     pilots_on_leg.sort_by(|&pilot1, &pilot2| {
-                        let pilot1_pos = npcs.get(pilot1).map_or(start_pos, |npc| npc.wpos.xy());
-                        let pilot2_pos = npcs.get(pilot2).map_or(start_pos, |npc| npc.wpos.xy());
+                        let pilot1_pos = actors
+                            .get(pilot1)
+                            .map_or(start_pos, |actor| actor.wpos.xy());
+                        let pilot2_pos = actors
+                            .get(pilot2)
+                            .map_or(start_pos, |actor| actor.wpos.xy());
                         start_pos
                             .distance_squared(pilot1_pos)
                             .partial_cmp(&start_pos.distance_squared(pilot2_pos))
@@ -196,7 +200,7 @@ impl AirshipSim {
 
     /// Given a route index and pilot id, find the next pilot on the route (the
     /// one that is ahead of the given pilot).
-    pub fn next_pilot(&self, route_index: usize, pilot_id: NpcId) -> Option<NpcId> {
+    pub fn next_pilot(&self, route_index: usize, pilot_id: ActorId) -> Option<ActorId> {
         if let Some(pilots) = self.route_pilots.get(&route_index) {
             if pilots.len() < 2 {
                 // If there is only one pilot on the route, return the pilot itself.

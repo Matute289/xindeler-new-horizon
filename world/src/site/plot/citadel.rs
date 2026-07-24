@@ -84,14 +84,6 @@ impl Citadel {
 
     pub fn radius(&self) -> i32 { self.radius }
 
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            trees: (wpos - self.origin).map(i32::abs).reduce_max() > self.radius,
-            waypoints: false,
-            ..SpawnRules::default()
-        }
-    }
-
     fn wpos_cell(&self, wpos: Vec2<i32>) -> Vec2<i32> {
         (wpos - self.origin) / CELL_SIZE + self.grid.size() / 2
     }
@@ -102,10 +94,23 @@ impl Citadel {
 }
 
 impl Structure for Citadel {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_citadel\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_citadel")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_citadel"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_citadel"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+        spawn_rules.trees &= (wpos - self.origin).map(i32::abs).reduce_max() > self.radius;
+        spawn_rules.waypoints = false;
+    }
+
     fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
         for (pos, cell) in self.grid.iter_area(
             self.wpos_cell(painter.render_aabr().min) - 1,

@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New river ambience
 - Softer rain/ambience when indoors
   
+- Tall characters will now squat when under low obstacles
+- You can now customise your character's height
+- Initial menu input support was added (starting with the player inventory)
+- Menu inputs can now be remapped in settings->controls
+- Selecting an inventory slot will now open a new context menu
+- A 'flat' cloud rendering mode
+
 ### Changed
 
 - Can now swim through lillypads.
@@ -62,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parry no longer depends on armor
 - Mindflayer drops glowing remains with 25% chance
 - Quests now give larger coin rewards, and trader NPCs have higher amounts of coins to be able to afford to pay for the larger quest rewards
+- Improved LoD voxel effect
 
 ### Removed
 
@@ -75,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix Orientation of Wildskin Drum's Thumbnail
 - Fast river sfx
 - All NPCs don't go to bed & wake up at the same time.
+- Mounted NPC can now properly utilize their free will.
 
 ## [0.18.0] - 2026-01-23
 

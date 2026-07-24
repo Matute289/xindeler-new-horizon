@@ -4,7 +4,7 @@ use common::{
     LoadoutBuilder,
     calendar::Calendar,
     comp::{
-        self, Body, Item, Presence, PresenceKind,
+        self, Body, Item,
         inventory::trade_pricing::TradePricing,
         item::{ItemDefinitionIdOwned, Quality},
         slot::ArmorSlot,
@@ -12,7 +12,7 @@ use common::{
     event::{CreateNpcEvent, CreateShipEvent, DeleteEvent, EventBus, NpcBuilder},
     generation::{BodyBuilder, EntityConfig, EntityInfo},
     resources::{DeltaTime, Time, TimeOfDay},
-    rtsim::{Actor, NpcId, RtSimEntity},
+    rtsim::ActorId,
     slowjob::SlowJobPool,
     terrain::CoordinateConversions,
     trade::{Good, SiteInformation},
@@ -23,10 +23,10 @@ use common::{
 use common_ecs::{Job, Origin, Phase, System};
 use rand::RngExt;
 use rtsim::{
-    ai::NpcSystemData,
+    ai::ActorSystemData,
     data::{
-        Npc, Sites,
-        npc::{Profession, SimulationMode},
+        Sites,
+        actor::{Actor, Presence, Profession, SimulationMode},
     },
 };
 use specs::{Entities, Join, LendJoin, Read, ReadExpect, ReadStorage, WriteExpect, WriteStorage};
@@ -358,17 +358,17 @@ fn profession_agent_mark(profession: Option<&Profession>) -> Option<comp::agent:
     }
 }
 
-fn get_npc_entity_info(
-    npc: &Npc,
+fn get_actor_entity_info(
+    actor: &Actor,
     sites: &Sites,
     index: IndexRef,
     time: Option<&(TimeOfDay, Calendar)>,
 ) -> EntityInfo {
-    let pos = comp::Pos(npc.wpos);
+    let pos = comp::Pos(actor.wpos);
 
-    let mut rng = npc.rng(Npc::PERM_ENTITY_CONFIG);
-    if let Some(profession) = npc.profession() {
-        let economy = npc.home.and_then(|home| {
+    let mut rng = actor.rng(Actor::PERM_ENTITY_CONFIG);
+    if let Some(profession) = actor.profession() {
+        let economy = actor.home.and_then(|home| {
             let site = sites.get(home)?.world_site?;
             index.sites.get(site).trade_information(site)
         });
@@ -376,7 +376,7 @@ fn get_npc_entity_info(
         let config_asset = humanoid_config(&profession);
 
         let entity_config = EntityConfig::from_asset_expect_owned(config_asset)
-            .with_body(BodyBuilder::Exact(npc.body));
+            .with_body(BodyBuilder::Exact(actor.body));
         EntityInfo::at(pos.0)
             .with_entity_config(entity_config, Some(config_asset), &mut rng, time)
             .with_alignment(
@@ -388,10 +388,10 @@ fn get_npc_entity_info(
             )
             .with_economy(economy.as_ref())
             .with_lazy_loadout(profession_extra_loadout(Some(&profession)))
-            .with_alias(npc.get_name())
+            .with_alias(actor.get_name())
             .with_agent_mark(profession_agent_mark(Some(&profession)))
     } else {
-        let config_asset = match npc.body {
+        let config_asset = match actor.body {
             Body::BirdLarge(body) => match body.species {
                 comp::bird_large::Species::Phoenix => "common.entity.wild.aggressive.phoenix",
                 comp::bird_large::Species::Cockatrice => "common.entity.wild.aggressive.cockatrice",
@@ -436,7 +436,7 @@ fn get_npc_entity_info(
             body => unimplemented!("rtsim spawning for {:?}", body),
         };
         let entity_config = EntityConfig::from_asset_expect_owned(config_asset)
-            .with_body(BodyBuilder::Exact(npc.body));
+            .with_body(BodyBuilder::Exact(actor.body));
 
         EntityInfo::at(pos.0).with_entity_config(entity_config, Some(config_asset), &mut rng, time)
     }
@@ -458,11 +458,11 @@ impl<'a> System<'a> for Sys {
         ReadExpect<'a, world::IndexOwned>,
         ReadExpect<'a, SlowJobPool>,
         ReadStorage<'a, comp::Pos>,
-        ReadStorage<'a, RtSimEntity>,
+        ReadStorage<'a, ActorId>,
         WriteStorage<'a, comp::Agent>,
-        ReadStorage<'a, Presence>,
+        ReadStorage<'a, Body>,
         ReadExpect<'a, Calendar>,
-        Read<'a, IdMaps>,
+        ReadExpect<'a, IdMaps>,
         ReadExpect<'a, ServerConstants>,
         ReadExpect<'a, WeatherGrid>,
         WriteStorage<'a, comp::Inventory>,
@@ -490,9 +490,9 @@ impl<'a> System<'a> for Sys {
             index,
             slow_jobs,
             positions,
-            rtsim_entities,
+            rtsim_actors,
             mut agents,
-            presences,
+            bodies,
             calendar,
             id_maps,
             server_constants,
@@ -515,25 +515,11 @@ impl<'a> System<'a> for Sys {
 
             // Update time of day
             data.time_of_day = *time_of_day;
-
-            // Update character map (i.e: so that rtsim knows where players are)
-            // TODO: Other entities too like animals? Or do we now care about that?
-            data.npcs.character_map.clear();
-            for (presence, wpos) in (&presences, &positions).join() {
-                if let PresenceKind::Character(character) = &presence.kind {
-                    let chunk_pos = wpos.0.xy().as_().wpos_to_cpos();
-                    data.npcs
-                        .character_map
-                        .entry(chunk_pos)
-                        .or_default()
-                        .push((*character, wpos.0));
-                }
-            }
         }
 
         // Tick rtsim
         rtsim.state.tick(
-            &mut NpcSystemData {
+            &mut ActorSystemData {
                 positions: positions.clone(),
                 id_maps,
                 server_constants,
@@ -563,62 +549,70 @@ impl<'a> System<'a> for Sys {
         let chunk_states = rtsim.state.resource::<ChunkStates>();
         let data = &mut *rtsim.state.data_mut();
 
-        let mut create_event = |id: NpcId, npc: &Npc, steering: Option<NpcBuilder>| match npc.body {
-            Body::Ship(body) => {
-                create_ship_emitter.emit(CreateShipEvent {
-                    pos: comp::Pos(npc.wpos),
-                    ori: comp::Ori::from(Dir::new(npc.dir.with_z(0.0))),
-                    ship: body,
-                    rtsim_entity: Some(id),
-                    driver: steering,
-                });
-            },
-            _ => {
-                let entity_info = get_npc_entity_info(
-                    npc,
-                    &data.sites,
-                    index.as_index_ref(),
-                    Some(&calendar_data),
-                );
+        let mut create_event =
+            |actor_id: ActorId, actor: &Actor, steering: Option<NpcBuilder>| match actor.body {
+                Body::Ship(body) => {
+                    create_ship_emitter.emit(CreateShipEvent {
+                        pos: comp::Pos(actor.wpos),
+                        ori: comp::Ori::from(Dir::new(actor.dir.with_z(0.0))),
+                        ship: body,
+                        rtsim_actor: Some(actor_id),
+                        driver: steering,
+                    });
+                },
+                _ => {
+                    let entity_info = get_actor_entity_info(
+                        actor,
+                        &data.sites,
+                        index.as_index_ref(),
+                        Some(&calendar_data),
+                    );
 
-                let (mut npc_builder, pos) = SpawnEntityData::from_entity_info(entity_info)
-                    .into_npc_data_inner()
-                    .expect("Entity loaded from assets cannot be special")
-                    .to_npc_builder();
+                    let (mut npc_builder, pos) = SpawnEntityData::from_entity_info(entity_info)
+                        .into_npc_data_inner()
+                        .expect("Entity loaded from assets cannot be special")
+                        .to_npc_builder();
 
-                if let Some(agent) = &mut npc_builder.agent {
-                    agent.rtsim_outbox = Some(Default::default());
-                }
+                    if let Some(agent) = &mut npc_builder.agent {
+                        agent.rtsim_outbox = Some(Default::default());
+                    }
 
-                if let Some(health) = &mut npc_builder.health {
-                    health.set_fraction(npc.health_fraction);
-                }
+                    if let Some(health) = &mut npc_builder.health
+                        && let Some(presence) = &actor.presence
+                    {
+                        health.set_fraction(presence.health_fraction);
+                    }
 
-                create_npc_emitter.emit(CreateNpcEvent {
-                    pos,
-                    ori: comp::Ori::from(Dir::new(npc.dir.with_z(0.0))),
-                    npc: npc_builder.with_rtsim(id).with_rider(steering),
-                });
-            },
-        };
+                    create_npc_emitter.emit(CreateNpcEvent {
+                        pos,
+                        ori: comp::Ori::from(Dir::new(actor.dir.with_z(0.0))),
+                        npc: npc_builder.with_rtsim(actor_id).with_rider(steering),
+                    });
+                },
+            };
 
         // Load in mounted npcs and their riders
-        for mount in data.npcs.mounts.iter_mounts() {
-            let mount_npc = data.npcs.npcs.get_mut(mount).expect("This should exist");
-            let chunk = mount_npc.wpos.xy().as_::<i32>().wpos_to_cpos();
+        // Note that players *should* never be loaded because they are never
+        // `SimulationMode::Simulated`.
+        for mount in data.actors.mounts.iter_mounts() {
+            let mount_actor = data
+                .actors
+                .actors
+                .get_mut(mount)
+                .expect("This should exist");
+            let chunk = mount_actor.wpos.xy().as_::<i32>().wpos_to_cpos();
 
-            if matches!(mount_npc.mode, SimulationMode::Simulated)
+            if matches!(mount_actor.mode, SimulationMode::Simulated)
                 && chunk_states.0.get(chunk).is_some_and(|c| c.is_some())
             {
-                mount_npc.mode = SimulationMode::Loaded;
+                mount_actor.mode = SimulationMode::Loaded;
 
-                let mut actor_info = |actor: Actor| {
-                    let npc_id = actor.npc()?;
-                    let npc = data.npcs.npcs.get_mut(npc_id)?;
-                    if matches!(npc.mode, SimulationMode::Simulated) {
-                        npc.mode = SimulationMode::Loaded;
-                        let entity_info = get_npc_entity_info(
-                            npc,
+                let mut actor_info = |actor_id: ActorId| {
+                    let actor = data.actors.actors.get_mut(actor_id)?;
+                    if matches!(actor.mode, SimulationMode::Simulated) {
+                        actor.mode = SimulationMode::Loaded;
+                        let entity_info = get_actor_entity_info(
+                            actor,
                             &data.sites,
                             index.as_index_ref(),
                             Some(&calendar_data),
@@ -632,7 +626,7 @@ impl<'a> System<'a> for Sys {
                             .expect("Entity loaded from assets cannot be special")
                             .to_npc_builder()
                             .0
-                            .with_rtsim(npc_id);
+                            .with_rtsim(actor_id);
 
                         if let Some(agent) = &mut npc_builder.agent {
                             agent.rtsim_outbox = Some(Default::default());
@@ -646,49 +640,67 @@ impl<'a> System<'a> for Sys {
                 };
 
                 let steerer = data
-                    .npcs
+                    .actors
                     .mounts
                     .get_steerer_link(mount)
                     .and_then(|link| actor_info(link.rider));
 
-                let mount_npc = data.npcs.npcs.get(mount).expect("This should exist");
-                create_event(mount, mount_npc, steerer);
+                let mount_actor = data.actors.actors.get(mount).expect("This should exist");
+                create_event(mount, mount_actor, steerer);
             }
         }
 
-        // Load in NPCs
-        for (npc_id, npc) in data.npcs.npcs.iter_mut() {
-            let chunk = npc.wpos.xy().as_::<i32>().wpos_to_cpos();
+        // Load in NPCs.
+        for (actor_id, actor) in data.actors.actors.iter_mut() {
+            let chunk = actor.wpos.xy().as_::<i32>().wpos_to_cpos();
 
             // Load the NPC into the world if it's in a loaded chunk and is not already
             // loaded
-            if matches!(npc.mode, SimulationMode::Simulated)
+            if matches!(actor.mode, SimulationMode::Simulated)
                 && chunk_states.0.get(chunk).is_some_and(|c| c.is_some())
                 // Riding npcs will be spawned by the vehicle.
-                && data.npcs.mounts.get_mount_link(npc_id).is_none()
+                && data.actors.mounts.get_mount_link(actor_id).is_none()
             {
-                npc.mode = SimulationMode::Loaded;
-                create_event(npc_id, npc, None);
+                actor.mode = SimulationMode::Loaded;
+                // Don't 'spawn in' players, their entities are managed by the server
+                if actor.character().is_none() {
+                    create_event(actor_id, actor, None);
+                }
             }
         }
 
         // Synchronise rtsim NPC with entity data
-        for (entity, pos, rtsim_entity, agent) in (
+        for (entity, pos, body, rtsim_actor, mut agent) in (
             &entities,
             &positions,
-            &rtsim_entities,
+            &bodies,
+            &rtsim_actors,
             (&mut agents).maybe(),
         )
             .join()
         {
-            if let Some(npc) = data.npcs.get_mut(*rtsim_entity) {
-                match npc.mode {
-                    SimulationMode::Loaded => {
-                        // Update rtsim NPC state
-                        npc.wpos = pos.0;
+            if let Some(actor) = data.actors.get_mut(*rtsim_actor) {
+                // Update actor state
+                actor.wpos = pos.0;
+                actor.body = *body;
 
+                // For players, let rtsim know that the character is present in the world
+                if let Some(character) = actor.character_mut() {
+                    character.last_present_at = Some(data.tick);
+                    actor.presence.get_or_insert(Presence {
+                        // TODO: This isn't correct, use the actual health %
+                        health_fraction: 1.0,
+                    });
+                }
+
+                // TODO: Update other attributes here
+
+                match actor.mode {
+                    SimulationMode::Loaded => {
                         // Update entity state
-                        if let Some(agent) = agent {
+                        if let Some(agent) = &mut agent
+                            && let Some(npc) = actor.npc_mut()
+                        {
                             agent.rtsim_controller.personality = npc.personality;
                             agent.rtsim_controller.look_dir = npc.controller.look_dir;
                             agent.rtsim_controller.activity = npc.controller.activity;
@@ -702,7 +714,10 @@ impl<'a> System<'a> for Sys {
                         }
                     },
                     SimulationMode::Simulated => {
-                        delete_emitter.emit(DeleteEvent(entity));
+                        // Never try to 'dissolve' players back into the rtsim matrix
+                        if actor.character().is_none() {
+                            delete_emitter.emit(DeleteEvent(entity));
+                        }
                     },
                 }
             }

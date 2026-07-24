@@ -22,7 +22,7 @@ pub enum AuraKind {
     Buff {
         kind: BuffKind,
         data: BuffData,
-        category: BuffCategory,
+        category: Option<BuffCategory>,
         source: BuffSource,
     },
     /// Enables free-for-all friendly-fire. Includes group members, and pets.
@@ -182,7 +182,7 @@ pub struct AuraBuffConstructor {
     pub kind: BuffKind,
     pub strength: f32,
     pub duration: Option<Secs>,
-    pub category: BuffCategory,
+    pub category: Option<BuffCategory>,
 }
 
 impl AuraBuffConstructor {

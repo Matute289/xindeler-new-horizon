@@ -4,7 +4,7 @@ BasicAura(
     recover_duration: 0.5,
     targets: InGroup,
     auras: [
-        (kind: Regeneration, strength: 1.5, duration: Some(30.0), category: Magical),
+        (kind: Regeneration, strength: 1.5, duration: Some(30.0), category: Some(Magical)),
     ],
     aura_duration: Some(30.0),
     range: 12.0,

@@ -1,5 +1,5 @@
 //! A widget for selecting a single value along some linear range.
-use crate::hud::animate_by_pulse;
+use crate::{hud::animate_by_pulse, window::LastInput};
 use conrod_core::{
     Color, Colorable, Positionable, Sizeable, Widget, WidgetCommon, builder_methods, image,
     input::{keyboard::ModifierKey, state::mouse},
@@ -32,6 +32,7 @@ pub struct ContentSize {
 
 pub struct SlotMaker<'a, C, I, S: SumSlot> {
     pub empty_slot: image::Id,
+    pub hovered_slot: image::Id,
     pub filled_slot: image::Id,
     pub selected_slot: image::Id,
     // Is this useful?
@@ -46,6 +47,7 @@ pub struct SlotMaker<'a, C, I, S: SumSlot> {
     pub content_source: &'a C,
     pub image_source: &'a I,
     pub slot_manager: Option<&'a mut SlotManager<S>>,
+    pub last_input: &'a LastInput,
     pub pulse: f32,
 }
 
@@ -53,10 +55,19 @@ impl<C, I, S> SlotMaker<'_, C, I, S>
 where
     S: SumSlot,
 {
+    /// Creates a new Slot widget
+    ///
+    /// # arguments
+    /// * `contents` - the contents of the slot type
+    /// * `wh` - the width and height of the slot
+    /// * `menu_hover` - is the slot being highlighted by menu nav
+    /// * `menu_clicked` - was the hovered slot clicked via menu nav
     pub fn fabricate<K: SlotKey<C, I> + Into<S>>(
         &mut self,
         contents: K,
         wh: [f32; 2],
+        menu_hover: bool,
+        menu_clicked: bool,
     ) -> Slot<'_, K, C, I, S> {
         let content_size = {
             let ContentSize {
@@ -76,6 +87,7 @@ where
         Slot::new(
             contents,
             self.empty_slot,
+            self.hovered_slot,
             self.selected_slot,
             self.filled_slot,
             content_size,
@@ -86,6 +98,9 @@ where
             self.amount_text_color,
             self.content_source,
             self.image_source,
+            menu_hover,
+            menu_clicked,
+            self.last_input,
             self.pulse,
         )
         .wh([wh[0] as f64, wh[1] as f64])
@@ -122,7 +137,7 @@ pub enum Event<K> {
     SplitDropped(K),
     // Dragged half of the stack
     SplitDragged(K, K),
-    // Clicked while selected
+    // Right click when not dragging
     Used(K),
     // {Shift,Ctrl}-clicked
     Request { slot: K, auto_quantity: bool },
@@ -352,11 +367,8 @@ where
         }
 
         let input = ui.widget_input(widget);
-        // TODO: make more robust wrt multiple events in the same frame (eg event order
-        // may matter) TODO: handle taps as well
         let click_count = input.clicks().left().count();
         if click_count > 0 {
-            let odd_num_clicks = click_count % 2 == 1;
             self.state = if let ManagerState::Selected(id, other_slot) = self.state {
                 if id != widget {
                     // Swap
@@ -365,23 +377,16 @@ where
                     }
                     if click_count == 1 {
                         ManagerState::Idle
-                    } else if click_count == 2 {
-                        // Was clicked again
-                        ManagerState::Selected(widget, slot)
                     } else {
-                        // Clicked more than once after swap, use and deselect
-                        self.events.push(Event::Used(slot));
-                        ManagerState::Idle
+                        ManagerState::Selected(widget, slot)
                     }
                 } else {
-                    // Clicked widget was already selected
-                    // Deselect and emit use if clicked while selected
-                    self.events.push(Event::Used(slot));
+                    // Clicked widget was already selected; deselect widget
                     ManagerState::Idle
                 }
             } else {
                 // No widgets were selected
-                if odd_num_clicks && filled {
+                if filled {
                     ManagerState::Selected(widget, slot)
                 } else {
                     // Selected and then deselected with one or more clicks
@@ -446,6 +451,22 @@ where
         }
     }
 
+    /// Emit a Used event and deselects the selected slot
+    pub fn use_selected(&mut self) {
+        if let ManagerState::Selected(_, slot) = self.state {
+            self.events.push(Event::Used(slot));
+            self.state = ManagerState::Idle;
+        }
+    }
+
+    /// Emit a Dropped event and deselects the selected slot
+    pub fn dropped_selected(&mut self) {
+        if let ManagerState::Selected(_, slot) = self.state {
+            self.events.push(Event::Dropped(slot));
+            self.state = ManagerState::Idle;
+        }
+    }
+
     /// Returns Some(slot) if a slot is selected
     pub fn selected(&self) -> Option<S> {
         if let ManagerState::Selected(_, s) = self.state {
@@ -453,6 +474,13 @@ where
         } else {
             None
         }
+    }
+
+    /// Selects a specified slot
+    pub fn select(&mut self, widget: widget::Id, slot: S) {
+        // Sets the slot to selected; if it has no content, it will be deselected on the
+        // next fn update call
+        self.state = ManagerState::Selected(widget, slot);
     }
 
     /// Sets the SlotManager into an idle state
@@ -465,6 +493,7 @@ pub struct Slot<'a, K: SlotKey<C, I> + Into<S>, C, I, S: SumSlot> {
 
     // Images for slot background and frame
     empty_slot: image::Id,
+    hovered_slot: image::Id,
     selected_slot: image::Id,
     background_color: Option<Color>,
 
@@ -486,6 +515,12 @@ pub struct Slot<'a, K: SlotKey<C, I> + Into<S>, C, I, S: SumSlot> {
     content_source: &'a C,
     image_source: &'a I,
 
+    // Menu button navigation
+    menu_hover: bool,
+    menu_click: bool,
+
+    last_input: &'a LastInput,
+
     pulse: f32,
 
     #[conrod(common_builder)]
@@ -493,13 +528,13 @@ pub struct Slot<'a, K: SlotKey<C, I> + Into<S>, C, I, S: SumSlot> {
 }
 
 widget_ids! {
-    // Note: icon, amount, and amount_bg are not always used. Is there any cost to having them?
     struct Ids {
         background,
         icon,
         amount,
         amount_bg,
         content,
+        slot_highlight,
     }
 }
 
@@ -536,9 +571,11 @@ where
         self
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn new(
         slot_key: K,
         empty_slot: image::Id,
+        hovered_slot: image::Id,
         filled_slot: image::Id,
         selected_slot: image::Id,
         content_size: Vec2<f32>,
@@ -549,11 +586,15 @@ where
         amount_text_color: Color,
         content_source: &'a C,
         image_source: &'a I,
+        menu_hover: bool,
+        menu_click: bool,
+        last_input: &'a LastInput,
         pulse: f32,
     ) -> Self {
         Self {
             slot_key,
             empty_slot,
+            hovered_slot,
             filled_slot,
             selected_slot,
             background_color: None,
@@ -567,6 +608,9 @@ where
             slot_manager: None,
             content_source,
             image_source,
+            menu_hover,
+            menu_click,
+            last_input,
             pulse,
             common: widget::CommonBuilder::default(),
         }
@@ -633,6 +677,14 @@ where
 
         // Get image ids
         let content_images = state.cached_images.as_ref().map(|c| c.1.clone());
+
+        // Check menu navigation selection events
+        if self.menu_click && self.menu_hover {
+            self.slot_manager
+                .as_mut()
+                .map(|m| m.select(id, slot_key.into()));
+        }
+
         // Get whether this slot is selected
         let interaction = self.slot_manager.as_mut().map_or(Interaction::None, |m| {
             m.update(
@@ -706,6 +758,28 @@ where
                 .parent(id)
                 .graphics_for(id)
                 .set(state.ids.content, ui);
+        }
+
+        // Draw on-hover highlight - let text overlap if the slot is small
+        let is_highlighted = self
+            .slot_manager
+            .as_ref()
+            .map_or(false, |sm| sm.mouse_over_slot == Some(slot_key.into()))
+            && *self.last_input == LastInput::Mouse;
+
+        // Determine if menu highligh should be shown (for keyboard and controller
+        // inputs)
+        let is_highlighted_menu = self.menu_hover
+            && (*self.last_input == LastInput::Keyboard
+                || *self.last_input == LastInput::Controller);
+
+        if is_highlighted || is_highlighted_menu {
+            Image::new(self.hovered_slot)
+                .x_y(x, y)
+                .w_h(w, h)
+                .parent(id)
+                .graphics_for(id)
+                .set(state.ids.slot_highlight, ui);
         }
 
         // Draw amount

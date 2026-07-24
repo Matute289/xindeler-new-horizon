@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use specs::{Component, DenseVecStorage};
 use vek::{Rgba, Sphere, Vec3};
 
-use crate::{resources::Time, uid::Uid};
+use crate::{resources::Time, rtsim, uid::Uid};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Shape {
@@ -93,7 +93,7 @@ pub struct GizmoSubscriber {
 /// A resource storing rtsim-gizmos.
 #[derive(Default)]
 pub struct RtsimGizmos {
-    pub tracked: slotmap::SecondaryMap<crate::rtsim::NpcId, Vec<Gizmos>>,
+    pub tracked: slotmap::SecondaryMap<rtsim::ActorId, Vec<Gizmos>>,
 }
 
 impl Default for GizmoSubscriber {

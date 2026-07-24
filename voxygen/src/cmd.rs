@@ -1062,6 +1062,7 @@ fn test_complete_command() {
     assert_eq!(complete_command("make_", "/"), vec![
         "/make_block".to_string(),
         "/make_npc".to_string(),
+        "/make_party".to_string(),
         "/make_sprite".to_string(),
         "/make_test_char".to_string(),
         "/make_volume".to_string()

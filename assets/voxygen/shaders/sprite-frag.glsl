@@ -113,8 +113,8 @@ void main() {
     vec3 mu = medium.x == MEDIUM_WATER ? MU_WATER : vec3(0.0);
     #if (FLUID_MODE >= FLUID_MODE_MEDIUM)
         cam_attenuation =
-            medium.x == MEDIUM_WATER ? compute_attenuation_point(cam_pos.xyz, view_dir, mu, fluid_alt, /*cam_pos.z <= fluid_alt ? cam_pos.xyz : f_pos*/f_pos)
-            : compute_attenuation_point(f_pos, -view_dir, mu, fluid_alt, /*cam_pos.z <= fluid_alt ? cam_pos.xyz : f_pos*/cam_pos.xyz);
+            medium.x == MEDIUM_WATER ? compute_attenuation_point(cam_pos.xyz, view_dir, mu, fluid_alt, f_pos)
+            : compute_attenuation_point(f_pos, -view_dir, mu, fluid_alt, cam_pos.xyz);
     #endif
 
     // Prevent the sky affecting light when underground
@@ -158,8 +158,6 @@ void main() {
     surf_color += f_select * (surf_color + 0.1) * vec3(0.15, 0.15, 0.15);
 
     tgt_color = vec4(surf_color, render_alpha);
-
     tgt_mat = uvec4(uvec3((f_norm + 1.0) * 127.0), render_mat);
-    //tgt_color = vec4(-f_norm, 1.0);
 #endif
 }

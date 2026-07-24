@@ -5,7 +5,7 @@ use specs::{
 
 use common::{
     comp::{
-        self, AbilityCooldowns, AbilityPool, ActiveAbilities, AttunedItems, Beam, Body,
+        self, AbilityCooldowns, AbilityPool, ActiveAbilities, AttunedItems, Beam, Body, Buffs,
         CharacterActivity, CharacterState, Combo, Controller, Density, Energy, Hardcore, Health,
         Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState, Poise, Pos, PreviousPhysCache,
         Scale, SkillSet, Stance, StateUpdate, Stats, Vel,
@@ -60,6 +60,7 @@ pub struct ReadData<'a> {
     attuned_items: ReadStorage<'a, AttunedItems>,
     stances: ReadStorage<'a, Stance>,
     prev_phys_caches: ReadStorage<'a, PreviousPhysCache>,
+    buffs: ReadStorage<'a, Buffs>,
 }
 
 /// ## Character Behavior System
@@ -250,6 +251,7 @@ impl<'a> System<'a> for Sys {
                 alignments: &read_data.alignments,
                 prev_phys_caches: &read_data.prev_phys_caches,
                 bodies: &read_data.bodies,
+                buffs: read_data.buffs.get(entity),
             };
 
             for action in actions {

@@ -8,7 +8,6 @@ BasicAura(
             kind: Regeneration,
             strength: 45.0,
             duration: Some(4),
-            category: Magical,
         ),
     ],
     aura_duration: Some(2.0),

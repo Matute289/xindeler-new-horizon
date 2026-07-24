@@ -69,3 +69,6 @@ hud-bag-requirement_level = Requires Level { $level }
 hud-bag-requirement_race = Requires Race: { $races }
 hud-bag-requirement_class = Requires Class: { $classes }
 hud-bag-requires_attunement = Requires Attunement
+hud-context-menu-use = Use
+hud-context-menu-drop = Drop
+hud-context-menu-cancel = Cancel

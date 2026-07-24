@@ -9,7 +9,6 @@ StaticAura(
             kind: ProtectingWard,
             strength: 0.4,
             duration: Some(1),
-            category: Magical,
         ),
     ],
     aura_duration: Some(20),

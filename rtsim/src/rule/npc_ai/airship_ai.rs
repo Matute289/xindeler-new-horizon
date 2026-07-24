@@ -3,7 +3,7 @@ use crate::rule::npc_ai::airship_logger::airship_logger;
 
 use crate::{
     ai::{Action, NpcCtx, State, finish, just, now, seq},
-    data::npc::SimulationMode,
+    data::actor::SimulationMode,
 };
 use common::{
     comp::{
@@ -137,7 +137,11 @@ impl StuckAirshipTracker {
         if !self.backout_route.is_empty()
             && let Some(pos) = self.backout_route.first().cloned()
         {
-            if ctx.npc.wpos.as_::<f64>().distance_squared(pos.as_::<f64>())
+            if ctx
+                .actor
+                .wpos
+                .as_::<f64>()
+                .distance_squared(pos.as_::<f64>())
                 < StuckAirshipTracker::BACKOUT_TARGET_DIST.powi(2)
             {
                 self.backout_route.remove(0);
@@ -184,7 +188,7 @@ impl StuckAirshipTracker {
 
                 // The direction to backout is opposite to the direction from the airship
                 // to where it was going before it got stuck.
-                if let Some(backout_dir) = (ctx.npc.wpos.xy() - target_pos)
+                if let Some(backout_dir) = (ctx.actor.wpos.xy() - target_pos)
                     .with_z(0.0)
                     .try_normalized()
                 {
@@ -195,9 +199,9 @@ impl StuckAirshipTracker {
                     // The position to backout to is the current position + a distance in the
                     // backout direction.
                     let mut backout_pos =
-                        ctx.npc.wpos + backout_dir * StuckAirshipTracker::BACKOUT_DIST;
+                        ctx.actor.wpos + backout_dir * StuckAirshipTracker::BACKOUT_DIST;
                     // Add a z offset to the backout pos if the airship is near the ground.
-                    if (ctx.npc.wpos.z - ground).abs() < StuckAirshipTracker::NEAR_GROUND_HEIGHT {
+                    if (ctx.actor.wpos.z - ground).abs() < StuckAirshipTracker::NEAR_GROUND_HEIGHT {
                         backout_pos.z += 50.0;
                     }
                     self.backout_route = vec![backout_pos, backout_pos + Vec3::unit_z() * 200.0];
@@ -206,10 +210,10 @@ impl StuckAirshipTracker {
                     debug_airships!(
                         2,
                         "Airship {} Stuck! at {} {} {}, backout_dir:{:?}, backout_pos:{:?}",
-                        format!("{:?}", ctx.npc_id),
-                        ctx.npc.wpos.x,
-                        ctx.npc.wpos.y,
-                        ctx.npc.wpos.z,
+                        format!("{:?}", ctx.actor_id),
+                        ctx.actor.wpos.x,
+                        ctx.actor.wpos.y,
+                        ctx.actor.wpos.z,
                         backout_dir,
                         backout_pos
                     );
@@ -238,7 +242,7 @@ fn check_phase_completion_time(
             4,
             "Airship {} route {} leg {} completed phase {:?} late by {:.1} seconds, crt {}, \
              scheduled end time {}",
-            format!("{:?}", ctx.npc_id),
+            format!("{:?}", ctx.actor_id),
             airship_context.route_index,
             airship_context.current_leg,
             phase,
@@ -251,7 +255,7 @@ fn check_phase_completion_time(
             4,
             "Airship {} route {} leg {} completed phase {:?} early by {:.1} seconds, crt {}, \
              scheduled end time {}",
-            format!("{:?}", ctx.npc_id),
+            format!("{:?}", ctx.actor_id),
             airship_context.route_index,
             airship_context.current_leg,
             phase,
@@ -264,7 +268,7 @@ fn check_phase_completion_time(
             4,
             "Airship {} route {} leg {} completed phase {:?} on time, crt {}, scheduled end time \
              {}",
-            format!("{:?}", ctx.npc_id),
+            format!("{:?}", ctx.actor_id),
             airship_context.route_index,
             airship_context.current_leg,
             phase,
@@ -318,12 +322,12 @@ fn fly_airship(
             debug_airships!(
                 4,
                 "Airship {} route {} leg {} first leg phase {} from {},{} dur {:.1}s",
-                format!("{:?}", ctx.npc_id),
+                format!("{:?}", ctx.actor_id),
                 airship_context.route_index,
                 airship_context.current_leg,
                 phase,
-                ctx.npc.wpos.x,
-                ctx.npc.wpos.y,
+                ctx.actor.wpos.x,
+                ctx.actor.wpos.y,
                 leg_segment.route_time - (ctx.time.0 - airship_context.route_time_zero)
             );
             ((leg_segment.route_time - (ctx.time.0 - airship_context.route_time_zero)) as f32)
@@ -344,7 +348,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} starting {} late by {:.1}s, rt {:.2}, expected rt \
                      {:.2}, leg dur {:.1}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     phase,
@@ -359,7 +363,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} starting {} early by {:.1}s, rt {:.2}, expected \
                      rt {:.2}, leg dur {:.1}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     phase,
@@ -373,7 +377,7 @@ fn fly_airship(
                 debug_airships!(
                     4,
                     "Airship {} route {} leg {} starting {} on time, leg dur {:.1}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     phase,
@@ -388,10 +392,12 @@ fn fly_airship(
             AirshipFlightPhase::DepartureCruise
             | AirshipFlightPhase::ApproachCruise
             | AirshipFlightPhase::Transition => {
-                ctx.npc.wpos.xy().distance(leg_segment.to_world_pos)
+                ctx.actor.wpos.xy().distance(leg_segment.to_world_pos)
             },
-            AirshipFlightPhase::Descent => ctx.npc.wpos.z - approach.airship_pos.z,
-            AirshipFlightPhase::Ascent => approach.airship_pos.z + approach.height - ctx.npc.wpos.z,
+            AirshipFlightPhase::Descent => ctx.actor.wpos.z - approach.airship_pos.z,
+            AirshipFlightPhase::Ascent => {
+                approach.airship_pos.z + approach.height - ctx.actor.wpos.z
+            },
             AirshipFlightPhase::Docked => 0.0,
         };
 
@@ -402,7 +408,7 @@ fn fly_airship(
                 airship_context.my_stuck_tracker = Some(StuckAirshipTracker::default());
                 airship_context.route_timer = Duration::from_secs_f32(1.0);
                 airship_context.cruise_direction =
-                    Dir::from_unnormalized((approach.midpoint - ctx.npc.wpos.xy()).with_z(0.0));
+                    Dir::from_unnormalized((approach.midpoint - ctx.actor.wpos.xy()).with_z(0.0));
                 // v = d/t
                 // speed factor = v/nominal_speed = (d/t)/nominal_speed
                 let speed = (fly_distance / fly_duration) / nominal_speed;
@@ -410,7 +416,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} DepartureCruise, fly_distance {:.1}, fly_duration \
                      {:.1}s, speed factor {:.3}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     fly_distance,
@@ -420,7 +426,7 @@ fn fly_airship(
                 // Fly 2D to approach midpoint
                 fly_airship_inner(
                     AirshipFlightPhase::DepartureCruise,
-                    ctx.npc.wpos,
+                    ctx.actor.wpos,
                     leg_segment.to_world_pos.with_z(0.0),
                     50.0,
                     leg_ctx_time_begin,
@@ -458,7 +464,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} ApproachCruise, fly_distance {:.1}, fly_duration \
                      {:.1}s, speed factor {:.3}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     fly_distance,
@@ -468,7 +474,7 @@ fn fly_airship(
                 // Fly 2D to transition point
                 fly_airship_inner(
                     AirshipFlightPhase::ApproachCruise,
-                    ctx.npc.wpos,
+                    ctx.actor.wpos,
                     leg_segment.to_world_pos.with_z(0.0),
                     50.0,
                     leg_ctx_time_begin,
@@ -505,7 +511,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} Transition, fly_distance {:.1}, fly_duration \
                      {:.1}s, speed factor {:.3}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     fly_distance,
@@ -515,7 +521,7 @@ fn fly_airship(
                 // fly 3D to descent point
                 fly_airship_inner(
                     AirshipFlightPhase::Transition,
-                    ctx.npc.wpos,
+                    ctx.actor.wpos,
                     leg_segment
                         .to_world_pos
                         .with_z(approach.airship_pos.z + approach.height),
@@ -567,7 +573,7 @@ fn fly_airship(
                 let step1_dist = descent_dist * ctx.rng.random_range(0.7..0.85);
                 let step1_dur = fly_duration * ctx.rng.random_range(0.4..0.55);
                 // Make loaded airships descend slightly faster
-                let speed_mult = if matches!(ctx.npc.mode, SimulationMode::Loaded) {
+                let speed_mult = if matches!(ctx.actor.mode, SimulationMode::Loaded) {
                     ctx.rng.random_range(1.1..1.25)
                 } else {
                     1.0
@@ -581,7 +587,7 @@ fn fly_airship(
                     "Airship {} route {} leg {} Descent, fly_distance {:.1}, fly_duration {:.1}s, \
                      desired_offset {:.1}, descent_offset {:.1}, descent_dist {:.1}, step1_dist \
                      {:.1}, step1_dur {:.3}s, speedmult {:.1}, speed1 {:.3}, speed2 {:.3}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     fly_distance,
@@ -599,8 +605,8 @@ fn fly_airship(
                 // fly 3D to the intermediate descent point
                 fly_airship_inner(
                     AirshipFlightPhase::Descent,
-                    ctx.npc.wpos,
-                    ctx.npc.wpos - Vec3::unit_z() * step1_dist,
+                    ctx.actor.wpos,
+                    ctx.actor.wpos - Vec3::unit_z() * step1_dist,
                     20.0,
                     leg_ctx_time_begin,
                     step1_dur,
@@ -613,7 +619,7 @@ fn fly_airship(
                 )
                 .then (fly_airship_inner(
                     AirshipFlightPhase::Descent,
-                    ctx.npc.wpos - Vec3::unit_z() * step1_dist,
+                    ctx.actor.wpos - Vec3::unit_z() * step1_dist,
                     approach.airship_pos + Vec3::unit_z() * descent_offset,
                     20.0,
                     leg_ctx_time_begin + step1_dur as f64,
@@ -642,7 +648,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} Docked ctx time {:.1}, \
                      airship_context.leg_ctx_time_begin {:.1}, docking duration {:.1}s",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     leg_ctx_time_begin,
@@ -709,7 +715,7 @@ fn fly_airship(
                     };
                     fly_airship_inner(
                         AirshipFlightPhase::Docked,
-                        ctx.npc.wpos,
+                        ctx.actor.wpos,
                         approach.airship_pos,
                         5.0,
                         leg_ctx_time_begin,
@@ -740,7 +746,7 @@ fn fly_airship(
                                             .to_string(),
                                         Direction::from_dir(
                                             next_leg_approach.approach_transition_pos
-                                                - ctx.npc.wpos.xy(),
+                                                - ctx.actor.wpos.xy(),
                                         )
                                         .localize_npc(),
                                     )
@@ -796,7 +802,7 @@ fn fly_airship(
                     4,
                     "Airship {} route {} leg {} Ascent, fly_distance {:.1}, fly_duration {:.1}s, \
                      speed factor {:.3}",
-                    format!("{:?}", ctx.npc_id),
+                    format!("{:?}", ctx.actor_id),
                     airship_context.route_index,
                     airship_context.current_leg,
                     fly_distance,
@@ -829,7 +835,7 @@ fn fly_airship(
                 );
                 fly_airship_inner(
                     AirshipFlightPhase::Ascent,
-                    ctx.npc.wpos,
+                    ctx.actor.wpos,
                     approach.airship_pos + Vec3::unit_z() * approach.height,
                     20.0,
                     leg_ctx_time_begin,
@@ -923,13 +929,13 @@ fn fly_airship_inner(
                     | AirshipFlightPhase::ApproachCruise
                     | AirshipFlightPhase::Transition => {
                         // Flying 2d, compute nominal x,y pos.
-                        ctx.npc
+                        ctx.actor
                             .wpos
                             .xy()
                             .as_::<f64>()
                             .distance(nominal_pos.xy().as_())
                     },
-                    _ => ctx.npc.wpos.as_::<f64>().distance(nominal_pos.as_()),
+                    _ => ctx.actor.wpos.as_::<f64>().distance(nominal_pos.as_()),
                 };
                 log_airship_position_plus(
                     ctx,
@@ -948,7 +954,7 @@ fn fly_airship_inner(
             ) {
                 // Check if we're stuck
                 if let Some(stuck_tracker) = &mut airship_context.my_stuck_tracker
-                    && stuck_tracker.is_stuck(ctx, &ctx.npc.wpos, &stuck_tracker_target_loc)
+                    && stuck_tracker.is_stuck(ctx, &ctx.actor.wpos, &stuck_tracker_target_loc)
                     && let Some(backout_pos) = stuck_tracker.current_backout_pos(ctx)
                 {
                     airship_context.stuck_backout_pos = Some(backout_pos);
@@ -957,15 +963,15 @@ fn fly_airship_inner(
                     debug_airships!(
                         2,
                         "{:?} unstuck at pos: {} {}",
-                        ctx.npc_id,
-                        ctx.npc.wpos.x as i32,
-                        ctx.npc.wpos.y as i32,
+                        ctx.actor_id,
+                        ctx.actor.wpos.x as i32,
+                        ctx.actor.wpos.y as i32,
                     );
                     airship_context.stuck_backout_pos = None;
                 };
                 // Reset cruise direction
                 airship_context.cruise_direction =
-                    Dir::from_unnormalized((to.xy() - ctx.npc.wpos.xy()).with_z(0.0));
+                    Dir::from_unnormalized((to.xy() - ctx.actor.wpos.xy()).with_z(0.0));
             }
         }
         // move the airship
@@ -1017,7 +1023,7 @@ fn fly_airship_inner(
         match phase {
             AirshipFlightPhase::Descent | AirshipFlightPhase::Ascent => {
                 ctx.time.0 >= context_tgt_end_time
-                    || ctx.npc.wpos.as_::<f64>().distance_squared(to.as_())
+                    || ctx.actor.wpos.as_::<f64>().distance_squared(to.as_())
                         < (goal_dist as f64).powi(2)
             },
             AirshipFlightPhase::Docked => {
@@ -1027,7 +1033,7 @@ fn fly_airship_inner(
                         4,
                         "Airship {} docking phase complete time now {:.1} >= context_tgt_end_time \
                          {:.1}",
-                        format!("{:?}", ctx.npc_id),
+                        format!("{:?}", ctx.actor_id),
                         ctx.time.0,
                         context_tgt_end_time,
                     );
@@ -1037,7 +1043,7 @@ fn fly_airship_inner(
             _ => {
                 if flight_mode == FlightMode::FlyThrough {
                     // we only care about the xy distance (just get close to the target position)
-                    ctx.npc
+                    ctx.actor
                         .wpos
                         .xy()
                         .as_::<f64>()
@@ -1045,7 +1051,7 @@ fn fly_airship_inner(
                         < (goal_dist as f64).powi(2)
                 } else {
                     // Braking mode means the PID controller will be controlling all three axes
-                    ctx.npc.wpos.as_::<f64>().distance_squared(to.as_())
+                    ctx.actor.wpos.as_::<f64>().distance_squared(to.as_())
                         < (goal_dist as f64).powi(2)
                 }
             },
@@ -1078,7 +1084,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
     now(move |ctx, airship_context: &mut AirshipRouteContext| {
         // get the assigned route and start leg indexes
         if let Some((route_index, start_leg_index)) =
-            ctx.data.airship_sim.assigned_routes.get(&ctx.npc_id)
+            ctx.data.airship_sim.assigned_routes.get(&ctx.actor_id)
         {
             // If airship_context.route_index is the default value (usize::MAX) it means the
             // server has just started.
@@ -1101,7 +1107,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                         4,
                         "Airship {} route {} completed full route, route time zero now {:.1}, \
                          ctx.time.0 - route_time_zero = {:.3}",
-                        format!("{:?}", ctx.npc_id),
+                        format!("{:?}", ctx.actor_id),
                         airship_context.route_index,
                         airship_context.route_time_zero,
                         ctx.time.0 - airship_context.route_time_zero
@@ -1110,7 +1116,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                     debug_airships!(
                         4,
                         "Airship {} route {} starting next leg {}, current route time {:.1}",
-                        format!("{:?}", ctx.npc_id),
+                        format!("{:?}", ctx.actor_id),
                         airship_context.route_index,
                         airship_context.current_leg,
                         ctx.time.0 - airship_context.route_time_zero
@@ -1131,7 +1137,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                 tracing::error!(
                     "Airship pilot {:?} approach not found for route {} leg {}, stopping \
                      pilot_airship loop.",
-                    ctx.npc_id,
+                    ctx.actor_id,
                     airship_context.route_index,
                     airship_context.current_leg
                 );
@@ -1154,7 +1160,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
             if airship_context.next_leg_approach.is_none() {
                 tracing::warn!(
                     "Airship pilot {:?} approach not found for next route {} leg {}",
-                    ctx.npc_id,
+                    ctx.actor_id,
                     airship_context.route_index,
                     next_leg_index
                 );
@@ -1167,8 +1173,18 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                 // closest to the airship's current position.
                 let my_route = &ctx.world.civs().airships.routes[airship_context.route_index];
                 if let Some(my_spawn_loc) = my_route.spawning_locations.iter().min_by(|a, b| {
-                    let dist_a = ctx.npc.wpos.xy().as_::<f64>().distance_squared(a.pos.as_());
-                    let dist_b = ctx.npc.wpos.xy().as_::<f64>().distance_squared(b.pos.as_());
+                    let dist_a = ctx
+                        .actor
+                        .wpos
+                        .xy()
+                        .as_::<f64>()
+                        .distance_squared(a.pos.as_());
+                    let dist_b = ctx
+                        .actor
+                        .wpos
+                        .xy()
+                        .as_::<f64>()
+                        .distance_squared(b.pos.as_());
                     dist_a.partial_cmp(&dist_b).unwrap_or(Ordering::Equal)
                 }) {
                     // The airship starts somewhere along the route.
@@ -1183,7 +1199,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                         "Airship {} route {} leg {}, initial start up on phase {:?}, setting \
                          route_time_zero to {:.1} (ctx.time.0 {} - my_spawn_loc.spawn_route_time \
                          {})",
-                        format!("{:?}", ctx.npc_id),
+                        format!("{:?}", ctx.actor_id),
                         airship_context.route_index,
                         airship_context.current_leg,
                         my_spawn_loc.flight_phase,
@@ -1198,7 +1214,7 @@ pub fn pilot_airship<S: State>() -> impl Action<S> {
                     // No spawning location, should not happen
                     tracing::error!(
                         "Airship pilot {:?} spawning location not found for route {} leg {}",
-                        ctx.npc_id,
+                        ctx.actor_id,
                         airship_context.route_index,
                         next_leg_index
                     );
@@ -1238,7 +1254,7 @@ fn setup_airship_route_context(
         debug_airships!(
             4,
             "Server startup, airship pilot {:?} starting on route {} leg {}, target dock: {} {}",
-            _ctx.npc_id,
+            _ctx.actor_id,
             route_context.route_index,
             route_context.current_leg,
             current_approach.airship_pos.x as i32,
@@ -1325,18 +1341,18 @@ fn log_airship_position_plus(
 ) {
     if let Ok(mut logger) = airship_logger() {
         logger.log_position(
-            ctx.npc_id,
+            ctx.actor_id,
             ctx.index.seed,
             route_index,
             phase,
             ctx.time.0,
-            ctx.npc.wpos,
-            matches!(ctx.npc.mode, SimulationMode::Loaded),
+            ctx.actor.wpos,
+            matches!(ctx.actor.mode, SimulationMode::Loaded),
             value1,
             value2,
         );
     } else {
-        tracing::warn!("Failed to log airship position for {:?}", ctx.npc_id);
+        tracing::warn!("Failed to log airship position for {:?}", ctx.actor_id);
     }
 }
 

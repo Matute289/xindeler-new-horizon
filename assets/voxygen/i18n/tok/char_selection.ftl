@@ -19,3 +19,4 @@ char_selection-starting_site_next = kama
 char_selection-starting_site_prev = pini
 char_selection-create_info_name = jan sina li wile e nimi a!
 char_selection-rules = lawa
+char_selection-height_scale = suli

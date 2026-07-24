@@ -5,7 +5,7 @@ use common::{
         ability::AbilityInput,
         agent::Psyche,
         buff::BuffKind,
-        item::{ItemDesc, ItemTag, tool::AbilityContext},
+        item::{ItemDesc, ItemTag},
     },
     terrain::Block,
     uid::Uid,
@@ -224,7 +224,6 @@ impl AgentData<'_> {
     }
 
     pub fn extract_ability(&self, input: AbilityInput) -> Option<AbilityData> {
-        let context = AbilityContext::from(self.stance, Some(self.inventory), self.combo);
         AbilityData::from_ability(
             &self
                 .active_abilities
@@ -235,9 +234,11 @@ impl AgentData<'_> {
                     self.skill_set,
                     self.body,
                     Some(self.char_state),
-                    &context,
+                    self.stance,
+                    self.combo,
                     self.stats,
-                    None,
+                    self.buffs,
+                    None, // NPCs don't have an ability pool (ENG-D2c)
                     self.ability_map,
                 )
                 .map_or(Default::default(), |a| a.0),

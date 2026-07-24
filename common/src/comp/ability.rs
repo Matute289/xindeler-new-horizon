@@ -1,15 +1,16 @@
 use crate::{
     combat::{self, CombatEffect, DamageKind, Knockback, ScalingKind},
     comp::{
-        self, Body, CharacterState, LightEmitter, StateUpdate, aura, beam, buff,
+        self, Body, CharacterState, Combo, LightEmitter, StateUpdate, aura, beam,
+        buff::{self, BuffKind, Buffs},
         character_state::AttackFilters,
         inventory::{
             Inventory,
             item::{
-                ItemDefinitionIdOwned, ItemDesc, ItemKind, Tool,
+                ItemDefinitionIdOwned, ItemKind, Tool,
                 tool::{
-                    AbilityContext, AbilityItem, AbilityKind, AbilityMap, AbilitySpec,
-                    ContextualIndex, Stats, ToolKind,
+                    AbilityItem, AbilityKind, AbilityMap, AbilitySpec, ContextualIndex, Stats,
+                    ToolKind,
                 },
             },
             slot::EquipSlot,
@@ -316,8 +317,10 @@ impl ActiveAbilities {
         skill_set: &SkillSet,
         body: Option<&Body>,
         char_state: Option<&CharacterState>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        combo: Option<&Combo>,
         stats: Option<&comp::Stats>,
+        buffs: Option<&Buffs>,
         ability_pool: Option<&AbilityPool>,
         ability_map: &AbilityMap,
         // bool is from_offhand
@@ -366,10 +369,12 @@ impl ActiveAbilities {
                 //
                 // We could alternatively just take `ability`, but it works too.
                 let dispatched = match ability.try_ability_set_key()? {
-                    I::Guard => abilities.guard(Some(skill_set), context),
-                    I::Primary => abilities.primary(Some(skill_set), context),
-                    I::Secondary => abilities.secondary(Some(skill_set), context),
-                    I::Auxiliary(index) => abilities.auxiliary(index, Some(skill_set), context),
+                    I::Guard => abilities.guard(Some(skill_set), stance, inv, combo, buffs),
+                    I::Primary => abilities.primary(Some(skill_set), stance, inv, combo, buffs),
+                    I::Secondary => abilities.secondary(Some(skill_set), stance, inv, combo, buffs),
+                    I::Auxiliary(index) => {
+                        abilities.auxiliary(index, Some(skill_set), stance, inv, combo, buffs)
+                    },
                     I::Movement => return None,
                 };
 
@@ -406,7 +411,7 @@ impl ActiveAbilities {
                 .and_then(|key| {
                     ability_map
                         .get_ability_set(&AbilitySpec::Custom(key.clone()))
-                        .and_then(|set| set.primary(Some(skill_set), context))
+                        .and_then(|set| set.primary(Some(skill_set), stance, inv, combo, buffs))
                         .map(|(item, i)| {
                             (
                                 item.ability
@@ -576,7 +581,9 @@ impl Ability {
         inv: Option<&'a Inventory>,
         skill_set: Option<&'a SkillSet>,
         ability_pool: Option<&'a AbilityPool>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<&'a str> {
         let ability_set = |equip_slot| {
             inv.and_then(|inv| inv.equipped(equip_slot))
@@ -600,10 +607,12 @@ impl Ability {
                 use AbilityInput as I;
 
                 let dispatched = match self.try_ability_set_key()? {
-                    I::Guard => abilities.guard(skill_set, context),
-                    I::Primary => abilities.primary(skill_set, context),
-                    I::Secondary => abilities.secondary(skill_set, context),
-                    I::Auxiliary(index) => abilities.auxiliary(index, skill_set, context),
+                    I::Guard => abilities.guard(skill_set, stance, inv, combo, buffs),
+                    I::Primary => abilities.primary(skill_set, stance, inv, combo, buffs),
+                    I::Secondary => abilities.secondary(skill_set, stance, inv, combo, buffs),
+                    I::Auxiliary(index) => {
+                        abilities.auxiliary(index, skill_set, stance, inv, combo, buffs)
+                    },
                     I::Movement => return None,
                 };
 
@@ -986,7 +995,6 @@ pub enum CharacterAbility {
         movement_modifier: MovementModifier,
         #[serde(default)]
         ori_modifier: OrientationModifier,
-        #[serde(default)]
         marker: Option<comp::FrontendMarker>,
         #[serde(default)]
         meta: AbilityMeta,
@@ -3876,6 +3884,8 @@ pub struct AbilityMeta {
     #[serde(default)]
     /// This is an event that gets emitted when the ability is first activated
     pub init_event: Option<AbilityInitEvent>,
+    // TODO: Evaluate if we want this to be a vec if we need more? Would lose copy though...
+    pub init_event2: Option<AbilityInitEvent>,
     #[serde(default)]
     pub requirements: AbilityRequirements,
     /// Adjusts stats of ability when activated based on context.
@@ -4057,15 +4067,8 @@ impl Stance {
                 "veloren.core.pseudo_abilities.sword.cleaving_stance"
             },
             Stance::Bow(BowStance::Barrage) => "common.abilities.bow.barrage",
-            Stance::Bow(BowStance::Scatterburst) => "common.abilities.bow.scatterburst",
-            Stance::Bow(BowStance::IgniteArrow) => "common.abilities.bow.ignite_arrow",
-            Stance::Bow(BowStance::DrenchArrow) => "common.abilities.bow.drench_arrow",
-            Stance::Bow(BowStance::FreezeArrow) => "common.abilities.bow.freeze_arrow",
-            Stance::Bow(BowStance::JoltArrow) => "common.abilities.bow.jolt_arrow",
-            Stance::Bow(BowStance::PiercingGale) => "common.abilities.bow.piercing_gale",
             Stance::Bow(BowStance::Hawkstrike) => "common.abilities.bow.hawkstrike",
-            Stance::Bow(BowStance::Fusillade) => "common.abilities.bow.fusillade",
-            Stance::Bow(BowStance::DeathVolley) => "common.abilities.bow.death_volley",
+            Stance::Bow(BowStance::Heartseeker) => "common.abilities.bow.heartseeker",
             Stance::None => "veloren.core.pseudo_abilities.no_stance",
         }
     }
@@ -4083,15 +4086,8 @@ pub enum SwordStance {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash, PartialOrd, Ord)]
 pub enum BowStance {
     Barrage,
-    Scatterburst,
-    IgniteArrow,
-    DrenchArrow,
-    FreezeArrow,
-    JoltArrow,
-    PiercingGale,
+    Heartseeker,
     Hawkstrike,
-    Fusillade,
-    DeathVolley,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -4102,6 +4098,7 @@ pub enum AbilityInitEvent {
         strength: f32,
         duration: Option<Secs>,
     },
+    RemoveBuff(BuffKind),
 }
 
 impl Component for Stance {
@@ -4298,6 +4295,7 @@ mod class_ability_pool_tests {
             skin: 0,
             eye_color: 0,
             eyes: 0,
+            height_scale: 0,
         })
     }
 

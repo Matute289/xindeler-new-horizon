@@ -497,7 +497,13 @@ impl Attack {
                     .filter_map(|(req, mult, ovrd)| {
                         req.is_none_or(|r| {
                             r.requirement_met(
-                                (target.health, target.buffs, target.char_state, target.ori),
+                                (
+                                    target.health,
+                                    target.buffs,
+                                    target.char_state,
+                                    target.ori,
+                                    Some(target.uid),
+                                ),
                                 (
                                     attacker.map(|a| a.entity),
                                     attacker.and_then(|a| a.energy),
@@ -534,19 +540,18 @@ impl Attack {
             (None, None) => None,
         };
 
-        // BL-52 unified critical. Positional/conditional precision (flank,
+        // Unified critical roll: positional/conditional precision (flank,
         // backstab, target poised, `ImminentCritical`, precision-vulnerability)
         // already fired above and folds in as a guaranteed crit. If none did,
         // roll the attacker's `crit_chance` for a random crit. Magnitude reuses
-        // the existing precision system (`precision_power`), per the locked Q4
-        // decision. Single-target only and only on a landed blow — keeping the
-        // AoE hot path RNG-free (AoE crit would re-add per-target rolls). The
-        // `crit_chance_floor` gives every attacker a small baseline crit (no dead
-        // stat); the cap bounds rolled crits (guaranteed positional crits bypass
-        // it as today). NOTE: the finer "side-flank = +chance / backstab =
-        // guaranteed" split (balance note §5) is deferred — positional precision
-        // stays deterministic here to avoid refactoring the shared upstream
-        // precision path.
+        // the existing precision system (`precision_power`). Single-target only
+        // and only on a landed blow — keeping the AoE hot path RNG-free (AoE
+        // crit would re-add per-target rolls). The `crit_chance_floor` gives
+        // every attacker a small baseline crit chance (no dead stat); the cap
+        // bounds rolled crits (guaranteed positional crits bypass it). The
+        // finer "side-flank = +chance / backstab = guaranteed" split is
+        // deferred — positional precision stays deterministic here to avoid
+        // refactoring the shared upstream precision path.
         let precision_mult = precision_mult.or_else(|| {
             if is_single_target && !attack_missed {
                 let crit_chance = attacker
@@ -562,10 +567,11 @@ impl Attack {
             }
         });
 
-        let precision_power = self.precision_multiplier
-            * attacker
-                .and_then(|a| a.stats)
-                .map_or(1.0, |s| s.precision_power_mult);
+        let precision_power = 1.0
+            + ((self.precision_multiplier - 1.0)
+                * attacker
+                    .and_then(|a| a.stats)
+                    .map_or(1.0, |s| s.precision_power_mult));
 
         let attacked_modifiers = AttackedModification::attacked_modifiers(
             target,
@@ -749,6 +755,7 @@ impl Attack {
                                     precise: precision_mult.is_some(),
                                     time,
                                 };
+                                accumulated_damage -= health_change.amount;
                                 emitters.emit(HealthChangeEvent {
                                     entity: target.entity,
                                     change: health_change,
@@ -812,14 +819,11 @@ impl Attack {
                                     entity: target.entity,
                                     buff_change: BuffChange::Add(b.to_buff(
                                         time,
-                                        (
-                                            attacker.map(|a| a.uid),
-                                            attacker.and_then(|a| a.mass),
-                                            self.ability_info.and_then(|ai| ai.tool),
-                                        ),
+                                        (attacker.map(|a| a.uid), attacker.and_then(|a| a.mass)),
                                         (target.stats, target.mass),
                                         applied_damage,
                                         strength_modifier,
+                                        self.ability_info,
                                     )),
                                 });
                             }
@@ -891,53 +895,24 @@ impl Attack {
                                 });
                             }
                         },
-                        CombatEffect::StageVulnerable(damage, section) => {
-                            if target
-                                .char_state
-                                .is_some_and(|cs| cs.stage_section() == Some(*section))
-                            {
-                                let change = {
-                                    let mut change = change;
-                                    change.amount *= damage * strength_modifier;
-                                    change
-                                };
-                                emitters.emit(HealthChangeEvent {
-                                    entity: target.entity,
-                                    change,
-                                });
-                            }
+                        CombatEffect::AdditionalDamage(damage) => {
+                            let change = {
+                                let mut change = change;
+                                change.amount *= damage * strength_modifier;
+                                change.instance = rand::random();
+                                change
+                            };
+                            accumulated_damage -= change.amount;
+                            emitters.emit(HealthChangeEvent {
+                                entity: target.entity,
+                                change,
+                            });
                         },
                         CombatEffect::RefreshBuff(chance, b) => {
                             if rng.random::<f32>() < *chance {
                                 emitters.emit(BuffEvent {
                                     entity: target.entity,
                                     buff_change: BuffChange::Refresh(*b),
-                                });
-                            }
-                        },
-                        CombatEffect::BuffsVulnerable(damage, buff) => {
-                            if target.buffs.is_some_and(|b| b.contains(*buff)) {
-                                let change = {
-                                    let mut change = change;
-                                    change.amount *= damage * strength_modifier;
-                                    change
-                                };
-                                emitters.emit(HealthChangeEvent {
-                                    entity: target.entity,
-                                    change,
-                                });
-                            }
-                        },
-                        CombatEffect::StunnedVulnerable(damage) => {
-                            if target.char_state.is_some_and(|cs| cs.is_stunned()) {
-                                let change = {
-                                    let mut change = change;
-                                    change.amount *= damage * strength_modifier;
-                                    change
-                                };
-                                emitters.emit(HealthChangeEvent {
-                                    entity: target.entity,
-                                    change,
                                 });
                             }
                         },
@@ -949,14 +924,10 @@ impl Attack {
                                     entity: attacker.entity,
                                     buff_change: BuffChange::Add(b.to_self_buff(
                                         time,
-                                        (
-                                            Some(attacker.uid),
-                                            attacker.stats,
-                                            attacker.mass,
-                                            self.ability_info.and_then(|ai| ai.tool),
-                                        ),
+                                        (Some(attacker.uid), attacker.stats, attacker.mass),
                                         applied_damage,
                                         strength_modifier,
+                                        self.ability_info,
                                     )),
                                 });
                             }
@@ -1021,8 +992,10 @@ impl Attack {
                                         change.amount *= scaling.factor(num_debuffs as f32, 1.0)
                                             * mult
                                             * strength_modifier;
+                                        change.instance = rand::random();
                                         change
                                     };
+                                    accumulated_damage -= change.amount;
                                     emitters.emit(HealthChangeEvent {
                                         entity: target.entity,
                                         change,
@@ -1053,7 +1026,13 @@ impl Attack {
         {
             let requirements_met = effect.requirements.iter().all(|req| {
                 req.requirement_met(
-                    (target.health, target.buffs, target.char_state, target.ori),
+                    (
+                        target.health,
+                        target.buffs,
+                        target.char_state,
+                        target.ori,
+                        Some(target.uid),
+                    ),
                     (
                         attacker.map(|a| a.entity),
                         attacker.and_then(|a| a.energy),
@@ -1111,14 +1090,11 @@ impl Attack {
                                 entity: target.entity,
                                 buff_change: BuffChange::Add(b.to_buff(
                                     time,
-                                    (
-                                        attacker.map(|a| a.uid),
-                                        attacker.and_then(|a| a.mass),
-                                        self.ability_info.and_then(|ai| ai.tool),
-                                    ),
+                                    (attacker.map(|a| a.uid), attacker.and_then(|a| a.mass)),
                                     (target.stats, target.mass),
                                     accumulated_damage,
                                     strength_modifier,
+                                    self.ability_info,
                                 )),
                             });
                         }
@@ -1190,24 +1166,20 @@ impl Attack {
                             });
                         }
                     },
-                    CombatEffect::StageVulnerable(damage, section) => {
-                        if target
-                            .char_state
-                            .is_some_and(|cs| cs.stage_section() == Some(*section))
-                        {
-                            let change = HealthChange {
-                                amount: -accumulated_damage * damage * strength_modifier,
-                                by: attacker.map(|a| a.into()),
-                                cause: Some(DamageSource::from(attack_source)),
-                                time,
-                                precise: precision_mult.is_some(),
-                                instance: rand::random(),
-                            };
-                            emitters.emit(HealthChangeEvent {
-                                entity: target.entity,
-                                change,
-                            });
-                        }
+                    CombatEffect::AdditionalDamage(damage) => {
+                        let change = HealthChange {
+                            amount: -accumulated_damage * damage * strength_modifier,
+                            by: attacker.map(|a| a.into()),
+                            cause: Some(DamageSource::from(attack_source)),
+                            time,
+                            precise: precision_mult.is_some(),
+                            instance: rand::random(),
+                        };
+                        accumulated_damage -= change.amount;
+                        emitters.emit(HealthChangeEvent {
+                            entity: target.entity,
+                            change,
+                        });
                     },
                     CombatEffect::RefreshBuff(chance, b) => {
                         if rng.random::<f32>() < *chance {
@@ -1217,54 +1189,18 @@ impl Attack {
                             });
                         }
                     },
-                    CombatEffect::BuffsVulnerable(damage, buff) => {
-                        if target.buffs.is_some_and(|b| b.contains(*buff)) {
-                            let change = HealthChange {
-                                amount: -accumulated_damage * damage * strength_modifier,
-                                by: attacker.map(|a| a.into()),
-                                cause: Some(DamageSource::from(attack_source)),
-                                time,
-                                precise: precision_mult.is_some(),
-                                instance: rand::random(),
-                            };
-                            emitters.emit(HealthChangeEvent {
-                                entity: target.entity,
-                                change,
-                            });
-                        }
-                    },
-                    CombatEffect::StunnedVulnerable(damage) => {
-                        if target.char_state.is_some_and(|cs| cs.is_stunned()) {
-                            let change = HealthChange {
-                                amount: -accumulated_damage * damage * strength_modifier,
-                                by: attacker.map(|a| a.into()),
-                                cause: Some(DamageSource::from(attack_source)),
-                                time,
-                                precise: precision_mult.is_some(),
-                                instance: rand::random(),
-                            };
-                            emitters.emit(HealthChangeEvent {
-                                entity: target.entity,
-                                change,
-                            });
-                        }
-                    },
                     CombatEffect::SelfBuff(b) => {
                         if let Some(attacker) = attacker
                             && rng.random::<f32>() < b.chance
                         {
                             emitters.emit(BuffEvent {
-                                entity: target.entity,
+                                entity: attacker.entity,
                                 buff_change: BuffChange::Add(b.to_self_buff(
                                     time,
-                                    (
-                                        Some(attacker.uid),
-                                        attacker.stats,
-                                        attacker.mass,
-                                        self.ability_info.and_then(|ai| ai.tool),
-                                    ),
+                                    (Some(attacker.uid), attacker.stats, attacker.mass),
                                     accumulated_damage,
                                     strength_modifier,
+                                    self.ability_info,
                                 )),
                             });
                         }
@@ -1334,6 +1270,7 @@ impl Attack {
                                     precise: precision_mult.is_some(),
                                     instance: rand::random(),
                                 };
+                                accumulated_damage -= change.amount;
                                 emitters.emit(HealthChangeEvent {
                                     entity: target.entity,
                                     change,
@@ -1557,29 +1494,11 @@ pub enum CombatEffect {
     Lifesteal(f32),
     Poise(f32),
     Combo(i32),
-    /// If the attack hits the target while they are in the buildup portion of a
-    /// character state, deal increased damage
-    /// Only has an effect when attached to a damage, otherwise does nothing if
-    /// only attached to the attack
-    // TODO: Maybe try to make it do something if tied to
-    // attack, not sure if it should double count in that instance?
-    StageVulnerable(f32, StageSection),
+    /// Intended to be used when gating additional damage behind some
+    /// requirement
+    AdditionalDamage(f32),
     /// Resets duration of all buffs of this buffkind, with some probability
     RefreshBuff(f32, BuffKind),
-    /// If the target hit by an attack has this buff, they will take increased
-    /// damage.
-    /// Only has an effect when attached to a damage, otherwise does nothing if
-    /// only attached to the attack
-    // TODO: Maybe try to make it do something if tied to attack, not sure if it should double
-    // count in that instance?
-    BuffsVulnerable(f32, BuffKind),
-    /// If the target hit by an attack is in a stunned state, they will take
-    /// increased damage.
-    /// Only has an effect when attached to a damage, otherwise does nothing if
-    /// only attached to the attack
-    // TODO: Maybe try to make it do something if tied to attack, not sure if it should double
-    // count in that instance?
-    StunnedVulnerable(f32),
     /// Applies buff to yourself after attack is applied
     SelfBuff(CombatBuff),
     /// Changes energy of target
@@ -1631,10 +1550,8 @@ impl CombatEffect {
             CombatEffect::Lifesteal(l) => CombatEffect::Lifesteal(l * mult),
             CombatEffect::Poise(p) => CombatEffect::Poise(p * mult),
             CombatEffect::Combo(c) => CombatEffect::Combo((c as f32 * mult).ceil() as i32),
-            CombatEffect::StageVulnerable(v, s) => CombatEffect::StageVulnerable(v * mult, s),
+            CombatEffect::AdditionalDamage(v) => CombatEffect::AdditionalDamage(v * mult),
             CombatEffect::RefreshBuff(c, b) => CombatEffect::RefreshBuff(c, b),
-            CombatEffect::BuffsVulnerable(v, b) => CombatEffect::BuffsVulnerable(v * mult, b),
-            CombatEffect::StunnedVulnerable(v) => CombatEffect::StunnedVulnerable(v * mult),
             CombatEffect::SelfBuff(CombatBuff {
                 kind,
                 dur_secs,
@@ -1687,16 +1604,10 @@ impl CombatEffect {
             CombatEffect::Lifesteal(l) => CombatEffect::Lifesteal(l * stats.effect_power),
             CombatEffect::Poise(p) => CombatEffect::Poise(p * stats.effect_power),
             CombatEffect::Combo(c) => CombatEffect::Combo(c),
-            CombatEffect::StageVulnerable(v, s) => {
-                CombatEffect::StageVulnerable(v * stats.effect_power, s)
+            CombatEffect::AdditionalDamage(v) => {
+                CombatEffect::AdditionalDamage(v * stats.effect_power)
             },
             CombatEffect::RefreshBuff(c, b) => CombatEffect::RefreshBuff(c, b),
-            CombatEffect::BuffsVulnerable(v, b) => {
-                CombatEffect::BuffsVulnerable(v * stats.effect_power, b)
-            },
-            CombatEffect::StunnedVulnerable(v) => {
-                CombatEffect::StunnedVulnerable(v * stats.effect_power)
-            },
             CombatEffect::SelfBuff(CombatBuff {
                 kind,
                 dur_secs,
@@ -1782,7 +1693,13 @@ impl AttackedModification {
                 |mut a_mods, a_mod| {
                     let requirements_met = a_mod.requirements.iter().all(|req| {
                         req.requirement_met(
-                            (target.health, target.buffs, target.char_state, target.ori),
+                            (
+                                target.health,
+                                target.buffs,
+                                target.char_state,
+                                target.ori,
+                                Some(target.uid),
+                            ),
                             (
                                 attacker.map(|a| a.entity),
                                 attacker.and_then(|a| a.energy),
@@ -1849,6 +1766,8 @@ pub enum CombatRequirement {
     AttackSource(AttackSource),
     AttackInput(InputKind),
     Attacker(Uid),
+    Target(Uid),
+    StageSection(StageSection),
 }
 
 impl CombatRequirement {
@@ -1859,6 +1778,7 @@ impl CombatRequirement {
             Option<&Buffs>,
             Option<&CharacterState>,
             Option<&Ori>,
+            Option<Uid>,
         ),
         // originator refers to the cause of the effect that requirements are being checked for.
         // For combat effects on an attack this will be the attacker, for damaged and death effects
@@ -1871,10 +1791,12 @@ impl CombatRequirement {
         attack_source: Option<AttackSource>,
         ability_info: Option<AbilityInfo>,
     ) -> bool {
+        let (target_health, target_buffs, target_char_state, target_ori, target_uid) = target;
+        let (originator_entity, originator_energy, originator_combo) = originator;
         match self {
-            CombatRequirement::AnyDamage => damage > 0.0 && target.0.is_some(),
+            CombatRequirement::AnyDamage => damage > 0.0 && target_health.is_some(),
             CombatRequirement::Energy(r) => {
-                if let (Some(entity), Some(energy)) = (originator.0, originator.1) {
+                if let (Some(entity), Some(energy)) = (originator_entity, originator_energy) {
                     let sufficient_energy = energy.current() >= *r;
                     if sufficient_energy {
                         emitters.emit(EnergyChangeEvent {
@@ -1890,7 +1812,7 @@ impl CombatRequirement {
                 }
             },
             CombatRequirement::Combo(r) => {
-                if let (Some(entity), Some(combo)) = (originator.0, originator.2) {
+                if let (Some(entity), Some(combo)) = (originator_entity, originator_combo) {
                     let sufficient_combo = combo.counter() >= *r;
                     if sufficient_combo {
                         emitters.emit(ComboChangeEvent {
@@ -1905,26 +1827,31 @@ impl CombatRequirement {
                 }
             },
             CombatRequirement::TargetHasBuff(buff) => {
-                target.1.is_some_and(|buffs| buffs.contains(*buff))
+                target_buffs.is_some_and(|buffs| buffs.contains(*buff))
             },
-            CombatRequirement::TargetPoised => target.2.is_some_and(|cs| cs.is_stunned()),
+            CombatRequirement::TargetPoised => target_char_state.is_some_and(|cs| cs.is_stunned()),
             CombatRequirement::BehindTarget => {
-                if let Some(ori) = target.3 {
+                if let Some(ori) = target_ori {
                     ori.look_vec().angle_between(dir.with_z(0.0)) < BEHIND_TARGET_ANGLE
                 } else {
                     false
                 }
             },
-            CombatRequirement::TargetBlocking => target
-                .2
+            CombatRequirement::TargetBlocking => target_char_state
                 .zip(attack_source)
                 .is_some_and(|(cs, attack)| cs.is_block(attack) || cs.is_parry(attack)),
-            CombatRequirement::TargetUnwielded => target.2.is_some_and(|cs| !cs.is_wield()),
+            CombatRequirement::TargetUnwielded => {
+                target_char_state.is_some_and(|cs| !cs.is_wield())
+            },
             CombatRequirement::AttackSource(source) => attack_source == Some(*source),
             CombatRequirement::AttackInput(input) => {
                 ability_info.is_some_and(|ai| ai.input == *input)
             },
             CombatRequirement::Attacker(uid) => Some(*uid) == attacker,
+            CombatRequirement::Target(uid) => Some(*uid) == target_uid,
+            CombatRequirement::StageSection(s) => {
+                Some(*s) == target_char_state.and_then(|cs| cs.stage_section())
+            },
         }
     }
 }
@@ -2308,24 +2235,30 @@ impl CombatBuff {
     pub fn to_buff(
         self,
         time: Time,
-        attacker_info: (Option<Uid>, Option<&Mass>, Option<ToolKind>),
+        attacker_info: (Option<Uid>, Option<&Mass>),
         target_info: (Option<&Stats>, Option<&Mass>),
         damage: f32,
         strength_modifier: f32,
+        ability_info: Option<AbilityInfo>,
     ) -> Buff {
+        let (attacker_uid, attacker_mass) = attacker_info;
+        let (target_stats, target_mass) = target_info;
         // TODO: Generate BufCategoryId vec (probably requires damage overhaul?)
-        let source = if let Some(uid) = attacker_info.0 {
+        let source = if let Some(uid) = attacker_uid {
             BuffSource::Character {
                 by: uid,
-                tool_kind: attacker_info.2,
+                tool_kind: ability_info.and_then(|ai| ai.tool),
             }
         } else {
             BuffSource::Unknown
         };
         let dest_info = DestInfo {
-            stats: target_info.0,
-            mass: target_info.1,
+            stats: target_stats,
+            mass: target_mass,
         };
+        let target_uid = ability_info
+            .and_then(|ai| ai.input_attr)
+            .and_then(|ia| ia.target_entity);
         Buff::new(
             self.kind,
             BuffData::new(
@@ -2336,30 +2269,36 @@ impl CombatBuff {
             source,
             time,
             dest_info,
-            attacker_info.1,
+            attacker_mass,
+            target_uid,
         )
     }
 
     pub fn to_self_buff(
         self,
         time: Time,
-        entity_info: (Option<Uid>, Option<&Stats>, Option<&Mass>, Option<ToolKind>),
+        entity_info: (Option<Uid>, Option<&Stats>, Option<&Mass>),
         damage: f32,
         strength_modifier: f32,
+        ability_info: Option<AbilityInfo>,
     ) -> Buff {
+        let (entity_uid, entity_stats, entity_mass) = entity_info;
         // TODO: Generate BufCategoryId vec (probably requires damage overhaul?)
-        let source = if let Some(uid) = entity_info.0 {
+        let source = if let Some(uid) = entity_uid {
             BuffSource::Character {
                 by: uid,
-                tool_kind: entity_info.3,
+                tool_kind: ability_info.and_then(|ai| ai.tool),
             }
         } else {
             BuffSource::Unknown
         };
         let dest_info = DestInfo {
-            stats: entity_info.1,
-            mass: entity_info.2,
+            stats: entity_stats,
+            mass: entity_mass,
         };
+        let target_uid = ability_info
+            .and_then(|ai| ai.input_attr)
+            .and_then(|ia| ia.target_entity);
         Buff::new(
             self.kind,
             BuffData::new(
@@ -2370,7 +2309,8 @@ impl CombatBuff {
             source,
             time,
             dest_info,
-            entity_info.2,
+            entity_mass,
+            target_uid,
         )
     }
 }

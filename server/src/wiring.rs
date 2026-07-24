@@ -183,17 +183,19 @@ impl WiringAction {
                 },
                 WiringActionEffect::SpawnProjectile { constr } => {
                     if let Some(&pos) = pos {
+                        let (projectile, marker) =
+                            constr.clone().create_projectile(None, 1.0, None, None);
                         emitters.emit(ShootEvent {
                             entity: Some(entity),
                             source_vel: None,
                             pos,
                             dir: Dir::forward(),
                             body: Body::Object(object::Body::Arrow),
-                            projectile: constr.clone().create_projectile(None, 1.0, None),
+                            projectile,
                             light: None,
                             speed: 5.0,
                             object: None,
-                            marker: None,
+                            marker,
                         });
                     }
                 },

@@ -27,3 +27,4 @@ char_selection-hardcore_tooltip =
 
     El modo extremo es recomendado únicamente para jugadores experimentados.
 char_selection-hardcore = Modo Extremo
+char_selection-height_scale = Altura

@@ -1,7 +1,7 @@
 use super::{
     DEFAULT_NPC, ENEMY_HP_COLOR, FACTION_COLOR, GROUP_COLOR, GROUP_MEMBER, HP_COLOR, LOW_HP_COLOR,
-    QUALITY_EPIC, REGION_COLOR, SAY_COLOR, STAMINA_COLOR, TELL_COLOR, TEXT_BG, TEXT_COLOR,
-    cr_color, img_ids::Imgs,
+    MARKED_NPC, QUALITY_EPIC, REGION_COLOR, SAY_COLOR, STAMINA_COLOR, TELL_COLOR, TEXT_BG,
+    TEXT_COLOR, cr_color, img_ids::Imgs,
 };
 use crate::{
     GlobalState,
@@ -76,6 +76,7 @@ pub struct Info<'a> {
     pub combat_rating: Option<f32>,
     pub hardcore: bool,
     pub stance: Option<&'a Stance>,
+    pub marked: bool,
 }
 
 /// Determines whether to show the healthbar
@@ -167,6 +168,7 @@ impl Widget for Overhead<'_> {
             combat_rating,
             hardcore,
             stance,
+            marked,
         }) = self.info
         {
             let display_name = match level {
@@ -297,6 +299,8 @@ impl Widget for Overhead<'_> {
                     GROUP_MEMBER
                 /*} else if targets player { //TODO: Add a way to see if the entity is trying to attack the player, their pet(s) or a member of their group and recolour their nametag accordingly
                 DEFAULT_NPC*/
+                } else if marked {
+                    MARKED_NPC
                 } else {
                     DEFAULT_NPC
                 })
@@ -470,7 +474,7 @@ impl Widget for Overhead<'_> {
                     .window
                     .last_input()
                 {
-                    LastInput::KeyboardMouse => self
+                    LastInput::Keyboard | LastInput::Mouse => self
                         .interaction_options
                         .iter()
                         .map(|(input, action)| {
@@ -499,9 +503,10 @@ impl Widget for Overhead<'_> {
                         .collect(),
                 };
 
-                // create two strings for inputs and actions. Actions should be left aligned
+                // Create two strings for inputs and actions. Actions should be left aligned
                 // with each other, and should not be influenced by multi-input input strings
-                // icons string
+
+                // Icons string
                 let mut temp_list: Vec<String> = Vec::new();
                 for i in &interactions {
                     // take the string element
@@ -510,7 +515,7 @@ impl Widget for Overhead<'_> {
                 }
                 let icons_input = temp_list.join("\n");
 
-                // actions string
+                // Actions string
                 let mut temp_list: Vec<String> = Vec::new();
                 for i in &interactions {
                     let s = i.1.clone();

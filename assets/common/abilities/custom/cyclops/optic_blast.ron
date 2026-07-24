@@ -12,6 +12,7 @@ BasicRanged(
         attack: Some((
             damage: 48,
             knockback: Some(5),
+            damage_kind: Energy,
         )),
     ),
     projectile_body: Object(LaserBeam),

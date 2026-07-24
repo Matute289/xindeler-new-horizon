@@ -7,6 +7,7 @@ Throw(
     recover_duration: 0.1,
     projectile: (
         kind: Firework(Blue),
+        lifetime_override: Some(3.0),
     ),
     projectile_light: Some((
         animated: true,

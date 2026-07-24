@@ -536,13 +536,15 @@ impl World {
 
         if sim_chunk.contains_waypoint {
             let waypoint_pos = gen_entity_pos(&mut dynamic_rng);
-            if sim_chunk
-                .sites
-                .iter()
-                .map(|site| index.sites[*site].spawn_rules(waypoint_pos.xy().as_()))
-                .fold(SpawnRules::default(), |a, b| a.combine(b))
-                .waypoints
-            {
+            let mut spawn_rules = SpawnRules::default();
+            for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
+                site.spawn_rules(
+                    &mut spawn_rules,
+                    &Land::from_sim(&self.sim),
+                    waypoint_pos.xy().as_(),
+                );
+            }
+            if spawn_rules.waypoints {
                 supplement.add_entity_spawn(EntitySpawn::Entity(Box::new(
                     EntityInfo::at(waypoint_pos).into_special(SpecialEntity::Waypoint),
                 )));
