@@ -1,9 +1,9 @@
 use super::{
-    CRITICAL_HP_COLOR, HudInfo, LOW_HP_COLOR, Show, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN, cr_color,
+    CRITICAL_HP_COLOR, HudInfo, LOW_HP_COLOR, Show, SlotEvents, SlotGrid, TEXT_COLOR,
+    UI_HIGHLIGHT_0, UI_MAIN, cr_color,
     img_ids::{Imgs, ImgsRot},
     item_imgs::ItemImgs,
-    slots::{ArmorSlot, EquipSlot, InventorySlot, SlotManager},
-    util,
+    slots::{ArmorSlot, EquipSlot, SlotManager},
 };
 use crate::{
     GlobalState,
@@ -25,12 +25,12 @@ use crate::{
 };
 use client::Client;
 use common::{
-    assets::AssetExt,
     combat::{combat_rating, compute_protection, perception_dist_multiplier_from_stealth},
     comp::{
-        AttunedItems, Body, CharacterClass, Energy, Health, Inventory, Poise, SkillSet, Stats,
+        AttunedItems, Body, CharacterClass, Energy, Health, Inventory, Item, Poise, SkillSet,
+        Stats,
         inventory::{InventorySortOrder, slot::Slot},
-        item::{ItemDef, ItemDesc, ItemI18n, MaterialStatManifest, Quality},
+        item::{ItemDesc, ItemI18n, MaterialStatManifest},
     },
     recipe::RecipeBookManifest,
 };
@@ -42,9 +42,7 @@ use conrod_core::{
 use i18n::Localization;
 use std::borrow::Cow;
 
-use crate::hud::slots::SlotKind;
 use specs::{Entity as EcsEntity, WorldExt};
-use std::{borrow::Borrow, sync::Arc};
 use vek::{Vec2, approx::AbsDiffEq};
 
 widget_ids! {
@@ -52,9 +50,6 @@ widget_ids! {
         draggable_area,
         inv_alignment,
         slot_grid,
-        inv_slots[],
-        inv_slot_names[],
-        inv_slot_amounts[],
         //coin_ico,
         space_txt,
         //coin_txt,
@@ -104,6 +99,7 @@ pub struct InventoryScroller<'a> {
     bg_ids: &'a BackgroundIds,
     show_salvage: bool,
     details_mode: bool,
+    navigable: bool,
 }
 
 impl<'a> InventoryScroller<'a> {
@@ -132,6 +128,7 @@ impl<'a> InventoryScroller<'a> {
         bg_ids: &'a BackgroundIds,
         show_salvage: bool,
         details_mode: bool,
+        navigable: bool,
     ) -> Self {
         InventoryScroller {
             client,
@@ -158,6 +155,7 @@ impl<'a> InventoryScroller<'a> {
             bg_ids,
             show_salvage,
             details_mode,
+            navigable,
         }
     }
 
@@ -349,97 +347,6 @@ impl<'a> InventoryScroller<'a> {
             .set(state.ids.inv_alignment, ui);
 
         // Bag Slots
-        // Create available inventory slot widgets
-        if state.ids.inv_slots.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids.inv_slots.resize(
-                    self.inventory.capacity() + self.inventory.overflow_items().count(),
-                    &mut ui.widget_id_generator(),
-                );
-            });
-        }
-        if state.ids.inv_slot_names.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids
-                    .inv_slot_names
-                    .resize(self.inventory.capacity(), &mut ui.widget_id_generator());
-            });
-        }
-        if state.ids.inv_slot_amounts.len() < self.inventory.capacity() {
-            state.update(|s| {
-                s.ids
-                    .inv_slot_amounts
-                    .resize(self.inventory.capacity(), &mut ui.widget_id_generator());
-            });
-        }
-        // Determine the range of inventory slots that are provided by the loadout item
-        // that the mouse is over
-        let mouseover_loadout_slots = self
-            .slot_manager
-            .mouse_over_slot
-            .and_then(|x| {
-                if let SlotKind::Equip(e) = x {
-                    self.inventory.get_slot_range_for_equip_slot(e)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0usize..0usize);
-
-        // Display inventory contents
-        let mut slot_maker = SlotMaker {
-            empty_slot: self.imgs.inv_slot,
-            hovered_slot: self.imgs.skillbar_index,
-            filled_slot: self.imgs.inv_slot,
-            selected_slot: self.imgs.inv_slot_sel,
-            background_color: Some(UI_MAIN),
-            content_size: ContentSize {
-                width_height_ratio: 1.0,
-                max_fraction: 0.75,
-            },
-            selected_content_scale: 1.067,
-            amount_font: self.fonts.cyri.conrod_id,
-            amount_margins: Vec2::new(-4.0, 0.0),
-            amount_font_size: self.fonts.cyri.scale(12),
-            amount_text_color: TEXT_COLOR,
-            content_source: self.inventory,
-            image_source: self.item_imgs,
-            slot_manager: Some(self.slot_manager),
-            last_input: &self.global_state.window.last_input(),
-            pulse: self.pulse,
-        };
-
-        let mut i = 0;
-        let mut items = self
-            .inventory
-            .slots_with_id()
-            .map(|(slot, item)| (Slot::Inventory(slot), item.as_ref()))
-            .chain(
-                self.inventory
-                    .overflow_items()
-                    .enumerate()
-                    .map(|(i, item)| (Slot::Overflow(i), Some(item))),
-            )
-            .collect::<Vec<_>>();
-        if self.details_mode && !self.is_us {
-            items.sort_by_cached_key(|(_, item)| {
-                (
-                    item.is_none(),
-                    item.as_ref().map(|i| {
-                        (
-                            std::cmp::Reverse(i.quality()),
-                            {
-                                // TODO: we do double the work here, optimize?
-                                let (name, _) =
-                                    util::item_text(i, self.localized_strings, self.item_i18n);
-                                name
-                            },
-                            i.amount(),
-                        )
-                    }),
-                )
-            });
-        }
         // Local player's context for equipment-requirement gray-out. Gates are
         // always evaluated against the viewer, even when inspecting someone
         // else's inventory.
@@ -451,136 +358,51 @@ impl<'a> InventoryScroller<'a> {
         let player_class = character_classes.get(player_entity).map(|c| c.0);
         let requirement_ctx = skill_sets.get(player_entity).zip(bodies.get(player_entity));
 
-        for (pos, item) in items.into_iter() {
-            if self.details_mode && !self.is_us && item.is_none() {
-                continue;
+        // Gray out items the viewer can't equip due to requirements. `None` leaves
+        // SlotGrid's own highlight (loadout-hover/salvage/overflow) alone.
+        let gray_out = |_pos: Slot, item: Option<&Item>| -> Option<Color> {
+            let (skill_set, body) = requirement_ctx?;
+            let item = item?;
+            (!item.meets_requirements_with_class(player_class, skill_set, body))
+                .then_some(Color::Rgba(0.45, 0.45, 0.45, 1.0))
+        };
+
+        for event in SlotGrid::new(
+            self.client,
+            self.imgs,
+            self.item_imgs,
+            self.fonts,
+            self.item_tooltip_manager,
+            self.slot_manager,
+            self.inventory,
+            self.item_tooltip,
+            self.localized_strings,
+            self.item_i18n,
+            self.entity,
+            &self.global_state.window.last_input(),
+            self.pulse,
+            self.menu_events,
+            self.active_content,
+        )
+        .columns(9)
+        .spacing(0.0)
+        .slot_size(if self.details_mode { 20.0 } else { 40.0 })
+        .is_us(self.is_us)
+        .details_mode(self.details_mode)
+        .show_salvage(self.show_salvage)
+        .grid_width(grid_width)
+        .navigable(self.navigable)
+        .slot_tint(&gray_out)
+        .wh_of(state.ids.inv_alignment)
+        .top_left_of(state.ids.inv_alignment)
+        .set(state.ids.slot_grid, ui)
+        {
+            match event {
+                SlotEvents::ChangeLocalFocus(change) => {
+                    events.push(InventoryScrollerEvent::ChangeLocalFocus(change));
+                },
+                SlotEvents::Close => events.push(InventoryScrollerEvent::Close),
             }
-            let (x, y) = if self.details_mode {
-                (0, i)
-            } else {
-                (i % 9, i / 9)
-            };
-            let slot_size = if self.details_mode { 20.0 } else { 40.0 };
-
-            // Slot
-            let mut slot_widget = slot_maker
-                .fabricate(
-                    InventorySlot {
-                        slot: pos,
-                        ours: self.is_us,
-                        entity: self.entity,
-                    },
-                    [slot_size as f32; 2],
-                    false,
-                    false,
-                )
-                .top_left_with_margins_on(
-                    state.ids.inv_alignment,
-                    0.0 + y as f64 * slot_size,
-                    0.0 + x as f64 * slot_size,
-                );
-
-            // Highlight slots are provided by the loadout item that the mouse is over
-            if mouseover_loadout_slots.contains(&i) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
-            }
-
-            if self.show_salvage && item.as_ref().is_some_and(|item| item.is_salvageable()) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
-            }
-
-            // Highlight in red slots that are overflow
-            if matches!(pos, Slot::Overflow(_)) {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 0.0, 0.0, 1.0));
-            }
-
-            // Gray out items the player can't equip due to requirements
-            if let Some((skill_set, body)) = requirement_ctx
-                && item.as_ref().is_some_and(|item| {
-                    !item.meets_requirements_with_class(player_class, skill_set, body)
-                })
-            {
-                slot_widget = slot_widget.with_background_color(Color::Rgba(0.45, 0.45, 0.45, 1.0));
-            }
-
-            if let Some(item) = item {
-                let quality_col_img = match item.quality() {
-                    Quality::Low => self.imgs.inv_slot_grey,
-                    Quality::Common => self.imgs.inv_slot_common,
-                    Quality::Moderate => self.imgs.inv_slot_green,
-                    Quality::High => self.imgs.inv_slot_blue,
-                    Quality::Epic => self.imgs.inv_slot_purple,
-                    Quality::Legendary => self.imgs.inv_slot_gold,
-                    Quality::Artifact => self.imgs.inv_slot_orange,
-                    _ => self.imgs.inv_slot_red,
-                };
-
-                let prices_info = self
-                    .client
-                    .pending_trade()
-                    .as_ref()
-                    .and_then(|(_, _, prices)| prices.clone());
-
-                if self.show_salvage && item.is_salvageable() {
-                    let salvage_result: Vec<_> = item
-                        .salvage_output()
-                        .map(|(material_id, _)| Arc::<ItemDef>::load_expect_cloned(material_id))
-                        .map(|item| item as Arc<dyn ItemDesc>)
-                        .collect();
-
-                    let items = salvage_result
-                        .iter()
-                        .map(|item| item.borrow())
-                        .chain(core::iter::once(item as &dyn ItemDesc));
-
-                    slot_widget
-                        .filled_slot(quality_col_img)
-                        .with_item_tooltip(
-                            self.item_tooltip_manager,
-                            items,
-                            &prices_info,
-                            self.item_tooltip,
-                        )
-                        .set(state.ids.inv_slots[i], ui);
-                } else {
-                    slot_widget
-                        .filled_slot(quality_col_img)
-                        .with_item_tooltip(
-                            self.item_tooltip_manager,
-                            core::iter::once(item as &dyn ItemDesc),
-                            &prices_info,
-                            self.item_tooltip,
-                        )
-                        .set(state.ids.inv_slots[i], ui);
-                }
-                if self.details_mode {
-                    let (name, _) = util::item_text(item, self.localized_strings, self.item_i18n);
-                    Text::new(&name)
-                        .top_left_with_margins_on(
-                            state.ids.inv_alignment,
-                            0.0 + y as f64 * slot_size,
-                            30.0 + x as f64 * slot_size,
-                        )
-                        .font_id(self.fonts.cyri.conrod_id)
-                        .font_size(self.fonts.cyri.scale(14))
-                        .color(color::WHITE)
-                        .set(state.ids.inv_slot_names[i], ui);
-
-                    Text::new(&format!("{}", item.amount()))
-                        .top_left_with_margins_on(
-                            state.ids.inv_alignment,
-                            0.0 + y as f64 * slot_size,
-                            grid_width - 40.0 + x as f64 * slot_size,
-                        )
-                        .font_id(self.fonts.cyri.conrod_id)
-                        .font_size(self.fonts.cyri.scale(14))
-                        .color(color::WHITE)
-                        .set(state.ids.inv_slot_amounts[i], ui);
-                }
-            } else {
-                slot_widget.set(state.ids.inv_slots[i], ui);
-            }
-            i += 1;
         }
     }
 
@@ -1228,6 +1050,7 @@ impl Widget for Bag<'_> {
                 &state.bg_ids,
                 self.show.crafting_fields.salvage,
                 self.show.bag_details,
+                true,
             )
             .set(state.ids.inventory_scroller, ui)
             {

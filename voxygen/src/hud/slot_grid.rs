@@ -18,7 +18,7 @@ use client::Client;
 use common::{
     assets::AssetExt,
     comp::{
-        Inventory,
+        Inventory, Item,
         inventory::slot::Slot,
         item::{ItemDef, ItemDesc, ItemI18n, Quality},
     },
@@ -38,6 +38,13 @@ pub enum SlotEvents {
     ChangeLocalFocus(usize),
     Close,
 }
+
+/// Per-slot background-colour override, evaluated after `SlotGrid`'s own
+/// highlights (loadout-hover, salvage, overflow) so a `Some(..)` return wins
+/// on conflict. `None` leaves the slot as `SlotGrid` decided. Keeps
+/// game-specific slot-gating rules (e.g. equip requirements) out of this
+/// widget, which otherwise mirrors upstream closely.
+pub type SlotTint<'a> = &'a dyn Fn(Slot, Option<&Item>) -> Option<Color>;
 
 #[derive(WidgetCommon)]
 pub struct SlotGrid<'a> {
@@ -64,6 +71,9 @@ pub struct SlotGrid<'a> {
     columns: usize,
     spacing: f64,
     slot_size: f64,
+    slot_tint: Option<SlotTint<'a>>,
+    grid_width: Option<f64>,
+    navigable: bool,
 }
 
 widget_ids! {
@@ -93,6 +103,7 @@ impl<'a> SlotGrid<'a> {
         pub is_us { is_us = bool }
         pub details_mode { details_mode = bool }
         pub show_salvage { show_salvage = bool }
+        pub navigable { navigable = bool }
     }
 
     pub fn new(
@@ -135,7 +146,25 @@ impl<'a> SlotGrid<'a> {
             columns: 6,
             slot_size: 55.0,
             spacing: 6.0,
+            slot_tint: None,
+            grid_width: None,
+            navigable: true,
         }
+    }
+
+    /// See [`SlotTint`].
+    pub fn slot_tint(mut self, f: SlotTint<'a>) -> Self {
+        self.slot_tint = Some(f);
+        self
+    }
+
+    /// Overrides the grid's total rendered width, used to right-align the
+    /// details-mode amount text. Defaults to `columns * (slot_size +
+    /// spacing)` if unset; only needed when the grid is laid out narrower or
+    /// wider than that (e.g. `wh_of` a differently-sized parent).
+    pub fn grid_width(mut self, w: f64) -> Self {
+        self.grid_width = Some(w);
+        self
     }
 }
 
@@ -184,7 +213,7 @@ impl<'a> Widget for SlotGrid<'a> {
         // Apply: select the current slot
         // Back: close the bag menu
         let mut clicked = false;
-        if selected.is_none() && self.active_content == 0 {
+        if self.navigable && selected.is_none() && self.active_content == 0 {
             for event in self.menu_events {
                 match *event {
                     MenuInput::Up => state.update(|s| {
@@ -310,14 +339,20 @@ impl<'a> Widget for SlotGrid<'a> {
             });
         }
 
+        // `rendered` counts only slots that actually get drawn this frame — in
+        // details_mode for someone else's bag, empty slots are skipped (below), so
+        // it diverges from the enumerate index `i` (which stays the stable
+        // widget-id-array index). Row/column placement and the loadout-hover range
+        // check must use `rendered`, or a skipped slot leaves a gap in the layout.
+        let mut rendered = 0usize;
         for (i, (pos, item)) in items.into_iter().enumerate() {
             if self.details_mode && !self.is_us && item.is_none() {
                 continue;
             }
             let (x, y) = if self.details_mode {
-                (0, i)
+                (0, rendered)
             } else {
-                (i % self.columns, i / self.columns)
+                (rendered % self.columns, rendered / self.columns)
             };
 
             // Inventory slot details
@@ -330,7 +365,8 @@ impl<'a> Widget for SlotGrid<'a> {
             };
 
             // Check if active menu navigation hover
-            let menu_hover = state.active_slot[0] == x
+            let menu_hover = self.navigable
+                && state.active_slot[0] == x
                 && state.active_slot[1] == y // Is it the current slot
                 && selected.is_none()        // Is the context menu not open
                 && self.active_content == 0; // Is local focus on the inventory
@@ -346,7 +382,7 @@ impl<'a> Widget for SlotGrid<'a> {
                 );
 
             // Highlight slots are provided by the loadout item (bag) that the mouse is over
-            if mouseover_loadout_slots.contains(&i) {
+            if mouseover_loadout_slots.contains(&rendered) {
                 slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 1.0, 1.0, 1.0));
             }
 
@@ -357,6 +393,14 @@ impl<'a> Widget for SlotGrid<'a> {
             // Highlight in red the slots that are overflow
             if matches!(pos, Slot::Overflow(_)) {
                 slot_widget = slot_widget.with_background_color(Color::Rgba(1.0, 0.0, 0.0, 1.0));
+            }
+
+            // Caller-supplied per-slot tint, applied last so it wins over the highlights
+            // above.
+            if let Some(tint) = self.slot_tint
+                && let Some(color) = tint(pos, item)
+            {
+                slot_widget = slot_widget.with_background_color(color);
             }
 
             if let Some(item) = item {
@@ -423,15 +467,14 @@ impl<'a> Widget for SlotGrid<'a> {
                         .color(color::WHITE)
                         .set(state.ids.inv_slot_names[i], ui);
 
-                    let col = self.columns;
-                    let size = self.columns;
-                    let space = self.spacing as usize;
-                    let current_width = ((col * size) + ((col - 1) * space)) as f64;
+                    let grid_width = self
+                        .grid_width
+                        .unwrap_or(self.columns as f64 * (self.slot_size + self.spacing));
                     Text::new(&format!("{}", item.amount()))
                         .top_left_with_margins_on(
                             id,
                             0.0 + y as f64 * self.slot_size,
-                            current_width - 40.0_f64 * self.slot_size,
+                            grid_width - 40.0 + x as f64 * self.slot_size,
                         )
                         .font_id(self.fonts.cyri.conrod_id)
                         .font_size(self.fonts.cyri.scale(14))
@@ -455,6 +498,8 @@ impl<'a> Widget for SlotGrid<'a> {
                     s.context_menu_pos = [x_pos + offset, y_pos];
                 });
             }
+
+            rendered += 1;
         }
 
         // Open context menu if any slot is selected
