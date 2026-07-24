@@ -10,6 +10,7 @@ BasicRanged(
         ),
         attack: Some((
             damage: 26,
+            damage_kind: Energy,
         )),
     ),
     projectile_body: Object(PoisonBall),

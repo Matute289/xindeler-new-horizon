@@ -10,7 +10,7 @@ ItemDef(
                     strength: 0.4,
                     duration: Some(60),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Cursed,
@@ -18,7 +18,7 @@ ItemDef(
                     strength: 0.35,
                     duration: Some(60),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ])
     ),

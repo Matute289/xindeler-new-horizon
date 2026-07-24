@@ -3,7 +3,7 @@ BasicRanged(
     buildup_duration: 1.0,
     recover_duration: 2.5,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 25,
             knockback: Some(12),
@@ -14,6 +14,7 @@ BasicRanged(
                 strength: DamageFraction(0.1),
                 chance: 0.1,
             )),
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(BoltBesieger),

@@ -23,7 +23,7 @@ BasicMelee(
     ),
     ori_modifier: (
         buildup: Some(1.0),
-        swing: Some(1.0),
+        action: Some(1.0),
         recover: Some(1.0),
     ),
     frontend_specifier: Some(FireGigasWhirlwind),

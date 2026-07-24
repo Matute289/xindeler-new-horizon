@@ -90,12 +90,12 @@
         (Bow(SepticShot), 1),
         (Bow(Barrage), 1),
 
-        (Bow(OwlTalon), 1),
+        (Bow(StormChaser), 1),
         (Bow(EagleEye), 1),
         (Bow(IgniteArrow), 1),
         (Bow(DrenchArrow), 1),
         (Bow(PiercingGale), 1),
-        (Bow(Scatterburst), 1),
+        (Bow(ThornStake), 1),
 
         (Bow(Heartseeker), 1),
         (Bow(Hawkstrike), 1),
@@ -158,12 +158,12 @@
         (Bow(SepticShot), 1),
         (Bow(Barrage), 1),
 
-        (Bow(OwlTalon), 1),
+        (Bow(StormChaser), 1),
         (Bow(EagleEye), 1),
         (Bow(IgniteArrow), 1),
         (Bow(DrenchArrow), 1),
         (Bow(PiercingGale), 1),
-        (Bow(Scatterburst), 1),
+        (Bow(ThornStake), 1),
 
         // Staff
         (UnlockGroup(Weapon(Staff)), 1),

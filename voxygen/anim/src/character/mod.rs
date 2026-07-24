@@ -136,36 +136,44 @@ impl Skeleton for CharacterSkeleton {
         buf: &mut [FigureBoneData; super::MAX_BONE_COUNT],
         body: Self::Body,
     ) -> Self::ComputedSkeleton {
+        let height_scale = body.height_scale();
+
         // TODO: extract scaler from body to it's own method so we can call that
         // directly instead of going through SkeletonAttr? (note todo also
         // appiles to other body variant animations)
-        let base_mat = base_mat * Mat4::scaling_3d(body.height() * (1.0 / 25.0));
+        let base_mat =
+            base_mat * Mat4::scaling_3d(Body::BASE_HEIGHT * body.scaler() * (1.0 / 25.0));
 
-        let squash_chest = |tr: Transform<f32, f32, f32>| Transform {
-            position: tr.position * Vec3::new(1.0, 1.0, self.squash.powi(2))
+        let transform_chest = |tr: Transform<f32, f32, f32>| Transform {
+            position: tr.position * Vec3::new(1.0, 1.0, self.squash * height_scale.powi(2))
                 + Vec3::new(0.0, (self.squash - 1.0).min(0.0) * 8.0, 0.0),
             orientation: tr.orientation
                 * Quaternion::rotation_x((self.squash - 1.0).min(0.0) * 2.0),
-            ..tr
+            scale: tr.scale * Lerp::lerp(1.0, height_scale, 0.25),
         };
-        let squash_limb = |tr: Transform<f32, f32, f32>| Transform {
-            position: tr.position * Vec3::new(1.0, 1.0, self.squash.powi(2))
+        let transform_limb = |tr: Transform<f32, f32, f32>| Transform {
+            position: tr.position * Vec3::new(1.0, 1.0, self.squash)
                 + Vec3::new(0.0, (1.0 - self.squash).max(0.0) * 5.0, 0.0),
             orientation: tr.orientation
                 * Quaternion::rotation_x((1.0 - self.squash).max(0.0) * 2.0),
             ..tr
         };
+        let transform_other = |stretch: f32, tr: Transform<f32, f32, f32>| Transform {
+            position: tr.position * Vec3::new(1.0, 1.0, height_scale.max(0.0).powf(stretch * 2.0)),
+            scale: tr.scale * Vec3::new(1.0, 1.0, height_scale.max(1.0).powf(stretch * 2.0)),
+            ..tr
+        };
 
         let torso_mat = base_mat * Mat4::<f32>::from(self.torso);
-        let chest_mat = torso_mat * Mat4::<f32>::from(squash_chest(self.chest));
-        let head_mat = chest_mat * Mat4::<f32>::from(squash_limb(self.head));
-        let shorts_mat = chest_mat * Mat4::<f32>::from(self.shorts);
+        let chest_mat = torso_mat * Mat4::<f32>::from(transform_chest(self.chest));
+        let head_mat = chest_mat * Mat4::<f32>::from(transform_limb(self.head));
+        let shorts_mat = chest_mat * Mat4::<f32>::from(transform_other(0.6, self.shorts));
         let control_mat = chest_mat * Mat4::<f32>::from(self.control);
         let control_l_mat = control_mat * Mat4::<f32>::from(self.control_l);
         let control_r_mat = control_mat * Mat4::<f32>::from(self.control_r);
-        let hand_r_mat = control_r_mat * Mat4::<f32>::from(squash_limb(self.hand_r));
+        let hand_r_mat = control_r_mat * Mat4::<f32>::from(transform_limb(self.hand_r));
 
-        let hand_l_mat = Mat4::<f32>::from(squash_limb(self.hand_l));
+        let hand_l_mat = Mat4::<f32>::from(transform_limb(self.hand_l));
         let lantern_mat = if self.holding_lantern {
             hand_r_mat
         } else {
@@ -178,7 +186,7 @@ impl Skeleton for CharacterSkeleton {
         let computed_skeleton = ComputedCharacterSkeleton {
             head: head_mat,
             chest: chest_mat,
-            belt: chest_mat * Mat4::<f32>::from(self.belt),
+            belt: chest_mat * Mat4::<f32>::from(transform_other(1.1, self.belt)),
             back: chest_mat * Mat4::<f32>::from(self.back),
             shorts: shorts_mat,
             hand_l: control_l_mat * hand_l_mat,

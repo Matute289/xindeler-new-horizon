@@ -17,6 +17,7 @@ BasicRanged(
                 strength: DamageFraction(0.5),
                 chance: 0.6,
             )),
+            damage_kind: Energy,
         )),
     ),
     projectile_body: Object(BloodBomb),

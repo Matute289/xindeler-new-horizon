@@ -281,11 +281,17 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
             } else {
                 None
             };
-            let riverless_alt = authored_path_profile
-                .map(|profile| profile.riverless_alt)
-                .unwrap_or_else(|| {
-                    PathLocals::new(&canvas.info(), col, path_nearest).riverless_alt
-                });
+            let riverless_alt = match authored_path_profile {
+                Some(profile) => profile.riverless_alt,
+                None => {
+                    let PathLocals {
+                        riverless_alt, alt, ..
+                    } = PathLocals::new(&canvas.info(), col, path_nearest);
+                    // Upstream fix: clamp to the lower of riverless/actual alt so
+                    // non-authored paths never float above terrain.
+                    riverless_alt.min(alt)
+                },
+            };
 
             let surface_z = riverless_alt.floor() as i32;
             let depth = authored_path_profile

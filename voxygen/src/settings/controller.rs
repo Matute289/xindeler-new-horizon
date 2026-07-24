@@ -47,6 +47,14 @@ impl From<ControllerSettings> for ControllerSettingsSerde {
             }
         }
 
+        // check menu buttons
+        let mut menu_bindings: HashMap<MenuInput, Option<Button>> = HashMap::new();
+        for (k, v) in controller_settings.menu_button_map {
+            if ControllerSettings::default_menu_button_binding(k) != v {
+                menu_bindings.insert(k, v);
+            }
+        }
+
         // none hashmap values
         let modifier_buttons = controller_settings.modifier_buttons;
         let pan_sensitivity = controller_settings.pan_sensitivity;
@@ -58,7 +66,7 @@ impl From<ControllerSettings> for ControllerSettingsSerde {
 
         ControllerSettingsSerde {
             game_button_map: button_bindings,
-            menu_button_map: HashMap::new(),
+            menu_button_map: menu_bindings,
             game_analog_button_map: HashMap::new(),
             menu_analog_button_map: HashMap::new(),
             game_axis_map: HashMap::new(),
@@ -113,6 +121,7 @@ impl From<ControllerSettingsSerde> for ControllerSettings {
     fn from(controller_serde: ControllerSettingsSerde) -> Self {
         let button_bindings = controller_serde.game_button_map;
         let layer_bindings = controller_serde.layer_button_map;
+        let menu_bindings = controller_serde.menu_button_map;
         let mut controller_settings = ControllerSettings::default();
         // update button bindings
         for (k, maybe_v) in button_bindings {
@@ -126,6 +135,13 @@ impl From<ControllerSettingsSerde> for ControllerSettings {
             match maybe_v {
                 Some(v) => controller_settings.modify_layer_binding(k, v),
                 None => controller_settings.remove_layer_binding(k),
+            }
+        }
+        // update menu bindings
+        for (k, maybe_v) in menu_bindings {
+            match maybe_v {
+                Some(v) => controller_settings.modify_menu_binding(k, v),
+                None => controller_settings.remove_menu_binding(k),
             }
         }
         controller_settings
@@ -195,10 +211,6 @@ impl ControllerSettings {
         }
     }
 
-    pub fn get_game_button_binding(&self, input: GameInput) -> Option<Button> {
-        self.game_button_map.get(&input).cloned().flatten()
-    }
-
     pub fn get_associated_game_button_inputs(
         &self,
         button: &Button,
@@ -211,6 +223,14 @@ impl ControllerSettings {
         layers: &LayerEntry,
     ) -> Option<&HashSet<GameInput>> {
         self.inverse_layer_button_map.get(layers)
+    }
+
+    pub fn get_associated_game_menu_inputs(&self, button: &Button) -> Option<&HashSet<MenuInput>> {
+        self.inverse_menu_button_map.get(button)
+    }
+
+    pub fn get_game_button_binding(&self, input: GameInput) -> Option<Button> {
+        self.game_button_map.get(&input).cloned().flatten()
     }
 
     pub fn get_menu_button_binding(&self, input: MenuInput) -> Option<Button> {
@@ -915,11 +935,15 @@ impl ControllerSettings {
             MenuInput::ScrollDown => Some(Button::Simple(GilButton::Unknown)),
             MenuInput::ScrollLeft => Some(Button::Simple(GilButton::Unknown)),
             MenuInput::ScrollRight => Some(Button::Simple(GilButton::Unknown)),
-            MenuInput::Home => Some(Button::Simple(GilButton::Unknown)),
-            MenuInput::End => Some(Button::Simple(GilButton::Unknown)),
+            MenuInput::PageUp => Some(Button::Simple(GilButton::RightTrigger)),
+            MenuInput::PageDown => Some(Button::Simple(GilButton::LeftTrigger)),
             MenuInput::Apply => Some(Button::Simple(GilButton::South)),
             MenuInput::Back => Some(Button::Simple(GilButton::East)),
             MenuInput::Exit => Some(Button::Simple(GilButton::Mode)),
+            MenuInput::LocalFocus => Some(Button::Simple(GilButton::North)),
+            MenuInput::GlobalFocus => Some(Button::Simple(GilButton::Select)),
+            MenuInput::EmulateLeftClick => Some(Button::Simple(GilButton::RightTrigger2)),
+            MenuInput::EmulateRightClick => Some(Button::Simple(GilButton::LeftTrigger2)),
         }
     }
 }

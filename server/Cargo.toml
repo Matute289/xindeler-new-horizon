@@ -73,6 +73,7 @@ authc = { git = "https://gitlab.com/veloren/auth.git", rev = "ae0e16783a9f904195
 enum-map = { workspace = true }
 noise = { workspace = true }
 censor = "0.3"
+slotmap = { workspace = true }
 
 rusqlite = { workspace = true }
 refinery = { version = "0.9", features = ["rusqlite"] }

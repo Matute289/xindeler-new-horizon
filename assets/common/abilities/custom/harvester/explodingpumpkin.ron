@@ -18,6 +18,7 @@ BasicRanged(
                 strength: DamageFraction(0.2),
                 chance: 1.0,
             )),
+            damage_kind: Energy,
         )),
     ),
     projectile_body: Object(Pumpkin),

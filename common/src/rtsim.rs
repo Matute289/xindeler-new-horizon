@@ -6,8 +6,8 @@
 //!
 //! The types in this module generally come in a few flavours:
 //!
-//! - IDs like [`NpcId`] and [`SiteId`], used to address objects that are shared
-//!   between both domains
+//! - IDs like [`ActorId`] and [`SiteId`], used to address objects that are
+//!   shared between both domains
 //! - Messages like [`Dialogue`] and [`NpcAction`] which facilitate
 //!   communication between both domains
 //! - 'Resource duals' like [`TerrainResource`] that allow physical items or
@@ -15,7 +15,6 @@
 
 use crate::{
     assets::AssetExt,
-    character::CharacterId,
     comp::{agent::FlightMode, inventory::item::ItemDef},
     map::Marker,
     util::Dir,
@@ -28,44 +27,18 @@ use std::{collections::VecDeque, sync::Arc};
 use strum::{EnumIter, IntoEnumIterator};
 use vek::*;
 
-slotmap::new_key_type! { pub struct NpcId; }
-
-slotmap::new_key_type! { pub struct SiteId; }
-
-slotmap::new_key_type! { pub struct FactionId; }
-
-slotmap::new_key_type! { pub struct ReportId; }
+slotmap::new_key_type! {
+    pub struct ActorId;
+    pub struct SiteId;
+    pub struct FactionId;
+    pub struct ReportId;
+}
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestId(pub u64);
 
-pub type RtSimEntity = NpcId; // TODO: Remove this, alias is needed for historical reasons
-
-impl Component for RtSimEntity {
+impl Component for ActorId {
     type Storage = specs::VecStorage<Self>;
-}
-
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum Actor {
-    Npc(NpcId),
-    Character(CharacterId),
-}
-
-impl Actor {
-    pub fn npc(&self) -> Option<NpcId> {
-        match self {
-            Actor::Npc(id) => Some(*id),
-            Actor::Character(_) => None,
-        }
-    }
-}
-
-impl From<NpcId> for Actor {
-    fn from(value: NpcId) -> Self { Actor::Npc(value) }
-}
-
-impl From<CharacterId> for Actor {
-    fn from(value: CharacterId) -> Self { Actor::Character(value) }
 }
 
 #[derive(EnumIter, Clone, Copy)]
@@ -271,7 +244,7 @@ pub enum NpcActivity {
     Dance(Option<Dir>),
     Cheer(Option<Dir>),
     Sit(Option<Dir>, Option<Vec3<i32>>),
-    Talk(Actor),
+    Talk(ActorId),
 }
 
 /// Represents event-like actions that rtsim NPCs can perform to interact with
@@ -281,13 +254,13 @@ pub enum NpcAction {
     /// Speak the given message, with an optional target for that speech.
     // TODO: Use some sort of structured, language-independent value that frontends can translate
     // instead
-    Say(Option<Actor>, Content),
+    Say(Option<ActorId>, Content),
     /// Attack the given target
-    Attack(Actor),
-    Dialogue(Actor, Dialogue),
+    Attack(ActorId),
+    Dialogue(ActorId, Dialogue),
     // TODO: Make this more principled, currently only used by pirates
     Msg {
-        to: Actor,
+        to: ActorId,
         msg: NpcMsg,
     },
 }
@@ -368,10 +341,10 @@ impl From<Content> for Response {
 #[derive(Clone, Debug)]
 pub enum NpcInput {
     Report(ReportId),
-    Interaction(Actor),
-    Dialogue(Actor, Dialogue<true>),
+    Interaction(ActorId),
+    Dialogue(ActorId, Dialogue<true>),
     // TODO: Make this more principled, currently only used by pirates
-    Msg { from: Actor, msg: NpcMsg },
+    Msg { from: ActorId, msg: NpcMsg },
 }
 
 /// Represents a message that may be communicated between NPCs on a 1:1 basis

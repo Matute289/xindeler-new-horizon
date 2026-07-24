@@ -24,7 +24,7 @@ pub trait FilledVox: Sized + Clone + PartialEq {
 /// A volume that contains voxel data.
 pub trait BaseVol {
     type Vox;
-    type Error: Debug;
+    type Error: Copy + Debug;
 
     fn scaled_by(self, scale: Vec3<f32>) -> Scaled<Self>
     where

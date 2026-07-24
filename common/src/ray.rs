@@ -3,7 +3,7 @@ use vek::*;
 
 pub trait RayForEach<V> = FnMut(&V, Vec3<i32>);
 
-pub struct Ray<'a, V: ReadVol, F: FnMut(&V::Vox) -> bool, G: RayForEach<V::Vox>> {
+pub struct Ray<'a, V, F, G> {
     vol: &'a V,
     from: Vec3<f32>,
     to: Vec3<f32>,
@@ -12,6 +12,17 @@ pub struct Ray<'a, V: ReadVol, F: FnMut(&V::Vox) -> bool, G: RayForEach<V::Vox>>
     for_each: Option<G>,
     max_iter: usize,
     ignore_error: bool,
+}
+
+impl<V, F: Copy, G: Copy> Copy for Ray<'_, V, F, G> {}
+impl<V, F: Clone, G: Clone> Clone for Ray<'_, V, F, G> {
+    fn clone(&self) -> Self {
+        Self {
+            until: self.until.clone(),
+            for_each: self.for_each.clone(),
+            ..*self
+        }
+    }
 }
 
 impl<'a, V, F, G> Ray<'a, V, F, G>

@@ -14,7 +14,7 @@ Explosion(
     reagent: Some(FireGigas),
     ori_modifier: (
         buildup: Some(0.05),
-        swing: Some(0.05),
+        action: Some(0.05),
         recover: Some(0.05),
     ),
 )

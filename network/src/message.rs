@@ -94,7 +94,7 @@ impl Message {
     ///     let mut stream_a = participant_a.opened().await?;
     ///     //Recv  Message
     ///     let msg = stream_a.recv_raw().await?;
-    ///     println!("Msg is {}", msg.deserialize::<String>()?);
+    ///     println!("Msg is {}", msg.deserialize::<String>(1 << 20)?);
     ///     drop(network);
     ///     # drop(remote);
     ///     # Ok(())
@@ -103,7 +103,7 @@ impl Message {
     /// ```
     ///
     /// [`recv_raw`]: crate::api::Stream::recv_raw
-    pub fn deserialize<M: DeserializeOwned>(self) -> Result<M, StreamError> {
+    pub fn deserialize<M: DeserializeOwned>(self, output_limit: usize) -> Result<M, StreamError> {
         #[cfg(not(feature = "compression"))]
         let uncompressed_data = self.data;
 
@@ -115,7 +115,7 @@ impl Message {
                     &self.data,
                     &[0; 0],
                     &mut uncompressed_data,
-                    usize::MAX,
+                    output_limit,
                 ) {
                     return Err(StreamError::Compression(e));
                 }

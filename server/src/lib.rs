@@ -84,7 +84,6 @@ use common::{
     mounting::{Volume, VolumeRider},
     region::RegionMap,
     resources::{BattleMode, GameMode, Time, TimeOfDay},
-    rtsim::RtSimEntity,
     shared_server_config::ServerConstants,
     slowjob::SlowJobPool,
     terrain::TerrainChunk,
@@ -475,7 +474,7 @@ impl Server {
         state.ecs_mut().register::<comp::Pet>();
         state.ecs_mut().register::<login_provider::PendingLogin>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
-        state.ecs_mut().register::<RtSimEntity>();
+        state.ecs_mut().register::<common::rtsim::ActorId>();
 
         // Load banned words list
         let banned_words = settings.moderation.load_banned_words(data_dir);
@@ -551,7 +550,9 @@ impl Server {
 
         state.ecs_mut().insert(DeletedEntities::default());
 
-        let network = Network::new_with_registry(Pid::new(), &runtime, &registry);
+        // Only allow clients to send us a maximum of 1 MB per uncompressed message, to
+        // reduce the effectiveness of a DoS attack
+        let network = Network::new_with_registry(Pid::new(), &runtime, &registry, 1 << 20);
         let (chat_cache, chat_tracker) = ChatCache::new(Duration::from_secs(60), &runtime);
         state.ecs_mut().insert(chat_tracker);
 
@@ -1021,10 +1022,10 @@ impl Server {
         #[cfg(feature = "worldgen")]
         {
             let mut rtsim = self.state.ecs().write_resource::<rtsim::RtSim>();
-            let rtsim_entities = self.state.ecs().read_storage();
+            let rtsim_actors = self.state.ecs().read_storage();
             for entity in &to_delete {
-                if let Some(rtsim_entity) = rtsim_entities.get(*entity) {
-                    rtsim.hook_rtsim_entity_unload(*rtsim_entity);
+                if let Some(actor) = rtsim_actors.get(*entity) {
+                    rtsim.hook_rtsim_entity_unload(*actor);
                 }
             }
         }

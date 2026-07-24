@@ -5,43 +5,25 @@ pub fn site_name(ctx: &NpcCtx, site_id: impl Into<Option<SiteId>>) -> Option<Str
     Some(ctx.index.sites.get(world_site).name()?.to_string())
 }
 
-pub fn locate_actor(ctx: &NpcCtx, actor: Actor) -> Option<Vec3<f32>> {
-    match actor {
-        Actor::Npc(npc_id) => ctx.data.npcs.get(npc_id).map(|npc| npc.wpos),
-        Actor::Character(character_id) => ctx
-            .system_data
-            .id_maps
-            .character_entity(character_id)
-            .and_then(|c| ctx.system_data.positions.get(c))
-            .map(|p| p.0),
-    }
+pub fn locate_actor(ctx: &NpcCtx, actor: ActorId) -> Option<Vec3<f32>> {
+    ctx.data.actors.get(actor).map(|actor| actor.wpos)
 }
 
-pub fn actor_exists(ctx: &NpcCtx, actor: Actor) -> bool {
-    match actor {
-        Actor::Npc(npc_id) => ctx.data.npcs.contains_key(npc_id),
-        Actor::Character(character_id) => ctx
-            .system_data
-            .id_maps
-            .character_entity(character_id)
-            .is_some(),
-    }
+pub fn actor_exists(ctx: &NpcCtx, actor: ActorId) -> bool { ctx.data.actors.contains_key(actor) }
+
+pub fn actor_name(ctx: &NpcCtx, actor: ActorId) -> Option<String> {
+    ctx.data
+        .actors
+        .get(actor)
+        .and_then(|actor| actor.get_name())
 }
 
-pub fn actor_name(ctx: &NpcCtx, actor: Actor) -> Option<String> {
-    match actor {
-        Actor::Npc(npc_id) => ctx.data.npcs.get(npc_id).and_then(|npc| npc.get_name()),
-        // TODO
-        Actor::Character(_) => None,
-    }
-}
-
-pub fn talk<S: State>(tgt: Actor) -> impl Action<S> + Clone {
+pub fn talk<S: State>(tgt: ActorId) -> impl Action<S> + Clone {
     just(move |ctx, _| ctx.controller.do_talk(tgt)).debug(|| "talking")
 }
 
 pub fn do_dialogue<S: State, T: Default + Clone + Send + Sync + 'static, A: Action<S, T>>(
-    tgt: Actor,
+    tgt: ActorId,
     f: impl Fn(DialogueSession) -> A + Clone + Send + Sync + 'static,
 ) -> impl Action<S, T> {
     now(move |ctx, _| {

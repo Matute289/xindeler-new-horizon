@@ -7,10 +7,10 @@ use super::{
 use crate::ui::slot::{self, SlotKey, SumSlot};
 use common::{
     comp::{
-        AbilityPool, ActiveAbilities, Body, CharacterState, Combo, Energy, Inventory, Item,
+        AbilityPool, ActiveAbilities, Body, Buffs, CharacterState, Combo, Energy, Inventory, Item,
         ItemKey, SkillSet, Stance, Stats,
         ability::{Ability, AbilityInput, AuxiliaryAbility},
-        item::tool::{AbilityContext, AbilityMap, ToolKind},
+        item::tool::{AbilityMap, ToolKind},
         slot::{InvSlotId, Slot},
     },
     recipe::ComponentRecipeBook,
@@ -130,11 +130,11 @@ type HotbarSource<'a> = (
     Option<&'a ActiveAbilities>,
     Option<&'a AbilityPool>,
     &'a Body,
-    &'a AbilityContext,
     Option<&'a Combo>,
     Option<&'a CharacterState>,
     Option<&'a Stance>,
     Option<&'a Stats>,
+    Option<&'a Buffs>,
     &'a AbilityMap,
 );
 type HotbarImageSource<'a> = (&'a ItemImgs, &'a img_ids::Imgs);
@@ -152,11 +152,11 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
             active_abilities,
             ability_pool,
             body,
-            contexts,
             combo,
             char_state,
             stance,
             stats,
+            buffs,
             ability_map,
         ): &HotbarSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
@@ -179,7 +179,9 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                 Some(inventory),
                                 Some(skillset),
                                 *ability_pool,
-                                contexts,
+                                *stance,
+                                *combo,
+                                *buffs,
                             )
                         })
                 });
@@ -196,8 +198,10 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     skillset,
                                     Some(body),
                                     *char_state,
-                                    contexts,
+                                    *stance,
+                                    *combo,
                                     *stats,
+                                    *buffs,
                                     *ability_pool,
                                     ability_map,
                                 )
@@ -257,9 +261,11 @@ type AbilitiesSource<'a> = (
     Option<&'a AbilityPool>,
     &'a Inventory,
     &'a SkillSet,
-    &'a AbilityContext,
+    Option<&'a Stance>,
+    Option<&'a Combo>,
     Option<&'a CharacterState>,
     Option<&'a Stats>,
+    Option<&'a Buffs>,
 );
 
 impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
@@ -267,7 +273,17 @@ impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
 
     fn image_key(
         &self,
-        (active_abilities, ability_pool, inventory, skillset, contexts, char_state, stats): &AbilitiesSource<'a>,
+        (
+            active_abilities,
+            ability_pool,
+            inventory,
+            skillset,
+            stance,
+            combo,
+            char_state,
+            stats,
+            buffs,
+        ): &AbilitiesSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         let ability_id = match self {
             Self::Slot(index) => active_abilities
@@ -282,14 +298,18 @@ impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
                     Some(inventory),
                     Some(skillset),
                     *ability_pool,
-                    contexts,
+                    *stance,
+                    *combo,
+                    *buffs,
                 ),
             Self::Ability(ability) => Ability::from(*ability).ability_id(
                 *char_state,
                 Some(inventory),
                 Some(skillset),
                 *ability_pool,
-                contexts,
+                *stance,
+                *combo,
+                *buffs,
             ),
         };
 

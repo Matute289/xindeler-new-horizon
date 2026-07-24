@@ -1,8 +1,8 @@
-use crate::{RtState, Rule, ai::NpcSystemData};
+use crate::{RtState, Rule, ai::ActorSystemData};
 use common::{
     mounting::VolumePos,
     resources::{Time, TimeOfDay},
-    rtsim::{Actor, NpcId, SiteId},
+    rtsim::{ActorId, SiteId},
     terrain::SpriteKind,
 };
 use vek::*;
@@ -35,14 +35,14 @@ pub struct OnTick {
     pub dt: f32,
 }
 impl Event for OnTick {
-    type SystemData<'a> = NpcSystemData<'a>;
+    type SystemData<'a> = ActorSystemData<'a>;
 }
 
 #[derive(Clone)]
 pub struct OnDeath {
-    pub actor: Actor,
+    pub actor: ActorId,
     pub wpos: Option<Vec3<f32>>,
-    pub killer: Option<Actor>,
+    pub killer: Option<ActorId>,
 }
 impl Event for OnDeath {
     type SystemData<'a> = ();
@@ -50,8 +50,8 @@ impl Event for OnDeath {
 
 #[derive(Clone)]
 pub struct OnHelped {
-    pub actor: Actor,
-    pub saver: Option<Actor>,
+    pub actor: ActorId,
+    pub saver: Option<ActorId>,
 }
 impl Event for OnHelped {
     type SystemData<'a> = ();
@@ -59,8 +59,8 @@ impl Event for OnHelped {
 
 #[derive(Clone)]
 pub struct OnHealthChange {
-    pub actor: Actor,
-    pub cause: Option<Actor>,
+    pub actor: ActorId,
+    pub cause: Option<ActorId>,
     pub new_health_fraction: f32,
     pub change: f32,
 }
@@ -70,7 +70,7 @@ impl Event for OnHealthChange {
 
 #[derive(Clone)]
 pub struct OnTheft {
-    pub actor: Actor,
+    pub actor: ActorId,
     pub wpos: Vec3<i32>,
     pub sprite: SpriteKind,
     pub site: Option<SiteId>,
@@ -82,8 +82,8 @@ impl Event for OnTheft {
 
 #[derive(Clone)]
 pub struct OnMountVolume {
-    pub actor: Actor,
-    pub pos: VolumePos<NpcId>,
+    pub actor: ActorId,
+    pub pos: VolumePos<ActorId>,
 }
 impl Event for OnMountVolume {
     type SystemData<'a> = ();

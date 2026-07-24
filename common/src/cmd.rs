@@ -182,14 +182,20 @@ lazy_static! {
             BuffKind::OffBalance => "off_balance",
             BuffKind::Tenacity => "tenacity",
             BuffKind::Resilience => "resilience",
+            BuffKind::StormChaser => "storm_chaser",
+            BuffKind::EagleEye => "eagle_eye",
             BuffKind::OwlTalon => "owl_talon",
             BuffKind::HeavyNock => "heavy_nock",
             BuffKind::Heartseeker => "heartseeker",
-            BuffKind::EagleEye => "eagle_eye",
-            BuffKind::Chilled => "chilled",
             BuffKind::ArdentHunter => "ardent_hunter",
-            BuffKind::ArdentHunted => "ardent_hunted",
             BuffKind::SepticShot => "septic_shot",
+            BuffKind::Chilled => "chilled",
+            BuffKind::ArdentHunted => "ardent_hunted",
+            BuffKind::ArdentHunt => "ardent_hunt",
+            BuffKind::IgniteArrow => "ignite_arrow",
+            BuffKind::FreezeArrow => "freeze_arrow",
+            BuffKind::DrenchArrow => "drench_arrow",
+            BuffKind::JoltArrow => "jolt_arrow",
             BuffKind::Terrified => "terrified",
             BuffKind::Charmed => "charmed",
             BuffKind::Hollowtouched => "hollowtouched",
@@ -341,7 +347,7 @@ lazy_static! {
 
 pub enum EntityTarget {
     Player(String),
-    RtsimNpc(u64),
+    RtsimNpc(String),
     Uid(crate::uid::Uid),
 }
 
@@ -352,9 +358,7 @@ impl FromStr for EntityTarget {
         // NOTE: `@` is an invalid character in usernames, so we can use it here.
         if let Some((spec, data)) = s.split_once('@') {
             match spec {
-                "rtsim" => Ok(EntityTarget::RtsimNpc(u64::from_str(data).map_err(
-                    |_| format!("Expected a valid number after 'rtsim@' but found {data}."),
-                )?)),
+                "rtsim" => Ok(EntityTarget::RtsimNpc(data.to_string())),
                 "uid" => {
                     let raw = u64::from_str(data).map_err(|_| {
                         format!("Expected a valid number after 'uid@' but found {data}.")

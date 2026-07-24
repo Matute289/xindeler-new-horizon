@@ -10,7 +10,7 @@ ItemDef(
                     strength: 10.0,
                     duration: Some(5),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
             Buff((
                 kind: Regeneration,
@@ -18,7 +18,7 @@ ItemDef(
                     strength: 1.0,
                     duration: Some(70),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ])
     ),

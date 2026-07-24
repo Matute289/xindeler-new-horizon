@@ -22,15 +22,11 @@ use client::{self, Client};
 use common::{
     combat,
     comp::{
-        self, AttunedItems, Body, CharacterState, ClassKind, Energy, Health, Inventory, Poise,
-        Stats,
+        self, AttunedItems, Body, Buffs, CharacterState, ClassKind, Combo, Energy, Health,
+        Inventory, Poise, Stance, Stats,
         ability::{Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT},
         inventory::{
-            item::{
-                ItemI18n, ItemKind, MaterialStatManifest,
-                item_key::ItemKey,
-                tool::{AbilityContext, ToolKind},
-            },
+            item::{ItemI18n, ItemKind, MaterialStatManifest, item_key::ItemKey, tool::ToolKind},
             slot::EquipSlot,
         },
         skills::{
@@ -217,8 +213,10 @@ pub struct Diary<'a> {
     tooltip_manager: &'a mut TooltipManager,
     slot_manager: &'a mut SlotManager,
     pulse: f32,
-    context: &'a AbilityContext,
+    stance: Option<&'a Stance>,
+    combo: Option<&'a Combo>,
     stats: Option<&'a Stats>,
+    buffs: Option<&'a Buffs>,
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -268,8 +266,10 @@ impl<'a> Diary<'a> {
         tooltip_manager: &'a mut TooltipManager,
         slot_manager: &'a mut SlotManager,
         pulse: f32,
-        context: &'a AbilityContext,
+        stance: Option<&'a Stance>,
+        combo: Option<&'a Combo>,
         stats: Option<&'a Stats>,
+        buffs: Option<&'a Buffs>,
     ) -> Self {
         Self {
             show,
@@ -295,8 +295,10 @@ impl<'a> Diary<'a> {
             tooltip_manager,
             slot_manager,
             pulse,
-            context,
+            stance,
+            combo,
             stats,
+            buffs,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -888,6 +890,7 @@ impl Widget for Diary<'_> {
 
                 let mut slot_maker = SlotMaker {
                     empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
                     filled_slot: self.imgs.inv_slot,
                     selected_slot: self.imgs.inv_slot_sel,
                     background_color: Some(UI_MAIN),
@@ -905,12 +908,15 @@ impl Widget for Diary<'_> {
                         self.ability_pool,
                         self.inventory,
                         self.skill_set,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         Some(self.char_state),
                         self.stats,
+                        self.buffs,
                     ),
                     image_source: self.imgs,
                     slot_manager: Some(self.slot_manager),
+                    last_input: &self.global_state.window.last_input(),
                     pulse: 0.0,
                 };
 
@@ -928,7 +934,9 @@ impl Widget for Diary<'_> {
                             Some(self.inventory),
                             Some(self.skill_set),
                             self.ability_pool,
-                            self.context,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
                         );
                     let (ability_title, ability_desc) = if let Some(ability_id) = ability_id {
                         util::ability_description(ability_id, self.localized_strings)
@@ -943,7 +951,8 @@ impl Widget for Diary<'_> {
                     let image_offsets = 92.0 * i as f64;
 
                     let slot = AbilitySlot::Slot(i);
-                    let mut ability_slot = slot_maker.fabricate(slot, [image_size; 2]);
+                    let mut ability_slot =
+                        slot_maker.fabricate(slot, [image_size; 2], false, false);
 
                     if i == 0 {
                         ability_slot = ability_slot.top_left_with_margins_on(
@@ -1001,7 +1010,9 @@ impl Widget for Diary<'_> {
                             Some(self.inventory),
                             Some(self.skill_set),
                             self.ability_pool,
-                            self.context,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
                         ),
                         a,
                     )
@@ -1090,6 +1101,7 @@ impl Widget for Diary<'_> {
 
                 let mut slot_maker = SlotMaker {
                     empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
                     filled_slot: self.imgs.inv_slot,
                     selected_slot: self.imgs.inv_slot_sel,
                     background_color: Some(UI_MAIN),
@@ -1107,12 +1119,15 @@ impl Widget for Diary<'_> {
                         self.ability_pool,
                         self.inventory,
                         self.skill_set,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         Some(self.char_state),
                         self.stats,
+                        self.buffs,
                     ),
                     image_source: self.imgs,
                     slot_manager: Some(self.slot_manager),
+                    last_input: &self.global_state.window.last_input(),
                     pulse: 0.0,
                 };
 
@@ -1157,7 +1172,7 @@ impl Widget for Diary<'_> {
 
                     let slot = AbilitySlot::Ability(*ability);
                     slot_maker
-                        .fabricate(slot, [100.0; 2])
+                        .fabricate(slot, [100.0; 2], false, false)
                         .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                         .set(state.ids.abilities[id_index], ui);
 
@@ -1166,7 +1181,7 @@ impl Widget for Diary<'_> {
 
                         let slot = AbilitySlot::Ability(ability);
                         slot_maker
-                            .fabricate(slot, [100.0; 2])
+                            .fabricate(slot, [100.0; 2], false, false)
                             .top_right_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                             .set(state.ids.abilities_dual[id_index], ui);
                     }
@@ -2680,8 +2695,8 @@ impl Diary<'_> {
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 310.0, 644.0),
             },
             SkillIcon::Ability {
-                skill: Skill::Bow(BowSkill::OwlTalon),
-                ability_id: "common.abilities.bow.owl_talon",
+                skill: Skill::Bow(BowSkill::StormChaser),
+                ability_id: "common.abilities.bow.storm_chaser",
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 154.0),
             },
             SkillIcon::Ability {
@@ -2705,8 +2720,8 @@ impl Diary<'_> {
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 594.0),
             },
             SkillIcon::Ability {
-                skill: Skill::Bow(BowSkill::Scatterburst),
-                ability_id: "common.abilities.bow.scatterburst",
+                skill: Skill::Bow(BowSkill::ThornStake),
+                ability_id: "common.abilities.bow.thorn_stake",
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 694.0),
             },
             SkillIcon::Ability {

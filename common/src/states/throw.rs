@@ -138,10 +138,11 @@ impl CharacterBehavior for Data {
                             projectile
                         }
                     };
-                    let projectile = projectile.create_projectile(
+                    let (projectile, _marker) = projectile.create_projectile(
                         Some(*data.uid),
                         precision_mult,
                         Some(self.static_data.ability_info),
+                        Some(data.stats),
                     );
 
                     // Removes the thrown item from the entity's inventory and creates a
@@ -206,11 +207,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::Throw(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

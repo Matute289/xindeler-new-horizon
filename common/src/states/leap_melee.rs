@@ -143,21 +143,13 @@ impl CharacterBehavior for Data {
                     );
 
                     if let CharacterState::LeapMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                         c.exhausted = true;
                     }
                 } else if self.timer < self.static_data.recover_duration {
                     // Complete recovery delay before finishing state
                     if let CharacterState::LeapMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

@@ -20,6 +20,10 @@ mod prompt_dialog;
 mod quest;
 mod settings_window;
 mod skillbar;
+// Keyboard-navigable inventory-grid widget, not wired up: it has no hook for
+// the equip-requirement gray-out bag.rs's own loop implements, so nothing
+// constructs it yet.
+#[allow(dead_code)] mod slot_grid;
 mod slots;
 mod social;
 mod subtitles;
@@ -90,7 +94,7 @@ use crate::{
         img_ids::Rotations,
         slot::{self, SlotKey},
     },
-    window::Event as WinEvent,
+    window::{Event as WinEvent, MenuInput},
 };
 use client::{Client, UserNotification};
 use common::{
@@ -107,7 +111,7 @@ use common::{
         },
         item::{
             ItemDefinitionIdOwned, ItemDesc, ItemI18n, MaterialStatManifest, Quality,
-            tool::{AbilityContext, ToolKind},
+            tool::ToolKind,
         },
         loot_owner::LootOwnerKind,
         skillset::{SkillGroupKind, SkillsPersistenceError, skills::Skill},
@@ -214,6 +218,7 @@ const WORLD_COLOR: Color = Color::Rgba(0.95, 1.0, 0.95, 1.0);
 //Nametags
 const GROUP_MEMBER: Color = Color::Rgba(0.47, 0.84, 1.0, 1.0);
 const DEFAULT_NPC: Color = Color::Rgba(1.0, 1.0, 1.0, 1.0);
+const MARKED_NPC: Color = Color::Rgba(1.0, 0.8, 0.0, 1.0);
 
 // UI Color-Theme
 const UI_MAIN: Color = Color::Rgba(0.61, 0.70, 0.70, 1.0); // Greenish Blue
@@ -903,6 +908,12 @@ impl TradeAmountInput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowId {
+    None,
+    Bag,
+}
+
 pub struct Show {
     ui: bool,
     intro: bool,
@@ -934,11 +945,65 @@ pub struct Show {
     camera_clamp: bool,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
+    // A stack of open menus; the menu in focus should be on top
+    focus: Vec<WindowId>,
 }
+
+impl Default for Show {
+    fn default() -> Self { Self::new() }
+}
+
 impl Show {
+    pub fn new() -> Self {
+        Self {
+            ui: true,
+            intro: false,
+            crafting: false,
+            bag: false,
+            bag_inv: false,
+            bag_details: false,
+            trade: false,
+            trade_details: false,
+            social: false,
+            diary: false,
+            group: false,
+            quest: false,
+            group_menu: false,
+            esc_menu: false,
+            open_windows: Windows::None,
+            map: false,
+            ingame: true,
+            chat_tab_settings_index: None,
+            settings_tab: SettingsTab::Interface,
+            diary_fields: diary::DiaryShow::default(),
+            crafting_fields: crafting::CraftingShow::default(),
+            social_search_key: None,
+            want_grab: true,
+            stats: false,
+            free_look: false,
+            auto_walk: false,
+            zoom_lock: ChangeNotification::default(),
+            camera_clamp: false,
+            prompt_dialog: None,
+            trade_amount_input_key: None,
+            focus: Vec::new(),
+        }
+    }
+
+    // Changing a window state must go through these functions
+    fn set_bag_state(&mut self, state: bool) {
+        if state {
+            self.focus.push(WindowId::Bag); // use hashset to avoid duplicates?
+            self.bag = true;
+        } else {
+            self.focus.retain(|x| *x != WindowId::Bag);
+            self.bag = false;
+        }
+    }
+
     fn bag(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.crafting_fields.salvage = false;
 
@@ -950,9 +1015,11 @@ impl Show {
         }
     }
 
+    pub fn bag_print(&self) -> bool { self.bag }
+
     fn trade(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.trade = open;
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
@@ -962,7 +1029,7 @@ impl Show {
     fn map(&mut self, open: bool) {
         if !self.esc_menu {
             self.map = open;
-            self.bag = false;
+            self.set_bag_state(false);
             self.crafting = false;
             self.crafting_fields.salvage = false;
             self.social = false;
@@ -1002,7 +1069,7 @@ impl Show {
             self.crafting = open;
             self.crafting_fields.salvage = false;
             self.crafting_fields.recipe_inputs = HashMap::new();
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
         }
@@ -1032,7 +1099,7 @@ impl Show {
             self.quest = false;
             self.crafting = false;
             self.crafting_fields.salvage = false;
-            self.bag = false;
+            self.set_bag_state(false);
             self.map = false;
             self.diary_fields = diary::DiaryShow::default();
             self.diary = open;
@@ -1047,7 +1114,7 @@ impl Show {
             } else {
                 Windows::None
             };
-            self.bag = false;
+            self.set_bag_state(false);
             self.social = false;
             self.quest = false;
             self.crafting = false;
@@ -1105,7 +1172,7 @@ impl Show {
 
     fn toggle_windows(&mut self, global_state: &mut GlobalState) {
         if self.any_window_requires_cursor() {
-            self.bag = false;
+            self.set_bag_state(false);
             self.trade = false;
             self.esc_menu = false;
             self.intro = false;
@@ -1136,7 +1203,7 @@ impl Show {
         self.open_windows = Windows::Settings;
         self.esc_menu = false;
         self.settings_tab = tab;
-        self.bag = false;
+        self.set_bag_state(false);
         self.want_grab = false;
     }
 
@@ -1282,9 +1349,6 @@ pub struct Hud {
     content_bubbles: Vec<(Vec3<f32>, comp::SpeechBubble)>,
     pub persisted_state: Rc<RefCell<PersistedHudState>>,
     pub show: Show,
-    //never_show: bool,
-    //intro: bool,
-    //intro_2: bool,
     to_focus: Option<Option<widget::Id>>,
     force_ungrab: bool,
     force_chat_input: Option<String>,
@@ -1295,6 +1359,7 @@ pub struct Hud {
     slot_manager: slots::SlotManager,
     hotbar: hotbar::State,
     events: Vec<Event>,
+    menu_events: Vec<MenuInput>,
     crosshair_opacity: f32,
     floaters: Floaters,
     voxel_minimap: VoxelMinimap,
@@ -1388,43 +1453,8 @@ impl Hud {
             persisted_state,
             speech_bubbles: HashMap::new(),
             content_bubbles: Vec::new(),
-            //intro: false,
-            //intro_2: false,
-            show: Show {
-                intro: false,
-                bag: false,
-                bag_inv: false,
-                bag_details: false,
-                trade: false,
-                trade_details: false,
-                esc_menu: false,
-                open_windows: Windows::None,
-                map: false,
-                crafting: false,
-                ui: true,
-                social: false,
-                diary: false,
-                group: false,
-                // Change this before implementation!
-                quest: false,
-                group_menu: false,
-                chat_tab_settings_index: None,
-                settings_tab: SettingsTab::Interface,
-                diary_fields: diary::DiaryShow::default(),
-                crafting_fields: crafting::CraftingShow::default(),
-                social_search_key: None,
-                want_grab: true,
-                ingame: true,
-                stats: false,
-                free_look: false,
-                auto_walk: false,
-                zoom_lock: ChangeNotification::default(),
-                camera_clamp: false,
-                prompt_dialog: None,
-                trade_amount_input_key: None,
-            },
+            show: Show::new(),
             to_focus: None,
-            //never_show: false,
             force_ungrab: false,
             force_chat_input: None,
             force_chat_cursor: None,
@@ -1434,6 +1464,7 @@ impl Hud {
             slot_manager,
             hotbar: hotbar_state,
             events: Vec::new(),
+            menu_events: Vec::new(),
             crosshair_opacity: 0.0,
             floaters: Floaters {
                 exp_floaters: Vec::new(),
@@ -2363,6 +2394,7 @@ impl Hud {
             }
 
             let speech_bubbles = &self.speech_bubbles;
+            let my_stats = stats.get(me);
             // Render overhead name tags and health bars
             for (
                 entity,
@@ -2426,6 +2458,8 @@ impl Hud {
                         let is_me = entity == me;
                         let dist_sqr = pos.distance_squared(player_pos);
 
+                        let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid));
+
                         // Determine whether to display nametag and healthbar based on whether the
                         // entity is mounted, has been damaged, is targeted/selected, or is in your
                         // group
@@ -2441,7 +2475,8 @@ impl Hud {
                                 || info.selected_entity.is_some_and(|s| s.0 == entity)
                                 || health.is_none_or(overhead::should_show_healthbar)
                                 || in_group
-                                || has_active_buffs)
+                                || has_active_buffs
+                                || is_marked)
                             && dist_sqr
                                 < (if in_group {
                                     NAMETAG_GROUP_RANGE
@@ -2472,6 +2507,7 @@ impl Hud {
                             },
                             hardcore: hardcore.contains(entity),
                             stance,
+                            marked: is_marked,
                         });
                         // Only render bubble if nearby or if its me and setting is on
                         let bubble = if (dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
@@ -3152,7 +3188,6 @@ impl Hud {
         // let entity = info.viewpoint_entity;
         let stats = ecs.read_storage::<comp::Stats>();
         let skill_sets = ecs.read_storage::<comp::SkillSet>();
-        let buffs = ecs.read_storage::<comp::Buffs>();
         let msm = ecs.read_resource::<MaterialStatManifest>();
         let time = ecs.read_resource::<Time>();
 
@@ -3260,6 +3295,7 @@ impl Hud {
         let time = ecs.read_resource::<Time>();
         let stances = ecs.read_storage::<comp::Stance>();
         let char_states = ecs.read_storage::<comp::CharacterState>();
+        let buffs = ecs.read_storage::<comp::Buffs>();
         // Combo floater stuffs
         self.floaters.combo_floater = self.floaters.combo_floater.map(|mut f| {
             f.timer -= dt.as_secs_f64();
@@ -3282,9 +3318,6 @@ impl Hud {
             skillsets.get(entity),
             bodies.get(entity),
         ) {
-            let stance = stances.get(entity);
-            let context = AbilityContext::from(stance, Some(inventory), combo);
-
             let skillbar_events = Skillbar::new(
                 client,
                 &info,
@@ -3314,13 +3347,13 @@ impl Hud {
                 &ability_map,
                 &rbm,
                 self.floaters.combo_floater,
-                &context,
                 combo,
                 char_states.get(entity),
-                stance,
+                stances.get(entity),
                 stats.get(entity),
                 ability_cooldowns_storage.get(entity),
                 time.0,
+                buffs.get(entity),
             )
             .set(self.ids.skillbar, ui_widgets);
 
@@ -3587,6 +3620,7 @@ impl Hud {
                 &msm,
                 &rbm,
                 poise,
+                &self.menu_events,
             )
             .set(self.ids.bag, ui_widgets)
             {
@@ -3602,6 +3636,10 @@ impl Hud {
                         } else {
                             self.force_ungrab = true
                         };
+                        // Also closes any open trade windows
+                        if self.show.trade {
+                            self.events.push(Event::TradeAction(TradeAction::Decline));
+                        }
                     },
                     bag::Event::ChangeInventorySortOrder(sort_order) => {
                         self.events
@@ -3769,12 +3807,6 @@ impl Hud {
 
         self.new_messages.clear();
         self.new_notifications.clear();
-
-        // Windows
-
-        // Char Window will always appear at the left side. Other Windows default to the
-        // left side, but when the Char Window is opened they will appear to the right
-        // of it.
 
         // Settings
         if let Windows::Settings = self.show.open_windows {
@@ -3958,7 +3990,6 @@ impl Hud {
                 poises.get(entity),
                 uids.get(entity),
             ) {
-                let context = AbilityContext::from(stances.get(entity), Some(inventory), combo);
                 for event in Diary::new(
                     &self.show,
                     client,
@@ -3983,8 +4014,10 @@ impl Hud {
                     tooltip_manager,
                     &mut self.slot_manager,
                     self.pulse,
-                    &context,
+                    stances.get(entity),
+                    combo,
                     stats.get(entity),
+                    buffs.get(entity),
                 )
                 .set(self.ids.diary, ui_widgets)
                 {
@@ -4801,6 +4834,10 @@ impl Hud {
             }
         }
 
+        // if a menu is open, notify window so it can restrict GameInputs
+        global_state.window.menu_open = !self.show.focus.is_empty();
+
+        self.menu_events.clear(); // clear all menu inputs after they have been read
         events
     }
 
@@ -5069,11 +5106,35 @@ impl Hud {
                         self.slot_manager.idle();
                     }
                     self.show.toggle_windows(global_state);
+                    self.force_ungrab = false;
                 }
                 true
             },
 
             // Press key while not typing
+            // MenuInput
+            WinEvent::MenuInput(key, state) => {
+                if self.typing() {
+                    // Close an opened chat using MenuInputs
+                    if key == MenuInput::Back {
+                        self.ui.focus_widget(None);
+                        self.force_chat = false;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    // Pass MenuInputs along to the UI
+                    if state {
+                        self.menu_events.push(key);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            },
+
+            // GameInput
             WinEvent::InputUpdate(key, state) if !self.typing() => {
                 let gs_audio = &global_state.settings.audio;
                 let mut toggle_mute = |audio: Audio| {
@@ -5686,6 +5747,7 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Amnesia => imgs.debuff_confused,
         BuffKind::Anchored => imgs.debuff_anchored,
         BuffKind::Antimagic => imgs.debuff_antimagic,
+        BuffKind::ArdentHunt => imgs.buff_ardenthunt,
         BuffKind::ArdentHunted => imgs.debuff_ardent_hunted,
         BuffKind::ArdentHunter => imgs.buff_ardent_hunter,
         BuffKind::Asleep => imgs.debuff_asleep,
@@ -5702,12 +5764,14 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Cursed => imgs.debuff_cursed,
         BuffKind::Defiance => imgs.buff_defiance,
         BuffKind::DifficultTerrain => imgs.debuff_difficult_terrain,
+        BuffKind::DrenchArrow => imgs.bow_drench_arrow,
         BuffKind::EagleEye => imgs.buff_eagle_eye,
         BuffKind::EnergyRegen => imgs.buff_energy_regen,
         BuffKind::Ensnared => imgs.debuff_ensnared,
         BuffKind::Flame => imgs.buff_flame,
         BuffKind::Fortitude => imgs.buff_fortitude,
         BuffKind::FreedomOfMovement => imgs.buff_freedom_of_movement,
+        BuffKind::FreezeArrow => imgs.bow_freeze_arrow,
         BuffKind::Frenzied => imgs.buff_frenzied,
         BuffKind::Frigid => imgs.buff_frigid,
         BuffKind::Frozen => imgs.debuff_frozen,
@@ -5717,10 +5781,12 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Heatstroke => imgs.debuff_heatstroke,
         BuffKind::HeavyNock => imgs.buff_heavy_nock,
         BuffKind::Hollowtouched => imgs.debuff_hollowtouched,
+        BuffKind::IgniteArrow => imgs.bow_ignite_arrow,
         BuffKind::ImminentCritical => imgs.buff_imminent_critical,
         BuffKind::IncreaseMaxEnergy => imgs.buff_increase_max_energy,
         BuffKind::IncreaseMaxHealth => imgs.buff_increase_max_health,
         BuffKind::Invulnerability => imgs.buff_invulnerability,
+        BuffKind::JoltArrow => imgs.bow_jolt_arrow,
         BuffKind::Lifesteal => imgs.buff_lifesteal,
         BuffKind::OffBalance => imgs.debuff_off_balance,
         BuffKind::OwlTalon => imgs.buff_owl_talon,
@@ -5740,6 +5806,7 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::SepticShot => imgs.buff_septic_shot,
         BuffKind::Shielded => imgs.buff_shielded,
         BuffKind::Slowed => imgs.debuff_slowed,
+        BuffKind::StormChaser => imgs.buff_stormchaser,
         BuffKind::Sunderer => imgs.buff_sunderer,
         BuffKind::Tenacity => imgs.buff_tenacity,
         BuffKind::Terrified => imgs.debuff_terrified,

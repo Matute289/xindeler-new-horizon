@@ -66,9 +66,9 @@ impl<'a> System<'a> for Sys {
             &mut controllers,
             read_data.light_emitter.maybe(),
             read_data.groups.maybe(),
-            read_data.rtsim_entities.maybe(),
+            read_data.rtsim_actors.maybe(),
             (
-                !&read_data.is_mounts,
+                read_data.is_mounts.maybe(),
                 read_data.is_riders.maybe(),
                 read_data.is_volume_riders.maybe(),
             ),
@@ -93,11 +93,15 @@ impl<'a> System<'a> for Sys {
                     controller,
                     light_emitter,
                     group,
-                    rtsim_entity,
-                    (_, is_rider, is_volume_rider),
+                    rtsim_actor,
+                    (is_mount, is_rider, is_volume_rider),
                 )| {
                     let mut emitters = events.get_emitters();
                     let mut rng = rng();
+
+                    if is_mount.is_some() && body.is_none_or(|body| !body.has_free_will()) {
+                        return;
+                    }
 
                     // The entity that is moving, if riding it's the mount, otherwise it's itself
                     let moving_entity = is_rider
@@ -202,7 +206,7 @@ impl<'a> System<'a> for Sys {
                     // Package all this agent's data into a convenient struct
                     let data = AgentData {
                         entity: &entity,
-                        rtsim_entity,
+                        rtsim_actor,
                         uid,
                         pos,
                         vel,

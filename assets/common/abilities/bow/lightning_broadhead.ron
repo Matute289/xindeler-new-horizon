@@ -3,29 +3,27 @@ ChargedRanged(
     energy_drain: 6,
     idle_drain: 12,
     projectile: (
-        kind: Arcing(
-            distance: 10,
-            arcs: 5,
-            min_delay: 0.25,
-            max_delay: 1,
-        ),
+        kind: Simple,
         attack: Some((
-            damage: 4,
+            damage: 8,
+            damage_kind: Piercing,
         )),
         scaled: Some((
-            damage: 12,
+            damage: 32,
+            knockback: Some(4),
         )),
+        homing_rate: Some(10.0),
     ),
     buildup_duration: 0.3,
     charge_duration: 1.0,
     recover_duration: 0.1,
     projectile_body: Object(Arrow),
     projectile_light: None,
-    initial_projectile_speed: 50.0,
-    scaled_projectile_speed: 150.0,
+    initial_projectile_speed: 100.0,
+    scaled_projectile_speed: 100.0,
     marker: Some(JoltArrow),
     move_speed: 0.4,
     meta: (
-        init_event: Some(EnterStance(None)),
+        init_event: Some(RemoveBuff(JoltArrow)),
     ),
 )

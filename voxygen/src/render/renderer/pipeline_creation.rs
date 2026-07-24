@@ -202,7 +202,7 @@ impl ShaderModules {
                 FluidMode::High => "FLUID_MODE_HIGH",
             },
             match pipeline_modes.cloud {
-                CloudMode::None => "CLOUD_MODE_NONE",
+                CloudMode::Flat => "CLOUD_MODE_FLAT",
                 CloudMode::Minimal => "CLOUD_MODE_MINIMAL",
                 CloudMode::Low => "CLOUD_MODE_LOW",
                 CloudMode::Medium => "CLOUD_MODE_MEDIUM",
@@ -281,7 +281,7 @@ impl ShaderModules {
 
         let cloud = shaders
             .get(match pipeline_modes.cloud {
-                CloudMode::None => "include.cloud.none",
+                CloudMode::Flat => "include.cloud.flat",
                 _ => "include.cloud.regular",
             })
             .unwrap();

@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 use std::{error::Error, fmt};
 
-use crate::combat::{
-    AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect,
+use crate::{
+    combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
+    comp::projectile::ProjectileConstructorEffect,
+    uid::Uid,
 };
 
 use super::Body;
@@ -93,8 +95,12 @@ pub struct Stats {
     pub poise_reduction: StatsSplit,
     pub max_health_modifiers: StatsModifier,
     pub move_speed_modifier: f32,
+    pub charge_move_speed_modifier: f32,
+    pub buildup_move_speed_modifier: f32,
     pub jump_modifier: f32,
     pub attack_speed_modifier: f32,
+    pub charge_speed_modifier: f32,
+    pub buildup_speed_modifier: f32,
     pub recovery_speed_modifier: f32,
     pub friction_modifier: f32,
     pub max_energy_modifiers: StatsModifier,
@@ -109,6 +115,7 @@ pub struct Stats {
     /// that gets ignored by attacks from this entity
     pub mitigations_penetration: f32,
     pub energy_reward_modifier: f32,
+    pub energy_efficiency_modifier: f32,
     /// This creates effects when the entity is damaged
     pub effects_on_damaged: Vec<StatEffect>,
     /// This creates effects when the entity is killed
@@ -148,21 +155,26 @@ pub struct Stats {
     pub attacked_modifications: Vec<AttackedModification>,
     pub precision_power_mult: f32,
     pub knockback_mult: f32,
-    /// BL-06 (Q2) — dedicated caster channels, per-tick (not persisted),
-    /// multiplicative (1.0 = no change). `spell_power` scales **magic-source**
-    /// outgoing damage only (gated by the `is_magic` ability signal in
-    /// `apply_attack`), so caster damage passives don't leak onto weapon swings
-    /// (Q3). `heal_power` scales healing the entity does
-    /// (`CombatEffect::Heal`). Kept separate from `attack_damage_modifier`
-    /// so a smiter Cleric and a pure healer scale independently; folds
-    /// cleanly into BL-53 later.
+    /// Dedicated caster channels, per-tick (not persisted), multiplicative
+    /// (1.0 = no change). `spell_power` scales **magic-source** outgoing
+    /// damage only (gated by the `is_magic` ability signal in
+    /// `apply_attack`), so caster damage passives don't leak onto weapon
+    /// swings. `heal_power` scales healing the entity does
+    /// (`CombatEffect::Heal`). Kept separate from `attack_damage_modifier` so
+    /// a smiter Cleric and a pure healer scale independently.
     pub spell_power: f32,
     pub heal_power: f32,
-    /// BL-06 (Q4) — extra outgoing damage vs targets with an undead body
+    /// Extra outgoing damage vs targets with an undead body
     /// (`Body::is_undead`), per-tick (not persisted), additive fraction (0.0 =
     /// none). Applied in `apply_attack` only when the target is undead — the
     /// Cleric's smite. Seeds future slayer-style conditionals.
     pub bonus_damage_vs_undead: f32,
+    pub projectile_speed_mult: f32,
+    pub projectile_constructor_effects: Vec<ProjectileConstructorEffect>,
+    /// This technically doesn't do anything. It should be used in the frontend
+    /// to 'mark' an entity for a player, or used in agent to make an NPC focus
+    /// on an entity.
+    pub marked_entities: Vec<Uid>,
 }
 
 impl Stats {
@@ -174,9 +186,13 @@ impl Stats {
             poise_reduction: StatsSplit::default(),
             max_health_modifiers: StatsModifier::default(),
             move_speed_modifier: 1.0,
+            charge_move_speed_modifier: 1.0,
+            buildup_move_speed_modifier: 1.0,
             jump_modifier: 1.0,
             attack_speed_modifier: 1.0,
             recovery_speed_modifier: 1.0,
+            charge_speed_modifier: 1.0,
+            buildup_speed_modifier: 1.0,
             friction_modifier: 1.0,
             max_energy_modifiers: StatsModifier::default(),
             poise_damage_modifier: 1.0,
@@ -187,6 +203,7 @@ impl Stats {
             effects_on_attack: Vec::new(),
             mitigations_penetration: 0.0,
             energy_reward_modifier: 1.0,
+            energy_efficiency_modifier: 1.0,
             effects_on_damaged: Vec::new(),
             effects_on_death: Vec::new(),
             disable_auxiliary_abilities: false,
@@ -209,6 +226,9 @@ impl Stats {
             spell_power: 1.0,
             heal_power: 1.0,
             bonus_damage_vs_undead: 0.0,
+            projectile_speed_mult: 1.0,
+            projectile_constructor_effects: Vec::new(),
+            marked_entities: Vec::new(),
         }
     }
 

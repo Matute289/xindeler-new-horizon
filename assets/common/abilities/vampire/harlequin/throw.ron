@@ -3,7 +3,7 @@ BasicRanged(
     buildup_duration: 0.8,
     recover_duration: 0.8,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 16,
             knockback: Some(1),
@@ -13,6 +13,7 @@ BasicRanged(
                 strength: DamageFraction(0.1),
                 chance: 0.1,
             )),
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(HarlequinDagger),

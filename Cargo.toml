@@ -209,6 +209,7 @@ serde_json = { version = "1.0.50" }
 sha2 = "0.11"
 signal-hook = "0.4.3"
 slab = { version = "0.4.2" }
+slotmap = { version = "1.0", features = ["serde"] }
 specs = { version = "0.20", features = ["nightly"] }
 strum = { version = "0.28", features = ["derive"] }
 thread-priority = { version = "3.0.0" }

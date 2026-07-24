@@ -2,11 +2,7 @@ use crate::{
     RtState, Rule, RuleError,
     event::{EventCtx, OnDeath, OnHealthChange, OnSetup, OnTick},
 };
-use common::{
-    grid::Grid,
-    rtsim::{Actor, NpcInput},
-    terrain::CoordinateConversions,
-};
+use common::{grid::Grid, rtsim::NpcInput, terrain::CoordinateConversions};
 
 pub struct SyncNpcs;
 
@@ -24,13 +20,13 @@ impl Rule for SyncNpcs {
 fn on_setup(ctx: EventCtx<SyncNpcs, OnSetup>) {
     let data = &mut *ctx.state.data_mut();
 
-    // Create NPC grid
-    data.npcs.npc_grid = Grid::new(ctx.world.sim().get_size().as_(), Default::default());
+    // Create actor grid
+    data.actors.actor_grid = Grid::new(ctx.world.sim().get_size().as_(), Default::default());
 
-    // Add NPCs to home population
-    for (npc_id, npc) in data.npcs.npcs.iter() {
-        if let Some(home) = npc.home.and_then(|home| data.sites.get_mut(home)) {
-            home.population.insert(npc_id);
+    // Add actors to home population
+    for (actor_id, actor) in data.actors.iter() {
+        if let Some(home) = actor.home.and_then(|home| data.sites.get_mut(home)) {
+            home.population.insert(actor_id);
         }
     }
 
@@ -76,32 +72,32 @@ fn on_health_change(ctx: EventCtx<SyncNpcs, OnHealthChange>) {
     // As this handler does not correctly handle death, ignore events that set the
     // health fraction to 0 (dead)
     if ctx.event.new_health_fraction != 0.0
-        && let Actor::Npc(npc_id) = ctx.event.actor
-        && let Some(npc) = data.npcs.get_mut(npc_id)
+        && let Some(actor) = data.actors.get_mut(ctx.event.actor)
+        && let Some(presence) = &mut actor.presence
     {
-        npc.health_fraction = ctx.event.new_health_fraction;
+        presence.health_fraction = ctx.event.new_health_fraction;
     }
 }
 
 fn on_death(ctx: EventCtx<SyncNpcs, OnDeath>) {
     let data = &mut *ctx.state.data_mut();
 
-    if let Actor::Npc(npc_id) = ctx.event.actor
-        && let Some(npc) = data.npcs.get_mut(npc_id)
+    if let Some(actor) = data.actors.get_mut(ctx.event.actor)
+        && let Some(presence) = &mut actor.presence
     {
-        // Mark the NPC as dead, allowing us to clear them up later
-        npc.health_fraction = 0.0;
+        // Mark the actor as dead, allowing us to clear them up later
+        presence.health_fraction = 0.0;
     }
 }
 
 fn on_tick(ctx: EventCtx<SyncNpcs, OnTick>) {
     let data = &mut *ctx.state.data_mut();
-    for (npc_id, npc) in data.npcs.npcs.iter_mut() {
-        // Update the NPC's current site, if any
-        npc.current_site = ctx
+    for (actor_id, actor) in data.actors.actors.iter_mut() {
+        // Update the actor's current site, if any
+        actor.current_site = ctx
             .world
             .sim()
-            .get(npc.wpos.xy().as_().wpos_to_cpos())
+            .get(actor.wpos.xy().as_().wpos_to_cpos())
             .and_then(|chunk| {
                 chunk
                     .sites
@@ -111,11 +107,12 @@ fn on_tick(ctx: EventCtx<SyncNpcs, OnTick>) {
 
         // Share known reports with current site, if it's our home
         // TODO: Only share new reports
-        if let Some(current_site) = npc.current_site
-            && Some(current_site) == npc.home
+        if let Some(current_site) = actor.current_site
+            && Some(current_site) == actor.home
             && let Some(site) = data.sites.get_mut(current_site)
+            && let Some(npc) = actor.npc_mut()
         {
-            // TODO: Sites should have an inbox and their own AI code
+            // TODO: Sites should have an inbox and their own AI code...?
             site.known_reports.extend(npc.known_reports.iter().copied());
             npc.inbox.extend(
                 site.known_reports
@@ -126,20 +123,37 @@ fn on_tick(ctx: EventCtx<SyncNpcs, OnTick>) {
             );
         }
 
-        // Update the NPC's grid cell
-        let chunk_pos = npc.wpos.xy().as_().wpos_to_cpos();
-        if npc.chunk_pos != Some(chunk_pos) {
-            if let Some(cell) = npc
+        // Update the actor's grid cell
+        let chunk_pos = if actor.presence.is_some() {
+            Some(actor.wpos.xy().as_().wpos_to_cpos())
+        } else {
+            None
+        };
+        if actor.chunk_pos != chunk_pos {
+            if let Some(cell) = actor
                 .chunk_pos
-                .and_then(|chunk_pos| data.npcs.npc_grid.get_mut(chunk_pos))
-                && let Some(index) = cell.npcs.iter().position(|id| *id == npc_id)
+                .and_then(|chunk_pos| data.actors.actor_grid.get_mut(chunk_pos))
+                && let Some(index) = cell.actors.iter().position(|id| *id == actor_id)
             {
-                cell.npcs.swap_remove(index);
+                cell.actors.swap_remove(index);
             }
-            npc.chunk_pos = Some(chunk_pos);
-            if let Some(cell) = data.npcs.npc_grid.get_mut(chunk_pos) {
-                cell.npcs.push(npc_id);
+            actor.chunk_pos = chunk_pos;
+            if let Some(chunk_pos) = chunk_pos
+                && let Some(cell) = data.actors.actor_grid.get_mut(chunk_pos)
+            {
+                cell.actors.push(actor_id);
             }
+        }
+
+        // Make characters that haven't been seen since the penultimate tick be no
+        // longer present (likely because the player they represent has logged
+        // off) TODO: Prune characters that we've not seen for a *long* time
+        // once we hit some arbitrary cap
+        if let Some(character) = actor.character()
+            && let Some(last_present_at) = character.last_present_at
+            && data.tick > last_present_at + 1
+        {
+            actor.presence = None;
         }
     }
 }

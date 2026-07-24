@@ -146,6 +146,10 @@ impl CharacterBehavior for Data {
                             *data.time,
                             dest_info,
                             Some(data.mass),
+                            self.static_data
+                                .ability_info
+                                .input_attr
+                                .and_then(|ia| ia.target_entity),
                         );
                         output_events.emit_server(BuffEvent {
                             entity: data.entity,
@@ -179,11 +183,7 @@ impl CharacterBehavior for Data {
             StageSection::Recover => {
                 if self.timer < self.static_data.recover_duration {
                     if let CharacterState::SelfBuff(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

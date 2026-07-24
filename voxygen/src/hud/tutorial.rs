@@ -100,7 +100,7 @@ impl Hint {
         let get_key = |key| match last_input {
             LastInput::Controller => icon_utils::get_controller_input_string(key, settings, ctrl)
                 .unwrap_or_else(|| icon_utils::UNBOUND_KEY.to_string()),
-            LastInput::KeyboardMouse => settings
+            LastInput::Keyboard | LastInput::Mouse => settings
                 .controls
                 .get_binding(key)
                 .map(|key| key.display_string())

@@ -209,6 +209,9 @@ buff-tenacity = Tenacity
 ## Resilience
 buff-resilience = Resilience
     .desc = After having just taken a debilitating attack, you become more resilient to future incapaciting effects.
+## Storm Chaser
+buff-stormchaser = Storm Chaser
+    .desc = You revel in violence, when your arrows strike true your attacks and movements become faster.
 ## Owl Talon
 buff-owltalon = Owl Talon
     .desc = Taking advantage of your target not knowing of your presence, your next attack will be more precise and deal more damage.
@@ -242,6 +245,21 @@ buff-charmed = Charmed
 ## Hollowtouched
 buff-hollowtouched = Hollowtouched
     .desc = The Hollow has tasted you. Maximum health reduced.
+## Ardent Hunt (upstream)
+buff-ardenthunt = Ardent Hunt
+    .desc = Your fervor causes your arrows to be more lethal to a specific target, at the cost of them being weaker against other targets.
+## Ignite Arrow
+buff-ignitearrow = Ignite Arrow
+    .desc = You've ignited your next arrow, which will cause it to burn the target it strikes, and may be explosive if fired in a certain way.
+## Freeze Arrow
+buff-freezearrow = Freeze Arrow
+    .desc = You've frozen your next arrow, which will cause it to freeze the target it strikes, and it may explode in a cloud of frost if fired in a certain way.
+## Drench Arrow
+buff-drencharrow = Drench Arrow
+    .desc = You've drenched your next arrow in poison, which will cause it to poison the target it strikes, and it may explode in a cloud of poison if fired in a certain way.
+## Jolt Arrow
+buff-joltarrow = Jolt Arrow
+    .desc = You've statically charged your next arrow, which will create arcs of electricity from the target it strikes, and it may be attracted to targets if fired in a certain way.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

@@ -54,7 +54,6 @@ layout(location = 0) out vec4 tgt_color;
 vec3 wpos_at(vec2 uv) {
     uvec2 sz = textureSize(sampler2D(t_src_depth, s_src_depth), 0);
     float buf_depth = texelFetch(sampler2D(t_src_depth, s_src_depth), clamp(ivec2(uv * sz), ivec2(0), ivec2(sz) - 1), 0).x;
-    //float buf_depth = texture(sampler2D(t_src_depth, s_src_depth), uv).x;
     vec4 clip_space = vec4((uv * 2.0 - 1.0) * vec2(1, -1), buf_depth, 1.0);
     vec4 view_space = all_mat_inv * clip_space;
     view_space /= view_space.w;
@@ -207,7 +206,6 @@ void main() {
                                 if (d < svpos.z * 0.8 && d > svpos.z * 0.999) {
                                     // Don't cast into water!
                                     if (texelFetch(sampler2D(t_src_color, s_src_color), clamp(ivec2(suv * col_sz), ivec2(0), ivec2(col_sz) - 1), 0).a >= 1.0) {
-                                        /* t -= 1.0 / float(MAIN_ITERS); */
                                         // Do a bit of extra iteration to try to refine the estimate
                                         const int ITERS = 8;
                                         float diff = 1.0 / float(MAIN_ITERS);
@@ -310,7 +308,7 @@ void main() {
                 vec3 rpos = vec3(0.0);
                 float t = 0.0;
                 const float PLANCK = 0.01;
-                for (int i = 0; i < 14 /* log2(64) * 2 + 2 */; i ++) {
+                for (int i = 0; i < 14; i ++) {
                     float scale = min(pow(2, ceil(t / 2.0)), 32);
                     vec2 deltas = (step(vec2(0), dir2d) - fract(rpos.xy / scale + 100.0)) / dir2d;
                     float jump = max(min(deltas.x, deltas.y) * scale, PLANCK);

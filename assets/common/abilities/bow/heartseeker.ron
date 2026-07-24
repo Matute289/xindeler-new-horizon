@@ -1,11 +1,8 @@
-SelfBuff(
-    buildup_duration: 0.1,
-    cast_duration: 0.1,
-    recover_duration: 0.1,
-    buffs: [
-        BuffDesc(kind: Heartseeker, data: BuffData(strength: 1.0, duration: None)),
-    ],
-    buff_cat: Some(RemoveOnAttack),
-    energy_cost: 40,
+Simple(
+    energy_cost: 0,
     combo_cost: 0,
+    buildup_duration: 0.1,
+    meta: (
+        init_event: Some(EnterStance(Bow(Heartseeker))),
+    ),
 )

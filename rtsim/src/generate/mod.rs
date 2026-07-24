@@ -4,15 +4,15 @@ pub mod site;
 
 use crate::data::{
     CURRENT_VERSION, Data, Nature,
+    actor::{Actor, Actors, Profession},
     architect::{Population, TrackedPopulation},
     faction::Faction,
-    npc::{Npc, Npcs, Profession},
     site::Site,
 };
 use common::{
     comp::{self, Body},
     resources::TimeOfDay,
-    rtsim::{NpcId, Personality, Role, WorldSettings},
+    rtsim::{ActorId, Personality, Role, WorldSettings},
     terrain::TerrainChunkSize,
     vol::RectVolSize,
 };
@@ -92,7 +92,7 @@ impl Data {
         let mut this = Self {
             version: CURRENT_VERSION,
             nature: Nature::generate(world),
-            npcs: Npcs::default(),
+            actors: Actors::default(),
             sites: Default::default(),
             factions: Default::default(),
             reports: Default::default(),
@@ -175,21 +175,21 @@ impl Data {
         &mut self,
         spawning_location: &AirshipSpawningLocation,
         rng: &mut impl Rng,
-    ) -> (NpcId, NpcId) {
-        let npc_wpos3d = spawning_location.pos.with_z(spawning_location.height);
+    ) -> (ActorId, ActorId) {
+        let actor_wpos3d = spawning_location.pos.with_z(spawning_location.height);
 
-        let vehicle_id = self.npcs.create_npc(Npc::new(
+        let vehicle_id = self.actors.create_actor(Actor::new_npc(
             rng.random(),
-            npc_wpos3d,
+            actor_wpos3d,
             Body::Ship(comp::body::ship::Body::DefaultAirship),
             Role::Vehicle,
         ));
 
         let species = comp::humanoid::ALL_SPECIES.choose(&mut *rng).unwrap();
-        let npc_id = self.npcs.create_npc(
-            Npc::new(
+        let actor_id = self.actors.create_actor(
+            Actor::new_npc(
                 rng.random(),
-                npc_wpos3d,
+                actor_wpos3d,
                 Body::Humanoid(comp::humanoid::Body::random_with(rng, species)),
                 Role::Civilised(Some(Profession::Captain)),
             )
@@ -198,11 +198,11 @@ impl Data {
         );
 
         // The captain is mounted on the airship
-        self.npcs
+        self.actors
             .mounts
-            .steer(vehicle_id, npc_id)
+            .steer(vehicle_id, actor_id)
             .expect("We just created these npcs!");
 
-        (npc_id, vehicle_id)
+        (actor_id, vehicle_id)
     }
 }

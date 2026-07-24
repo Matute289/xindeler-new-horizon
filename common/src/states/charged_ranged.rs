@@ -91,7 +91,10 @@ impl CharacterBehavior for Data {
                 }
             },
             StageSection::Charge => {
-                if !input_is_pressed(data, self.static_data.ability_info.input) && !self.exhausted {
+                if (!input_is_pressed(data, self.static_data.ability_info.input)
+                    || update.energy.current() < 1.0)
+                    && !self.exhausted
+                {
                     let charge_frac = self.charge_frac();
                     // Fire
                     let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
@@ -100,7 +103,7 @@ impl CharacterBehavior for Data {
                         .body
                         .projectile_offsets(update.ori.look_vec(), data.scale.map_or(1.0, |s| s.0));
                     let pos = Pos(data.pos.0 + body_offsets);
-                    let projectile = self
+                    let (projectile, marker) = self
                         .static_data
                         .projectile
                         .clone()
@@ -109,6 +112,7 @@ impl CharacterBehavior for Data {
                             Some(*data.uid),
                             precision_mult,
                             Some(self.static_data.ability_info),
+                            Some(data.stats),
                         );
 
                     let num_projectiles = self
@@ -137,10 +141,11 @@ impl CharacterBehavior for Data {
                             body: self.static_data.projectile_body,
                             projectile: projectile.clone(),
                             light: self.static_data.projectile_light,
-                            speed: self.static_data.initial_projectile_speed
-                                + charge_frac * self.static_data.scaled_projectile_speed,
+                            speed: (self.static_data.initial_projectile_speed
+                                + charge_frac * self.static_data.scaled_projectile_speed)
+                                * data.stats.projectile_speed_mult,
                             object: None,
-                            marker: self.static_data.marker,
+                            marker: self.static_data.marker.or(marker),
                         });
                     }
 
@@ -177,11 +182,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::ChargedRanged(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done
