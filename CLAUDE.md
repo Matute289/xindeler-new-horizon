@@ -33,6 +33,24 @@ Rules (full spec + canonical example: `docs/design/conventions/fill-in-worksheet
 
 This is the default for any multi-decision / bulk request (`AskUserQuestion` only for 1–4 quick structural forks).
 
+## Comunicación asíncrona con Mati
+
+Si necesitás input y Mati no está disponible (no está en la app, o el mensaje puede tardar):
+
+```bash
+MSG_ID=$(python /Users/mgrinberg/MyXindeler/Discord/scripts/discord_api.py notify \
+  --project "xindeler-new-horizon" \
+  --session "descripción corta de esta tarea" \
+  --type blocked \
+  --message "Qué necesitás decidir y por qué estás bloqueado")
+
+# Polling hasta que responda (cada ~5 min)
+python /Users/mgrinberg/MyXindeler/Discord/scripts/discord_api.py poll --after $MSG_ID
+```
+
+Tipos: `blocked` | `question` | `done` | `info` | `error`. Usalo también para avisar cuando una PR
+queda lista para mergear, no solo cuando estás bloqueado — Mati no siempre está mirando el chat.
+
 ## Toolchain
 
 Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024 edition. The `specs` ECS crate requires nightly.
