@@ -22,7 +22,7 @@
 use core::assert_matches;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use veloren_network::{Network, ParticipantError, ParticipantEvent, Pid, Promises, StreamError};
+use xindeler_network::{Network, ParticipantError, ParticipantEvent, Pid, Promises, StreamError};
 mod helper;
 use helper::{SLEEP_EXTERNAL, SLEEP_INTERNAL, network_participant_stream, tcp};
 

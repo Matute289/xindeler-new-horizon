@@ -121,8 +121,8 @@ use test_world::{IndexOwned, World};
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info, trace, warn};
 use vek::*;
-use veloren_query_server::server::QueryServer;
 pub use world::{WorldGenerateStage, civ::WorldCivStage, sim::WorldSimStage};
+use xindeler_query_server::server::QueryServer;
 
 use crate::{
     persistence::{DatabaseSettings, SqlLogMode},
@@ -635,7 +635,7 @@ impl Server {
         }
 
         if let Some(addr) = settings.query_address {
-            use veloren_query_server::proto::ServerInfo;
+            use xindeler_query_server::proto::ServerInfo;
 
             const QUERY_SERVER_RATELIMIT: u16 = 120;
 
@@ -650,7 +650,7 @@ impl Server {
             let mut query_server =
                 QueryServer::new(addr, query_server_info_rx, QUERY_SERVER_RATELIMIT);
             let query_server_metrics =
-                Arc::new(Mutex::new(veloren_query_server::server::Metrics::default()));
+                Arc::new(Mutex::new(xindeler_query_server::server::Metrics::default()));
             let query_server_metrics2 = Arc::clone(&query_server_metrics);
             runtime.spawn(async move {
                 let err = query_server.run(query_server_metrics2).await.err();

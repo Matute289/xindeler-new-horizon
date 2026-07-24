@@ -15,7 +15,7 @@ Identify the minimal sequence to reproduce. Use admin commands:
 # Launch server with admin access
 cargo server
 # In another terminal, connect with client
-cargo run --bin veloren-voxygen
+cargo run --bin xindeler-voxygen
 ```
 
 In-game reproduction commands:

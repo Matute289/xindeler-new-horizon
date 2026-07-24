@@ -1,6 +1,6 @@
 use common::cmd::{ChatCommandData, ServerChatCommand};
 use i18n::{LocalizationGuard, LocalizationHandle};
-use veloren_voxygen::cmd::ClientChatCommand;
+use xindeler_voxygen::cmd::ClientChatCommand;
 
 /// This binary generates the markdown tables used for the `players/commands.md`
 /// page in the Veloren Book. It can be run with `cargo cmd-doc-gen`.

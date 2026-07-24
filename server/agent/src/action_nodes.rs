@@ -1221,7 +1221,7 @@ impl AgentData<'_> {
                 fn(&Self, &mut Agent, &mut Controller, &TargetData, &ReadData),
             > = // SAFETY: `ATTACK_FN` names the `attack_inner` symbol exported
                 // with `#[unsafe(export_name)]` by this same crate's
-                // `be-dyn-lib` build (`veloren-server-agent` dylib), compiled
+                // `be-dyn-lib` build (`xindeler-server-agent` dylib), compiled
                 // from this workspace by the hot-reload watcher; the symbol's
                 // type signature here matches that exported fn item exactly.
                 unsafe { lib.get(ATTACK_FN) }.unwrap_or_else(|e| {

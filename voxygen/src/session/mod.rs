@@ -150,7 +150,7 @@ impl SessionState {
             .borrow_mut()
             .set_lod_distance(global_state.settings.graphics.lod_distance);
         #[cfg(not(target_os = "macos"))]
-        let mut mumble_link = SharedLink::new("veloren", "veloren-voxygen");
+        let mut mumble_link = SharedLink::new("veloren", "xindeler-voxygen");
         {
             let mut client = client.borrow_mut();
             client.request_player_physics(global_state.settings.networking.player_physics_behavior);

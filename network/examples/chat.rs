@@ -8,7 +8,7 @@ use std::{sync::Arc, thread, time::Duration};
 use tokio::{io, io::AsyncBufReadExt, runtime::Runtime, sync::RwLock};
 use tracing::*;
 use tracing_subscriber::EnvFilter;
-use veloren_network::{ConnectAddr, ListenAddr, Network, Participant, Pid, Promises, Stream};
+use xindeler_network::{ConnectAddr, ListenAddr, Network, Participant, Pid, Promises, Stream};
 
 ///This example contains a simple chatserver, that allows to send messages
 /// between participants, it's neither pretty nor perfect, but it should show
@@ -17,7 +17,7 @@ fn main() {
     let matches = Command::new("Chat example")
         .version("0.1.0")
         .author("Marcel Märtens <marcel.cochem@googlemail.com>")
-        .about("example chat implemented with veloren-network")
+        .about("example chat implemented with xindeler-network")
         .arg(
             Arg::new("mode")
                 .short('m')

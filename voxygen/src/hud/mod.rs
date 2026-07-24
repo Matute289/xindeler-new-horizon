@@ -5843,7 +5843,7 @@ fn air_velocity(fluid: Option<comp::Fluid>) -> String {
 ///
 /// # Examples
 /// ```
-/// use veloren_voxygen::hud::multiplier_to_percentage;
+/// use xindeler_voxygen::hud::multiplier_to_percentage;
 ///
 /// let positive = multiplier_to_percentage(1.05);
 /// assert!((positive - 5.0).abs() < 0.0001);

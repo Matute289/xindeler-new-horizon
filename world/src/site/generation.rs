@@ -1234,7 +1234,7 @@ impl Painter {
 
     /// Places a sprite at the provided location with the provided orientation
     /// which will be tracked by rtsim nature if the sprite has an associated
-    /// [`veloren_common::rtsim::TerrainResource`].
+    /// [`xindeler_common::rtsim::TerrainResource`].
     pub fn resource_sprite(&self, pos: Vec3<i32>, sprite: SpriteKind, ori: u8) {
         self.aabb(Aabb {
             min: pos,
@@ -1245,7 +1245,7 @@ impl Painter {
 
     /// Places a sprite at the provided location with the provided orientation
     /// which will be tracked by rtsim nature if the sprite has an associated
-    /// [`veloren_common::rtsim::TerrainResource`].
+    /// [`xindeler_common::rtsim::TerrainResource`].
     pub fn owned_resource_sprite(&self, pos: Vec3<i32>, sprite: SpriteKind, ori: u8) {
         self.aabb(Aabb {
             min: pos,
@@ -1689,7 +1689,7 @@ pub trait Structure {
 
             // SAFETY: `Self::UPDATE_FN` names a plot-render symbol exported
             // with `#[unsafe(export_name)]` by this same crate's `be-dyn-lib`
-            // build (`veloren-world` dylib), compiled from this workspace by
+            // build (`xindeler-world` dylib), compiled from this workspace by
             // the hot-reload watcher; the symbol's type signature here matches
             // that exported fn item exactly.
             let update_fn: common_dynlib::Symbol<fn(&Self, &Site, &Land, &Painter)> = unsafe {

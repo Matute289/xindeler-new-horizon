@@ -8,7 +8,7 @@ use ron::ser::{PrettyConfig, to_string_pretty};
 use serde::Serialize;
 use std::{borrow::Cow, error::Error, fs::File, io::Write};
 
-use veloren_common::{
+use xindeler_common::{
     assets::ASSETS_PATH,
     comp::{
         self,

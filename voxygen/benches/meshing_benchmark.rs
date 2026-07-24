@@ -5,8 +5,8 @@ use common::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::{hint::black_box, sync::Arc};
 use vek::*;
-use veloren_voxygen::{mesh::terrain::generate_mesh, scene::terrain::BlocksOfInterest};
 use world::{World, sim};
+use xindeler_voxygen::{mesh::terrain::generate_mesh, scene::terrain::BlocksOfInterest};
 
 const CENTER: Vec2<i32> = Vec2 { x: 512, y: 512 };
 const GEN_SIZE: i32 = 4;

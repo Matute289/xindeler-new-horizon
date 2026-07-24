@@ -44,6 +44,6 @@ work, dispatch the `sim-systems-engineer` agent.
 
 ## Verification
 
-- Unit + sim tests in `rtsim` crate; long-run soak via headless `veloren-server-cli` —
+- Unit + sim tests in `rtsim` crate; long-run soak via headless `xindeler-server-cli` —
   watch rtsim tick time in telemetry (`xindeler-telemetry` skill).
 - Dispatch `rust-perf-reviewer` on any change inside the rtsim tick.

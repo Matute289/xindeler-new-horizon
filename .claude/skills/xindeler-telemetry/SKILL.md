@@ -36,7 +36,7 @@ ls -lt userdata/voxygen/logs/*telemetry* 2>/dev/null | head -5
 
 If no telemetry file exists, the game was run without `--features logging-verbose`. Tell the user and suggest:
 ```bash
-cargo build --bin veloren-voxygen --features veloren-voxygen/logging-verbose
+cargo build --bin xindeler-voxygen --features xindeler-voxygen/logging-verbose
 ```
 
 ## Step 2 — Session Overview
@@ -286,6 +286,6 @@ When you need a complete picture, run steps 2–9 in sequence and synthesize:
 ## Notes
 
 - If telemetry files are gzipped (`.jsonl.gz`), decompress first: `gunzip -c file.jsonl.gz | grep ...`
-- Telemetry is only generated with `--features veloren-voxygen/logging-verbose` (dev builds)
-- Server telemetry requires `--features veloren-server-cli/logging-verbose`
+- Telemetry is only generated with `--features xindeler-voxygen/logging-verbose` (dev builds)
+- Server telemetry requires `--features xindeler-server-cli/logging-verbose`
 - The most recent file may still be open and writing — tail it live with: `tail -f userdata/voxygen/logs/*telemetry*.jsonl`

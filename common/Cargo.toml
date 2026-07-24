@@ -1,5 +1,5 @@
 [package]
-name = "veloren-common"
+name = "xindeler-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,8 +22,8 @@ default = ["simd"]
 
 [dependencies]
 
-common-base = { package = "veloren-common-base", path = "base" }
-common-i18n = { package = "veloren-common-i18n", path = "i18n" }
+common-base = { package = "xindeler-common-base", path = "base" }
+common-i18n = { package = "xindeler-common-i18n", path = "i18n" }
 # inline_tweak = { workspace = true }
 
 # Serde
@@ -65,7 +65,7 @@ fxhash = { workspace = true }
 thread-priority = { workspace = true }
 
 # Assets
-common-assets = { package = "veloren-common-assets", path = "assets" }
+common-assets = { package = "xindeler-common-assets", path = "assets" }
 dot_vox = "5.1"
 serde_repr = "0.1.6"
 

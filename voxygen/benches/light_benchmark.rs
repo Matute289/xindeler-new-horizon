@@ -2,8 +2,8 @@ use common::{terrain::TerrainGrid, vol::SampleVol};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::{hint::black_box, sync::Arc};
 use vek::*;
-use veloren_voxygen::mesh::terrain::{MAX_LIGHT_DIST, SUNLIGHT, calc_light};
 use world::{World, sim};
+use xindeler_voxygen::mesh::terrain::{MAX_LIGHT_DIST, SUNLIGHT, calc_light};
 
 const CENTER: Vec2<i32> = Vec2 { x: 512, y: 512 };
 const GEN_SIZE: i32 = 3;
