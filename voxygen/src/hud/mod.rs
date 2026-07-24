@@ -120,11 +120,11 @@ use common::{
     resources::{BattleMode, Secs, Time},
     rtsim,
     slowjob::SlowJobPool,
-    terrain::{Block, SpriteKind, TerrainChunk, UnlockKind},
+    terrain::{Block, SpriteKind, TerrainChunk, TerrainChunkSize, UnlockKind},
     trade::{ReducedInventory, TradeAction},
     uid::Uid,
     util::{Dir, srgba_to_linear},
-    vol::RectRasterableVol,
+    vol::{RectRasterableVol, RectVolSize},
 };
 use common_base::{prof_span, span};
 use common_net::{msg::world_msg::SiteId, sync::WorldSyncExt};
@@ -274,6 +274,7 @@ widget_ids! {
         fps_counter,
         ping,
         coordinates,
+        cromatolis_map_pixel_coordinates,
         velocity,
         glide_ratio,
         glide_aoe,
@@ -2768,6 +2769,38 @@ impl Hud {
             largest_str_len = usize::max(largest_str_len, coordinates_text.len());
             debug_msg_line_count += 1;
 
+            let cromatolis_map_pixel_coordinates_text = match debug_info.coordinates {
+                Some(coordinates) => {
+                    const CROMATOLIS_MAP_PIXEL_WIDTH: f32 = 2048.0;
+                    const CROMATOLIS_MAP_PIXEL_HEIGHT: f32 = 1536.0;
+
+                    let world_size = self.world_map.1.map(|e| e as f32)
+                        * TerrainChunkSize::RECT_SIZE.map(|e| e as f32);
+                    let pixel_x = (coordinates.0.x / world_size.x
+                        * (CROMATOLIS_MAP_PIXEL_WIDTH - 1.0))
+                        .round()
+                        .clamp(0.0, CROMATOLIS_MAP_PIXEL_WIDTH - 1.0)
+                        as i32;
+                    let pixel_y = ((1.0 - coordinates.0.y / world_size.y)
+                        * (CROMATOLIS_MAP_PIXEL_HEIGHT - 1.0))
+                        .round()
+                        .clamp(0.0, CROMATOLIS_MAP_PIXEL_HEIGHT - 1.0)
+                        as i32;
+
+                    format!("Cromatolis map px: {}, {} / 2048x1536", pixel_x, pixel_y)
+                },
+                None => "Cromatolis map px: unavailable".to_owned(),
+            };
+            Text::new(&cromatolis_map_pixel_coordinates_text)
+                .color(TEXT_COLOR)
+                .down_from(self.ids.coordinates, V_PAD)
+                .font_id(self.fonts.cyri.conrod_id)
+                .font_size(self.fonts.cyri.scale(FONT_SCALE))
+                .set(self.ids.cromatolis_map_pixel_coordinates, ui_widgets);
+            largest_str_len =
+                usize::max(largest_str_len, cromatolis_map_pixel_coordinates_text.len());
+            debug_msg_line_count += 1;
+
             // Player's velocity
             let (velocity_text, glide_ratio_text) = match debug_info.velocity {
                 Some(velocity) => {
@@ -2797,7 +2830,7 @@ impl Hud {
             };
             Text::new(&velocity_text)
                 .color(TEXT_COLOR)
-                .down_from(self.ids.coordinates, V_PAD)
+                .down_from(self.ids.cromatolis_map_pixel_coordinates, V_PAD)
                 .font_id(self.fonts.cyri.conrod_id)
                 .font_size(self.fonts.cyri.scale(FONT_SCALE))
                 .set(self.ids.velocity, ui_widgets);

@@ -1283,6 +1283,13 @@ impl Civs {
         }
 
         let site = establish_site(self, ctx, loc, site_fn);
+        if ctx
+            .sim
+            .get(loc)
+            .is_some_and(|chunk| chunk.authored_cromatolis_v0)
+        {
+            return site;
+        }
 
         // Find neighbors
         // Note, the maximum distance that I have so far observed not hitting the

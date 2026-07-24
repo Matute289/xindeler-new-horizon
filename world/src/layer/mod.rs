@@ -18,7 +18,10 @@ use crate::{
     sim,
     util::{FastNoise, RandomPerm, Sampler},
 };
-use common::terrain::{Block, BlockKind, SpriteKind};
+use common::{
+    terrain::{Block, BlockKind, SpriteKind, TerrainChunkSize},
+    vol::RectVolSize,
+};
 use hashbrown::HashMap;
 use noise::NoiseFn;
 use rand::{prelude::*, seq::IndexedRandom};
@@ -35,6 +38,177 @@ pub struct Colors {
 }
 
 const EMPTY_AIR: Block = Block::empty();
+pub(crate) const CROMATOLIS_AUTHORED_PATH_WIDTH: f32 = 6.25;
+const CROMATOLIS_PATH_BASE_CUT: f32 = 5.0;
+const CROMATOLIS_PATH_BASE_FILL: f32 = 4.0;
+const CROMATOLIS_PATH_SIDE_CUT: f32 = 14.0;
+const CROMATOLIS_PATH_SIDE_FILL: f32 = 10.0;
+const CROMATOLIS_PATH_BRIDGE_START_DELTA: f32 = 16.0;
+const CROMATOLIS_PATH_BRIDGE_FULL_DELTA: f32 = 36.0;
+const CROMATOLIS_PATH_BRIDGE_FILL: f32 = 24.0;
+const CROMATOLIS_PATH_STEEP_START_GRADIENT: f32 = 0.9;
+const CROMATOLIS_PATH_STEEP_FULL_GRADIENT: f32 = 1.8;
+const CROMATOLIS_PATH_STEEP_CENTER_CUT: f32 = 5.0;
+const CROMATOLIS_CHARRAN_APPROACH_DECK_ALT: f32 = 205.0;
+const CROMATOLIS_CHARRAN_BRIDGE_DECK_ALT: f32 = 276.0;
+const CROMATOLIS_CHARRAN_BRIDGE_DECK_THICKNESS: i32 = 3;
+const CROMATOLIS_CHARRAN_APPROACH_HEAD_SPACE: i32 = 20;
+const CROMATOLIS_SOURCE_MAP_SIZE: Vec2<f32> = Vec2::new(2048.0, 1536.0);
+const CROMATOLIS_CHARRAN_APPROACH_MIN_SOURCE_PX: Vec2<i32> = Vec2::new(1580, 990);
+const CROMATOLIS_CHARRAN_APPROACH_MAX_SOURCE_PX: Vec2<i32> = Vec2::new(1628, 1025);
+const CROMATOLIS_CHARRAN_BRIDGE_MIN_SOURCE_PX: Vec2<i32> = Vec2::new(1628, 1008);
+const CROMATOLIS_CHARRAN_BRIDGE_MAX_SOURCE_PX: Vec2<i32> = Vec2::new(1660, 1034);
+
+#[derive(Copy, Clone)]
+struct AuthoredPathProfile {
+    riverless_alt: f32,
+    depth: i32,
+    head_space_bonus: i32,
+}
+
+#[derive(Copy, Clone)]
+enum CharranRoadOverride {
+    BridgeDeck(f32),
+    ApproachRamp(f32),
+}
+
+fn authored_cromatolis_path_profile(
+    path_dist: f32,
+    path_width: f32,
+    local_riverless_alt: f32,
+    center_riverless_alt: f32,
+    local_gradient: Option<f32>,
+) -> AuthoredPathProfile {
+    let path_t = (1.0 - path_dist / path_width).clamped(0.0, 1.0);
+    let bench_t = path_t * path_t * (3.0 - 2.0 * path_t);
+    let target_delta = center_riverless_alt - local_riverless_alt;
+    let side_strength = (target_delta.abs() / 8.0).clamped(0.0, 1.0);
+    let bridge_strength = if target_delta > 0.0 {
+        ((target_delta - CROMATOLIS_PATH_BRIDGE_START_DELTA)
+            / (CROMATOLIS_PATH_BRIDGE_FULL_DELTA - CROMATOLIS_PATH_BRIDGE_START_DELTA))
+            .clamped(0.0, 1.0)
+            * bench_t
+    } else {
+        0.0
+    };
+    let steep_center_strength = ((local_gradient.unwrap_or(0.0)
+        - CROMATOLIS_PATH_STEEP_START_GRADIENT)
+        / (CROMATOLIS_PATH_STEEP_FULL_GRADIENT - CROMATOLIS_PATH_STEEP_START_GRADIENT))
+        .clamped(0.0, 1.0)
+        * bench_t
+        * (1.0 - bridge_strength);
+    let center_riverless_alt =
+        center_riverless_alt - CROMATOLIS_PATH_STEEP_CENTER_CUT * steep_center_strength;
+    let target_delta = center_riverless_alt - local_riverless_alt;
+    let cut = Lerp::lerp(
+        CROMATOLIS_PATH_BASE_CUT,
+        CROMATOLIS_PATH_SIDE_CUT,
+        side_strength,
+    ) * bench_t;
+    let fill = Lerp::lerp(
+        Lerp::lerp(
+            CROMATOLIS_PATH_BASE_FILL,
+            CROMATOLIS_PATH_SIDE_FILL,
+            side_strength,
+        ),
+        CROMATOLIS_PATH_BRIDGE_FILL,
+        bridge_strength,
+    ) * bench_t;
+    let riverless_alt = local_riverless_alt + target_delta.clamped(-cut, fill);
+    let max_fill_depth = if bridge_strength > 0.0 { 28 } else { 14 };
+    let fill_depth = (riverless_alt.floor() as i32 - local_riverless_alt.floor() as i32)
+        .max(0)
+        .min(max_fill_depth);
+
+    AuthoredPathProfile {
+        riverless_alt,
+        depth: fill_depth + 8,
+        head_space_bonus: if side_strength > 0.45 || steep_center_strength > 0.45 {
+            4
+        } else {
+            1
+        },
+    }
+}
+
+fn cromatolis_source_pixel_for_wpos(info: &CanvasInfo, wpos2d: Vec2<i32>) -> Vec2<i32> {
+    let world_size =
+        info.chunks().get_size().map(|e| e as f32) * TerrainChunkSize::RECT_SIZE.map(|e| e as f32);
+    Vec2::new(
+        (wpos2d.x as f32 / world_size.x * (CROMATOLIS_SOURCE_MAP_SIZE.x - 1.0))
+            .round()
+            .clamped(0.0, CROMATOLIS_SOURCE_MAP_SIZE.x - 1.0) as i32,
+        ((1.0 - wpos2d.y as f32 / world_size.y) * (CROMATOLIS_SOURCE_MAP_SIZE.y - 1.0))
+            .round()
+            .clamped(0.0, CROMATOLIS_SOURCE_MAP_SIZE.y - 1.0) as i32,
+    )
+}
+
+fn cromatolis_charran_road_override_for_source_pixel(
+    source_px: Vec2<i32>,
+) -> Option<CharranRoadOverride> {
+    if source_px.x >= CROMATOLIS_CHARRAN_BRIDGE_MIN_SOURCE_PX.x
+        && source_px.y >= CROMATOLIS_CHARRAN_BRIDGE_MIN_SOURCE_PX.y
+        && source_px.x <= CROMATOLIS_CHARRAN_BRIDGE_MAX_SOURCE_PX.x
+        && source_px.y <= CROMATOLIS_CHARRAN_BRIDGE_MAX_SOURCE_PX.y
+    {
+        Some(CharranRoadOverride::BridgeDeck(
+            CROMATOLIS_CHARRAN_BRIDGE_DECK_ALT,
+        ))
+    } else if source_px.x >= CROMATOLIS_CHARRAN_APPROACH_MIN_SOURCE_PX.x
+        && source_px.y >= CROMATOLIS_CHARRAN_APPROACH_MIN_SOURCE_PX.y
+        && source_px.x <= CROMATOLIS_CHARRAN_APPROACH_MAX_SOURCE_PX.x
+        && source_px.y <= CROMATOLIS_CHARRAN_APPROACH_MAX_SOURCE_PX.y
+    {
+        let t = ((source_px.x - CROMATOLIS_CHARRAN_APPROACH_MIN_SOURCE_PX.x) as f32
+            / (CROMATOLIS_CHARRAN_APPROACH_MAX_SOURCE_PX.x
+                - CROMATOLIS_CHARRAN_APPROACH_MIN_SOURCE_PX.x) as f32)
+            .clamped(0.0, 1.0);
+        Some(CharranRoadOverride::ApproachRamp(Lerp::lerp(
+            CROMATOLIS_CHARRAN_APPROACH_DECK_ALT,
+            CROMATOLIS_CHARRAN_BRIDGE_DECK_ALT,
+            t,
+        )))
+    } else {
+        None
+    }
+}
+
+fn apply_cromatolis_charran_road_override(
+    mut profile: AuthoredPathProfile,
+    local_riverless_alt: f32,
+    source_px: Vec2<i32>,
+) -> AuthoredPathProfile {
+    match cromatolis_charran_road_override_for_source_pixel(source_px) {
+        Some(CharranRoadOverride::BridgeDeck(deck_alt)) => {
+            let cut_head_space =
+                (local_riverless_alt.floor() as i32 - deck_alt.floor() as i32).max(0);
+            AuthoredPathProfile {
+                riverless_alt: deck_alt,
+                depth: CROMATOLIS_CHARRAN_BRIDGE_DECK_THICKNESS,
+                head_space_bonus: (cut_head_space + 8).min(96),
+            }
+        },
+        Some(CharranRoadOverride::ApproachRamp(ramp_alt)) => {
+            let old_alt = profile.riverless_alt;
+            profile.riverless_alt = profile.riverless_alt.max(ramp_alt);
+            let fill_depth = (profile.riverless_alt.floor() as i32
+                - local_riverless_alt.floor() as i32)
+                .max(0)
+                .min(14);
+            profile.depth = profile.depth.max(fill_depth + 8);
+
+            let cut_head_space =
+                (local_riverless_alt.floor() as i32 - profile.riverless_alt.floor() as i32).max(0);
+            profile.head_space_bonus = profile
+                .head_space_bonus
+                .max((cut_head_space + CROMATOLIS_CHARRAN_APPROACH_HEAD_SPACE).min(64));
+            debug_assert!(profile.riverless_alt >= old_alt);
+            profile
+        },
+        None => profile,
+    }
+}
 
 pub struct PathLocals {
     pub riverless_alt: f32,
@@ -89,16 +263,35 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
         {
             let inset = 0;
 
-            let PathLocals {
-                riverless_alt,
-                alt: _,
-                water_dist: _,
-                bridge_offset: _,
-                depth: _,
-            } = PathLocals::new(&canvas.info(), col, path_nearest);
+            let authored_path_profile = if canvas.info().chunk.authored_cromatolis_v0 {
+                let info = canvas.info();
+                let center_alt = PathLocals::new(&info, col, path_nearest).riverless_alt;
+                let mut profile = authored_cromatolis_path_profile(
+                    path_dist,
+                    path.width,
+                    col.riverless_alt,
+                    center_alt,
+                    col.gradient,
+                );
+                profile = apply_cromatolis_charran_road_override(
+                    profile,
+                    col.riverless_alt,
+                    cromatolis_source_pixel_for_wpos(&info, wpos2d),
+                );
+                Some(profile)
+            } else {
+                None
+            };
+            let riverless_alt = authored_path_profile
+                .map(|profile| profile.riverless_alt)
+                .unwrap_or_else(|| {
+                    PathLocals::new(&canvas.info(), col, path_nearest).riverless_alt
+                });
 
-            let depth = 4;
             let surface_z = riverless_alt.floor() as i32;
+            let depth = authored_path_profile
+                .map(|profile| profile.depth)
+                .unwrap_or(4);
 
             for z in inset - depth..inset {
                 let wpos = Vec3::new(wpos2d.x, wpos2d.y, surface_z + z);
@@ -106,7 +299,10 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
                     path.surface_color(col.sub_surface_color.map(|e| (e * 255.0) as u8), wpos);
                 canvas.set(wpos, Block::new(BlockKind::Earth, path_color));
             }
-            let head_space = path.head_space(path_dist);
+            let head_space = path.head_space(path_dist)
+                + authored_path_profile
+                    .map(|profile| profile.head_space_bonus)
+                    .unwrap_or(0);
             for z in inset..inset + head_space {
                 let pos = Vec3::new(wpos2d.x, wpos2d.y, surface_z + z);
                 if canvas.get(pos).kind() != BlockKind::Water {
@@ -115,6 +311,169 @@ pub fn apply_paths_to(canvas: &mut Canvas) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authored_cromatolis_sidehill_path_cuts_a_deeper_bench() {
+        let flat = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            100.0,
+            98.0,
+            None,
+        );
+        let sidehill = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            100.0,
+            86.0,
+            None,
+        );
+
+        assert!(100.0 - sidehill.riverless_alt > 100.0 - flat.riverless_alt);
+        assert!(sidehill.head_space_bonus > flat.head_space_bonus);
+    }
+
+    #[test]
+    fn authored_cromatolis_normal_path_keeps_low_enclosure() {
+        let profile = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            100.0,
+            100.75,
+            None,
+        );
+
+        assert!(profile.riverless_alt <= 100.75);
+        assert_eq!(profile.head_space_bonus, 1);
+        assert_eq!(profile.depth, 8);
+    }
+
+    #[test]
+    fn authored_cromatolis_filled_path_gets_deeper_support() {
+        let profile = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            100.0,
+            112.0,
+            None,
+        );
+
+        assert!(profile.riverless_alt > 100.0);
+        assert!(profile.depth > 7);
+    }
+
+    #[test]
+    fn authored_cromatolis_profile_does_not_fake_tunnels_locally() {
+        let profile = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            120.0,
+            121.0,
+            None,
+        );
+
+        assert!(profile.riverless_alt >= 120.0);
+        assert_eq!(profile.head_space_bonus, 1);
+    }
+
+    #[test]
+    fn authored_cromatolis_bridge_gap_gets_high_support() {
+        let normal_fill = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            100.0,
+            112.0,
+            None,
+        );
+        let bridge_fill = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            100.0,
+            140.0,
+            None,
+        );
+
+        assert!(bridge_fill.riverless_alt - 100.0 > normal_fill.riverless_alt - 100.0);
+        assert!(bridge_fill.depth > normal_fill.depth);
+    }
+
+    #[test]
+    fn authored_cromatolis_steep_center_gets_modest_smoothing() {
+        let normal = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            120.0,
+            120.0,
+            None,
+        );
+        let steep = authored_cromatolis_path_profile(
+            0.0,
+            CROMATOLIS_AUTHORED_PATH_WIDTH,
+            120.0,
+            120.0,
+            Some(2.0),
+        );
+
+        assert!(steep.riverless_alt < normal.riverless_alt);
+        assert!(normal.riverless_alt - steep.riverless_alt <= CROMATOLIS_PATH_STEEP_CENTER_CUT);
+    }
+
+    #[test]
+    fn authored_cromatolis_charran_bridge_has_local_deck_override() {
+        let early_approach_alt =
+            match cromatolis_charran_road_override_for_source_pixel(Vec2::new(1607, 1005))
+                .expect("the 1607,1005 bridge approach must not fall back to the generic road")
+            {
+                CharranRoadOverride::ApproachRamp(alt) => alt,
+                CharranRoadOverride::BridgeDeck(_) => panic!("1607,1005 must be an approach ramp"),
+            };
+        assert!(early_approach_alt > CROMATOLIS_CHARRAN_APPROACH_DECK_ALT);
+        assert!(early_approach_alt < CROMATOLIS_CHARRAN_BRIDGE_DECK_ALT);
+
+        let approach_alt =
+            match cromatolis_charran_road_override_for_source_pixel(Vec2::new(1626, 1011))
+                .expect("the 1626,1011 bridge approach must be treated as a carved route segment")
+            {
+                CharranRoadOverride::ApproachRamp(alt) => alt,
+                CharranRoadOverride::BridgeDeck(_) => panic!("1626,1011 must be an approach ramp"),
+            };
+        assert!(approach_alt > early_approach_alt);
+        assert!(approach_alt > CROMATOLIS_CHARRAN_APPROACH_DECK_ALT);
+        assert!(approach_alt < CROMATOLIS_CHARRAN_BRIDGE_DECK_ALT);
+        match cromatolis_charran_road_override_for_source_pixel(Vec2::new(1642, 1021)) {
+            Some(CharranRoadOverride::BridgeDeck(alt)) => {
+                assert_eq!(alt, CROMATOLIS_CHARRAN_BRIDGE_DECK_ALT)
+            },
+            _ => panic!("1642,1021 must be the bridge deck"),
+        }
+        assert_eq!(CROMATOLIS_CHARRAN_BRIDGE_DECK_THICKNESS, 3);
+        assert_eq!(CROMATOLIS_CHARRAN_APPROACH_HEAD_SPACE, 20);
+        assert_eq!(
+            cromatolis_charran_road_override_for_source_pixel(Vec2::new(1570, 1021)).map(|_| ()),
+            None
+        );
+    }
+
+    #[test]
+    fn authored_cromatolis_charran_approach_never_buries_normal_road() {
+        let profile = AuthoredPathProfile {
+            riverless_alt: 260.0,
+            depth: 8,
+            head_space_bonus: 1,
+        };
+
+        let adjusted =
+            apply_cromatolis_charran_road_override(profile, 260.0, Vec2::new(1607, 1005));
+
+        assert_eq!(adjusted.riverless_alt, profile.riverless_alt);
+        assert!(adjusted.depth >= profile.depth);
+        assert!(adjusted.head_space_bonus >= CROMATOLIS_CHARRAN_APPROACH_HEAD_SPACE);
+    }
 }
 
 pub fn apply_trains_to(

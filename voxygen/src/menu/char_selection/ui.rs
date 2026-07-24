@@ -3281,7 +3281,7 @@ impl CharSelectionUi {
             default_name,
             client.server_info(),
             ui.add_graphic(Graphic::Image(
-                Arc::clone(client.world_data().topo_map_image()),
+                Arc::clone(client.world_data().map_image()),
                 Some(default_water_color()),
             )),
             client

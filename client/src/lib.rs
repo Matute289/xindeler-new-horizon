@@ -799,11 +799,53 @@ impl Client {
                     && pos.x < map_size.x as i32
                     && pos.y < map_size.y as i32
             };
+            let is_water_color = |r: u8, g: u8, b: u8| -> bool { r == 0 && (g > 8 || b > 8) };
+            let mut distance_to_land = vec![u16::MAX; rgba.size().product() as usize];
+            let mut distance_queue = VecDeque::new();
+            for y in 0..i32::from(map_size.y) {
+                for x in 0..i32::from(map_size.x) {
+                    let pos = Vec2::new(x, y);
+                    let [r, g, b, _a] = rgba[pos].to_le_bytes();
+                    if !is_water_color(r, g, b) {
+                        let idx = y as usize * usize::from(map_size.x) + x as usize;
+                        distance_to_land[idx] = 0;
+                        distance_queue.push_back(pos);
+                    }
+                }
+            }
+            while let Some(pos) = distance_queue.pop_front() {
+                let idx = pos.y as usize * usize::from(map_size.x) + pos.x as usize;
+                let distance = distance_to_land[idx];
+                if distance >= 96 {
+                    continue;
+                }
+                for offset in [
+                    Vec2::new(-1, 0),
+                    Vec2::new(1, 0),
+                    Vec2::new(0, -1),
+                    Vec2::new(0, 1),
+                ] {
+                    let next = pos + offset;
+                    if !bounds_check(next) {
+                        continue;
+                    }
+                    let next_idx = next.y as usize * usize::from(map_size.x) + next.x as usize;
+                    if distance_to_land[next_idx] != u16::MAX {
+                        continue;
+                    }
+                    let [r, g, b, _a] = rgba[next].to_le_bytes();
+                    if is_water_color(r, g, b) {
+                        distance_to_land[next_idx] = distance + 1;
+                        distance_queue.push_back(next);
+                    }
+                }
+            }
             fn sample_pos(
                 map_config: &MapConfig,
                 pos: Vec2<i32>,
                 alt: &Grid<u32>,
                 rgba: &Grid<u32>,
+                distance_to_land: &[u16],
                 map_size: &Vec2<u16>,
                 map_size_lg: &common::terrain::MapSizeLg,
                 max_height: f32,
@@ -815,6 +857,7 @@ impl Client {
                         && pos.x < map_size.x as i32
                         && pos.y < map_size.y as i32
                 };
+                let is_water_color = |r: u8, g: u8, b: u8| -> bool { r == 0 && (g > 8 || b > 8) };
                 let MapConfig {
                     gain,
                     is_contours,
@@ -824,14 +867,14 @@ impl Client {
                 } = *map_config;
                 let mut is_contour_line = false;
                 let mut is_border = false;
-                let (rgb, alt, downhill_wpos) = if bounds_check(pos) {
+                let (rgb, encoded_alt, downhill_wpos) = if bounds_check(pos) {
                     let posi = pos.y as usize * map_size.x as usize + pos.x as usize;
                     let [r, g, b, _a] = rgba[pos].to_le_bytes();
-                    let is_water = r == 0 && b > 102 && g < 77;
+                    let is_water = is_water_color(r, g, b);
                     let alti = alt[pos];
                     // Compute contours (chunks are assigned in the river code below)
                     let altj = rescale_height(scale_height_big(alti));
-                    let contour_interval = 150.0;
+                    let contour_interval = 50.0;
                     let chunk_contour = (altj * gain / contour_interval) as u32;
 
                     // Compute downhill.
@@ -846,7 +889,7 @@ impl Client {
                                 is_contour_line = true;
                             }
                             let [nr, ng, nb, _na] = rgba.raw()[nposi].to_le_bytes();
-                            let n_is_water = nr == 0 && nb > 102 && ng < 77;
+                            let n_is_water = is_water_color(nr, ng, nb);
 
                             if !is_border && is_water && !n_is_water {
                                 is_border = true;
@@ -873,26 +916,62 @@ impl Client {
                 } else {
                     (Rgb::zero(), 0, None)
                 };
-                let alt = f64::from(rescale_height(scale_height_big(alt)));
+                let alt_norm = f64::from(rescale_height(scale_height_big(encoded_alt)));
                 let wpos = pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
                 let downhill_wpos =
                     downhill_wpos.unwrap_or(wpos + TerrainChunkSize::RECT_SIZE.map(|e| e as i32));
-                let is_path = rgb.r == 0x37 && rgb.g == 0x29 && rgb.b == 0x23;
-                let rgb = rgb.map(|e: u8| e as f64 / 255.0);
-                let is_water = rgb.r == 0.0 && rgb.b > 0.4 && rgb.g < 0.3;
+                let source_rgb = rgb;
+                let is_path = source_rgb.r == 0x37 && source_rgb.g == 0x29 && source_rgb.b == 0x23;
+                let rgb = source_rgb.map(|e: u8| e as f64 / 255.0);
+                let is_water = is_water_color(source_rgb.r, source_rgb.g, source_rgb.b);
+                let visual_water_depth = if is_water {
+                    let color_depth =
+                        (1.0 - (f64::from(source_rgb.g) / 0xa8 as f64)).clamp(0.0, 1.0);
+                    let idx = pos.y as usize * usize::from(map_size.x) + pos.x as usize;
+                    match distance_to_land.get(idx).copied().unwrap_or(u16::MAX) {
+                        0..=3 => 0.02,
+                        4..=8 => 0.08,
+                        9..=16 => 0.16,
+                        17..=28 => 0.28,
+                        29..=44 => 0.42,
+                        45..=66 => 0.58,
+                        67..=96 => 0.74,
+                        _ => color_depth.max(0.92),
+                    }
+                } else {
+                    0.0
+                };
+                let water_rgb = |depth: f64| -> Rgb<f64> {
+                    if depth < 0.05 {
+                        Rgb::new(0x5f, 0xb8, 0xd3)
+                    } else if depth < 0.12 {
+                        Rgb::new(0x48, 0xa4, 0xcb)
+                    } else if depth < 0.22 {
+                        Rgb::new(0x2b, 0x86, 0xb8)
+                    } else if depth < 0.36 {
+                        Rgb::new(0x18, 0x67, 0xa0)
+                    } else if depth < 0.52 {
+                        Rgb::new(0x0d, 0x4c, 0x88)
+                    } else if depth < 0.75 {
+                        Rgb::new(0x06, 0x33, 0x68)
+                    } else {
+                        Rgb::new(0x02, 0x18, 0x3d)
+                    }
+                    .map(|channel| f64::from(channel) / 255.0)
+                };
 
-                let rgb = if is_height_map {
+                let mut rgb = if is_height_map {
                     if is_path {
                         // Path color is Rgb::new(0x37, 0x29, 0x23)
                         Rgb::new(0.9, 0.9, 0.63)
                     } else if is_water {
-                        Rgb::new(0.23, 0.47, 0.53)
+                        water_rgb(visual_water_depth)
                     } else if is_contours && is_contour_line {
                         // Color contour lines
-                        Rgb::new(0.15, 0.15, 0.15)
+                        Rgb::new(0.08, 0.08, 0.07)
                     } else {
                         // Color hill shading
-                        let lightness = (alt + 0.2).min(1.0);
+                        let lightness = (alt_norm + 0.2).min(1.0);
                         Rgb::new(lightness, 0.9 * lightness, 0.5 * lightness)
                     }
                 } else if is_stylized_topo {
@@ -900,12 +979,12 @@ impl Client {
                         Rgb::new(0.9, 0.9, 0.63)
                     } else if is_water {
                         if is_border {
-                            Rgb::new(0.10, 0.34, 0.50)
+                            water_rgb(0.02)
                         } else {
-                            Rgb::new(0.23, 0.47, 0.63)
+                            water_rgb(visual_water_depth)
                         }
                     } else if is_contour_line {
-                        Rgb::new(0.25, 0.25, 0.25)
+                        Rgb::new(0.10, 0.09, 0.08)
                     } else {
                         // Stylized colors
                         Rgb::new(
@@ -918,9 +997,78 @@ impl Client {
                     Rgb::new(rgb.r, rgb.g, rgb.b)
                 }
                 .map(|e| (e * 255.0) as u8);
+                if is_water && !is_path && !is_height_map && !is_stylized_topo {
+                    rgb = water_rgb(visual_water_depth).map(|channel| (channel * 255.0) as u8);
+                }
+                if !is_water && !is_path {
+                    let height_at = |sample_pos: Vec2<i32>| -> f64 {
+                        if bounds_check(sample_pos) {
+                            rescale_height(scale_height_big(alt[sample_pos])) as f64
+                        } else {
+                            alt_norm
+                        }
+                    };
+                    let west = height_at(pos - Vec2::new(1, 0));
+                    let east = height_at(pos + Vec2::new(1, 0));
+                    let north = height_at(pos - Vec2::new(0, 1));
+                    let south = height_at(pos + Vec2::new(0, 1));
+                    let slope = (((east - west).powi(2) + (south - north).powi(2)).sqrt() * 18.0)
+                        .clamp(0.0, 1.0);
+                    let light = ((west + north) - (east + south)) * 8.0;
+
+                    let hash_noise = |salt: i32| -> f64 {
+                        let mut h = (pos.x as i64).wrapping_mul(73_856_093)
+                            ^ (pos.y as i64).wrapping_mul(19_349_663)
+                            ^ (salt as i64).wrapping_mul(83_492_791);
+                        h ^= h >> 13;
+                        h = h.wrapping_mul(1_274_126_177);
+                        (((h & 0xffff) as f64 / 65535.0) * 2.0) - 1.0
+                    };
+                    let coarse = hash_noise(11);
+                    let fine = hash_noise(37);
+                    let micro = hash_noise(71);
+
+                    let mut shade = 1.0
+                        + light.clamp(-0.24, 0.24)
+                        + slope * 0.16
+                        + coarse * (0.10 + alt_norm * 0.08)
+                        + fine * 0.055
+                        + micro * slope * 0.16;
+                    if is_stylized_topo {
+                        shade += coarse * 0.06 + slope * 0.08;
+                    }
+                    shade = shade.clamp(0.58, 1.38);
+                    rgb = rgb.map(|channel| (f64::from(channel) * shade).clamp(0.0, 255.0) as u8);
+
+                    if alt_norm > 0.06 {
+                        let contour_phase = (alt_norm * max_height as f64 / 50.0).rem_euclid(1.0);
+                        let contour = (0.070 - contour_phase.min(1.0 - contour_phase))
+                            .clamp(0.0, 0.070)
+                            / 0.070;
+                        let strength = contour
+                            * if is_stylized_topo {
+                                (0.22 + alt_norm * 0.38).min(0.48)
+                            } else {
+                                (0.16 + alt_norm * 0.34).min(0.42)
+                            };
+                        rgb = rgb.map(|channel| {
+                            (f64::from(channel) * (1.0 - strength)).clamp(0.0, 255.0) as u8
+                        });
+                    }
+
+                    if slope > 0.24 {
+                        let ridge =
+                            ((slope - 0.24) / 0.76).clamp(0.0, 1.0) * (0.20 + alt_norm * 0.34);
+                        rgb = Rgb::new(
+                            (f64::from(rgb.r) * (1.0 - ridge) + 28.0 * ridge) as u8,
+                            (f64::from(rgb.g) * (1.0 - ridge) + 22.0 * ridge) as u8,
+                            (f64::from(rgb.b) * (1.0 - ridge) + 18.0 * ridge) as u8,
+                        );
+                    }
+                }
                 common::terrain::map::MapSample {
                     rgb,
-                    alt,
+                    alt: alt_norm,
                     downhill_wpos,
                     connections: None,
                 }
@@ -934,6 +1082,7 @@ impl Client {
                         pos,
                         &alt,
                         &rgba,
+                        &distance_to_land,
                         &map_size,
                         &map_size_lg,
                         max_height,
@@ -962,6 +1111,7 @@ impl Client {
                         pos,
                         &alt,
                         &rgba,
+                        &distance_to_land,
                         &map_size,
                         &map_size_lg,
                         max_height,

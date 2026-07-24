@@ -96,6 +96,9 @@ const DEFAULT_WORLD_CHUNKS_LG: MapSizeLg =
 /// functions for the input that led to those values.  See the definition of
 /// InverseCdf for a description of how to interpret the types of its fields.
 struct GenCdf {
+    pub(crate) authored_cromatolis_v0: bool,
+    authored_route_layer: Option<Box<[f32]>>,
+    authored_vegetation_layer: Option<Box<[f32]>>,
     humid_base: InverseCdf,
     temp_base: InverseCdf,
     chaos: InverseCdf,
@@ -202,6 +205,10 @@ impl Default for FileOpts {
 }
 
 impl FileOpts {
+    fn is_cromatolis_v0_asset(&self) -> bool {
+        matches!(self, Self::LoadAsset(specifier) if specifier == "world.map.cromatolis_v0")
+    }
+
     fn load_content(&self) -> (Option<ModernMap>, MapSizeLg, GenOpts) {
         let parsed_world_file = self.try_load_map();
 
@@ -556,6 +563,26 @@ impl FileAsset for WorldFile {
     fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_bincode_legacy(&bytes) }
 }
 
+struct AuthoredF32Layer {
+    values: Box<[f32]>,
+}
+
+impl FileAsset for AuthoredF32Layer {
+    const EXTENSION: &'static str = "f32le";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let chunks = bytes.chunks_exact(4);
+        if !chunks.remainder().is_empty() {
+            return Err("authored f32 layer length was not a multiple of 4".into());
+        }
+        let values = chunks
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok(Self { values })
+    }
+}
+
 /// Data for the most recent map type.  Update this when you add a new map
 /// version.
 pub type ModernMap = WorldMap_0_7_0;
@@ -727,6 +754,7 @@ impl WorldSim {
             map_size_lg: MapSizeLg::new(Vec2::one()).unwrap(),
             max_height: 0.0,
             chunks: vec![SimChunk {
+                authored_cromatolis_v0: false,
                 chaos: 0.0,
                 alt: 0.0,
                 basement: 0.0,
@@ -767,7 +795,34 @@ impl WorldSim {
         let world_file = opts.world_file;
 
         // Parse out the contents of various map formats into the values we need.
+        let authored_cromatolis_v0 = world_file.is_cromatolis_v0_asset();
         let (parsed_world_file, map_size_lg, gen_opts) = world_file.load_content();
+        let load_authored_layer = |specifier, label| match AuthoredF32Layer::load_owned(specifier) {
+            Ok(layer) if layer.values.len() == map_size_lg.chunks_len() => Some(layer.values),
+            Ok(layer) => {
+                warn!(
+                    actual = layer.values.len(),
+                    expected = map_size_lg.chunks_len(),
+                    "Ignoring Cromatolis authored layer with invalid length: {}",
+                    label
+                );
+                None
+            },
+            Err(err) => {
+                warn!(?err, "Could not load Cromatolis authored layer: {}", label);
+                None
+            },
+        };
+        let authored_route_layer = if authored_cromatolis_v0 {
+            load_authored_layer("world.map.cromatolis_v0_routes", "routes")
+        } else {
+            None
+        };
+        let authored_vegetation_layer = if authored_cromatolis_v0 {
+            load_authored_layer("world.map.cromatolis_v0_vegetation", "vegetation")
+        } else {
+            None
+        };
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
         let fresh = parsed_world_file.is_none();
@@ -1553,7 +1608,7 @@ impl WorldSim {
         .map(|posi| water_height_initial(posi))
         .collect::<Vec<_>>(); */
 
-        let rivers = get_rivers(
+        let mut rivers = get_rivers(
             map_size_lg,
             gen_opts.scale,
             &water_alt_pos,
@@ -1562,6 +1617,21 @@ impl WorldSim {
             &indirection,
             &flux_rivers,
         );
+        if authored_cromatolis_v0 {
+            for (idx, river) in rivers.iter_mut().enumerate() {
+                river.river_kind = if alt[idx] < 0.0 {
+                    if is_ocean[idx] {
+                        Some(RiverKind::Ocean)
+                    } else {
+                        Some(RiverKind::Lake {
+                            neighbor_pass_pos: uniform_idx_as_vec2(map_size_lg, idx),
+                        })
+                    }
+                } else {
+                    None
+                };
+            }
+        }
 
         let water_alt = indirection
             .par_iter()
@@ -1573,7 +1643,7 @@ impl WorldSim {
                 } else {
                     indirection_idx as usize
                 };
-                if dh[lake_idx] < 0 {
+                if authored_cromatolis_v0 || dh[lake_idx] < 0 {
                     // This is either a boundary node (dh[chunk_idx] == -2, i.e. water is at sea
                     // level) or part of a lake that flows directly into the
                     // ocean.  In the former case, water is at sea level so we
@@ -1678,6 +1748,9 @@ impl WorldSim {
             );
 
         let gen_cdf = GenCdf {
+            authored_cromatolis_v0,
+            authored_route_layer,
+            authored_vegetation_layer,
             humid_base,
             temp_base,
             chaos,
@@ -2501,6 +2574,7 @@ impl WorldSim {
 
 #[derive(Debug)]
 pub struct SimChunk {
+    pub(crate) authored_cromatolis_v0: bool,
     pub chaos: f32,
     pub alt: f32,
     pub basement: f32,
@@ -2544,6 +2618,60 @@ pub struct NearestWaysData<M, F: FnOnce() -> Vec2<f32>> {
     pub calc_tangent: F,
 }
 
+fn authored_layer_idx_for_cromatolis_v0(map_size_lg: MapSizeLg, posi: usize) -> usize {
+    let width = usize::from(map_size_lg.chunks().x);
+    let height = usize::from(map_size_lg.chunks().y);
+    let x = posi % width;
+    let y = posi / width;
+    (height - 1 - y) * width + x
+}
+
+fn authored_layer_value_for_cromatolis_v0(
+    map_size_lg: MapSizeLg,
+    posi: usize,
+    layer: &[f32],
+) -> f32 {
+    let layer_idx = authored_layer_idx_for_cromatolis_v0(map_size_lg, posi);
+    layer
+        .get(layer_idx)
+        .copied()
+        .unwrap_or_default()
+        .clamp(0.0, 1.0)
+}
+
+fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Option<Way> {
+    const ROUTE_THRESHOLD: f32 = 0.62;
+    const NEIGHBOR_ROUTE_THRESHOLD: f32 = 0.50;
+
+    if authored_layer_value_for_cromatolis_v0(map_size_lg, posi, routes) < ROUTE_THRESHOLD {
+        return None;
+    }
+
+    let pos = uniform_idx_as_vec2(map_size_lg, posi);
+    let world_size = map_size_lg.chunks();
+    let mut way = Way::default();
+
+    for (idx, neighbor) in NEIGHBORS.iter().enumerate() {
+        let neighbor_pos = pos + *neighbor;
+        if neighbor_pos.x < 0
+            || neighbor_pos.y < 0
+            || neighbor_pos.x >= i32::from(world_size.x)
+            || neighbor_pos.y >= i32::from(world_size.y)
+        {
+            continue;
+        }
+
+        let neighbor_idx = vec2_as_uniform_idx(map_size_lg, neighbor_pos);
+        if authored_layer_value_for_cromatolis_v0(map_size_lg, neighbor_idx, routes)
+            >= NEIGHBOR_ROUTE_THRESHOLD
+        {
+            way.neighbors |= 1 << idx as u8;
+        }
+    }
+
+    way.is_way().then_some(way)
+}
+
 impl SimChunk {
     fn generate(map_size_lg: MapSizeLg, posi: usize, gen_ctx: &GenCtx, gen_cdf: &GenCdf) -> Self {
         let pos = uniform_idx_as_vec2(map_size_lg, posi);
@@ -2577,7 +2705,7 @@ impl SimChunk {
         // We also correlate temperature negatively with altitude and absolute latitude,
         // using different weighting than we use for humidity.
         const TEMP_WEIGHTS: [f32; 3] = [/* 1.5, */ 1.0, 2.0, 1.0];
-        let temp = cdf_irwin_hall(
+        let mut temp = cdf_irwin_hall(
             &TEMP_WEIGHTS,
             [
                 temp_uniform,
@@ -2588,13 +2716,16 @@ impl SimChunk {
         // Convert to [-1, 1]
         .sub(0.5)
         .mul(2.0);
+        if gen_cdf.authored_cromatolis_v0 {
+            temp = if alt_pre > 970.0 { -1.0 } else { 0.55 };
+        }
 
         // Take the weighted average of our randomly generated base humidity, and the
         // calculated water flux over this point in order to compute humidity.
         const HUMID_WEIGHTS: [f32; 3] = [1.0, 1.0, 0.75];
-        let humidity = cdf_irwin_hall(&HUMID_WEIGHTS, [humid_uniform, flux_uniform, 1.0]);
+        let mut humidity = cdf_irwin_hall(&HUMID_WEIGHTS, [humid_uniform, flux_uniform, 1.0]);
         // Moisture evaporates more in hot places
-        let humidity = humidity
+        humidity = humidity
             * (1.0
                 - (temp - CONFIG.tropical_temp)
                     .max(0.0)
@@ -2632,6 +2763,35 @@ impl SimChunk {
             Some(RiverKind::River { .. }) => false, // TODO: inspect width
             None => false,
         };
+        let authored_vegetation_density =
+            gen_cdf
+                .authored_vegetation_layer
+                .as_ref()
+                .map(|vegetation| {
+                    let vegetation =
+                        authored_layer_value_for_cromatolis_v0(map_size_lg, posi, vegetation);
+                    let altitude_tree_factor = if alt_pre < 520.0 {
+                        1.0
+                    } else if alt_pre < 760.0 {
+                        Lerp::lerp(1.0, 0.45, (alt_pre - 520.0) / 240.0)
+                    } else if alt_pre < 970.0 {
+                        Lerp::lerp(0.45, 0.04, (alt_pre - 760.0) / 210.0)
+                    } else {
+                        0.0
+                    };
+                    if is_underwater {
+                        0.0
+                    } else if temp < 0.0 {
+                        vegetation * 0.02
+                    } else {
+                        vegetation * altitude_tree_factor
+                    }
+                });
+        if let Some(vegetation_density) = authored_vegetation_density {
+            if temp >= 0.0 {
+                humidity = humidity.max((0.25 + vegetation_density * 0.72).min(1.0));
+            }
+        }
         let river_xy = Vec2::new(river.velocity.x, river.velocity.y).magnitude();
         let river_slope = river.velocity.z / river_xy;
         match river.river_kind {
@@ -2684,7 +2844,7 @@ impl SimChunk {
             .add(0.5)
         } as f32;
         const MIN_TREE_HUM: f32 = 0.15;
-        let tree_density = tree_density
+        let mut tree_density = tree_density
             // Tree density increases exponentially with humidity...
             .mul((humidity - MIN_TREE_HUM).max(0.0).mul(1.0 + MIN_TREE_HUM) / temp.max(0.75))
             // Places that are *too* wet (like marshes) also get fewer trees because the ground isn't stable enough for
@@ -2693,6 +2853,16 @@ impl SimChunk {
             .mul(0.25 + flux * 0.05)
             // ...but is ultimately limited by available sunlight (and our tree generation system)
             .min(1.0);
+        if let Some(vegetation_density) = authored_vegetation_density {
+            tree_density = if temp < 0.0 {
+                vegetation_density.min(0.04)
+            } else {
+                vegetation_density.powf(1.55)
+            };
+            if temp >= 0.0 && vegetation_density > 0.82 {
+                tree_density = tree_density.max(0.90);
+            }
+        }
 
         // Add geologically short timescale undulation to the world for various reasons
         let alt =
@@ -2735,7 +2905,19 @@ impl SimChunk {
                 }
             };
 
+        let authored_path = gen_cdf
+            .authored_route_layer
+            .as_ref()
+            .and_then(|routes| authored_route_way(map_size_lg, posi, routes))
+            .map(|way| {
+                (way, Path {
+                    width: crate::layer::CROMATOLIS_AUTHORED_PATH_WIDTH,
+                })
+            })
+            .unwrap_or_default();
+
         Self {
+            authored_cromatolis_v0: gen_cdf.authored_cromatolis_v0,
             chaos,
             flux,
             alt,
@@ -2776,7 +2958,7 @@ impl SimChunk {
             sites: Vec::new(),
             place: None,
             poi: None,
-            path: Default::default(),
+            path: authored_path,
             cliff_height: 0.0,
             spot: None,
 
@@ -2797,7 +2979,7 @@ impl SimChunk {
             BiomeKind::Ocean
         } else if self.river.is_lake() {
             BiomeKind::Lake
-        } else if self.temp < CONFIG.snow_temp {
+        } else if !self.authored_cromatolis_v0 && self.temp < CONFIG.snow_temp {
             BiomeKind::Snowland
         } else if self.alt > 500.0 && self.chaos > 0.3 && self.tree_density < 0.6 {
             BiomeKind::Mountain

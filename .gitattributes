@@ -11,6 +11,7 @@
 *.blend filter=lfs diff=lfs merge=lfs -text
 *.canary filter=lfs diff=lfs merge=lfs -text
 assets/world/map/*.bin filter=lfs diff=lfs merge=lfs -text
+assets/world/map/*.f32le filter=lfs diff=lfs merge=lfs -text
 
 *.ron gitlab-language=rust
 

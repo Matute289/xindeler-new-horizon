@@ -12,8 +12,27 @@ use common::{
     },
     vol::RectVolSize,
 };
-use std::f64;
+use noise::NoiseFn;
+use std::{f64, ops::Div};
 use vek::*;
+
+fn blend_rgb(base: Rgb<u8>, overlay: Rgb<u8>, blend: f64) -> Rgb<u8> {
+    let blend = blend.clamp(0.0, 1.0);
+    Rgb::new(
+        (base.r as f64 * (1.0 - blend) + overlay.r as f64 * blend) as u8,
+        (base.g as f64 * (1.0 - blend) + overlay.g as f64 * blend) as u8,
+        (base.b as f64 * (1.0 - blend) + overlay.b as f64 * blend) as u8,
+    )
+}
+
+fn shade_rgb(base: Rgb<u8>, factor: f64) -> Rgb<u8> {
+    let factor = factor.clamp(0.35, 1.35);
+    Rgb::new(
+        (base.r as f64 * factor).clamp(0.0, 255.0) as u8,
+        (base.g as f64 * factor).clamp(0.0, 255.0) as u8,
+        (base.b as f64 * factor).clamp(0.0, 255.0) as u8,
+    )
+}
 
 /// A sample function that grabs the connections at a chunk.
 ///
@@ -192,14 +211,11 @@ pub fn sample_pos(
         column_data.map_or(alt, |(_, alt, _)| alt)
     };
 
+    let depth_m = (alt.max(water_alt) - alt).max(0.0) as f64;
     let true_water_alt = (alt.max(water_alt) as f64 - focus.z) / gain as f64;
     let true_alt = (alt as f64 - focus.z) / gain as f64;
-    let water_depth = (true_water_alt - true_alt).clamp(0.0, 1.0);
     let alt = true_alt.clamp(0.0, 1.0);
 
-    let water_color_factor = 2.0;
-    let g_water = 32.0 * water_color_factor;
-    let b_water = 64.0 * water_color_factor;
     let default_rgb = Rgb::new(
         if is_shaded || is_temperature {
             1.0
@@ -258,14 +274,133 @@ pub fn sample_pos(
                 );
                 Rgb::new((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
             },
-            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => Rgb::new(
-                0,
-                ((g_water - water_depth * g_water) * 1.0) as u8,
-                ((b_water - water_depth * b_water) * 1.0) as u8,
-            ),
+            (None | Some(RiverKind::Lake { .. } | RiverKind::Ocean), _) => match depth_m {
+                depth if depth < 5.0 => Rgb::new(0, 0xa8, 0xc9),
+                depth if depth < 15.0 => Rgb::new(0, 0x91, 0xbd),
+                depth if depth < 30.0 => Rgb::new(0, 0x78, 0xab),
+                depth if depth < 70.0 => Rgb::new(0, 0x61, 0x99),
+                depth if depth < 150.0 => Rgb::new(0, 0x4b, 0x82),
+                depth if depth < 300.0 => Rgb::new(0, 0x36, 0x6b),
+                _ => Rgb::new(0, 0x22, 0x52),
+            },
         }
     };
-    // TODO: Make principled.
+    let rgb = if let Some(sample) = sampler
+        .get(pos)
+        .filter(|sample| sample.authored_cromatolis_v0)
+        .filter(|_| {
+            !matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
+                && true_alt >= true_sea_level
+        }) {
+        let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
+        let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
+
+        let mut out = rgb;
+        if sample.temp >= 0.0 {
+            let dry = Rgb::new(0xbd, 0xad, 0x5a);
+            let dry_blend = ((0.48 - vegetation) / 0.48).clamp(0.0, 1.0)
+                * (1.0 - (altitude / 0.35).clamp(0.0, 1.0))
+                * 0.72;
+            out = Rgb::new(
+                (out.r as f64 * (1.0 - dry_blend) + dry.r as f64 * dry_blend) as u8,
+                (out.g as f64 * (1.0 - dry_blend) + dry.g as f64 * dry_blend) as u8,
+                (out.b as f64 * (1.0 - dry_blend) + dry.b as f64 * dry_blend) as u8,
+            );
+
+            if altitude > 0.28 {
+                let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
+                let mountain = if mountain_t > 0.6 {
+                    Rgb::new(0x3d, 0x28, 0x1a)
+                } else {
+                    Rgb::new(0x78, 0x55, 0x32)
+                };
+                let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
+                out = Rgb::new(
+                    (out.r as f64 * (1.0 - mountain_blend) + mountain.r as f64 * mountain_blend)
+                        as u8,
+                    (out.g as f64 * (1.0 - mountain_blend) + mountain.g as f64 * mountain_blend)
+                        as u8,
+                    (out.b as f64 * (1.0 - mountain_blend) + mountain.b as f64 * mountain_blend)
+                        as u8,
+                );
+            }
+
+            if vegetation > 0.24 {
+                let forest = if vegetation > 0.72 {
+                    Rgb::new(0x08, 0x36, 0x20)
+                } else if vegetation > 0.46 {
+                    Rgb::new(0x28, 0x73, 0x35)
+                } else {
+                    Rgb::new(0x82, 0x9d, 0x42)
+                };
+                let altitude_limit =
+                    (1.0 - ((altitude - 0.32) / 0.52).clamp(0.0, 1.0) * 0.78).clamp(0.0, 1.0);
+                let blend = ((vegetation - 0.24) / 0.76).clamp(0.0, 1.0) * altitude_limit * 0.94;
+                out = Rgb::new(
+                    (out.r as f64 * (1.0 - blend) + forest.r as f64 * blend) as u8,
+                    (out.g as f64 * (1.0 - blend) + forest.g as f64 * blend) as u8,
+                    (out.b as f64 * (1.0 - blend) + forest.b as f64 * blend) as u8,
+                );
+            }
+        }
+        let neighbor_alt = |offset: Vec2<i32>| {
+            sampler
+                .get(pos + offset)
+                .map(|sample| sample.alt)
+                .unwrap_or(sample.alt) as f64
+        };
+        let west = neighbor_alt(Vec2::new(-1, 0));
+        let east = neighbor_alt(Vec2::new(1, 0));
+        let north = neighbor_alt(Vec2::new(0, -1));
+        let south = neighbor_alt(Vec2::new(0, 1));
+        let slope =
+            (((east - west).powi(2) + (south - north).powi(2)).sqrt() / 190.0).clamp(0.0, 1.0);
+        let light = ((west + north) - (east + south)) / 260.0;
+
+        let wposf = (pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32)).map(|e| e as f64);
+        let large_noise = sampler
+            .gen_ctx
+            .hill_nz
+            .get((wposf.div(900.0)).into_array())
+            .clamp(-1.0, 1.0);
+        let fine_noise = sampler
+            .gen_ctx
+            .small_nz
+            .get((wposf.div(180.0)).into_array())
+            .clamp(-1.0, 1.0);
+        let rock_noise = sampler
+            .gen_ctx
+            .rock_nz
+            .get((wposf.div(420.0)).into_array())
+            .clamp(-1.0, 1.0);
+
+        let texture_strength = (0.05 + altitude * 0.07 + vegetation * 0.035).clamp(0.04, 0.14);
+        let texture = 1.0
+            + large_noise * texture_strength
+            + fine_noise * texture_strength * 0.55
+            + rock_noise * slope * 0.11;
+        out = shade_rgb(out, texture);
+
+        let hillshade = (1.0 + light.clamp(-0.18, 0.18) + slope * 0.10).clamp(0.72, 1.24);
+        out = shade_rgb(out, hillshade);
+
+        if altitude > 0.18 {
+            let contour_phase = ((sample.alt - CONFIG.sea_level) as f64 / 58.0).rem_euclid(1.0);
+            let contour =
+                (0.055 - contour_phase.min(1.0 - contour_phase)).clamp(0.0, 0.055) / 0.055;
+            let contour_strength = contour * (0.12 + altitude * 0.18).min(0.28);
+            out = shade_rgb(out, 1.0 - contour_strength);
+        }
+
+        if slope > 0.22 {
+            let ridge = ((slope - 0.22) / 0.78).clamp(0.0, 1.0) * (0.16 + altitude * 0.20);
+            out = blend_rgb(out, Rgb::new(0x24, 0x1c, 0x15), ridge);
+        }
+
+        out
+    } else {
+        rgb
+    };
     let rgb = if is_bridge {
         Rgb::new(0x80, 0x80, 0x80)
     } else if is_path {
