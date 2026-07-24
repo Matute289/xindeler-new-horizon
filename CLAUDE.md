@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## What this repo is
+
+`xindeler-new-horizon` is the successor track chosen 2026-07-24 after an engine-strategy
+investigation (`docs/design/specs/2026-07-24-engine-strategy-veloren-vs-bevy.md`, private repo)
+concluded that reverting to the original Veloren-derived engine — rather than continuing the
+from-scratch Bevy 0.19 port — was the more viable path. Three related repos exist:
+- **`xindeler-new-horizon`** (this repo) — the live, ongoing successor project. All new work
+  happens here.
+- **`xindeler-old`** (sibling local checkout) — the frozen source this repo was cloned from
+  (Veloren-derived engine, still `veloren`-branded). Kept as a clean reference; not touched by
+  new-horizon work.
+- **`xindeler`** (sibling local checkout) — the earlier Bevy 0.19 port. Superseded, not deleted;
+  its shared sim-crate history and any future frozen-reserve decision are documented in the
+  engine-strategy spec above.
+
+Full rationale, the conditional pivot plan, and the `NH-N` backlog rows all live in
+`docs/design/` (the same private repo nested in `xindeler`, reused here — see below).
+
 ## Interaction Convention — Fill-in Worksheets (Matias ⇄ Claude)
 
 Whenever you need Matias to **make decisions, choose between options, confirm renames/changes, or supply information**, do **not** scatter the questions through prose or rely only on `AskUserQuestion`. Instead present a **plain-text fill-in worksheet** Matias can copy into Sublime Text, complete offline, and paste back whole — easy for him to fill, unambiguous for you to parse, with tables that never break alignment.
@@ -100,24 +118,25 @@ In dev builds, `voxygen-anim` and `server-agent` are compiled as `cdylib` crates
 ## Documentation & Git Policy
 
 **Where docs live — two repos, one working tree:**
-- Design docs (specs, plans, task boards) live in `docs/design/`, which is a **separate, private git repo** (`Matute289/xindeler-design`) nested inside this one and gitignored here. Commit and push design docs from inside `docs/design/` — never into this (public) repo.
+- Design docs (specs, plans, task boards) live in `docs/design/`, which is the **same separate, private git repo** used by the sibling Bevy-port project (`Matute289/xindeler-design`) — nested inside this repo too, and gitignored here. Commit and push design docs from inside `docs/design/` — never into this (public) repo. Reusing the same private repo (rather than forking a second one) keeps the engine-strategy decision history and the `docs/design/backlog/new-horizon.md` backlog in one place.
   - Specs → `docs/design/specs/`, implementation plans → `docs/design/plans/`, task boards → `docs/design/tasks/` (index: `00-task-board.md`).
+  - The **working backlog for this project** is `docs/design/backlog/new-horizon.md` (private) — NH-N rows, not a public `docs/backlog/backlog.md` (that file belongs to the sibling Bevy-port repo's own history).
 - Lore canon (markdown) lives at `docs/design/lore/` in the private design repo. `docs/lore/` is a legacy path kept gitignored as a guard — never create files there.
 - `.superpowers/` (brainstorm scratch) and `graphify-out/` are local-only and gitignored; never commit them anywhere. Brainstorm conclusions belong as a spec/plan in `docs/design/`.
 - The `gitlab` remote is the fetch-only upstream (push disabled); never push to it.
 
-**Branch protection (public repo `Matute289/xindeler`):**
-- `main` and `development` are protected: no direct pushes (admins included), no force-pushes, no deletion. All changes land via PR with 1 approval.
-- AI agents must NEVER merge or approve PRs, push to `main`/`development`, or touch branch-protection settings. Workflow: branch off `development` → commit → push branch → open PR with base `development` → stop and report. Only Matias reviews and merges.
+**Branch protection (public repo `Matute289/xindeler-new-horizon`):**
+- `main` and `development` require a PR + 1 approval, block force-pushes and deletion — but **`enforce_admins` is OFF**: Matias (as repo admin) can merge or push directly when he chooses to, unlike the sibling Bevy-port repo where even admins are hard-blocked. This is deliberate for this project.
+- AI agents must still NEVER merge or approve PRs, push to `main`/`development`, or touch branch-protection settings themselves — the admin-bypass exists for Matias, not for the agent. Workflow: branch off `development` → commit → push branch → open PR with base `development` → stop and report. Only Matias reviews and merges (or bypasses, at his own discretion).
 
 ## Git LFS & Binary Assets (the VPS) — IMPORTANT
 
 Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico`, `.obj`/`.blend`, `assets/world/map/*.bin`, etc. — the full list is `.gitattributes`) are **NOT stored on GitHub**. They live on a self-hosted Git LFS store on the VPS. GitHub holds only code, RON/i18n text, and tiny **LFS pointer files**.
 
 **Topology — three sources, one working tree:**
-- **GitHub public** (`Matute289/xindeler`, `origin`) — code + RON/i18n + LFS pointers. No blobs.
-- **VPS** (`greenmountain.dev:/srv/git-lfs/repos/xindeler.git`) — the actual binary blobs, served by `git-lfs-transfer` over **pure SSH** (no HTTP server, no Caddy). Private (SSH-key auth). It is the **single copy** of the binaries, so it must be backed up server-side. Server-side setup notes live in the private `MyServerVPS` repo (`git-lfs/`).
-- **GitHub private** (`Matute289/xindeler-design`, nested at `docs/design/`) — design/lore.
+- **GitHub public** (`Matute289/xindeler-new-horizon`, `origin`) — code + RON/i18n + LFS pointers. No blobs.
+- **VPS** (`greenmountain.dev:/srv/git-lfs/repos/xindeler.git`) — the SAME shared blob store the sibling Bevy-port repo and `xindeler-old` already use (asset history is common to all three), served by `git-lfs-transfer` over **pure SSH** (no HTTP server, no Caddy). Private (SSH-key auth). It is the **single copy** of the binaries, so it must be backed up server-side. Server-side setup notes live in the private `MyServerVPS` repo (`git-lfs/`).
+- **GitHub private** (`Matute289/xindeler-design`, nested at `docs/design/`) — design/lore, shared with the sibling Bevy-port repo (see above).
 
 **How it's wired:**
 - `.lfsconfig` (committed) sets `lfs.url = ssh://mgrinberg@greenmountain.dev/srv/git-lfs/repos/xindeler.git`. Every clone reads it, so all LFS push/fetch goes to the VPS — never GitHub.
@@ -133,11 +152,12 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 **Where each build runs:**
 - **Code CI** (build / check / test / lint on PRs) → **GitHub Actions** (public repo = free, unlimited minutes). It must **not** pull LFS — compilation and tests don't need the binary assets.
-- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>` → produces `/srv/git-lfs/releases/xindeler-server-<tag>.tar.gz`.
-- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `veloren-server-cli`, pushes to GHCR.
-- **Client release** (voxygen desktop installer + Airshipper) → **deferred** to the first client release; study Veloren's packaging then. The shipped client necessarily bundles its assets (players have them locally) — "private" means private in source control, not in the shipped binary.
+- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`. **TODO before first use**: this script was written for the sibling repos and needs to be checked/adapted server-side to build from `xindeler-new-horizon` (checkout path, binary name, output path) before a real `v*` tag push is made here.
+- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `veloren-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
+- **Client release** (voxygen desktop installer + Airshipper) → **deferred**, same as the sibling repo.
+- **Repo secrets**: this is a brand-new repo — `secrets.VPS_SSH_KEY` has NOT been configured yet (`gh secret set VPS_SSH_KEY < path/to/key`, or via the GitHub UI). CI that needs VPS SSH will fail until this is added.
 
-**GitHub Actions minutes:** the 2,000-minute quota is for **private** repos only; the public `xindeler` repo runs Actions for free. Heavy Rust builds run on the VPS anyway, so they don't consume GitHub minutes.
+**GitHub Actions minutes:** the 2,000-minute quota is for **private** repos only; the public `xindeler-new-horizon` repo runs Actions for free. Heavy Rust builds run on the VPS anyway, so they don't consume GitHub minutes.
 
 ## Upstream Sync (GitLab Veloren)
 
@@ -157,12 +177,14 @@ Custom profiles in the workspace `Cargo.toml`:
 
 ## 📋 Project Backlog (scored & prioritized)
 
-**The full scored master backlog lives in [`docs/backlog/backlog.md`](docs/backlog/backlog.md)** — moved
-out of this file to keep CLAUDE.md lean. It is **the single always-present roadmap** (all `BL-NN` epics +
-the scoring rubric + dependency edges + parallel tracks), each row referencing its specs/plans/tasks in
-the private `docs/design/`.
+**The working backlog for this project is [`docs/design/backlog/new-horizon.md`](docs/design/backlog/new-horizon.md)** —
+private (see Documentation & Git Policy above), `NH-N` rows, each referencing its specs/plans/tasks in
+the same private `docs/design/` repo. There is no public `docs/backlog/backlog.md` in this repo yet —
+if/when this project reaches a maturity where a public-facing summary backlog is useful, model it after
+the sibling Bevy-port repo's `docs/backlog/engine-migration.md`, but don't invent one prematurely.
 
-**Always read `docs/backlog/backlog.md` on resume and before starting / after finishing any work**, together
-with `docs/design/session-notes.md` + `agenda.md`. The backlog is **multi-session**: `git pull`/re-sync
-`development` before editing, add+score new `BL-NN` rows **there** (not here), and commit only your own rows.
+**Always read `docs/design/backlog/new-horizon.md` on resume and before starting / after finishing any
+work.** The backlog is **multi-session**: `git pull`/re-sync `development` (in `docs/design`, a separate
+repo — see Documentation & Git Policy) before editing, add+score new `NH-N` rows there, and commit only
+your own rows.
 
