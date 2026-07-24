@@ -52,6 +52,7 @@ command-dummy-desc = Spawns a training dummy
 command-explosion-desc = Explodes the ground around you
 command-faction-desc = Send messages to your faction
 command-give_item-desc = Give yourself some items. For an example or to auto complete use Tab.
+command-give_item_quality-desc = (Admin) Give yourself an item at a chosen quality tier, for comparing rarity-tier rendering: item quality [num]
 command-gizmos-desc = Manage gizmo subscriptions.
 command-gizmos_range-desc = Change the range of gizmo subscriptions.
 command-goto-desc = Teleport to a position
@@ -76,6 +77,7 @@ command-location-desc = Teleport to a location
 command-make_block-desc = Make a block at your location with a color
 command-make_npc-desc = Spawn entity from config near you.
   For an example or to auto complete use Tab.
+command-make_party-desc = (Admin) Spawn 3 NPCs near you, each a given class and level, with a random name/race and a moral alignment compatible with your own, then group them with you: class1 level1 class2 level2 class3 level3
 command-make_sprite-desc = Make a sprite at your location, to define sprite attributes use ron syntax for a StructureSprite.
 command-make_volume-desc = Create a volume (experimental)
 command-motd-desc = View the server description
@@ -198,6 +200,7 @@ command-give-inventory-full = Player inventory full. Gave { $given ->
   *[other] { $given }
 } of { $total } items.
 command-give-inventory-success = Added { $total } x { $item } to the inventory.
+command-give_item_quality-success = Added { $total } x { $item } ({ $quality } quality) to the inventory.
 command-invalid-item = Invalid item: { $item }
 command-invalid-block-kind = Invalid block kind: { $kind }
 command-nof-entities-at-least = Number of entities should be at least 1

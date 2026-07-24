@@ -2,8 +2,10 @@ use crate::{
     assets::{AssetCombined, Ron},
     combat::GroupTarget,
     comp::{
-        self, AdminRole as Role, Skill, aura::AuraKindVariant, buff::BuffKind,
-        inventory::item::try_all_item_defs,
+        self, AdminRole as Role, Skill,
+        aura::AuraKindVariant,
+        buff::BuffKind,
+        inventory::item::{Quality, try_all_item_defs},
     },
     generation::try_all_entity_configs,
     npc, outcome,
@@ -404,6 +406,7 @@ pub enum ServerChatCommand {
     Explosion,
     Faction,
     GiveItem,
+    GiveItemQuality,
     Gizmos,
     GizmosRange,
     Goto,
@@ -427,6 +430,7 @@ pub enum ServerChatCommand {
     Location,
     MakeBlock,
     MakeNpc,
+    MakeParty,
     MakeSprite,
     MakeTestChar,
     MakeVolume,
@@ -694,6 +698,15 @@ impl ServerChatCommand {
                 Content::localized("command-give_item-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::GiveItemQuality => cmd(
+                vec![
+                    AssetPath("item", "common.items.", ITEM_SPECS.clone(), Required),
+                    Enum("quality", Quality::all_options(), Required),
+                    Integer("num", 1, Optional),
+                ],
+                Content::localized("command-give_item_quality-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::Gizmos => cmd(
                 vec![
                     Enum(
@@ -842,6 +855,27 @@ impl ServerChatCommand {
                 Content::localized("command-make_npc-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::MakeParty => {
+                let class_kinds = || {
+                    // Single source of truth — don't hardcode the class list.
+                    crate::comp::class::ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword().to_owned())
+                        .collect::<Vec<_>>()
+                };
+                cmd(
+                    vec![
+                        Enum("class1", class_kinds(), Required),
+                        Integer("level1", 1, Required),
+                        Enum("class2", class_kinds(), Required),
+                        Integer("level2", 1, Required),
+                        Enum("class3", class_kinds(), Required),
+                        Integer("level3", 1, Required),
+                    ],
+                    Content::localized("command-make_party-desc"),
+                    Some(Admin),
+                )
+            },
             ServerChatCommand::MakeSprite => cmd(
                 vec![Enum("sprite", SPRITE_KINDS.clone(), Required)],
                 Content::localized("command-make_sprite-desc"),
@@ -1266,6 +1300,7 @@ impl ServerChatCommand {
             ServerChatCommand::Explosion => "explosion",
             ServerChatCommand::Faction => "faction",
             ServerChatCommand::GiveItem => "give_item",
+            ServerChatCommand::GiveItemQuality => "give_item_quality",
             ServerChatCommand::Gizmos => "gizmos",
             ServerChatCommand::GizmosRange => "gizmos_range",
             ServerChatCommand::Goto => "goto",
@@ -1288,6 +1323,7 @@ impl ServerChatCommand {
             ServerChatCommand::Light => "light",
             ServerChatCommand::MakeBlock => "make_block",
             ServerChatCommand::MakeNpc => "make_npc",
+            ServerChatCommand::MakeParty => "make_party",
             ServerChatCommand::MakeSprite => "make_sprite",
             ServerChatCommand::Motd => "motd",
             ServerChatCommand::Object => "object",
@@ -1629,6 +1665,17 @@ impl_from_to_str_cmd!(AuraKindVariant, (
     Buff => "buff",
     FriendlyFire => "friendly_fire",
     ForcePvP => "force_pvp"
+));
+
+impl_from_to_str_cmd!(Quality, (
+    Low => "low",
+    Common => "common",
+    Moderate => "moderate",
+    High => "high",
+    Epic => "epic",
+    Legendary => "legendary",
+    Artifact => "artifact",
+    Debug => "debug"
 ));
 
 impl_from_to_str_cmd!(GroupTarget, (

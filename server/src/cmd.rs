@@ -15,7 +15,7 @@ use crate::{
         server_description::ServerDescription,
         server_physics::ServerPhysicsForceRecord,
     },
-    sys::terrain::SpawnEntityData,
+    sys::terrain::{NpcData, SpawnEntityData},
     wiring::{self, OutputFormula},
 };
 #[cfg(feature = "worldgen")]
@@ -29,7 +29,7 @@ use common::{
     assets,
     calendar::Calendar,
     cmd::{
-        AreaKind, BUFF_PACK, BUFF_PARSER, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
+        AreaKind, BUFF_PACK, BUFF_PARSER, CommandEnumArg, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
         PRESET_MANIFEST_PATH, ServerChatCommand,
     },
     combat,
@@ -169,6 +169,7 @@ fn do_command(
         ServerChatCommand::Explosion => handle_explosion,
         ServerChatCommand::Faction => handle_faction,
         ServerChatCommand::GiveItem => handle_give_item,
+        ServerChatCommand::GiveItemQuality => handle_give_item_quality,
         ServerChatCommand::Gizmos => handle_gizmos,
         ServerChatCommand::GizmosRange => handle_gizmos_range,
         ServerChatCommand::Goto => handle_goto,
@@ -190,6 +191,7 @@ fn do_command(
         ServerChatCommand::Light => handle_light,
         ServerChatCommand::MakeBlock => handle_make_block,
         ServerChatCommand::MakeNpc => handle_make_npc,
+        ServerChatCommand::MakeParty => handle_make_party,
         ServerChatCommand::MakeSprite => handle_make_sprite,
         ServerChatCommand::Motd => handle_motd,
         ServerChatCommand::Object => handle_object,
@@ -707,6 +709,143 @@ fn handle_give_item(
     }
 }
 
+/// `/give_item_quality <item> <quality> [num]` — admin-only test tool (BL-82
+/// EM-5.18): spawns an item at a chosen [`Quality`] tier, so the equipment
+/// panel's rarity-tier slot border rendering can be compared side by side
+/// without needing a matching item to naturally drop/craft at every tier.
+/// Otherwise identical to `/give_item` (same asset loading, same
+/// non-stackable amount cap), plus a quality override applied via
+/// [`Item::set_quality_override`]. Server-authoritative: gated by
+/// `needs_role: Admin` AND re-checked here via `real_role(..) == Admin`, same
+/// pattern as `/set_level`.
+///
+/// NOTE: the quality override is a per-instance runtime property, not
+/// persisted to the database (see `Item::set_quality_override` doc) — an
+/// item given this way that survives a server restart reverts to its item
+/// definition's baseline quality on reload. Acceptable for its purpose
+/// (live-session visual comparison); not fixed here as it would require a
+/// DB schema change for a testing-only command.
+///
+/// NOTE: for a **stackable** asset (e.g. a potion), `quality_override` isn't
+/// part of `Item`'s `PartialEq`/stack-merge check, so giving it a tier that
+/// differs from an existing stack of the same item already in the target's
+/// inventory will silently merge into that stack (adopting whichever
+/// quality was already there) rather than showing the new tier. Harmless in
+/// practice: the intended use (comparing equipment slot-border rendering)
+/// targets non-stackable gear, which never takes this path (each unit lands
+/// in its own slot via the `duplicate()` loop below).
+fn handle_give_item_quality(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    // Defense in depth beyond `needs_role`: re-verify against the authoritative
+    // admin source (same pattern as `/set_level`/`/set_class`).
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /give_item_quality.".to_string(),
+        ));
+    }
+
+    if let (Some(item_name), Some(quality_str), give_amount_opt) =
+        parse_cmd_args!(args, String, String, u32)
+    {
+        let quality = Quality::from_str(quality_str.to_lowercase().as_str()).map_err(|_| {
+            Content::Plain(format!(
+                "Unknown quality '{quality_str}'. Options: {}.",
+                Quality::all_options().join(", ")
+            ))
+        })?;
+
+        let give_amount = give_amount_opt.unwrap_or(1);
+        if let Ok(item) = Item::new_from_asset(&item_name.replace(['/', '\\'], "."))
+            .inspect_err(|error| error!(?error, "Failed to parse item asset!"))
+        {
+            let mut item: Item = item;
+            item.set_quality_override(quality);
+            let mut res = Ok(());
+
+            const MAX_GIVE_AMOUNT: u32 = 2000;
+            // Cap give_amount for non-stackable items
+            let give_amount = if item.is_stackable() {
+                give_amount
+            } else {
+                give_amount.min(MAX_GIVE_AMOUNT)
+            };
+
+            if let Ok(()) = item.set_amount(give_amount) {
+                server
+                    .state
+                    .ecs()
+                    .write_storage::<Inventory>()
+                    .get_mut(target)
+                    .map(|mut inv| {
+                        // NOTE: Deliberately ignores items that couldn't be pushed.
+                        if inv.push(item).is_err() {
+                            res = Err(Content::localized_with_args(
+                                "command-give-inventory-full",
+                                [("total", give_amount as u64), ("given", 0)],
+                            ));
+                        }
+                    });
+            } else {
+                let ability_map = server.state.ecs().read_resource::<AbilityMap>();
+                let msm = server.state.ecs().read_resource::<MaterialStatManifest>();
+                // This item can't stack. Give each item in a loop. `duplicate`
+                // carries the quality override over to each copy.
+                server
+                    .state
+                    .ecs()
+                    .write_storage::<Inventory>()
+                    .get_mut(target)
+                    .map(|mut inv| {
+                        for i in 0..give_amount {
+                            // NOTE: Deliberately ignores items that couldn't be pushed.
+                            if inv.push(item.duplicate(&ability_map, &msm)).is_err() {
+                                res = Err(Content::localized_with_args(
+                                    "command-give-inventory-full",
+                                    [("total", give_amount as u64), ("given", i as u64)],
+                                ));
+                                break;
+                            }
+                        }
+                    });
+            }
+
+            if res.is_ok() {
+                let msg = ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::localized_with_args("command-give_item_quality-success", [
+                        ("total", LocalizationArg::from(give_amount as u64)),
+                        ("item", LocalizationArg::from(item_name)),
+                        ("quality", LocalizationArg::from(quality_str)),
+                    ]),
+                );
+                server.notify_client(client, msg);
+            }
+
+            let mut inventory_update_buffers = server
+                .state
+                .ecs_mut()
+                .write_storage::<comp::InventoryUpdateBuffer>();
+            if let Some(buf) = inventory_update_buffers.get_mut(target) {
+                buf.push(comp::InventoryUpdateEvent::Given);
+            }
+
+            res
+        } else {
+            Err(Content::localized_with_args("command-invalid-item", [(
+                "item", item_name,
+            )]))
+        }
+    } else {
+        Err(action.help_content())
+    }
+}
+
 fn handle_gizmos(
     server: &mut Server,
     _client: EcsEntity,
@@ -973,6 +1112,221 @@ fn handle_make_npc(
                 ("n", number.to_string()),
                 ("config", entity_config),
             ]),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/make_party <class1> <level1> <class2> <level2> <class3> <level3>` —
+/// admin-only test tool (BL-82): spawns 3 NPCs near the caller, each with a
+/// given class/level, a random name and race, and a moral alignment
+/// ([`Moral`]) compatible with the caller's own current `Ethos` (see
+/// [`Moral::compatible_npc_morals`] for the exact compatibility table), then
+/// groups all 3 with the caller as leader — a party of 4. Unblocks manual
+/// testing of the party-frames HUD (BL-82 EM-5.17) without needing 3 human
+/// players online.
+///
+/// Deliberately out of scope (BL-57, not started): class-specific starter
+/// gear — NPCs spawn with only the generic per-body default loadout, same as
+/// any other bare humanoid NPC.
+fn handle_make_party(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{
+        class::{CharacterClass, ClassKind},
+        ethos::{Ethos, Order},
+        group::GroupManager,
+        skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind},
+    };
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /make_party.".to_string(),
+        ));
+    }
+
+    let (class1, level1, class2, level2, class3, level3) =
+        parse_cmd_args!(args, String, u16, String, u16, String, u16);
+
+    let mut members = Vec::with_capacity(3);
+    for (class_arg, level) in [(class1, level1), (class2, level2), (class3, level3)] {
+        let class_arg = class_arg.ok_or_else(|| action.help_content())?;
+        let class =
+            ClassKind::from_keyword(class_arg.to_lowercase().as_str()).ok_or_else(|| {
+                Content::Plain(format!(
+                    "Unknown class '{class_arg}'. Options: {}.",
+                    ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+        let level = level.ok_or_else(|| action.help_content())?;
+        if !(1..=MAX_CHARACTER_LEVEL).contains(&level) {
+            return Err(Content::Plain(format!(
+                "Level must be between 1 and {MAX_CHARACTER_LEVEL}."
+            )));
+        }
+        members.push((class, level));
+    }
+
+    // The calling player's own moral alignment gates which NPCs can roll in
+    // (BL-33 `Ethos`; default = True Neutral for characters that never picked
+    // one).
+    let player_moral = server
+        .state
+        .ecs()
+        .read_storage::<Ethos>()
+        .get(target)
+        .copied()
+        .unwrap_or_default()
+        .moral();
+    let allowed_morals = player_moral.compatible_npc_morals();
+
+    let comp::Pos(spawn_pos) = position(server, target, "target")?;
+
+    let mut roll_rng = rng();
+    let mut npc_entities = Vec::with_capacity(members.len());
+    for (class, level) in members {
+        let order = match roll_rng.random_range(0..3usize) {
+            0 => Order::Lawful,
+            1 => Order::Neutral,
+            _ => Order::Chaotic,
+        };
+        let moral = allowed_morals[roll_rng.random_range(0..allowed_morals.len())];
+
+        // Random race + name: `EntityInfo::at` defaults to a random humanoid
+        // body, and `with_automatic_name` derives a name from that body (the
+        // same "random race + name" mechanism used by other auto-named entity
+        // configs, e.g. `assets/common/entity/dungeon/vampire/strigoi.ron`).
+        let entity_info = EntityInfo::at(spawn_pos)
+            .with_alignment(Alignment::Npc)
+            .with_automatic_name()
+            .with_ethos(Ethos::from_box(order, moral));
+        // Generic per-body default gear only — class starter kits are BL-57,
+        // not started; see the doc comment above.
+        let loadout = LoadoutBuilder::from_default(&entity_info.body);
+        let entity_info = entity_info.with_loadout(loadout);
+
+        let NpcData {
+            pos,
+            stats,
+            skill_set,
+            health,
+            poise,
+            inventory,
+            agent,
+            body,
+            alignment,
+            ethos,
+            scale,
+            ..
+        } = SpawnEntityData::from_entity_info(entity_info)
+            .into_npc_data_inner()
+            .expect("EntityInfo without special_entity always yields SpawnEntityData::Npc");
+
+        let npc_entity = server
+            .state
+            .create_npc(
+                pos,
+                comp::Ori::default(),
+                stats,
+                skill_set,
+                health,
+                poise,
+                inventory,
+                body,
+                scale,
+            )
+            .with(alignment)
+            .maybe_with(ethos)
+            .maybe_with(agent)
+            .build();
+
+        let _ = server
+            .state
+            .ecs_mut()
+            .write_storage::<CharacterClass>()
+            .insert(npc_entity, CharacterClass(class));
+        if let Some(mut skill_set) = server
+            .state
+            .ecs_mut()
+            .write_storage::<comp::SkillSet>()
+            .get_mut(npc_entity)
+        {
+            let class_group = SkillGroupKind::Class(class);
+            skill_set.unlock_skill_group(class_group);
+            skill_set.set_level(level);
+            // `set_level` only tops up the General group's earned exp — the
+            // freshly-unlocked Class group starts at 0 SP, so without this the
+            // `level` arg would leave the class tree totally inert (no
+            // signature/capstone/passives spendable at any level). Grant SP
+            // via the same exp-driven path `/skill_point` uses, so a levelled
+            // party member actually has a functioning class kit to test.
+            const SKILL_POINTS_PER_LEVEL: u16 = 1;
+            skill_set.add_skill_points(class_group, level * SKILL_POINTS_PER_LEVEL);
+        }
+
+        npc_entities.push(npc_entity);
+    }
+
+    // Group the 3 NPCs with the caller as leader — a party of 4. `target` (not
+    // one of the NPCs) leads, so this calls `GroupManager::add_group_member`
+    // directly rather than reusing `CreateNpcGroupEvent`/
+    // `handle_create_npc_group` (which always treats the first spawned NPC as
+    // leader). Mirrors `handle_invite_accept`'s notifier (`server/src/events/
+    // invite.rs`) so the caller's party-frames HUD updates immediately.
+    {
+        let ecs = server.state.ecs();
+        let entities = ecs.entities();
+        let uids = ecs.read_storage::<Uid>();
+        let alignments = ecs.read_storage::<Alignment>();
+        let clients = ecs.read_storage::<Client>();
+        let map_markers = ecs.read_storage::<comp::MapMarker>();
+        let mut groups = ecs.write_storage::<comp::Group>();
+        let mut group_manager = ecs.write_resource::<GroupManager>();
+
+        for npc_entity in &npc_entities {
+            group_manager.add_group_member(
+                target,
+                *npc_entity,
+                &entities,
+                &mut groups,
+                &alignments,
+                &uids,
+                |entity, group_change| {
+                    group_change
+                        .try_map_ref(|e| uids.get(*e).copied())
+                        .zip(clients.get(entity))
+                        .map(|(g, c)| {
+                            crate::events::shared::update_map_markers(
+                                &map_markers,
+                                &uids,
+                                c,
+                                &group_change,
+                            );
+                            c.send_fallible(ServerGeneral::GroupUpdate(g));
+                        });
+                },
+            );
+        }
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Party spawned: 3 NPCs (moral alignment compatible with {player_moral:?}) grouped \
+                 with you."
+            )),
         ),
     );
 
