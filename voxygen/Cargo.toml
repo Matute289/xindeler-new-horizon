@@ -73,6 +73,7 @@ shaderc = "0.10"
 
 # Ui
 conrod_core = { git = "https://gitlab.com/veloren/conrod.git", branch = "copypasta_0.7" }
+copypasta = "0.8"
 euc = "0.5.3"
 # We should probably migrate to a more recent version at some point, but this is significant amount of work.
 # Note: this does not depend on the version of `winit` anymore, all dependent code was moved into Voxygen

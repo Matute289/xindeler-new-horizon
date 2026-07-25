@@ -11197,6 +11197,7 @@ dependencies = [
  "chumsky",
  "clap",
  "conrod_core",
+ "copypasta",
  "cpal",
  "criterion",
  "crossbeam-channel",
