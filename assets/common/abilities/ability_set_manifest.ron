@@ -332,7 +332,7 @@
         abilities: [],
     )),
     Tool(Focus): AbilitySet((
-        primary: Simple(None, "common.abilities.spells.primal.thornspit"),
+        primary: Simple(None, "common.abilities.spells.primordial.thornspit"),
         secondary: Simple(None, "common.abilities.spells.hollow.dread_whisper"),
         abilities: [],
     )),

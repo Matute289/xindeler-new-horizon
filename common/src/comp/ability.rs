@@ -3868,8 +3868,9 @@ pub enum MagicSource {
     Arcane,
     /// The gods' channel through the Veil — faith and oaths.
     Divine,
-    /// The Song still singing in the world — nature and elements.
-    Primal,
+    /// The Song still singing in the world — nature and elements, shaped by
+    /// the Primordials.
+    Primordial,
     /// Leakage from the Beyond — the mind as an unlicensed gate.
     Psionic,
     /// The Song flowing through a living body — discipline and ki.
@@ -4217,7 +4218,7 @@ mod ground_aoe_tests {
         for id in [
             "common.abilities.spells.arcane.cinderbolt",
             "common.abilities.spells.divine.dawnmote",
-            "common.abilities.spells.primal.thornspit",
+            "common.abilities.spells.primordial.thornspit",
         ] {
             crate::assets::Ron::<CharacterAbility>::load_expect(id).read();
         }

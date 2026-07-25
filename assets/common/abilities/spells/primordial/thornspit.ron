@@ -18,5 +18,5 @@ BasicRanged(
     projectile_body: Object(BoltFire),
     projectile_speed: 60.0,
     num_projectiles: Value(1),
-    meta: (school: Some(Conjuration), source: Some(Primal)),
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
 )
