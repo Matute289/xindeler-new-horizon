@@ -1,0 +1,13 @@
+// Sentinel Owl — a wide-ranging watcher NPC template for PROJECT ORACLE's
+// entity factory, same schema as the other sibling templates in this
+// directory.
+(
+    entity_template_id: "sentinel_owl",
+    body: "snowy_owl",
+    stats: (
+        name: Some("Sentinel Owl"),
+    ),
+    faction: "wild",
+    loot: Some("common.items.food.meat.bird_raw"),
+    ai_behavior_override: "stalk",
+)

@@ -1,0 +1,13 @@
+// Forest Deer — a skittish wild deer NPC template for PROJECT ORACLE's
+// entity factory (`xindeler_common_oracle::EntityTemplate`). A new sibling
+// template needs only a new file like this one — zero Rust changes.
+(
+    entity_template_id: "forest_deer",
+    body: "deer",
+    stats: (
+        name: Some("Forest Deer"),
+    ),
+    faction: "wild",
+    loot: Some("common.items.food.meat.beast_small_raw"),
+    ai_behavior_override: "flee",
+)

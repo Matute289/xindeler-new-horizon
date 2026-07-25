@@ -22,6 +22,7 @@ pub mod location;
 pub mod lod;
 pub mod login_provider;
 pub mod metrics;
+pub mod oracle;
 pub mod persistence;
 mod pet;
 pub mod presence;
@@ -430,6 +431,10 @@ impl Server {
         state
             .ecs_mut()
             .insert(ChunkGenerator::new(chunk_gen_metrics));
+        state.ecs_mut().insert(oracle::OracleWatcher::new(
+            &oracle::watcher::default_events_dir(),
+        ));
+        state.ecs_mut().insert(oracle::ChronicleLog::default());
         {
             let (sender, receiver) =
                 crossbeam_channel::bounded::<chunk_serialize::SerializedChunk>(10_000);

@@ -11,6 +11,7 @@ members = [
     "common/frontend",
     "common/i18n",
     "common/net",
+    "common/oracle",
     "common/query_server",
     "common/state",
     "common/systems",

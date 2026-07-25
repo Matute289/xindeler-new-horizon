@@ -9,6 +9,7 @@ pub mod loot;
 pub mod metrics;
 pub mod msg;
 pub mod object;
+pub mod oracle;
 pub mod persistence;
 pub mod pets;
 pub mod sentinel;
@@ -40,6 +41,7 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     dispatch::<invite_timeout::Sys>(dispatch_builder, &[]);
     dispatch::<persistence::Sys>(dispatch_builder, &[]);
     dispatch::<object::Sys>(dispatch_builder, &[]);
+    dispatch::<oracle::Sys>(dispatch_builder, &[]);
     dispatch::<wiring::Sys>(dispatch_builder, &[]);
     // no dependency, as we only work once per sec anyway.
     dispatch::<chunk_serialize::Sys>(dispatch_builder, &[]);
