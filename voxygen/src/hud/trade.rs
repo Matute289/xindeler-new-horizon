@@ -429,6 +429,7 @@ impl<'a> Trade<'a> {
                 &state.bg_ids,
                 false,
                 self.show.trade_details,
+                false,
             )
             .set(state.ids.inventory_scroller, ui)
             {

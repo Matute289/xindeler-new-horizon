@@ -20,10 +20,7 @@ mod prompt_dialog;
 mod quest;
 mod settings_window;
 mod skillbar;
-// Keyboard-navigable inventory-grid widget, not wired up: it has no hook for
-// the equip-requirement gray-out bag.rs's own loop implements, so nothing
-// constructs it yet.
-#[allow(dead_code)] mod slot_grid;
+mod slot_grid;
 mod slots;
 mod social;
 mod subtitles;
@@ -41,6 +38,7 @@ pub use hotbar::{SlotContents as HotbarSlotContents, State as HotbarState};
 pub use item_imgs::animate_by_pulse;
 pub use loot_scroller::LootMessage;
 pub use settings_window::ScaleChange;
+pub use slot_grid::{SlotEvents, SlotGrid};
 pub use subtitles::Subtitle;
 
 use bag::Bag;
