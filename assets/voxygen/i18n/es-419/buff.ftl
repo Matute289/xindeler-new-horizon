@@ -252,3 +252,45 @@ buff-ardenthunted = Cazado con Fervor
     .desc = Un arquero ferviente te ha marcado como objetivo.
 buff-septicshot = Disparo séptico
     .desc = Tu próximo disparo provocará una infección en el objetivo, lo que aumentará su letalidad si este tiene alguna otra condición.
+buff-shielded = Protegido
+    .desc = Un escudo absorbe el daño entrante antes que tu salud.
+    .stat = { $duration ->
+        [1] Absorbe { $strength } de daño.
+            Dura por { $duration } segundo.
+        *[other] Absorbe { $strength } de daño.
+                 Dura por { $duration } segundos.
+    }
+buff-bleeding_mark = Marca de Sangre
+    .desc = Sangra con el tiempo, luego detona en una ráfaga cuando se agota - límpiala para detener la explosión.
+buff-difficult_terrain = Terreno Difícil
+    .desc = El suelo pelea cada paso - te mueves a velocidad reducida.
+buff-freedom_of_movement = Libertad de Movimiento
+    .desc = Te mueves sin obstáculos, ignorando terreno difícil.
+buff-antimagic = Antimagia
+    .desc = La magia falla aquí - no puedes lanzar hechizos y tus objetos mágicos están dormidos.
+buff-anchored = Anclado
+    .desc = Un ancla dimensional te mantiene en su lugar - no puedes teletransportarte o parpadear.
+buff-asleep = Dormido
+    .desc = Estás hundido en un sueño mágico - incapaz de moverte o actuar.
+buff-blinded = Cegado
+    .desc = No puedes ver para apuntar - tus ataques infligen daño reducido.
+buff-slowed = Ralentizado
+    .desc = Tu velocidad de movimiento está reducida.
+buff-stormchaser = Perseguidor de Tormentas
+    .desc = Te regodeas en la violencia, cuando tus flechas dan en el blanco tus ataques y movimientos se vuelven más rápidos.
+buff-terrified = Aterrorizado
+    .desc = El terror inunda tus miembros, ralentizando cada paso.
+buff-charmed = Encantado
+    .desc = No puedes traicionarte a ti mismo hiriendo a quienquiera que hizo esto por ti.
+buff-hollowtouched = Tocado por el Vacío
+    .desc = El Vacío te ha probado. La salud máxima reducida.
+buff-ardenthunt = Caza Apasionada
+    .desc = Tu fervor hace que tus flechas sean más letales contra un objetivo específico, al costo de ser más débiles contra otros.
+buff-ignitearrow = Flecha Incendiaria
+    .desc = Has encendido tu próxima flecha, lo que hará que queme al objetivo que golpee, y puede ser explosiva si se dispara de cierta manera.
+buff-freezearrow = Flecha Congelante
+    .desc = Has congelado tu próxima flecha, lo que hará que congele al objetivo que golpee, y puede explotar en una nube de escarcha si se dispara de cierta manera.
+buff-drencharrow = Flecha Envenenada
+    .desc = Has empapado tu próxima flecha en veneno, lo que hará que envenene al objetivo que golpee, y puede explotar en una nube de veneno si se dispara de cierta manera.
+buff-joltarrow = Flecha Eléctrica
+    .desc = Has cargado estáticamente tu próxima flecha, lo que creará arcos de electricidad desde el objetivo que golpee, y puede ser atraída a objetivos si se dispara de cierta manera.

@@ -12,3 +12,4 @@ hud-social-name = Nombre
 hud-social-level = Nivel
 hud-social-zone = Zona
 hud-social-account = Cuenta
+hud-social-online_players = Jugadores Conectados
