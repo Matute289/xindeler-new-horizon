@@ -570,7 +570,9 @@ enum Mode {
 
         body_type_buttons: [button::State; 2],
         species_buttons: [button::State; 6],
-        class_buttons: [button::State; 4],
+        /// One button per `ClassKind::PLAYABLE` entry, same order: all
+        /// playable classes are selectable at creation.
+        class_buttons: [button::State; 14],
         tool_buttons: [button::State; 6],
         ethos_moral_buttons: [button::State; 3],
         ethos_order_buttons: [button::State; 3],
@@ -1634,12 +1636,23 @@ impl Controls {
                         .into(),
                     ])
                     .spacing(1);
-                    // Class picker: four text buttons, one per playable class.
+                    // Class picker: one text button per playable class, in
+                    // `ClassKind::PLAYABLE` order.
                     let [
                         warrior_class_button,
                         mage_class_button,
                         cleric_class_button,
                         rogue_class_button,
+                        barbarian_class_button,
+                        sorcerer_class_button,
+                        warlock_class_button,
+                        bard_class_button,
+                        paladin_class_button,
+                        druid_class_button,
+                        ranger_class_button,
+                        monk_class_button,
+                        artificer_class_button,
+                        blood_slayer_class_button,
                     ] = class_buttons;
                     // Selection is signalled ONLY by text color: every state
                     // shares the same button images, so the geometry never
@@ -1690,6 +1703,102 @@ impl Controls {
                                 FILL_FRAC_ONE,
                                 class_button_style(*class == ClassKind::Rogue),
                                 Some(Message::Class(ClassKind::Rogue)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                barbarian_class_button,
+                                i18n.get_msg("char_selection-class_barbarian").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Barbarian),
+                                Some(Message::Class(ClassKind::Barbarian)),
+                            ),
+                            neat_button(
+                                sorcerer_class_button,
+                                i18n.get_msg("char_selection-class_sorcerer").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Sorcerer),
+                                Some(Message::Class(ClassKind::Sorcerer)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                warlock_class_button,
+                                i18n.get_msg("char_selection-class_warlock").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Warlock),
+                                Some(Message::Class(ClassKind::Warlock)),
+                            ),
+                            neat_button(
+                                bard_class_button,
+                                i18n.get_msg("char_selection-class_bard").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Bard),
+                                Some(Message::Class(ClassKind::Bard)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                paladin_class_button,
+                                i18n.get_msg("char_selection-class_paladin").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Paladin),
+                                Some(Message::Class(ClassKind::Paladin)),
+                            ),
+                            neat_button(
+                                druid_class_button,
+                                i18n.get_msg("char_selection-class_druid").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Druid),
+                                Some(Message::Class(ClassKind::Druid)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                ranger_class_button,
+                                i18n.get_msg("char_selection-class_ranger").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Ranger),
+                                Some(Message::Class(ClassKind::Ranger)),
+                            ),
+                            neat_button(
+                                monk_class_button,
+                                i18n.get_msg("char_selection-class_monk").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Monk),
+                                Some(Message::Class(ClassKind::Monk)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                artificer_class_button,
+                                i18n.get_msg("char_selection-class_artificer").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Artificer),
+                                Some(Message::Class(ClassKind::Artificer)),
+                            ),
+                            neat_button(
+                                blood_slayer_class_button,
+                                i18n.get_msg("char_selection-class_blood_slayer")
+                                    .into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::BloodSlayer),
+                                Some(Message::Class(ClassKind::BloodSlayer)),
                             ),
                         ])
                         .height(Length::Units(26))
@@ -2291,14 +2400,12 @@ impl Controls {
                         } else {
                             format!("{} {}", i18n.get_msg(order_key), i18n.get_msg(moral_key))
                         };
-                    // Creation only offers these four classes (the class step).
-                    let class_key = match class {
-                        ClassKind::Mage => "char_selection-class_mage",
-                        ClassKind::Cleric => "char_selection-class_cleric",
-                        ClassKind::Rogue => "char_selection-class_rogue",
-                        _ => "char_selection-class_warrior",
-                    };
-                    let class_name = i18n.get_msg(class_key).into_owned();
+                    // `ClassKind::keyword()` already returns the lowercase,
+                    // underscore-separated suffix used by every
+                    // `char_selection-class_*` key, so build the lookup
+                    // directly instead of hand-listing all playable classes.
+                    let class_key = format!("char_selection-class_{}", class.keyword());
+                    let class_name = i18n.get_msg(&class_key).into_owned();
                     // A tidy key/value row: a muted, right-aligned label in a
                     // fixed-width column so the values line up, then the value.
                     let kv = |label_key: &str, value: String| -> Element<Message> {
