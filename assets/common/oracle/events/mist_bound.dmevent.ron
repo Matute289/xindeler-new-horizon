@@ -1,0 +1,33 @@
+// Mist-Bound — a sample PROJECT ORACLE event: drop this file (or a copy of
+// it) into the watched events directory (`<userdata>/oracle_events`, or
+// `XINDELER_ORACLE_EVENTS_DIR` if set) and trigger it with
+// `/oracle_trigger mist_bound` near you.
+//
+// Lore: `docs/design/lore/40-planes/umbriel.md` — the mist-walled
+// curse-domains of Umbriel, the grey echo; colourless, cold, restless dead,
+// "cross by dark, come back by dawn."
+//
+// Schema: `xindeler_common_oracle::DmEvent`. All values below are already
+// in-bounds (see `xindeler_common_oracle::dm_event::bounds`) — dropping this
+// file must be a `sanitize()` no-op.
+(
+    dimension_config: (
+        seed_modifier: 1298754643,                // "MIST" — any u64 is a legal seed
+        biome_profile: "mist_bound_grey_forest",   // carried as data, not yet applied
+    ),
+    atmosphere: (
+        weather_effect: Rain,
+        time_lock: Some(23.5),                     // locked 23.5h — deep night, dread dimension
+        transition_secs: 4.0,
+    ),
+    spawning_rules: (
+        entity_templates: ["mist_bound_shade"],
+        spawn_count: 15.0,                         // within the (0..=200) clamp
+        spawn_radius: 40.0,
+        ai_behavior_override: "aggro",              // hunts: notices from 2x range, no warn-up, never flees
+    ),
+    narrative: (
+        world_rumor: Some("A grey mist swallows the village; they say the dead walk the Mist-Bound."),
+        on_enter_message: Some("The veil parts. You have crossed into the Mist-Bound."),
+    ),
+)

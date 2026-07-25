@@ -66,3 +66,15 @@ hud-bag-split_swap_slots_drop_items =
         [1] Esto resultará en que 1 objeto caiga al suelo. ¿Estás seguro?
        *[other] Esto resultará en que { $slot_deficit } objetos caigan al suelo. ¿Estás seguro?
     }
+hud-bag-tab_items = Objetos
+hud-bag-tab_stats = Atributos
+hud-bag-title = Inventario
+hud-bag-unequip = Desequipar
+hud-bag-requirements_not_met = No cumples los requisitos para equipar este objeto.
+hud-bag-requirement_level = Requiere Nivel { $level }
+hud-bag-requirement_race = Requiere Raza: { $races }
+hud-bag-requirement_class = Requiere Clase: { $classes }
+hud-bag-requires_attunement = Requiere Sintonización
+hud-context-menu-use = Usar
+hud-context-menu-drop = Soltar
+hud-context-menu-cancel = Cancelar

@@ -1,5 +1,6 @@
 hud-show_tips = Mostrar consejos
 hud-quests = Misiones
+hud-level_up_msg = ¡Subiste de nivel! Alcanzaste el nivel { $level }.
 hud-you_died = Has muerto
 hud-waypoint_saved = Punto de control guardado
 hud-sp_arrow_txt = PH
