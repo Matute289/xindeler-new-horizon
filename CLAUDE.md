@@ -33,6 +33,15 @@ Rules (full spec + canonical example: `docs/design/conventions/fill-in-worksheet
 
 This is the default for any multi-decision / bulk request (`AskUserQuestion` only for 1–4 quick structural forks).
 
+**Sibling convention — in-game smoke-test checklists:** when what you need from Matias is not a
+decision but a **manual test/QA pass** (build it, run the client, check boxes for pass/fail), use
+the different shape documented in the same file's "Sibling convention" section — plain Markdown
+(not one big fenced block), a `## Cómo correrlo / Setup` section with the exact build/run
+commands, lettered `## A. <topic>` sections of `- [ ] **A1 · name** — ...` checkboxes, and a
+closing `## Reportá así` legend (`✅`/`❌`/`🤷`, screenshots for failures, partial completion OK).
+For a single small feature/PR, the lighter variant embeds this directly in that feature's
+task-board doc instead of a standalone file.
+
 ## Delegation — worktrees + parallel subagents (Matias, 2026-07-24)
 
 Ported from how `xindeler` (the sibling Bevy-port repo) actually worked in practice (never
