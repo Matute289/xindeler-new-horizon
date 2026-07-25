@@ -831,7 +831,7 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         // Spells (cantrips): no dedicated spell icons yet, reuse fireball.
         "common.abilities.spells.arcane.cinderbolt" => imgs.fireball,
         "common.abilities.spells.divine.dawnmote" => imgs.fireball,
-        "common.abilities.spells.primal.thornspit" => imgs.fireball,
+        "common.abilities.spells.primordial.thornspit" => imgs.fireball,
         // Racial innates: reused icons until dedicated art exists.
         "innate.human" => imgs.skill_sceptre_heal,
         "innate.elf" => imgs.sword_agile_stance,

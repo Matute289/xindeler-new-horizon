@@ -530,7 +530,7 @@ common-abilities-spells-arcane-cinderbolt = Cinderbolt
     .desc = A darting bolt of leyline fire that bursts on impact.
 common-abilities-spells-divine-dawnmote = Dawnmote
     .desc = A mote of dawnlight that sears what it touches.
-common-abilities-spells-primal-thornspit = Thornspit
+common-abilities-spells-primordial-thornspit = Thornspit
     .desc = A hurled spine of hardened bramble.
 # Racial innates (magic-abilities Task 14) — keys derive from the AbilityPool set key.
 innate-human = Second Wind
