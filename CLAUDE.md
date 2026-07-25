@@ -33,6 +33,32 @@ Rules (full spec + canonical example: `docs/design/conventions/fill-in-worksheet
 
 This is the default for any multi-decision / bulk request (`AskUserQuestion` only for 1–4 quick structural forks).
 
+## Delegation — worktrees + parallel subagents (Matias, 2026-07-24)
+
+Ported from how `xindeler` (the sibling Bevy-port repo) actually worked in practice (never
+formally written there either — this is the first time it's documented): for any task large
+enough to split into independent pieces, don't implement everything serially yourself. Instead:
+
+- **You are the orchestrator, verifier, and reviewer** — stay free to keep talking with Matias
+  while subagents work in the background. Author each subagent's brief yourself: exact files,
+  exact desired end-state, referencing the relevant plan/spec section — never "figure out task
+  N4-C" with no other context.
+- **Dispatch implementation subagents into isolated git worktrees** (`Agent` tool,
+  `isolation: "worktree"`) whenever more than one subagent could touch overlapping files
+  concurrently, or a feature needs isolation from the current workspace. Skip the worktree only
+  for a single, clearly-scoped, no-conflict-risk piece.
+- **Run the existing specialist reviewer subagents** (`ecs-design-reviewer`,
+  `game-architecture-reviewer`, `game-balance-designer`, `rust-perf-reviewer`,
+  `sim-design-reviewer`, etc. — see the agent list) against each diff before it ships, not just
+  `cargo clippy`.
+- **One PR per phase/task, off freshly-synced `development`.** You own git and the PR; you never
+  merge (branch-protection rule above still applies to every subagent-produced commit too).
+- For genuinely large or ambiguous new scope (a new subsystem, a cross-cutting content pass), have
+  an **Opus** agent investigate and write the plan + task board first (same pattern already used
+  for NH-4/NH-19) — implementation dispatch only starts once that plan exists.
+
+This is the default approach for multi-part work going forward, not just a one-off request.
+
 ## Comunicación asíncrona con Mati
 
 Si necesitás input y Mati no está disponible (no está en la app, o el mensaje puede tardar):
