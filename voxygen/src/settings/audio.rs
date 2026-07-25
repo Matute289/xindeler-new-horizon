@@ -126,7 +126,7 @@ impl Default for AudioSettings {
             inactive_master_volume_perc: AudioVolume::new(0.5, false),
             music_volume: AudioVolume::new(0.5, false),
             sfx_volume: AudioVolume::new(0.8, false),
-            instrument_volume: AudioVolume::new(1.0, false),
+            instrument_volume: AudioVolume::new(0.4, false),
             ambience_volume: AudioVolume::new(0.8, false),
             num_sfx_channels: 32,
             rain_ambience_enabled: true,
