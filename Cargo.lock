@@ -10924,6 +10924,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xindeler-common-oracle"
+version = "0.18.0"
+dependencies = [
+ "ron",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "xindeler-common-state"
 version = "0.18.0"
 dependencies = [
@@ -11089,6 +11099,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "noise",
+ "notify",
  "num_cpus",
  "parking_lot",
  "portpicker",
@@ -11107,6 +11118,7 @@ dependencies = [
  "slotmap",
  "specs",
  "strum",
+ "tempfile",
  "tokio",
  "tracing",
  "vek 0.17.2",
@@ -11114,6 +11126,7 @@ dependencies = [
  "xindeler-common-base",
  "xindeler-common-ecs",
  "xindeler-common-net",
+ "xindeler-common-oracle",
  "xindeler-common-state",
  "xindeler-common-systems",
  "xindeler-network",

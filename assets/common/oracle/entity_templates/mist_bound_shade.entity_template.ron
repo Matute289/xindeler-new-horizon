@@ -1,0 +1,18 @@
+// Mist-Bound Shade — the grey undead minion spawned by `mist_bound.
+// dmevent.ron`. Lore: `docs/design/lore/40-planes/umbriel.md` — the
+// curse-domains of Umbriel, the grey echo; restless dead that hunt the mist.
+//
+// `body: "husk"` is a real, spawnable species keyword under the
+// `biped_small` body category (`assets/common/npc_names.ron`), a grey
+// undead humanoid — the same vocabulary the in-game `/spawn` admin command
+// parses.
+(
+    entity_template_id: "mist_bound_shade",
+    body: "husk",
+    stats: (
+        name: Some("Mist-Bound Shade"),
+    ),
+    faction: "enemy",
+    loot: None,
+    ai_behavior_override: "aggro",
+)

@@ -196,6 +196,7 @@ fn do_command(
         ServerChatCommand::MakeSprite => handle_make_sprite,
         ServerChatCommand::Motd => handle_motd,
         ServerChatCommand::Object => handle_object,
+        ServerChatCommand::OracleTrigger => handle_oracle_trigger,
         ServerChatCommand::Outcome => handle_outcome,
         ServerChatCommand::PermitBuild => handle_permit_build,
         ServerChatCommand::Players => handle_players,
@@ -1338,6 +1339,103 @@ fn handle_make_party(
             Content::Plain(format!(
                 "Party spawned: 3 NPCs (moral alignment compatible with {player_moral:?}) grouped \
                  with you."
+            )),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/oracle_trigger <dmevent_id>` — admin-only manual trigger for a
+/// currently-loaded ORACLE `.dmevent.ron`/`.dmevent.json` (dropped into the
+/// watched events directory, see `crate::oracle::watcher`): resolves its
+/// `spawning_rules` against currently-loaded entity templates, spawns the
+/// resolved NPCs scattered around the caller's own position, appends its
+/// `world_rumor` to the chronicle, and greets the caller with its
+/// `on_enter_message`. Stands in for the real per-plano entry trigger there
+/// is no plano yet, so a human decides when and where.
+fn handle_oracle_trigger(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /oracle_trigger.".to_string(),
+        ));
+    }
+
+    let dmevent_id = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let comp::Pos(pos) = position(server, target, "target")?;
+
+    let dm_event = server
+        .state
+        .ecs()
+        .read_resource::<crate::oracle::OracleWatcher>()
+        .events()
+        .dm_events()
+        .find(|(path, _)| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name == format!("{dmevent_id}.dmevent.ron")
+                        || name == format!("{dmevent_id}.dmevent.json")
+                })
+        })
+        .map(|(_, event)| event.clone())
+        .ok_or_else(|| {
+            Content::Plain(format!(
+                "No loaded ORACLE event named '{dmevent_id}' (drop a .dmevent.ron/.json file in \
+                 the watched events directory first)."
+            ))
+        })?;
+
+    let templates: Vec<_> = server
+        .state
+        .ecs()
+        .read_resource::<crate::oracle::OracleWatcher>()
+        .events()
+        .entity_templates()
+        .map(|(_, template)| template.clone())
+        .collect();
+
+    let mut spawn_rng = rng();
+    let spawns = crate::oracle::factory::spawn_dm_event(
+        &dm_event.spawning_rules,
+        templates.iter(),
+        pos,
+        &mut spawn_rng,
+    );
+    let spawn_count = spawns.len();
+    for (pos, ori, npc) in spawns {
+        server
+            .state
+            .ecs()
+            .read_resource::<EventBus<CreateNpcEvent>>()
+            .emit_now(CreateNpcEvent { pos, ori, npc });
+    }
+
+    if let Some(rumor) = &dm_event.narrative.world_rumor {
+        server
+            .state
+            .ecs()
+            .write_resource::<crate::oracle::ChronicleLog>()
+            .push(rumor.clone());
+    }
+
+    if let Some(message) = &dm_event.narrative.on_enter_message {
+        crate::oracle::narrative::send_on_enter_message(server, client, message);
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Oracle event '{dmevent_id}' spawned {spawn_count} entities."
             )),
         ),
     );

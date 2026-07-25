@@ -37,6 +37,7 @@ network = { package = "xindeler-network", path = "../network", features = [
 ], default-features = false }
 
 server-agent = { package = "xindeler-server-agent", path = "agent" }
+common-oracle = { package = "xindeler-common-oracle", path = "../common/oracle" }
 
 #inline_tweak = "1.0.8"
 
@@ -46,6 +47,7 @@ strum = { workspace = true }
 bincode = { workspace = true }
 num_cpus = "1.0"
 tracing = { workspace = true }
+notify = { version = "8.0.0" }
 vek = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
@@ -79,3 +81,6 @@ rusqlite = { workspace = true }
 refinery = { version = "0.9", features = ["rusqlite"] }
 
 schnellru = "0.2.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
