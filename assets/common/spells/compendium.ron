@@ -564,4 +564,19 @@
         description_i18n: "spell-antimagic_field-desc",
         ability: "common.abilities.spells.abjuration.antimagic_field",
     ),
+    // --- Transmutation ---
+    (
+        id: "spells.transmutation.knock",
+        name_i18n: "spell-knock",
+        level: 2,
+        school: Some(Transmutation),
+        source: Arcane,
+        classes: [Mage],
+        cast_time: Action,
+        duration: Instant,
+        range: Meters(18.0),
+        aoe: None,
+        description_i18n: "spell-knock-desc",
+        ability: "common.abilities.spells.transmutation.knock",
+    ),
 ]

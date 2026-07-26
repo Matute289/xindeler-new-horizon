@@ -60,6 +60,7 @@ event_emitters! {
         help_downed: event::HelpDownedEvent,
         set_ability_cooldown: event::SetAbilityCooldownEvent,
         health_change: event::HealthChangeEvent,
+        remote_unlock: event::RemoteUnlockEvent,
     }
 }
 
@@ -199,6 +200,9 @@ pub enum CharacterState {
     LeapRanged(leap_ranged::Data),
     /// Primarily intended for events to hook into (e.g. entering stances)
     Simple(simple::Data),
+    /// A single-shot, ranged/keyless unlock effect targeted at a sprite
+    /// position (e.g. the `knock` spell)
+    Knock(knock::Data),
 }
 
 impl CharacterState {
@@ -237,6 +241,7 @@ impl CharacterState {
             | CharacterState::RapidMelee(_)
             | CharacterState::StaticAura(_)
             | CharacterState::LeapRanged(_)
+            | CharacterState::Knock(_)
             | CharacterState::Simple(_) => true,
             CharacterState::Idle(_)
             | CharacterState::Crawl
@@ -315,6 +320,7 @@ impl CharacterState {
             | CharacterState::Transform(_)
             | CharacterState::RegrowHead(_)
             | CharacterState::LeapRanged(_)
+            | CharacterState::Knock(_)
             | CharacterState::Simple(_) => false,
         }
     }
@@ -368,6 +374,7 @@ impl CharacterState {
             | CharacterState::Transform(_)
             | CharacterState::RegrowHead(_)
             | CharacterState::LeapRanged(_)
+            | CharacterState::Knock(_)
             | CharacterState::Simple(_) => false,
         }
     }
@@ -429,6 +436,7 @@ impl CharacterState {
                 | CharacterState::RapidMelee(_)
                 | CharacterState::StaticAura(_)
                 | CharacterState::LeapRanged(_)
+                | CharacterState::Knock(_)
                 | CharacterState::Simple(_)
         )
     }
@@ -524,6 +532,7 @@ impl CharacterState {
             | CharacterState::Music(_)
             | CharacterState::Transform(_)
             | CharacterState::RegrowHead(_)
+            | CharacterState::Knock(_)
             | CharacterState::Simple(_) => None,
         }
     }
@@ -798,6 +807,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => data.behavior(j, output_events),
             CharacterState::SelfBuff(data) => data.behavior(j, output_events),
             CharacterState::SpriteSummon(data) => data.behavior(j, output_events),
+            CharacterState::Knock(data) => data.behavior(j, output_events),
             CharacterState::UseItem(data) => data.behavior(j, output_events),
             CharacterState::Interact(data) => data.behavior(j, output_events),
             CharacterState::Skate(data) => data.behavior(j, output_events),
@@ -864,6 +874,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => data.handle_event(j, output_events, action),
             CharacterState::SelfBuff(data) => data.handle_event(j, output_events, action),
             CharacterState::SpriteSummon(data) => data.handle_event(j, output_events, action),
+            CharacterState::Knock(data) => data.handle_event(j, output_events, action),
             CharacterState::UseItem(data) => data.handle_event(j, output_events, action),
             CharacterState::Interact(data) => data.handle_event(j, output_events, action),
             CharacterState::Skate(data) => data.handle_event(j, output_events, action),
@@ -926,6 +937,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => Some(data.static_data.ability_info),
             CharacterState::SelfBuff(data) => Some(data.static_data.ability_info),
             CharacterState::SpriteSummon(data) => Some(data.static_data.ability_info),
+            CharacterState::Knock(data) => Some(data.static_data.ability_info),
             CharacterState::UseItem(_) => None,
             CharacterState::Interact(_) => None,
             CharacterState::FinisherMelee(data) => Some(data.static_data.ability_info),
@@ -979,6 +991,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => Some(data.stage_section),
             CharacterState::SelfBuff(data) => Some(data.stage_section),
             CharacterState::SpriteSummon(data) => Some(data.stage_section),
+            CharacterState::Knock(data) => Some(data.stage_section),
             CharacterState::UseItem(data) => Some(data.stage_section),
             CharacterState::Interact(data) => Some(data.stage_section),
             CharacterState::FinisherMelee(data) => Some(data.stage_section),
@@ -1156,6 +1169,12 @@ impl CharacterState {
                 recover: Some(data.static_data.recover_duration),
                 ..Default::default()
             }),
+            CharacterState::Knock(data) => Some(DurationsInfo {
+                buildup: Some(data.static_data.buildup_duration),
+                action: Some(data.static_data.cast_duration),
+                recover: Some(data.static_data.recover_duration),
+                ..Default::default()
+            }),
             CharacterState::UseItem(data) => Some(DurationsInfo {
                 buildup: Some(data.static_data.buildup_duration),
                 action: Some(data.static_data.use_duration),
@@ -1268,6 +1287,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => Some(data.timer),
             CharacterState::SelfBuff(data) => Some(data.timer),
             CharacterState::SpriteSummon(data) => Some(data.timer),
+            CharacterState::Knock(data) => Some(data.timer),
             CharacterState::UseItem(data) => Some(data.timer),
             CharacterState::Interact(data) => Some(data.timer),
             CharacterState::FinisherMelee(data) => Some(data.timer),
@@ -1341,6 +1361,7 @@ impl CharacterState {
             CharacterState::BasicSummon(_) => &[],
             CharacterState::SelfBuff(_) => &[],
             CharacterState::SpriteSummon(_) => &[],
+            CharacterState::Knock(_) => &[],
             CharacterState::UseItem(_) => &[],
             CharacterState::Interact(_) => &[],
             CharacterState::FinisherMelee(_) => &[AttackSource::Melee],

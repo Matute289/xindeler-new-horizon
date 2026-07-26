@@ -1769,6 +1769,7 @@ impl FigureMgr {
                     | CharacterState::BasicBlock(_)
                     | CharacterState::RiposteMelee(_)
                     | CharacterState::LeapRanged(_)
+                    | CharacterState::Knock(_)
                     | CharacterState::Simple(_) => {
                         let timer = character.timer();
                         let stage_section = character.stage_section();
