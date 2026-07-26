@@ -1,0 +1,16 @@
+// Ranged, keyless "unlock any locked door" utility spell. Fires a `RemoteUnlockEvent` at the
+// targeted sprite position (server/src/events/inventory_manip.rs) — reuses the same
+// Keyhole->KeyDoor (etc.) sprite-swap logic as the ordinary melee key-item interaction, but
+// skips the "do you have the key" check entirely. Progression-gated keyholes opt out via the
+// `no_knock` SpriteCfg flag (common/src/terrain/sprite/mod.rs) so dungeon/treasure gating that's
+// meant to require the physical key isn't trivially bypassed. Balance numbers below are INTERIM
+// (game-balance-designer sign-off pending).
+Knock(
+    energy_cost: 65,
+    buildup_duration: 0.6,
+    cast_duration: 0.4,
+    recover_duration: 0.5,
+    range: 18.0,
+    ori_modifier: 1.0,
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(6.0)),
+)

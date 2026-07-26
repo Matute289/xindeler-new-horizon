@@ -593,4 +593,18 @@
         description_i18n: "spell-control_winds_turbulence-desc",
         ability: "common.abilities.spells.transmutation.control_winds_turbulence",
     ),
+    (
+        id: "spells.transmutation.knock",
+        name_i18n: "spell-knock",
+        level: 2,
+        school: Some(Transmutation),
+        source: Arcane,
+        classes: [Mage],
+        cast_time: Action,
+        duration: Instant,
+        range: Meters(18.0),
+        aoe: None,
+        description_i18n: "spell-knock-desc",
+        ability: "common.abilities.spells.transmutation.knock",
+    ),
 ]

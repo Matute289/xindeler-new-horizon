@@ -273,6 +273,8 @@ mod tests {
             // TODO: requires access to i18n for validation
             content: _,
             loot_table,
+            // A plain bool flag; nothing to validate here.
+            no_knock: _,
         } = sprite_cfg;
 
         if let Some(loot_table) = loot_table.clone() {

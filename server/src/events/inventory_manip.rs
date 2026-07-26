@@ -15,11 +15,11 @@ use common::{
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_FAST, ONWERSHIP_TIMEOUT_SLOW},
         slot::{self, Slot},
     },
-    consts::MAX_PICKUP_RANGE,
+    consts::{MAX_KNOCK_RANGE, MAX_PICKUP_RANGE},
     event::{
         BuffEvent, ChangeBodyEvent, ChangeStanceEvent, CreateItemDropEvent, CreateObjectEvent,
         DeleteEvent, EmitExt, HealthChangeEvent, InventoryManipEvent, PoiseChangeEvent,
-        TamePetEvent,
+        RemoteUnlockEvent, TamePetEvent,
     },
     event_emitters, match_some,
     mounting::VolumePos,
@@ -45,6 +45,140 @@ use super::{ServerEvent, entity_manipulation::emit_effect_events, event_dispatch
 
 pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<InventoryManipEvent>(builder, &[]);
+    event_dispatch::<RemoteUnlockEvent>(builder, &[]);
+}
+
+/// Given the [`SpriteKind`] of a keyhole/lock sprite that was just opened
+/// (whether via the melee key-item interaction or a ranged/keyless effect like
+/// the `knock` spell), returns the [`SpriteKind`] of the door blocks that
+/// opening it should destroy nearby, if any.
+///
+/// Shared by both [`comp::InventoryManip::Collect`] (the melee, key-item path)
+/// and [`RemoteUnlockEvent`] (the ranged, keyless path) so the two never drift
+/// out of sync.
+pub fn keyhole_swap_target(sprite_kind: SpriteKind) -> Option<SpriteKind> {
+    match sprite_kind {
+        SpriteKind::Keyhole => Some(SpriteKind::KeyDoor),
+        SpriteKind::BoneKeyhole => Some(SpriteKind::BoneKeyDoor),
+        SpriteKind::HaniwaKeyhole => Some(SpriteKind::HaniwaKeyDoor),
+        SpriteKind::SahaginKeyhole => Some(SpriteKind::SahaginKeyDoor),
+        SpriteKind::GlassKeyhole => Some(SpriteKind::GlassBarrier),
+        SpriteKind::KeyholeBars => Some(SpriteKind::DoorBars),
+        SpriteKind::TerracottaKeyhole => Some(SpriteKind::TerracottaKeyDoor),
+        SpriteKind::VampireKeyhole => Some(SpriteKind::VampireKeyDoor),
+        SpriteKind::MyrmidonKeyhole | SpriteKind::MinotaurKeyhole => {
+            Some(SpriteKind::MyrmidonKeyDoor)
+        },
+        _ => None,
+    }
+}
+
+/// Whether a [`RemoteUnlockEvent`] targeting a sprite of `sprite_kind` (with
+/// the given, possibly-unset [`SpriteCfg`](common::terrain::sprite::SpriteCfg))
+/// should proceed, and if so, which door [`SpriteKind`] it should destroy
+/// nearby.
+///
+/// Returns `None` both when the sprite isn't a keyhole/lock at all, and when it
+/// is one but carries `no_knock: true` — a progression-gated keyhole opting out
+/// of ranged/keyless unlocking. This flag is only ever consulted from this
+/// ranged path: the ordinary melee key-item interaction
+/// (`InventoryManip::Collect`) never checks it, so a character carrying
+/// the actual key can still open a `no_knock` door normally.
+pub fn remote_unlock_target(
+    sprite_kind: SpriteKind,
+    sprite_cfg: Option<&common::terrain::sprite::SpriteCfg>,
+) -> Option<SpriteKind> {
+    let kind_to_destroy = keyhole_swap_target(sprite_kind)?;
+    if sprite_cfg.is_some_and(|cfg| cfg.no_knock) {
+        return None;
+    }
+    Some(kind_to_destroy)
+}
+
+/// Flood-fills outward from `sprite_pos`, destroying any connected
+/// `kind_to_destroy` door blocks. Shared by both the melee key-unlock path and
+/// the ranged/keyless `knock` path.
+pub fn destroy_nearby_key_doors(
+    block_change: &mut common_state::BlockChange,
+    terrain: &common::terrain::TerrainGrid,
+    sprite_pos: Vec3<i32>,
+    kind_to_destroy: SpriteKind,
+) {
+    let dirs = [
+        Vec3::unit_x(),
+        -Vec3::unit_x(),
+        Vec3::unit_y(),
+        -Vec3::unit_y(),
+        Vec3::unit_z(),
+        -Vec3::unit_z(),
+    ];
+    let mut destroyed = HashSet::<Vec3<i32>>::default();
+    let mut pending = dirs
+        .into_iter()
+        .map(|dir| sprite_pos + dir)
+        .collect::<HashSet<_>>();
+    // TODO: Replace with `entry` eventually
+    while destroyed.len() < 450 {
+        if let Some(pos) = pending.iter().next().copied() {
+            pending.remove(&pos);
+
+            if !destroyed.contains(&pos)
+                && terrain.get(pos).ok().and_then(|b| b.get_sprite()) == Some(kind_to_destroy)
+            {
+                block_change.try_set(pos, Block::empty());
+                destroyed.insert(pos);
+                pending.extend(dirs.into_iter().map(|dir| pos + dir));
+            }
+        } else {
+            break;
+        }
+    }
+}
+
+impl ServerEvent for RemoteUnlockEvent {
+    type SystemData<'a> = (
+        Write<'a, common_state::BlockChange>,
+        ReadExpect<'a, common::terrain::TerrainGrid>,
+        ReadStorage<'a, comp::Pos>,
+    );
+
+    fn handle(
+        events: impl ExactSizeIterator<Item = Self>,
+        (mut block_change, terrain, positions): Self::SystemData<'_>,
+    ) {
+        for ev in events {
+            // Defense-in-depth range re-check: the `knock` CharacterState already validates
+            // range against its own (data-driven) ability range before ever emitting this
+            // event, but a caster's `Pos` is authoritative server data, so it costs nothing
+            // to check again here, mirroring `ToggleSpriteLightEvent`'s handler.
+            let Some(caster_pos) = positions.get(ev.entity) else {
+                continue;
+            };
+            if caster_pos.0.distance_squared(ev.pos.as_()) > MAX_KNOCK_RANGE.powi(2) {
+                continue;
+            }
+
+            if !block_change.can_set_block(ev.pos) {
+                continue;
+            }
+
+            let Ok(block) = terrain.get(ev.pos) else {
+                continue;
+            };
+            let Some(sprite_kind) = block.get_sprite() else {
+                continue;
+            };
+            let Some(kind_to_destroy) =
+                remote_unlock_target(sprite_kind, terrain.sprite_cfg_at(ev.pos))
+            else {
+                // Either not a keyhole/lock sprite at all, or one flagged `no_knock`.
+                continue;
+            };
+
+            block_change.set(ev.pos, block.into_collected());
+            destroy_nearby_key_doors(&mut block_change, &terrain, ev.pos, kind_to_destroy);
+        }
+    }
 }
 
 pub fn swap_lantern(
@@ -462,61 +596,15 @@ impl ServerEvent for InventoryManipEvent {
                             data.block_change.set(sprite_pos, block.into_collected());
 
                             // If the block was a keyhole, remove nearby door blocks
-                            // TODO: Abstract this code into a generalised way to do block updates?
-                            if let Some(kind_to_destroy) = match block.get_sprite() {
-                                Some(SpriteKind::Keyhole) => Some(SpriteKind::KeyDoor),
-                                Some(SpriteKind::BoneKeyhole) => Some(SpriteKind::BoneKeyDoor),
-                                Some(SpriteKind::HaniwaKeyhole) => Some(SpriteKind::HaniwaKeyDoor),
-                                Some(SpriteKind::SahaginKeyhole) => {
-                                    Some(SpriteKind::SahaginKeyDoor)
-                                },
-                                Some(SpriteKind::GlassKeyhole) => Some(SpriteKind::GlassBarrier),
-                                Some(SpriteKind::KeyholeBars) => Some(SpriteKind::DoorBars),
-                                Some(SpriteKind::TerracottaKeyhole) => {
-                                    Some(SpriteKind::TerracottaKeyDoor)
-                                },
-                                Some(SpriteKind::VampireKeyhole) => {
-                                    Some(SpriteKind::VampireKeyDoor)
-                                },
-                                Some(SpriteKind::MyrmidonKeyhole | SpriteKind::MinotaurKeyhole) => {
-                                    Some(SpriteKind::MyrmidonKeyDoor)
-                                },
-                                _ => None,
-                            } {
-                                let dirs = [
-                                    Vec3::unit_x(),
-                                    -Vec3::unit_x(),
-                                    Vec3::unit_y(),
-                                    -Vec3::unit_y(),
-                                    Vec3::unit_z(),
-                                    -Vec3::unit_z(),
-                                ];
-                                let mut destroyed = HashSet::<Vec3<i32>>::default();
-                                let mut pending = dirs
-                                    .into_iter()
-                                    .map(|dir| sprite_pos + dir)
-                                    .collect::<HashSet<_>>();
-                                // TODO: Replace with `entry` eventually
-                                while destroyed.len() < 450 {
-                                    if let Some(pos) = pending.iter().next().copied() {
-                                        pending.remove(&pos);
-
-                                        if !destroyed.contains(&pos)
-                                            && data
-                                                .terrain
-                                                .get(pos)
-                                                .ok()
-                                                .and_then(|b| b.get_sprite())
-                                                == Some(kind_to_destroy)
-                                        {
-                                            data.block_change.try_set(pos, Block::empty());
-                                            destroyed.insert(pos);
-                                            pending.extend(dirs.into_iter().map(|dir| pos + dir));
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
+                            if let Some(kind_to_destroy) =
+                                block.get_sprite().and_then(keyhole_swap_target)
+                            {
+                                destroy_nearby_key_doors(
+                                    &mut data.block_change,
+                                    &data.terrain,
+                                    sprite_pos,
+                                    kind_to_destroy,
+                                );
                             }
                         } else {
                             debug!(
@@ -1310,5 +1398,44 @@ mod tests {
         assert!(!within_pickup_range(test_cylinder(position), || {
             test_cylinder(item_position)
         },),);
+    }
+
+    #[test]
+    fn knock_opens_unflagged_ordinary_keyhole() {
+        // An ordinary keyhole with no `SpriteCfg` at all (the common case) opens
+        // normally.
+        assert_eq!(
+            remote_unlock_target(SpriteKind::HaniwaKeyhole, None),
+            Some(SpriteKind::HaniwaKeyDoor)
+        );
+        // Also true with an explicit but unflagged `SpriteCfg` (e.g. one with an
+        // unrelated `loot_table` set, matching the shape of `jungle_ruin`'s
+        // chests).
+        let unflagged = common::terrain::sprite::SpriteCfg::default();
+        assert_eq!(
+            remote_unlock_target(SpriteKind::HaniwaKeyhole, Some(&unflagged)),
+            Some(SpriteKind::HaniwaKeyDoor)
+        );
+    }
+
+    #[test]
+    fn knock_refuses_no_knock_flagged_keyhole() {
+        // The Haniwa dungeon's keyhole (world/src/site/plot/haniwa.rs) is flagged
+        // `no_knock: true` as a worked example of a progression-gated keyhole: `knock`
+        // must not be able to open it.
+        let no_knock_cfg = common::terrain::sprite::SpriteCfg {
+            no_knock: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            remote_unlock_target(SpriteKind::HaniwaKeyhole, Some(&no_knock_cfg)),
+            None
+        );
+    }
+
+    #[test]
+    fn knock_ignores_non_keyhole_sprites() {
+        // Sprites unrelated to locks are never affected by `knock`, flagged or not.
+        assert_eq!(remote_unlock_target(SpriteKind::Apple, None), None);
     }
 }
