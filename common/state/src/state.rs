@@ -14,7 +14,7 @@ use common::{
     mounting::{Mount, Rider, VolumeRider, VolumeRiders},
     outcome::Outcome,
     resources::{
-        DeltaTime, EntitiesDiedLastTick, GameMode, PlayerEntity, PlayerPhysicsSettings,
+        DeltaTime, EntitiesDiedLastTick, GameMode, OracleLive, PlayerEntity, PlayerPhysicsSettings,
         ProgramTime, Time, TimeOfDay, TimeScale,
     },
     shared_server_config::ServerConstants,
@@ -411,6 +411,10 @@ impl State {
         ecs.insert(common::CachedSpatialGrid::default());
         ecs.insert(EntitiesDiedLastTick::default());
         ecs.insert(RtsimGizmos::default());
+        // Default to not-live; the server overwrites this from
+        // `GameplaySettings::oracle` at startup, and the client overwrites its own
+        // copy from the server on login / mid-session flip.
+        ecs.insert(OracleLive::default());
 
         let num_cpu = num_cpus::get() as u64;
         let slow_limit = (num_cpu / 2 + num_cpu / 4).max(1);

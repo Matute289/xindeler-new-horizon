@@ -59,7 +59,7 @@ use common::{
     npc::{self, get_npc_name},
     outcome::Outcome,
     parse_cmd_args,
-    resources::{BattleMode, ProgramTime, Secs, Time, TimeOfDay, TimeScale},
+    resources::{BattleMode, OracleLive, ProgramTime, Secs, Time, TimeOfDay, TimeScale},
     rtsim::Role,
     spiral::Spiral2d,
     terrain::{Block, BlockKind, CoordinateConversions, SpriteKind, StructureSprite},
@@ -196,6 +196,7 @@ fn do_command(
         ServerChatCommand::MakeSprite => handle_make_sprite,
         ServerChatCommand::Motd => handle_motd,
         ServerChatCommand::Object => handle_object,
+        ServerChatCommand::Oracle => handle_oracle,
         ServerChatCommand::OracleTrigger => handle_oracle_trigger,
         ServerChatCommand::Outcome => handle_outcome,
         ServerChatCommand::PermitBuild => handle_permit_build,
@@ -1340,6 +1341,46 @@ fn handle_make_party(
                 "Party spawned: 3 NPCs (moral alignment compatible with {player_moral:?}) grouped \
                  with you."
             )),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/oracle on|off` — admin-only mid-session flip of PROJECT ORACLE's
+/// liveness. Writes the server's own `OracleLive` resource (the thing
+/// `AbilityRequirements::requirements_met` actually reads for cast authority)
+/// and broadcasts `ServerGeneral::OracleLive` so every connected client's HUD
+/// re-greys the affected abilities immediately, without waiting for a
+/// reconnect.
+fn handle_oracle(
+    server: &mut Server,
+    client: EcsEntity,
+    _target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain("Only admins may use /oracle.".to_string()));
+    }
+
+    let state = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let live = match state.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return Err(action.help_content()),
+    };
+
+    server.state.ecs().write_resource::<OracleLive>().0 = live;
+    server.notify_players(ServerGeneral::OracleLive(live));
+
+    let status = if live { "live" } else { "not live" };
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("PROJECT ORACLE is now {status}.")),
         ),
     );
 

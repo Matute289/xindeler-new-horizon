@@ -306,6 +306,10 @@ pub struct Skillbar<'a> {
     ability_cooldowns: Option<&'a AbilityCooldowns>,
     now: f64,
     buffs: Option<&'a Buffs>,
+    /// Whether PROJECT ORACLE is live, for greying out any ability whose
+    /// `AbilityRequirements.oracle` is `true`. Purely cosmetic here — the
+    /// server is the one that actually refuses the cast.
+    oracle_live: bool,
 }
 
 impl<'a> Skillbar<'a> {
@@ -344,6 +348,7 @@ impl<'a> Skillbar<'a> {
         ability_cooldowns: Option<&'a AbilityCooldowns>,
         now: f64,
         buffs: Option<&'a Buffs>,
+        oracle_live: bool,
     ) -> Self {
         Self {
             client,
@@ -380,6 +385,7 @@ impl<'a> Skillbar<'a> {
             ability_cooldowns,
             now,
             buffs,
+            oracle_live,
         }
     }
 
@@ -1068,6 +1074,7 @@ impl<'a> Skillbar<'a> {
             self.stats,
             self.buffs,
             self.ability_map,
+            self.oracle_live,
         );
 
         let image_source = (self.item_imgs, self.imgs);
@@ -1480,9 +1487,11 @@ impl<'a> Skillbar<'a> {
                 .is_some_and(|(a, _, _)| {
                     self.energy.current() >= a.energy_cost()
                         && self.combo.is_some_and(|c| c.counter() >= a.combo_cost())
-                        && a.ability_meta()
-                            .requirements
-                            .requirements_met(self.stance, Some(self.inventory))
+                        && a.ability_meta().requirements.requirements_met(
+                            self.stance,
+                            Some(self.inventory),
+                            self.oracle_live,
+                        )
                 })
             {
                 Color::Rgba(1.0, 1.0, 1.0, 1.0)

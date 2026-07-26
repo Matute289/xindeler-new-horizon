@@ -220,6 +220,10 @@ pub enum ServerGeneral {
     /// Economic information about sites
     SiteEconomy(EconomyInfo),
     MapMarker(comp::MapMarkerUpdate),
+    /// A mid-session flip of PROJECT ORACLE's liveness (`/oracle on|off`).
+    /// Updates the same client-side `OracleLive` resource the login-time
+    /// `ServerConstants::oracle_live` push writes.
+    OracleLive(bool),
     WeatherUpdate(SharedWeatherGrid),
     LocalWindUpdate(Vec2<f32>),
     /// Suggest the client to spectate a position. Called after client has
@@ -376,6 +380,7 @@ impl ServerMsg {
                         | ServerGeneral::FinishedTrade(_)
                         | ServerGeneral::SiteEconomy(_)
                         | ServerGeneral::MapMarker(_)
+                        | ServerGeneral::OracleLive(_)
                         | ServerGeneral::WeatherUpdate(_)
                         | ServerGeneral::LocalWindUpdate(_)
                         | ServerGeneral::SpectatePosition(_)

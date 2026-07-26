@@ -68,6 +68,7 @@ pub fn tick(state: &mut State, dt: Duration) {
         None,
         &ServerConstants {
             day_cycle_coefficient: 24.0,
+            oracle_live: false,
         },
         |_, _| {},
     );

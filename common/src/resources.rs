@@ -161,3 +161,17 @@ pub enum BattleMode {
     PvP,
     PvE,
 }
+
+/// Shared ECS resource mirroring whether PROJECT ORACLE is currently live on
+/// this server. Read by
+/// [`crate::comp::ability::AbilityRequirements::requirements_met`] to gate any
+/// ability marked `oracle: true`, on both the client (HUD greyout) and the
+/// server (cast authority) — see `JoinData::oracle_live`.
+///
+/// The server is the source of truth: it derives this from
+/// `GameplaySettings::oracle` at startup and updates it on `/oracle on|off`.
+/// The client's copy only ever decides what colour to paint a hotbar slot; a
+/// client that locally flips its own copy still gets refused server-side,
+/// because the cast itself reads the server's own resource, not the client's.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct OracleLive(pub bool);

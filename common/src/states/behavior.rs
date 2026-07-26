@@ -11,7 +11,7 @@ use crate::{
     },
     link::Is,
     mounting::{Rider, VolumeRider},
-    resources::{DeltaTime, Time},
+    resources::{DeltaTime, OracleLive, Time},
     terrain::TerrainGrid,
     uid::{IdMaps, Uid},
 };
@@ -147,6 +147,10 @@ pub struct JoinData<'a> {
     pub density: &'a Density,
     pub dt: &'a DeltaTime,
     pub time: &'a Time,
+    /// Whether PROJECT ORACLE is live, read from the server's own resource so
+    /// `requirements_paid` can gate `AbilityRequirements.oracle` abilities
+    /// with server authority (see `OracleLive`).
+    pub oracle_live: &'a OracleLive,
     pub controller: &'a Controller,
     pub inputs: &'a ControllerInputs,
     pub health: Option<&'a Health>,
@@ -232,6 +236,7 @@ impl<'a> JoinData<'a> {
         time: &'a Time,
         msm: &'a MaterialStatManifest,
         ability_map: &'a AbilityMap,
+        oracle_live: &'a OracleLive,
     ) -> Self {
         Self {
             entity: j.entity,
@@ -262,6 +267,7 @@ impl<'a> JoinData<'a> {
             time,
             msm,
             ability_map,
+            oracle_live,
             combo: j.combo,
             alignment: j.alignment,
             terrain: j.terrain,

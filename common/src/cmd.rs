@@ -441,6 +441,7 @@ pub enum ServerChatCommand {
     Motd,
     Mount,
     Object,
+    Oracle,
     OracleTrigger,
     Outcome,
     PermitBuild,
@@ -892,6 +893,15 @@ impl ServerChatCommand {
                 Content::localized("command-object-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::Oracle => cmd(
+                vec![Enum(
+                    "state",
+                    vec!["on".to_string(), "off".to_string()],
+                    Required,
+                )],
+                Content::localized("command-oracle-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::OracleTrigger => cmd(
                 vec![Any("dmevent_id", Required)],
                 Content::localized("command-oracle_trigger-desc"),
@@ -1337,6 +1347,7 @@ impl ServerChatCommand {
             ServerChatCommand::MakeSprite => "make_sprite",
             ServerChatCommand::Motd => "motd",
             ServerChatCommand::Object => "object",
+            ServerChatCommand::Oracle => "oracle",
             ServerChatCommand::OracleTrigger => "oracle_trigger",
             ServerChatCommand::Outcome => "outcome",
             ServerChatCommand::PermitBuild => "permit_build",

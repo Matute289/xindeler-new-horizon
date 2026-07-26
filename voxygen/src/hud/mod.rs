@@ -119,7 +119,7 @@ use common::{
     mounting::{Mount, Rider, VolumePos},
     outcome::{HealthChangeInfo, Outcome},
     recipe::RecipeBookManifest,
-    resources::{BattleMode, Secs, Time},
+    resources::{BattleMode, OracleLive, Secs, Time},
     rtsim,
     slowjob::SlowJobPool,
     terrain::{Block, SpriteKind, TerrainChunk, TerrainChunkSize, UnlockKind},
@@ -3294,6 +3294,7 @@ impl Hud {
         let stances = ecs.read_storage::<comp::Stance>();
         let char_states = ecs.read_storage::<comp::CharacterState>();
         let buffs = ecs.read_storage::<comp::Buffs>();
+        let oracle_live = ecs.read_resource::<OracleLive>().0;
         // Combo floater stuffs
         self.floaters.combo_floater = self.floaters.combo_floater.map(|mut f| {
             f.timer -= dt.as_secs_f64();
@@ -3352,6 +3353,7 @@ impl Hud {
                 ability_cooldowns_storage.get(entity),
                 time.0,
                 buffs.get(entity),
+                oracle_live,
             )
             .set(self.ids.skillbar, ui_widgets);
 

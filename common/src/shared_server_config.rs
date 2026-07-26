@@ -7,4 +7,9 @@ pub struct ServerConstants {
     /// How many times faster the in-game day/night cycle should be compared to
     /// real time.
     pub day_cycle_coefficient: f64,
+    /// Whether PROJECT ORACLE is live on this server at login time. Stored
+    /// into the client's own `OracleLive` resource; a mid-session flip arrives
+    /// separately via `ServerGeneral::OracleLive`, updating the same
+    /// resource.
+    pub oracle_live: bool,
 }
