@@ -2,7 +2,7 @@ use common::{
     comp::{Body, Mass, Ori, Pos, Scale, Vel},
     link::Is,
     resources::DeltaTime,
-    tether::Follower,
+    tether::{Follower, Leader},
     uid::IdMaps,
     util::Dir,
 };
@@ -18,7 +18,8 @@ impl<'a> System<'a> for Sys {
         Read<'a, IdMaps>,
         Entities<'a>,
         Read<'a, DeltaTime>,
-        ReadStorage<'a, Is<Follower>>,
+        WriteStorage<'a, Is<Follower>>,
+        ReadStorage<'a, Is<Leader>>,
         ReadStorage<'a, Pos>,
         WriteStorage<'a, Vel>,
         WriteStorage<'a, Ori>,
@@ -37,7 +38,8 @@ impl<'a> System<'a> for Sys {
             id_maps,
             entities,
             dt,
-            is_followers,
+            mut is_followers,
+            is_leaders,
             positions,
             mut velocities,
             mut orientations,
@@ -46,12 +48,26 @@ impl<'a> System<'a> for Sys {
             masses,
         ): Self::SystemData,
     ) {
+        // Links whose leader side has vanished or lost `Is<Leader>` (entity death,
+        // disconnect, an ability interrupt that skipped its own release logic, ...).
+        // Self-heal by dropping the stale `Is<Follower>` instead of leaving the
+        // follower permanently marked as tethered to nothing. Collected up front
+        // and removed after the join below, since removing from a storage while
+        // it's being joined over is not safe.
+        let mut stale_followers = Vec::new();
+
         for (follower, is_follower, follower_body, follower_scale) in
             (&entities, &is_followers, bodies.maybe(), scales.maybe()).join()
         {
             let Some(leader) = id_maps.uid_entity(is_follower.leader) else {
+                stale_followers.push(follower);
                 continue;
             };
+
+            if !is_leaders.contains(leader) {
+                stale_followers.push(follower);
+                continue;
+            }
 
             let (Some(leader_pos), Some(follower_pos)) = (
                 positions.get(leader).copied(),
@@ -131,6 +147,10 @@ impl<'a> System<'a> for Sys {
                     *leader_ori = leader_ori.slerped_towards(target_ori, turn_strength * dt.0);
                 }
             }
+        }
+
+        for follower in stale_followers {
+            is_followers.remove(follower);
         }
     }
 }

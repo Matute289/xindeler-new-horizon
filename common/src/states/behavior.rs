@@ -2,9 +2,9 @@ use crate::{
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, Alignment, AttunedItems, Beam, Body,
         Buffs, CharacterActivity, CharacterState, Combo, ControlAction, Controller,
-        ControllerInputs, Density, Energy, Health, InputAttr, InputKind, Inventory,
-        InventoryAction, Mass, Melee, Ori, PhysicsState, Pos, PreviousPhysCache, Scale, SkillSet,
-        Stance, StateUpdate, Stats, Vel,
+        ControllerInputs, Density, Energy, Health, Immovable, InputAttr, InputKind, Inventory,
+        InventoryAction, Mass, Melee, Ori, PhysicsState, PickupItem, Pos, PreviousPhysCache, Scale,
+        SkillSet, Stance, StateUpdate, Stats, Vel,
         body::parts::Heads,
         character_state::OutputEvents,
         item::{MaterialStatManifest, tool::AbilityMap},
@@ -13,6 +13,7 @@ use crate::{
     mounting::{Rider, VolumeRider},
     resources::{DeltaTime, OracleLive, Time},
     terrain::TerrainGrid,
+    tether::Follower,
     uid::{IdMaps, Uid},
 };
 use specs::{Entity, LazyUpdate, Read, ReadStorage, storage::FlaggedAccessMut};
@@ -186,6 +187,16 @@ pub struct JoinData<'a> {
     pub prev_phys_caches: &'a ReadStorage<'a, PreviousPhysCache>,
     pub bodies: &'a ReadStorage<'a, Body>,
     pub buffs: Option<&'a Buffs>,
+    /// Global lookup used by `TelekineticGrip` (and any future ranged-grab
+    /// ability) to validate an arbitrary `target_entity` carries loose,
+    /// grabbable loot — see `common/src/states/telekinetic_grip.rs`.
+    pub pickup_items: &'a ReadStorage<'a, PickupItem>,
+    /// Global lookup of the `Immovable` marker, so a grab ability can reject
+    /// world-anchored targets.
+    pub immovables: &'a ReadStorage<'a, Immovable>,
+    /// Global lookup of `Is<Follower>` so a grab ability can tell whether an
+    /// arbitrary target is already tethered to someone else.
+    pub is_followers: &'a ReadStorage<'a, Is<Follower>>,
 }
 
 pub struct JoinStruct<'a> {
@@ -226,6 +237,9 @@ pub struct JoinStruct<'a> {
     pub prev_phys_caches: &'a ReadStorage<'a, PreviousPhysCache>,
     pub bodies: &'a ReadStorage<'a, Body>,
     pub buffs: Option<&'a Buffs>,
+    pub pickup_items: &'a ReadStorage<'a, PickupItem>,
+    pub immovables: &'a ReadStorage<'a, Immovable>,
+    pub is_followers: &'a ReadStorage<'a, Is<Follower>>,
 }
 
 impl<'a> JoinData<'a> {
@@ -282,6 +296,9 @@ impl<'a> JoinData<'a> {
             prev_phys_caches: j.prev_phys_caches,
             bodies: j.bodies,
             buffs: j.buffs,
+            pickup_items: j.pickup_items,
+            immovables: j.immovables,
+            is_followers: j.is_followers,
         }
     }
 }
