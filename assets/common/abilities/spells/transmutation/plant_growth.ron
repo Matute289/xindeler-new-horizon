@@ -1,0 +1,29 @@
+// A zone of surging plant-life bursts into dense, choking overgrowth around the caster.
+// StaticAura + sprite_info shape cloned from rampart.ron: a standalone aura entity left behind
+// at cast position (persists after the caster walks away), plus vine sprites planted in the
+// same radius. Anything that steps directly on a vine tile also gets the shipped Ensnared
+// debuff on top of the wider DifficultTerrain slow from the aura itself.
+StaticAura(
+    buildup_duration: 0.8,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    energy_cost: 83.0,
+    targets: OutOfGroup,
+    auras: [
+        (
+            kind: DifficultTerrain,
+            strength: 0.6,
+            duration: Some(2),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(18.0),
+    range: 6.0,
+    sprite_info: Some((
+        sprite: EnsnaringVines,
+        del_timeout: Some((16, 4)),
+        summon_distance: (0, 6),
+        sparseness: 0.55,
+    )),
+    meta: (school: Some(Transmutation), source: Some(Primordial), cooldown: Some(20.0)),
+)
