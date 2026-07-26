@@ -164,6 +164,13 @@ pub struct Stats {
     pub resist_poison: f32,
     pub resist_magic: f32,
     pub crowd_control_resistance: f32,
+    /// Additive resistance term (fraction in `0.0..`) against resisted
+    /// mind-altering effects such as charm/domination-style buffs, distinct
+    /// from `resist_magic` (which mitigates AoE spell damage magnitude, not
+    /// a resisted effect's chance to land). Sourced from racial passives
+    /// (`RacialTraits::apply`); consumed by the resist-chance roll for those
+    /// effects.
+    pub magic_resistance: f32,
     pub item_effect_reduction: f32,
     /// This modifies attacks that target this entity
     pub attacked_modifications: Vec<AttackedModification>,
@@ -238,6 +245,7 @@ impl Stats {
             resist_poison: 0.0,
             resist_magic: 0.0,
             crowd_control_resistance: 0.0,
+            magic_resistance: 0.0,
             item_effect_reduction: 1.0,
             attacked_modifications: Vec::new(),
             precision_power_mult: 1.0,

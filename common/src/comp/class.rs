@@ -127,6 +127,11 @@ pub struct RacialTraits {
     pub max_energy_mult: f32,
     pub damage_reduction_add: f32,
     pub crowd_control_resistance_add: f32,
+    /// Additive resistance (fraction) against resisted mind-altering effects
+    /// such as charm/domination, mirroring how `crowd_control_resistance_add`
+    /// works for crowd-control durations. Only meaningful for humanoid
+    /// species, since `RacialTraits` itself is keyed by `Species`.
+    pub magic_resistance_add: f32,
 }
 
 impl Default for RacialTraits {
@@ -138,6 +143,7 @@ impl Default for RacialTraits {
             max_energy_mult: 1.0,
             damage_reduction_add: 0.0,
             crowd_control_resistance_add: 0.0,
+            magic_resistance_add: 0.0,
         }
     }
 }
@@ -169,6 +175,7 @@ impl RacialTraits {
         stats.max_energy_modifiers.mult_mod *= self.max_energy_mult;
         stats.damage_reduction.pos_mod += self.damage_reduction_add;
         stats.crowd_control_resistance += self.crowd_control_resistance_add;
+        stats.magic_resistance += self.magic_resistance_add;
     }
 }
 
@@ -332,6 +339,12 @@ mod tests {
         assert!(racial_traits(Species::Orc).attack_damage_mult > 1.0);
         assert!(racial_traits(Species::Danari).max_energy_mult > 1.0);
         assert!(racial_traits(Species::Draugr).crowd_control_resistance_add > 0.0);
+        assert!(racial_traits(Species::Elf).magic_resistance_add > 0.0);
+        assert!(racial_traits(Species::Danari).magic_resistance_add > 0.0);
+        assert!(racial_traits(Species::Draugr).magic_resistance_add > 0.0);
+        // Dwarven Resilience is poison resistance, not charm resistance — must
+        // not be mapped onto this field.
+        assert_eq!(racial_traits(Species::Dwarf).magic_resistance_add, 0.0);
     }
 
     #[test]
@@ -342,6 +355,16 @@ mod tests {
         let before = stats.attack_damage_modifier;
         apply_racial_traits(&mut stats, Species::Orc);
         assert!(stats.attack_damage_modifier > before);
+    }
+
+    #[test]
+    fn racial_traits_apply_magic_resistance_to_stats() {
+        use crate::comp::{Stats, body::humanoid::Species};
+        let body = crate::comp::Body::Humanoid(crate::comp::humanoid::Body::random());
+        let mut stats = Stats::empty(body);
+        assert_eq!(stats.magic_resistance, 0.0);
+        apply_racial_traits(&mut stats, Species::Elf);
+        assert!(stats.magic_resistance > 0.0);
     }
 
     #[test]

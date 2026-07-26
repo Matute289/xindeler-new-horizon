@@ -3190,11 +3190,25 @@ RepairBench: [(
     wind_sway: 0.0,
 )],
 // Ensnaring Vines
+// A rescaled duplicate of the base vine model is included below as a second variation (randomly
+// chosen alongside the original, same mechanism used for Mushroom's several variation files)
+// rather than gated by a sprite attribute filter: sprite-spawning events have no way to set a
+// sprite's Growth attribute value at spawn time today (freshly-placed sprites always get
+// raw-zero attribute bits), so there is no data-only signal available to make different casters
+// of this SpriteKind consistently pick different variants. See the overgrown model file's own
+// comment for details.
 EnsnaringVines: [(
     variations: [
         (
             model: "voxygen.voxel.sprite.misc.ensnaring_vines",
             offset: (-5.0, -6.5, 0.0),
+            lod_axes: (0.0, 0.0, 0.0),
+        ),
+        (
+            // 2x-rescaled duplicate: taller/denser overgrowth look, same shape as the base
+            // model with every voxel replicated into a 2x2x2 block (10x13x6 -> 20x26x12).
+            model: "voxygen.voxel.sprite.misc.ensnaring_vines_overgrown",
+            offset: (-10.0, -13.0, 0.0),
             lod_axes: (0.0, 0.0, 0.0),
         ),
     ],
