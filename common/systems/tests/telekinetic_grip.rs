@@ -138,11 +138,20 @@ mod tests {
         (entity, uid)
     }
 
-    fn create_caster(state: &mut State, ability: StaticData) -> Entity {
-        let body = common::comp::Body::Humanoid(common::comp::humanoid::Body::random_with(
-            &mut rand::rng(),
+    /// A fixed (not per-run-random) humanoid body. `thrown_item_hits_creature`
+    /// asserts a precise physical interaction (a thrown item's straight-line
+    /// path colliding with a specific collider) — an unseeded RNG occasionally
+    /// produced a body short/thin enough to be missed, making that test flaky.
+    fn deterministic_humanoid_body() -> Body {
+        use rand::{SeedableRng, rngs::SmallRng};
+        Body::Humanoid(common::comp::humanoid::Body::random_with(
+            &mut SmallRng::seed_from_u64(0),
             &common::comp::humanoid::Species::Human,
-        ));
+        ))
+    }
+
+    fn create_caster(state: &mut State, ability: StaticData) -> Entity {
+        let body = deterministic_humanoid_body();
         let skill_set = SkillSetBuilder::default().build();
         state
             .ecs_mut()
@@ -173,6 +182,7 @@ mod tests {
             .with(skill_set)
             .with(PhysicsState::default())
             .with(Stats::empty(body))
+            .with(Health::new(body))
             .build()
     }
 
@@ -198,10 +208,7 @@ mod tests {
     }
 
     fn create_creature(state: &mut State, pos: Vec3<f32>) -> (Entity, Uid) {
-        let body = common::comp::Body::Humanoid(common::comp::humanoid::Body::random_with(
-            &mut rand::rng(),
-            &common::comp::humanoid::Species::Human,
-        ));
+        let body = deterministic_humanoid_body();
         let (p0, p1, radius) = body.sausage();
         let collider = Collider::CapsulePrism(CapsulePrism {
             p0,
@@ -450,6 +457,119 @@ mod tests {
                 other => panic!("expected TelekineticGrip/Charge, got {other:?}"),
             }
         }
+    }
+
+    /// A caster who dies mid-grip (without ever running their own release
+    /// logic) doesn't leave the item permanently tethered to the corpse.
+    /// Regression test for a gap an ecs-design-reviewer pass caught: dying
+    /// doesn't itself change `CharacterState` away from `TelekineticGrip`
+    /// (death is tracked separately via `Health.is_dead`), so the safety net
+    /// in `character_behavior.rs` has to check `is_dead` explicitly rather
+    /// than only "did the state change" — and it has to run *before* that
+    /// system's own dead-entity early-return, not after.
+    #[test]
+    fn caster_death_releases_the_grip() {
+        let mut state = setup();
+        let (item_entity, item_uid) = create_item(&mut state, Vec3::new(1.0, 0.0, 0.0));
+        let ability = default_ability(Some(item_uid));
+        let caster = create_caster(&mut state, ability.clone());
+        set_held(&mut state, caster, &ability, true);
+
+        complete_buildup(&mut state, &ability);
+        {
+            let is_followers = state.ecs().read_storage::<Is<Follower>>();
+            assert!(
+                is_followers.get(item_entity).is_some(),
+                "grip should have succeeded before the caster dies"
+            );
+        }
+
+        {
+            let mut healths = state.ecs().write_storage::<Health>();
+            healths.get_mut(caster).unwrap().is_dead = true;
+        }
+        // One tick for `character_behavior::Sys`'s safety net to *queue* removing
+        // the dead caster's `Is<Leader>` (applied via `LazyUpdate`, so it isn't
+        // visible until this tick's `maintain()`), a second for `tether::Sys` to
+        // observe it's actually gone and self-heal the item's `Is<Follower>`.
+        tick(&mut state, Duration::from_millis(16));
+        tick(&mut state, Duration::from_millis(16));
+
+        let is_leaders = state.ecs().read_storage::<Is<Leader>>();
+        assert!(
+            is_leaders.get(caster).is_none(),
+            "a dead caster must not keep holding the tether link"
+        );
+        drop(is_leaders);
+        let is_followers = state.ecs().read_storage::<Is<Follower>>();
+        assert!(
+            is_followers.get(item_entity).is_none(),
+            "the item must be released once its dead caster's Is<Leader> is gone"
+        );
+    }
+
+    /// If two casters' grabs on the same item ever race (both validate the
+    /// same tick, one's `LazyUpdate` insert of `Is<Follower>` overwrites the
+    /// other's), the loser isn't left permanently stuck holding a link the
+    /// item no longer honors. `tether::Sys`'s self-heal compares the
+    /// *identity* of the leader's link (does the leader's `Tethered.follower`
+    /// still name this particular follower?), not just whether it has
+    /// `Is<Leader>` at all — otherwise "has some `Is<Leader>`" would be true
+    /// for the loser too, and self-heal would never fire for it. Regression
+    /// test for a gap an ecs-design-reviewer pass caught.
+    #[test]
+    fn stale_leader_link_self_heals_without_disturbing_the_winner() {
+        let mut state = setup();
+        let (item_entity, item_uid) = create_item(&mut state, Vec3::new(1.0, 0.0, 0.0));
+        let ability = default_ability(Some(item_uid));
+        let loser = create_caster(&mut state, ability.clone());
+        let winner = create_caster(&mut state, ability);
+
+        // Simulate the race directly: both casters end up with `Is<Leader>`
+        // naming the same item, but the item's own `Is<Follower>` (last
+        // write wins) only agrees with `winner`.
+        {
+            let make_leader = |leader_uid: Uid| {
+                LinkHandle::from_link(Tethered {
+                    leader: leader_uid,
+                    follower: item_uid,
+                    tether_length: 1.5,
+                })
+            };
+            let loser_uid = uid_of(&state, loser);
+            let winner_uid = uid_of(&state, winner);
+            let loser_handle = make_leader(loser_uid);
+            let winner_handle = make_leader(winner_uid);
+            let mut is_leaders = state.ecs_mut().write_storage::<Is<Leader>>();
+            is_leaders.insert(loser, loser_handle.make_role()).unwrap();
+            is_leaders
+                .insert(winner, winner_handle.make_role())
+                .unwrap();
+            drop(is_leaders);
+            state
+                .ecs_mut()
+                .write_storage::<Is<Follower>>()
+                .insert(item_entity, winner_handle.make_role())
+                .unwrap();
+        }
+
+        tick(&mut state, Duration::from_millis(16));
+
+        let is_leaders = state.ecs().read_storage::<Is<Leader>>();
+        assert!(
+            is_leaders.get(loser).is_none(),
+            "the loser's orphaned Is<Leader> should have been self-healed away"
+        );
+        assert!(
+            is_leaders.get(winner).is_some(),
+            "the winner's still-agreed-upon link must not be disturbed"
+        );
+        drop(is_leaders);
+        let is_followers = state.ecs().read_storage::<Is<Follower>>();
+        assert!(
+            is_followers.get(item_entity).is_some(),
+            "the item should still be following the winner"
+        );
     }
 
     /// (2) Grip-then-release-as-place leaves the item at rest near the

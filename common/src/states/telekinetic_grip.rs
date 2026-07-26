@@ -106,6 +106,24 @@ impl Data {
     /// within `range`, and (d) not already be `Is<Follower>` of someone
     /// else's grip/leash. Returns the item's `Uid` and resolved `Entity` on
     /// success.
+    ///
+    /// Doesn't re-check the cycle-prevention invariants `Tethered::create`
+    /// enforces (target not already `Is<Leader>` of something, no
+    /// self-tether) — those only matter for a follower that could itself be
+    /// a leader or the same entity as the caster, which a `PickupItem`
+    /// never is. Also doesn't guard against two casters completing buildup
+    /// on the very same item within the same tick: both would pass this
+    /// check (it reads a per-tick snapshot), and whichever `LazyUpdate`
+    /// insert lands second wins the `Is<Follower>`. The loser isn't left
+    /// stuck, though — `tether::Sys`'s self-heal (see
+    /// `common/systems/src/tether.rs`) now compares the *identity* of the
+    /// leader's link, not just whether it has one, so it cleans up the
+    /// loser's now-orphaned `Is<Leader>` on the next tick. Still, an
+    /// authoritative single-claim guard (mirroring how
+    /// `InventoryManip::Pickup` — `server/src/events/inventory_manip.rs` —
+    /// avoids this exact race for regular pickup) would be a better fix if
+    /// contested grabs turn out to matter in practice once `mage_hand`/
+    /// `telekinesis`/`catapult` make ranged grabbing a routine action.
     fn try_grab(&self, data: &JoinData) -> Option<(Uid, specs::Entity)> {
         let target_uid = self
             .static_data
@@ -196,12 +214,16 @@ impl CharacterBehavior for Data {
                     // sets it down, a deliberate hold-then-release throws it.
                     let throw = self.timer >= self.static_data.place_threshold;
 
+                    // Free the caster's side of the link unconditionally — don't wait for
+                    // `Recover`, so it stops pulling the instant the player lets go — even
+                    // if the item itself is already gone (e.g. despawned/merged away by
+                    // `server/src/sys/item.rs` mid-charge). Only the item-side effects
+                    // below need the item to still resolve.
+                    data.updater.remove::<Is<Leader>>(data.entity);
+
                     if let Some(item_entity) =
                         self.item.and_then(|uid| data.id_maps.uid_entity(uid))
                     {
-                        // Free the item immediately — don't wait for `Recover` — so it
-                        // stops being pulled the instant the player lets go.
-                        data.updater.remove::<Is<Leader>>(data.entity);
                         data.updater.remove::<Is<Follower>>(item_entity);
 
                         if throw {

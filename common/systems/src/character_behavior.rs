@@ -176,8 +176,25 @@ impl<'a> System<'a> for Sys {
                 ),
                 combo,
             ) = comps;
+            // Safety net for `TelekineticGrip`: if the caster leaves that state through any
+            // path that skips its own release logic (an interrupt, disconnect, death, ...),
+            // make sure the `Is<Leader>` half of the tether link doesn't outlive it. The
+            // `tether` system self-heals the follower's `Is<Follower>` once it notices the
+            // leader lost its `Is<Leader>` (see `common/systems/src/tether.rs`), so
+            // dropping just this side here is enough to unwind the whole link.
+            //
+            // This must run *before*, and independently of, the death early-return below:
+            // dying doesn't itself change `char_state` away from `TelekineticGrip` (death
+            // is tracked separately via `Health.is_dead`), so a dead caster's state can
+            // still read as `TelekineticGrip` here — without the explicit `is_dead` check
+            // a corpse would keep holding its item tethered to it indefinitely.
+            let is_dead = health.is_some_and(|h| h.is_dead);
+            if is_dead || !matches!(&*char_state, CharacterState::TelekineticGrip(_)) {
+                read_data.lazy_update.remove::<Is<Leader>>(entity);
+            }
+
             // Being dead overrides all other states
-            if health.is_some_and(|h| h.is_dead) {
+            if is_dead {
                 // Do nothing
                 return;
             }
@@ -188,15 +205,6 @@ impl<'a> System<'a> for Sys {
             }
             if !char_state.is_beam_attack() {
                 read_data.lazy_update.remove::<Beam>(entity);
-            }
-            // Safety net for `TelekineticGrip`: if the caster leaves that state through any
-            // path that skips its own release logic (an interrupt, death, disconnect, ...),
-            // make sure the `Is<Leader>` half of the tether link doesn't outlive it. The
-            // `tether` system self-heals the follower's `Is<Follower>` once it notices the
-            // leader lost its `Is<Leader>` (see `common/systems/src/tether.rs`), so
-            // dropping just this side here is enough to unwind the whole link.
-            if !matches!(&*char_state, CharacterState::TelekineticGrip(_)) {
-                read_data.lazy_update.remove::<Is<Leader>>(entity);
             }
 
             // Enter stunned state if poise damage is enough

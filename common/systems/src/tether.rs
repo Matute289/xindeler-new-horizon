@@ -19,7 +19,7 @@ impl<'a> System<'a> for Sys {
         Entities<'a>,
         Read<'a, DeltaTime>,
         WriteStorage<'a, Is<Follower>>,
-        ReadStorage<'a, Is<Leader>>,
+        WriteStorage<'a, Is<Leader>>,
         ReadStorage<'a, Pos>,
         WriteStorage<'a, Vel>,
         WriteStorage<'a, Ori>,
@@ -39,7 +39,7 @@ impl<'a> System<'a> for Sys {
             entities,
             dt,
             mut is_followers,
-            is_leaders,
+            mut is_leaders,
             positions,
             mut velocities,
             mut orientations,
@@ -48,13 +48,22 @@ impl<'a> System<'a> for Sys {
             masses,
         ): Self::SystemData,
     ) {
-        // Links whose leader side has vanished or lost `Is<Leader>` (entity death,
-        // disconnect, an ability interrupt that skipped its own release logic, ...).
-        // Self-heal by dropping the stale `Is<Follower>` instead of leaving the
-        // follower permanently marked as tethered to nothing. Collected up front
-        // and removed after the join below, since removing from a storage while
-        // it's being joined over is not safe.
+        // Self-heal links whose two sides have gone out of sync (entity death,
+        // disconnect, an ability interrupt that skipped its own release logic, two
+        // casters racing to grab the same follower in the same tick, ...), rather
+        // than leaving either side permanently referencing a partner that no
+        // longer agrees the link exists. Two passes are needed because a stale
+        // side can go undetected from only one direction: a *follower* whose
+        // leader moved on is caught by walking followers and checking their
+        // leader below, but a *leader* whose claimed follower was actually won
+        // by a different leader (e.g. the loser of a same-tick grab race) has no
+        // follower pointing back at it at all, so it's invisible to that first
+        // pass — the second pass below walks leaders and checks their follower
+        // to catch exactly that case. Both collect stale entities up front and
+        // remove them after their join, since removing from a storage while it's
+        // being joined over is not safe.
         let mut stale_followers = Vec::new();
+        let mut stale_leaders = Vec::new();
 
         for (follower, is_follower, follower_body, follower_scale) in
             (&entities, &is_followers, bodies.maybe(), scales.maybe()).join()
@@ -64,7 +73,13 @@ impl<'a> System<'a> for Sys {
                 continue;
             };
 
-            if !is_leaders.contains(leader) {
+            // Presence of `Is<Leader>` alone isn't enough: the leader entity could
+            // have picked up an unrelated link since. Compare the `follower` field
+            // both sides' `Tethered` payload agree on, not just presence.
+            if !is_leaders
+                .get(leader)
+                .is_some_and(|is_leader| is_leader.follower == is_follower.follower)
+            {
                 stale_followers.push(follower);
                 continue;
             }
@@ -149,8 +164,24 @@ impl<'a> System<'a> for Sys {
             }
         }
 
+        for (leader, is_leader) in (&entities, &is_leaders).join() {
+            let follower_agrees = id_maps
+                .uid_entity(is_leader.follower)
+                .is_some_and(|follower| {
+                    is_followers
+                        .get(follower)
+                        .is_some_and(|is_follower| is_follower.leader == is_leader.leader)
+                });
+            if !follower_agrees {
+                stale_leaders.push(leader);
+            }
+        }
+
         for follower in stale_followers {
             is_followers.remove(follower);
+        }
+        for leader in stale_leaders {
+            is_leaders.remove(leader);
         }
     }
 }
