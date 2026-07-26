@@ -1,0 +1,27 @@
+// Difficult-terrain half only — the howling winds churn the ground around the caster into a
+// slowing zone. The knockback/push half and the pure-weather-flavor half are not covered by
+// this ability; they need a combat-effect-in-aura delivery path that doesn't exist yet.
+// Near-verbatim clone of magnify_gravity.ron with different tuning. BasicAura attaches the
+// aura to the caster's own entity, so the zone follows the caster and disappears when the
+// ability ends (self-centered "you command the winds around you" cube, approximated as a
+// sphere since BasicAura has no cube-shaped zone).
+BasicAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.6,
+    recover_duration: 0.4,
+    targets: OutOfGroup,
+    auras: [
+        (
+            kind: DifficultTerrain,
+            strength: 0.4,
+            duration: Some(2),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 15.0,
+    energy_cost: 137.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Transmutation), source: Some(Primordial), cooldown: Some(75.0)),
+)
