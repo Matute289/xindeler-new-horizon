@@ -12,6 +12,13 @@
 //! `common/systems/src/lib.rs::add_local_systems`: the client must not be able
 //! to grant itself a viewpoint, and it structurally cannot, because the code
 //! that grants one does not live in a crate the client dispatches.
+//!
+//! Known narrow interaction: this system unconditionally reasserts
+//! `SpectatingEntity` from a still-valid `RemoteSense` every tick, so a
+//! moderator who manually toggles their own debug spectate elsewhere while
+//! *also* holding an active link will see it overwritten back to the link's
+//! anchor on the next tick. Harmless (both are the same moderator's own
+//! choices), but worth knowing if this ever needs to change.
 
 use common::{
     comp::{
@@ -85,6 +92,13 @@ impl<'a> System<'a> for Sys {
                     .is_some_and(|b| b.contains(BuffKind::RemoteSensing))
                 && anchor_entity.is_some_and(|anchor_entity| {
                     positions.get(anchor_entity).is_some_and(|anchor_pos| {
+                        // A caster with no `Presence` component gets
+                        // `max_range == 0.0` and so can never validate
+                        // unless the anchor shares its exact position --
+                        // correct as long as only entities with a
+                        // `Presence` (i.e. players) ever hold a
+                        // `RemoteSense`; revisit this if a non-player
+                        // caster is ever introduced.
                         let max_range = presences.get(caster).map_or(0.0, |presence| {
                             presence.entity_view_distance.current() as f32
                                 * TerrainChunkSize::RECT_SIZE.reduce_max() as f32

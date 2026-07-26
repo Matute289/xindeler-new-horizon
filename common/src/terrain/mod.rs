@@ -403,10 +403,14 @@ impl TerrainChunk {
 /// through the terrain: casts a ray from `pos_a` to `pos_b` and checks that it
 /// reaches `pos_b` without hitting an opaque block first.
 ///
-/// Shared implementation so both AI code and server-only systems (which
-/// cannot depend on `server-agent`'s crate-local `ReadData`) can use the same
-/// check without duplicating it. Callers wanting eye-height offsets should add
-/// those to `pos_a`/`pos_b` before calling this.
+/// Lifted out of `server-agent`'s crate-local `positions_have_line_of_sight`
+/// (which takes that crate's own `ReadData` and so cannot be called from
+/// `server/src/sys/`) so a server-only system that needs the same check —
+/// e.g. cast-time validation of a spell's targeted point — can call it
+/// without depending on that crate or duplicating the logic. `server-agent`'s
+/// own helper now delegates here instead of reimplementing it. Callers
+/// wanting eye-height offsets should add those to `pos_a`/`pos_b` before
+/// calling this.
 pub fn positions_have_line_of_sight(
     terrain: &TerrainGrid,
     pos_a: Vec3<f32>,
