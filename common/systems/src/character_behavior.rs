@@ -7,8 +7,8 @@ use common::{
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, AttunedItems, Beam, Body, Buffs,
         CharacterActivity, CharacterState, Combo, Controller, Density, Energy, Hardcore, Health,
-        Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState, Poise, Pos, PreviousPhysCache,
-        Scale, SkillSet, Stance, StateUpdate, Stats, Vel,
+        Immovable, Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState, PickupItem, Poise,
+        Pos, PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats, Vel,
         character_state::{CharacterStateEvents, OutputEvents},
         inventory::item::{MaterialStatManifest, tool::AbilityMap},
     },
@@ -22,6 +22,7 @@ use common::{
         idle,
     },
     terrain::TerrainGrid,
+    tether::{Follower, Leader},
     uid::{IdMaps, Uid},
 };
 use common_ecs::{Job, Origin, Phase, System};
@@ -62,6 +63,9 @@ pub struct ReadData<'a> {
     stances: ReadStorage<'a, Stance>,
     prev_phys_caches: ReadStorage<'a, PreviousPhysCache>,
     buffs: ReadStorage<'a, Buffs>,
+    pickup_items: ReadStorage<'a, PickupItem>,
+    immovables: ReadStorage<'a, Immovable>,
+    is_followers: ReadStorage<'a, Is<Follower>>,
 }
 
 /// ## Character Behavior System
@@ -172,8 +176,25 @@ impl<'a> System<'a> for Sys {
                 ),
                 combo,
             ) = comps;
+            // Safety net for `TelekineticGrip`: if the caster leaves that state through any
+            // path that skips its own release logic (an interrupt, disconnect, death, ...),
+            // make sure the `Is<Leader>` half of the tether link doesn't outlive it. The
+            // `tether` system self-heals the follower's `Is<Follower>` once it notices the
+            // leader lost its `Is<Leader>` (see `common/systems/src/tether.rs`), so
+            // dropping just this side here is enough to unwind the whole link.
+            //
+            // This must run *before*, and independently of, the death early-return below:
+            // dying doesn't itself change `char_state` away from `TelekineticGrip` (death
+            // is tracked separately via `Health.is_dead`), so a dead caster's state can
+            // still read as `TelekineticGrip` here — without the explicit `is_dead` check
+            // a corpse would keep holding its item tethered to it indefinitely.
+            let is_dead = health.is_some_and(|h| h.is_dead);
+            if is_dead || !matches!(&*char_state, CharacterState::TelekineticGrip(_)) {
+                read_data.lazy_update.remove::<Is<Leader>>(entity);
+            }
+
             // Being dead overrides all other states
-            if health.is_some_and(|h| h.is_dead) {
+            if is_dead {
                 // Do nothing
                 return;
             }
@@ -253,6 +274,9 @@ impl<'a> System<'a> for Sys {
                 prev_phys_caches: &read_data.prev_phys_caches,
                 bodies: &read_data.bodies,
                 buffs: read_data.buffs.get(entity),
+                pickup_items: &read_data.pickup_items,
+                immovables: &read_data.immovables,
+                is_followers: &read_data.is_followers,
             };
 
             for action in actions {

@@ -43,6 +43,7 @@ pub mod sprite_summon;
 pub mod static_aura;
 pub mod stunned;
 pub mod talk;
+pub mod telekinetic_grip;
 pub mod throw;
 pub mod transform;
 pub mod use_item;

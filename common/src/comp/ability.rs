@@ -919,6 +919,7 @@ impl From<&CharacterState> for CharacterAbilityType {
             | CharacterState::GroundAoe(_)
             | CharacterState::LeapRanged(_)
             | CharacterState::Simple(_)
+            | CharacterState::TelekineticGrip(_)
             | CharacterState::Knock(_) => Self::Other,
         }
     }
@@ -1209,6 +1210,22 @@ pub enum CharacterAbility {
         initial_projectile_speed: f32,
         scaled_projectile_speed: f32,
         damage_effect: Option<CombatEffect>,
+        move_speed: f32,
+        #[serde(default)]
+        meta: AbilityMeta,
+    },
+    TelekineticGrip {
+        energy_cost: f32,
+        energy_drain: f32,
+        buildup_duration: f32,
+        charge_duration: f32,
+        place_threshold: f32,
+        recover_duration: f32,
+        range: f32,
+        tether_length: f32,
+        initial_projectile_speed: f32,
+        scaled_projectile_speed: f32,
+        projectile: ProjectileConstructor,
         move_speed: f32,
         #[serde(default)]
         meta: AbilityMeta,
@@ -1575,6 +1592,7 @@ impl CharacterAbility {
                 | CharacterAbility::BasicRanged { energy_cost, .. }
                 | CharacterAbility::ChargedRanged { energy_cost, .. }
                 | CharacterAbility::Throw { energy_cost, .. }
+                | CharacterAbility::TelekineticGrip { energy_cost, .. }
                 | CharacterAbility::ChargedMelee { energy_cost, .. }
                 | CharacterAbility::BasicBlock { energy_cost, .. }
                 | CharacterAbility::RiposteMelee { energy_cost, .. }
@@ -2060,6 +2078,33 @@ impl CharacterAbility {
                 *initial_projectile_speed *= stats.range;
                 *scaled_projectile_speed *= stats.range;
             },
+            TelekineticGrip {
+                ref mut energy_cost,
+                ref mut energy_drain,
+                ref mut buildup_duration,
+                ref mut charge_duration,
+                ref mut place_threshold,
+                ref mut recover_duration,
+                ref mut range,
+                ref mut tether_length,
+                ref mut initial_projectile_speed,
+                ref mut scaled_projectile_speed,
+                ref mut projectile,
+                move_speed: _,
+                meta: _,
+            } => {
+                *projectile = projectile.clone().adjusted_by_stats(stats);
+                *energy_cost /= stats.energy_efficiency;
+                *energy_drain *= stats.speed / stats.energy_efficiency;
+                *buildup_duration /= stats.speed;
+                *charge_duration /= stats.speed;
+                *place_threshold /= stats.speed;
+                *recover_duration /= stats.speed;
+                *range *= stats.range;
+                *tether_length *= stats.range;
+                *initial_projectile_speed *= stats.range;
+                *scaled_projectile_speed *= stats.range;
+            },
             Shockwave {
                 ref mut energy_cost,
                 ref mut buildup_duration,
@@ -2483,6 +2528,7 @@ impl CharacterAbility {
             | ChargedMelee { energy_cost, .. }
             | ChargedRanged { energy_cost, .. }
             | Throw { energy_cost, .. }
+            | TelekineticGrip { energy_cost, .. }
             | Shockwave { energy_cost, .. }
             | Explosion { energy_cost, .. }
             | GroundAoe { energy_cost, .. }
@@ -2563,6 +2609,7 @@ impl CharacterAbility {
             | ChargedMelee { .. }
             | ChargedRanged { .. }
             | Throw { .. }
+            | TelekineticGrip { .. }
             | BasicBlock { .. }
             | ComboMelee2 { .. }
             | DiveMelee { .. }
@@ -2597,6 +2644,7 @@ impl CharacterAbility {
             | ChargedMelee { meta, .. }
             | ChargedRanged { meta, .. }
             | Throw { meta, .. }
+            | TelekineticGrip { meta, .. }
             | Shockwave { meta, .. }
             | Explosion { meta, .. }
             | GroundAoe { meta, .. }
@@ -3316,6 +3364,40 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     exhausted: false,
                 })
             },
+            CharacterAbility::TelekineticGrip {
+                energy_cost: _,
+                energy_drain,
+                buildup_duration,
+                charge_duration,
+                place_threshold,
+                recover_duration,
+                range,
+                tether_length,
+                initial_projectile_speed,
+                scaled_projectile_speed,
+                projectile,
+                move_speed,
+                meta: _,
+            } => CharacterState::TelekineticGrip(telekinetic_grip::Data {
+                static_data: telekinetic_grip::StaticData {
+                    buildup_duration: Duration::from_secs_f32(*buildup_duration),
+                    charge_duration: Duration::from_secs_f32(*charge_duration),
+                    place_threshold: Duration::from_secs_f32(*place_threshold),
+                    recover_duration: Duration::from_secs_f32(*recover_duration),
+                    energy_drain: *energy_drain,
+                    range: *range,
+                    tether_length: *tether_length,
+                    initial_projectile_speed: *initial_projectile_speed,
+                    scaled_projectile_speed: *scaled_projectile_speed,
+                    projectile: projectile.clone(),
+                    move_speed: *move_speed,
+                    ability_info,
+                },
+                timer: Duration::default(),
+                stage_section: StageSection::Buildup,
+                item: None,
+                thrown: false,
+            }),
             CharacterAbility::Shockwave {
                 energy_cost: _,
                 buildup_duration,

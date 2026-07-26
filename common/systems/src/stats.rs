@@ -171,7 +171,8 @@ impl<'a> System<'a> for Sys {
                 | CharacterState::StaticAura(_)
                 | CharacterState::Roll(_)
                 | CharacterState::LeapRanged(_)
-                | CharacterState::Simple(_) => {
+                | CharacterState::Simple(_)
+                | CharacterState::TelekineticGrip(_) => {
                     if energy.needs_regen_rate_reset() {
                         energy.reset_regen_rate();
                     }
