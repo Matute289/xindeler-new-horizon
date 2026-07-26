@@ -321,6 +321,9 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::FreezeArrow => "buff-freezearrow",
         BuffKind::DrenchArrow => "buff-drencharrow",
         BuffKind::JoltArrow => "buff-joltarrow",
+        BuffKind::Detecting => "buff-detecting",
+        BuffKind::SeeInvisible => "buff-seeinvisible",
+        BuffKind::TrueSight => "buff-truesight",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
         BuffKind::BleedingMark => "buff-bleeding_mark",
@@ -516,7 +519,10 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::IgniteArrow
                         | BuffKind::FreezeArrow
                         | BuffKind::DrenchArrow
-                        | BuffKind::JoltArrow => Cow::Borrowed(""),
+                        | BuffKind::JoltArrow
+                        | BuffKind::Detecting
+                        | BuffKind::SeeInvisible
+                        | BuffKind::TrueSight => Cow::Borrowed(""),
                     };
 
                     write!(&mut description, "{}", buff_desc).unwrap();

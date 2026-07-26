@@ -5,7 +5,7 @@ use std::{error::Error, fmt};
 
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
-    comp::projectile::ProjectileConstructorEffect,
+    comp::{buff::SenseMode, detection::SenseKind, projectile::ProjectileConstructorEffect},
     uid::Uid,
 };
 
@@ -86,6 +86,20 @@ impl fmt::Display for StatChangeError {
     }
 }
 impl Error for StatChangeError {}
+
+/// Declares that this entity is currently maintaining a magical sense (e.g.
+/// via an active `Detect Magic`-style buff). This is the harmless-to-broadcast
+/// *declaration* that a sense is active — it says nothing about what was
+/// found, only that detection is happening (which the caster's own glow VFX
+/// would reveal anyway). The *result* of the sense — the actual set of
+/// revealed entities/points — lives in the owner-private `Detected`
+/// component, never here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ActiveSense {
+    pub kind: SenseKind,
+    pub radius: f32,
+    pub mode: SenseMode,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stats {
@@ -175,6 +189,11 @@ pub struct Stats {
     /// to 'mark' an entity for a player, or used in agent to make an NPC focus
     /// on an entity.
     pub marked_entities: Vec<Uid>,
+    /// Magical senses this entity currently has active, populated each tick
+    /// from active buffs. See `ActiveSense`'s doc comment for why this is
+    /// separate from the detection *result*.
+    #[serde(default)]
+    pub senses: Vec<ActiveSense>,
 }
 
 impl Stats {
@@ -229,6 +248,7 @@ impl Stats {
             projectile_speed_mult: 1.0,
             projectile_constructor_effects: Vec::new(),
             marked_entities: Vec::new(),
+            senses: Vec::new(),
         }
     }
 

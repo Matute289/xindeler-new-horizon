@@ -6767,7 +6767,10 @@ fn build_buff(
             | BuffKind::Anchored
             | BuffKind::Asleep
             | BuffKind::Blinded
-            | BuffKind::Slowed => {
+            | BuffKind::Slowed
+            | BuffKind::Detecting
+            | BuffKind::SeeInvisible
+            | BuffKind::TrueSight => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {

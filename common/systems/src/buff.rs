@@ -2,7 +2,7 @@ use common::{
     Damage, DamageSource,
     combat::{self, DamageContributor},
     comp::{
-        Alignment, Energy, Group, Health, HealthChange, Inventory, LightEmitter, Mass,
+        ActiveSense, Alignment, Energy, Group, Health, HealthChange, Inventory, LightEmitter, Mass,
         ModifierKind, PhysicsState, Player, Pos, Stats,
         agent::{Sound, SoundKind},
         aura::{Auras, EnteredAuras},
@@ -942,6 +942,13 @@ fn execute_effect(
         },
         BuffEffect::MarkEntity(e) => {
             stat.marked_entities.push(*e);
+        },
+        BuffEffect::Sense { kind, radius, mode } => {
+            stat.senses.push(ActiveSense {
+                kind: *kind,
+                radius: *radius,
+                mode: *mode,
+            });
         },
     };
 }
