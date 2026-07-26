@@ -15,6 +15,7 @@ pub mod class;
 pub mod combo;
 pub mod compass;
 pub mod controller;
+pub mod detection;
 mod energy;
 pub mod ethos;
 pub mod fluid_dynamics;
@@ -84,6 +85,7 @@ pub use self::{
         ControlAction, ControlEvent, Controller, ControllerInputs, GroupManip, InputAttr,
         InputKind, InventoryAction, InventoryEvent, InventoryManip, UtteranceKind,
     },
+    detection::{DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind},
     energy::Energy,
     ethos::{Ethos, Moral, Order},
     fluid_dynamics::Fluid,
@@ -123,7 +125,7 @@ pub use self::{
         skills::{self, Skill},
     },
     spell::{SpellCompendium, SpellDef},
-    stats::{Stats, StatsModifier},
+    stats::{ActiveSense, Stats, StatsModifier},
     teleport::Teleporting,
     visual::{FrontendMarker, LightAnimation, LightEmitter},
 };

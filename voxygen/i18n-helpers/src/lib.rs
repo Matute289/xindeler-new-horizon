@@ -414,7 +414,10 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::FreezeArrow
         | BuffKind::DrenchArrow
         | BuffKind::JoltArrow
-        | BuffKind::FreedomOfMovement => {
+        | BuffKind::FreedomOfMovement
+        | BuffKind::Detecting
+        | BuffKind::SeeInvisible
+        | BuffKind::TrueSight => {
             tracing::error!("Player was killed by a positive buff!");
             "mysterious"
         },

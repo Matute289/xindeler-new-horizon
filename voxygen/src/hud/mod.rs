@@ -5761,6 +5761,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Crippled => imgs.debuff_crippled,
         BuffKind::Cursed => imgs.debuff_cursed,
         BuffKind::Defiance => imgs.buff_defiance,
+        // Detection senses: reuse the perception-themed icon until dedicated
+        // art ships with the spell content that grants these buffs.
+        BuffKind::Detecting => imgs.buff_eagle_eye,
         BuffKind::DifficultTerrain => imgs.debuff_difficult_terrain,
         BuffKind::DrenchArrow => imgs.bow_drench_arrow,
         BuffKind::EagleEye => imgs.buff_eagle_eye,
@@ -5801,6 +5804,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Rooted => imgs.debuff_rooted,
         BuffKind::Saturation => imgs.buff_saturation,
         BuffKind::ScornfulTaunt => imgs.buff_scornful_taunt,
+        // Detection senses: reuse the perception-themed icon until dedicated
+        // art ships with the spell content that grants these buffs.
+        BuffKind::SeeInvisible => imgs.buff_eagle_eye,
         BuffKind::SepticShot => imgs.buff_septic_shot,
         BuffKind::Shielded => imgs.buff_shielded,
         BuffKind::Slowed => imgs.debuff_slowed,
@@ -5808,6 +5814,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Sunderer => imgs.buff_sunderer,
         BuffKind::Tenacity => imgs.buff_tenacity,
         BuffKind::Terrified => imgs.debuff_terrified,
+        // Detection senses: reuse the perception-themed icon until dedicated
+        // art ships with the spell content that grants these buffs.
+        BuffKind::TrueSight => imgs.buff_eagle_eye,
         BuffKind::Wet => imgs.debuff_wet,
         BuffKind::Winded => imgs.debuff_winded,
     }

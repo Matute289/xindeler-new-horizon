@@ -7,6 +7,7 @@ use crate::{
     comp::{
         FrontendMarker, Mass, Stats,
         aura::AuraKey,
+        detection::SenseKind,
         projectile::{
             ProjectileArcingProperties, ProjectileConstructorEffect,
             ProjectileConstructorEffectKind,
@@ -360,6 +361,19 @@ pub enum BuffKind {
     // =================
     /// Changed into another body.
     Polymorphed,
+    // =================
+    //    DETECTION
+    // =================
+    /// A generic active magical sense (e.g. Detect Magic and its kin):
+    /// area-of-effect, one-shot or timed, membership frozen at cast.
+    Detecting,
+    /// Lets the bearer perceive concealed/invisible creatures. Sets a
+    /// perception-piercing flag; produces no reveal set of its own.
+    SeeInvisible,
+    /// An always-active, continuously re-evaluated true sense: pierces
+    /// concealment and illusion for as long as it lasts, and reveals
+    /// illusory entities as they come into range.
+    TrueSight,
 }
 
 /// Tells a little more about the buff kind than simple buff/debuff
@@ -426,7 +440,10 @@ impl BuffKind {
             | BuffKind::FreezeArrow
             | BuffKind::DrenchArrow
             | BuffKind::JoltArrow
-            | BuffKind::FreedomOfMovement => BuffDescriptor::SimplePositive,
+            | BuffKind::FreedomOfMovement
+            | BuffKind::Detecting
+            | BuffKind::SeeInvisible
+            | BuffKind::TrueSight => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
             | BuffKind::Cursed
@@ -1009,6 +1026,31 @@ impl BuffKind {
                     tool_filter: Some(ToolKind::Bow),
                 }),
             ],
+            // Area/generic active senses: membership frozen at cast (`SenseMode::Snapshot`).
+            BuffKind::Detecting => {
+                let mut effects = Vec::new();
+                if let Some(MiscBuffData::Sense(kind, radius, mode)) = data.misc_data {
+                    effects.push(BuffEffect::Sense { kind, radius, mode });
+                }
+                effects
+            },
+            // Concealment-piercing only; produces no reveal set of its own
+            // (the perception-piercing flag is set elsewhere).
+            BuffKind::SeeInvisible => {
+                let mut effects = Vec::new();
+                if let Some(MiscBuffData::Sense(kind, radius, mode)) = data.misc_data {
+                    effects.push(BuffEffect::Sense { kind, radius, mode });
+                }
+                effects
+            },
+            // Always-active, continuously re-evaluated (`SenseMode::Continuous`).
+            BuffKind::TrueSight => {
+                let mut effects = Vec::new();
+                if let Some(MiscBuffData::Sense(kind, radius, mode)) = data.misc_data {
+                    effects.push(BuffEffect::Sense { kind, radius, mode });
+                }
+                effects
+            },
         }
     }
 
@@ -1111,6 +1153,22 @@ impl Default for BuffData {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MiscBuffData {
     Body(Body),
+    /// Parameters for a `BuffEffect::Sense`: which sense, its radius, and
+    /// whether it snapshots once or re-evaluates continuously.
+    Sense(SenseKind, f32, SenseMode),
+}
+
+/// Whether a sense's reveal set is computed once and frozen for the buff's
+/// lifetime, or continuously re-evaluated while the buff is active.
+///
+/// `Continuous` is deliberately rare: it is reserved for a sense that is
+/// genuinely always-active for as long as it lasts (entities glow the instant
+/// they come into range and stop the instant they leave), not a periodic
+/// re-scan. Every other sense uses `Snapshot`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SenseMode {
+    Snapshot,
+    Continuous,
 }
 
 impl BuffData {
@@ -1175,6 +1233,11 @@ pub enum BuffCategory {
     /// bearer takes a hit at or above the break threshold. Tag
     /// concentration-spell buffs/auras with this.
     Concentration,
+    /// Tags a buff as maintaining an active magical sense (see
+    /// `BuffEffect::Sense`). Lets a detection query join cheaply over only
+    /// entities with an active sense, and lets a future dispel target
+    /// detections as a class.
+    Detection,
 }
 
 /// Concentration break threshold = base + a fraction of the bearer's **max
@@ -1329,6 +1392,16 @@ pub enum BuffEffect {
     /// constructor
     ProjectileConstructorEffect(ProjectileConstructorEffect),
     MarkEntity(Uid),
+    /// Declares an active magical sense of `kind`, evaluated within `radius`,
+    /// using `mode` to decide whether it snapshots once or re-evaluates
+    /// continuously. Sets `Stats.senses`; the actual reveal set is computed by
+    /// a spatial query elsewhere and stored on the owner-private `Detected`
+    /// component, never here.
+    Sense {
+        kind: SenseKind,
+        radius: f32,
+        mode: SenseMode,
+    },
 }
 
 /// Actual de/buff.

@@ -81,6 +81,11 @@ macro_rules! synced_components {
             // NOT synced — it carries absolute server `Time`, a different epoch
             // than the client's, so a finish timestamp would be meaningless there.
             attuned_items: AttunedItems,
+            // The detection reveal set. Owner-private on purpose: a
+            // concealment-piercing reveal broadcast to every nearby client
+            // (like `Stats`) would leak the concealed entity's position to
+            // everyone in range, not just the caster.
+            detected: Detected,
             can_build: CanBuild,
             is_interactor: IsInteractor,
             interactors: Interactors,
@@ -332,6 +337,12 @@ impl NetSync for AbilityCooldowns {
 }
 
 impl NetSync for AttunedItems {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
+// Owner-private: see the comment on `detected` in `synced_components!` above
+// for why this must never become `SyncFrom::AnyEntity`.
+impl NetSync for Detected {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 

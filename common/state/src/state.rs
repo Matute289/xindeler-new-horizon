@@ -300,6 +300,7 @@ impl State {
         ecs.register::<comp::AbilityPool>();
         ecs.register::<comp::AttunedItems>();
         ecs.register::<comp::Attuning>();
+        ecs.register::<comp::Detected>();
         ecs.register::<comp::Buffs>();
         ecs.register::<comp::Auras>();
         ecs.register::<comp::EnteredAuras>();
