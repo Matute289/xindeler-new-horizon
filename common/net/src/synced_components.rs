@@ -58,6 +58,9 @@ macro_rules! synced_components {
             object: Object,
             frontend_marker: FrontendMarker,
             arcing: Arcing,
+            // A property of the entity itself (like `Body`/`Pos`), not a
+            // secret about who is observing it — see its own doc comment.
+            concealed_unless_true_sight: ConcealedUnlessTrueSight,
             // TODO: change this to `SyncFrom::ClientEntity` and sync the bare minimum
             // from other entities (e.g. just keys needed to show appearance
             // based on their loadout). Also, it looks like this actually has
@@ -81,6 +84,11 @@ macro_rules! synced_components {
             // NOT synced — it carries absolute server `Time`, a different epoch
             // than the client's, so a finish timestamp would be meaningless there.
             attuned_items: AttunedItems,
+            // The active remote-sensing link (a spell-granted detached
+            // viewpoint). Owner-private on purpose: broadcasting *who* is
+            // currently watching through *what* would be a PvP information
+            // leak, exactly like `detected` below. NEVER `AnyEntity`.
+            remote_sense: RemoteSense,
             // The detection reveal set. Owner-private on purpose: a
             // concealment-piercing reveal broadcast to every nearby client
             // (like `Stats`) would leak the concealed entity's position to
@@ -318,6 +326,10 @@ impl NetSync for Arcing {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 
+impl NetSync for ConcealedUnlessTrueSight {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
 // These are synced only from the client's own entity.
 
 impl NetSync for Admin {
@@ -337,6 +349,15 @@ impl NetSync for AbilityCooldowns {
 }
 
 impl NetSync for AttunedItems {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
+// Owner-private: see the comment on `remote_sense` in `synced_components!`
+// above for why this must never become `SyncFrom::AnyEntity` (a PvP
+// information leak) nor `SyncFrom::ClientSpectatorEntity` (the opposite sync
+// direction — that scope sends the *spectated* entity's own components to the
+// spectator, not who is spectating it).
+impl NetSync for RemoteSense {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 

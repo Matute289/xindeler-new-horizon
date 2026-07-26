@@ -388,6 +388,8 @@ impl State {
         ecs.register::<common::combat::DeathEffects>();
         ecs.register::<common::combat::RiderEffects>();
         ecs.register::<comp::SpectatingEntity>();
+        ecs.register::<comp::RemoteSense>();
+        ecs.register::<comp::ConcealedUnlessTrueSight>();
 
         // Register synced resources used by the ECS.
         ecs.insert(TimeOfDay(0.0));

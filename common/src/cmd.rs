@@ -209,6 +209,7 @@ lazy_static! {
             BuffKind::Detecting => "detecting",
             BuffKind::SeeInvisible => "see_invisible",
             BuffKind::TrueSight => "true_sight",
+            BuffKind::RemoteSensing => "remote_sensing",
         };
         let mut buff_parser = HashMap::new();
         for kind in BuffKind::iter() {

@@ -417,7 +417,8 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::FreedomOfMovement
         | BuffKind::Detecting
         | BuffKind::SeeInvisible
-        | BuffKind::TrueSight => {
+        | BuffKind::TrueSight
+        | BuffKind::RemoteSensing => {
             tracing::error!("Player was killed by a positive buff!");
             "mysterious"
         },

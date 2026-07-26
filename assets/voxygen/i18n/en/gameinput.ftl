@@ -73,6 +73,7 @@ gameinput-greet = Greet
 gameinput-map-locationmarkerbutton = Set a Waypoint in the Map
 gameinput-spectatespeedboost = Spectate Speed Boost
 gameinput-spectateviewpoint = Spectate Viewpoint
+gameinput-cancelremotesense = Return to Body
 gameinput-mutemaster = Mute Master Volume
 gameinput-muteinactivemaster = Mute Master Volume (Inactive Window)
 gameinput-mutemusic = Mute Music Volume

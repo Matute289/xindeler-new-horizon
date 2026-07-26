@@ -374,6 +374,15 @@ pub enum BuffKind {
     /// concealment and illusion for as long as it lasts, and reveals
     /// illusory entities as they come into range.
     TrueSight,
+    // =================
+    //   REMOTE SENSE
+    // =================
+    /// Declares an active remote-sensing link: the bearer's point of view is
+    /// anchored somewhere other than its own body (see `RemoteSense` /
+    /// `SenseAnchor`). Always tagged `BuffCategory::Concentration` (see
+    /// `extend_cat_ids`) — a solid hit ends the link the same way it ends any
+    /// other concentration effect, and only one such link is held at a time.
+    RemoteSensing,
 }
 
 /// Tells a little more about the buff kind than simple buff/debuff
@@ -443,7 +452,8 @@ impl BuffKind {
             | BuffKind::FreedomOfMovement
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
-            | BuffKind::TrueSight => BuffDescriptor::SimplePositive,
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
             | BuffKind::Cursed
@@ -1051,15 +1061,48 @@ impl BuffKind {
                 }
                 effects
             },
+            // Declares the shape of a remote-sensing link (which kind of
+            // anchor, whether the caster may look around freely, whether they
+            // may drive it). Deliberately carries no entity identity — see
+            // `MiscBuffData::RemoteSense`'s doc comment. The link's actual
+            // anchor `Uid` is written server-side, at cast time, into the
+            // owner-private `RemoteSense` component, never here.
+            BuffKind::RemoteSensing => {
+                // Rooted: the caster's body cannot move at all while their
+                // senses are anchored elsewhere (confirmed design: no damage
+                // immunity and no aggro suppression accompany this — the body
+                // stays a fully normal, hittable target). Same idiom as
+                // `Asleep`'s immobilisation.
+                let mut effects = vec![BuffEffect::MovementSpeed(0.0)];
+                if let Some(MiscBuffData::RemoteSense {
+                    anchor_kind,
+                    free_look,
+                    piloted,
+                }) = data.misc_data
+                {
+                    effects.push(BuffEffect::RemoteSense {
+                        anchor_kind,
+                        free_look,
+                        piloted,
+                    });
+                }
+                effects
+            },
         }
     }
 
     fn extend_cat_ids(&self, mut cat_ids: Vec<BuffCategory>) -> Vec<BuffCategory> {
-        // TODO: Remove clippy allow after another buff needs this
-        #[expect(clippy::single_match)]
         match self {
             BuffKind::PotionSickness => {
                 cat_ids.push(BuffCategory::PersistOnDowned);
+            },
+            // Every remote-sensing link is sustained by concentration (only
+            // one at a time; a solid hit ends it) and joined cheaply by the
+            // server's remote-sense system via its own category — tag both
+            // here so RON authors can't forget one.
+            BuffKind::RemoteSensing => {
+                cat_ids.push(BuffCategory::Concentration);
+                cat_ids.push(BuffCategory::RemoteSense);
             },
             _ => {},
         }
@@ -1156,6 +1199,30 @@ pub enum MiscBuffData {
     /// Parameters for a `BuffEffect::Sense`: which sense, its radius, and
     /// whether it snapshots once or re-evaluates continuously.
     Sense(SenseKind, f32, SenseMode),
+    /// Parameters for a `BuffEffect::RemoteSense`: the shape of a
+    /// remote-sensing link this buff sustains.
+    ///
+    /// 🔴 Deliberately carries no `Uid` and no world position. `BuffData` (via
+    /// `Buff`/`Buffs`) is `SyncFrom::AnyEntity` — anyone nearby can see that a
+    /// buff is active — so embedding the anchor's identity here would
+    /// broadcast exactly the "who is watching what" leak the owner-private
+    /// `RemoteSense` component exists to prevent. The resolved anchor lives
+    /// only on `RemoteSense`, which is `SyncFrom::ClientEntity`.
+    RemoteSense {
+        anchor_kind: SenseAnchorKind,
+        free_look: bool,
+        piloted: bool,
+    },
+}
+
+/// Which kind of `SenseAnchor` a `RemoteSensing` buff declares, without the
+/// anchor's identity (see `MiscBuffData::RemoteSense`'s doc comment for why
+/// the `Uid` itself is never carried here).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SenseAnchorKind {
+    Existing,
+    Sensor,
+    Piloted,
 }
 
 /// Whether a sense's reveal set is computed once and frozen for the buff's
@@ -1238,6 +1305,12 @@ pub enum BuffCategory {
     /// entities with an active sense, and lets a future dispel target
     /// detections as a class.
     Detection,
+    /// Tags a buff as maintaining an active remote-sensing link (see
+    /// `RemoteSense`). Lets the server's remote-sense system join cheaply
+    /// over only the handful of entities with an active link, instead of
+    /// scanning every buff on every entity. Always paired with
+    /// `Concentration` (see `BuffKind::RemoteSensing::extend_cat_ids`).
+    RemoteSense,
 }
 
 /// Concentration break threshold = base + a fraction of the bearer's **max
@@ -1401,6 +1474,17 @@ pub enum BuffEffect {
         kind: SenseKind,
         radius: f32,
         mode: SenseMode,
+    },
+    /// Declares the shape of an active remote-sensing link: which kind of
+    /// anchor it is, whether the bearer may look around freely from it, and
+    /// whether the bearer may drive it. Carries no entity identity (see
+    /// `MiscBuffData::RemoteSense`) — the resolved anchor `Uid` lives only on
+    /// the owner-private `RemoteSense` component, written server-side at cast
+    /// time, never derived from this effect.
+    RemoteSense {
+        anchor_kind: SenseAnchorKind,
+        free_look: bool,
+        piloted: bool,
     },
 }
 

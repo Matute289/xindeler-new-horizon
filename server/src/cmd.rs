@@ -6770,7 +6770,8 @@ fn build_buff(
             | BuffKind::Slowed
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
-            | BuffKind::TrueSight => {
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {

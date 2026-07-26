@@ -12,6 +12,7 @@ pub mod object;
 pub mod oracle;
 pub mod persistence;
 pub mod pets;
+pub mod remote_sense;
 pub mod sentinel;
 pub mod server_info;
 pub mod subscription;
@@ -52,6 +53,13 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // Observes the loadout after inventory changes are applied; the D2c
     // effect-gating consumer must run after this.
     dispatch::<attunement::Sys>(dispatch_builder, &[]);
+    // Depends on the buff system (`common::systems::buff::Sys`, dispatched by
+    // `common_systems::add_local_systems` before server-only systems run) so
+    // it sees this tick's buff removals before deciding whether a link is
+    // still sustained. That system isn't reachable from here (its module is
+    // private to `common-systems`), so the dependency is named by its
+    // computed `sys_name()`: `"Common_buff_sys"`.
+    dispatch::<remote_sense::Sys>(dispatch_builder, &["Common_buff_sys"]);
 }
 
 pub fn run_sync_systems(ecs: &mut specs::World) {

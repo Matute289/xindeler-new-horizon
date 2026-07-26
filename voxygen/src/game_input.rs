@@ -172,6 +172,10 @@ pub enum GameInput {
     SpectateSpeedBoost,
     #[strum(serialize = "gameinput-spectateviewpoint")]
     SpectateViewpoint,
+    /// Voluntarily ends the player's own active remote-sensing spell early,
+    /// returning them to their body before its duration expires.
+    #[strum(serialize = "gameinput-cancelremotesense")]
+    CancelRemoteSense,
     #[strum(serialize = "gameinput-mutemaster")]
     MuteMaster,
     #[strum(serialize = "gameinput-muteinactivemaster")]

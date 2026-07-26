@@ -164,16 +164,7 @@ pub fn entities_have_line_of_sight(
 }
 
 pub fn positions_have_line_of_sight(pos_a: &Pos, pos_b: &Pos, read_data: &ReadData) -> bool {
-    let dist_sqrd = pos_b.0.distance_squared(pos_a.0);
-
-    read_data
-        .terrain
-        .ray(pos_a.0, pos_b.0)
-        .until(Block::is_opaque)
-        .cast()
-        .0
-        .powi(2)
-        >= (dist_sqrd - 0.01)
+    common::terrain::positions_have_line_of_sight(&read_data.terrain, pos_a.0, pos_b.0)
 }
 
 pub fn is_dressed_as_cultist(entity: EcsEntity, read_data: &ReadData) -> bool {

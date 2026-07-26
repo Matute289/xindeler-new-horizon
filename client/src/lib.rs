@@ -1405,6 +1405,7 @@ impl Client {
                     | ClientGeneral::UpdateMapMarker(_)
                     | ClientGeneral::SpectatePosition(_)
                     | ClientGeneral::SpectateEntity(_)
+                    | ClientGeneral::CancelRemoteSense
                     | ClientGeneral::SetBattleMode(_) => {
                         #[cfg(feature = "tracy")]
                         {
@@ -2140,6 +2141,10 @@ impl Client {
     }
 
     pub fn stop_spectate_entity(&mut self) { self.send_msg(ClientGeneral::SpectateEntity(None)); }
+
+    /// Voluntarily ends the player's own active remote-sensing link before its
+    /// duration expires, returning them to their body.
+    pub fn cancel_remote_sense(&mut self) { self.send_msg(ClientGeneral::CancelRemoteSense); }
 
     /// Checks whether a player can swap their weapon+ability `Loadout` settings
     /// and sends the `ControlAction` event that signals to do the swap.
