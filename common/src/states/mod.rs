@@ -23,6 +23,7 @@ pub mod glide_wield;
 pub mod ground_aoe;
 pub mod idle;
 pub mod interact;
+pub mod knock;
 pub mod leap_explosion_shockwave;
 pub mod leap_melee;
 pub mod leap_ranged;

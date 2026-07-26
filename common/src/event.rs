@@ -389,6 +389,17 @@ pub struct DestroyEvent {
 
 pub struct InventoryManipEvent(pub EcsEntity, pub comp::InventoryManip);
 
+/// A ranged, keyless request to unlock a keyhole/lock sprite at `pos` — e.g.
+/// the `knock` spell's effect. Unlike `InventoryManip::Collect`, this never
+/// checks for (or consumes) a key item, and is subject to the target sprite's
+/// `no_knock` `SpriteCfg` flag: progression-gated keyholes can opt out of
+/// remote/keyless opening while still opening normally for a character that
+/// walks up with the matching key.
+pub struct RemoteUnlockEvent {
+    pub entity: EcsEntity,
+    pub pos: Vec3<i32>,
+}
+
 pub struct GroupManipEvent(pub EcsEntity, pub comp::GroupManip);
 
 pub struct RespawnEvent(pub EcsEntity);

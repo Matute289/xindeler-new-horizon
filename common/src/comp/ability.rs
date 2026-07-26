@@ -919,7 +919,8 @@ impl From<&CharacterState> for CharacterAbilityType {
             | CharacterState::GroundAoe(_)
             | CharacterState::LeapRanged(_)
             | CharacterState::Simple(_)
-            | CharacterState::TelekineticGrip(_) => Self::Other,
+            | CharacterState::TelekineticGrip(_)
+            | CharacterState::Knock(_) => Self::Other,
         }
     }
 }
@@ -1407,6 +1408,20 @@ pub enum CharacterAbility {
         #[serde(default)]
         meta: AbilityMeta,
     },
+    /// A single-shot, ranged/keyless unlock effect targeted at a sprite
+    /// position (e.g. the `knock` spell). See `common/src/states/knock.rs`.
+    Knock {
+        energy_cost: f32,
+        buildup_duration: f32,
+        cast_duration: f32,
+        recover_duration: f32,
+        /// Max range the targeted sprite position can be from the caster
+        range: f32,
+        #[serde(default)]
+        ori_modifier: f32,
+        #[serde(default)]
+        meta: AbilityMeta,
+    },
     Music {
         play_duration: f32,
         ori_modifier: f32,
@@ -1653,6 +1668,9 @@ impl CharacterAbility {
                     update.energy.try_change_by(-*energy_cost).is_ok()
                 },
                 CharacterAbility::GroundAoe { energy_cost, .. } => {
+                    update.energy.try_change_by(-*energy_cost).is_ok()
+                },
+                CharacterAbility::Knock { energy_cost, .. } => {
                     update.energy.try_change_by(-*energy_cost).is_ok()
                 },
                 CharacterAbility::DiveMelee {
@@ -2477,6 +2495,21 @@ impl CharacterAbility {
                 *energy_cost /= stats.energy_efficiency;
                 *buildup_duration /= stats.speed;
             },
+            Knock {
+                ref mut energy_cost,
+                ref mut buildup_duration,
+                ref mut cast_duration,
+                ref mut recover_duration,
+                ref mut range,
+                ori_modifier: _,
+                meta: _,
+            } => {
+                *energy_cost /= stats.energy_efficiency;
+                *buildup_duration /= stats.speed;
+                *cast_duration /= stats.speed;
+                *recover_duration /= stats.speed;
+                *range *= stats.range;
+            },
         }
         self
     }
@@ -2513,6 +2546,7 @@ impl CharacterAbility {
             | StaticAura { energy_cost, .. }
             | RegrowHead { energy_cost, .. }
             | LeapRanged { energy_cost, .. }
+            | Knock { energy_cost, .. }
             | Simple { energy_cost, .. } => *energy_cost,
             BasicBeam { energy_drain, .. } => {
                 if *energy_drain > f32::EPSILON {
@@ -2590,7 +2624,8 @@ impl CharacterAbility {
             | Transform { .. }
             | StaticAura { .. }
             | RegrowHead { .. }
-            | LeapRanged { .. } => 0,
+            | LeapRanged { .. }
+            | Knock { .. } => 0,
         }
     }
 
@@ -2632,6 +2667,7 @@ impl CharacterAbility {
             | StaticAura { meta, .. }
             | RegrowHead { meta, .. }
             | LeapRanged { meta, .. }
+            | Knock { meta, .. }
             | Simple { meta, .. } => *meta,
         }
     }
@@ -3689,6 +3725,27 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 timer: Duration::default(),
                 stage_section: StageSection::Buildup,
                 achieved_radius: summon_distance.0.floor() as i32 - 1,
+            }),
+            CharacterAbility::Knock {
+                energy_cost: _,
+                buildup_duration,
+                cast_duration,
+                recover_duration,
+                range,
+                ori_modifier,
+                meta: _,
+            } => CharacterState::Knock(knock::Data {
+                static_data: knock::StaticData {
+                    buildup_duration: Duration::from_secs_f32(*buildup_duration),
+                    cast_duration: Duration::from_secs_f32(*cast_duration),
+                    recover_duration: Duration::from_secs_f32(*recover_duration),
+                    range: *range,
+                    ori_modifier: *ori_modifier,
+                    ability_info,
+                },
+                timer: Duration::default(),
+                stage_section: StageSection::Buildup,
+                target_pos: None,
             }),
             CharacterAbility::Music {
                 play_duration,

@@ -163,6 +163,7 @@ impl<'a> System<'a> for Sys {
                 | CharacterState::BasicSummon(_)
                 | CharacterState::SelfBuff(_)
                 | CharacterState::SpriteSummon(_)
+                | CharacterState::Knock(_)
                 | CharacterState::FinisherMelee(_)
                 | CharacterState::DiveMelee(_)
                 | CharacterState::RiposteMelee(_)
