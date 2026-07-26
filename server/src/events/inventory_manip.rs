@@ -48,12 +48,14 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<RemoteUnlockEvent>(builder, &[]);
 }
 
-/// Given the [`SpriteKind`] of a keyhole/lock sprite that was just opened (whether via the
-/// melee key-item interaction or a ranged/keyless effect like the `knock` spell), returns the
-/// [`SpriteKind`] of the door blocks that opening it should destroy nearby, if any.
+/// Given the [`SpriteKind`] of a keyhole/lock sprite that was just opened
+/// (whether via the melee key-item interaction or a ranged/keyless effect like
+/// the `knock` spell), returns the [`SpriteKind`] of the door blocks that
+/// opening it should destroy nearby, if any.
 ///
-/// Shared by both [`comp::InventoryManip::Collect`] (the melee, key-item path) and
-/// [`RemoteUnlockEvent`] (the ranged, keyless path) so the two never drift out of sync.
+/// Shared by both [`comp::InventoryManip::Collect`] (the melee, key-item path)
+/// and [`RemoteUnlockEvent`] (the ranged, keyless path) so the two never drift
+/// out of sync.
 pub fn keyhole_swap_target(sprite_kind: SpriteKind) -> Option<SpriteKind> {
     match sprite_kind {
         SpriteKind::Keyhole => Some(SpriteKind::KeyDoor),
@@ -71,14 +73,16 @@ pub fn keyhole_swap_target(sprite_kind: SpriteKind) -> Option<SpriteKind> {
     }
 }
 
-/// Whether a [`RemoteUnlockEvent`] targeting a sprite of `sprite_kind` (with the given,
-/// possibly-unset [`SpriteCfg`](common::terrain::sprite::SpriteCfg)) should proceed, and if so,
-/// which door [`SpriteKind`] it should destroy nearby.
+/// Whether a [`RemoteUnlockEvent`] targeting a sprite of `sprite_kind` (with
+/// the given, possibly-unset [`SpriteCfg`](common::terrain::sprite::SpriteCfg))
+/// should proceed, and if so, which door [`SpriteKind`] it should destroy
+/// nearby.
 ///
-/// Returns `None` both when the sprite isn't a keyhole/lock at all, and when it is one but
-/// carries `no_knock: true` — a progression-gated keyhole opting out of ranged/keyless
-/// unlocking. This flag is only ever consulted from this ranged path: the ordinary melee
-/// key-item interaction (`InventoryManip::Collect`) never checks it, so a character carrying
+/// Returns `None` both when the sprite isn't a keyhole/lock at all, and when it
+/// is one but carries `no_knock: true` — a progression-gated keyhole opting out
+/// of ranged/keyless unlocking. This flag is only ever consulted from this
+/// ranged path: the ordinary melee key-item interaction
+/// (`InventoryManip::Collect`) never checks it, so a character carrying
 /// the actual key can still open a `no_knock` door normally.
 pub fn remote_unlock_target(
     sprite_kind: SpriteKind,
@@ -91,8 +95,9 @@ pub fn remote_unlock_target(
     Some(kind_to_destroy)
 }
 
-/// Flood-fills outward from `sprite_pos`, destroying any connected `kind_to_destroy` door
-/// blocks. Shared by both the melee key-unlock path and the ranged/keyless `knock` path.
+/// Flood-fills outward from `sprite_pos`, destroying any connected
+/// `kind_to_destroy` door blocks. Shared by both the melee key-unlock path and
+/// the ranged/keyless `knock` path.
 pub fn destroy_nearby_key_doors(
     block_change: &mut common_state::BlockChange,
     terrain: &common::terrain::TerrainGrid,
@@ -1397,13 +1402,15 @@ mod tests {
 
     #[test]
     fn knock_opens_unflagged_ordinary_keyhole() {
-        // An ordinary keyhole with no `SpriteCfg` at all (the common case) opens normally.
+        // An ordinary keyhole with no `SpriteCfg` at all (the common case) opens
+        // normally.
         assert_eq!(
             remote_unlock_target(SpriteKind::HaniwaKeyhole, None),
             Some(SpriteKind::HaniwaKeyDoor)
         );
-        // Also true with an explicit but unflagged `SpriteCfg` (e.g. one with an unrelated
-        // `loot_table` set, matching the shape of `jungle_ruin`'s chests).
+        // Also true with an explicit but unflagged `SpriteCfg` (e.g. one with an
+        // unrelated `loot_table` set, matching the shape of `jungle_ruin`'s
+        // chests).
         let unflagged = common::terrain::sprite::SpriteCfg::default();
         assert_eq!(
             remote_unlock_target(SpriteKind::HaniwaKeyhole, Some(&unflagged)),
@@ -1414,8 +1421,8 @@ mod tests {
     #[test]
     fn knock_refuses_no_knock_flagged_keyhole() {
         // The Haniwa dungeon's keyhole (world/src/site/plot/haniwa.rs) is flagged
-        // `no_knock: true` as a worked example of a progression-gated keyhole: `knock` must
-        // not be able to open it.
+        // `no_knock: true` as a worked example of a progression-gated keyhole: `knock`
+        // must not be able to open it.
         let no_knock_cfg = common::terrain::sprite::SpriteCfg {
             no_knock: true,
             ..Default::default()

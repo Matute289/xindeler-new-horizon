@@ -11,10 +11,10 @@ pub use common::event::{
     MineBlockEvent, MountEvent, NpcInteractEvent, ParryHookEvent, PoiseChangeEvent, PossessEvent,
     ProcessTradeActionEvent, RegrowHeadEvent, RemoteUnlockEvent, RemoveLightEmitterEvent,
     RequestSiteInfoEvent, RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent,
-    SetLanternEvent, SetPetStayEvent,
-    ShockwaveEvent, ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent,
-    SummonBeamPillarsEvent, TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent,
-    ToggleSpriteLightEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
+    SetLanternEvent, SetPetStayEvent, ShockwaveEvent, ShootEvent, SoundEvent,
+    StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent, TamePetEvent,
+    TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent, TransformEvent,
+    UpdateCharacterDataEvent, UpdateMapMarkerEvent,
 };
 
 #[cfg(feature = "plugins")]

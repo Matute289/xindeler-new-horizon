@@ -119,8 +119,9 @@ impl Structure for Haniwa {
         let rock = Fill::Brick(BlockKind::Rock, Rgb::new(96, 123, 131), 24);
         let key_door = Fill::Block(Block::air(SpriteKind::HaniwaKeyDoor));
         // Progression-gated: the Haniwa dungeon's whole point is requiring the physical
-        // `haniwa_key` to pass this door, so its keyhole opts out of ranged/keyless unlocking
-        // (e.g. the `knock` spell) via `no_knock`. Melee key-item unlocking is unaffected.
+        // `haniwa_key` to pass this door, so its keyhole opts out of ranged/keyless
+        // unlocking (e.g. the `knock` spell) via `no_knock`. Melee key-item
+        // unlocking is unaffected.
         let key_hole = Fill::sprite_ori_cfg(SpriteKind::HaniwaKeyhole, 0, SpriteCfg {
             no_knock: true,
             ..Default::default()

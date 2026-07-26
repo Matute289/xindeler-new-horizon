@@ -5,9 +5,10 @@ pub const MAX_SPRITE_MOUNT_RANGE: f32 = 2.0;
 pub const MAX_TRADE_RANGE: f32 = 5.0;
 pub const MAX_NPCINTERACT_RANGE: f32 = 8.0;
 pub const MAX_INTERACT_RANGE: f32 = 5.0;
-// Server-side defense-in-depth ceiling for the `knock` spell's ranged/keyless unlock (see
-// `RemoteUnlockEvent`) — the ability's own configurable `range` (asset-tuned, expected well
-// under this) is what actually gates normal play; this is just an upper bound.
+// Server-side defense-in-depth ceiling for the `knock` spell's ranged/keyless
+// unlock (see `RemoteUnlockEvent`) — the ability's own configurable `range`
+// (asset-tuned, expected well under this) is what actually gates normal play;
+// this is just an upper bound.
 pub const MAX_KNOCK_RANGE: f32 = 30.0;
 pub const MAX_WAYPOINT_RANGE: f32 = 4.0;
 // Player-imperceptible offset to ensure campfire healing is always
