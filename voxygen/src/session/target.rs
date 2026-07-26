@@ -126,6 +126,17 @@ pub(super) fn targets_under_cursor(
     };
 
     let uids = ecs.read_storage::<Uid>();
+    let concealed = ecs.read_storage::<comp::ConcealedUnlessTrueSight>();
+    // Whether the player themselves currently pierces concealment, so an
+    // entity marked `ConcealedUnlessTrueSight` (an invisible sensor/eye) can
+    // only ever be target-acquired by a True-Sight holder, never accidentally
+    // via nearest-entity auto-target. Checked once against the player's own
+    // body, not the current viewpoint, since a remote-sensing spell's
+    // sensor/eye anchor has no `Stats` of its own to carry the sense.
+    let pierces_concealment = ecs
+        .read_storage::<comp::Stats>()
+        .get(player_entity)
+        .is_some_and(comp::observer_pierces_concealment);
 
     // Need to raycast by distance to cam
     // But also filter out by distance to the player (but this only needs to be done
@@ -140,10 +151,14 @@ pub(super) fn targets_under_cursor(
         !&ecs.read_storage::<Is<Mount>>(),
         ecs.read_storage::<Is<Rider>>().maybe(),
         ecs.read_storage::<Health>().maybe(),
+        concealed.maybe(),
     )
         .join()
-        .filter(|(e, _, _, _, _, _, _, _)| *e != viewpoint_entity)
-        .filter_map(|(e, p, s, b, i, _, is_rider, health)| {
+        .filter(|(e, _, _, _, _, _, _, _, _)| *e != viewpoint_entity)
+        // An entity invisible to normal perception can't be targeted unless
+        // the player themselves currently has True Sight.
+        .filter(|(_, _, _, _, _, _, _, _, concealed)| concealed.is_none() || pierces_concealment)
+        .filter_map(|(e, p, s, b, i, _, is_rider, health, _)| {
             const RADIUS_SCALE: f32 = 3.0;
             // TODO: use collider radius instead of body radius?
             let radius = s.map_or(1.0, |s| s.0) * (b.dimensions() * Vec3::new(1.0, 1.0, 0.5)).reduce_partial_max() * RADIUS_SCALE;

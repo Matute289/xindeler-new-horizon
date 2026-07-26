@@ -269,6 +269,9 @@ buff-seeinvisible = See Invisible
 ## True Sight (placeholder strings; content spells land separately)
 buff-truesight = True Sight
     .desc = You see through illusion, invisibility, and darkness.
+## Remote Sensing (placeholder strings; content spells land separately)
+buff-remotesensing = Remote Sensing
+    .desc = Your senses are anchored elsewhere; your own body stands unattended.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

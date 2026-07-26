@@ -288,6 +288,7 @@ impl ControlSettings {
             GameInput::MapSetMarker => return Some(KeyMouse::Mouse(MouseButton::Middle)),
             GameInput::SpectateSpeedBoost => Key::Named(NamedKey::Control),
             GameInput::SpectateViewpoint => return Some(KeyMouse::Mouse(MouseButton::Middle)),
+            GameInput::CancelRemoteSense => Key::Named(NamedKey::Backspace),
             GameInput::MuteMaster => Key::Named(NamedKey::AudioVolumeMute),
             GameInput::MuteInactiveMaster => return None,
             GameInput::MuteMusic => Key::Named(NamedKey::F8),

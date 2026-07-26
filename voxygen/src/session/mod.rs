@@ -16,14 +16,15 @@ use client::{self, Client};
 use common::{
     CachedSpatialGrid,
     comp::{
-        self, CharacterActivity, CharacterState, ChatType, Content, Fluid, InputKind,
-        InventoryUpdateEvent, Pos, PresenceKind, Stats, UtteranceKind, Vel,
+        self, ActiveAbilities, CharacterActivity, CharacterState, ChatType, Combo, Content, Fluid,
+        InputKind, InventoryUpdateEvent, Pos, PresenceKind, RemoteSense, Stats, UtteranceKind, Vel,
         inventory::slot::{EquipSlot, Slot},
         invite::InviteKind,
         item::{ItemDesc, tool::ToolKind},
     },
     consts::MAX_MOUNT_RANGE,
     event::UpdateCharacterMetadata,
+    interaction::{Interactor, Interactors},
     link::Is,
     mounting::{Mount, VolumePos},
     outcome::Outcome,
@@ -96,6 +97,35 @@ pub struct PlayerDebugLines {
     pub vel: Option<DebugShapeId>,
 }
 
+/// Who set the current `viewpoint_entity`. Distinguishes a moderator's own
+/// manual debug toggle (`GameInput::SpectateViewpoint`) from a remote-sensing
+/// spell's automatic enter/leave transition, so casting one of these spells as
+/// a moderator doesn't strand your manually-set camera, and ending a spell
+/// doesn't clear a moderator's unrelated manual viewpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewpointSource {
+    Moderator,
+    Spell,
+}
+
+/// Drops the client's local copy of the four components the shipped
+/// spectator sync additionally sends for a spectated entity (`Combo`,
+/// `ActiveAbilities`, `IsInteractor`, `Interactors`). The server only sends
+/// these while actively spectating and never pushes a removal when
+/// spectating stops, so without this the (formerly) spectated entity's
+/// combo/ability/interaction state stays stale on the client's HUD —
+/// invisible for a moderator's occasional debug toggle, but a visible defect
+/// once every remote-sensing spell caster hits this path.
+fn clear_stale_spectator_components(client: &Client, spectated_entity: specs::Entity) {
+    let ecs = client.state().ecs();
+    ecs.write_storage::<Combo>().remove(spectated_entity);
+    ecs.write_storage::<ActiveAbilities>()
+        .remove(spectated_entity);
+    ecs.write_storage::<Is<Interactor>>()
+        .remove(spectated_entity);
+    ecs.write_storage::<Interactors>().remove(spectated_entity);
+}
+
 pub struct SessionState {
     scene: Scene,
     pub(crate) client: Rc<RefCell<Client>>,
@@ -117,6 +147,10 @@ pub struct SessionState {
     pub(crate) target_entity: Option<specs::Entity>,
     pub(crate) selected_entity: Option<(specs::Entity, std::time::Instant)>,
     pub(crate) viewpoint_entity: Option<specs::Entity>,
+    /// Who currently owns `viewpoint_entity`, so a moderator's own manual
+    /// spectate toggle and a remote-sensing spell's enter/leave transition
+    /// never stomp each other.
+    viewpoint_source: Option<ViewpointSource>,
     interactables: interactable::Interactables,
     #[cfg(not(target_os = "macos"))]
     mumble_link: SharedLink,
@@ -192,6 +226,7 @@ impl SessionState {
             target_entity: None,
             selected_entity: None,
             viewpoint_entity: None,
+            viewpoint_source: None,
             interactables: Default::default(),
             #[cfg(not(target_os = "macos"))]
             mumble_link,
@@ -1307,9 +1342,11 @@ impl PlayState for SessionState {
                             },
                             GameInput::SpectateViewpoint if state => {
                                 let mut client = self.client.borrow_mut();
-                                if self.viewpoint_entity.is_some() {
+                                if let Some(spectated_entity) = self.viewpoint_entity {
                                     client.stop_spectate_entity();
+                                    clear_stale_spectator_components(&client, spectated_entity);
                                     self.viewpoint_entity = None;
+                                    self.viewpoint_source = None;
                                     self.scene.camera_mut().set_mode(CameraMode::Freefly);
                                     let mut ori = self.scene.camera().get_orientation();
                                     // Remove any roll that could have possibly been set to the
@@ -1324,7 +1361,20 @@ impl PlayState for SessionState {
                                     client.start_spectate_entity(target_entity.kind.0);
 
                                     self.viewpoint_entity = Some(target_entity.kind.0);
+                                    self.viewpoint_source = Some(ViewpointSource::Moderator);
                                     self.scene.camera_mut().set_mode(CameraMode::FirstPerson);
+                                }
+                            },
+                            GameInput::CancelRemoteSense if state => {
+                                // Voluntarily end an active remote-sensing
+                                // spell early. Only meaningful while a spell
+                                // (not a moderator's manual toggle) owns the
+                                // viewpoint; the actual transition back to the
+                                // body happens once the server clears
+                                // `RemoteSense` in response, handled above
+                                // alongside every other end-of-link path.
+                                if self.viewpoint_source == Some(ViewpointSource::Spell) {
+                                    self.client.borrow_mut().cancel_remote_sense();
                                 }
                             },
                             GameInput::ToggleWalk if state => {
@@ -1403,9 +1453,88 @@ impl PlayState for SessionState {
                     .read_storage::<Pos>()
                     .contains(viewpoint_entity)
             {
-                self.client.borrow_mut().stop_spectate_entity();
+                {
+                    let mut client = self.client.borrow_mut();
+                    client.stop_spectate_entity();
+                    clear_stale_spectator_components(&client, viewpoint_entity);
+                }
                 self.viewpoint_entity = None;
-                self.scene.camera_mut().set_mode(CameraMode::Freefly);
+                // A spell-owned viewpoint returns the player to third-person
+                // (matching every other end-of-link path below); a
+                // moderator's manual debug toggle keeps its existing
+                // freefly fallback.
+                let was_spell = self.viewpoint_source.take() == Some(ViewpointSource::Spell);
+                self.scene.camera_mut().set_mode(if was_spell {
+                    CameraMode::ThirdPerson
+                } else {
+                    CameraMode::Freefly
+                });
+                if was_spell {
+                    let mut ori = self.scene.camera().get_orientation();
+                    ori.z = 0.0;
+                    self.scene.camera_mut().set_orientation(ori);
+                }
+            }
+
+            // Remote-sensing spell enter/leave: driven entirely by the
+            // presence/absence of the player's own `RemoteSense` component --
+            // there is no keybind for this half, so a player can never get
+            // stuck in it (the voluntary early-exit keybind just asks the
+            // server to remove the sustaining buff, which removes the
+            // component in turn). Left alone while a moderator's own manual
+            // spectate toggle currently owns the viewpoint, so casting one of
+            // these spells doesn't strand a moderator's debug camera.
+            if self.viewpoint_source != Some(ViewpointSource::Moderator) {
+                let remote_sense = {
+                    let client = self.client.borrow();
+                    client
+                        .state()
+                        .ecs()
+                        .read_storage::<RemoteSense>()
+                        .get(client.entity())
+                        .copied()
+                };
+                match remote_sense {
+                    Some(remote_sense)
+                        if self.viewpoint_source != Some(ViewpointSource::Spell)
+                            || self.viewpoint_entity.is_none() =>
+                    {
+                        let mut client = self.client.borrow_mut();
+                        if let Some(anchor_entity) = client
+                            .state()
+                            .ecs()
+                            .entity_from_uid(remote_sense.anchor_uid())
+                        {
+                            // Notify the server once, on the transition,
+                            // exactly like the moderator keybind does.
+                            client.start_spectate_entity(anchor_entity);
+                            self.viewpoint_entity = Some(anchor_entity);
+                            self.viewpoint_source = Some(ViewpointSource::Spell);
+                            self.scene.camera_mut().set_mode(if remote_sense.free_look {
+                                CameraMode::Freefly
+                            } else {
+                                CameraMode::FirstPerson
+                            });
+                        }
+                    },
+                    None if self.viewpoint_source == Some(ViewpointSource::Spell) => {
+                        // The link ended (duration expiry, concentration
+                        // break, or the voluntary cancel key) -- return to
+                        // the body.
+                        if let Some(spectated_entity) = self.viewpoint_entity {
+                            let mut client = self.client.borrow_mut();
+                            client.stop_spectate_entity();
+                            clear_stale_spectator_components(&client, spectated_entity);
+                        }
+                        self.viewpoint_entity = None;
+                        self.viewpoint_source = None;
+                        self.scene.camera_mut().set_mode(CameraMode::ThirdPerson);
+                        let mut ori = self.scene.camera().get_orientation();
+                        ori.z = 0.0;
+                        self.scene.camera_mut().set_orientation(ori);
+                    },
+                    _ => {},
+                }
             }
 
             let (viewpoint_entity, mutable_viewpoint) = self.viewpoint_entity();

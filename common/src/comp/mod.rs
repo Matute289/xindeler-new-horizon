@@ -39,6 +39,7 @@ pub mod poise;
 pub mod pool;
 pub mod presence;
 pub mod projectile;
+pub mod remote_sense;
 pub mod shockwave;
 pub mod skillset;
 pub mod spell;
@@ -85,7 +86,10 @@ pub use self::{
         ControlAction, ControlEvent, Controller, ControllerInputs, GroupManip, InputAttr,
         InputKind, InventoryAction, InventoryEvent, InventoryManip, UtteranceKind,
     },
-    detection::{DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind},
+    detection::{
+        ConcealedUnlessTrueSight, DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind,
+        observer_pierces_concealment,
+    },
     energy::Energy,
     ethos::{Ethos, Moral, Order},
     fluid_dynamics::Fluid,
@@ -119,6 +123,7 @@ pub use self::{
     pool::{Pool, PoolProperties},
     presence::{Presence, PresenceKind, SpectatingEntity},
     projectile::{Projectile, ProjectileConstructor},
+    remote_sense::{RemoteSense, SenseAnchor},
     shockwave::{Shockwave, ShockwaveHitEntities},
     skillset::{
         SkillGroup, SkillGroupKind, SkillSet,

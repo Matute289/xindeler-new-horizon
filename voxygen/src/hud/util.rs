@@ -324,6 +324,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Detecting => "buff-detecting",
         BuffKind::SeeInvisible => "buff-seeinvisible",
         BuffKind::TrueSight => "buff-truesight",
+        BuffKind::RemoteSensing => "buff-remotesensing",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
         BuffKind::BleedingMark => "buff-bleeding_mark",
@@ -522,7 +523,8 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::JoltArrow
                         | BuffKind::Detecting
                         | BuffKind::SeeInvisible
-                        | BuffKind::TrueSight => Cow::Borrowed(""),
+                        | BuffKind::TrueSight
+                        | BuffKind::RemoteSensing => Cow::Borrowed(""),
                     };
 
                     write!(&mut description, "{}", buff_desc).unwrap();

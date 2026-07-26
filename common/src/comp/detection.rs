@@ -6,9 +6,9 @@
 //! `Detected` by spatially querying the world runs server-side and lives
 //! elsewhere; nothing in this file computes a reveal set.
 
-use crate::uid::Uid;
+use crate::{comp::stats::Stats, uid::Uid};
 use serde::{Deserialize, Serialize};
-use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
+use specs::{Component, DenseVecStorage, DerefFlaggedStorage, NullStorage};
 use vek::Vec3;
 
 /// The set of things this entity currently perceives through a magical sense.
@@ -102,4 +102,75 @@ pub enum SenseKind {
 pub enum DetectDetail {
     Item,
     Creature,
+}
+
+/// Marks an entity as invisible to normal perception and revealed only to an
+/// observer whose own `Stats.senses` currently includes `SenseKind::True`
+/// (see `observer_pierces_concealment`). Used for objects that must exist as
+/// real, positioned, server-authoritative entities (so the world data behind
+/// them streams correctly) while never being visible or targetable by a
+/// player without that sense.
+///
+/// A property of the *entity itself*, not a secret about who is observing it,
+/// so it is synced `SyncFrom::AnyEntity` like `Body`/`Pos` — it reveals no
+/// more than those already do. What differs per observer is purely local,
+/// client-side render and target-acquisition filtering: this marker just
+/// tells that filtering to apply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConcealedUnlessTrueSight;
+
+impl Component for ConcealedUnlessTrueSight {
+    type Storage = DerefFlaggedStorage<Self, NullStorage<Self>>;
+}
+
+/// Whether an observer with the given `Stats` currently pierces concealment —
+/// i.e. can perceive and target an entity marked `ConcealedUnlessTrueSight`.
+/// Reuses the same "does this entity have an active `SenseKind::True` sense"
+/// signal the true-sight buff itself already populates
+/// (`BuffEffect::Sense`/`Stats.senses`) rather than inventing a second
+/// visibility mechanism.
+pub fn observer_pierces_concealment(stats: &Stats) -> bool {
+    stats
+        .senses
+        .iter()
+        .any(|sense| sense.kind == SenseKind::True)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::comp::{Body, buff::SenseMode, humanoid, stats::ActiveSense};
+
+    fn stats_with_senses(senses: Vec<ActiveSense>) -> Stats {
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut stats = Stats::empty(body);
+        stats.senses = senses;
+        stats
+    }
+
+    #[test]
+    fn true_sight_sense_pierces_concealment() {
+        let stats = stats_with_senses(vec![ActiveSense {
+            kind: SenseKind::True,
+            radius: 30.0,
+            mode: SenseMode::Continuous,
+        }]);
+        assert!(observer_pierces_concealment(&stats));
+    }
+
+    #[test]
+    fn unrelated_sense_does_not_pierce_concealment() {
+        let stats = stats_with_senses(vec![ActiveSense {
+            kind: SenseKind::Magic,
+            radius: 30.0,
+            mode: SenseMode::Snapshot,
+        }]);
+        assert!(!observer_pierces_concealment(&stats));
+    }
+
+    #[test]
+    fn no_active_senses_does_not_pierce_concealment() {
+        let stats = stats_with_senses(vec![]);
+        assert!(!observer_pierces_concealment(&stats));
+    }
 }

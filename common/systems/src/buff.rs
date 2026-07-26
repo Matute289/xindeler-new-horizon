@@ -950,5 +950,13 @@ fn execute_effect(
                 mode: *mode,
             });
         },
+        // Deliberately a no-op here: this system is shared by the client and
+        // the server (dispatched in `add_local_systems`), and its only output
+        // channel is `Stats`, which is synced `SyncFrom::AnyEntity`. Writing
+        // the resolved anchor into anything reachable from here would leak
+        // it to every nearby client. The owner-private `RemoteSense`
+        // component is written directly by the server-only cast-resolution
+        // code that applies this buff, never derived from this effect.
+        BuffEffect::RemoteSense { .. } => {},
     };
 }

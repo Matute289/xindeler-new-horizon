@@ -5819,6 +5819,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // Detection senses: reuse the perception-themed icon until dedicated
         // art ships with the spell content that grants these buffs.
         BuffKind::TrueSight => imgs.buff_eagle_eye,
+        // Reuse the perception-themed icon until dedicated art ships with the
+        // spells that grant this buff.
+        BuffKind::RemoteSensing => imgs.buff_eagle_eye,
         BuffKind::Wet => imgs.debuff_wet,
         BuffKind::Winded => imgs.debuff_winded,
     }

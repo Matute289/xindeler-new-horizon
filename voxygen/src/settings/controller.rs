@@ -505,6 +505,7 @@ impl ControllerSettings {
             GameInput::MapSetMarker => Some(Button::Simple(GilButton::Unknown)),
             GameInput::SpectateSpeedBoost => Some(Button::Simple(GilButton::Unknown)),
             GameInput::SpectateViewpoint => Some(Button::Simple(GilButton::Unknown)),
+            GameInput::CancelRemoteSense => Some(Button::Simple(GilButton::Unknown)),
             GameInput::MuteMaster => Some(Button::Simple(GilButton::Unknown)),
             GameInput::MuteInactiveMaster => Some(Button::Simple(GilButton::Unknown)),
             GameInput::MuteMusic => Some(Button::Simple(GilButton::Unknown)),
@@ -888,6 +889,11 @@ impl ControllerSettings {
                 mod2: Button::Simple(GilButton::Unknown),
             }),
             GameInput::SpectateViewpoint => Some(LayerEntry {
+                button: Button::Simple(GilButton::Unknown),
+                mod1: Button::Simple(GilButton::Unknown),
+                mod2: Button::Simple(GilButton::Unknown),
+            }),
+            GameInput::CancelRemoteSense => Some(LayerEntry {
                 button: Button::Simple(GilButton::Unknown),
                 mod1: Button::Simple(GilButton::Unknown),
                 mod2: Button::Simple(GilButton::Unknown),

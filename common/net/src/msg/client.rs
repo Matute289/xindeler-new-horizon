@@ -117,6 +117,10 @@ pub enum ClientGeneral {
 
     SpectatePosition(Vec3<f32>),
     SpectateEntity(Option<common::uid::Uid>),
+    /// Voluntarily ends the sender's own active remote-sensing link before its
+    /// duration expires, returning them to their body. Names no target
+    /// entity — it only ever acts on the sender's own buff/component state.
+    CancelRemoteSense,
 
     //Only in Game, via terrain stream
     TerrainChunkRequest {
@@ -178,7 +182,8 @@ impl ClientMsg {
                         | ClientGeneral::RequestPlayerPhysics { .. }
                         | ClientGeneral::RequestLossyTerrainCompression { .. }
                         | ClientGeneral::UpdateMapMarker(_)
-                        | ClientGeneral::SetBattleMode(_) => {
+                        | ClientGeneral::SetBattleMode(_)
+                        | ClientGeneral::CancelRemoteSense => {
                             c_type == ClientType::Game && presence.is_some()
                         },
                         ClientGeneral::SpectatePosition(_) | ClientGeneral::SpectateEntity(_) => {
