@@ -84,7 +84,7 @@ use common::{
     link::Is,
     mounting::{Volume, VolumeRider},
     region::RegionMap,
-    resources::{BattleMode, GameMode, Time, TimeOfDay},
+    resources::{BattleMode, GameMode, OracleLive, Time, TimeOfDay},
     shared_server_config::ServerConstants,
     slowjob::SlowJobPool,
     terrain::TerrainChunk,
@@ -389,7 +389,11 @@ impl Server {
         });
         state.ecs_mut().insert(ServerConstants {
             day_cycle_coefficient: settings.day_cycle_coefficient(),
+            oracle_live: settings.gameplay.oracle.is_live(),
         });
+        state
+            .ecs_mut()
+            .insert(OracleLive(settings.gameplay.oracle.is_live()));
         state.ecs_mut().insert(Tick(0));
         state.ecs_mut().insert(TickStart(Instant::now()));
         state.ecs_mut().insert(job_metrics);

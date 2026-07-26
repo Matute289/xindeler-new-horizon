@@ -72,6 +72,20 @@ impl ServerBattleMode {
     }
 }
 
+/// Whether PROJECT ORACLE is live on this server. Gates any ability whose
+/// `AbilityRequirements.oracle` is `true` (see `common::resources::OracleLive`
+/// and `AbilityRequirements::requirements_met`).
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
+pub enum OracleMode {
+    #[default]
+    Off,
+    On,
+}
+
+impl OracleMode {
+    pub fn is_live(&self) -> bool { matches!(self, OracleMode::On) }
+}
+
 impl From<ServerBattleMode> for xindeler_query_server::proto::ServerBattleMode {
     fn from(value: ServerBattleMode) -> Self {
         use xindeler_query_server::proto::ServerBattleMode as QueryBattleMode;
@@ -105,6 +119,8 @@ pub struct GameplaySettings {
     #[serde(default)]
     // explosion_burn_marks by players
     pub explosion_burn_marks: bool,
+    #[serde(default)]
+    pub oracle: OracleMode,
 }
 
 impl Default for GameplaySettings {
@@ -112,6 +128,7 @@ impl Default for GameplaySettings {
         Self {
             battle_mode: ServerBattleMode::default(),
             explosion_burn_marks: true,
+            oracle: OracleMode::default(),
         }
     }
 }

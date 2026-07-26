@@ -199,6 +199,7 @@ impl Client {
                     | ServerGeneral::UpdatePendingTrade(_, _, _)
                     | ServerGeneral::FinishedTrade(_)
                     | ServerGeneral::MapMarker(_)
+                    | ServerGeneral::OracleLive(_)
                     | ServerGeneral::WeatherUpdate(_)
                     | ServerGeneral::LocalWindUpdate(_)
                     | ServerGeneral::SpectatePosition(_)

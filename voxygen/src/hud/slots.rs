@@ -136,6 +136,7 @@ type HotbarSource<'a> = (
     Option<&'a Stats>,
     Option<&'a Buffs>,
     &'a AbilityMap,
+    bool,
 );
 type HotbarImageSource<'a> = (&'a ItemImgs, &'a img_ids::Imgs);
 
@@ -158,6 +159,7 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
             stats,
             buffs,
             ability_map,
+            oracle_live,
         ): &HotbarSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         const GREYED_OUT: Color = Color::Rgba(0.3, 0.3, 0.3, 0.8);
@@ -212,10 +214,11 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     if energy.current() >= ability.energy_cost()
                                         && combo
                                             .is_some_and(|c| c.counter() >= ability.combo_cost())
-                                        && ability
-                                            .ability_meta()
-                                            .requirements
-                                            .requirements_met(*stance, Some(*inventory))
+                                        && ability.ability_meta().requirements.requirements_met(
+                                            *stance,
+                                            Some(*inventory),
+                                            *oracle_live,
+                                        )
                                     {
                                         Some(Color::Rgba(1.0, 1.0, 1.0, 1.0))
                                     } else {

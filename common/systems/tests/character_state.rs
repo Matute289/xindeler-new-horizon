@@ -82,6 +82,7 @@ mod tests {
             None,
             &ServerConstants {
                 day_cycle_coefficient: 24.0,
+                oracle_live: false,
             },
             |_, _| {},
         );

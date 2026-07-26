@@ -1495,7 +1495,11 @@ fn handle_ability(
         // here (necessary after energy and combo moved to AbilityMeta)
         let ability_meta = ability.ability_meta();
         {
-            let AbilityRequirements { stance: _, item } = ability_meta.requirements;
+            let AbilityRequirements {
+                stance: _,
+                item,
+                oracle: _,
+            } = ability_meta.requirements;
             let inv_slot = item.and_then(|item| {
                 data.inventory
                     .and_then(|inv| inv.get_slot_of_item_by_def_id(&item.item_def_id()))

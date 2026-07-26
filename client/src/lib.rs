@@ -40,7 +40,7 @@ use common::{
     mounting::{Rider, VolumePos, VolumeRider},
     outcome::Outcome,
     recipe::{ComponentRecipeBook, RecipeBookManifest},
-    resources::{BattleMode, GameMode, PlayerEntity, Time, TimeOfDay},
+    resources::{BattleMode, GameMode, OracleLive, PlayerEntity, Time, TimeOfDay},
     rtsim,
     shared_server_config::ServerConstants,
     spiral::Spiral2d,
@@ -758,6 +758,7 @@ impl Client {
             state.ecs_mut().insert(material_stats);
             state.ecs_mut().insert(ability_map);
             state.ecs_mut().insert(recipe_book);
+            *state.ecs_mut().write_resource() = OracleLive(server_constants.oracle_live);
 
             let map_size = map_size_lg.chunks();
             let max_height = world_map.max_height;
@@ -3250,6 +3251,12 @@ impl Client {
             },
             ServerGeneral::MapMarker(event) => {
                 frontend_events.push(Event::MapMarker(event));
+            },
+            ServerGeneral::OracleLive(live) => {
+                // Writes the same `OracleLive` resource the login-time
+                // `ServerConstants::oracle_live` push writes — one client-side
+                // reader, not two.
+                *self.state.ecs_mut().write_resource() = OracleLive(live);
             },
             ServerGeneral::WeatherUpdate(weather) => {
                 self.weather.weather_update(weather);

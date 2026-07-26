@@ -1542,7 +1542,7 @@ impl CharacterAbility {
     pub fn requirements_paid(&self, data: &JoinData, update: &mut StateUpdate) -> bool {
         let from_meta = {
             let AbilityMeta { requirements, .. } = self.ability_meta();
-            requirements.requirements_met(data.stance, data.inventory)
+            requirements.requirements_met(data.stance, data.inventory, data.oracle_live.0)
         };
         from_meta
             && match self {
@@ -4004,13 +4004,26 @@ impl AbilityReqItem {
 pub struct AbilityRequirements {
     pub stance: Option<Stance>,
     pub item: Option<AbilityReqItem>,
+    /// Whether this ability only exists while PROJECT ORACLE is live.
+    /// Greyed-out in every ability picker and refused server-side when it is
+    /// not — see `common::resources::OracleLive` and
+    /// `CharacterAbility::requirements_paid`. Generic and reusable by any
+    /// future ability; not specific to any one spell.
+    #[serde(default)]
+    pub oracle: bool,
 }
 
 impl AbilityRequirements {
-    pub fn requirements_met(&self, stance: Option<&Stance>, inv: Option<&Inventory>) -> bool {
+    pub fn requirements_met(
+        &self,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        oracle_live: bool,
+    ) -> bool {
         let AbilityRequirements {
             stance: req_stance,
             item,
+            oracle,
         } = self;
         let stance_met = req_stance
             .is_none_or(|req_stance| stance.is_some_and(|char_stance| req_stance == *char_stance));
@@ -4020,7 +4033,8 @@ impl AbilityRequirements {
                     .is_some()
             })
         });
-        stance_met && item_met
+        let oracle_met = !oracle || oracle_live;
+        stance_met && item_met && oracle_met
     }
 }
 
@@ -4182,6 +4196,42 @@ mod ability_meta_tag_tests {
         let meta: AbilityMeta =
             ron::from_str("(school: Some(Evocation))").expect("meta must deserialize");
         assert_eq!(meta.hp_cost, None);
+    }
+}
+
+#[cfg(test)]
+mod oracle_gate_tests {
+    use super::*;
+
+    // The 5 oracle-flavored spells (augury, divination, commune,
+    // contact_other_plane, legend_lore) don't exist yet, so this synthesizes
+    // an `AbilityRequirements { oracle: true, .. }` directly instead of
+    // loading a real spell RON. Proves the gate itself works before any
+    // content depends on it.
+
+    #[test]
+    fn oracle_ability_refused_when_not_live() {
+        let req = AbilityRequirements {
+            oracle: true,
+            ..Default::default()
+        };
+        assert!(!req.requirements_met(None, None, false));
+    }
+
+    #[test]
+    fn oracle_ability_accepted_when_live() {
+        let req = AbilityRequirements {
+            oracle: true,
+            ..Default::default()
+        };
+        assert!(req.requirements_met(None, None, true));
+    }
+
+    #[test]
+    fn non_oracle_ability_ignores_oracle_liveness() {
+        let req = AbilityRequirements::default();
+        assert!(req.requirements_met(None, None, false));
+        assert!(req.requirements_met(None, None, true));
     }
 }
 

@@ -83,6 +83,7 @@ command-make_volume-desc = Create a volume (experimental)
 command-motd-desc = View the server description
 command-mount-desc = Mount an entity
 command-object-desc = Spawn an object
+command-oracle-desc = (Admin) Turn PROJECT ORACLE live on or off server-wide: greys out (and refuses) any ability requiring it
 command-oracle_trigger-desc = (Admin) Manually trigger a loaded ORACLE .dmevent.ron/.json: spawn its NPCs near you, log its rumor, and greet you
 command-outcome-desc = Create an outcome
 command-permit_build-desc = Grants player a bounded box they can build in

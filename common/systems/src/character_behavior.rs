@@ -16,7 +16,7 @@ use common::{
     link::Is,
     mounting::{Rider, VolumeRider},
     outcome::Outcome,
-    resources::{DeltaTime, Time},
+    resources::{DeltaTime, OracleLive, Time},
     states::{
         behavior::{JoinData, JoinStruct},
         idle,
@@ -53,6 +53,7 @@ pub struct ReadData<'a> {
     ability_pool: ReadStorage<'a, AbilityPool>,
     msm: ReadExpect<'a, MaterialStatManifest>,
     ability_map: ReadExpect<'a, AbilityMap>,
+    oracle_live: ReadExpect<'a, OracleLive>,
     combos: ReadStorage<'a, Combo>,
     alignments: ReadStorage<'a, comp::Alignment>,
     terrain: ReadExpect<'a, TerrainGrid>,
@@ -262,6 +263,7 @@ impl<'a> System<'a> for Sys {
                     &read_data.time,
                     &read_data.msm,
                     &read_data.ability_map,
+                    &read_data.oracle_live,
                 );
                 let state_update = j.character.handle_event(&j, &mut output_events, action);
                 Self::publish_state_update(&mut join_struct, state_update, &mut output_events);
@@ -282,6 +284,7 @@ impl<'a> System<'a> for Sys {
                 &read_data.time,
                 &read_data.msm,
                 &read_data.ability_map,
+                &read_data.oracle_live,
             );
 
             let state_update = j.character.behavior(&j, &mut output_events);
