@@ -363,11 +363,20 @@ impl Body {
         match self {
             Body::BipedSmall(b) => matches!(
                 b.species,
-                biped_small::Species::Husk | biped_small::Species::Jiangshi
+                biped_small::Species::Husk
+                    | biped_small::Species::Jiangshi
+                    | biped_small::Species::Bloodservant
+                    | biped_small::Species::BloodmoonHeiress
+                    | biped_small::Species::ShamanicSpirit
+                    | biped_small::Species::Harlequin
             ),
             Body::BipedLarge(b) => matches!(
                 b.species,
-                biped_large::Species::Huskbrute | biped_large::Species::Dullahan
+                biped_large::Species::Huskbrute
+                    | biped_large::Species::Dullahan
+                    | biped_large::Species::Strigoi
+                    | biped_large::Species::Cursekeeper
+                    | biped_large::Species::Executioner
             ),
             Body::QuadrupedMedium(b) => {
                 matches!(b.species, quadruped_medium::Species::Bonerattler)
@@ -2582,5 +2591,50 @@ mod magic_resist_tests {
         // charm-immune set, so it doubles as a stand-in "not universally CC
         // immune" check for a golem here.
         assert!(!Body::Golem(golem::Body::random()).immune_to(BuffKind::Frozen));
+    }
+}
+
+#[cfg(test)]
+mod is_undead_tests {
+    use super::*;
+    use crate::comp::body::{biped_large, biped_small};
+
+    fn biped_large_body(species: biped_large::Species) -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn biped_small_body(species: biped_small::Species) -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    #[test]
+    fn vampire_castle_roster_is_undead() {
+        assert!(biped_large_body(biped_large::Species::Strigoi).is_undead());
+        assert!(biped_large_body(biped_large::Species::Cursekeeper).is_undead());
+        assert!(biped_large_body(biped_large::Species::Executioner).is_undead());
+        assert!(biped_small_body(biped_small::Species::Bloodservant).is_undead());
+        assert!(biped_small_body(biped_small::Species::BloodmoonHeiress).is_undead());
+        assert!(biped_small_body(biped_small::Species::ShamanicSpirit).is_undead());
+        assert!(biped_small_body(biped_small::Species::Harlequin).is_undead());
+    }
+
+    #[test]
+    fn previously_covered_undead_still_covered() {
+        assert!(biped_large_body(biped_large::Species::Huskbrute).is_undead());
+        assert!(biped_large_body(biped_large::Species::Dullahan).is_undead());
+        assert!(biped_small_body(biped_small::Species::Husk).is_undead());
+        assert!(biped_small_body(biped_small::Species::Jiangshi).is_undead());
+    }
+
+    #[test]
+    fn ordinary_bodies_are_not_undead() {
+        assert!(!biped_large_body(biped_large::Species::Minotaur).is_undead());
+        assert!(!biped_small_body(biped_small::Species::Gnarling).is_undead());
     }
 }
