@@ -862,6 +862,18 @@ fn convert_skill_groups_from_database(
         let skill_group_exp = skill_group.earned_exp.clamp(0, i64::from(u32::MAX)) as u32;
         new_skill_group.add_experience(skill_group_exp);
 
+        // Skill points granted outside the exp economy (e.g. level-milestone
+        // feats) are persisted separately from earned_exp, so restore them on
+        // top of the exp-reconstructed amounts here.
+        let direct_earned_sp = skill_group.direct_earned_sp.clamp(0, i64::from(u16::MAX)) as u16;
+        let direct_available_sp = skill_group
+            .direct_available_sp
+            .clamp(0, i64::from(u16::MAX)) as u16;
+        new_skill_group.earned_sp = new_skill_group.earned_sp.saturating_add(direct_earned_sp);
+        new_skill_group.available_sp = new_skill_group
+            .available_sp
+            .saturating_add(direct_available_sp);
+
         use skillset::SkillsPersistenceError;
 
         let skills_result = if skill_group.spent_exp != i64::from(new_skill_group.spent_exp()) {
@@ -903,17 +915,39 @@ pub fn convert_skill_groups_to_database<'a, I: Iterator<Item = &'a skillset::Ski
     let skill_group_hashes = &skillset::SKILL_GROUP_HASHES;
     skill_groups
         .into_iter()
-        .map(|sg| SkillGroup {
-            entity_id: entity_id.0,
-            skill_group_kind: json_models::skill_group_to_db_string(sg.skill_group_kind),
-            earned_exp: i64::from(sg.earned_exp),
-            spent_exp: i64::from(sg.spent_exp()),
-            // If fails to convert, just forces a respec on next login
-            skills: serde_json::to_string(&sg.ordered_skills).unwrap_or_else(|_| "".to_string()),
-            hash_val: skill_group_hashes
-                .get(&sg.skill_group_kind)
-                .cloned()
-                .unwrap_or_default(),
+        .map(|sg| {
+            // earned_sp/available_sp are a mix of exp-earned points and points
+            // granted directly (bypassing the exp economy). Replaying the same
+            // earned_exp through a fresh skill group isolates the exp-earned
+            // portion; whatever the live skill group has beyond that is the
+            // directly-granted portion, persisted in its own columns.
+            let mut exp_only = skillset::SkillGroup {
+                skill_group_kind: sg.skill_group_kind,
+                available_exp: 0,
+                earned_exp: 0,
+                available_sp: 0,
+                earned_sp: 0,
+                ordered_skills: Vec::new(),
+            };
+            exp_only.add_experience(sg.earned_exp);
+            let direct_earned_sp = sg.earned_sp.saturating_sub(exp_only.earned_sp);
+            let direct_available_sp = sg.available_sp.saturating_sub(exp_only.available_sp);
+
+            SkillGroup {
+                entity_id: entity_id.0,
+                skill_group_kind: json_models::skill_group_to_db_string(sg.skill_group_kind),
+                earned_exp: i64::from(sg.earned_exp),
+                spent_exp: i64::from(sg.spent_exp()),
+                // If fails to convert, just forces a respec on next login
+                skills: serde_json::to_string(&sg.ordered_skills)
+                    .unwrap_or_else(|_| "".to_string()),
+                hash_val: skill_group_hashes
+                    .get(&sg.skill_group_kind)
+                    .cloned()
+                    .unwrap_or_default(),
+                direct_earned_sp: i64::from(direct_earned_sp),
+                direct_available_sp: i64::from(direct_available_sp),
+            }
         })
         .collect()
 }
@@ -1036,5 +1070,74 @@ mod tests {
             convert_background_from_database(Some("custom")),
             Background(None)
         );
+    }
+
+    #[test]
+    fn direct_skill_points_persist_across_save_and_load() {
+        // Points granted outside the exp economy (e.g. level-milestone feats)
+        // leave earned_exp/available_exp untouched, so they can't be
+        // reconstructed from exp alone on load — they need their own
+        // persisted columns. Simulate 3 granted, 1 already spent.
+        let feats = skillset::SkillGroup {
+            skill_group_kind: SkillGroupKind::Feats,
+            available_exp: 0,
+            earned_exp: 0,
+            earned_sp: 3,
+            available_sp: 1,
+            ordered_skills: Vec::new(),
+        };
+
+        let db_rows = convert_skill_groups_to_database(CharacterId(1), std::iter::once(&feats));
+        assert_eq!(db_rows.len(), 1);
+        assert_eq!(db_rows[0].earned_exp, 0);
+        assert_eq!(
+            db_rows[0].direct_earned_sp, 3,
+            "all 3 grants must be captured since none are backed by earned_exp"
+        );
+        assert_eq!(db_rows[0].direct_available_sp, 1);
+
+        let (restored, _) = convert_skill_groups_from_database(&db_rows);
+        let restored_feats = restored
+            .get(&SkillGroupKind::Feats)
+            .expect("Feats group must persist");
+        assert_eq!(
+            restored_feats.earned_sp, 3,
+            "milestone-granted points must survive a save/load round-trip"
+        );
+        assert_eq!(restored_feats.available_sp, 1);
+    }
+
+    #[test]
+    fn direct_skill_points_do_not_duplicate_exp_earned_points() {
+        // A group that mixes real exp-earned points with directly-granted
+        // ones must not double-count the exp-earned portion on reload.
+        let mut general = skillset::SkillGroup {
+            skill_group_kind: SkillGroupKind::General,
+            available_exp: 0,
+            earned_exp: 0,
+            earned_sp: 0,
+            available_sp: 0,
+            ordered_skills: Vec::new(),
+        };
+        // Earn 2 points the normal way, then grant 1 more directly on top.
+        general.add_experience(1_000_000);
+        let exp_earned_sp = general.earned_sp;
+        assert!(
+            exp_earned_sp > 0,
+            "test setup must actually earn sp from exp"
+        );
+        general.earned_sp += 1;
+        general.available_sp += 1;
+
+        let db_rows = convert_skill_groups_to_database(CharacterId(1), std::iter::once(&general));
+        assert_eq!(db_rows[0].direct_earned_sp, 1);
+        assert_eq!(db_rows[0].direct_available_sp, 1);
+
+        let (restored, _) = convert_skill_groups_from_database(&db_rows);
+        let restored_general = restored
+            .get(&SkillGroupKind::General)
+            .expect("General group must persist");
+        assert_eq!(restored_general.earned_sp, exp_earned_sp + 1);
+        assert_eq!(restored_general.available_sp, exp_earned_sp + 1);
     }
 }

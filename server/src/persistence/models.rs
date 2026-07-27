@@ -42,6 +42,12 @@ pub struct SkillGroup {
     pub spent_exp: i64,
     pub skills: String,
     pub hash_val: Vec<u8>,
+    /// Skill points granted directly (bypassing the exp economy — e.g. a
+    /// level-milestone feat point), tracked separately from `earned_exp` so
+    /// they survive a save/load round-trip. See
+    /// `conversions::convert_skill_groups_{from,to}_database`.
+    pub direct_earned_sp: i64,
+    pub direct_available_sp: i64,
 }
 
 pub struct Pet {
