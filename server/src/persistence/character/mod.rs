@@ -210,7 +210,9 @@ pub fn load_character_data(
                 earned_exp,
                 spent_exp,
                 skills,
-                hash_val
+                hash_val,
+                direct_earned_sp,
+                direct_available_sp
         FROM    skill_group
         WHERE   entity_id = ?1",
     )?;
@@ -224,6 +226,8 @@ pub fn load_character_data(
                 spent_exp: row.get(2)?,
                 skills: row.get(3)?,
                 hash_val: row.get(4)?,
+                direct_earned_sp: row.get(5)?,
+                direct_available_sp: row.get(6)?,
             })
         })?
         .filter_map(Result::ok)
@@ -590,8 +594,10 @@ pub fn create_character(
                                  earned_exp,
                                  spent_exp,
                                  skills,
-                                 hash_val)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                 hash_val,
+                                 direct_earned_sp,
+                                 direct_available_sp)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
 
     for skill_group in db_skill_groups {
@@ -602,6 +608,8 @@ pub fn create_character(
             &skill_group.spent_exp,
             &skill_group.skills,
             &skill_group.hash_val,
+            &skill_group.direct_earned_sp,
+            &skill_group.direct_available_sp,
         ])?;
     }
     drop(stmt);
@@ -1233,8 +1241,10 @@ pub fn update(
                              earned_exp,
                              spent_exp,
                              skills,
-                             hash_val)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                             hash_val,
+                             direct_earned_sp,
+                             direct_available_sp)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
 
     for skill_group in db_skill_groups {
@@ -1245,6 +1255,8 @@ pub fn update(
             &skill_group.spent_exp,
             &skill_group.skills,
             &skill_group.hash_val,
+            &skill_group.direct_earned_sp,
+            &skill_group.direct_available_sp,
         ])?;
     }
 
