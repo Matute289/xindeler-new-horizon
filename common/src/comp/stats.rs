@@ -5,7 +5,10 @@ use std::{error::Error, fmt};
 
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
-    comp::{buff::SenseMode, detection::SenseKind, projectile::ProjectileConstructorEffect},
+    comp::{
+        buff::SenseMode, creature_type::CreatureKind, detection::SenseKind,
+        projectile::ProjectileConstructorEffect,
+    },
     uid::Uid,
 };
 
@@ -202,12 +205,32 @@ pub struct Stats {
     /// separate from the detection *result*.
     #[serde(default)]
     pub senses: Vec<ActiveSense>,
+    /// This entity's creature kind, defaulted from
+    /// `original_body.creature_kind()` at construction and overridable
+    /// per-entity by `EntityConfig`'s `creature_type` field (an authored
+    /// reskin can carry a different kind than the body it spawns on, e.g. a
+    /// fiend wearing a humanoid body).
+    ///
+    /// Read this field, not `original_body.creature_kind()` directly, from
+    /// any consumer that has a `Stats` in scope (e.g. anti-undead damage
+    /// bonuses) — that is what makes the override effective.
+    ///
+    /// One asymmetry is accepted on purpose and must not be "fixed" locally:
+    /// `Body::immune_to` is a `&self` method on `Body` alone, so it always
+    /// reads the body's own default kind and never this override. A reskinned
+    /// entity (say, a fiend spawned on a humanoid body via the config
+    /// override) is therefore still charmable, because charm immunity is
+    /// resolved from the body it actually wears, not from the authored kind
+    /// stored here.
+    #[serde(default)]
+    pub creature_kind: Option<CreatureKind>,
 }
 
 impl Stats {
     pub fn new(name: Content, body: Body) -> Self {
         Self {
             name,
+            creature_kind: body.creature_kind(),
             original_body: body,
             damage_reduction: StatsSplit::default(),
             poise_reduction: StatsSplit::default(),
