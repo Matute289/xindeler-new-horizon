@@ -1,8 +1,9 @@
 use crate::{
     assets::{AssetExt, Ron},
     comp::{
-        Alignment, AttunedItems, Body, Buffs, CharacterState, Combo, Energy, Group, Health,
-        HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange, SkillSet, Stats,
+        Alignment, AttunedItems, Body, Buffs, CharacterState, Combo, CreatureKind, Energy, Group,
+        Health, HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange,
+        SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -602,7 +603,10 @@ impl Attack {
         // has an undead body. `original_body` is the target's true body (Stats is
         // always present on combat entities), so no signature change is needed.
         let damage_modifier = damage_modifier
-            * if target.stats.is_some_and(|s| s.original_body.is_undead()) {
+            * if target
+                .stats
+                .is_some_and(|s| s.original_body.creature_kind() == Some(CreatureKind::Undead))
+            {
                 1.0 + attacker
                     .and_then(|a| a.stats)
                     .map_or(0.0, |s| s.bonus_damage_vs_undead)

@@ -31,7 +31,7 @@ use specs::{Component, DerefFlaggedStorage};
 use strum::{Display, IntoEnumIterator};
 use vek::*;
 
-use super::{BuffKind, CapsulePrism, Collider, Density, Mass, Scale};
+use super::{BuffKind, CapsulePrism, Collider, CreatureKind, Density, Mass, Scale};
 
 enum_iter! {
     #[derive(
@@ -352,38 +352,6 @@ impl Body {
     }
 
     pub fn is_humanoid(&self) -> bool { matches!(self, Body::Humanoid(_)) }
-
-    /// BL-06 (Q4): undead/unholy body tag. Keys conditional "vs undead" bonus
-    /// damage (Cleric Smiting Strikes / Radiant Channel) and seeds future
-    /// slayer-style conditionals (demons, beasts, …). Constructs (golems,
-    /// terracotta, haniwa, training dummies) are deliberately NOT undead — they
-    /// are unliving but not raised dead. Extend the lists as undead content
-    /// lands.
-    pub fn is_undead(&self) -> bool {
-        match self {
-            Body::BipedSmall(b) => matches!(
-                b.species,
-                biped_small::Species::Husk
-                    | biped_small::Species::Jiangshi
-                    | biped_small::Species::Bloodservant
-                    | biped_small::Species::BloodmoonHeiress
-                    | biped_small::Species::ShamanicSpirit
-                    | biped_small::Species::Harlequin
-            ),
-            Body::BipedLarge(b) => matches!(
-                b.species,
-                biped_large::Species::Huskbrute
-                    | biped_large::Species::Dullahan
-                    | biped_large::Species::Strigoi
-                    | biped_large::Species::Cursekeeper
-                    | biped_large::Species::Executioner
-            ),
-            Body::QuadrupedMedium(b) => {
-                matches!(b.species, quadruped_medium::Species::Bonerattler)
-            },
-            _ => false,
-        }
-    }
 
     pub fn is_campfire(&self) -> bool { matches!(self, Body::Object(object::Body::CampfireLit)) }
 
@@ -1644,9 +1612,16 @@ impl Body {
             // fold a movement/action-disabling buff kind into this arm.
             // Any future domination/madness-style `BuffKind`s belong in this
             // same arm alongside `Charmed`.
+            //
+            // The remaining two `matches!` cover inanimate bodies that are not
+            // creatures at all (ships, held items, most non-creature objects)
+            // and so fall outside `creature_kind` entirely; `TrainingDummy` is
+            // the sole object deliberately carved out of that allowlist.
             BuffKind::Charmed => {
-                self.is_undead()
-                    || matches!(self, Body::Golem(_) | Body::Ship(_) | Body::Item(_))
+                matches!(
+                    self.creature_kind(),
+                    Some(CreatureKind::Undead | CreatureKind::Construct)
+                ) || matches!(self, Body::Golem(_) | Body::Ship(_) | Body::Item(_))
                     || matches!(self, Body::Object(o) if !matches!(o, object::Body::TrainingDummy))
             },
             _ => false,
@@ -2583,6 +2558,22 @@ mod magic_resist_tests {
     }
 
     #[test]
+    fn non_golem_constructs_are_immune_to_charmed() {
+        // Haniwa (BipedSmall) and Forgemaster (BipedLarge) are `Construct`
+        // creatures without being a `Body::Golem`, so they only become
+        // charm-immune through the `creature_kind` check, not the older
+        // body-kind allowlist.
+        assert!(haniwa_body().immune_to(BuffKind::Charmed));
+        assert!(
+            Body::BipedLarge(biped_large::Body {
+                species: biped_large::Species::Forgemaster,
+                body_type: biped_large::BodyType::Male,
+            })
+            .immune_to(BuffKind::Charmed)
+        );
+    }
+
+    #[test]
     fn constructs_are_not_immune_to_paralyzed() {
         // Charm-immune undead/constructs must not become blanket-immune to
         // every crowd-control kind — a hold-style effect must still be able
@@ -2595,7 +2586,7 @@ mod magic_resist_tests {
 }
 
 #[cfg(test)]
-mod is_undead_tests {
+mod undead_creature_kind_tests {
     use super::*;
     use crate::comp::body::{biped_large, biped_small};
 
@@ -2613,28 +2604,40 @@ mod is_undead_tests {
         })
     }
 
+    fn is_undead(body: Body) -> bool { body.creature_kind() == Some(CreatureKind::Undead) }
+
     #[test]
     fn vampire_castle_roster_is_undead() {
-        assert!(biped_large_body(biped_large::Species::Strigoi).is_undead());
-        assert!(biped_large_body(biped_large::Species::Cursekeeper).is_undead());
-        assert!(biped_large_body(biped_large::Species::Executioner).is_undead());
-        assert!(biped_small_body(biped_small::Species::Bloodservant).is_undead());
-        assert!(biped_small_body(biped_small::Species::BloodmoonHeiress).is_undead());
-        assert!(biped_small_body(biped_small::Species::ShamanicSpirit).is_undead());
-        assert!(biped_small_body(biped_small::Species::Harlequin).is_undead());
+        assert!(is_undead(biped_large_body(biped_large::Species::Strigoi)));
+        assert!(is_undead(biped_large_body(
+            biped_large::Species::Cursekeeper
+        )));
+        assert!(is_undead(biped_large_body(
+            biped_large::Species::Executioner
+        )));
+        assert!(is_undead(biped_small_body(
+            biped_small::Species::Bloodservant
+        )));
+        assert!(is_undead(biped_small_body(
+            biped_small::Species::BloodmoonHeiress
+        )));
+        assert!(is_undead(biped_small_body(
+            biped_small::Species::ShamanicSpirit
+        )));
+        assert!(is_undead(biped_small_body(biped_small::Species::Harlequin)));
     }
 
     #[test]
     fn previously_covered_undead_still_covered() {
-        assert!(biped_large_body(biped_large::Species::Huskbrute).is_undead());
-        assert!(biped_large_body(biped_large::Species::Dullahan).is_undead());
-        assert!(biped_small_body(biped_small::Species::Husk).is_undead());
-        assert!(biped_small_body(biped_small::Species::Jiangshi).is_undead());
+        assert!(is_undead(biped_large_body(biped_large::Species::Huskbrute)));
+        assert!(is_undead(biped_large_body(biped_large::Species::Dullahan)));
+        assert!(is_undead(biped_small_body(biped_small::Species::Husk)));
+        assert!(is_undead(biped_small_body(biped_small::Species::Jiangshi)));
     }
 
     #[test]
     fn ordinary_bodies_are_not_undead() {
-        assert!(!biped_large_body(biped_large::Species::Minotaur).is_undead());
-        assert!(!biped_small_body(biped_small::Species::Gnarling).is_undead());
+        assert!(!is_undead(biped_large_body(biped_large::Species::Minotaur)));
+        assert!(!is_undead(biped_small_body(biped_small::Species::Gnarling)));
     }
 }

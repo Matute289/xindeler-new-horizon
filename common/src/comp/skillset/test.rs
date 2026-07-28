@@ -100,19 +100,19 @@ fn heal_power_passive_applies() {
 #[test]
 fn undead_body_tag_and_smite_passive() {
     use crate::comp::{
-        Body, Stats,
+        Body, CreatureKind, Stats,
         body::{biped_small, humanoid},
         skills::ClericSkill,
     };
 
-    // Body::is_undead (Q4): true for an undead species, false for a humanoid.
+    // Body::creature_kind (Q4): Undead for an undead species, not for a humanoid.
     let husk = Body::BipedSmall(biped_small::Body {
         species: biped_small::Species::Husk,
         body_type: biped_small::BodyType::Male,
     });
-    assert!(husk.is_undead());
+    assert_eq!(husk.creature_kind(), Some(CreatureKind::Undead));
     let human = Body::Humanoid(humanoid::Body::iter().next().unwrap());
-    assert!(!human.is_undead());
+    assert_ne!(human.creature_kind(), Some(CreatureKind::Undead));
 
     // SmitingStrikes folds into both spell_power and bonus_damage_vs_undead.
     let mut skillset = SkillSet::default();
