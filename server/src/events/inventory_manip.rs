@@ -1295,7 +1295,33 @@ impl ServerEvent for InventoryManipEvent {
                     inventory.sort(sort_order);
                 },
                 comp::InventoryManip::SwapEquippedWeapons => {
-                    inventory.swap_equipped_weapons(*data.time);
+                    // The inactive weapon set is about to become active — re-check
+                    // requirements for whatever's sitting there, the same gate
+                    // direct-equip already applies. Without this, a gated item that
+                    // somehow ended up in the inactive set (e.g. legacy save data
+                    // predating this gating feature) reaches the active slot with
+                    // zero re-validation.
+                    let class = data.character_classes.get(entity).map(|c| c.0);
+                    let requirements_ok = [
+                        slot::EquipSlot::InactiveMainhand,
+                        slot::EquipSlot::InactiveOffhand,
+                    ]
+                    .into_iter()
+                    .all(|slot| {
+                        inventory.equipped(slot).is_none_or(|item| {
+                            entity_meets_item_requirements(
+                                item,
+                                class,
+                                data.skill_sets.get(entity),
+                                data.bodies.get(entity),
+                            )
+                        })
+                    });
+                    if requirements_ok {
+                        inventory.swap_equipped_weapons(*data.time);
+                    } else {
+                        notify_requirements_not_met(&data.clients, entity);
+                    }
                 },
                 comp::InventoryManip::Delete(slot, amount) => {
                     let _ = inventory.take_amount(slot, amount, &data.ability_map, &data.msm);

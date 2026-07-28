@@ -394,14 +394,20 @@ impl Widget for Chat<'_> {
         // input line is, via `TextEdit`'s own Ctrl+C), so this is the only way to
         // get e.g. a command's error output out to paste elsewhere. Shift
         // distinguishes it from `TextEdit`'s native Ctrl+C (copy selection).
-        let copy_log_requested =
-            ui.widget_input(state.ids.chat_input)
+        // Keyboard capture can sit on either the input line (`chat_input`, after the
+        // player has typed something) or the outer chat widget (`id`, e.g. right
+        // after clicking into the scrollback to read history) — mirrors
+        // `input_focused` below. Checking `chat_input` alone silently drops the
+        // shortcut (and its confirmation line) whenever focus is on `id`.
+        let copy_log_requested = [state.ids.chat_input, id].iter().any(|widget_id| {
+            ui.widget_input(*widget_id)
                 .presses()
                 .key()
                 .any(|key_press| {
                     matches!(key_press.key, Key::C)
                         && key_press.modifiers.contains(ModifierKey::CTRL_SHIFT)
-                });
+                })
+        });
 
         // If up or down are pressed: move through history
         // If any key other than up, down, or tab is pressed: stop completion.
