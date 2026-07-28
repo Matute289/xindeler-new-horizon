@@ -2444,9 +2444,11 @@ mod bl65_tests {
 #[cfg(test)]
 mod magic_resist_tests {
     use super::*;
-    use crate::comp::body::{
-        biped_large, biped_small, dragon, golem, humanoid, item, object, ship,
+    use crate::comp::{
+        Stats,
+        body::{biped_large, biped_small, dragon, golem, humanoid, item, object, ship},
     };
+    use common_i18n::Content;
 
     fn humanoid_body() -> Body {
         Body::Humanoid(humanoid::Body {
@@ -2571,6 +2573,20 @@ mod magic_resist_tests {
             })
             .immune_to(BuffKind::Charmed)
         );
+    }
+
+    #[test]
+    fn a_reskinned_entity_stays_charmable_via_its_actual_body() {
+        // A content-authored override can give an entity's `Stats.creature_kind`
+        // a different kind than the body it actually spawns on (e.g. a fiend
+        // wearing a humanoid body). `Body::immune_to` only ever consults the
+        // body, never `Stats`, so the override must not grant charm immunity
+        // it wouldn't otherwise have.
+        let body = humanoid_body();
+        let mut stats = Stats::new(Content::dummy(), body);
+        stats.creature_kind = Some(CreatureKind::Fiend);
+
+        assert!(!body.immune_to(BuffKind::Charmed));
     }
 
     #[test]

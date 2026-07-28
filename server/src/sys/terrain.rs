@@ -456,6 +456,7 @@ impl SpawnEntityData {
             aggro_range_multiplier,
             // stats
             body,
+            creature_kind,
             name,
             scale,
             pos,
@@ -477,7 +478,10 @@ impl SpawnEntityData {
         }
 
         let name = name.unwrap_or_else(Content::dummy);
-        let stats = comp::Stats::new(name, body);
+        let mut stats = comp::Stats::new(name, body);
+        if let Some(creature_kind) = creature_kind {
+            stats.creature_kind = Some(creature_kind);
+        }
 
         let skill_set = {
             let skillset_builder = SkillSetBuilder::default();
@@ -826,4 +830,52 @@ pub fn chunk_in_vd(player_chunk_pos: Vec2<i16>, player_vd_sqr: i32, chunk_pos: V
     let adjusted_dist_sqr = (player_chunk_pos.as_::<i32>() - chunk_pos).magnitude_squared();
 
     adjusted_dist_sqr <= player_vd_sqr
+}
+
+#[cfg(test)]
+mod creature_kind_override_tests {
+    use super::*;
+    use common::{
+        comp::{Body, CreatureKind},
+        generation::EntityConfig,
+    };
+
+    /// An `EntityConfig`'s `creature_type` override wins over the spawned
+    /// body's own default: a config authored on a `Humanoid` body (whose own
+    /// default is `CreatureKind::Humanoid`) but tagged `creature_type: Fiend`
+    /// spawns with `Stats.creature_kind == Some(CreatureKind::Fiend)`.
+    #[test]
+    fn entity_config_creature_type_override_wins_over_body_default() {
+        let source = r#"
+            #![enable(implicit_some)]
+            (
+                name: Automatic,
+                body: RandomWith("humanoid"),
+                alignment: Alignment(Enemy),
+                creature_type: Fiend,
+                loot: Nothing,
+                inventory: (
+                    loadout: FromBody,
+                ),
+            )
+        "#;
+        let config: EntityConfig = ron::from_str(source).expect("test config must deserialize");
+
+        let entity_info =
+            EntityInfo::at(Vec3::zero()).with_entity_config(config, None, &mut rand::rng(), None);
+        assert!(
+            matches!(entity_info.body, Body::Humanoid(_)),
+            "test body must actually be Humanoid for the override to be meaningful"
+        );
+
+        let SpawnEntityData::Npc(npc_data) = SpawnEntityData::from_entity_info(entity_info) else {
+            panic!("expected a regular NPC spawn");
+        };
+
+        assert_eq!(
+            npc_data.stats.creature_kind,
+            Some(CreatureKind::Fiend),
+            "the EntityConfig override must win over the Humanoid body's own default"
+        );
+    }
 }
