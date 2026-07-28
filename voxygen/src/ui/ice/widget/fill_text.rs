@@ -3,11 +3,22 @@ use std::hash::Hash;
 
 const DEFAULT_FILL_FRACTION: f32 = 1.0;
 const DEFAULT_VERTICAL_ADJUSTMENT: f32 = 0.05;
+/// Font size never shrinks below this, no matter how long the label is —
+/// past this point illegibility is worse than a small overflow.
+const MIN_FONT_SIZE: u16 = 8;
+/// How many halving-style steps `shrink_to_fit` takes at most. `measure`
+/// isn't perfectly linear in size (kerning/hinting), so one shrink can
+/// slightly over/undershoot; a few iterations converge without looping
+/// forever.
+const MAX_SHRINK_STEPS: u32 = 4;
 
 /// Wraps the existing Text widget giving it more advanced layouting
 /// capabilities
 /// Centers child text widget and adjust the font size depending on the height
-/// of the limits Assumes single line text is being used
+/// of the limits. Assumes single line text is being used — if the label is
+/// too wide to fit on one line at the height-derived size, the font shrinks
+/// (down to `MIN_FONT_SIZE`) rather than silently wrapping/clipping a second
+/// line, since the caller's box height is fixed and won't grow to fit it.
 pub struct FillText<R>
 where
     R: iced::text::Renderer,
@@ -21,6 +32,10 @@ where
     // layouting library
     vertical_adjustment: f32,
     text: iced::Text<R>,
+    /// Kept alongside `text` (whose `content`/`font` fields are private) so
+    /// `shrink_to_fit` can call `Renderer::measure` directly.
+    content: String,
+    font: R::Font,
 }
 
 impl<R> FillText<R>
@@ -28,12 +43,39 @@ where
     R: iced::text::Renderer,
 {
     pub fn new(label: impl Into<String>) -> Self {
+        let content = label.into();
         Self {
             //max_font_size: u16::MAX,
             fill_fraction: DEFAULT_FILL_FRACTION,
             vertical_adjustment: DEFAULT_VERTICAL_ADJUSTMENT,
-            text: iced::Text::new(label),
+            text: iced::Text::new(content.clone()),
+            content,
+            font: R::Font::default(),
         }
+    }
+
+    /// Largest font size, at or below `max_font_size`, at which `content`
+    /// measures no wider than `available_width` — or `MIN_FONT_SIZE` if it
+    /// still doesn't fit there.
+    fn shrink_to_fit(&self, renderer: &R, max_font_size: u16, available_width: f32) -> u16 {
+        let mut font_size = max_font_size;
+        for _ in 0..MAX_SHRINK_STEPS {
+            if font_size <= MIN_FONT_SIZE {
+                return MIN_FONT_SIZE;
+            }
+            let (measured_width, _) = renderer.measure(
+                &self.content,
+                font_size,
+                self.font,
+                Size::new(f32::INFINITY, f32::INFINITY),
+            );
+            if measured_width <= available_width || measured_width <= 0.0 {
+                return font_size;
+            }
+            let scale = (available_width / measured_width).clamp(0.5, 0.95);
+            font_size = ((font_size as f32 * scale) as u16).max(MIN_FONT_SIZE);
+        }
+        font_size
     }
 
     #[must_use]
@@ -56,7 +98,9 @@ where
 
     #[must_use]
     pub fn font(mut self, font: impl Into<R::Font>) -> Self {
+        let font = font.into();
         self.text = self.text.font(font);
+        self.font = font;
         self
     }
 }
@@ -74,7 +118,11 @@ where
 
         let size = limits.max();
 
-        let font_size = (size.height * self.fill_fraction) as u16;
+        let font_size = self.shrink_to_fit(
+            renderer,
+            (size.height * self.fill_fraction) as u16,
+            size.width,
+        );
 
         let mut text =
             Widget::<M, _>::layout(&self.text.clone().size(font_size), renderer, &limits);
@@ -101,7 +149,16 @@ where
         viewport: &Rectangle,
     ) -> R::Output {
         // Note: this breaks if the parent widget adjusts the bounds height
-        let font_size = (layout.bounds().height * self.fill_fraction) as u16;
+        // TODO: this recomputes the identical shrink `layout` just did for the same
+        // bounds. `glyph_brush`'s own cache absorbs the expensive part (perf-reviewed,
+        // negligible at current FillText counts), but if `FillText` ever grows a
+        // persistent `State`, cache the resulting font_size in a `Cell<u16>` in
+        // `layout` and read it here instead of recomputing.
+        let font_size = self.shrink_to_fit(
+            renderer,
+            (layout.bounds().height * self.fill_fraction) as u16,
+            layout.bounds().width,
+        );
         Widget::<M, _>::draw(
             &self.text.clone().size(font_size),
             renderer,
