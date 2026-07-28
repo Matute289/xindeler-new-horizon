@@ -1491,9 +1491,8 @@ mod tests {
         }
     }
 
-    /// The 12 species that are actually Undead: 5 already recognised by the
-    /// pre-existing `is_undead()`, plus the 7 it misses (the vampire-castle
-    /// roster and the terracotta-tomb spirit/boss).
+    /// The 12 species that are Undead — the vampire-castle roster plus the
+    /// terracotta-tomb spirit/boss.
     #[test]
     fn the_twelve_undead_species_are_undead() {
         assert_eq!(
@@ -1657,6 +1656,10 @@ mod tests {
         });
         assert!(clownfish.creature_tags().contains(CreatureTags::AQUATIC));
         assert!(!clownfish.creature_tags().contains(CreatureTags::FLYING));
+
+        let crux = Body::Object(object::Body::Crux);
+        assert!(crux.creature_tags().contains(CreatureTags::FLYING));
+        assert!(!crux.creature_tags().contains(CreatureTags::AQUATIC));
 
         assert!(
             golem_body(golem::Species::StoneGolem)
