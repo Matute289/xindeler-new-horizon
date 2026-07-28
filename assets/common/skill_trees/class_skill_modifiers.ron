@@ -15,7 +15,8 @@
 // The `AttackDamage` (global, physical+magic) channel is now unused here but
 // kept for future physical-damage passives (e.g. a Warrior offense node).
 // SmitingStrikes also carries `BonusVsUndead` (Q4): extra damage applied in
-// apply_attack only when the target has an undead body (Body::is_undead).
+// apply_attack only when the target's body classifies as CreatureKind::Undead
+// (Body::creature_kind).
 //
 // CONVENTION: MaxHealth/MaxEnergy here are %-MULTIPLICATIVE per level (skills
 // scale your pool), whereas the per-class ClassAttributes layer adds a FLAT base

@@ -185,10 +185,11 @@ pub struct Stats {
     /// a smiter Cleric and a pure healer scale independently.
     pub spell_power: f32,
     pub heal_power: f32,
-    /// Extra outgoing damage vs targets with an undead body
-    /// (`Body::is_undead`), per-tick (not persisted), additive fraction (0.0 =
-    /// none). Applied in `apply_attack` only when the target is undead — the
-    /// Cleric's smite. Seeds future slayer-style conditionals.
+    /// Extra outgoing damage vs targets whose body classifies as
+    /// `CreatureKind::Undead` (`Body::creature_kind`), per-tick (not
+    /// persisted), additive fraction (0.0 = none). Applied in `apply_attack`
+    /// only when the target is undead — the Cleric's smite. Seeds future
+    /// slayer-style conditionals.
     pub bonus_damage_vs_undead: f32,
     pub projectile_speed_mult: f32,
     pub projectile_constructor_effects: Vec<ProjectileConstructorEffect>,
