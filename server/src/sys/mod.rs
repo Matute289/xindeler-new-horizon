@@ -2,6 +2,7 @@ pub mod agent;
 pub mod attunement;
 pub mod chunk_send;
 pub mod chunk_serialize;
+pub mod detection;
 pub mod entity_sync;
 pub mod invite_timeout;
 pub mod item;
@@ -60,6 +61,18 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // private to `common-systems`), so the dependency is named by its
     // computed `sys_name()`: `"Common_buff_sys"`.
     dispatch::<remote_sense::Sys>(dispatch_builder, &["Common_buff_sys"]);
+    // Must run after the buff system, which rebuilds `Stats` (and with it the
+    // active-sense declarations this reads) from scratch every tick; running
+    // earlier would evaluate the previous tick's declarations and keep honouring
+    // a sense for one tick after its buff was removed. Same naming caveat as
+    // above: that system is private to `common-systems`, so the dependency is
+    // named by its computed `sys_name()`.
+    //
+    // Deliberately registered here and never in
+    // `common_systems::add_local_systems`: keeping the code that computes a
+    // reveal set out of every crate the client dispatches is what makes it
+    // structurally impossible for a client to grant itself one.
+    dispatch::<detection::Sys>(dispatch_builder, &["Common_buff_sys"]);
 }
 
 pub fn run_sync_systems(ecs: &mut specs::World) {
