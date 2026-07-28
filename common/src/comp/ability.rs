@@ -1574,7 +1574,12 @@ impl CharacterAbility {
     pub fn requirements_paid(&self, data: &JoinData, update: &mut StateUpdate) -> bool {
         let from_meta = {
             let AbilityMeta { requirements, .. } = self.ability_meta();
-            requirements.requirements_met(data.stance, data.inventory, data.oracle_live.0)
+            requirements.requirements_met(
+                data.stance,
+                data.inventory,
+                data.oracle_live.0,
+                data.skill_set.character_level(),
+            )
         };
         from_meta
             && match self {
@@ -4150,6 +4155,12 @@ pub struct AbilityRequirements {
     /// future ability; not specific to any one spell.
     #[serde(default)]
     pub oracle: bool,
+    /// Minimum derived character level (`SkillSet::character_level`) to use
+    /// this ability. Greyed out in every picker and refused server-side below
+    /// it. Generic and reusable by any ability — the ability-side twin of
+    /// `ItemRequirements.min_level`.
+    #[serde(default)]
+    pub min_level: Option<u16>,
 }
 
 impl AbilityRequirements {
@@ -4158,11 +4169,13 @@ impl AbilityRequirements {
         stance: Option<&Stance>,
         inv: Option<&Inventory>,
         oracle_live: bool,
+        character_level: u16,
     ) -> bool {
         let AbilityRequirements {
             stance: req_stance,
             item,
             oracle,
+            min_level,
         } = self;
         let stance_met = req_stance
             .is_none_or(|req_stance| stance.is_some_and(|char_stance| req_stance == *char_stance));
@@ -4173,7 +4186,8 @@ impl AbilityRequirements {
             })
         });
         let oracle_met = !oracle || oracle_live;
-        stance_met && item_met && oracle_met
+        let level_met = min_level.is_none_or(|l| character_level >= l);
+        stance_met && item_met && oracle_met && level_met
     }
 }
 
@@ -4354,7 +4368,7 @@ mod oracle_gate_tests {
             oracle: true,
             ..Default::default()
         };
-        assert!(!req.requirements_met(None, None, false));
+        assert!(!req.requirements_met(None, None, false, 1));
     }
 
     #[test]
@@ -4363,14 +4377,59 @@ mod oracle_gate_tests {
             oracle: true,
             ..Default::default()
         };
-        assert!(req.requirements_met(None, None, true));
+        assert!(req.requirements_met(None, None, true, 1));
     }
 
     #[test]
     fn non_oracle_ability_ignores_oracle_liveness() {
         let req = AbilityRequirements::default();
-        assert!(req.requirements_met(None, None, false));
-        assert!(req.requirements_met(None, None, true));
+        assert!(req.requirements_met(None, None, false, 1));
+        assert!(req.requirements_met(None, None, true, 1));
+    }
+}
+
+#[cfg(test)]
+mod min_level_gate_tests {
+    use super::*;
+
+    #[test]
+    fn no_min_level_is_met_at_level_one() {
+        let req = AbilityRequirements::default();
+        assert!(req.requirements_met(None, None, false, 1));
+    }
+
+    #[test]
+    fn min_level_refused_below_threshold() {
+        let req = AbilityRequirements {
+            min_level: Some(20),
+            ..Default::default()
+        };
+        assert!(!req.requirements_met(None, None, false, 19));
+    }
+
+    #[test]
+    fn min_level_accepted_at_and_above_threshold() {
+        let req = AbilityRequirements {
+            min_level: Some(20),
+            ..Default::default()
+        };
+        assert!(req.requirements_met(None, None, false, 20));
+        assert!(req.requirements_met(None, None, false, 21));
+    }
+
+    #[test]
+    fn min_level_and_oracle_gates_are_independent() {
+        let req = AbilityRequirements {
+            oracle: true,
+            min_level: Some(20),
+            ..Default::default()
+        };
+        // Level requirement met, but ORACLE is down: still refused.
+        assert!(!req.requirements_met(None, None, false, 20));
+        // Both requirements met: accepted.
+        assert!(req.requirements_met(None, None, true, 20));
+        // ORACLE live, but level requirement not met: still refused.
+        assert!(!req.requirements_met(None, None, true, 19));
     }
 }
 

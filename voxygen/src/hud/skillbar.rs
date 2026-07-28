@@ -1491,6 +1491,7 @@ impl<'a> Skillbar<'a> {
                             self.stance,
                             Some(self.inventory),
                             self.oracle_live,
+                            self.skillset.character_level(),
                         )
                 })
             {

@@ -1499,6 +1499,7 @@ fn handle_ability(
                 stance: _,
                 item,
                 oracle: _,
+                min_level: _,
             } = ability_meta.requirements;
             let inv_slot = item.and_then(|item| {
                 data.inventory
