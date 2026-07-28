@@ -218,6 +218,7 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                             *stance,
                                             Some(*inventory),
                                             *oracle_live,
+                                            skillset.character_level(),
                                         )
                                     {
                                         Some(Color::Rgba(1.0, 1.0, 1.0, 1.0))
