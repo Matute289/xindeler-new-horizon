@@ -258,6 +258,14 @@ fn evaluate_sense(
     entities: &mut Vec<DetectedEntity>,
     points: &mut Vec<DetectedPoint>,
 ) {
+    // The illusion-piercing reveal set is built separately, together with the
+    // rest of its piercing flags — it never contributes to the area reveal
+    // set here. Skip the spatial-grid scan entirely rather than run it only
+    // to have every candidate rejected by `reveals`.
+    if sense.kind == SenseKind::True {
+        return;
+    }
+
     let radius_sqr = sense.radius * sense.radius;
     // `Path` reveals a place rather than a set of things, so it resolves to the
     // single closest candidate instead of appending every match.
