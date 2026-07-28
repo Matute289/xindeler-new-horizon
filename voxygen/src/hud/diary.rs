@@ -1613,7 +1613,7 @@ impl Diary<'_> {
             Some(PoiseDamage) => self.imgs.buff_frenzy_0,
             Some(MoveSpeed | RecoverySpeed) => self.imgs.utility_speed_skill,
             Some(EnergyReward) => self.imgs.magic_energy_regen_skill,
-            Some(BonusVsUndead) => self.imgs.buff_plus_0,
+            Some(BonusVs(_)) => self.imgs.buff_plus_0,
             None => self.imgs.buff_cost_skill,
         }
     }

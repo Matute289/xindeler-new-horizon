@@ -1,9 +1,8 @@
 use crate::{
     assets::{AssetExt, Ron},
     comp::{
-        Alignment, AttunedItems, Body, Buffs, CharacterState, Combo, CreatureKind, Energy, Group,
-        Health, HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange,
-        SkillSet, Stats,
+        Alignment, AttunedItems, Body, Buffs, CharacterState, Combo, Energy, Group, Health,
+        HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange, SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -597,22 +596,23 @@ impl Attack {
                 s.attack_damage_modifier
             }
         });
-        // BL-06 (Q4): conditional "vs undead" bonus — the Cleric smite. The
-        // target is fixed for the whole attack, so resolve it once and fold the
-        // attacker's `bonus_damage_vs_undead` into the modifier when the target
-        // has an undead body. `original_body` is the target's true body (Stats is
-        // always present on combat entities), so no signature change is needed.
+        // Conditional "vs creature kind" bonus — the Cleric smite (and any
+        // future slayer-style conditional) is one slot in the attacker's
+        // `bonus_damage_vs` array, indexed by the target's `creature_kind`.
+        // The target's kind is fixed for the whole attack, so resolve it once.
+        // Reads `Stats.creature_kind`, not `original_body.creature_kind()`
+        // directly, so an `EntityConfig`-authored override on the target is
+        // honored. This is an array index, strictly cheaper than the previous
+        // per-hit nested match.
         let damage_modifier = damage_modifier
-            * if target
+            * target
                 .stats
-                .is_some_and(|s| s.original_body.creature_kind() == Some(CreatureKind::Undead))
-            {
-                1.0 + attacker
-                    .and_then(|a| a.stats)
-                    .map_or(0.0, |s| s.bonus_damage_vs_undead)
-            } else {
-                1.0
-            };
+                .and_then(|s| s.creature_kind)
+                .map_or(1.0, |kind| {
+                    1.0 + attacker
+                        .and_then(|a| a.stats)
+                        .map_or(0.0, |s| s.bonus_damage_vs[kind as usize])
+                });
         // BL-06 (Q2): the heal *source's* `heal_power` scales `CombatEffect::Heal`
         // output (the target is usually an ally). Buff/aura regen (a separate path
         // in common-systems) is deliberately NOT scaled yet — a follow-up if a

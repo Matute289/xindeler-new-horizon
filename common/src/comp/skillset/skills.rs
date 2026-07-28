@@ -1,5 +1,5 @@
 use crate::comp::{
-    Stats,
+    CreatureKind, Stats,
     skillset::{
         SKILL_GROUP_LOOKUP, SKILL_MAX_LEVEL, SKILL_PREREQUISITES, SkillGroupKind, SkillPrerequisite,
     },
@@ -672,8 +672,9 @@ pub enum ClassPassiveStat {
     MoveSpeed,
     RecoverySpeed,
     EnergyReward,
-    /// BL-06 (Q4) extra damage vs undead targets (the Cleric smite).
-    BonusVsUndead,
+    /// Extra damage vs targets of a given `CreatureKind` (the Cleric smite is
+    /// `BonusVs(Undead)`).
+    BonusVs(CreatureKind),
 }
 
 impl ClassPassiveStat {
@@ -704,7 +705,7 @@ impl ClassPassiveStat {
             ClassPassiveStat::MoveSpeed => stats.move_speed_modifier *= 1.0 + amount,
             ClassPassiveStat::RecoverySpeed => stats.recovery_speed_modifier *= 1.0 + amount,
             ClassPassiveStat::EnergyReward => stats.energy_reward_modifier *= 1.0 + amount,
-            ClassPassiveStat::BonusVsUndead => stats.bonus_damage_vs_undead += amount,
+            ClassPassiveStat::BonusVs(kind) => stats.bonus_damage_vs[kind as usize] += amount,
         }
     }
 }
