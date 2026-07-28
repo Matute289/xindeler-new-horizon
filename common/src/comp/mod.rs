@@ -15,6 +15,7 @@ pub mod class;
 pub mod combo;
 pub mod compass;
 pub mod controller;
+pub mod creature_type;
 pub mod detection;
 mod energy;
 pub mod ethos;
@@ -85,6 +86,12 @@ pub use self::{
     controller::{
         ControlAction, ControlEvent, Controller, ControllerInputs, GroupManip, InputAttr,
         InputKind, InventoryAction, InventoryEvent, InventoryManip, UtteranceKind,
+    },
+    creature_type::{
+        AberrationSubtype, BeastSubtype, CelestialSubtype, ConstructSubtype, CreatureKind,
+        CreatureSubtype, CreatureTags, DragonSubtype, ElementalSubtype, FeySubtype, FiendSubtype,
+        GiantSubtype, HumanoidSubtype, MonstrositySubtype, OozeSubtype, PlantSubtype,
+        UndeadSubtype,
     },
     detection::{
         ConcealedUnlessTrueSight, DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind,
