@@ -439,6 +439,9 @@ impl Server {
             &oracle::watcher::default_events_dir(),
         ));
         state.ecs_mut().insert(oracle::ChronicleLog::default());
+        state
+            .ecs_mut()
+            .insert(sys::detection::DetectionSnapshots::default());
         {
             let (sender, receiver) =
                 crossbeam_channel::bounded::<chunk_serialize::SerializedChunk>(10_000);
