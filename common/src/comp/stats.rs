@@ -188,12 +188,17 @@ pub struct Stats {
     /// a smiter Cleric and a pure healer scale independently.
     pub spell_power: f32,
     pub heal_power: f32,
-    /// Extra outgoing damage vs targets whose body classifies as
-    /// `CreatureKind::Undead` (`Body::creature_kind`), per-tick (not
-    /// persisted), additive fraction (0.0 = none). Applied in `apply_attack`
-    /// only when the target is undead — the Cleric's smite. Seeds future
-    /// slayer-style conditionals.
-    pub bonus_damage_vs_undead: f32,
+    /// Extra outgoing damage vs targets of a given `CreatureKind`
+    /// (`Stats.creature_kind`), indexed by the kind's discriminant. Per-tick
+    /// (not persisted), additive fraction per slot (0.0 = none). Applied in
+    /// `apply_attack` by indexing with the target's `creature_kind` — the
+    /// Cleric's smite is the `Undead` slot; other slayer-style conditionals
+    /// (e.g. vs `Fiend`) are the same mechanism, a different index.
+    ///
+    /// A fixed-size array, not a `Vec`/`HashMap`: this is a net-synced
+    /// component the buff system rebuilds every tick, so an allocation here
+    /// would be a per-tick heap cost for every entity in combat.
+    pub bonus_damage_vs: [f32; CreatureKind::NUM_KINDS],
     pub projectile_speed_mult: f32,
     pub projectile_constructor_effects: Vec<ProjectileConstructorEffect>,
     /// This technically doesn't do anything. It should be used in the frontend
@@ -276,7 +281,7 @@ impl Stats {
             knockback_mult: 1.0,
             spell_power: 1.0,
             heal_power: 1.0,
-            bonus_damage_vs_undead: 0.0,
+            bonus_damage_vs: [0.0; CreatureKind::NUM_KINDS],
             projectile_speed_mult: 1.0,
             projectile_constructor_effects: Vec::new(),
             marked_entities: Vec::new(),

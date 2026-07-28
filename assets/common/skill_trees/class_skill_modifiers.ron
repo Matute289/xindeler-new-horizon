@@ -14,9 +14,9 @@
 // apply_attack — so they buff spells/smites but never weapon swings.
 // The `AttackDamage` (global, physical+magic) channel is now unused here but
 // kept for future physical-damage passives (e.g. a Warrior offense node).
-// SmitingStrikes also carries `BonusVsUndead` (Q4): extra damage applied in
-// apply_attack only when the target's body classifies as CreatureKind::Undead
-// (Body::creature_kind).
+// SmitingStrikes also carries `BonusVs(Undead)`: extra damage applied in
+// apply_attack, indexed by the target's Stats.creature_kind — the Undead slot
+// is the smite; other CreatureKind slots are the same mechanism.
 //
 // CONVENTION: MaxHealth/MaxEnergy here are %-MULTIPLICATIVE per level (skills
 // scale your pool), whereas the per-class ClassAttributes layer adds a FLAT base
@@ -54,7 +54,7 @@
     // BL-66 d: HealPower makes heal_power a live lever (scales instant heals AND
     // healing auras like Mending Light). rank 3 → +18% healing at max.
     Cleric(DivineConduit): [(EnergyReward, 0.06), (HealPower, 0.06)],
-    Cleric(SmitingStrikes): [(SpellPower, 0.04), (BonusVsUndead, 0.10)],
+    Cleric(SmitingStrikes): [(SpellPower, 0.04), (BonusVs(Undead), 0.10)],
     Cleric(ArmorOfFaith): [(DamageReduction, 0.02)],
     Cleric(Aegis): [(DamageReduction, 0.05)],
     // ---------- Rogue ----------

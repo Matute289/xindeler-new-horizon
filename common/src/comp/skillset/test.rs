@@ -114,7 +114,8 @@ fn undead_body_tag_and_smite_passive() {
     let human = Body::Humanoid(humanoid::Body::iter().next().unwrap());
     assert_ne!(human.creature_kind(), Some(CreatureKind::Undead));
 
-    // SmitingStrikes folds into both spell_power and bonus_damage_vs_undead.
+    // SmitingStrikes folds into both spell_power and the Undead slot of
+    // bonus_damage_vs.
     let mut skillset = SkillSet::default();
     skillset
         .skills
@@ -122,7 +123,7 @@ fn undead_body_tag_and_smite_passive() {
     let mut stats = Stats::empty(human);
     skillset.apply_class_passives(&mut stats);
     assert!((stats.spell_power - 1.08).abs() < 1e-5); // +0.04 spell_power/level
-    assert!((stats.bonus_damage_vs_undead - 0.20).abs() < 1e-5); // +0.10/level
+    assert!((stats.bonus_damage_vs[CreatureKind::Undead as usize] - 0.20).abs() < 1e-5); // +0.10/level
 }
 
 #[test]
