@@ -43,7 +43,7 @@ use client::Client;
 use common::{
     calendar::Calendar,
     comp::{
-        self, CapsulePrism, CharacterState, item::ItemDesc,
+        self, CapsulePrism, CharacterState, SenseKind, item::ItemDesc,
         ship::figuredata::VOXEL_COLLIDER_MANIFEST, slot::EquipSlot, tool::ToolKind,
     },
     outcome::Outcome,
@@ -145,6 +145,9 @@ pub struct SceneData<'a> {
     pub viewpoint_entity: specs::Entity,
     pub mutable_viewpoint: bool,
     pub target_entities: &'a HashSet<specs::Entity>,
+    /// Entities the viewpoint entity currently perceives through a magical
+    /// sense, each tagged with the sense that revealed it.
+    pub revealed_entities: &'a HashMap<specs::Entity, SenseKind>,
     pub loaded_distance: f32,
     pub terrain_view_distance: u32, // not used currently
     pub entity_view_distance: u32,

@@ -16,8 +16,9 @@ use client::{self, Client};
 use common::{
     CachedSpatialGrid,
     comp::{
-        self, ActiveAbilities, CharacterActivity, CharacterState, ChatType, Combo, Content, Fluid,
-        InputKind, InventoryUpdateEvent, Pos, PresenceKind, RemoteSense, Stats, UtteranceKind, Vel,
+        self, ActiveAbilities, CharacterActivity, CharacterState, ChatType, Combo, Content,
+        Detected, Fluid, InputKind, InventoryUpdateEvent, Pos, PresenceKind, RemoteSense,
+        SenseKind, Stats, UtteranceKind, Vel,
         inventory::slot::{EquipSlot, Slot},
         invite::InviteKind,
         item::{ItemDesc, tool::ToolKind},
@@ -152,6 +153,11 @@ pub struct SessionState {
     /// never stomp each other.
     viewpoint_source: Option<ViewpointSource>,
     interactables: interactable::Interactables,
+    /// The local player's own reveal set, resolved from the owner-private
+    /// `Detected` component's `Uid`s into local `specs::Entity` handles once
+    /// per tick so the figure renderer and the HUD can both consume it
+    /// cheaply.
+    revealed_entities: HashMap<specs::Entity, SenseKind>,
     #[cfg(not(target_os = "macos"))]
     mumble_link: SharedLink,
     hitboxes: HashMap<specs::Entity, DebugShapeId>,
@@ -228,6 +234,7 @@ impl SessionState {
             viewpoint_entity: None,
             viewpoint_source: None,
             interactables: Default::default(),
+            revealed_entities: HashMap::new(),
             #[cfg(not(target_os = "macos"))]
             mumble_link,
             hitboxes: HashMap::new(),
@@ -757,6 +764,24 @@ impl PlayState for SessionState {
                     tracing::trace!(?error, "Getting interactables failed");
                     self.interactables = Default::default()
                 },
+            }
+
+            // Resolve our own reveal set (`Detected`, synced only to its owner) from
+            // `Uid`s into local entity handles. Rebuilt wholesale each tick, mirroring
+            // how the server rebuilds the component itself.
+            self.revealed_entities.clear();
+            {
+                let ecs = client.state().ecs();
+                let detected = ecs.read_storage::<Detected>();
+                if let Some(detected) = detected.get(player_entity) {
+                    let id_maps = ecs.read_resource::<common::uid::IdMaps>();
+                    self.revealed_entities.extend(
+                        detected
+                            .entities
+                            .iter()
+                            .filter_map(|d| id_maps.uid_entity(d.uid).map(|e| (e, d.sense))),
+                    );
+                }
             }
 
             drop(client);
@@ -1866,6 +1891,7 @@ impl PlayState for SessionState {
                     mutable_viewpoint,
                     target_entity: self.target_entity,
                     selected_entity: self.selected_entity,
+                    revealed_entities: &self.revealed_entities,
                     persistence_load_error: self.metadata.skill_set_persistence_load_error,
                     key_state: &self.key_state,
                 },
@@ -2342,6 +2368,7 @@ impl PlayState for SessionState {
                     mutable_viewpoint: mutable_viewpoint || self.free_look,
                     // Only highlight if interactable
                     target_entities: &self.interactables.entities,
+                    revealed_entities: &self.revealed_entities,
                     loaded_distance: client.loaded_distance(),
                     terrain_view_distance: client.view_distance().unwrap_or(1),
                     entity_view_distance: client
@@ -2438,6 +2465,7 @@ impl PlayState for SessionState {
             mutable_viewpoint,
             // Only highlight if interactable
             target_entities: &self.interactables.entities,
+            revealed_entities: &self.revealed_entities,
             loaded_distance: client.loaded_distance(),
             terrain_view_distance: client.view_distance().unwrap_or(1),
             entity_view_distance: client

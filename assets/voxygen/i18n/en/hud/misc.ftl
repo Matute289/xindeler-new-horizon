@@ -115,3 +115,15 @@ hud-init-stage-client-starting-client = [{ -client }]: Preparing Client...
 hud-init-stage-render-pipeline = Creating render pipeline ({ $done }/{ $total })
 
 hud-tutorial-disable = Permanently disable tutorial hints
+
+hud-detected-path = Revealed Path
+hud-detected-point = Revealed Location
+hud-detected-bearing = { $bearing } · { $distance } m
+hud-compass-north = N
+hud-compass-northeast = NE
+hud-compass-east = E
+hud-compass-southeast = SE
+hud-compass-south = S
+hud-compass-southwest = SW
+hud-compass-west = W
+hud-compass-northwest = NW
