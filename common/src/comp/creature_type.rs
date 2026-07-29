@@ -74,6 +74,29 @@ enum_iter! {
     }
 }
 
+impl CreatureKind {
+    /// The i18n key for this kind's player-facing name, shown alongside a
+    /// creature's name wherever the game surfaces its taxonomy to the player.
+    pub const fn i18n_key(self) -> &'static str {
+        match self {
+            CreatureKind::Aberration => "common-creature_kind-aberration",
+            CreatureKind::Beast => "common-creature_kind-beast",
+            CreatureKind::Celestial => "common-creature_kind-celestial",
+            CreatureKind::Construct => "common-creature_kind-construct",
+            CreatureKind::Dragon => "common-creature_kind-dragon",
+            CreatureKind::Elemental => "common-creature_kind-elemental",
+            CreatureKind::Fey => "common-creature_kind-fey",
+            CreatureKind::Fiend => "common-creature_kind-fiend",
+            CreatureKind::Giant => "common-creature_kind-giant",
+            CreatureKind::Humanoid => "common-creature_kind-humanoid",
+            CreatureKind::Monstrosity => "common-creature_kind-monstrosity",
+            CreatureKind::Ooze => "common-creature_kind-ooze",
+            CreatureKind::Plant => "common-creature_kind-plant",
+            CreatureKind::Undead => "common-creature_kind-undead",
+        }
+    }
+}
+
 // ─────────────────────── Layer 3: one enum per kind ────────────────────────
 
 enum_iter! {
