@@ -1130,7 +1130,7 @@ impl BuffKind {
                     None,
                     CombatEffect::Buff(CombatBuff {
                         kind: BuffKind::Blinded,
-                        dur_secs: Secs(5.0),
+                        dur_secs: data.secondary_duration.unwrap_or(Secs(5.0)),
                         strength: CombatBuffStrength::Value(0.5),
                         chance: 1.0,
                     }),
@@ -1148,7 +1148,7 @@ impl BuffKind {
                     None,
                     CombatEffect::Buff(CombatBuff {
                         kind: BuffKind::Burning,
-                        dur_secs: Secs(5.0),
+                        dur_secs: data.secondary_duration.unwrap_or(Secs(5.0)),
                         strength: CombatBuffStrength::DamageFraction(0.3),
                         chance: 1.0,
                     }),
@@ -1183,7 +1183,7 @@ impl BuffKind {
                     None,
                     CombatEffect::Buff(CombatBuff {
                         kind: BuffKind::Terrified,
-                        dur_secs: Secs(5.0),
+                        dur_secs: data.secondary_duration.unwrap_or(Secs(5.0)),
                         strength: CombatBuffStrength::Value(1.0),
                         chance: 1.0,
                     }),
