@@ -2,7 +2,10 @@ use crate::{
     combat::GroupTarget,
     comp::{
         CharacterState, StateUpdate,
-        aura::{AuraBuffConstructor, AuraChange, AuraKind, AuraTarget, Specifier},
+        aura::{
+            AuraBuffConstructor, AuraChange, AuraKind, AuraTarget, Specifier,
+            TieredHealthEffectConstructor,
+        },
         character_state::OutputEvents,
     },
     event::{AuraEvent, ComboChangeEvent},
@@ -28,6 +31,9 @@ pub struct StaticData {
     pub targets: GroupTarget,
     /// Has information used to construct the auras
     pub auras: Vec<AuraBuffConstructor>,
+    /// Capped-nearest-N, per-target-tiered effects created alongside `auras`
+    /// (see `aura::AuraKind::TieredHealthEffect`).
+    pub tiered_health_effects: Vec<TieredHealthEffectConstructor>,
     /// How long aura lasts
     pub aura_duration: Option<Secs>,
     /// Radius of aura
@@ -101,13 +107,29 @@ impl CharacterBehavior for Data {
                                         split.value_at_max_level *= combo_mult;
                                     }
                                 },
-                                AuraKind::FriendlyFire | AuraKind::ForcePvP => {},
+                                AuraKind::FriendlyFire
+                                | AuraKind::ForcePvP
+                                | AuraKind::TieredHealthEffect { .. } => {},
                             }
                             output_events.emit_server(ComboChangeEvent {
                                 entity: data.entity,
                                 change: -(self.static_data.combo_at_cast as i32),
                             });
                         }
+                        output_events.emit_server(AuraEvent {
+                            entity: data.entity,
+                            aura_change: AuraChange::Add(aura),
+                        });
+                    }
+                    for tiered_data in &self.static_data.tiered_health_effects {
+                        let aura = tiered_data.to_aura(
+                            (data.uid, self.static_data.ability_info.tool),
+                            self.static_data.range,
+                            self.static_data.aura_duration,
+                            targets,
+                            *data.time,
+                            self.static_data.specifier,
+                        );
                         output_events.emit_server(AuraEvent {
                             entity: data.entity,
                             aura_change: AuraChange::Add(aura),

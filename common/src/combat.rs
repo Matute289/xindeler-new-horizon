@@ -1769,6 +1769,29 @@ pub enum CombatEffect {
     },
 }
 
+/// One rung of a capped-nearest-N, per-target-resolved tier ladder (see
+/// `aura::AuraKind::TieredHealthEffect`): checks the target's CURRENT health
+/// (never scaled by max health, unlike
+/// `CombatRequirement::TargetHealthAtOrBelow`) and applies only the single
+/// WORST tier the target qualifies for — a target under every threshold gets
+/// the worst one, not all of them. Tiers must be supplied most-severe (lowest
+/// `HealthTier::max_current_health`) first; resolution does not sort them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HealthTier {
+    /// This tier applies when the target's current health is at or below
+    /// this value.
+    pub max_current_health: f32,
+    pub effect: TierEffect,
+}
+
+/// What a [`HealthTier`] grants once its threshold is the worst one met.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum TierEffect {
+    Buff(CombatBuff),
+    /// Same semantics as [`CombatEffect::AdditionalDamage`].
+    AdditionalDamage(f32),
+}
+
 impl CombatEffect {
     pub fn apply_multiplier(self, mult: f32) -> Self {
         match self {

@@ -1,0 +1,51 @@
+BasicAura(
+    buildup_duration: 1.0,
+    cast_duration: 0.3,
+    recover_duration: 0.6,
+    targets: OutOfGroup,
+    auras: [],
+    tiered_health_effects: [
+        (
+            tiers: [
+                (
+                    max_current_health: 45.0,
+                    effect: Buff((
+                        kind: Paralyzed,
+                        dur_secs: 3600,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                ),
+                (
+                    max_current_health: 55.0,
+                    effect: Buff((
+                        kind: Blinded,
+                        dur_secs: 600,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                ),
+                (
+                    max_current_health: 65.0,
+                    effect: Buff((
+                        kind: Paralyzed,
+                        dur_secs: 60,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                ),
+            ],
+            max_targets: 4,
+        ),
+    ],
+    aura_duration: Some(0.5),
+    range: 15.0,
+    energy_cost: 220.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Divine),
+        requirements: (min_level: Some(42)),
+    ),
+)

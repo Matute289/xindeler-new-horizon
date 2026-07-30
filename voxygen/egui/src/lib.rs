@@ -25,7 +25,7 @@ use crate::{
 };
 use common::comp::{
     Body, Fluid,
-    aura::AuraKind::{Buff, ForcePvP, FriendlyFire},
+    aura::AuraKind::{Buff, ForcePvP, FriendlyFire, TieredHealthEffect},
 };
 use egui_winit::State as WinitState;
 use std::time::Duration;
@@ -729,6 +729,7 @@ fn selected_entity_window(
                                         Buff { kind, .. } =>  format!("Buff - {:?}", kind),
                                         FriendlyFire =>  "Friendly Fire".to_string(),
                                         ForcePvP =>  "ForcedPvP".to_string(),
+                                        TieredHealthEffect { .. } => "Tiered Health Effect".to_string(),
                                     });
                                     ui.label(format!("{:1}", v.radius));
                                     ui.label(v.end_time.map_or("-".to_owned(), |x| format!("{:1}s", x.0 - time.0)));
