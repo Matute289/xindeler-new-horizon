@@ -6760,6 +6760,9 @@ fn build_buff(
             | BuffKind::JoltArrow
             | BuffKind::Terrified
             | BuffKind::Charmed
+            | BuffKind::Dominated
+            | BuffKind::Maddened
+            | BuffKind::Paralyzed
             | BuffKind::Hollowtouched
             | BuffKind::DifficultTerrain
             | BuffKind::FreedomOfMovement

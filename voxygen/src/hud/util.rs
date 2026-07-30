@@ -346,6 +346,9 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::ArdentHunted => "buff-ardenthunted",
         BuffKind::Terrified => "buff-terrified",
         BuffKind::Charmed => "buff-charmed",
+        BuffKind::Dominated => "buff-dominated",
+        BuffKind::Maddened => "buff-maddened",
+        BuffKind::Paralyzed => "buff-paralyzed",
         BuffKind::Hollowtouched => "buff-hollowtouched",
         BuffKind::DifficultTerrain => "buff-difficult_terrain",
         BuffKind::Antimagic => "buff-antimagic",
@@ -508,6 +511,9 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Chilled
                         | BuffKind::Terrified
                         | BuffKind::Charmed
+                        | BuffKind::Dominated
+                        | BuffKind::Maddened
+                        | BuffKind::Paralyzed
                         | BuffKind::Hollowtouched
                         | BuffKind::DifficultTerrain
                         | BuffKind::FreedomOfMovement

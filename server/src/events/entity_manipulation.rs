@@ -2524,22 +2524,55 @@ impl ServerEvent for AuraEvent {
     }
 }
 
-impl ServerEvent for BuffEvent {
-    type SystemData<'a> = (
-        Read<'a, Time>,
-        WriteStorage<'a, comp::Buffs>,
-        ReadStorage<'a, Body>,
-        // BL-05 RD-6: Health is written here to grant/clear the temp-HP absorb
-        // pool when a `Shielded` buff is added/removed.
-        WriteStorage<'a, Health>,
-        ReadStorage<'a, Stats>,
-        ReadStorage<'a, comp::Mass>,
-    );
+#[derive(SystemData)]
+pub struct BuffEventData<'a> {
+    time: Read<'a, Time>,
+    buffs: WriteStorage<'a, comp::Buffs>,
+    bodies: ReadStorage<'a, Body>,
+    // Written here to grant/clear the temp-HP absorb pool when a `Shielded`
+    // buff is added/removed.
+    healths: WriteStorage<'a, Health>,
+    stats: ReadStorage<'a, Stats>,
+    masses: ReadStorage<'a, comp::Mass>,
+    id_maps: Read<'a, IdMaps>,
+    uids: ReadStorage<'a, Uid>,
+    positions: ReadStorage<'a, Pos>,
+    inventories: ReadStorage<'a, Inventory>,
+    energies: ReadStorage<'a, Energy>,
+    poises: ReadStorage<'a, Poise>,
+    skill_sets: ReadStorage<'a, SkillSet>,
+    groups: ReadStorage<'a, Group>,
+    agents: ReadStorage<'a, Agent>,
+    msm: ReadExpect<'a, MaterialStatManifest>,
+    outcomes: Read<'a, EventBus<Outcome>>,
+}
 
-    fn handle(
-        events: impl ExactSizeIterator<Item = Self>,
-        (time, mut buffs, bodies, mut healths, stats, masses): Self::SystemData<'_>,
-    ) {
+impl ServerEvent for BuffEvent {
+    type SystemData<'a> = BuffEventData<'a>;
+
+    fn handle(events: impl ExactSizeIterator<Item = Self>, data: Self::SystemData<'_>) {
+        let BuffEventData {
+            time,
+            mut buffs,
+            bodies,
+            mut healths,
+            stats,
+            masses,
+            id_maps,
+            uids,
+            positions,
+            inventories,
+            energies,
+            poises,
+            skill_sets,
+            groups,
+            agents,
+            msm,
+            outcomes,
+        } = data;
+        let mut outcomes_emitter = outcomes.emitter();
+        let mut rng = rand::rng();
+
         for ev in events {
             if let Some(mut buffs) = buffs.get_mut(ev.entity) {
                 use buff::BuffChange;
@@ -2560,12 +2593,122 @@ impl ServerEvent for BuffEvent {
                                 _ => false,
                             });
 
-                        if !bodies
+                        let not_immune = !bodies
                             .get(ev.entity)
                             .is_some_and(|body| body.immune_to(new_buff.kind))
                             && immunity_by_buff.is_none()
-                            && healths.get(ev.entity).is_none_or(|h| !h.is_dead)
-                        {
+                            && healths.get(ev.entity).is_none_or(|h| !h.is_dead);
+
+                        // A resisted mind-altering effect (Charmed/Dominated/Maddened/
+                        // Paralyzed) rolls against the target's magic resistance once,
+                        // here, rather than being applied unconditionally. Any other
+                        // buff kind, or a source with no caster entity to roll against,
+                        // always hits.
+                        let resisted = not_immune
+                            && matches!(
+                                new_buff.kind,
+                                BuffKind::Charmed
+                                    | BuffKind::Dominated
+                                    | BuffKind::Maddened
+                                    | BuffKind::Paralyzed
+                            )
+                            && 'resist: {
+                                let buff::BuffSource::Character { by: caster_uid, .. } =
+                                    new_buff.source
+                                else {
+                                    break 'resist false;
+                                };
+                                let Some(caster) = id_maps.uid_entity(caster_uid) else {
+                                    break 'resist false;
+                                };
+                                let Some(caster_stats) = stats.get(caster) else {
+                                    break 'resist false;
+                                };
+                                let (
+                                    Some(target_uid),
+                                    Some(target_body),
+                                    Some(target_inventory),
+                                    Some(target_health),
+                                    Some(target_energy),
+                                    Some(target_poise),
+                                    Some(target_skill_set),
+                                ) = (
+                                    uids.get(ev.entity).copied(),
+                                    bodies.get(ev.entity).copied(),
+                                    inventories.get(ev.entity),
+                                    healths.get(ev.entity),
+                                    energies.get(ev.entity),
+                                    poises.get(ev.entity),
+                                    skill_sets.get(ev.entity),
+                                )
+                                else {
+                                    break 'resist false;
+                                };
+
+                                let tuning = Ron::<combat::CombatTuning>::load_expect(
+                                    "common.combat_tuning",
+                                )
+                                .read();
+                                let combat_rating = combat::combat_rating(
+                                    target_inventory,
+                                    target_health,
+                                    target_energy,
+                                    target_poise,
+                                    target_skill_set,
+                                    target_body,
+                                    &msm,
+                                );
+                                let target_stats = stats.get(ev.entity);
+
+                                let caster_info = combat::CharmCasterInfo {
+                                    magic_accuracy: caster_stats.magic_accuracy,
+                                };
+                                let target_info = combat::CharmTargetInfo {
+                                    stats_magic_evasion: target_stats
+                                        .map_or(0.0, |s| s.magic_evasion),
+                                    crowd_control_resistance: target_stats
+                                        .map_or(0.0, |s| s.crowd_control_resistance),
+                                    stats_magic_resistance: target_stats
+                                        .map_or(0.0, |s| s.magic_resistance),
+                                    magic_resist_tier: target_body.magic_resist_tier(),
+                                    combat_rating,
+                                };
+                                let ctx = combat::CharmCombatContext {
+                                    caster_uid,
+                                    caster_group: groups.get(caster).copied(),
+                                    target_uid,
+                                    target_group: groups.get(ev.entity).copied(),
+                                    target_hostile_focus: agents
+                                        .get(ev.entity)
+                                        .and_then(|agent| agent.target)
+                                        .filter(|target| target.hostile)
+                                        .and_then(|target| {
+                                            uids.get(target.target).map(|uid| {
+                                                (*uid, groups.get(target.target).copied())
+                                            })
+                                        }),
+                                    target_last_change: Some(&target_health.last_change),
+                                    caster_last_change: healths.get(caster).map(|h| &h.last_change),
+                                    now: time.0,
+                                };
+                                let fighting_caster = combat::is_fighting_caster(&ctx);
+                                let chance = combat::charm_success_chance(
+                                    &caster_info,
+                                    &target_info,
+                                    fighting_caster,
+                                    &tuning.0,
+                                );
+                                rng.random::<f32>() >= chance
+                            };
+
+                        if resisted {
+                            if let Some(target_uid) = uids.get(ev.entity).copied() {
+                                outcomes_emitter.emit(Outcome::Resisted {
+                                    pos: positions.get(ev.entity).map_or(Vec3::zero(), |pos| pos.0),
+                                    target: target_uid,
+                                });
+                            }
+                        } else if not_immune {
                             if let Some(strength) =
                                 new_buff.kind.resilience_ccr_strength(new_buff.data)
                             {
@@ -2611,6 +2754,21 @@ impl ServerEvent for BuffEvent {
                                     .filter(|(_, b)| {
                                         b.cat_ids.contains(&BuffCategory::Concentration)
                                     })
+                                    .map(|(key, _)| key)
+                                    .collect();
+                                for key in prior {
+                                    buffs.remove(key);
+                                }
+                            }
+
+                            // Last dominator wins: adding a new Dominated buff
+                            // removes any prior one, so exactly one entity is
+                            // ever the acting dominator.
+                            if new_buff.kind == BuffKind::Dominated {
+                                let prior: Vec<_> = buffs
+                                    .buffs
+                                    .iter()
+                                    .filter(|(_, b)| b.kind == BuffKind::Dominated)
                                     .map(|(key, _)| key)
                                     .collect();
                                 for key in prior {

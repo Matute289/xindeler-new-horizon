@@ -242,6 +242,12 @@ buff-terrified = Terrified
 ## Charmed
 buff-charmed = Charmed
     .desc = You cannot bring yourself to harm whoever did this to you.
+buff-dominated = Dominated
+    .desc = Your will is not your own; you obey your dominator's commands.
+buff-maddened = Maddened
+    .desc = You have turned against everyone, even your former allies.
+buff-paralyzed = Paralyzed
+    .desc = You cannot move, act, or fight back.
 ## Hollowtouched
 buff-hollowtouched = Hollowtouched
     .desc = The Hollow has tasted you. Maximum health reduced.

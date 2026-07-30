@@ -5833,6 +5833,11 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Bloodfeast => imgs.buff_bloodfeast,
         BuffKind::Burning => imgs.debuff_burning,
         BuffKind::Charmed => imgs.debuff_charmed,
+        // Reuse the closest existing icon by family until dedicated art
+        // exists: domination/madness share the mind-control icon, paralysis
+        // shares the incapacitation icon.
+        BuffKind::Dominated | BuffKind::Maddened => imgs.debuff_charmed,
+        BuffKind::Paralyzed => imgs.debuff_asleep,
         BuffKind::Chilled => imgs.debuff_chilled,
         BuffKind::ComboGeneration => imgs.buff_combo_generation,
         BuffKind::Crippled => imgs.debuff_crippled,
