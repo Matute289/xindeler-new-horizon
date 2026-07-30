@@ -743,6 +743,7 @@ pub enum Event {
     LeaveStance,
     UnlockSkill(Skill),
     SelectExpBar(Option<SkillGroupKind>),
+    SetFutureLevelsToSecondary(bool),
 
     RequestSiteInfo(SiteId),
     ChangeAbility(usize, AuxiliaryAbility),
@@ -4088,6 +4089,9 @@ impl Hud {
                         },
                         diary::Event::SelectExpBar(xp_bar) => {
                             events.push(Event::SelectExpBar(xp_bar))
+                        },
+                        diary::Event::SetFutureLevelsToSecondary(value) => {
+                            events.push(Event::SetFutureLevelsToSecondary(value))
                         },
                     }
                 }

@@ -3,8 +3,9 @@ use crate::TerrainPersistence;
 use crate::{EditableSettings, Settings, client::Client};
 use common::{
     comp::{
-        Admin, AdminRole, Body, CanBuild, ControlEvent, Controller, ForceUpdate, Health, Ori,
-        Player, Pos, Presence, PresenceKind, RemoteSense, Scale, SkillSet, SpectatingEntity, Vel,
+        Admin, AdminRole, Body, CanBuild, CharacterClass, ControlEvent, Controller, ForceUpdate,
+        Health, Ori, Player, Pos, Presence, PresenceKind, RemoteSense, Scale, SkillSet,
+        SpectatingEntity, Vel,
         buff::{BuffChange, BuffKind},
     },
     event::{self, EmitExt},
@@ -69,6 +70,7 @@ impl Sys {
         is_volume_rider: &ReadStorage<'_, Is<VolumeRider>>,
         force_update: Option<&&mut ForceUpdate>,
         skill_set: &mut Option<Cow<'_, SkillSet>>,
+        character_class: &mut Option<CharacterClass>,
         healths: &ReadStorage<'_, Health>,
         rare_writes: &parking_lot::Mutex<RareWrites<'_, '_>>,
         position: Option<&mut Pos>,
@@ -225,6 +227,11 @@ impl Sys {
                     })
                     .transpose();
             },
+            ClientGeneral::SetFutureLevelsToSecondary(value) => {
+                if let Some(character_class) = character_class.as_mut() {
+                    character_class.set_future_levels_to_secondary(value);
+                }
+            },
             ClientGeneral::RequestSiteInfo(id) => {
                 emitters.emit(event::RequestSiteInfoEvent { entity, id });
             },
@@ -325,6 +332,7 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, Is<Rider>>,
         ReadStorage<'a, Is<VolumeRider>>,
         WriteStorage<'a, SkillSet>,
+        WriteStorage<'a, CharacterClass>,
         ReadStorage<'a, Health>,
         ReadStorage<'a, Body>,
         ReadStorage<'a, Scale>,
@@ -359,6 +367,7 @@ impl<'a> System<'a> for Sys {
             is_rider,
             is_volume_rider,
             mut skill_sets,
+            mut character_classes,
             healths,
             bodies,
             scales,
@@ -395,6 +404,7 @@ impl<'a> System<'a> for Sys {
             admins.maybe(),
             remote_senses.maybe(),
             (&skill_sets).maybe(),
+            (&character_classes).maybe(),
             (&mut positions).maybe(),
             (&mut velocities).maybe(),
             (&mut orientations).maybe(),
@@ -414,6 +424,7 @@ impl<'a> System<'a> for Sys {
                     maybe_admin,
                     maybe_remote_sense,
                     skill_set,
+                    character_class,
                     ref mut pos,
                     ref mut vel,
                     ref mut ori,
@@ -433,6 +444,7 @@ impl<'a> System<'a> for Sys {
                     // ingame messages to be ignored.
                     let mut clearable_maybe_presence = maybe_presence.as_deref_mut();
                     let mut skill_set = skill_set.map(Cow::Borrowed);
+                    let mut character_class_owned = character_class.copied();
                     let mut player_physics = None;
                     let mut spectating_entity = None;
                     let _ = super::try_recv_all(client, 2, |client, msg| {
@@ -447,6 +459,7 @@ impl<'a> System<'a> for Sys {
                             &is_volume_rider,
                             force_update.as_ref(),
                             &mut skill_set,
+                            &mut character_class_owned,
                             &healths,
                             &rare_writes,
                             pos.as_deref_mut(),
@@ -586,12 +599,19 @@ impl<'a> System<'a> for Sys {
                         .zip(new_player_physics_setting
                              .filter(|_| old_player_physics_setting != new_player_physics_setting));
                      let spectating_entity_update = spectating_entity.map(|e| (entity, e));
-                    (skill_set_update, spectating_entity_update, physics_update)
+                    // Only a real, rarely-toggled preference change, never a per-tick write —
+                    // compared against the borrowed pre-message value so an untouched message
+                    // batch never produces a spurious deferred write.
+                    let character_class_update = character_class_owned
+                        .zip(character_class.copied())
+                        .filter(|(new, old)| new != old)
+                        .map(|(new, _)| (entity, new));
+                    (skill_set_update, spectating_entity_update, physics_update, character_class_update)
                 },
             )
             // NOTE: Would be nice to combine this with the map_init somehow, but I'm not sure if
             // that's possible.
-            .filter(|(x, y, z)| x.is_some() || y.is_some() || z.is_some())
+            .filter(|(x, y, z, w)| x.is_some() || y.is_some() || z.is_some() || w.is_some())
             // NOTE: I feel like we shouldn't actually need to allocate here, but hopefully this
             // doesn't turn out to be important as there shouldn't be that many connected clients.
             // The reason we can't just use unzip is that the two sides might be different lengths.
@@ -605,7 +625,12 @@ impl<'a> System<'a> for Sys {
         // order, even though we're not updating directly by entity or uid (note that
         // for a given entity, we process messages serially).
         deferred_updates.iter_mut().for_each(
-            |(skill_set_update, spectating_entity_update, physics_update)| {
+            |(
+                skill_set_update,
+                spectating_entity_update,
+                physics_update,
+                character_class_update,
+            )| {
                 if let Some((entity, new_skill_set)) = skill_set_update {
                     // We know this exists, because we already iterated over it with the skillset
                     // lock taken, so we can ignore the error.
@@ -634,6 +659,12 @@ impl<'a> System<'a> for Sys {
                     player_physics_settings
                         .settings
                         .insert(uuid, player_physics_setting);
+                }
+                if let &mut Some((entity, new_character_class)) = character_class_update {
+                    // We know this exists, for the same reason as the skillset case above.
+                    character_classes
+                        .get_mut(entity)
+                        .map(|mut cc| *cc = new_character_class);
                 }
             },
         );

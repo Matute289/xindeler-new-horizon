@@ -185,6 +185,11 @@ widget_ids! {
         class_tree_empty_txt,
         class_skills[],
         class_skill_lock_imgs[],
+        // Multiclass: in-tab primary/secondary toggle + future-levels routing
+        class_toggle_btn,
+        class_toggle_label,
+        future_levels_checkbox,
+        future_levels_label,
     }
 }
 
@@ -319,6 +324,7 @@ pub enum Event {
     UnlockSkill(Skill),
     ChangeSection(DiarySection),
     SelectExpBar(Option<SkillGroupKind>),
+    SetFutureLevelsToSecondary(bool),
 }
 
 // Possible future sections: Bestiary ("Pokedex" of fought enemies), Weapon and
@@ -699,6 +705,90 @@ impl Widget for Diary<'_> {
                         .set(state.ids.weapon_btns[i], ui);
                     if wpn_button.was_clicked() {
                         events.push(Event::ChangeSkillTree(skill_group))
+                    }
+                }
+
+                // Multiclass: in-tab toggle between the primary's and the
+                // secondary's skill tree, plus the set-and-forget "future
+                // levels" routing preference. Both only ever shown while the
+                // Class tab is the active tab.
+                if let (Some(character_class), Some(class_group)) =
+                    (self.character_class, class_group)
+                    && character_class.is_multiclass()
+                    && *sel_tab == class_group
+                {
+                    let other_class =
+                        if class_group == SkillGroupKind::Class(character_class.primary) {
+                            character_class.secondary
+                        } else {
+                            Some(character_class.primary)
+                        };
+                    if let Some(other_class) = other_class {
+                        let other_class_key =
+                            format!("char_selection-class_{}", other_class.keyword());
+                        let other_class_name = self
+                            .localized_strings
+                            .get_msg(&other_class_key)
+                            .into_owned();
+                        let switch_label = self.localized_strings.get_msg_ctx(
+                            "hud-skill_tree-multiclass_switch_to",
+                            &i18n::fluent_args! {
+                                "class" => other_class_name.clone(),
+                            },
+                        );
+
+                        if Button::image(self.imgs.wpn_icon_border)
+                            .w_h(160.0, 30.0)
+                            .hover_image(self.imgs.wpn_icon_border_mo)
+                            .press_image(self.imgs.wpn_icon_border_press)
+                            .down_from(state.ids.weapon_imgs[skill_trees_len - 1], 15.0)
+                            .label(&switch_label)
+                            .label_font_size(self.fonts.cyri.scale(12))
+                            .label_font_id(self.fonts.cyri.conrod_id)
+                            .label_color(TEXT_COLOR)
+                            .set(state.ids.class_toggle_btn, ui)
+                            .was_clicked()
+                        {
+                            events.push(Event::ChangeSkillTree(SkillGroupKind::Class(other_class)));
+                        }
+
+                        let future_levels_checked = character_class.future_levels_to_secondary;
+                        if Button::image(if !future_levels_checked {
+                            self.imgs.checkbox
+                        } else {
+                            self.imgs.checkbox_checked
+                        })
+                        .w_h(18.0, 18.0)
+                        .hover_image(if !future_levels_checked {
+                            self.imgs.checkbox_mo
+                        } else {
+                            self.imgs.checkbox_checked_mo
+                        })
+                        .press_image(if !future_levels_checked {
+                            self.imgs.checkbox_press
+                        } else {
+                            self.imgs.checkbox_checked
+                        })
+                        .down_from(state.ids.class_toggle_btn, 10.0)
+                        .set(state.ids.future_levels_checkbox, ui)
+                        .was_clicked()
+                        {
+                            events.push(Event::SetFutureLevelsToSecondary(!future_levels_checked));
+                        }
+
+                        let future_levels_label = self.localized_strings.get_msg_ctx(
+                            "hud-skill_tree-multiclass_future_levels",
+                            &i18n::fluent_args! {
+                                "class" => other_class_name,
+                            },
+                        );
+                        Text::new(&future_levels_label)
+                            .right_from(state.ids.future_levels_checkbox, 10.0)
+                            .font_size(self.fonts.cyri.scale(12))
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .graphics_for(state.ids.future_levels_checkbox)
+                            .color(TEXT_COLOR)
+                            .set(state.ids.future_levels_label, ui);
                     }
                 }
 
@@ -1292,7 +1382,25 @@ impl Widget for Diary<'_> {
                     let value = match stat {
                         CharacterStat::Name => name,
                         CharacterStat::Level => {
-                            format!("{}", self.skill_set.character_level())
+                            let character_level = self.skill_set.character_level();
+                            match self.character_class.filter(|cc| cc.is_multiclass()) {
+                                Some(character_class) => {
+                                    let class_name = |class: ClassKind| {
+                                        let key =
+                                            format!("char_selection-class_{}", class.keyword());
+                                        self.localized_strings.get_msg(&key).into_owned()
+                                    };
+                                    let levels = character_class
+                                        .class_levels(character_level)
+                                        .map(|(class, level, _)| {
+                                            format!("{} {level}", class_name(class))
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(" / ");
+                                    format!("{character_level} ({levels})")
+                                },
+                                None => format!("{character_level}"),
+                            }
                         },
                         CharacterStat::BattleMode => match battle_mode {
                             BattleMode::PvP => "PvP".to_string(),
@@ -1549,18 +1657,24 @@ enum SkillIcon<'a> {
 impl Diary<'_> {
     // --- BL-06 P3a helpers -------------------------------------------------
 
-    /// Returns the primary class's skill group, or `None` for Adventurer /
-    /// unclassed characters. Reads `CharacterClass` directly rather than
-    /// guessing at whichever `Class(_)` group the skill set happens to
-    /// return first — with a secondary class that guess is ambiguous.
-    /// Single-class-correct only for now; picking between the two classes'
-    /// tabs is the two-class Diary UI's job, not this accessor's.
+    /// Returns the class skill group currently shown in the (single) Class
+    /// tab: whichever of the held classes matches `sel_tab` (the in-tab
+    /// toggle picks between them by pushing `Event::ChangeSkillTree`, same
+    /// as every other tab), defaulting to the primary otherwise — including
+    /// on first open, before either has been explicitly selected. `None` for
+    /// Adventurer / unclassed characters.
     fn selected_class_group(&self) -> Option<SkillGroupKind> {
-        let primary = self.character_class?.primary;
-        if primary == ClassKind::Adventurer {
+        let character_class = self.character_class?;
+        if character_class.primary == ClassKind::Adventurer {
             return None;
         }
-        let group = SkillGroupKind::Class(primary);
+        let sel_tab = self.show.diary_fields.skilltreetab;
+        let secondary_group = character_class.secondary.map(SkillGroupKind::Class);
+        let group = if secondary_group == Some(sel_tab) {
+            sel_tab
+        } else {
+            SkillGroupKind::Class(character_class.primary)
+        };
         self.skill_set
             .skill_groups()
             .any(|sg| sg.skill_group_kind == group)

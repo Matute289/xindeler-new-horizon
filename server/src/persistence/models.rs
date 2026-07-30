@@ -12,6 +12,10 @@ pub struct Character {
     /// The primary's own level is never stored -- always derived as
     /// `character_level - secondary_class_level`.
     pub secondary_class_level: i64,
+    /// Set-and-forget routing preference (`0`/`1`): whether character levels
+    /// earned after the multiclass grant flow to the secondary class instead
+    /// of the primary. Always `0` for single-class characters.
+    pub secondary_class_future_levels: i64,
     pub ethos_good_evil: i16,
     pub ethos_law_chaos: i16,
     /// BL-31: `NULL` -> `Background(None)` ("Uncommitted", P0 §Q1).

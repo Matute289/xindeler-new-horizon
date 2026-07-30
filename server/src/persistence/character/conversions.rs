@@ -787,6 +787,7 @@ pub fn convert_class_from_database(
     class: &str,
     secondary_class: Option<&str>,
     secondary_class_level: i64,
+    secondary_class_future_levels: i64,
 ) -> common::comp::CharacterClass {
     let secondary = secondary_class.map(json_models::db_string_to_class);
     common::comp::CharacterClass {
@@ -799,6 +800,7 @@ pub fn convert_class_from_database(
         } else {
             0
         },
+        future_levels_to_secondary: secondary.is_some() && secondary_class_future_levels != 0,
     }
 }
 
@@ -813,6 +815,10 @@ pub fn convert_secondary_class_to_database(class: common::comp::CharacterClass) 
 
 pub fn convert_secondary_class_level_to_database(class: common::comp::CharacterClass) -> i64 {
     i64::from(class.secondary_level)
+}
+
+pub fn convert_future_levels_to_secondary_to_database(class: common::comp::CharacterClass) -> i64 {
+    i64::from(class.future_levels_to_secondary)
 }
 
 /// BL-31: `background` NULL or unrecognized -> `Background(None)`
@@ -1101,10 +1107,11 @@ mod tests {
         use common::comp::class::ClassKind;
 
         // Single-class: NULL secondary_class column -> None, byte-identical
-        // to today's single-class behaviour. A stale non-zero level column
-        // (from a bug, or a class that got un-set some other way) must be
-        // ignored rather than resurrected as a phantom secondary level.
-        let single = convert_class_from_database("Warrior", None, 20);
+        // to today's single-class behaviour. A stale non-zero level/future-
+        // levels column (from a bug, or a class that got un-set some other
+        // way) must be ignored rather than resurrected as a phantom
+        // secondary state.
+        let single = convert_class_from_database("Warrior", None, 20, 1);
         assert_eq!(
             single,
             common::comp::CharacterClass::single(ClassKind::Warrior)
@@ -1112,16 +1119,18 @@ mod tests {
         assert_eq!(convert_class_to_database(single), "Warrior");
         assert_eq!(convert_secondary_class_to_database(single), None);
         assert_eq!(convert_secondary_class_level_to_database(single), 0);
+        assert_eq!(convert_future_levels_to_secondary_to_database(single), 0);
 
-        // Multiclass: all three columns populated round-trip through both
+        // Multiclass: all four columns populated round-trip through both
         // directions.
         let multi = common::comp::CharacterClass {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
             secondary_level: 20,
+            future_levels_to_secondary: true,
         };
         assert_eq!(
-            convert_class_from_database("Warrior", Some("Warlock"), 20),
+            convert_class_from_database("Warrior", Some("Warlock"), 20, 1),
             multi
         );
         assert_eq!(convert_class_to_database(multi), "Warrior");
@@ -1130,6 +1139,7 @@ mod tests {
             Some("Warlock".to_string())
         );
         assert_eq!(convert_secondary_class_level_to_database(multi), 20);
+        assert_eq!(convert_future_levels_to_secondary_to_database(multi), 1);
     }
 
     #[test]

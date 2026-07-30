@@ -4610,6 +4610,7 @@ mod class_ability_pool_tests {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Mage),
             secondary_level: 20,
+            future_levels_to_secondary: false,
         };
         let pool = AbilityPool::for_character(&body, &character_class);
         assert_eq!(pool.abilities, vec![

@@ -26,9 +26,10 @@ use common::{
         DeathEffects, StatEffect, StatEffectTarget,
     },
     comp::{
-        self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterState,
-        Energy, Group, Hardcore, Health, HealthChange, Inventory, Object, PickupItem, Player,
-        Poise, PoiseChange, Pos, Presence, PresenceKind, ProjectileConstructor, SkillSet, Stats,
+        self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterClass,
+        CharacterState, Energy, Group, Hardcore, Health, HealthChange, Inventory, Object,
+        PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind, ProjectileConstructor,
+        SkillSet, Stats,
         ability::Dodgeable,
         aura::{self, EnteredAuras},
         buff,
@@ -536,6 +537,7 @@ fn handle_exp_gain(
     exp_reward: f32,
     inventory: &Inventory,
     skill_set: &mut SkillSet,
+    character_class: Option<&mut CharacterClass>,
     uid: &Uid,
     outcomes_emitter: &mut Emitter<Outcome>,
 ) {
@@ -622,6 +624,11 @@ fn handle_exp_gain(
             uid = ?uid,
             new_level = level_after
         );
+        // Set-and-forget routing preference: a no-op unless the player has
+        // opted a multiclass character's future levels to the secondary.
+        if let Some(character_class) = character_class {
+            character_class.route_levels_gained(level_after - level_before, level_after);
+        }
     }
     // BL-20: 1 feat point per 10 character levels (15/25/35/45 — lore cadence,
     // max 4 total). Grants directly via `grant_skill_point` (exp-independent),
@@ -663,7 +670,15 @@ mod handle_exp_gain_tests {
         let inventory = Inventory::with_empty();
         let bus = EventBus::<Outcome>::default();
         let mut emitter = bus.emitter();
-        handle_exp_gain(exp_reward, &inventory, skill_set, &uid(), &mut emitter);
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        handle_exp_gain(
+            exp_reward,
+            &inventory,
+            skill_set,
+            Some(&mut character_class),
+            &uid(),
+            &mut emitter,
+        );
         emitter
             .events
             .iter()
@@ -756,6 +771,7 @@ pub struct DestroyEventData<'a> {
     melees: WriteStorage<'a, comp::Melee>,
     beams: WriteStorage<'a, comp::Beam>,
     skill_sets: WriteStorage<'a, SkillSet>,
+    character_classes: WriteStorage<'a, CharacterClass>,
     inventories: WriteStorage<'a, Inventory>,
     item_drops: WriteStorage<'a, comp::ItemDrops>,
     velocities: WriteStorage<'a, comp::Vel>,
@@ -1452,15 +1468,25 @@ impl ServerEvent for DestroyEvent {
 
                 exp_awards.iter().for_each(|(attacker, exp_reward, _)| {
                     // Process the calculated EXP rewards
-                    if let Some((mut attacker_skill_set, attacker_uid, attacker_inventory)) =
-                        (&mut data.skill_sets, &data.uids, &data.inventories)
-                            .lend_join()
-                            .get(*attacker, &data.entities)
+                    if let Some((
+                        mut attacker_skill_set,
+                        attacker_uid,
+                        attacker_inventory,
+                        mut attacker_character_class,
+                    )) = (
+                        &mut data.skill_sets,
+                        &data.uids,
+                        &data.inventories,
+                        (&mut data.character_classes).maybe(),
+                    )
+                        .lend_join()
+                        .get(*attacker, &data.entities)
                     {
                         handle_exp_gain(
                             *exp_reward,
                             attacker_inventory,
                             &mut attacker_skill_set,
+                            attacker_character_class.as_deref_mut(),
                             attacker_uid,
                             &mut outcomes,
                         );
