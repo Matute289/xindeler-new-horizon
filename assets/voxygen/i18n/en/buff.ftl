@@ -123,6 +123,8 @@ buff-blinded = Blinded
 ## Slowed (BL-66 d)
 buff-slowed = Slowed
     .desc = Your movement speed is reduced.
+buff-agonized = Agonized
+    .desc = Wracked with pain - your movement and attacks are weakened, and you cannot use auxiliary abilities.
 ## Freeze
 buff-frozen = Frozen
     .desc = Your movements and attacks are slowed.

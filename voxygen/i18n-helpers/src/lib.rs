@@ -459,7 +459,8 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Bane
         | BuffKind::FaerieFire
         | BuffKind::Enfeebled
-        | BuffKind::Slowed => {
+        | BuffKind::Slowed
+        | BuffKind::Agonized => {
             tracing::error!("Player was killed by a debuff that doesn't do damage!");
             "mysterious"
         },

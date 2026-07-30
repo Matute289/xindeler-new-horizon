@@ -1054,7 +1054,10 @@ fn verify_cmd_list_sorted() {
 
 #[test]
 fn test_complete_command() {
-    assert_eq!(complete_command("mu", "/"), vec!["/mute".to_string()]);
+    assert_eq!(complete_command("mu", "/"), vec![
+        "/multiclass".to_string(),
+        "/mute".to_string()
+    ]);
     assert_eq!(complete_command("unba", "/"), vec![
         "/unban".to_string(),
         "/unban_ip".to_string()

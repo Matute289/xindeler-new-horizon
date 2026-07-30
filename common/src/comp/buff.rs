@@ -421,6 +421,13 @@ pub enum BuffKind {
     /// Strength scales the movement speed debuff non-linearly, 0.5 is 50%
     /// speed, 1.0 is 33% speed.
     Slowed,
+    /// Incapacitation combining halved movement (`Slowed`'s curve), reduced
+    /// outgoing attack damage (`Blinded`'s curve, the disadvantage
+    /// analogue), and disabled auxiliary abilities (`Amnesia`'s effect) all
+    /// at once. Unlike `Asleep`/`Paralyzed`, movement and damage are reduced
+    /// rather than zeroed — the target is debilitated, not incapacitated
+    /// outright. The ability lock does not scale with strength.
+    Agonized,
     // =================
     //      COMPLEX
     // =================
@@ -561,7 +568,8 @@ impl BuffKind {
             | BuffKind::Anchored
             | BuffKind::Asleep
             | BuffKind::Blinded
-            | BuffKind::Slowed => BuffDescriptor::SimpleNegative,
+            | BuffKind::Slowed
+            | BuffKind::Agonized => BuffDescriptor::SimpleNegative,
             BuffKind::Polymorphed => BuffDescriptor::Complex,
         }
     }
@@ -833,6 +841,11 @@ impl BuffKind {
             // BL-66 d: generic movement slow, mirrors Crippled's speed curve
             // without the HP drain.
             BuffKind::Slowed => vec![BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength))],
+            BuffKind::Agonized => vec![
+                BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength)),
+                BuffEffect::AttackDamage((1.0 - data.strength).max(0.0)),
+                BuffEffect::DisableAuxiliaryAbilities,
+            ],
             BuffKind::Hastened => vec![
                 BuffEffect::MovementSpeed(1.0 + data.strength),
                 BuffEffect::AttackSpeed(1.0 + data.strength),
@@ -2115,6 +2128,29 @@ pub mod tests {
                 .any(|e| matches!(e, BuffEffect::AttackDamage(d) if *d == 0.0))
         );
         assert!(!BuffKind::Asleep.is_buff(), "should be a debuff");
+    }
+
+    #[test]
+    fn agonized_debilitates_without_fully_incapacitating() {
+        // Unlike Asleep/Paralyzed, movement and damage are reduced (strength
+        // 0.5 -> halved), not zeroed, but the ability lock is the same.
+        let effects = BuffKind::Agonized.effects(&BuffData::new(0.5, None), None, None);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::MovementSpeed(s) if (*s - 0.5).abs() < 0.001))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::AttackDamage(d) if (*d - 0.5).abs() < 0.001))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::DisableAuxiliaryAbilities))
+        );
+        assert!(!BuffKind::Agonized.is_buff(), "should be a debuff");
     }
 
     #[test]

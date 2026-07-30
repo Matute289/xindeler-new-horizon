@@ -6966,6 +6966,7 @@ fn build_buff(
             | BuffKind::Asleep
             | BuffKind::Blinded
             | BuffKind::Slowed
+            | BuffKind::Agonized
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
             | BuffKind::TrueSight
