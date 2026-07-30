@@ -4,8 +4,8 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Beam, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory,
-        Mass, Ori, PhysicsState, Player, Pos, Scale, Stats,
+        Alignment, Beam, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
+        Inventory, Mass, Ori, PhysicsState, Player, Pos, Scale, Stats,
         ability::Dodgeable,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
@@ -70,6 +70,7 @@ pub struct ReadData<'a> {
     outcomes: Read<'a, EventBus<Outcome>>,
     events: ReadAttackEvents<'a>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 /// This system is responsible for handling beams that heal or do damage
@@ -247,6 +248,7 @@ impl<'a> System<'a> for Sys {
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pos.0),
                                 buffs: read_data.buffs.get(entity),
+                                character_class: read_data.character_classes.get(entity),
                             });
 
                             let target_info = TargetInfo {
