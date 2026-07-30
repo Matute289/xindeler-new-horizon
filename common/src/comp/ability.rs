@@ -2277,8 +2277,13 @@ impl CharacterAbility {
                          strength,
                          duration: _,
                          category: _,
+                         pool_split,
                      }| {
                         *strength *= stats.diminished_buff_strength();
+                        if let Some(split) = pool_split {
+                            split.value_at_unlock *= stats.diminished_buff_strength();
+                            split.value_at_max_level *= stats.diminished_buff_strength();
+                        }
                     },
                 );
                 *range *= stats.range;
@@ -2305,8 +2310,13 @@ impl CharacterAbility {
                          strength,
                          duration: _,
                          category: _,
+                         pool_split,
                      }| {
                         *strength *= stats.diminished_buff_strength();
+                        if let Some(split) = pool_split {
+                            split.value_at_unlock *= stats.diminished_buff_strength();
+                            split.value_at_max_level *= stats.diminished_buff_strength();
+                        }
                     },
                 );
                 *range *= stats.range;

@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use common::{
     combat,
     comp::{
-        Alignment, Aura, Auras, BuffKind, Buffs, CharacterState, Health, Mass, Player, Pos, Stats,
+        Alignment, Aura, Auras, BuffKind, Buffs, CharacterClass, CharacterState, Health, Mass,
+        Player, Pos, Stats,
         aura::{AuraChange, AuraKey, AuraKind, AuraTarget, EnteredAuras},
         buff::{Buff, BuffCategory, BuffChange, BuffSource, DestInfo},
         group::Group,
@@ -42,6 +43,7 @@ pub struct ReadData<'a> {
     auras: ReadStorage<'a, Auras>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 #[derive(Default)]
@@ -75,6 +77,68 @@ impl<'a> System<'a> for Sys {
                 {
                     expired_auras.push(key);
                 }
+                let eligible = |target: specs::Entity, target_pos: &Pos, target_uid: &Uid| {
+                    // Ensure entity is within the aura radius
+                    target_pos.0.distance_squared(pos.0) < aura.radius.powi(2) && {
+                        // Ensure the entity is in the group we want to target
+                        let same_group = |uid: Uid| {
+                            read_data
+                                .id_maps
+                                .uid_entity(uid)
+                                .and_then(|e| read_data.groups.get(e))
+                                .is_some_and(|owner_group| {
+                                    Some(owner_group) == read_data.groups.get(target)
+                                })
+                                || *target_uid == uid
+                        };
+                        let allow_friendly_fire =
+                            combat::allow_friendly_fire(&read_data.entered_auras, entity, target);
+                        allow_friendly_fire && entity != target
+                            || match aura.target {
+                                AuraTarget::GroupOf(uid) => same_group(uid),
+                                AuraTarget::NotGroupOf(uid) => !same_group(uid),
+                                AuraTarget::All => true,
+                            }
+                    }
+                };
+
+                // A pool-split aura shares one total among the nearest
+                // eligible targets (capped) instead of applying a flat
+                // strength to everyone found -- resolve who gets a share, and
+                // how much, once per activation before the per-target loop.
+                let pool_split_strength: std::collections::HashMap<specs::Entity, f32> =
+                    if let AuraKind::Buff {
+                        pool_split: Some(split),
+                        ..
+                    } = &aura.aura_kind
+                    {
+                        let mut nearest = read_data
+                            .cached_spatial_grid
+                            .0
+                            .in_circle_aabr(pos.0.xy(), aura.radius)
+                            .filter_map(|target| {
+                                let target_pos = read_data.positions.get(target)?;
+                                let target_uid = read_data.uids.get(target)?;
+                                eligible(target, target_pos, target_uid)
+                                    .then(|| (target, target_pos.0.distance_squared(pos.0)))
+                            })
+                            .collect::<Vec<_>>();
+                        nearest.sort_by(|(_, a), (_, b)| a.total_cmp(b));
+                        nearest.truncate(split.max_targets.max(1));
+                        let total = split.resolved_total(
+                            read_data.stats.get(entity).map(|s| s.character_level),
+                            read_data.character_classes.get(entity),
+                        );
+                        let share = total / nearest.len().max(1) as f32;
+                        nearest.into_iter().map(|(e, _)| (e, share)).collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    };
+                let has_pool_split = matches!(aura.aura_kind, AuraKind::Buff {
+                    pool_split: Some(_),
+                    ..
+                });
+
                 let target_iter = read_data
                     .cached_spatial_grid
                     .0
@@ -96,36 +160,30 @@ impl<'a> System<'a> for Sys {
                         None => return,
                     };
 
-                    // Ensure entity is within the aura radius
-                    if target_pos.0.distance_squared(pos.0) < aura.radius.powi(2) {
-                        // Ensure the entity is in the group we want to target
-                        let same_group = |uid: Uid| {
-                            read_data
-                                .id_maps
-                                .uid_entity(uid)
-                                .and_then(|e| read_data.groups.get(e))
-                                .is_some_and(|owner_group| {
-                                    Some(owner_group) == read_data.groups.get(target)
-                                })
-                                || *target_uid == uid
-                        };
+                    // A pool-split aura only ever activates for the targets
+                    // resolved above, at their computed share -- never the
+                    // aura's own (unused) flat strength.
+                    if has_pool_split && !pool_split_strength.contains_key(&target) {
+                        return;
+                    }
 
+                    // Ensure entity is within the aura radius
+                    if eligible(target, target_pos, target_uid) {
                         let allow_friendly_fire =
                             combat::allow_friendly_fire(&read_data.entered_auras, entity, target);
 
-                        if !(allow_friendly_fire && entity != target
-                            || match aura.target {
-                                AuraTarget::GroupOf(uid) => same_group(uid),
-                                AuraTarget::NotGroupOf(uid) => !same_group(uid),
-                                AuraTarget::All => true,
-                            })
-                        {
-                            return;
+                        let mut aura_for_target = std::borrow::Cow::Borrowed(aura);
+                        if let Some(share) = pool_split_strength.get(&target) {
+                            let mut owned = aura.clone();
+                            if let AuraKind::Buff { ref mut data, .. } = owned.aura_kind {
+                                data.strength = *share;
+                            }
+                            aura_for_target = std::borrow::Cow::Owned(owned);
                         }
 
                         let did_activate = activate_aura(
                             key,
-                            aura,
+                            &aura_for_target,
                             entity,
                             *uid,
                             target,
@@ -275,6 +333,7 @@ fn activate_aura(
             data,
             ref category,
             source,
+            pool_split: _,
         } => {
             // Checks that target is not already receiving a buff
             // from an aura, where the buff is of the same kind,
