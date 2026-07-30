@@ -528,7 +528,7 @@ impl<'a> System<'a> for Sys {
 
                     class_attributes
                         .0
-                        .get(&character_class.0)
+                        .get(&character_class.primary)
                         .copied()
                         .unwrap_or_default()
                         .apply(&mut stat, skill_set.character_level());

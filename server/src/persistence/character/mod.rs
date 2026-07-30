@@ -19,9 +19,10 @@ use crate::{
             convert_class_to_database, convert_ethos_from_database, convert_hardcore_from_database,
             convert_hardcore_to_database, convert_inventory_from_database_items,
             convert_items_to_database_items, convert_loadout_from_database_items,
-            convert_recipe_book_from_database_items, convert_skill_groups_to_database,
-            convert_skill_set_from_database, convert_stats_from_database,
-            convert_waypoint_from_database_json, convert_waypoint_to_database_json,
+            convert_recipe_book_from_database_items, convert_secondary_class_to_database,
+            convert_skill_groups_to_database, convert_skill_set_from_database,
+            convert_stats_from_database, convert_waypoint_from_database_json,
+            convert_waypoint_to_database_json,
         },
         character_loader::{CharacterCreationResult, CharacterDataResult, CharacterListResult},
         character_updater::PetPersistenceData,
@@ -154,7 +155,8 @@ pub fn load_character_data(
                 c.ethos_good_evil,
                 c.ethos_law_chaos,
                 c.background,
-                c.background_custom_note
+                c.background_custom_note,
+                c.secondary_class
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -175,6 +177,7 @@ pub fn load_character_data(
                 ethos_law_chaos: row.get(8)?,
                 background: row.get(9)?,
                 background_custom_note: row.get(10)?,
+                secondary_class: row.get(11)?,
             };
 
             let body_data = Body {
@@ -309,7 +312,10 @@ pub fn load_character_data(
         PersistedComponents {
             body,
             hardcore,
-            character_class: convert_class_from_database(&character_data.class),
+            character_class: convert_class_from_database(
+                &character_data.class,
+                character_data.secondary_class.as_deref(),
+            ),
             stats: convert_stats_from_database(character_data.alias, body),
             skill_set,
             inventory: convert_inventory_from_database_items(
@@ -372,6 +378,8 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 // Nor background (BL-31): defaulted, same as ethos above.
                 background: None,
                 background_custom_note: None,
+                // Nor the secondary class: defaulted, same reasoning.
+                secondary_class: None,
             })
         })?
         .map(|x| x.unwrap())
@@ -566,8 +574,9 @@ pub fn create_character(
                                ethos_good_evil,
                                ethos_law_chaos,
                                background,
-                               background_custom_note)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                               background_custom_note,
+                               secondary_class)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
 
     stmt.execute([
@@ -581,6 +590,7 @@ pub fn create_character(
         &ethos.law_chaos,
         &background_db,
         &background_custom_note_db,
+        &convert_secondary_class_to_database(character_class),
     ])?;
     drop(stmt);
 
@@ -1271,8 +1281,9 @@ pub fn update(
                 ethos_good_evil = ?3,
                 ethos_law_chaos = ?4,
                 background = ?5,
-                background_custom_note = ?6
-        WHERE   character_id = ?7
+                background_custom_note = ?6,
+                secondary_class = ?7
+        WHERE   character_id = ?8
     ",
     )?;
 
@@ -1283,6 +1294,7 @@ pub fn update(
         &ethos.law_chaos,
         &background_db,
         &background_custom_note_db,
+        &convert_secondary_class_to_database(character_class),
         &char_id.0,
     ])?;
 

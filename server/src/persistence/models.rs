@@ -6,6 +6,8 @@ pub struct Character {
     pub waypoint: Option<String>,
     pub hardcore: i64,
     pub class: String,
+    /// `NULL` -> single-class (`CharacterClass::secondary == None`).
+    pub secondary_class: Option<String>,
     pub ethos_good_evil: i16,
     pub ethos_law_chaos: i16,
     /// BL-31: `NULL` -> `Background(None)` ("Uncommitted", P0 §Q1).

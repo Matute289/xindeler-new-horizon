@@ -108,10 +108,35 @@ impl ClassKind {
     }
 }
 
-/// The class a player character chose at creation (or via /set_class).
-/// Synced to all clients; persisted in the `character` table.
+/// The class(es) a player character holds. `secondary` is `None` for the
+/// overwhelming majority of characters and can only be set by a multiclass
+/// grant (never at creation). Hard cap of 2 — there is no third field, by
+/// design. Synced to all clients; persisted in the `character` table.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CharacterClass(pub ClassKind);
+pub struct CharacterClass {
+    pub primary: ClassKind,
+    pub secondary: Option<ClassKind>,
+}
+
+impl CharacterClass {
+    pub fn single(class: ClassKind) -> Self {
+        Self {
+            primary: class,
+            secondary: None,
+        }
+    }
+
+    /// Iterates 1 or 2 classes. THE accessor — prefer it over `primary`
+    /// wherever "does this character have class X" or "apply this to every
+    /// class held" is the actual question.
+    pub fn classes(&self) -> impl Iterator<Item = ClassKind> + '_ {
+        std::iter::once(self.primary).chain(self.secondary)
+    }
+
+    pub fn has(&self, class: ClassKind) -> bool { self.classes().any(|c| c == class) }
+
+    pub fn is_multiclass(&self) -> bool { self.secondary.is_some() }
+}
 
 impl Component for CharacterClass {
     type Storage = DerefFlaggedStorage<Self, VecStorage<Self>>;
@@ -315,7 +340,33 @@ mod tests {
     #[test]
     fn default_class_is_adventurer() {
         assert_eq!(ClassKind::default(), ClassKind::Adventurer);
-        assert_eq!(CharacterClass::default().0, ClassKind::Adventurer);
+        assert_eq!(CharacterClass::default().primary, ClassKind::Adventurer);
+        assert_eq!(CharacterClass::default().secondary, None);
+        assert!(!CharacterClass::default().is_multiclass());
+    }
+
+    #[test]
+    fn character_class_single_and_multiclass_helpers() {
+        let single = CharacterClass::single(ClassKind::Warrior);
+        assert_eq!(single.classes().collect::<Vec<_>>(), vec![
+            ClassKind::Warrior
+        ]);
+        assert!(single.has(ClassKind::Warrior));
+        assert!(!single.has(ClassKind::Warlock));
+        assert!(!single.is_multiclass());
+
+        let multi = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+        };
+        assert_eq!(multi.classes().collect::<Vec<_>>(), vec![
+            ClassKind::Warrior,
+            ClassKind::Warlock
+        ]);
+        assert!(multi.has(ClassKind::Warrior));
+        assert!(multi.has(ClassKind::Warlock));
+        assert!(!multi.has(ClassKind::Mage));
+        assert!(multi.is_multiclass());
     }
 
     #[test]

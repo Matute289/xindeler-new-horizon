@@ -1268,7 +1268,7 @@ fn handle_make_party(
             .state
             .ecs_mut()
             .write_storage::<CharacterClass>()
-            .insert(npc_entity, CharacterClass(class));
+            .insert(npc_entity, CharacterClass::single(class));
         if let Some(mut skill_set) = server
             .state
             .ecs_mut()
@@ -6228,13 +6228,13 @@ fn handle_set_class(
     {
         let mut classes = server.state.ecs_mut().write_storage::<CharacterClass>();
         let current = classes.get(target).copied().unwrap_or_default();
-        if current.0 != ClassKind::Adventurer {
+        if current.primary != ClassKind::Adventurer {
             return Err(Content::Plain(format!(
                 "Class is already {:?}; /set_class is a one-time pick for legacy characters.",
-                current.0
+                current.primary
             )));
         }
-        let _ = classes.insert(target, CharacterClass(class));
+        let _ = classes.insert(target, CharacterClass::single(class));
     }
 
     // Unlock the class skill tree on the live skill set; both the component
@@ -6418,7 +6418,7 @@ fn handle_make_test_char(
             .state
             .ecs_mut()
             .write_storage::<CharacterClass>()
-            .insert(target, CharacterClass(class));
+            .insert(target, CharacterClass::single(class));
         if let Some(mut skill_set) = server
             .state
             .ecs_mut()
