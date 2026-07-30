@@ -382,6 +382,12 @@ impl ServerEvent for HealthChangeEvent {
                     entity: ev.entity,
                     buff_change: buff::BuffChange::RemoveByKind(BuffKind::Asleep),
                 });
+                // RestfulSleep (a voluntary nap granted to willing allies)
+                // shares the same wake-on-damage rule as Asleep.
+                emitters.emit(BuffEvent {
+                    entity: ev.entity,
+                    buff_change: buff::BuffChange::RemoveByKind(BuffKind::RestfulSleep),
+                });
             }
         }
     }

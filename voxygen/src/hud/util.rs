@@ -330,6 +330,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::WrathfulSmite => "buff-wrathfulsmite",
         BuffKind::Blessed => "buff-blessed",
         BuffKind::CrusadersMantle => "buff-crusadersmantle",
+        BuffKind::RestfulSleep => "buff-restfulsleep",
         BuffKind::Bane => "buff-bane",
         BuffKind::FaerieFire => "buff-faeriefire",
         BuffKind::Enfeebled => "buff-enfeebled",
@@ -548,6 +549,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::WrathfulSmite
                         | BuffKind::Blessed
                         | BuffKind::CrusadersMantle
+                        | BuffKind::RestfulSleep
                         | BuffKind::Bane
                         | BuffKind::FaerieFire
                         | BuffKind::Enfeebled
