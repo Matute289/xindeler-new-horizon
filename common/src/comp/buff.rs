@@ -1,8 +1,8 @@
 use crate::{
     combat::{
         AttackEffect, AttackSource, AttackedModification, AttackedModifier, CombatBuff,
-        CombatBuffStrength, CombatEffect, CombatModification, CombatRequirement, ScalingKind,
-        StatEffect, StatEffectTarget,
+        CombatBuffStrength, CombatEffect, CombatModification, CombatRequirement, Knockback,
+        KnockbackDir, ScalingKind, StatEffect, StatEffectTarget,
     },
     comp::{
         FrontendMarker, Mass, Stats,
@@ -229,6 +229,33 @@ pub enum BuffKind {
     /// The strength of this buff is multiplied by the damage on the original
     /// projectile to determine the arcing damage.
     JoltArrow,
+    /// Causes the wielder's next weapon hit to deal additional damage and
+    /// blind the target. Strength scales the additional damage; the target's
+    /// `Blinded` duration is fixed.
+    BlindingSmite,
+    /// Causes the wielder's next weapon hit to deal additional damage, no
+    /// secondary effect. Strength scales the additional damage.
+    BrandingSmite,
+    /// Causes the wielder's next weapon hit to deal additional damage, no
+    /// secondary effect — a larger bonus than `BrandingSmite`. Strength
+    /// scales the additional damage.
+    DivineSmite,
+    /// Causes the wielder's next weapon hit to deal additional damage and set
+    /// the target burning. Strength scales the additional damage; the
+    /// target's `Burning` duration/strength are fixed.
+    SearingSmite,
+    /// Causes the wielder's next weapon hit to deal additional damage and
+    /// poise damage. Strength scales the additional damage; the poise
+    /// damage is fixed.
+    StaggeringSmite,
+    /// Causes the wielder's next weapon hit to deal additional damage and
+    /// knock the target back. Strength scales the additional damage; the
+    /// knockback strength is fixed.
+    ThunderousSmite,
+    /// Causes the wielder's next weapon hit to deal additional damage and
+    /// frighten the target. Strength scales the additional damage; the
+    /// target's `Terrified` duration is fixed.
+    WrathfulSmite,
     // =================
     //      DEBUFFS
     // =================
@@ -463,6 +490,13 @@ impl BuffKind {
             | BuffKind::FreezeArrow
             | BuffKind::DrenchArrow
             | BuffKind::JoltArrow
+            | BuffKind::BlindingSmite
+            | BuffKind::BrandingSmite
+            | BuffKind::DivineSmite
+            | BuffKind::SearingSmite
+            | BuffKind::StaggeringSmite
+            | BuffKind::ThunderousSmite
+            | BuffKind::WrathfulSmite
             | BuffKind::FreedomOfMovement
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
@@ -1063,6 +1097,74 @@ impl BuffKind {
                     kind: ProjectileConstructorEffectKind::Marker(FrontendMarker::JoltArrow),
                     tool_filter: Some(ToolKind::Bow),
                 }),
+            ],
+            BuffKind::BlindingSmite => vec![
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::AdditionalDamage(data.strength),
+                )),
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::Buff(CombatBuff {
+                        kind: BuffKind::Blinded,
+                        dur_secs: Secs(5.0),
+                        strength: CombatBuffStrength::Value(0.5),
+                        chance: 1.0,
+                    }),
+                )),
+            ],
+            BuffKind::BrandingSmite | BuffKind::DivineSmite => vec![BuffEffect::AttackEffect(
+                AttackEffect::new(None, CombatEffect::AdditionalDamage(data.strength)),
+            )],
+            BuffKind::SearingSmite => vec![
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::AdditionalDamage(data.strength),
+                )),
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::Buff(CombatBuff {
+                        kind: BuffKind::Burning,
+                        dur_secs: Secs(5.0),
+                        strength: CombatBuffStrength::DamageFraction(0.3),
+                        chance: 1.0,
+                    }),
+                )),
+            ],
+            BuffKind::StaggeringSmite => vec![
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::AdditionalDamage(data.strength),
+                )),
+                BuffEffect::AttackEffect(AttackEffect::new(None, CombatEffect::Poise(40.0))),
+            ],
+            BuffKind::ThunderousSmite => vec![
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::AdditionalDamage(data.strength),
+                )),
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::Knockback(Knockback {
+                        direction: KnockbackDir::Away,
+                        strength: 8.0,
+                    }),
+                )),
+            ],
+            BuffKind::WrathfulSmite => vec![
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::AdditionalDamage(data.strength),
+                )),
+                BuffEffect::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::Buff(CombatBuff {
+                        kind: BuffKind::Terrified,
+                        dur_secs: Secs(5.0),
+                        strength: CombatBuffStrength::Value(1.0),
+                        chance: 1.0,
+                    }),
+                )),
             ],
             // Area/generic active senses: membership frozen at cast (`SenseMode::Snapshot`).
             BuffKind::Detecting => {

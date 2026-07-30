@@ -5838,6 +5838,15 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // shares the incapacitation icon.
         BuffKind::Dominated | BuffKind::Maddened => imgs.debuff_charmed,
         BuffKind::Paralyzed => imgs.debuff_asleep,
+        // Placeholder icon reuse pending dedicated smite art: all seven
+        // share the same "next hit is empowered" shape as Fury.
+        BuffKind::BlindingSmite
+        | BuffKind::BrandingSmite
+        | BuffKind::DivineSmite
+        | BuffKind::SearingSmite
+        | BuffKind::StaggeringSmite
+        | BuffKind::ThunderousSmite
+        | BuffKind::WrathfulSmite => imgs.buff_fury,
         BuffKind::Chilled => imgs.debuff_chilled,
         BuffKind::ComboGeneration => imgs.buff_combo_generation,
         BuffKind::Crippled => imgs.debuff_crippled,

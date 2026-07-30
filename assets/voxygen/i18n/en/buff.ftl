@@ -278,6 +278,21 @@ buff-truesight = True Sight
 ## Remote Sensing (placeholder strings; content spells land separately)
 buff-remotesensing = Remote Sensing
     .desc = Your senses are anchored elsewhere; your own body stands unattended.
+## Smites (self-buff, next weapon hit gains a rider)
+buff-blindingsmite = Blinding Smite
+    .desc = Your next weapon strike sears with radiant light, dealing extra damage and blinding your foe.
+buff-brandingsmite = Branding Smite
+    .desc = Your next weapon strike sears with radiant light, dealing extra damage.
+buff-divinesmite = Divine Smite
+    .desc = Your next weapon strike is charged with holy power, dealing significant extra damage.
+buff-searingsmite = Searing Smite
+    .desc = Your next weapon strike sears with fire, dealing extra damage and setting your foe alight.
+buff-staggeringsmite = Staggering Smite
+    .desc = Your next weapon strike rattles the senses, dealing extra damage and knocking your foe off balance.
+buff-thunderoussmite = Thunderous Smite
+    .desc = Your next weapon strike booms like thunder, dealing extra damage and hurling your foe backward.
+buff-wrathfulsmite = Wrathful Smite
+    .desc = Your next weapon strike channels dread, dealing extra damage and filling your foe with terror.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

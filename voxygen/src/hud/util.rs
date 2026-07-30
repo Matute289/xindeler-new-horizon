@@ -321,6 +321,13 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::FreezeArrow => "buff-freezearrow",
         BuffKind::DrenchArrow => "buff-drencharrow",
         BuffKind::JoltArrow => "buff-joltarrow",
+        BuffKind::BlindingSmite => "buff-blindingsmite",
+        BuffKind::BrandingSmite => "buff-brandingsmite",
+        BuffKind::DivineSmite => "buff-divinesmite",
+        BuffKind::SearingSmite => "buff-searingsmite",
+        BuffKind::StaggeringSmite => "buff-staggeringsmite",
+        BuffKind::ThunderousSmite => "buff-thunderoussmite",
+        BuffKind::WrathfulSmite => "buff-wrathfulsmite",
         BuffKind::Detecting => "buff-detecting",
         BuffKind::SeeInvisible => "buff-seeinvisible",
         BuffKind::TrueSight => "buff-truesight",
@@ -527,6 +534,13 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::FreezeArrow
                         | BuffKind::DrenchArrow
                         | BuffKind::JoltArrow
+                        | BuffKind::BlindingSmite
+                        | BuffKind::BrandingSmite
+                        | BuffKind::DivineSmite
+                        | BuffKind::SearingSmite
+                        | BuffKind::StaggeringSmite
+                        | BuffKind::ThunderousSmite
+                        | BuffKind::WrathfulSmite
                         | BuffKind::Detecting
                         | BuffKind::SeeInvisible
                         | BuffKind::TrueSight
