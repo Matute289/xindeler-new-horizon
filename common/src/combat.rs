@@ -1999,6 +1999,11 @@ pub enum CombatRequirement {
     Attacker(Uid),
     Target(Uid),
     StageSection(StageSection),
+    /// Met when the target's remaining health fraction (`Health::fraction`,
+    /// `0.0..=1.0`) is strictly below the given threshold. A fraction rather
+    /// than an absolute HP value, so a single tuning number scales correctly
+    /// across creatures with very different max health pools.
+    TargetHealthBelow(f32),
 }
 
 impl CombatRequirement {
@@ -2082,6 +2087,9 @@ impl CombatRequirement {
             CombatRequirement::Target(uid) => Some(*uid) == target_uid,
             CombatRequirement::StageSection(s) => {
                 Some(*s) == target_char_state.and_then(|cs| cs.stage_section())
+            },
+            CombatRequirement::TargetHealthBelow(threshold) => {
+                target_health.is_some_and(|h| h.fraction() < *threshold)
             },
         }
     }
