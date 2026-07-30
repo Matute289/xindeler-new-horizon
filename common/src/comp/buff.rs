@@ -1779,6 +1779,17 @@ impl Buffs {
             .map(move |&key| (key, &self.buffs[key]))
     }
 
+    /// Whether `by` is a charmer or dominator of this entity — `Dominated`
+    /// implies `Charmed`'s restrictions on top of command eligibility, so
+    /// both kinds are checked. No-alloc `iter_kind` scan, modelled on
+    /// `is_charmed_by` (`server/agent/src/action_nodes.rs`).
+    pub fn charmed_by(&self, by: Uid) -> bool {
+        [BuffKind::Charmed, BuffKind::Dominated].into_iter().any(|kind| {
+            self.iter_kind(kind)
+                .any(|(_, buff)| matches!(buff.source, BuffSource::Character { by: b, .. } if b == by))
+        })
+    }
+
     // Iterates through all active buffs (the most powerful buff of each
     // non-stacking kind, and all of the stacking ones)
     pub fn iter_active(&self) -> impl Iterator<Item = impl Iterator<Item = &Buff>> + '_ {
