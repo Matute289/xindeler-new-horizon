@@ -382,6 +382,7 @@ pub struct AttackerInfo<'a> {
     pub stats: Option<&'a Stats>,
     pub mass: Option<&'a Mass>,
     pub pos: Option<Vec3<f32>>,
+    pub buffs: Option<&'a Buffs>,
 }
 
 #[derive(Copy, Clone)]
@@ -674,8 +675,19 @@ impl Attack {
                 .clamp(combat_tuning.hit_floor, combat_tuning.hit_ceil);
             rng.random::<f32>() >= hit_chance
         };
-        // BL-52 P4: surface the whiff with a floating "Miss" over the target —
-        // but never over an in-group ally (mirrors the `avoid_effect` beneficial
+        // A charmed/dominated attacker's hostile attack on its charmer is a
+        // no-op — the same no-op a whiff already is, so it folds into
+        // `attack_missed` and every downstream gate (damage, harmful
+        // effects, crit, the Miss floater) falls out for free. Gated behind
+        // `is_single_target` so the AoE path stays scan-free; the
+        // `charmed_by` scan itself is a no-alloc `iter_kind` walk.
+        let charmed_by_target = is_single_target
+            && attacker
+                .and_then(|a| a.buffs)
+                .is_some_and(|buffs| buffs.charmed_by(target.uid));
+        let attack_missed = attack_missed || charmed_by_target;
+        // Surface the whiff with a floating "Miss" over the target — but
+        // never over an in-group ally (mirrors the `avoid_effect` beneficial
         // exemption, so a future single-target ally ability can't show a
         // contradictory "Miss" while its beneficial effect still lands).
         if attack_missed && !matches!(target_group, GroupTarget::InGroup) {

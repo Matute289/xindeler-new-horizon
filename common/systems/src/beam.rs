@@ -246,6 +246,7 @@ impl<'a> System<'a> for Sys {
                                 stats: read_data.stats.get(entity),
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pos.0),
+                                buffs: read_data.buffs.get(entity),
                             });
 
                             let target_info = TargetInfo {
