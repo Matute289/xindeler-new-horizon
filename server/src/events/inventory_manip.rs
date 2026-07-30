@@ -659,7 +659,7 @@ impl ServerEvent for InventoryManipEvent {
                                     (is_equippable, lantern_info)
                                 });
                             if is_equippable {
-                                let class = data.character_classes.get(entity).map(|c| c.0);
+                                let class = data.character_classes.get(entity).map(|c| c.primary);
                                 let requirements_ok = inventory.get(slot).is_none_or(|item| {
                                     entity_meets_item_requirements(
                                         item,
@@ -958,7 +958,7 @@ impl ServerEvent for InventoryManipEvent {
 
                     // Equip gate: reject when either side of the swap would
                     // mount a gated item into a loadout slot.
-                    let swap_class = data.character_classes.get(entity).map(|c| c.0);
+                    let swap_class = data.character_classes.get(entity).map(|c| c.primary);
                     let violates_requirements = [(a, b), (b, a)].into_iter().any(|(src, dst)| {
                         matches!(dst, Slot::Equip(_))
                             && inventory.get_slot(src).is_some_and(|item| {
@@ -1301,7 +1301,7 @@ impl ServerEvent for InventoryManipEvent {
                     // somehow ended up in the inactive set (e.g. legacy save data
                     // predating this gating feature) reaches the active slot with
                     // zero re-validation.
-                    let class = data.character_classes.get(entity).map(|c| c.0);
+                    let class = data.character_classes.get(entity).map(|c| c.primary);
                     let requirements_ok = [
                         slot::EquipSlot::InactiveMainhand,
                         slot::EquipSlot::InactiveOffhand,

@@ -1285,7 +1285,7 @@ impl Widget for ItemTooltip<'_> {
             let class = ecs
                 .read_storage::<CharacterClass>()
                 .get(entity)
-                .map(|c| c.0);
+                .map(|c| c.primary);
             (level.map(|level| (level, species)), class)
         };
         let (req_met, req_unmet) = util::requirements_text(item, viewer_class, viewer, i18n);

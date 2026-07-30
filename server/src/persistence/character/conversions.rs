@@ -783,12 +783,23 @@ pub fn convert_hardcore_to_database(hardcore: Option<Hardcore>) -> i64 {
     if hardcore.is_some() { 1 } else { 0 }
 }
 
-pub fn convert_class_from_database(class: &str) -> common::comp::CharacterClass {
-    common::comp::CharacterClass(json_models::db_string_to_class(class))
+pub fn convert_class_from_database(
+    class: &str,
+    secondary_class: Option<&str>,
+) -> common::comp::CharacterClass {
+    common::comp::CharacterClass {
+        primary: json_models::db_string_to_class(class),
+        secondary: secondary_class.map(json_models::db_string_to_class),
+    }
 }
 
 pub fn convert_class_to_database(class: common::comp::CharacterClass) -> String {
-    json_models::class_to_db_string(class.0)
+    json_models::class_to_db_string(class.primary)
+}
+
+/// `None` -> single-class (`NULL` in the `secondary_class` column).
+pub fn convert_secondary_class_to_database(class: common::comp::CharacterClass) -> Option<String> {
+    class.secondary.map(json_models::class_to_db_string)
 }
 
 /// BL-31: `background` NULL or unrecognized -> `Background(None)`
@@ -1069,6 +1080,37 @@ mod tests {
         assert_eq!(
             convert_background_from_database(Some("custom")),
             Background(None)
+        );
+    }
+
+    #[test]
+    fn class_persistence_round_trips_single_and_multiclass() {
+        use common::comp::class::ClassKind;
+
+        // Single-class: NULL secondary_class column -> None, byte-identical
+        // to today's single-class behaviour.
+        let single = convert_class_from_database("Warrior", None);
+        assert_eq!(
+            single,
+            common::comp::CharacterClass::single(ClassKind::Warrior)
+        );
+        assert_eq!(convert_class_to_database(single), "Warrior");
+        assert_eq!(convert_secondary_class_to_database(single), None);
+
+        // Multiclass: both columns populated round-trip through both
+        // directions.
+        let multi = common::comp::CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+        };
+        assert_eq!(
+            convert_class_from_database("Warrior", Some("Warlock")),
+            multi
+        );
+        assert_eq!(convert_class_to_database(multi), "Warrior");
+        assert_eq!(
+            convert_secondary_class_to_database(multi),
+            Some("Warlock".to_string())
         );
     }
 

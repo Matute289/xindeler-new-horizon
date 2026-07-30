@@ -746,7 +746,7 @@ impl StateExt for State {
             self.write_component_ignore_entity_dead(entity, stats);
             // Copy the ClassKind out (ClassKind: Copy) for the AbilityPool below,
             // since `character_class` is moved into its component write (BL-06 P2a).
-            let class_kind = character_class.0;
+            let class_kind = character_class.primary;
             self.write_component_ignore_entity_dead(entity, character_class);
             self.write_component_ignore_entity_dead(entity, ethos);
             self.write_component_ignore_entity_dead(entity, background);

@@ -165,7 +165,7 @@ pub fn create_character(
     character_updater.create_character(entity, player_uuid, character_alias, PersistedComponents {
         body,
         hardcore: hardcore.then_some(common::comp::Hardcore),
-        character_class: CharacterClass(character_class),
+        character_class: CharacterClass::single(character_class),
         stats,
         skill_set,
         inventory,

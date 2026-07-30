@@ -355,7 +355,7 @@ impl<'a> InventoryScroller<'a> {
         let skill_sets = ecs.read_storage::<SkillSet>();
         let bodies = ecs.read_storage::<Body>();
         let character_classes = ecs.read_storage::<CharacterClass>();
-        let player_class = character_classes.get(player_entity).map(|c| c.0);
+        let player_class = character_classes.get(player_entity).map(|c| c.primary);
         let requirement_ctx = skill_sets.get(player_entity).zip(bodies.get(player_entity));
 
         // Gray out items the viewer can't equip due to requirements. `None` leaves
