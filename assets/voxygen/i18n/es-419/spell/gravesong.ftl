@@ -17,3 +17,5 @@ spell-bane = Perdición
 spell-bane-desc = Impregnás el aire alrededor de un puñado de enemigos con una maldición desgastante, resquebrajando su concentración para que sus golpes y determinación flaqueen en los peores momentos.
 spell-bless = Bendición
 spell-bless-desc = Envolvés a hasta tres aliados elegidos en un baño de luz alentadora, afinando sus golpes y su determinación.
+spell-crusaders_mantle = Manto del Cruzado
+spell-crusaders_mantle-desc = Un radio de luz consagrada florece a tu alrededor y viaja con vos, llenando de valor a los aliados cercanos. Mientras dura, sus golpes llevan un plus de radiancia abrasadora.

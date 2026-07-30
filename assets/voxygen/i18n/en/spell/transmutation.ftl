@@ -1,4 +1,8 @@
 # Transmutation spell names + descriptions.
+spell-magic_stone = Magic Stone
+spell-magic_stone-desc = You channel raw essence into a handful of small pebbles, hardening them into deadly projectiles. The charged stones can be flung or slung to strike a distant foe before their power fades.
+spell-lightning_arrow = Lightning Arrow
+spell-lightning_arrow-desc = You charge your next ranged shot so the projectile becomes a crackling bolt of lightning on impact, arcing to sear nearby foes as well.
 spell-plant_growth = Plant Growth
 spell-plant_growth-desc = You flood a patch of ground with surging life force, bursting the vegetation into dense, choking overgrowth. The lush tangle slows anything trying to push through it, and vines can ensnare those who step directly onto them.
 spell-control_winds_turbulence = Control Winds

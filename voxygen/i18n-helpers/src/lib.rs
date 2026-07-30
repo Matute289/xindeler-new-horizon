@@ -422,6 +422,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::ThunderousSmite
         | BuffKind::WrathfulSmite
         | BuffKind::Blessed
+        | BuffKind::CrusadersMantle
         | BuffKind::FreedomOfMovement
         | BuffKind::Detecting
         | BuffKind::SeeInvisible

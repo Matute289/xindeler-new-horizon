@@ -296,6 +296,8 @@ buff-wrathfulsmite = Wrathful Smite
 ## Bane / Bless / Faerie Fire / Enfeebled
 buff-blessed = Blessed
     .desc = Your strikes and resolve are subtly sharpened.
+buff-crusadersmantle = Crusader's Mantle
+    .desc = A radius of consecrated light bolsters your strikes, wreathing every blow in searing radiance.
 buff-bane = Bane
     .desc = Your focus frays; your strikes and resolve falter at the worst moments.
 buff-faeriefire = Faerie Fire

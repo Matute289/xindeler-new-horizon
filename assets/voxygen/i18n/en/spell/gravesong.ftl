@@ -17,3 +17,5 @@ spell-bane = Bane
 spell-bane-desc = You lace the air around a handful of foes with a sapping curse, fraying their focus so their strikes and resolve falter at the worst moments.
 spell-bless = Bless
 spell-bless-desc = You wrap up to three chosen allies in a wash of encouraging light, sharpening their strikes and resolve.
+spell-crusaders_mantle = Crusader's Mantle
+spell-crusaders_mantle-desc = A radius of consecrated light blooms around you and travels as you move, filling nearby allies with valor. While it holds, their strikes carry an extra surge of searing radiance.

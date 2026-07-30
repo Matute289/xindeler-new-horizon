@@ -1,0 +1,12 @@
+SelfBuff(
+    buildup_duration: 0.2,
+    cast_duration: 0.1,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(kind: JoltArrow, data: BuffData(strength: 1.0, duration: None)),
+    ],
+    buff_cat: Some(WeaponCoating),
+    energy_cost: 35,
+    enforced_limit: false,
+    meta: (school: Some(Transmutation), source: Some(Primordial)),
+)
