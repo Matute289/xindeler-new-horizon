@@ -524,6 +524,8 @@ impl<'a> System<'a> for Sys {
                     read_data.character_classes.get(entity),
                     read_data.skill_sets.get(entity),
                 ) {
+                    stat.character_level = skill_set.character_level();
+
                     class_attributes
                         .0
                         .get(&character_class.0)
@@ -879,7 +881,7 @@ fn execute_effect(
         },
         BuffEffect::PrecisionModifier(req, val, ovrd) => {
             stat.conditional_precision_modifiers
-                .push((*req, *val, *ovrd));
+                .push((req.clone(), *val, *ovrd));
         },
         BuffEffect::PrecisionVulnerabilityOverride(val) => {
             // Use higher of precision multiplier overrides

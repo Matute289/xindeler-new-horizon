@@ -98,7 +98,7 @@ pub struct MeleeConstructor {
     pub precision_flank_invert: bool,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Default, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Default, Deserialize)]
 pub struct CustomCombo {
     pub base: Option<i32>,
     pub conditional: Option<(i32, CombatRequirement)>,

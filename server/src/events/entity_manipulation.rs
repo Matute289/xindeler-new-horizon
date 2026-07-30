@@ -866,6 +866,10 @@ impl ServerEvent for DestroyEvent {
                             dir,
                             attack_source,
                             None,
+                            &mut rng,
+                            attacker_entity
+                                .and_then(|a| data.stats.get(a))
+                                .map(|s| s.character_level),
                         )
                     });
 
@@ -3219,6 +3223,10 @@ impl ServerEvent for EntityAttackedHookEvent {
                             dir,
                             Some(ev.attack_source),
                             None,
+                            &mut rng,
+                            ev.attacker
+                                .and_then(|e| data.stats.get(e))
+                                .map(|s| s.character_level),
                         )
                     });
 

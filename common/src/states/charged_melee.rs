@@ -175,11 +175,12 @@ impl CharacterBehavior for Data {
                             .custom_combo
                             .base
                             .map(|b| (self.charge_amount * b as f32).round() as i32),
-                        conditional: self
-                            .static_data
-                            .custom_combo
-                            .conditional
-                            .map(|c| ((self.charge_amount * c.0 as f32).round() as i32, c.1)),
+                        conditional: self.static_data.custom_combo.conditional.as_ref().map(|c| {
+                            (
+                                (self.charge_amount * c.0 as f32).round() as i32,
+                                c.1.clone(),
+                            )
+                        }),
                     };
 
                     data.updater.insert(

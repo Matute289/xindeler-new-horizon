@@ -189,7 +189,7 @@ impl CharacterBehavior for Data {
                         strike_data
                             .melee_constructor
                             .clone()
-                            .custom_combo(strike_data.custom_combo)
+                            .custom_combo(strike_data.custom_combo.clone())
                             .create_melee(
                                 precision_mult,
                                 tool_stats,

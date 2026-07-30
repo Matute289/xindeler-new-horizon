@@ -157,6 +157,12 @@ pub struct Stats {
     pub magic_accuracy: f32,
     pub magic_evasion: f32,
     pub crit_chance: f32,
+    /// Cached `SkillSet::character_level()`, re-derived each tick in the same
+    /// slot as the class/level attribute scaling above. 0 for bodies with no
+    /// class/skill set. Exists so combat code with a `Stats` in scope (e.g.
+    /// `CombatRequirement::CasterLevelRoll`) can read the caster's level
+    /// without threading `SkillSet` through the whole attack pipeline.
+    pub character_level: u16,
     /// Combat resolution (BL-52 P3) — typed elemental resistance (fraction in
     /// `0.0..`), reset per tick like the other modifiers. Mitigates **AoE**
     /// damage of the matching kind in `apply_attack` (soft-capped); physical
@@ -269,6 +275,7 @@ impl Stats {
             magic_accuracy: 0.0,
             magic_evasion: 0.0,
             crit_chance: 0.0,
+            character_level: 0,
             resist_fire: 0.0,
             resist_frost: 0.0,
             resist_poison: 0.0,

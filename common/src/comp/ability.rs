@@ -3219,7 +3219,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     melee_constructor: melee_constructor.clone(),
                     ability_info,
                     specifier: *specifier,
-                    custom_combo: *custom_combo,
+                    custom_combo: custom_combo.clone(),
                     movement_modifier: *movement_modifier,
                     ori_modifier: *ori_modifier,
                 },
