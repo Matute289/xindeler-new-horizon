@@ -256,6 +256,9 @@ pub enum BuffKind {
     /// frighten the target. Strength scales the additional damage; the
     /// target's `Terrified` duration is fixed.
     WrathfulSmite,
+    /// Sharpens the bearer's attacks and resolve. Strength scales the flat
+    /// accuracy bonus.
+    Blessed,
     // =================
     //      DEBUFFS
     // =================
@@ -265,6 +268,17 @@ pub enum BuffKind {
     Burning,
     /// Lowers health over time for some duration.
     /// Strength should be the DPS of the debuff.
+    /// Frays the bearer's focus. Strength scales the flat accuracy penalty
+    /// (the mirror of `Blessed`).
+    Bane,
+    /// Marks the bearer with a glow that makes them easier to hit. Strength
+    /// scales the flat evasion penalty (the mirror of `Blur`'s positive
+    /// evasion).
+    FaerieFire,
+    /// Withers the bearer's physical strikes. Strength scales the fraction
+    /// of outgoing attack damage retained (0.5 -> half damage), same shape
+    /// as `Blinded`.
+    Enfeebled,
     Bleeding,
     /// Bleed-detonate (BL-05 RD-7): bleeds over time like `Bleeding`, then
     /// **detonates** for a burst of damage when it runs its full course
@@ -497,6 +511,7 @@ impl BuffKind {
             | BuffKind::StaggeringSmite
             | BuffKind::ThunderousSmite
             | BuffKind::WrathfulSmite
+            | BuffKind::Blessed
             | BuffKind::FreedomOfMovement
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
@@ -504,6 +519,9 @@ impl BuffKind {
             | BuffKind::RemoteSensing => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
+            | BuffKind::Bane
+            | BuffKind::FaerieFire
+            | BuffKind::Enfeebled
             | BuffKind::Cursed
             | BuffKind::Burning
             | BuffKind::Crippled
@@ -790,6 +808,11 @@ impl BuffKind {
             ],
             // BL-05 rider: blinded — reduced outgoing attack damage (can't aim).
             BuffKind::Blinded => vec![BuffEffect::AttackDamage((1.0 - data.strength).max(0.0))],
+            BuffKind::Enfeebled => {
+                vec![BuffEffect::AttackDamage((1.0 - data.strength).max(0.0))]
+            },
+            BuffKind::Bane => vec![BuffEffect::Accuracy(-12.0 * nn_scaling(data.strength))],
+            BuffKind::FaerieFire => vec![BuffEffect::Evasion(-12.0 * nn_scaling(data.strength))],
             // BL-66 d: generic movement slow, mirrors Crippled's speed curve
             // without the HP drain.
             BuffKind::Slowed => vec![BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength))],
@@ -1166,6 +1189,7 @@ impl BuffKind {
                     }),
                 )),
             ],
+            BuffKind::Blessed => vec![BuffEffect::Accuracy(12.0 * nn_scaling(data.strength))],
             // Area/generic active senses: membership frozen at cast (`SenseMode::Snapshot`).
             BuffKind::Detecting => {
                 let mut effects = Vec::new();

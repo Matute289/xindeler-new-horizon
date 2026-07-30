@@ -1,0 +1,20 @@
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    targets: OutOfGroup,
+    auras: [
+        (
+            kind: FaerieFire,
+            strength: 0.7,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 8.0,
+    energy_cost: 45.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)
