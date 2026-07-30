@@ -6758,6 +6758,13 @@ fn build_buff(
             | BuffKind::FreezeArrow
             | BuffKind::DrenchArrow
             | BuffKind::JoltArrow
+            | BuffKind::BlindingSmite
+            | BuffKind::BrandingSmite
+            | BuffKind::DivineSmite
+            | BuffKind::SearingSmite
+            | BuffKind::StaggeringSmite
+            | BuffKind::ThunderousSmite
+            | BuffKind::WrathfulSmite
             | BuffKind::Terrified
             | BuffKind::Charmed
             | BuffKind::Dominated
