@@ -2506,6 +2506,7 @@ impl Hud {
                             hardcore: hardcore.contains(entity),
                             stance,
                             marked: is_marked,
+                            creature_kind: stats.creature_kind,
                         });
                         // Only render bubble if nearby or if its me and setting is on
                         let bubble = if (dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)

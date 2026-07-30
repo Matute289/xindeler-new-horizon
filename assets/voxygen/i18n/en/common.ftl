@@ -67,6 +67,22 @@ common-species-elf = Elf
 common-species-draugr = Dhampir
 common-species-danari = Gnome
 
+## Creature Kinds
+common-creature_kind-aberration = Aberration
+common-creature_kind-beast = Beast
+common-creature_kind-celestial = Celestial
+common-creature_kind-construct = Construct
+common-creature_kind-dragon = Dragon
+common-creature_kind-elemental = Elemental
+common-creature_kind-fey = Fey
+common-creature_kind-fiend = Fiend
+common-creature_kind-giant = Giant
+common-creature_kind-humanoid = Humanoid
+common-creature_kind-monstrosity = Monstrosity
+common-creature_kind-ooze = Ooze
+common-creature_kind-plant = Plant
+common-creature_kind-undead = Undead
+
 ## Classes
 common-class-warrior = Warrior
 common-class-mage = Mage
