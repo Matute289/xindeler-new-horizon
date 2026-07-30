@@ -5850,6 +5850,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         | BuffKind::CrusadersMantle => imgs.buff_fury,
         // Placeholder icon reuse pending dedicated art.
         BuffKind::Blessed => imgs.buff_fortitude,
+        // Same sleep iconography as Asleep -- distinguished from it only by
+        // the positive/negative classification and tooltip text.
+        BuffKind::RestfulSleep => imgs.debuff_asleep,
         BuffKind::Bane | BuffKind::FaerieFire => imgs.debuff_cursed,
         BuffKind::Enfeebled => imgs.debuff_crippled,
         BuffKind::Chilled => imgs.debuff_chilled,

@@ -264,6 +264,11 @@ pub enum BuffKind {
     /// (granted by an aura, not a self-buff with `RemoveOnAttack`). Strength
     /// scales the additional damage.
     CrusadersMantle,
+    /// A voluntary, restful sleep granted to a willing target — mechanically
+    /// identical to `Asleep` (same incapacitation, same wake-on-damage rule)
+    /// but classified as a positive buff rather than a debuff, since it is
+    /// cast on consenting allies rather than inflicted on foes.
+    RestfulSleep,
     // =================
     //      DEBUFFS
     // =================
@@ -518,6 +523,7 @@ impl BuffKind {
             | BuffKind::WrathfulSmite
             | BuffKind::Blessed
             | BuffKind::CrusadersMantle
+            | BuffKind::RestfulSleep
             | BuffKind::FreedomOfMovement
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
@@ -800,7 +806,11 @@ impl BuffKind {
             // has no "disable all abilities" primitive, so AttackDamage(0.0)
             // neuters the still-usable primary/secondary while asleep). v1 is
             // duration-based; wake-on-damage is RD-3 (tasks/13).
-            BuffKind::Asleep => vec![
+            // Same incapacitation as Asleep (including the wake-on-damage
+            // rule in `entity_manipulation.rs`) — see `RestfulSleep`'s own
+            // doc comment for why this is a separate BuffKind rather than a
+            // reuse of `Asleep`.
+            BuffKind::Asleep | BuffKind::RestfulSleep => vec![
                 BuffEffect::MovementSpeed(0.0),
                 BuffEffect::DisableAuxiliaryAbilities,
                 BuffEffect::AttackDamage(0.0),
@@ -2105,6 +2115,30 @@ pub mod tests {
                 .any(|e| matches!(e, BuffEffect::AttackDamage(d) if *d == 0.0))
         );
         assert!(!BuffKind::Asleep.is_buff(), "should be a debuff");
+    }
+
+    #[test]
+    fn restful_sleep_incapacitates_like_asleep_but_is_positive() {
+        // Same incapacitation shape as Asleep...
+        let asleep_effects = BuffKind::Asleep.effects(&BuffData::new(1.0, None), None, None);
+        let restful_effects = BuffKind::RestfulSleep.effects(&BuffData::new(1.0, None), None, None);
+        assert_eq!(asleep_effects.len(), restful_effects.len());
+        assert!(
+            restful_effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::MovementSpeed(s) if *s == 0.0))
+        );
+        assert!(
+            restful_effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::DisableAuxiliaryAbilities))
+        );
+        // ...but classified as a buff, not a debuff, since it is only ever
+        // granted to consenting allies.
+        assert!(
+            BuffKind::RestfulSleep.is_buff(),
+            "should be a buff, unlike Asleep"
+        );
     }
 
     #[test]
