@@ -8,6 +8,10 @@ pub struct Character {
     pub class: String,
     /// `NULL` -> single-class (`CharacterClass::secondary == None`).
     pub secondary_class: Option<String>,
+    /// Banked class levels in the secondary class (`0` for single-class).
+    /// The primary's own level is never stored -- always derived as
+    /// `character_level - secondary_class_level`.
+    pub secondary_class_level: i64,
     pub ethos_good_evil: i16,
     pub ethos_law_chaos: i16,
     /// BL-31: `NULL` -> `Background(None)` ("Uncommitted", P0 §Q1).
