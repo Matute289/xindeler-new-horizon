@@ -421,6 +421,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::StaggeringSmite
         | BuffKind::ThunderousSmite
         | BuffKind::WrathfulSmite
+        | BuffKind::Blessed
         | BuffKind::FreedomOfMovement
         | BuffKind::Detecting
         | BuffKind::SeeInvisible
@@ -453,6 +454,9 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Anchored
         | BuffKind::Asleep
         | BuffKind::Blinded
+        | BuffKind::Bane
+        | BuffKind::FaerieFire
+        | BuffKind::Enfeebled
         | BuffKind::Slowed => {
             tracing::error!("Player was killed by a debuff that doesn't do damage!");
             "mysterious"

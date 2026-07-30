@@ -293,6 +293,15 @@ buff-thunderoussmite = Thunderous Smite
     .desc = Your next weapon strike booms like thunder, dealing extra damage and hurling your foe backward.
 buff-wrathfulsmite = Wrathful Smite
     .desc = Your next weapon strike channels dread, dealing extra damage and filling your foe with terror.
+## Bane / Bless / Faerie Fire / Enfeebled
+buff-blessed = Blessed
+    .desc = Your strikes and resolve are subtly sharpened.
+buff-bane = Bane
+    .desc = Your focus frays; your strikes and resolve falter at the worst moments.
+buff-faeriefire = Faerie Fire
+    .desc = A glow clings to you, leaving you unable to hide. Attacks against you land more easily.
+buff-enfeebled = Enfeebled
+    .desc = Your blows land weak, dealing only a fraction of their usual force.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

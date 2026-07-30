@@ -6765,6 +6765,10 @@ fn build_buff(
             | BuffKind::StaggeringSmite
             | BuffKind::ThunderousSmite
             | BuffKind::WrathfulSmite
+            | BuffKind::Blessed
+            | BuffKind::Bane
+            | BuffKind::FaerieFire
+            | BuffKind::Enfeebled
             | BuffKind::Terrified
             | BuffKind::Charmed
             | BuffKind::Dominated

@@ -13,3 +13,7 @@ spell-thunderous_smite = Thunderous Smite
 spell-thunderous_smite-desc = Your next weapon strike booms like thunder, dealing extra damage and hurling the creature struck backward.
 spell-wrathful_smite = Wrathful Smite
 spell-wrathful_smite-desc = Your next weapon strike channels dread, dealing extra damage and filling the creature struck with terror.
+spell-bane = Bane
+spell-bane-desc = You lace the air around a handful of foes with a sapping curse, fraying their focus so their strikes and resolve falter at the worst moments.
+spell-bless = Bless
+spell-bless-desc = You wrap up to three chosen allies in a wash of encouraging light, sharpening their strikes and resolve.

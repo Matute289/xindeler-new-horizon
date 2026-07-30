@@ -13,3 +13,7 @@ spell-thunderous_smite = Golpe Atronador
 spell-thunderous_smite-desc = Tu próximo golpe de arma retumba como un trueno, causando daño extra y lanzando hacia atrás a la criatura golpeada.
 spell-wrathful_smite = Golpe Iracundo
 spell-wrathful_smite-desc = Tu próximo golpe de arma canaliza el terror, causando daño extra y llenando de pavor a la criatura golpeada.
+spell-bane = Perdición
+spell-bane-desc = Impregnás el aire alrededor de un puñado de enemigos con una maldición desgastante, resquebrajando su concentración para que sus golpes y determinación flaqueen en los peores momentos.
+spell-bless = Bendición
+spell-bless-desc = Envolvés a hasta tres aliados elegidos en un baño de luz alentadora, afinando sus golpes y su determinación.
