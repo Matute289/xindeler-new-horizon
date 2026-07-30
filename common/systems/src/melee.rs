@@ -238,6 +238,7 @@ impl<'a> System<'a> for Sys {
                         stats: read_data.stats.get(attacker),
                         mass: read_data.masses.get(attacker),
                         pos: Some(pos.0),
+                        buffs: read_data.buffs.get(attacker),
                     });
 
                     let target_ori = read_data.orientations.get(target);
