@@ -823,20 +823,22 @@ pub enum UnmetRequirement {
 }
 
 impl ItemRequirements {
-    /// Requirements unmet for the given class/level/species combination.
-    /// `class` is `None` for entities without a `CharacterClass` component
-    /// (NPCs, spectators), which therefore fail any class gate.
-    /// `species` is `None` for non-humanoid bodies, which therefore fail any
-    /// race gate.
+    /// Requirements unmet for the given class(es)/level/species combination.
+    /// `character_class` is `None` for entities without a `CharacterClass`
+    /// component (NPCs, spectators), which therefore fail any class gate.
+    /// A multiclass character passes the gate if *any* of its held classes
+    /// is whitelisted — a Warrior who multiclasses into Warlock can equip
+    /// gear restricted to either class, not only the primary. `species` is
+    /// `None` for non-humanoid bodies, which therefore fail any race gate.
     pub fn unmet(
         &self,
-        class: Option<crate::comp::class::ClassKind>,
+        character_class: Option<&crate::comp::CharacterClass>,
         level: u16,
         species: Option<humanoid::Species>,
     ) -> Vec<UnmetRequirement> {
         let mut unmet = Vec::new();
         if let Some(classes) = &self.classes
-            && !class.is_some_and(|c| classes.contains(&c))
+            && !character_class.is_some_and(|cc| cc.classes().any(|c| classes.contains(&c)))
         {
             unmet.push(UnmetRequirement::Class);
         }
@@ -1549,11 +1551,11 @@ impl Item {
     }
 
     /// Requirements this entity fails for equipping this item. Shared by
-    /// server enforcement and the client tooltip so they always agree.
-    /// `class` comes from `CharacterClass`; pass `None` for NPCs/spectators.
+    /// server enforcement and the client tooltip so they always agree. Pass
+    /// `None` for NPCs/spectators (entities with no `CharacterClass`).
     pub fn unmet_requirements_with_class(
         &self,
-        class: Option<crate::comp::class::ClassKind>,
+        character_class: Option<&crate::comp::CharacterClass>,
         skill_set: &SkillSet,
         body: &Body,
     ) -> Vec<UnmetRequirement> {
@@ -1562,17 +1564,17 @@ impl Item {
                 Body::Humanoid(humanoid_body) => Some(humanoid_body.species),
                 _ => None,
             };
-            requirements.unmet(class, skill_set.character_level(), species)
+            requirements.unmet(character_class, skill_set.character_level(), species)
         })
     }
 
     pub fn meets_requirements_with_class(
         &self,
-        class: Option<crate::comp::class::ClassKind>,
+        character_class: Option<&crate::comp::CharacterClass>,
         skill_set: &SkillSet,
         body: &Body,
     ) -> bool {
-        self.unmet_requirements_with_class(class, skill_set, body)
+        self.unmet_requirements_with_class(character_class, skill_set, body)
             .is_empty()
     }
 
@@ -2599,13 +2601,23 @@ mod tests {
             races: None,
         }));
         assert!(!cleric_only.meets_requirements_with_class(
-            Some(ClassKind::Adventurer),
+            Some(&crate::comp::CharacterClass::single(ClassKind::Adventurer)),
             &skill_set_at_level(1),
             &human,
         ));
         assert!(cleric_only.meets_requirements_with_class(
-            Some(ClassKind::Cleric),
+            Some(&crate::comp::CharacterClass::single(ClassKind::Cleric)),
             &skill_set_at_level(1),
+            &human,
+        ));
+        // A multiclass character passes if EITHER held class is whitelisted.
+        assert!(cleric_only.meets_requirements_with_class(
+            Some(&crate::comp::CharacterClass {
+                primary: ClassKind::Warrior,
+                secondary: Some(ClassKind::Cleric),
+                secondary_level: 20,
+            }),
+            &skill_set_at_level(20),
             &human,
         ));
     }

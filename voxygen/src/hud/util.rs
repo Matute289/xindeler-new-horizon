@@ -1,7 +1,7 @@
 use super::img_ids;
 use common::{
     comp::{
-        BuffData, BuffKind,
+        BuffData, BuffKind, CharacterClass,
         body::humanoid::Species,
         class::ClassKind,
         inventory::trade_pricing::TradePricing,
@@ -80,7 +80,7 @@ pub fn item_text<'a, I: ItemDesc + ?Sized>(
 /// e.g. spectators) renders everything as met.
 pub fn requirements_text(
     item: &dyn ItemDesc,
-    class: Option<ClassKind>,
+    character_class: Option<&CharacterClass>,
     viewer: Option<(u16, Option<Species>)>,
     i18n: &Localization,
 ) -> (Vec<String>, Vec<String>) {
@@ -91,7 +91,7 @@ pub fn requirements_text(
     // Reuse the shared predicate so the tooltip can never disagree with the
     // server's enforcement.
     let unmet_kinds = viewer
-        .map(|(level, species)| requirements.unmet(class, level, species))
+        .map(|(level, species)| requirements.unmet(character_class, level, species))
         .unwrap_or_default();
 
     if let Some(classes) = &requirements.classes {

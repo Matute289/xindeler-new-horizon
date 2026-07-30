@@ -215,6 +215,7 @@ fn do_command(
         ServerChatCommand::ServerPhysics => handle_server_physics,
         ServerChatCommand::SetBodyType => handle_set_body_type,
         ServerChatCommand::SetClass => handle_set_class,
+        ServerChatCommand::SetClassLevel => handle_set_class_level,
         ServerChatCommand::SetEthos => handle_set_ethos,
         ServerChatCommand::SetLevel => handle_set_level,
         ServerChatCommand::SetMotd => handle_set_motd,
@@ -254,6 +255,7 @@ fn do_command(
         ServerChatCommand::DestroyTethers => handle_destroy_tethers,
         ServerChatCommand::Mount => handle_mount,
         ServerChatCommand::Dismount => handle_dismount,
+        ServerChatCommand::Multiclass => handle_multiclass,
     };
 
     handler(server, client, target, args, cmd)
@@ -6258,6 +6260,167 @@ fn handle_set_class(
     Ok(())
 }
 
+/// `/multiclass <class>` — admin-only: grants `class` as the target's
+/// secondary class (hard cap of 2). Reallocates half the character's
+/// already-earned levels to the new secondary (an admin-friendly default;
+/// `/set_class_level` fine-tunes the split afterward). A future in-world
+/// grant (a narrative event offering a second class) would call the same
+/// underlying `grant_second_class` and its guards (cap of 2, distinct from
+/// primary, primary must be a real class, minimum level).
+fn handle_multiclass(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{
+        CharacterClass,
+        class::{ClassKind, MULTICLASS_MIN_LEVEL, MulticlassError, grant_second_class},
+    };
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /multiclass.".to_string(),
+        ));
+    }
+
+    let class_arg = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let class = ClassKind::from_keyword(class_arg.to_lowercase().as_str())
+        .filter(|c| c.is_playable())
+        .ok_or_else(|| Content::Plain(format!("Unknown class '{class_arg}'.")))?;
+
+    let ecs = server.state.ecs();
+    let character_class = {
+        let mut character_classes = ecs.write_storage::<CharacterClass>();
+        let mut skill_sets = ecs.write_storage::<comp::SkillSet>();
+        let (Some(mut character_class), Some(mut skill_set)) = (
+            character_classes.get_mut(target),
+            skill_sets.get_mut(target),
+        ) else {
+            return Err(Content::Plain(
+                "Target has no class or skill set.".to_string(),
+            ));
+        };
+
+        let initial_secondary_level = skill_set.character_level() / 2;
+        grant_second_class(
+            &mut character_class,
+            &mut skill_set,
+            class,
+            initial_secondary_level,
+        )
+        .map_err(|err| {
+            Content::Plain(match err {
+                MulticlassError::AlreadyMulticlass => {
+                    "Character is already multiclass (hard cap of 2).".to_string()
+                },
+                MulticlassError::SameAsPrimary => {
+                    format!("{class:?} is already the primary class.")
+                },
+                MulticlassError::NoPrimaryClass => {
+                    "Character has no primary class yet.".to_string()
+                },
+                MulticlassError::BelowMinimumLevel => format!(
+                    "Character must be at least level {MULTICLASS_MIN_LEVEL} to multiclass."
+                ),
+            })
+        })?;
+        *character_class
+    };
+
+    // Rebuild the AbilityPool: union of both classes, with the new
+    // secondary's keys strictly appended after the racial innate so no
+    // persisted hotbar index shifts.
+    if let Some(body) = ecs.read_storage::<comp::Body>().get(target).copied() {
+        let _ = ecs.write_storage::<comp::AbilityPool>().insert(
+            target,
+            comp::AbilityPool::for_character(&body, &character_class),
+        );
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Secondary class granted: {class:?}.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/set_class_level primary|secondary <n>` — admin-only test tool: overrides
+/// the split of already-banked levels between a multiclass character's two
+/// classes (e.g. after `/multiclass` picked an even default). Setting
+/// `primary` sets the secondary's level to `character_level - n` instead --
+/// there is no direct primary-level storage to write, by design (it is
+/// always derived).
+fn handle_set_class_level(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::CharacterClass;
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /set_class_level.".to_string(),
+        ));
+    }
+
+    let (slot_arg, level) = parse_cmd_args!(args, String, u16);
+    let slot_arg = slot_arg.ok_or_else(|| action.help_content())?;
+    let level = level.ok_or_else(|| action.help_content())?;
+
+    let ecs = server.state.ecs();
+    let mut character_classes = ecs.write_storage::<CharacterClass>();
+    let skill_sets = ecs.read_storage::<comp::SkillSet>();
+    let (Some(mut character_class), Some(skill_set)) =
+        (character_classes.get_mut(target), skill_sets.get(target))
+    else {
+        return Err(Content::Plain(
+            "Target has no class or skill set.".to_string(),
+        ));
+    };
+    if !character_class.is_multiclass() {
+        return Err(Content::Plain(
+            "Target is not multiclass -- /multiclass it first.".to_string(),
+        ));
+    }
+
+    let character_level = skill_set.character_level();
+    let secondary_level = match slot_arg.to_lowercase().as_str() {
+        "secondary" => level,
+        "primary" => character_level.saturating_sub(level),
+        _ => {
+            return Err(Content::Plain(
+                "Slot must be 'primary' or 'secondary'.".to_string(),
+            ));
+        },
+    };
+    character_class.set_secondary_level(secondary_level, character_level);
+    let resulting_primary_level = character_class.primary_level(character_level);
+    let resulting_secondary_level = character_class.secondary_level;
+    drop(character_classes);
+    drop(skill_sets);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Class levels set: primary {resulting_primary_level}, secondary \
+                 {resulting_secondary_level}."
+            )),
+        ),
+    );
+    Ok(())
+}
+
 /// `/set_level <level>` — admin-only test tool: set the target's character
 /// level instantly (no grinding) by adjusting the General skill group's earned
 /// XP. Server-authoritative: gated by `needs_role: Admin` AND re-checked here
@@ -6405,8 +6568,13 @@ fn handle_make_test_char(
         return Err(Content::Plain("Target has no skill set.".to_string()));
     }
 
-    // 2. Class (optional) — force-set for testing (no one-time legacy guard) and
-    //    unlock its skill tree.
+    // 2. Class (optional) — force-set for testing (no one-time legacy guard, no
+    //    multiclass level/cap guards) and unlock its skill tree. A second call with
+    //    a different class becomes the SECONDARY (not a silent single-class
+    //    overwrite) so this doubles as the manual multiclass repro: two calls in a
+    //    row leave both CharacterClass and the two unlocked skill groups mutually
+    //    consistent, instead of the skill set silently accumulating a class the
+    //    component itself forgot about.
     let class = if let Some(class_arg) = class_arg {
         let class =
             ClassKind::from_keyword(class_arg.to_lowercase().as_str()).ok_or_else(|| {
@@ -6414,11 +6582,25 @@ fn handle_make_test_char(
                     "Unknown class '{class_arg}'. Options: warrior, mage, cleric, rogue."
                 ))
             })?;
+        let existing = server
+            .state
+            .ecs()
+            .read_storage::<CharacterClass>()
+            .get(target)
+            .copied();
+        let new_character_class = match existing {
+            Some(mut character_class) if character_class.primary != class => {
+                character_class.secondary = Some(class);
+                character_class.secondary_level = 0;
+                character_class
+            },
+            _ => CharacterClass::single(class),
+        };
         let _ = server
             .state
             .ecs_mut()
             .write_storage::<CharacterClass>()
-            .insert(target, CharacterClass::single(class));
+            .insert(target, new_character_class);
         if let Some(mut skill_set) = server
             .state
             .ecs_mut()

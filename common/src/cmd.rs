@@ -460,6 +460,7 @@ pub enum ServerChatCommand {
     MakeVolume,
     Motd,
     Mount,
+    Multiclass,
     Object,
     Oracle,
     OracleTrigger,
@@ -487,6 +488,7 @@ pub enum ServerChatCommand {
     ServerPhysics,
     SetBodyType,
     SetClass,
+    SetClassLevel,
     SetEthos,
     SetLevel,
     SetMotd,
@@ -1308,6 +1310,30 @@ impl ServerChatCommand {
                 Content::localized("command-dismount-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::Multiclass => cmd(
+                vec![Enum(
+                    "class",
+                    comp::class::ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword().to_string())
+                        .collect(),
+                    Required,
+                )],
+                Content::localized("command-multiclass-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::SetClassLevel => cmd(
+                vec![
+                    Enum(
+                        "class",
+                        vec!["primary".to_owned(), "secondary".to_owned()],
+                        Required,
+                    ),
+                    Integer("level", 1, Required),
+                ],
+                Content::localized("command-set_class_level-desc"),
+                Some(Admin),
+            ),
         }
     }
 
@@ -1384,6 +1410,7 @@ impl ServerChatCommand {
             ServerChatCommand::Say => "say",
             ServerChatCommand::ServerPhysics => "server_physics",
             ServerChatCommand::SetClass => "set_class",
+            ServerChatCommand::SetClassLevel => "set_class_level",
             ServerChatCommand::SetEthos => "set_ethos",
             ServerChatCommand::SetLevel => "set_level",
             ServerChatCommand::SetMotd => "set_motd",
@@ -1424,6 +1451,7 @@ impl ServerChatCommand {
             ServerChatCommand::DestroyTethers => "destroy_tethers",
             ServerChatCommand::Mount => "mount",
             ServerChatCommand::Dismount => "dismount",
+            ServerChatCommand::Multiclass => "multiclass",
         }
     }
 

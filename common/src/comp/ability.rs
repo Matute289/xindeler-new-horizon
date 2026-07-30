@@ -119,7 +119,19 @@ impl Component for AbilityCooldowns {
 /// `Innate:index:N` positions into this Vec, so its order must be STABLE and
 /// append-only for a given character: producers must emit class abilities
 /// first (spec order), then racial innates, never reordering existing
-/// entries. Revisit key-based persistence before the pool producer ships
+/// entries.
+///
+/// Canonical order under multiclass: **primary class keys, then the racial
+/// innate, then the secondary class's keys last.** The secondary's keys
+/// always go at the very end, never between the primary and the racial
+/// innate — granting a second class to an existing single-class character
+/// must never shift the racial innate's index, or every persisted
+/// `Innate:index:N` hotbar slot silently re-points to something else on
+/// relog. Any future producer appending to this Vec must append after *all*
+/// of the above, in whatever order is agreed centrally — never insert into
+/// the middle.
+///
+/// Revisit key-based persistence before the pool producer ships
 /// (magic plan Phase 4) if this contract proves too fragile.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AbilityPool {
@@ -146,23 +158,36 @@ impl AbilityPool {
         }
     }
 
-    /// Full ability pool for a player character: class active-ability keys
-    /// FIRST (spec order, stable indices for persisted hotbar slots — BL-06
-    /// P2a), then the racial innate key. Ordering contract: append-only;
-    /// never reorder.
+    /// Full ability pool for a player character: primary class active-ability
+    /// keys FIRST (spec order, stable indices for persisted hotbar slots),
+    /// then the racial innate key, then — if the character is multiclass —
+    /// the secondary class's keys last (see the ordering contract on
+    /// [`Self::abilities`]'s doc comment for why the secondary goes at the
+    /// very end rather than after the primary).
     ///
     /// ALL class-ability keys are always emitted regardless of whether the
     /// player has unlocked the skill yet. The manifest `Simple(Some(skill), …)`
     /// gate makes an un-unlocked key resolve to nothing at use-time — stable
     /// pool indices are thereby guaranteed even for locked skills.
-    pub fn for_character(body: &crate::comp::Body, class: crate::comp::ClassKind) -> Self {
-        // Class keys first, then the racial innate — delegate the racial part to
-        // `for_body` so the species→key logic lives in exactly one place.
-        let abilities = Self::class_ability_keys(class)
+    pub fn for_character(
+        body: &crate::comp::Body,
+        character_class: &crate::comp::CharacterClass,
+    ) -> Self {
+        // Primary's class keys, then the racial innate (delegated to
+        // `for_body` so the species→key logic lives in exactly one place),
+        // then the secondary's class keys strictly appended at the end.
+        let mut abilities: Vec<String> = Self::class_ability_keys(character_class.primary)
             .iter()
             .map(|k| k.to_string())
-            .chain(Self::for_body(body).abilities)
             .collect();
+        abilities.extend(Self::for_body(body).abilities);
+        if let Some(secondary) = character_class.secondary {
+            abilities.extend(
+                Self::class_ability_keys(secondary)
+                    .iter()
+                    .map(|k| k.to_string()),
+            );
+        }
         Self { abilities }
     }
 
@@ -4548,12 +4573,15 @@ mod class_ability_pool_tests {
         })
     }
 
-    /// `for_character` emits class keys BEFORE the racial innate key, in spec
-    /// order (BL-06 P2a ordering contract).
+    /// `for_character` emits class keys BEFORE the racial innate key, in
+    /// spec order.
     #[test]
     fn warrior_pool_order_is_class_then_racial() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, ClassKind::Warrior);
+        let pool = AbilityPool::for_character(
+            &body,
+            &crate::comp::CharacterClass::single(ClassKind::Warrior),
+        );
         // First two entries are the Warrior class keys (signature, capstone).
         assert_eq!(
             pool.abilities.first().map(String::as_str),
@@ -4571,12 +4599,49 @@ mod class_ability_pool_tests {
         assert_eq!(pool.abilities.len(), 3);
     }
 
+    /// A multiclass character's secondary keys go strictly at the end,
+    /// after the racial innate — never between the primary's keys and the
+    /// racial innate, so granting a second class to an existing character
+    /// never shifts the racial innate's index.
+    #[test]
+    fn multiclass_pool_appends_secondary_keys_after_racial() {
+        let body = human_body();
+        let character_class = crate::comp::CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Mage),
+            secondary_level: 20,
+        };
+        let pool = AbilityPool::for_character(&body, &character_class);
+        assert_eq!(pool.abilities, vec![
+            "class.warrior.rally",
+            "class.warrior.onslaught",
+            "innate.human",
+            "class.mage.arcanesurge",
+            "class.mage.arcanemastery",
+        ]);
+
+        // A single-class Warrior's pool is an exact prefix of this one -- the
+        // primary+racial portion never changes shape when a second class is
+        // granted; only the tail grows.
+        let single = AbilityPool::for_character(
+            &body,
+            &crate::comp::CharacterClass::single(ClassKind::Warrior),
+        );
+        assert_eq!(
+            &pool.abilities[..single.abilities.len()],
+            &single.abilities[..]
+        );
+    }
+
     /// A non-proof class (e.g. Adventurer) gets only the racial innate — no
     /// class keys — preserving the legacy/empty-tree behaviour.
     #[test]
     fn adventurer_pool_has_only_racial_innate() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, ClassKind::Adventurer);
+        let pool = AbilityPool::for_character(
+            &body,
+            &crate::comp::CharacterClass::single(ClassKind::Adventurer),
+        );
         assert_eq!(pool.abilities.len(), 1);
         assert_eq!(pool.abilities[0], "innate.human");
     }
@@ -4595,7 +4660,8 @@ mod class_ability_pool_tests {
         ];
         let body = human_body();
         for class in proof_classes {
-            let pool = AbilityPool::for_character(&body, class);
+            let pool =
+                AbilityPool::for_character(&body, &crate::comp::CharacterClass::single(class));
             for key in &pool.abilities {
                 // Skip the trailing racial innate (already covered by innate tests).
                 if key.starts_with("innate.") {

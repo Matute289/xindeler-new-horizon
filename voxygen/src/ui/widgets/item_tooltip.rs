@@ -1282,13 +1282,11 @@ impl Widget for ItemTooltip<'_> {
                 .read_storage::<Body>()
                 .get(entity)
                 .and_then(|body| match_some!(*body, Body::Humanoid(b) => b.species));
-            let class = ecs
-                .read_storage::<CharacterClass>()
-                .get(entity)
-                .map(|c| c.primary);
+            let class = ecs.read_storage::<CharacterClass>().get(entity).copied();
             (level.map(|level| (level, species)), class)
         };
-        let (req_met, req_unmet) = util::requirements_text(item, viewer_class, viewer, i18n);
+        let (req_met, req_unmet) =
+            util::requirements_text(item, viewer_class.as_ref(), viewer, i18n);
         let req_anchor = if !desc.is_empty() {
             state.ids.desc
         } else if stats_count > 0 {
