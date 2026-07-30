@@ -3338,6 +3338,7 @@ impl Hud {
         let bodies = ecs.read_storage::<comp::Body>();
         let poises = ecs.read_storage::<comp::Poise>();
         let uids = ecs.read_storage::<Uid>();
+        let character_classes = ecs.read_storage::<comp::CharacterClass>();
         let combos = ecs.read_storage::<comp::Combo>();
         let combo = combos.get(entity);
         let time = ecs.read_resource::<Time>();
@@ -4068,6 +4069,7 @@ impl Hud {
                     combo,
                     stats.get(entity),
                     buffs.get(entity),
+                    character_classes.get(entity),
                 )
                 .set(self.ids.diary, ui_widgets)
                 {

@@ -22,8 +22,8 @@ use client::{self, Client};
 use common::{
     combat,
     comp::{
-        self, AttunedItems, Body, Buffs, CharacterState, ClassKind, Combo, Energy, Health,
-        Inventory, Poise, Stance, Stats,
+        self, AttunedItems, Body, Buffs, CharacterClass, CharacterState, ClassKind, Combo, Energy,
+        Health, Inventory, Poise, Stance, Stats,
         ability::{Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT},
         inventory::{
             item::{ItemI18n, ItemKind, MaterialStatManifest, item_key::ItemKey, tool::ToolKind},
@@ -217,6 +217,7 @@ pub struct Diary<'a> {
     combo: Option<&'a Combo>,
     stats: Option<&'a Stats>,
     buffs: Option<&'a Buffs>,
+    character_class: Option<&'a CharacterClass>,
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -270,6 +271,7 @@ impl<'a> Diary<'a> {
         combo: Option<&'a Combo>,
         stats: Option<&'a Stats>,
         buffs: Option<&'a Buffs>,
+        character_class: Option<&'a CharacterClass>,
     ) -> Self {
         Self {
             show,
@@ -299,6 +301,7 @@ impl<'a> Diary<'a> {
             combo,
             stats,
             buffs,
+            character_class,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -1546,13 +1549,22 @@ enum SkillIcon<'a> {
 impl Diary<'_> {
     // --- BL-06 P3a helpers -------------------------------------------------
 
-    /// Returns the first Class skill group present in the skill set, or None
-    /// for Adventurer / unclassed characters.
+    /// Returns the primary class's skill group, or `None` for Adventurer /
+    /// unclassed characters. Reads `CharacterClass` directly rather than
+    /// guessing at whichever `Class(_)` group the skill set happens to
+    /// return first — with a secondary class that guess is ambiguous.
+    /// Single-class-correct only for now; picking between the two classes'
+    /// tabs is the two-class Diary UI's job, not this accessor's.
     fn selected_class_group(&self) -> Option<SkillGroupKind> {
+        let primary = self.character_class?.primary;
+        if primary == ClassKind::Adventurer {
+            return None;
+        }
+        let group = SkillGroupKind::Class(primary);
         self.skill_set
             .skill_groups()
-            .find(|sg| matches!(sg.skill_group_kind, SkillGroupKind::Class(_)))
-            .map(|sg| sg.skill_group_kind)
+            .any(|sg| sg.skill_group_kind == group)
+            .then_some(group)
     }
 
     /// Compute the tier (depth) of `skill` in the prerequisite DAG.
