@@ -543,7 +543,7 @@ impl<'a> System<'a> for Sys {
                                 .unwrap_or_default()
                                 .energy_reward_mult
                         })
-                        .fold(1.0_f32, f32::max);
+                        .fold(f32::MIN, f32::max);
                     stat.energy_reward_modifier *= energy_reward_mult;
 
                     for (class, level, is_primary) in character_class.class_levels(character_level)
