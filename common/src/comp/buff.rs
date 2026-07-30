@@ -759,13 +759,14 @@ impl BuffKind {
                 let projectile_req = CombatRequirement::AttackSource(AttackSource::Projectile);
                 let mut energy_reward_effect =
                     AttackedModification::new(AttackedModifier::EnergyReward(data.strength))
-                        .with_requirement(projectile_req);
+                        .with_requirement(projectile_req.clone());
                 let mut damage_mult_effect =
                     AttackedModification::new(AttackedModifier::DamageMultiplier(data.strength))
                         .with_requirement(projectile_req);
                 if let Some(uid) = source_entity {
                     let attacker_req = CombatRequirement::Attacker(uid);
-                    energy_reward_effect = energy_reward_effect.with_requirement(attacker_req);
+                    energy_reward_effect =
+                        energy_reward_effect.with_requirement(attacker_req.clone());
                     damage_mult_effect = damage_mult_effect.with_requirement(attacker_req);
                 }
                 vec![

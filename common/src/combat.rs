@@ -16,7 +16,7 @@ use crate::{
             },
             slot::EquipSlot,
         },
-        skillset::SkillGroupKind,
+        skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind},
     },
     effect::BuffEffect,
     event::{
@@ -722,29 +722,32 @@ impl Attack {
                 s.conditional_precision_modifiers
                     .iter()
                     .filter_map(|(req, mult, ovrd)| {
-                        req.is_none_or(|r| {
-                            r.requirement_met(
-                                (
-                                    target.health,
-                                    target.buffs,
-                                    target.char_state,
-                                    target.ori,
-                                    Some(target.uid),
-                                ),
-                                (
-                                    attacker.map(|a| a.entity),
-                                    attacker.and_then(|a| a.energy),
-                                    attacker.and_then(|a| a.combo),
-                                ),
-                                attacker.map(|a| a.uid),
-                                0.0,
-                                emitters,
-                                dir,
-                                Some(attack_source),
-                                self.ability_info,
-                            )
-                        })
-                        .then_some((*mult, *ovrd))
+                        req.as_ref()
+                            .is_none_or(|r| {
+                                r.requirement_met(
+                                    (
+                                        target.health,
+                                        target.buffs,
+                                        target.char_state,
+                                        target.ori,
+                                        Some(target.uid),
+                                    ),
+                                    (
+                                        attacker.map(|a| a.entity),
+                                        attacker.and_then(|a| a.energy),
+                                        attacker.and_then(|a| a.combo),
+                                    ),
+                                    attacker.map(|a| a.uid),
+                                    0.0,
+                                    emitters,
+                                    dir,
+                                    Some(attack_source),
+                                    self.ability_info,
+                                    rng,
+                                    attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                                )
+                            })
+                            .then_some((*mult, *ovrd))
                     })
                     .chain(precision_mult.iter().map(|val| (*val, false)))
                     .reduce(|(val_a, ovrd_a), (val_b, ovrd_b)| {
@@ -807,6 +810,7 @@ impl Attack {
             dir,
             Some(attack_source),
             self.ability_info,
+            rng,
         );
 
         let mut is_applied = false;
@@ -1275,6 +1279,8 @@ impl Attack {
                     dir,
                     Some(attack_source),
                     self.ability_info,
+                    rng,
+                    attacker.and_then(|a| a.stats).map(|s| s.character_level),
                 )
             });
             if requirements_met {
@@ -1917,6 +1923,7 @@ impl AttackedModification {
         dir: Dir,
         attack_source: Option<AttackSource>,
         ability_info: Option<AbilityInfo>,
+        rng: &mut rand::rngs::ThreadRng,
     ) -> AttackedModifiers {
         if let Some(stats) = target.stats {
             stats.attacked_modifications.iter().fold(
@@ -1945,6 +1952,8 @@ impl AttackedModification {
                             dir,
                             attack_source,
                             ability_info,
+                            rng,
+                            attacker.and_then(|a| a.stats).map(|s| s.character_level),
                         )
                     });
 
@@ -1984,7 +1993,52 @@ pub enum AttackedModifier {
     DamageMultiplier(f32),
 }
 
+/// A max-health-scaled absolute HP threshold: flat `base` up to `breakpoint`
+/// max health, then `base + scale * (max_health - breakpoint)` above it —
+/// continuous at the breakpoint by construction. Absolute HP, not a fraction
+/// (see [`CombatRequirement::TargetHealthBelow`] for that), for effects where
+/// the same flat pool of HP is always fatal regardless of the target's
+/// max-health, only scaling up gently for very tanky targets.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HealthThreshold {
+    pub base: f32,
+    pub breakpoint: f32,
+    pub scale: f32,
+}
+
+impl HealthThreshold {
+    pub fn threshold(&self, max_health: f32) -> f32 {
+        self.base + self.scale * (max_health - self.breakpoint).max(0.0)
+    }
+}
+
+/// A caster-level-scaled chance to fail a cast outright: below
+/// `unlock_level` this always fails (pair with an ability-side `min_level`
+/// gate so the ability can't even be attempted that low); from
+/// `unlock_level` up to `MAX_CHARACTER_LEVEL` the fail chance falls linearly
+/// from `fail_chance_at_unlock` to `fail_chance_at_max_level`. This is a roll
+/// against the caster's own level, independent of the target — there is no
+/// target-side resistance to weigh against it.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CasterLevelFailChance {
+    pub unlock_level: u16,
+    pub fail_chance_at_unlock: f32,
+    pub fail_chance_at_max_level: f32,
+}
+
+impl CasterLevelFailChance {
+    pub fn fail_chance(&self, caster_level: u16) -> f32 {
+        if caster_level <= self.unlock_level {
+            return self.fail_chance_at_unlock;
+        }
+        let span = f32::from(MAX_CHARACTER_LEVEL.saturating_sub(self.unlock_level)).max(1.0);
+        let progress = (f32::from(caster_level.saturating_sub(self.unlock_level)) / span).min(1.0);
+        self.fail_chance_at_unlock
+            + (self.fail_chance_at_max_level - self.fail_chance_at_unlock) * progress
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum CombatRequirement {
     AnyDamage,
     Energy(f32),
@@ -2004,6 +2058,18 @@ pub enum CombatRequirement {
     /// than an absolute HP value, so a single tuning number scales correctly
     /// across creatures with very different max health pools.
     TargetHealthBelow(f32),
+    /// Met when the target's absolute remaining HP is at or below a
+    /// max-health-scaled threshold (see [`HealthThreshold`]) — a
+    /// deterministic check, no roll on the target's side.
+    TargetHealthAtOrBelow(HealthThreshold),
+    /// Met by a random roll against the caster's own level (see
+    /// [`CasterLevelFailChance`]) — no target-side term at all.
+    CasterLevelRoll(CasterLevelFailChance),
+    /// Met when every inner requirement is met — an AND combinator, for
+    /// composing more than one `CombatRequirement` where an ability's RON
+    /// shape only has room for a single requirement slot (e.g.
+    /// `attack_effect: Option<(CombatEffect, CombatRequirement)>`).
+    All(Vec<CombatRequirement>),
 }
 
 impl CombatRequirement {
@@ -2026,6 +2092,11 @@ impl CombatRequirement {
         dir: Dir,
         attack_source: Option<AttackSource>,
         ability_info: Option<AbilityInfo>,
+        rng: &mut rand::rngs::ThreadRng,
+        // The caster's own derived character level, when known — distinct
+        // from `attacker` (a `Uid` used for identity checks). Only
+        // `CasterLevelRoll` and `All` (recursively) consume it.
+        caster_level: Option<u16>,
     ) -> bool {
         let (target_health, target_buffs, target_char_state, target_ori, target_uid) = target;
         let (originator_entity, originator_energy, originator_combo) = originator;
@@ -2091,6 +2162,24 @@ impl CombatRequirement {
             CombatRequirement::TargetHealthBelow(threshold) => {
                 target_health.is_some_and(|h| h.fraction() < *threshold)
             },
+            CombatRequirement::TargetHealthAtOrBelow(health_threshold) => target_health
+                .is_some_and(|h| h.current() <= health_threshold.threshold(h.maximum())),
+            CombatRequirement::CasterLevelRoll(fail_chance) => caster_level
+                .is_some_and(|level| rng.random::<f32>() >= fail_chance.fail_chance(level)),
+            CombatRequirement::All(reqs) => reqs.iter().all(|req| {
+                req.requirement_met(
+                    target,
+                    originator,
+                    attacker,
+                    damage,
+                    emitters,
+                    dir,
+                    attack_source,
+                    ability_info,
+                    rng,
+                    caster_level,
+                )
+            }),
         }
     }
 }
@@ -3026,6 +3115,46 @@ pub fn get_equip_slot_by_block_priority(inventory: Option<&Inventory>) -> EquipS
                 (None, None) => EquipSlot::ActiveMainhand,
             },
         )
+}
+
+#[cfg(test)]
+mod power_word_kill_threshold_tests {
+    use super::{CasterLevelFailChance, HealthThreshold};
+
+    // Base 100 HP up to 215 max health, then 100 + (1/3)(max_health - 215)
+    // above it — continuous at the breakpoint (no discontinuous jump that
+    // would favor tankier targets over less tanky ones).
+    const POWER_WORD_KILL: HealthThreshold = HealthThreshold {
+        base: 100.0,
+        breakpoint: 215.0,
+        scale: 1.0 / 3.0,
+    };
+
+    #[test]
+    fn flat_below_and_at_breakpoint() {
+        assert_eq!(POWER_WORD_KILL.threshold(50.0), 100.0);
+        assert_eq!(POWER_WORD_KILL.threshold(215.0), 100.0);
+    }
+
+    #[test]
+    fn continuous_and_scaled_above_breakpoint() {
+        assert!((POWER_WORD_KILL.threshold(1000.0) - 361.666_67).abs() < 0.01);
+        assert_eq!(POWER_WORD_KILL.threshold(2000.0), 695.0);
+    }
+
+    #[test]
+    fn caster_level_roll_clamps_below_unlock_and_interpolates_to_max_level() {
+        let curve = CasterLevelFailChance {
+            unlock_level: 50,
+            fail_chance_at_unlock: 0.25,
+            fail_chance_at_max_level: 0.05,
+        };
+        assert_eq!(curve.fail_chance(1), 0.25);
+        assert_eq!(curve.fail_chance(50), 0.25);
+        assert!((curve.fail_chance(60) - 0.05).abs() < 0.001);
+        // Halfway from L50 to L60 (L55) should be halfway from 25% to 5%.
+        assert!((curve.fail_chance(55) - 0.15).abs() < 0.001);
+    }
 }
 
 #[cfg(test)]
