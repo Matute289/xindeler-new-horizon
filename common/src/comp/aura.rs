@@ -1,5 +1,5 @@
 use crate::{
-    combat::GroupTarget,
+    combat::{GroupTarget, HealthTier},
     comp::{
         CharacterClass,
         buff::{BuffCategory, BuffData, BuffKind, BuffSource},
@@ -43,6 +43,29 @@ pub enum AuraKind {
     /// affected by this aura, only player entities will be affected by this
     /// aura.
     ForcePvP,
+    /// Selects up to `max_targets` nearest eligible targets (same
+    /// group/range eligibility as `Buff`), and for each one independently —
+    /// not shared like `Buff::pool_split` — resolves the single worst tier of
+    /// `tiers` that target's OWN current health qualifies for, applying that
+    /// tier's effect to just that target. Reuses `combat::HealthTier`, the
+    /// same tiered-ladder shape `CombatEffect::TieredHealthEffect` uses for
+    /// single-target attacks, so spell authors write one kind of tier table
+    /// regardless of whether the effect comes from an attack or an aura.
+    /// Built for `power_word_divine_word`'s capped-area judgment and meant to
+    /// be reused by any future capped-nearest-N, per-target-resolved spell
+    /// (e.g. a `Prismatic Spray`-style effect).
+    ///
+    /// Semantic difference from the attack-pipeline version: there is no
+    /// underlying attack damage here, so `TierEffect::AdditionalDamage(v)` is
+    /// interpreted as a flat health change of `v` (not a multiplier), and
+    /// `CombatBuffStrength::DamageFraction` in a `TierEffect::Buff` resolves
+    /// against `0.0` damage (effectively always `0`) — tier tables meant for
+    /// aura use should stick to `CombatBuffStrength::Value`.
+    TieredHealthEffect {
+        tiers: Vec<HealthTier>,
+        max_targets: usize,
+        source: BuffSource,
+    },
     /* TODO: Implement other effects here. Things to think about
      * are terrain/sprite effects, collision and physics, and
      * environmental conditions like temperature and humidity
@@ -55,6 +78,7 @@ pub enum AuraKindVariant {
     Buff,
     FriendlyFire,
     ForcePvP,
+    TieredHealthEffect,
 }
 
 /// Aura
@@ -132,6 +156,7 @@ impl AsRef<AuraKindVariant> for AuraKind {
             AuraKind::Buff { .. } => &AuraKindVariant::Buff,
             AuraKind::FriendlyFire => &AuraKindVariant::FriendlyFire,
             AuraKind::ForcePvP => &AuraKindVariant::ForcePvP,
+            AuraKind::TieredHealthEffect { .. } => &AuraKindVariant::TieredHealthEffect,
         }
     }
 }
@@ -275,6 +300,46 @@ impl AuraBuffConstructor {
                 tool_kind: entity_info.1,
             },
             pool_split: self.pool_split.clone().map(Box::new),
+        };
+        Aura::new(
+            aura_kind,
+            radius,
+            duration,
+            target,
+            time,
+            frontend_specifier,
+        )
+    }
+}
+
+/// RON-facing config for [`AuraKind::TieredHealthEffect`]. Kept separate from
+/// `AuraBuffConstructor` (rather than adding an optional field there) because
+/// it builds a fundamentally different `AuraKind` variant, not a `Buff` with
+/// extra knobs.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TieredHealthEffectConstructor {
+    pub tiers: Vec<HealthTier>,
+    pub max_targets: usize,
+}
+
+impl TieredHealthEffectConstructor {
+    pub fn to_aura(
+        &self,
+        entity_info: (&Uid, Option<ToolKind>),
+        radius: f32,
+        duration: Option<Secs>,
+        target: AuraTarget,
+        time: Time,
+        frontend_specifier: Option<Specifier>,
+    ) -> Aura {
+        let aura_kind = AuraKind::TieredHealthEffect {
+            tiers: self.tiers.clone(),
+            max_targets: self.max_targets,
+            source: BuffSource::Character {
+                by: *entity_info.0,
+                tool_kind: entity_info.1,
+            },
         };
         Aura::new(
             aura_kind,

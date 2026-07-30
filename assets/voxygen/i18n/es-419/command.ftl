@@ -227,6 +227,8 @@ command-adminify-role-upgraded = Rol del jugador { $player } ascendido a { $role
 
 command-aura-invalid-buff-parameters = Parámetros de potenciador inválidos para aura
 
+command-aura-tiered-effect-unsupported = No se pueden generar auras de efecto por escalones de vida con este comando
+
 command-aura-spawn = Se generó un nuevo aura adjunto a la entidad
 
 command-aura-spawn-new-entity = Se generó un nuevo aura

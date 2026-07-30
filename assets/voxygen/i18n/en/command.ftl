@@ -284,6 +284,7 @@ command-message-group-missing = You are using group chat but do not belong to a 
 command-tell-to-yourself = You can't /tell yourself.
 command-transform-invalid-presence = Cannot transform in the current presence
 command-aura-invalid-buff-parameters = Invalid buff parameters for aura
+command-aura-tiered-effect-unsupported = Tiered health-effect auras cannot be spawned via this command
 command-aura-spawn = Spawned new aura attached to entity
 command-aura-spawn-new-entity = Spawned new aura
 command-reloaded-chunks = Reloaded { $reloaded } chunks

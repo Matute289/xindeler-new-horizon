@@ -5820,6 +5820,9 @@ fn handle_aura(
         },
         AuraKindVariant::FriendlyFire => AuraKind::FriendlyFire,
         AuraKindVariant::ForcePvP => AuraKind::ForcePvP,
+        AuraKindVariant::TieredHealthEffect => {
+            return Err(Content::localized("command-aura-tiered-effect-unsupported"));
+        },
     };
     let aura_target = server
         .state

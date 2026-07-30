@@ -1,15 +1,15 @@
 use std::collections::HashSet;
 
 use common::{
-    combat,
+    combat::{self, DamageSource, TierEffect},
     comp::{
-        Alignment, Aura, Auras, BuffKind, Buffs, CharacterClass, CharacterState, Health, Mass,
-        Player, Pos, Stats,
+        Alignment, Aura, Auras, BuffKind, Buffs, CharacterClass, CharacterState, Health,
+        HealthChange, Mass, Player, Pos, Stats,
         aura::{AuraChange, AuraKey, AuraKind, AuraTarget, EnteredAuras},
         buff::{Buff, BuffCategory, BuffChange, BuffSource, DestInfo},
         group::Group,
     },
-    event::{AuraEvent, BuffEvent, EmitExt},
+    event::{AuraEvent, BuffEvent, EmitExt, HealthChangeEvent},
     event_emitters, match_some,
     resources::Time,
     uid::{IdMaps, Uid},
@@ -21,6 +21,7 @@ event_emitters! {
     struct Events[Emitters] {
         aura: AuraEvent,
         buff: BuffEvent,
+        health_change: HealthChangeEvent,
     }
 }
 
@@ -102,29 +103,38 @@ impl<'a> System<'a> for Sys {
                     }
                 };
 
+                // Shared by any aura kind that needs "up to N nearest
+                // eligible targets" instead of everyone in radius -- resolves
+                // who's selected once per activation before the per-target
+                // loop, so both pool-split buffs and tiered health effects
+                // can build on the same capped-nearest-N selection.
+                let nearest_eligible = |max_targets: usize| -> Vec<(specs::Entity, f32)> {
+                    let mut nearest = read_data
+                        .cached_spatial_grid
+                        .0
+                        .in_circle_aabr(pos.0.xy(), aura.radius)
+                        .filter_map(|target| {
+                            let target_pos = read_data.positions.get(target)?;
+                            let target_uid = read_data.uids.get(target)?;
+                            eligible(target, target_pos, target_uid)
+                                .then(|| (target, target_pos.0.distance_squared(pos.0)))
+                        })
+                        .collect::<Vec<_>>();
+                    nearest.sort_by(|(_, a), (_, b)| a.total_cmp(b));
+                    nearest.truncate(max_targets.max(1));
+                    nearest
+                };
+
                 // A pool-split aura shares one total among the nearest
                 // eligible targets (capped) instead of applying a flat
-                // strength to everyone found -- resolve who gets a share, and
-                // how much, once per activation before the per-target loop.
+                // strength to everyone found.
                 let pool_split_strength: std::collections::HashMap<specs::Entity, f32> =
                     if let AuraKind::Buff {
                         pool_split: Some(split),
                         ..
                     } = &aura.aura_kind
                     {
-                        let mut nearest = read_data
-                            .cached_spatial_grid
-                            .0
-                            .in_circle_aabr(pos.0.xy(), aura.radius)
-                            .filter_map(|target| {
-                                let target_pos = read_data.positions.get(target)?;
-                                let target_uid = read_data.uids.get(target)?;
-                                eligible(target, target_pos, target_uid)
-                                    .then(|| (target, target_pos.0.distance_squared(pos.0)))
-                            })
-                            .collect::<Vec<_>>();
-                        nearest.sort_by(|(_, a), (_, b)| a.total_cmp(b));
-                        nearest.truncate(split.max_targets.max(1));
+                        let nearest = nearest_eligible(split.max_targets);
                         let total = split.resolved_total(
                             read_data.stats.get(entity).map(|s| s.character_level),
                             read_data.character_classes.get(entity),
@@ -138,6 +148,23 @@ impl<'a> System<'a> for Sys {
                     pool_split: Some(_),
                     ..
                 });
+
+                // A tiered-health-effect aura resolves an independent effect
+                // per selected target (against that target's own current
+                // health), rather than sharing a pool -- only the selection
+                // (who's in range/eligible, capped nearest-first) is shared
+                // logic with pool-split.
+                let tiered_health_targets: HashSet<specs::Entity> =
+                    if let AuraKind::TieredHealthEffect { max_targets, .. } = &aura.aura_kind {
+                        nearest_eligible(*max_targets)
+                            .into_iter()
+                            .map(|(e, _)| e)
+                            .collect()
+                    } else {
+                        HashSet::new()
+                    };
+                let has_tiered_health_effect =
+                    matches!(aura.aura_kind, AuraKind::TieredHealthEffect { .. });
 
                 let target_iter = read_data
                     .cached_spatial_grid
@@ -164,6 +191,11 @@ impl<'a> System<'a> for Sys {
                     // resolved above, at their computed share -- never the
                     // aura's own (unused) flat strength.
                     if has_pool_split && !pool_split_strength.contains_key(&target) {
+                        return;
+                    }
+                    // Likewise, a tiered-health-effect aura only ever
+                    // activates for its capped nearest-N selection.
+                    if has_tiered_health_effect && !tiered_health_targets.contains(&target) {
                         return;
                     }
 
@@ -260,7 +292,7 @@ fn activate_aura(
     target_buffs: &Buffs,
     allow_friendly_fire: bool,
     read_data: &ReadData,
-    emitters: &mut impl EmitExt<BuffEvent>,
+    emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent>),
 ) -> bool {
     let should_activate = match aura.aura_kind {
         AuraKind::Buff { kind, source, .. } => {
@@ -314,7 +346,9 @@ fn activate_aura(
             conditions_held
                 && (kind.is_buff() || allow_friendly_fire || indiscriminate || permit_pvp())
         },
-        AuraKind::FriendlyFire => true,
+        // Selection (who's eligible, capped nearest-N) was already resolved
+        // in `Sys::run` before this target was allowed to reach here.
+        AuraKind::FriendlyFire | AuraKind::TieredHealthEffect { .. } => true,
         AuraKind::ForcePvP => {
             // Only apply this aura to players
             read_data.players.contains(target)
@@ -334,62 +368,153 @@ fn activate_aura(
             ref category,
             source,
             pool_split: _,
-        } => {
-            // Checks that target is not already receiving a buff
-            // from an aura, where the buff is of the same kind,
-            // and is of at least the same strength
-            // and of at least the same duration.
-            // If no such buff is present, adds the buff.
-            // BL-66 d: bake the aura applier's heal_power into healing aura
-            // strength (same approach combat.rs uses for instant heals) BEFORE the
-            // dedup check, so the check compares like-for-like scaled strengths and
-            // doesn't re-emit every tick when heal_power < 1.0. Non-healing buffs
-            // are untouched. `data`/`BuffData` is Copy, so this reads the aura's base
-            // each tick — no compounding.
-            let mut data = data;
-            if kind.is_heal() {
-                let hp = read_data.stats.get(applier).map_or(1.0, |s| s.heal_power);
-                data.strength *= hp;
-            }
-            let emit_buff = !target_buffs.buffs.iter().any(|(_, buff)| {
-                buff.cat_ids
-                    .iter()
-                    .any(|cat_id| matches!(cat_id, BuffCategory::FromActiveAura(uid, aura_key) if *aura_key == key && *uid == applier_uid))
-                    && buff.kind == kind
-                    && buff.data.strength >= data.strength
-            });
-            if emit_buff {
-                let dest_info = DestInfo {
-                    stats: read_data.stats.get(target),
-                    mass: read_data.masses.get(target),
-                };
-                let buff_cats = {
-                    let mut vec = vec![BuffCategory::FromActiveAura(applier_uid, key)];
-                    if let Some(cat) = category {
-                        vec.push(cat.clone());
-                    }
-                    vec
-                };
-                emitters.emit(BuffEvent {
-                    entity: target,
-                    buff_change: BuffChange::Add(Buff::new(
-                        kind,
-                        data,
-                        buff_cats,
-                        source,
-                        *read_data.time,
-                        dest_info,
-                        read_data.masses.get(applier),
-                        // Auras, after the initial creation, do not have a specific target that an
-                        // ability is designating
-                        None,
-                    )),
-                });
-            }
-        },
+        } => apply_buff_aura(
+            kind,
+            data,
+            category,
+            source,
+            key,
+            applier,
+            applier_uid,
+            target,
+            target_buffs,
+            read_data,
+            emitters,
+        ),
+        AuraKind::TieredHealthEffect { ref tiers, .. } => apply_tiered_health_effect(
+            tiers,
+            health,
+            applier,
+            applier_uid,
+            target,
+            read_data,
+            emitters,
+        ),
         // No implementation needed for these auras
         AuraKind::FriendlyFire | AuraKind::ForcePvP => {},
     }
 
     true
+}
+
+/// Adds the aura's buff to `target` unless an equal-or-stronger instance from
+/// this same aura is already active. Split out of `activate_aura` to keep
+/// that function under clippy's line-count lint.
+fn apply_buff_aura(
+    kind: BuffKind,
+    data: common::comp::buff::BuffData,
+    category: &Option<BuffCategory>,
+    source: BuffSource,
+    key: AuraKey,
+    applier: EcsEntity,
+    applier_uid: Uid,
+    target: EcsEntity,
+    target_buffs: &Buffs,
+    read_data: &ReadData,
+    emitters: &mut impl EmitExt<BuffEvent>,
+) {
+    // Checks that target is not already receiving a buff from an aura, where
+    // the buff is of the same kind, and is of at least the same strength and
+    // of at least the same duration. If no such buff is present, adds the
+    // buff.
+    // Bake the aura applier's heal_power into healing aura strength (same
+    // approach combat.rs uses for instant heals) BEFORE the dedup check, so
+    // the check compares like-for-like scaled strengths and doesn't re-emit
+    // every tick when heal_power < 1.0. Non-healing buffs are untouched.
+    // `data`/`BuffData` is Copy, so this reads the aura's base each tick — no
+    // compounding.
+    let mut data = data;
+    if kind.is_heal() {
+        let hp = read_data.stats.get(applier).map_or(1.0, |s| s.heal_power);
+        data.strength *= hp;
+    }
+    let emit_buff = !target_buffs.buffs.iter().any(|(_, buff)| {
+        buff.cat_ids
+            .iter()
+            .any(|cat_id| matches!(cat_id, BuffCategory::FromActiveAura(uid, aura_key) if *aura_key == key && *uid == applier_uid))
+            && buff.kind == kind
+            && buff.data.strength >= data.strength
+    });
+    if !emit_buff {
+        return;
+    }
+    let dest_info = DestInfo {
+        stats: read_data.stats.get(target),
+        mass: read_data.masses.get(target),
+    };
+    let buff_cats = {
+        let mut vec = vec![BuffCategory::FromActiveAura(applier_uid, key)];
+        if let Some(cat) = category {
+            vec.push(cat.clone());
+        }
+        vec
+    };
+    emitters.emit(BuffEvent {
+        entity: target,
+        buff_change: BuffChange::Add(Buff::new(
+            kind,
+            data,
+            buff_cats,
+            source,
+            *read_data.time,
+            dest_info,
+            read_data.masses.get(applier),
+            // Auras, after the initial creation, do not have a specific target that an
+            // ability is designating
+            None,
+        )),
+    });
+}
+
+/// Resolves the single worst tier `target`'s own current health qualifies
+/// for and applies its effect. Split out of `activate_aura` to keep that
+/// function under clippy's line-count lint.
+fn apply_tiered_health_effect(
+    tiers: &[combat::HealthTier],
+    health: &Health,
+    applier: EcsEntity,
+    applier_uid: Uid,
+    target: EcsEntity,
+    read_data: &ReadData,
+    emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent>),
+) {
+    let Some(tier) = tiers
+        .iter()
+        .find(|t| health.current() <= t.max_current_health)
+    else {
+        return;
+    };
+    match &tier.effect {
+        TierEffect::Buff(b) => {
+            if rand::random::<f32>() < b.chance {
+                emitters.emit(BuffEvent {
+                    entity: target,
+                    buff_change: BuffChange::Add(b.to_buff(
+                        *read_data.time,
+                        (Some(applier_uid), read_data.masses.get(applier)),
+                        (read_data.stats.get(target), read_data.masses.get(target)),
+                        0.0,
+                        1.0,
+                        None,
+                    )),
+                });
+            }
+        },
+        // Semantic difference from the attack pipeline: there is no
+        // underlying attack damage to multiply here, so this is a flat
+        // health change, not a multiplier.
+        TierEffect::AdditionalDamage(amount) => {
+            emitters.emit(HealthChangeEvent {
+                entity: target,
+                change: HealthChange {
+                    amount: -amount,
+                    by: Some(combat::DamageContributor::Solo(applier_uid)),
+                    cause: Some(DamageSource::Other),
+                    time: *read_data.time,
+                    precise: false,
+                    instance: rand::random(),
+                },
+            });
+        },
+    }
 }

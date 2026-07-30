@@ -1357,6 +1357,12 @@ pub enum CharacterAbility {
         recover_duration: f32,
         targets: combat::GroupTarget,
         auras: Vec<aura::AuraBuffConstructor>,
+        /// Capped-nearest-N, per-target-tiered effects (see
+        /// `aura::AuraKind::TieredHealthEffect`) created alongside `auras`.
+        /// Kept as a separate list since these build a different `AuraKind`
+        /// variant entirely, not a `Buff`.
+        #[serde(default)]
+        tiered_health_effects: Vec<aura::TieredHealthEffectConstructor>,
         aura_duration: Option<Secs>,
         range: f32,
         energy_cost: f32,
@@ -2261,6 +2267,7 @@ impl CharacterAbility {
                 ref mut recover_duration,
                 targets: _,
                 ref mut auras,
+                tiered_health_effects: _,
                 aura_duration: _,
                 ref mut range,
                 ref mut energy_cost,
@@ -3613,6 +3620,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 recover_duration,
                 targets,
                 auras,
+                tiered_health_effects,
                 aura_duration,
                 range,
                 energy_cost: _,
@@ -3626,6 +3634,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     recover_duration: Duration::from_secs_f32(*recover_duration),
                     targets: *targets,
                     auras: auras.clone(),
+                    tiered_health_effects: tiered_health_effects.clone(),
                     aura_duration: *aura_duration,
                     range: *range,
                     ability_info,
