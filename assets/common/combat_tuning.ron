@@ -27,4 +27,25 @@
     gear_evasion_floor: -10.0, // full plate cannot drag below this
     armor_evasion_per_protection: 0.3, // evasion lost per point of armor protection
     shield_evasion_penalty: 2.0, // flat -evasion while a shield is equipped
+
+    // --- resisted mind-altering effects (charm / domination / compulsion) ---
+    // chance% = clamp(charm_base_hit + level_term - resist - in_combat,
+    //                 charm_hit_floor, charm_hit_ceil)
+    //   level_term = (caster magic_accuracy - effective magic evasion) * hit_k
+    //   effective magic evasion = target magic_evasion + combat_rating * charm_cr_to_evasion
+    //   resist = clamp(magic resistance + crowd_control_resistance, 0, charm_mr_soft_cap)
+    // ...except that a level_term at or below -charm_outclassed_wall returns 0%
+    // outright, bypassing the floor.
+    charm_base_hit:  0.70, // own base, below base_hit: charm tunes apart from damage
+    charm_hit_floor: 0.05, // a disadvantaged (not outclassed) attempt is never impossible
+    charm_hit_ceil:  0.95, // below hit_ceil on purpose: a charm is never guaranteed
+    charm_mr_soft_cap: 0.75, // stacked resistances can't reach immunity
+    charm_cr_to_evasion: 2.0, // magic evasion per point of the target's combat_rating
+    charm_in_combat_penalty: 0.20, // -20pp if the target is already fighting the caster
+    charm_outclassed_wall: 0.30, // level_term <= -0.30 -> always fails, no floor rescue
+
+    // magic-resistance tier values; the tier taxonomy itself lives in Rust
+    magic_resist_minor:     0.15, // e.g. fey ancestry
+    magic_resist_major:     0.30, // the magic-resistance trait
+    magic_resist_legendary: 0.50, // magic resistance + legendary-resistance analogue
 )

@@ -6,6 +6,7 @@ use crate::{
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
+        body::MagicResistTier,
         buff::{Buff, BuffChange, BuffData, BuffDescriptor, BuffKind, BuffSource, DestInfo},
         inventory::{
             item::{
@@ -101,6 +102,45 @@ pub struct CombatTuning {
     /// Flat evasion penalty while a shield is equipped — a shield pays off via
     /// block/mitigation, not dodge.
     pub shield_evasion_penalty: f32,
+    /// Chance for a resisted mind-altering effect (charm / domination /
+    /// compulsion) to land when the caster's magic accuracy exactly equals the
+    /// target's *effective* magic evasion. Deliberately below `base_hit` so
+    /// these effects can be tuned without touching the damage curve.
+    pub charm_base_hit: f32,
+    /// Minimum landing chance for a mind-altering effect, for a caster that is
+    /// merely at a disadvantage rather than hard-walled by
+    /// `charm_outclassed_wall` — such an attempt is unlikely, never impossible.
+    pub charm_hit_floor: f32,
+    /// Maximum landing chance for a mind-altering effect. Deliberately below
+    /// `hit_ceil`: damage may become guaranteed, a charm never may, so every
+    /// target keeps an escape roll no matter the level gap.
+    pub charm_hit_ceil: f32,
+    /// Hard cap on the combined magic-resistance + crowd-control-resistance
+    /// subtraction, mirroring `resist_soft_cap`. Stacked resistances can never
+    /// reach immunity — only `Body::immune_to` grants that.
+    pub charm_mr_soft_cap: f32,
+    /// Points of effective magic evasion granted per point of the target's
+    /// `combat_rating`. Creatures carry no class attributes, so their
+    /// `Stats::magic_evasion` is 0.0; without this term a world boss would be
+    /// as charmable as a rabbit.
+    pub charm_cr_to_evasion: f32,
+    /// Flat penalty subtracted when the target is already fighting the caster
+    /// or the caster's group, which makes a charm an opener rather than a
+    /// mid-duel button. Applies identically in PvE and PvP.
+    pub charm_in_combat_penalty: f32,
+    /// Resistance fraction each `MagicResistTier` above `None` is worth. The
+    /// tier *taxonomy* lives in code (`Body::magic_resist_tier`); only these
+    /// numbers are data.
+    pub magic_resist_minor: f32,
+    pub magic_resist_major: f32,
+    pub magic_resist_legendary: f32,
+    /// Hard wall on the level term, expressed in the same post-`hit_k` units
+    /// the level term itself uses (not raw accuracy/evasion points). A caster
+    /// whose accuracy deficit against the target's effective magic evasion
+    /// reaches this magnitude always fails outright, bypassing
+    /// `charm_hit_floor` entirely: being sufficiently outclassed removes the
+    /// rescue roll, while a merely unfavourable matchup keeps it.
+    pub charm_outclassed_wall: f32,
 }
 
 impl Default for CombatTuning {
@@ -119,8 +159,183 @@ impl Default for CombatTuning {
             gear_evasion_floor: -10.0,
             armor_evasion_per_protection: 0.3,
             shield_evasion_penalty: 2.0,
+            charm_base_hit: 0.70,
+            charm_hit_floor: 0.05,
+            charm_hit_ceil: 0.95,
+            charm_mr_soft_cap: 0.75,
+            charm_cr_to_evasion: 2.0,
+            charm_in_combat_penalty: 0.20,
+            magic_resist_minor: 0.15,
+            magic_resist_major: 0.30,
+            magic_resist_legendary: 0.50,
+            charm_outclassed_wall: 0.30,
         }
     }
+}
+
+impl CombatTuning {
+    /// The resistance fraction a creature's innate [`MagicResistTier`] is
+    /// worth. `None` is always exactly 0.0 and therefore needs no constant.
+    pub fn magic_resist_tier_value(&self, tier: MagicResistTier) -> f32 {
+        match tier {
+            MagicResistTier::None => 0.0,
+            MagicResistTier::Minor => self.magic_resist_minor,
+            MagicResistTier::Major => self.magic_resist_major,
+            MagicResistTier::Legendary => self.magic_resist_legendary,
+        }
+    }
+}
+
+/// The caster side of a resisted mind-altering roll.
+#[derive(Copy, Clone, Debug)]
+pub struct CharmCasterInfo {
+    /// `Stats::magic_accuracy` of the caster.
+    pub magic_accuracy: f32,
+}
+
+/// The target side of a resisted mind-altering roll, gathered once from shipped
+/// components at application time.
+#[derive(Copy, Clone, Debug)]
+pub struct CharmTargetInfo {
+    /// `Stats::magic_evasion` — class/level derived, so 0.0 for a plain
+    /// creature.
+    pub stats_magic_evasion: f32,
+    /// `Stats::crowd_control_resistance`.
+    pub crowd_control_resistance: f32,
+    /// `Stats::magic_resistance` — the additive contribution from racial
+    /// passives and buffs, on top of the innate creature tier below.
+    pub stats_magic_resistance: f32,
+    /// `Body::magic_resist_tier()` — the innate per-creature tier.
+    pub magic_resist_tier: MagicResistTier,
+    /// `combat_rating` for this target: the difficulty axis that stands in for
+    /// a character level on creatures that have no class attributes.
+    pub combat_rating: f32,
+}
+
+impl CharmTargetInfo {
+    /// Total magic resistance: the innate creature tier plus whatever has
+    /// already accumulated on `Stats`.
+    pub fn magic_resistance(&self, tuning: &CombatTuning) -> f32 {
+        tuning.magic_resist_tier_value(self.magic_resist_tier) + self.stats_magic_resistance
+    }
+}
+
+/// The evasion a resisted mind-altering roll is made against: the target's
+/// class/level magic evasion plus a contribution derived from its
+/// `combat_rating`, which is the only difficulty signal a creature without
+/// class attributes has.
+pub fn effective_magic_evasion(target: &CharmTargetInfo, tuning: &CombatTuning) -> f32 {
+    target.stats_magic_evasion + target.combat_rating * tuning.charm_cr_to_evasion
+}
+
+/// Probability in `0.0..=1.0` that a resisted mind-altering effect lands on
+/// `target`.
+///
+/// `fighting_caster` is the [`is_fighting_caster`] predicate: a target already
+/// in a fight with the caster (or the caster's group) is harder to charm.
+///
+/// A caster far enough below the target's effective magic evasion returns
+/// exactly `0.0` — the outclassed wall is checked *before* the clamp, which is
+/// what distinguishes it from one more subtracted term and is why it can
+/// produce a result below `charm_hit_floor`.
+pub fn charm_success_chance(
+    caster: &CharmCasterInfo,
+    target: &CharmTargetInfo,
+    fighting_caster: bool,
+    tuning: &CombatTuning,
+) -> f32 {
+    let level_term =
+        (caster.magic_accuracy - effective_magic_evasion(target, tuning)) * tuning.hit_k;
+
+    if level_term <= -tuning.charm_outclassed_wall {
+        return 0.0;
+    }
+
+    let resist = (target.magic_resistance(tuning) + target.crowd_control_resistance)
+        .clamp(0.0, tuning.charm_mr_soft_cap);
+    let in_combat = if fighting_caster {
+        tuning.charm_in_combat_penalty
+    } else {
+        0.0
+    };
+    (tuning.charm_base_hit + level_term - resist - in_combat)
+        .clamp(tuning.charm_hit_floor, tuning.charm_hit_ceil)
+}
+
+/// How recent a hostile health change must be to still count as "currently
+/// fighting", matching the window the pet behaviour tree already uses to decide
+/// that its owner was attacked.
+pub const CHARM_RECENT_COMBAT_SECS: f64 = 5.0;
+
+/// Everything [`is_fighting_caster`] needs, read once from already-shipped
+/// components at application time — no new component, no timer, no per-tick
+/// scan.
+pub struct CharmCombatContext<'a> {
+    pub caster_uid: Uid,
+    pub caster_group: Option<Group>,
+    pub target_uid: Uid,
+    pub target_group: Option<Group>,
+    /// `(uid, group)` of the entity the target's `Agent` is currently *hostile*
+    /// towards, when the target is a creature with such a target at all. `None`
+    /// for a player, which has no `Agent`.
+    pub target_hostile_focus: Option<(Uid, Option<Group>)>,
+    /// The target's most recent `Health::last_change` — the fallback signal for
+    /// player targets.
+    pub target_last_change: Option<&'a HealthChange>,
+    /// The caster's most recent `Health::last_change`, so the check fires
+    /// whether the caster hit the target or the target hit the caster.
+    pub caster_last_change: Option<&'a HealthChange>,
+    /// Current `Time`.
+    pub now: f64,
+}
+
+/// Whether the target of a mind-altering effect already counts as fighting the
+/// caster or the caster's group, which costs the caster
+/// `charm_in_combat_penalty`.
+///
+/// Creature targets answer this from their existing hostile agent target;
+/// players, having no agent, fall back to recent attributable damage in *both*
+/// directions.
+pub fn is_fighting_caster(ctx: &CharmCombatContext<'_>) -> bool {
+    if let Some((focus_uid, focus_group)) = ctx.target_hostile_focus
+        && (focus_uid == ctx.caster_uid
+            || (focus_group.is_some() && focus_group == ctx.caster_group))
+    {
+        return true;
+    }
+    recent_hostile_change_by(
+        ctx.target_last_change,
+        ctx.now,
+        ctx.caster_uid,
+        ctx.caster_group,
+    ) || recent_hostile_change_by(
+        ctx.caster_last_change,
+        ctx.now,
+        ctx.target_uid,
+        ctx.target_group,
+    )
+}
+
+/// Whether `change` is a damaging health change taken within
+/// [`CHARM_RECENT_COMBAT_SECS`] and attributable to `uid` or to `group`.
+fn recent_hostile_change_by(
+    change: Option<&HealthChange>,
+    now: f64,
+    uid: Uid,
+    group: Option<Group>,
+) -> bool {
+    change.is_some_and(|change| {
+        change.amount < 0.0
+            && now - change.time.0 < CHARM_RECENT_COMBAT_SECS
+            && match change.damage_by() {
+                Some(DamageContributor::Solo(by)) => by == uid,
+                Some(DamageContributor::Group {
+                    entity_uid,
+                    group: by_group,
+                }) => entity_uid == uid || group == Some(by_group),
+                None => false,
+            }
+    })
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -3017,5 +3232,395 @@ mod combat_resolution_tests {
         assert!((combine(0.0, 0.95) - cap).abs() < 1e-6);
         // Negative resist is floored at 0 — never amplifies AoE damage.
         assert!((combine(0.25, -0.5) - 0.25).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod charm_resist_tests {
+    use super::{
+        AttackSource, CharmCasterInfo, CharmCombatContext, CharmTargetInfo, CombatTuning,
+        DamageContributor, DamageSource, charm_success_chance, effective_magic_evasion,
+        is_fighting_caster,
+    };
+    use crate::{
+        assets::{AssetExt, Ron},
+        comp::{Health, HealthChange, body::MagicResistTier, group},
+        resources::Time,
+        uid::Uid,
+    };
+    use std::num::NonZeroU64;
+
+    const EPS: f32 = 1e-4;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// A creature target: no class attributes, so its whole magic evasion comes
+    /// from the `combat_rating` term.
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> CharmTargetInfo {
+        CharmTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: tier,
+            combat_rating,
+        }
+    }
+
+    /// A player-character target, whose magic evasion is class/level derived.
+    /// The calibration table quotes a PC's `magic_evasion` directly and gives
+    /// it no `combat_rating`, so that term is held at 0 here to reproduce the
+    /// table's stated accuracy differences exactly.
+    fn player(magic_evasion: f32, magic_resistance: f32) -> CharmTargetInfo {
+        CharmTargetInfo {
+            stats_magic_evasion: magic_evasion,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: magic_resistance,
+            magic_resist_tier: MagicResistTier::None,
+            combat_rating: 0.0,
+        }
+    }
+
+    fn chance(t: &CombatTuning, accuracy: f32, target: &CharmTargetInfo, fighting: bool) -> f32 {
+        charm_success_chance(
+            &CharmCasterInfo {
+                magic_accuracy: accuracy,
+            },
+            target,
+            fighting,
+            t,
+        )
+    }
+
+    /// The creature's `combat_rating` term is the only difficulty signal a
+    /// non-class body has, and it is what puts a world boss out of reach.
+    #[test]
+    fn effective_evasion_folds_combat_rating() {
+        let t = CombatTuning::default();
+        // A rabbit-tier creature contributes almost nothing.
+        assert!((effective_magic_evasion(&creature(1.0, MagicResistTier::None), &t) - 2.0) < EPS);
+        // A boss-tier one contributes more evasion than any caster has accuracy.
+        assert!(effective_magic_evasion(&creature(36.0, MagicResistTier::None), &t) > 70.0);
+        // A player's class evasion is used as-is, added to (here zero) rating.
+        assert!((effective_magic_evasion(&player(30.0, 0.0), &t) - 30.0).abs() < EPS);
+    }
+
+    /// Every row of the calibration table, recomputed by the shipped formula.
+    /// Rows whose level term reaches the outclassed wall return exactly 0.0
+    /// instead of resting on the 5 % floor.
+    #[test]
+    fn calibration_table() {
+        let t = CombatTuning::default();
+        let row =
+            |accuracy, target: &CharmTargetInfo, fighting| chance(&t, accuracy, target, fighting);
+
+        // 1. L10 caster (acc 12) vs a CR 1 beast with no resistance.
+        assert!((row(12.0, &creature(1.0, MagicResistTier::None), false) - 0.85).abs() < EPS);
+        // 2. L10 caster vs a CR 3.5 body with the major tier.
+        assert!((row(12.0, &creature(3.5, MagicResistTier::Major), false) - 0.475).abs() < EPS);
+        // 3. L10 caster vs a CR 5.2 body with the major tier.
+        assert!((row(12.0, &creature(5.2, MagicResistTier::Major), false) - 0.424).abs() < EPS);
+        // 4. L40 caster (acc 42) vs a CR 36 legendary body — outclassed wall.
+        assert_eq!(
+            row(42.0, &creature(36.0, MagicResistTier::Legendary), false),
+            0.0
+        );
+        // 5. L40 caster vs an equal-level PC.
+        assert!((row(42.0, &player(30.0, 0.0), false) - 0.88).abs() < EPS);
+        // 6. L40 caster vs a L5 PC — clamped by the 0.95 ceiling.
+        assert!((row(42.0, &player(4.0, 0.0), false) - t.charm_hit_ceil).abs() < EPS);
+        // 6b. Same, mid-fight: the level term is far past the ceiling, so the
+        //     in-combat penalty does not rescue the victim.
+        assert!((row(42.0, &player(4.0, 0.0), true) - t.charm_hit_ceil).abs() < EPS);
+        // 7. L5 caster (acc 7) vs a L40 PC — outclassed wall.
+        assert_eq!(row(7.0, &player(30.0, 0.0), false), 0.0);
+        // 7b. Same, mid-duel: still the wall, which is checked first.
+        assert_eq!(row(7.0, &player(30.0, 0.0), true), 0.0);
+        // 8. L5 caster vs a CR 36 legendary body — outclassed wall.
+        assert_eq!(
+            row(7.0, &creature(36.0, MagicResistTier::Legendary), false),
+            0.0
+        );
+        // 9. L10 caster vs a L10 PC with a minor racial magic resistance.
+        assert!((row(12.0, &player(6.0, 0.15), false) - 0.64).abs() < EPS);
+        // 9b. Same, mid-fight.
+        assert!((row(12.0, &player(6.0, 0.15), true) - 0.44).abs() < EPS);
+    }
+
+    /// The wall is a hard bypass of the floor, not another subtracted term: a
+    /// deficit just short of it still leaves a real chance, and one just past
+    /// it leaves none at all.
+    #[test]
+    fn outclassed_wall_bypasses_the_floor() {
+        let t = CombatTuning::default();
+        // -18 net points => level term -0.27, short of the -0.30 wall.
+        let winnable = chance(&t, 12.0, &player(30.0, 0.0), false);
+        assert!((winnable - 0.43).abs() < EPS);
+        // -22 net points => level term -0.33, past the wall.
+        assert_eq!(chance(&t, 8.0, &player(30.0, 0.0), false), 0.0);
+        // A target beyond any reach is 0.0, never the floor.
+        assert_eq!(chance(&t, 0.0, &player(1000.0, 0.0), false), 0.0);
+    }
+
+    /// A caster that is *not* outclassed still gets the floor, however
+    /// resistant the target is — the two mechanisms are independent.
+    #[test]
+    fn floor_still_applies_below_the_wall() {
+        let t = CombatTuning::default();
+        let mut target = player(30.0, 0.0);
+        target.crowd_control_resistance = 0.75;
+        // Level term -0.27 (inside the wall) minus the capped resist and the
+        // in-combat penalty lands far below zero, so the floor catches it.
+        assert!((chance(&t, 12.0, &target, true) - t.charm_hit_floor).abs() < EPS);
+    }
+
+    /// Magic resistance and crowd-control resistance are summed and then
+    /// capped, so stacking them can never reach immunity.
+    #[test]
+    fn resistance_saturates_at_the_soft_cap() {
+        let t = CombatTuning::default();
+        // Legendary tier (0.50) + 0.60 CCR = 1.10 raw, capped to 0.75.
+        let mut over_capped = player(12.0, 0.0);
+        over_capped.magic_resist_tier = MagicResistTier::Legendary;
+        over_capped.crowd_control_resistance = 0.60;
+        // Exactly at the cap: 0.50 + 0.25.
+        let mut at_cap = over_capped;
+        at_cap.crowd_control_resistance = 0.25;
+        let over = chance(&t, 12.0, &over_capped, false);
+        let at = chance(&t, 12.0, &at_cap, false);
+        assert!((over - at).abs() < EPS);
+        // 0.70 - 0.75 is negative, so both rest on the floor rather than 0.0.
+        assert!((over - t.charm_hit_floor).abs() < EPS);
+    }
+
+    /// The in-combat penalty is exactly the tuned value in the unclamped band,
+    /// and is symmetric in the sense that dropping the flag restores the value.
+    #[test]
+    fn in_combat_penalty_is_exact_when_unclamped() {
+        let t = CombatTuning::default();
+        let target = player(6.0, 0.0);
+        let calm = chance(&t, 12.0, &target, false);
+        let fighting = chance(&t, 12.0, &target, true);
+        assert!((calm - fighting - t.charm_in_combat_penalty).abs() < EPS);
+        assert!((calm - 0.79).abs() < EPS);
+    }
+
+    /// A boss-tier body is out of reach for every reachable caster, with no
+    /// hand-authored "uncharmable" list: its combat rating alone puts the level
+    /// term past the wall for any accuracy a character can actually attain.
+    ///
+    /// Note the wall does *not* make it unreachable in principle: a caster
+    /// whose magic accuracy came within 20 net points of the boss's
+    /// effective magic evasion would clear the wall and fall back on the 5
+    /// % floor. At an effective evasion of 72 that needs ~52 accuracy, well
+    /// past the ~42 a max-level caster reaches, so the boss property holds
+    /// in practice — but it holds because of the accuracy ceiling, not
+    /// unconditionally.
+    #[test]
+    fn boss_tier_body_is_unreachable_at_attainable_caster_levels() {
+        let t = CombatTuning::default();
+        let boss = creature(36.0, MagicResistTier::Legendary);
+        for accuracy in [0.0, 7.0, 12.0, 42.0, 51.0] {
+            assert_eq!(chance(&t, accuracy, &boss, false), 0.0);
+        }
+        // Past the wall threshold the floor takes over again.
+        assert!((chance(&t, 55.0, &boss, false) - t.charm_hit_floor).abs() < EPS);
+    }
+
+    /// The shipped asset carries the confirmed constants, and stays loadable.
+    #[test]
+    fn combat_tuning_asset_carries_charm_constants() {
+        let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let t = &tuning.read().0;
+        assert!((t.charm_base_hit - 0.70).abs() < 1e-6);
+        assert!((t.charm_hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.charm_hit_ceil - 0.95).abs() < 1e-6);
+        assert!((t.charm_mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.charm_cr_to_evasion - 2.0).abs() < 1e-6);
+        assert!((t.charm_in_combat_penalty - 0.20).abs() < 1e-6);
+        assert!((t.magic_resist_minor - 0.15).abs() < 1e-6);
+        assert!((t.magic_resist_major - 0.30).abs() < 1e-6);
+        assert!((t.magic_resist_legendary - 0.50).abs() < 1e-6);
+        assert!((t.charm_outclassed_wall - 0.30).abs() < 1e-6);
+        // A mind-altering effect is never guaranteed, unlike damage.
+        assert!(t.charm_hit_ceil < t.hit_ceil);
+        // Charm has its own, stingier base than the damage curve.
+        assert!(t.charm_base_hit < t.base_hit);
+        // The tier ladder is monotonic.
+        assert!(t.magic_resist_minor < t.magic_resist_major);
+        assert!(t.magic_resist_major < t.magic_resist_legendary);
+    }
+
+    /// An asset predating the mind-altering section still parses, and picks up
+    /// the tuned values rather than zeroes: the struct-level
+    /// `#[serde(default)]` fills missing fields from
+    /// `CombatTuning::default()`, so no field may carry its own
+    /// `#[serde(default)]` (that would resolve to `0.0` and silently make
+    /// every charm land at the base rate).
+    #[test]
+    fn partial_asset_falls_back_to_tuned_defaults() {
+        let t: CombatTuning = ron::from_str("(base_hit: 0.85, hit_k: 0.015)").unwrap();
+        let d = CombatTuning::default();
+        assert!((t.charm_base_hit - d.charm_base_hit).abs() < 1e-6);
+        assert!((t.charm_hit_floor - d.charm_hit_floor).abs() < 1e-6);
+        assert!((t.charm_hit_ceil - d.charm_hit_ceil).abs() < 1e-6);
+        assert!((t.charm_mr_soft_cap - d.charm_mr_soft_cap).abs() < 1e-6);
+        assert!((t.charm_cr_to_evasion - d.charm_cr_to_evasion).abs() < 1e-6);
+        assert!((t.charm_in_combat_penalty - d.charm_in_combat_penalty).abs() < 1e-6);
+        assert!((t.magic_resist_minor - d.magic_resist_minor).abs() < 1e-6);
+        assert!((t.magic_resist_major - d.magic_resist_major).abs() < 1e-6);
+        assert!((t.magic_resist_legendary - d.magic_resist_legendary).abs() < 1e-6);
+        assert!((t.charm_outclassed_wall - d.charm_outclassed_wall).abs() < 1e-6);
+        assert!(t.charm_cr_to_evasion > 0.0);
+        assert!(t.charm_outclassed_wall > 0.0);
+    }
+
+    /// Every tier maps to its tuned number, and `None` is exactly zero.
+    #[test]
+    fn tier_values_map_to_tuning() {
+        let t = CombatTuning::default();
+        assert_eq!(t.magic_resist_tier_value(MagicResistTier::None), 0.0);
+        assert!((t.magic_resist_tier_value(MagicResistTier::Minor) - 0.15).abs() < EPS);
+        assert!((t.magic_resist_tier_value(MagicResistTier::Major) - 0.30).abs() < EPS);
+        assert!((t.magic_resist_tier_value(MagicResistTier::Legendary) - 0.50).abs() < EPS);
+        // The innate tier and the additive `Stats` term stack.
+        let mut target = creature(0.0, MagicResistTier::Major);
+        target.stats_magic_resistance = 0.15;
+        assert!((target.magic_resistance(&t) - 0.45).abs() < EPS);
+    }
+
+    fn health_change(amount: f32, by: Option<DamageContributor>, at: f64) -> HealthChange {
+        HealthChange {
+            amount,
+            by,
+            cause: Some(DamageSource::Attack(AttackSource::Melee)),
+            time: Time(at),
+            precise: false,
+            instance: 0,
+        }
+    }
+
+    const CASTER: u64 = 1;
+    const TARGET: u64 = 2;
+    const ALLY: u64 = 3;
+    const STRANGER: u64 = 4;
+
+    fn ctx<'a>(now: f64) -> CharmCombatContext<'a> {
+        CharmCombatContext {
+            caster_uid: uid(CASTER),
+            caster_group: None,
+            target_uid: uid(TARGET),
+            target_group: None,
+            target_hostile_focus: None,
+            target_last_change: None,
+            caster_last_change: None,
+            now,
+        }
+    }
+
+    #[test]
+    fn creature_target_fighting_the_caster_is_detected() {
+        let mut c = ctx(100.0);
+        c.target_hostile_focus = Some((uid(CASTER), None));
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn creature_target_fighting_the_casters_group_is_detected() {
+        let mut c = ctx(100.0);
+        c.caster_group = Some(group::ENEMY);
+        c.target_hostile_focus = Some((uid(ALLY), Some(group::ENEMY)));
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn creature_target_fighting_someone_else_is_not() {
+        let mut c = ctx(100.0);
+        c.caster_group = Some(group::ENEMY);
+        c.target_hostile_focus = Some((uid(STRANGER), Some(group::NPC)));
+        assert!(!is_fighting_caster(&c));
+        // A groupless caster must not match on two `None` groups.
+        let mut c = ctx(100.0);
+        c.target_hostile_focus = Some((uid(STRANGER), None));
+        assert!(!is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn idle_creature_target_is_not_fighting() {
+        assert!(!is_fighting_caster(&ctx(100.0)));
+    }
+
+    #[test]
+    fn player_target_recently_hurt_by_the_caster_is_detected() {
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(CASTER))), 98.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn player_target_hurt_long_ago_is_not_fighting() {
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(CASTER))), 90.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn caster_recently_hurt_by_the_target_is_detected() {
+        // The reverse direction: the target hit the caster, not the other way.
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(TARGET))), 99.0);
+        let mut c = ctx(100.0);
+        c.caster_last_change = Some(&change);
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn damage_from_the_casters_group_counts() {
+        let change = health_change(
+            -10.0,
+            Some(DamageContributor::Group {
+                entity_uid: uid(ALLY),
+                group: group::ENEMY,
+            }),
+            99.0,
+        );
+        let mut c = ctx(100.0);
+        c.caster_group = Some(group::ENEMY);
+        c.target_last_change = Some(&change);
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn damage_from_an_unrelated_party_does_not_count() {
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(STRANGER))), 99.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+        // Nor does an unattributed change.
+        let change = health_change(-10.0, None, 99.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn healing_does_not_count_as_fighting() {
+        let change = health_change(10.0, Some(DamageContributor::Solo(uid(CASTER))), 99.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+    }
+
+    /// The predicate reads a real `Health`'s shipped `last_change` field, so it
+    /// keeps working off the component the pet behaviour tree already consults.
+    #[test]
+    fn predicate_reads_a_real_health_component() {
+        let health = Health::new(crate::comp::Body::Object(
+            crate::comp::object::Body::TrainingDummy,
+        ));
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&health.last_change);
+        // A freshly-built `Health` has no damaging change, so it must not fire.
+        assert!(!is_fighting_caster(&c));
     }
 }
