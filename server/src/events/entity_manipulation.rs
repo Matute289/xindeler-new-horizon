@@ -541,20 +541,14 @@ fn handle_exp_gain(
 ) {
     use comp::inventory::{item::ItemKind, slot::EquipSlot};
 
-    // Create hash set of xp pools to consider splitting xp amongst
+    // Create hash set of xp pools to consider splitting xp amongst. The class
+    // slice is handled separately below: it counts as ONE slot here
+    // regardless of how many `Class(_)` groups the character holds, so
+    // gaining a second class group (multiclass) never dilutes General or
+    // weapon XP, which have nothing to do with multiclassing.
     let mut xp_pools = HashSet::<SkillGroupKind>::new();
     // Insert general pool since it is always accessible
     xp_pools.insert(SkillGroupKind::General);
-    // BL-06: the character's class group is always-active (like General), so it
-    // earns combat XP from every kill — this is the source of class skill points
-    // (spec §1). Without it the class trees can never be unlocked.
-    if let Some(class_group) = skill_set
-        .skill_groups()
-        .map(|sg| sg.skill_group_kind)
-        .find(|kind| matches!(kind, SkillGroupKind::Class(_)))
-    {
-        xp_pools.insert(class_group);
-    }
     // Closure to add xp pool corresponding to weapon type equipped in a particular
     // EquipSlot
     let mut add_tool_from_slot = |equip_slot| {
@@ -576,7 +570,21 @@ fn handle_exp_gain(
     add_tool_from_slot(EquipSlot::ActiveOffhand);
     add_tool_from_slot(EquipSlot::InactiveMainhand);
     add_tool_from_slot(EquipSlot::InactiveOffhand);
-    let num_pools = xp_pools.len() as f32;
+
+    // The character's class group(s) are always-active (like General), so they
+    // earn combat XP from every kill — this is the source of class skill
+    // points (spec §1). Without it the class trees can never be unlocked. A
+    // multiclass character holds up to 2 `Class(_)` groups; the class slice's
+    // reward is split evenly across however many are present (Model A: 50/50
+    // for two, unchanged for one).
+    let class_groups: Vec<SkillGroupKind> = skill_set
+        .skill_groups()
+        .map(|sg| sg.skill_group_kind)
+        .filter(|kind| matches!(kind, SkillGroupKind::Class(_)))
+        .collect();
+    let has_class_slice = !class_groups.is_empty();
+
+    let num_pools = xp_pools.len() as f32 + if has_class_slice { 1.0 } else { 0.0 };
     let level_before = skill_set.character_level();
     for pool in xp_pools.iter() {
         if let Some(level_outcome) =
@@ -587,6 +595,19 @@ fn handle_exp_gain(
                 skill_tree: *pool,
                 total_points: level_outcome,
             });
+        }
+    }
+    if has_class_slice {
+        let per_class_reward = ((exp_reward / num_pools) / class_groups.len() as f32).ceil() as u32;
+        for class_group in &class_groups {
+            if let Some(level_outcome) = skill_set.add_experience(*class_group, per_class_reward) {
+                outcomes_emitter.emit(Outcome::SkillPointGain {
+                    uid: *uid,
+                    skill_tree: *class_group,
+                    total_points: level_outcome,
+                });
+            }
+            xp_pools.insert(*class_group);
         }
     }
     let level_after = skill_set.character_level();
@@ -617,6 +638,102 @@ fn handle_exp_gain(
         exp: exp_reward as u32,
         xp_pools,
     });
+}
+
+#[cfg(test)]
+mod handle_exp_gain_tests {
+    use super::*;
+    use common::{
+        comp::{class::ClassKind, inventory::Inventory},
+        event::EventBus,
+    };
+    use core::num::NonZeroU64;
+
+    fn uid() -> Uid { Uid(NonZeroU64::new(1).unwrap()) }
+
+    fn earned_exp(skill_set: &SkillSet, kind: SkillGroupKind) -> u32 {
+        skill_set
+            .skill_groups()
+            .find(|sg| sg.skill_group_kind == kind)
+            .unwrap()
+            .earned_exp
+    }
+
+    fn gain_exp(skill_set: &mut SkillSet, exp_reward: f32) -> HashSet<SkillGroupKind> {
+        let inventory = Inventory::with_empty();
+        let bus = EventBus::<Outcome>::default();
+        let mut emitter = bus.emitter();
+        handle_exp_gain(exp_reward, &inventory, skill_set, &uid(), &mut emitter);
+        emitter
+            .events
+            .iter()
+            .find_map(|o| match o {
+                Outcome::ExpChange { xp_pools, .. } => Some(xp_pools.clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    /// The class slice must count as exactly one slot regardless of how many
+    /// `Class(_)` groups are held, so a single-class character's per-pool
+    /// split is byte-identical to the pre-multiclass behaviour (General +
+    /// one class group = 2 pools, no weapons equipped).
+    #[test]
+    fn single_class_xp_split_is_unaffected_by_the_class_slice_refactor() {
+        let mut skill_set = SkillSet::default();
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+
+        let xp_pools = gain_exp(&mut skill_set, 100.0);
+
+        assert_eq!(
+            xp_pools,
+            HashSet::from([
+                SkillGroupKind::General,
+                SkillGroupKind::Class(ClassKind::Warrior)
+            ])
+        );
+        // 2 pools (General + the one class slice) -> 50 exp each, exactly the
+        // pre-refactor split.
+        assert_eq!(
+            earned_exp(&skill_set, SkillGroupKind::Class(ClassKind::Warrior)),
+            50
+        );
+        assert_eq!(earned_exp(&skill_set, SkillGroupKind::General), 50);
+    }
+
+    /// A multiclass character's class slice is still ONE slot (so General
+    /// stays at half the reward, not a third) and is split deterministically
+    /// 50/50 across the two held class groups.
+    #[test]
+    fn multiclass_xp_split_shares_one_class_slice_deterministically() {
+        let mut skill_set = SkillSet::default();
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warlock));
+
+        let xp_pools = gain_exp(&mut skill_set, 100.0);
+
+        assert_eq!(
+            xp_pools,
+            HashSet::from([
+                SkillGroupKind::General,
+                SkillGroupKind::Class(ClassKind::Warrior),
+                SkillGroupKind::Class(ClassKind::Warlock)
+            ])
+        );
+        // Still 2 pools for the purpose of the top-level split (General +
+        // ONE class slice) -> General gets 50, same as the single-class
+        // case above, not 33.
+        assert_eq!(earned_exp(&skill_set, SkillGroupKind::General), 50);
+        // The 50-exp class slice splits 50/50 across the two class groups.
+        assert_eq!(
+            earned_exp(&skill_set, SkillGroupKind::Class(ClassKind::Warrior)),
+            25
+        );
+        assert_eq!(
+            earned_exp(&skill_set, SkillGroupKind::Class(ClassKind::Warlock)),
+            25
+        );
+    }
 }
 
 #[derive(SystemData)]
