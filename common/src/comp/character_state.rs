@@ -51,6 +51,7 @@ event_emitters! {
         change_stance: event::ChangeStanceEvent,
         create_npc: event::CreateNpcEvent,
         create_object: event::CreateObjectEvent,
+        create_floating_disk: event::CreateFloatingDiskEvent,
         energy_change: event::EnergyChangeEvent,
         knockback: event::KnockbackEvent,
         sprite_light: event::ToggleSpriteLightEvent,

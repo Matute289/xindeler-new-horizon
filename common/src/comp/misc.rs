@@ -44,6 +44,19 @@ pub enum Object {
         #[serde(skip)]
         pid_controller: Option<PidController<fn(f32, f32) -> f32, 8>>,
     },
+    /// A `floating_disk` prop: a hovering, stand-on-able platform that
+    /// follows its caster. Driven by one arm in `server/src/sys/object.rs`
+    /// each tick (ground-clearance hover + station-keeping + the four
+    /// despawn rules); carries no combat/AI components (see the spawn
+    /// handler for the deliberate omissions).
+    FloatingDisk {
+        owner: Uid,
+        spawned_at: Time,
+        timeout: Duration,
+        follow_distance: f32,
+        hover_height: f32,
+        max_owner_distance: f32,
+    },
 }
 
 impl Component for Object {

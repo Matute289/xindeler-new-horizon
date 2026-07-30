@@ -6,35 +6,36 @@ use common::{
     CachedSpatialGrid,
     combat::AttackTarget,
     comp::{
-        self, Alignment, BehaviorCapability, Body, Group, Inventory, ItemDrops, LightEmitter,
-        Object, Ori, Pos, ThrownItem, TradingBehavior, Vel, WaypointArea,
+        self, Alignment, BehaviorCapability, Body, Collider, Density, Group, Inventory, ItemDrops,
+        LightEmitter, Mass, Object, Ori, Pos, ThrownItem, TradingBehavior, Vel, WaypointArea,
         aura::{Aura, AuraKind, AuraTarget},
         body,
         buff::{BuffCategory, BuffChange, BuffData, BuffKind, BuffSource},
         item::MaterialStatManifest,
-        ship::figuredata::VOXEL_COLLIDER_MANIFEST,
+        ship,
+        ship::figuredata::{VOXEL_COLLIDER_MANIFEST, VoxelCollider},
         tool::AbilityMap,
     },
-    consts::MAX_CAMPFIRE_RANGE,
+    consts::{AIR_DENSITY, MAX_CAMPFIRE_RANGE},
     event::{
-        ArcingEvent, BuffEvent, CreateAuraEntityEvent, CreateItemDropEvent, CreateNpcEvent,
-        CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent, CreateShipEvent,
-        CreateSpecialEntityEvent, EventBus, InitializeCharacterEvent, InitializeSpectatorEvent,
-        NpcBuilder, ShockwaveEvent, ShootEvent, SummonBeamPillarsEvent, ThrowEvent,
-        UpdateCharacterDataEvent,
+        ArcingEvent, BuffEvent, CreateAuraEntityEvent, CreateFloatingDiskEvent,
+        CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent, CreateObjectEvent,
+        CreatePoolEvent, CreateShipEvent, CreateSpecialEntityEvent, DeleteEvent, EventBus,
+        InitializeCharacterEvent, InitializeSpectatorEvent, NpcBuilder, ShockwaveEvent, ShootEvent,
+        SummonBeamPillarsEvent, ThrowEvent, UpdateCharacterDataEvent,
     },
     generation::SpecialEntity,
     mounting::{Mounting, Volume, VolumeMounting, VolumePos},
     outcome::Outcome,
     resources::{Secs, Time},
-    terrain::TerrainGrid,
+    terrain::{Block, BlockKind, TerrainGrid},
     uid::{IdMaps, Uid},
     util::Dir,
     vol::IntoFullVolIterator,
 };
 use common_net::{msg::ServerGeneral, sync::WorldSyncExt};
-use specs::{Builder, Entity as EcsEntity, WorldExt};
-use std::time::Duration;
+use specs::{Builder, Entity as EcsEntity, Join, WorldExt};
+use std::{sync::Arc, time::Duration};
 use vek::{Rgb, Vec3};
 
 use super::group_manip::update_map_markers;
@@ -728,6 +729,72 @@ pub fn handle_create_object(
                 .build();
         },
     }
+}
+
+/// Spawns a `floating_disk`: a `Body::Ship(ship::Body::Volume)` prop with a
+/// procedurally-built flat-disk collider, driven each tick by
+/// `Object::FloatingDisk`'s arm in `server/src/sys/object.rs`. Built directly
+/// rather than through `create_ship`/`create_object` — neither can express
+/// this shape, and `create_ship` adds a Controller/Inventory/CharacterState/
+/// Energy/Stats set this prop deliberately does not carry (no nameplate, no
+/// health bar, never persisted).
+pub fn handle_create_floating_disk(server: &mut Server, ev: CreateFloatingDiskEvent) {
+    let state = server.state_mut();
+    let time = *state.ecs().read_resource::<Time>();
+
+    // One disk per caster: recasting dismisses any disk this caster already
+    // has (also papers over the disabled voxel-voxel collision gap between
+    // two disks).
+    let existing: Vec<EcsEntity> = {
+        let entities = state.ecs().entities();
+        let objects = state.ecs().read_storage::<Object>();
+        (&entities, &objects)
+            .join()
+            .filter_map(|(entity, object)| match object {
+                Object::FloatingDisk { owner, .. } if *owner == ev.owner => Some(entity),
+                _ => None,
+            })
+            .collect()
+    };
+    if !existing.is_empty() {
+        let delete_events = state.ecs().read_resource::<EventBus<DeleteEvent>>();
+        for entity in existing {
+            delete_events.emit_now(DeleteEvent(entity));
+        }
+    }
+
+    let radius = ev.radius;
+    let sz = Vec3::new(5u32, 5, 1);
+    let half = sz.map(|e| e as i32) / 2;
+    let collider = Collider::Volume(Arc::new(VoxelCollider::from_fn(sz, move |rpos| {
+        let offset = (rpos.xy() - half.xy()).map(|e| e as f32);
+        if offset.magnitude_squared() <= radius * radius {
+            Block::new(BlockKind::Misc, Rgb::new(130, 110, 80))
+        } else {
+            Block::empty()
+        }
+    })));
+
+    state
+        .ecs_mut()
+        .create_entity_synced()
+        .with(Pos(ev.pos.0 + Vec3::unit_z() * ev.hover_height))
+        .with(Vel(Vec3::zero()))
+        .with(Ori::default())
+        .with(Mass(40.0))
+        .with(Density(AIR_DENSITY))
+        .with(collider)
+        .with(Body::Ship(ship::Body::Volume))
+        .with(Object::FloatingDisk {
+            owner: ev.owner,
+            spawned_at: time,
+            timeout: ev.timeout,
+            follow_distance: ev.follow_distance,
+            hover_height: ev.hover_height,
+            max_owner_distance: ev.max_owner_distance,
+        })
+        .with(Alignment::Owned(ev.owner))
+        .build();
 }
 
 pub fn handle_create_aura_entity(server: &mut Server, ev: CreateAuraEntityEvent) {

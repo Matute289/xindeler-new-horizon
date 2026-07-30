@@ -226,6 +226,22 @@ pub struct CreateObjectEvent {
     pub stats: Option<comp::Stats>,
 }
 
+/// Spawns a `floating_disk` prop: a `Body::Ship(ship::Body::Volume)` entity
+/// with a procedurally-built flat-disk collider, tracked and driven by an
+/// `Object::FloatingDisk` each tick. Distinct from `CreateObjectEvent`
+/// (cannot express a ship body) and `CreateShipEvent` (builds its collider
+/// via `ship::Body::make_collider`, which yields random rubble for
+/// `Body::Volume`).
+pub struct CreateFloatingDiskEvent {
+    pub pos: Pos,
+    pub owner: Uid,
+    pub radius: f32,
+    pub timeout: Duration,
+    pub follow_distance: f32,
+    pub hover_height: f32,
+    pub max_owner_distance: f32,
+}
+
 /// Inserts default components for a character when loading into the game.
 pub struct InitializeCharacterEvent {
     pub entity: EcsEntity,

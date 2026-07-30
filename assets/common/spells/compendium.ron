@@ -607,4 +607,18 @@
         description_i18n: "spell-knock-desc",
         ability: "common.abilities.spells.transmutation.knock",
     ),
+    (
+        id: "spells.transmutation.floating_disk",
+        name_i18n: "spell-floating_disk",
+        level: 1,
+        school: Some(Transmutation),
+        source: Arcane,
+        classes: [Mage],
+        cast_time: Action,
+        duration: Secs(90.0),
+        range: Meters(9.0),
+        aoe: None,
+        description_i18n: "spell-floating_disk-desc",
+        ability: "common.abilities.spells.transmutation.floating_disk",
+    ),
 ]
