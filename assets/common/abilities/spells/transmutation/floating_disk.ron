@@ -1,0 +1,12 @@
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.8,
+    recover_duration: 0.4,
+    summon_info: FloatingDisk(
+        radius: 2.0,               // blocks; D&D's 3 ft is sub-block, unusable at this scale
+        hover_height: 1.0,         // blocks above the ground directly beneath the disk
+        follow_distance: 4.0,      // blocks; the disk holds station this far from the caster
+        max_owner_distance: 30.0,  // blocks, approximates D&D's 100 ft
+        duration: 90.0,            // seconds
+    ),
+)

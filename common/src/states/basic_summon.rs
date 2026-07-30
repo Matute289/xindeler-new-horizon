@@ -9,7 +9,10 @@ use crate::{
         inventory::loadout_builder::{self, LoadoutBuilder},
         object::{self, Body::FieryTornado},
     },
-    event::{CreateNpcEvent, CreateObjectEvent, LocalEvent, NpcBuilder, SummonBeamPillarsEvent},
+    event::{
+        CreateFloatingDiskEvent, CreateNpcEvent, CreateObjectEvent, LocalEvent, NpcBuilder,
+        SummonBeamPillarsEvent,
+    },
     npc::NPC_NAMES,
     outcome::Outcome,
     resources::Secs,
@@ -384,6 +387,23 @@ impl CharacterBehavior for Data {
                                     });
                                 }
                             },
+                            SummonInfo::FloatingDisk {
+                                radius,
+                                hover_height,
+                                follow_distance,
+                                max_owner_distance,
+                                duration,
+                            } => {
+                                output_events.emit_server(CreateFloatingDiskEvent {
+                                    pos: *data.pos,
+                                    owner: *data.uid,
+                                    radius: *radius,
+                                    timeout: Duration::from_secs_f32(*duration),
+                                    follow_distance: *follow_distance,
+                                    hover_height: *hover_height,
+                                    max_owner_distance: *max_owner_distance,
+                                });
+                            },
                         }
 
                         if let CharacterState::BasicSummon(c) = &mut update.character {
@@ -488,6 +508,13 @@ pub enum SummonInfo {
         strength: f32,
         duration: f64,
     },
+    FloatingDisk {
+        radius: f32,
+        hover_height: f32,
+        follow_distance: f32,
+        max_owner_distance: f32,
+        duration: f32,
+    },
 }
 
 impl SummonInfo {
@@ -499,6 +526,7 @@ impl SummonInfo {
             SummonInfo::BeamPillar { .. } => 1, // Fire pillars are summoned simultaneously
             SummonInfo::BeamWall { pillar_count, .. } => *pillar_count,
             SummonInfo::Crux { .. } => 1,
+            SummonInfo::FloatingDisk { .. } => 1,
         }
     }
 
@@ -519,6 +547,7 @@ impl SummonInfo {
                 *wall_radius *= scale;
             },
             SummonInfo::Crux { .. } => {},
+            SummonInfo::FloatingDisk { .. } => {},
         }
     }
 }
