@@ -386,9 +386,13 @@ command-server-no-experimental-terrain-persistence = El servidor fue compilado s
 
 command-set_class-desc = Selección de clase única para personajes heredados: warrior, mage, cleric o rogue
 
+command-set_class_level-desc = (Administrador) Establece el nivel de clase primaria o secundaria de un personaje multiclase, para pruebas
+
 command-set_ethos-desc = (Administrador) Establece el alineamiento moral del objetivo: <good|neutral|evil> <lawful|neutral|chaotic>
 
 command-set_level-desc = (Administrador) Establece el nivel de personaje del objetivo (1-60) para pruebas, sin molienda
+
+command-multiclass-desc = (Administrador) Otorga una segunda clase al objetivo (tope de 2), para pruebas
 
 command-set_motd-message-added = Se estableció el mensaje del servidor del día a { $message }
 

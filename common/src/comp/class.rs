@@ -6,7 +6,11 @@ use specs::{Component, DerefFlaggedStorage, VecStorage};
 
 use crate::{
     assets::{AssetExt, Ron},
-    comp::{Stats, body::humanoid::Species, skillset::MAX_CHARACTER_LEVEL},
+    comp::{
+        Stats,
+        body::humanoid::Species,
+        skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind, SkillSet},
+    },
 };
 
 #[derive(
@@ -181,6 +185,55 @@ impl CharacterClass {
 
 impl Component for CharacterClass {
     type Storage = DerefFlaggedStorage<Self, VecStorage<Self>>;
+}
+
+/// Minimum character level required to accept a second class. Multiclassing
+/// is never a character-creation pick — it is granted in play, always to an
+/// existing single-class character — so this alone does not gate anything by
+/// itself; it composes with whatever narrative content offers the grant.
+pub const MULTICLASS_MIN_LEVEL: u16 = 20;
+
+/// The error a rejected [`grant_second_class`] call returns, so callers can
+/// render a specific message rather than a generic failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MulticlassError {
+    AlreadyMulticlass,
+    SameAsPrimary,
+    NoPrimaryClass,
+    BelowMinimumLevel,
+}
+
+/// Grants `class` as `character_class`'s secondary, reassigning
+/// `initial_secondary_level` of the character's already-earned levels to it
+/// (the one-time, grant-moment reallocation of banked levels — the player's
+/// choice of how to split their current total, not a forced 50/50 or a
+/// from-1 start). Also unlocks the secondary's skill group so its tree, XP
+/// pool, and skill points exist from the moment of the grant. Mutates
+/// nothing and returns an error if any guard fails.
+pub fn grant_second_class(
+    character_class: &mut CharacterClass,
+    skill_set: &mut SkillSet,
+    class: ClassKind,
+    initial_secondary_level: u16,
+) -> Result<(), MulticlassError> {
+    if character_class.is_multiclass() {
+        return Err(MulticlassError::AlreadyMulticlass);
+    }
+    if class == character_class.primary {
+        return Err(MulticlassError::SameAsPrimary);
+    }
+    if character_class.primary == ClassKind::Adventurer {
+        return Err(MulticlassError::NoPrimaryClass);
+    }
+    let character_level = skill_set.character_level();
+    if character_level < MULTICLASS_MIN_LEVEL {
+        return Err(MulticlassError::BelowMinimumLevel);
+    }
+
+    character_class.secondary = Some(class);
+    character_class.set_secondary_level(initial_secondary_level, character_level);
+    skill_set.unlock_skill_group(SkillGroupKind::Class(class));
+    Ok(())
 }
 
 /// Per-species passive stat modifiers (spec §6). All values small (≤10%).
@@ -481,6 +534,79 @@ mod tests {
         multi.set_secondary_level(100, 60);
         assert_eq!(multi.secondary_level, 60);
         assert_eq!(multi.primary_level(60), 0);
+    }
+
+    #[test]
+    fn grant_second_class_succeeds_and_reallocates_levels() {
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(40);
+
+        let result =
+            grant_second_class(&mut character_class, &mut skill_set, ClassKind::Warlock, 20);
+        assert_eq!(result, Ok(()));
+        assert_eq!(character_class.secondary, Some(ClassKind::Warlock));
+        assert_eq!(character_class.secondary_level, 20);
+        assert_eq!(character_class.primary_level(40), 20);
+        assert!(
+            skill_set
+                .skill_groups()
+                .any(|sg| sg.skill_group_kind == SkillGroupKind::Class(ClassKind::Warlock))
+        );
+    }
+
+    #[test]
+    fn grant_second_class_rejects_already_multiclass() {
+        let mut character_class = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+            secondary_level: 20,
+        };
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(40);
+
+        assert_eq!(
+            grant_second_class(&mut character_class, &mut skill_set, ClassKind::Mage, 10),
+            Err(MulticlassError::AlreadyMulticlass)
+        );
+    }
+
+    #[test]
+    fn grant_second_class_rejects_same_as_primary() {
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(40);
+
+        assert_eq!(
+            grant_second_class(&mut character_class, &mut skill_set, ClassKind::Warrior, 10),
+            Err(MulticlassError::SameAsPrimary)
+        );
+    }
+
+    #[test]
+    fn grant_second_class_rejects_adventurer_primary() {
+        let mut character_class = CharacterClass::single(ClassKind::Adventurer);
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(40);
+
+        assert_eq!(
+            grant_second_class(&mut character_class, &mut skill_set, ClassKind::Warlock, 10),
+            Err(MulticlassError::NoPrimaryClass)
+        );
+    }
+
+    #[test]
+    fn grant_second_class_rejects_below_minimum_level() {
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(MULTICLASS_MIN_LEVEL - 1);
+
+        assert_eq!(
+            grant_second_class(&mut character_class, &mut skill_set, ClassKind::Warlock, 5),
+            Err(MulticlassError::BelowMinimumLevel)
+        );
+        // Rejected: nothing should have been mutated.
+        assert!(!character_class.is_multiclass());
     }
 
     #[test]

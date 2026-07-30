@@ -744,18 +744,18 @@ impl StateExt for State {
             self.write_component_ignore_entity_dead(entity, comp::Energy::new(body));
             self.write_component_ignore_entity_dead(entity, Poise::new(body));
             self.write_component_ignore_entity_dead(entity, stats);
-            // Copy the ClassKind out (ClassKind: Copy) for the AbilityPool below,
-            // since `character_class` is moved into its component write (BL-06 P2a).
-            let class_kind = character_class.primary;
+            // Copy CharacterClass out (it's Copy) for the AbilityPool below,
+            // since `character_class` is moved into its component write.
+            let character_class_copy = character_class;
             self.write_component_ignore_entity_dead(entity, character_class);
             self.write_component_ignore_entity_dead(entity, ethos);
             self.write_component_ignore_entity_dead(entity, background);
             self.write_component_ignore_entity_dead(entity, active_abilities);
             self.write_component_ignore_entity_dead(entity, comp::AbilityCooldowns::default());
-            // Grant class active-ability keys (BL-06 P2a) + racial innate (Task 14).
+            // Grant class active-ability keys + racial innate.
             self.write_component_ignore_entity_dead(
                 entity,
-                comp::AbilityPool::for_character(&body, class_kind),
+                comp::AbilityPool::for_character(&body, &character_class_copy),
             );
             self.write_component_ignore_entity_dead(entity, skill_set);
             self.write_component_ignore_entity_dead(entity, inventory);
