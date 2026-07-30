@@ -91,9 +91,15 @@ impl CharacterBehavior for Data {
                                     ref mut data,
                                     category: _,
                                     source: _,
+                                    ref mut pool_split,
                                 } => {
-                                    data.strength *=
+                                    let combo_mult =
                                         (self.static_data.combo_at_cast.max(1) as f32).sqrt();
+                                    data.strength *= combo_mult;
+                                    if let Some(split) = pool_split {
+                                        split.value_at_unlock *= combo_mult;
+                                        split.value_at_max_level *= combo_mult;
+                                    }
                                 },
                                 AuraKind::FriendlyFire | AuraKind::ForcePvP => {},
                             }

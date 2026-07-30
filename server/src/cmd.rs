@@ -5815,6 +5815,7 @@ fn handle_aura(
                         tool_kind: None,
                     }
                 },
+                pool_split: None,
             }
         },
         AuraKindVariant::FriendlyFire => AuraKind::FriendlyFire,

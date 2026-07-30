@@ -507,6 +507,7 @@ impl StateExt for State {
                     data: BuffData::new(1.0, Some(Secs(1.0))),
                     category: None,
                     source: BuffSource::World,
+                    pool_split: None,
                 },
                 range.unwrap_or(100.0),
                 None,
