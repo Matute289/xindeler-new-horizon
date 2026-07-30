@@ -323,6 +323,20 @@ pub enum BuffKind {
     /// Cannot bring itself to harm the charmer. No stat effects; consumed by
     /// agent targeting (NPCs only in v1, spec §5).
     Charmed,
+    /// Obeys the dominator's commands. No stat effects — a state tag, same
+    /// shape as `Charmed`; consumed by the shared command-authorisation
+    /// predicate (NPCs only, players can never be commanded).
+    Dominated,
+    /// Turned hostile against everyone, including former allies. No stat
+    /// effects — a state tag, same shape as `Charmed`; consumed by agent
+    /// targeting.
+    Maddened,
+    /// Cannot move, use auxiliary abilities, or deal damage — a harder lock
+    /// than `Asleep`, and deliberately does NOT wake on taking damage (see
+    /// `Asleep`'s own wake-on-hit rule, which this must not inherit). Always
+    /// paired with `resilience_ccr_strength` for automatic diminishing
+    /// returns on repeated application.
+    Paralyzed,
     /// The Hollow's surcharge: stacking multiplicative max-health reduction
     /// applied by every Beyond-tainted Necromancy cast via
     /// AbilityMeta.init_event.
@@ -474,6 +488,9 @@ impl BuffKind {
             | BuffKind::ArdentHunted
             | BuffKind::Terrified
             | BuffKind::Charmed
+            | BuffKind::Dominated
+            | BuffKind::Maddened
+            | BuffKind::Paralyzed
             | BuffKind::Hollowtouched
             | BuffKind::DifficultTerrain
             | BuffKind::Antimagic
@@ -729,6 +746,14 @@ impl BuffKind {
                 BuffEffect::DisableAuxiliaryAbilities,
                 BuffEffect::AttackDamage(0.0),
             ],
+            // Harder lock than Asleep: same incapacitation, but deliberately
+            // no wake-on-damage removal (contrast Asleep's own rule, which
+            // lives in the health-change handler, not here).
+            BuffKind::Paralyzed => vec![
+                BuffEffect::MovementSpeed(0.0),
+                BuffEffect::DisableAuxiliaryAbilities,
+                BuffEffect::AttackDamage(0.0),
+            ],
             // BL-05 rider: blinded — reduced outgoing attack damage (can't aim).
             BuffKind::Blinded => vec![BuffEffect::AttackDamage((1.0 - data.strength).max(0.0))],
             // BL-66 d: generic movement slow, mirrors Crippled's speed curve
@@ -944,7 +969,10 @@ impl BuffKind {
                     BuffEffect::Accuracy(-12.0 * nn_scaling(data.strength)),
                 ]
             },
-            BuffKind::Charmed => vec![],
+            // State tags, not stat modifiers — their consequences are
+            // enforced in the agent behaviour tree and combat's attack
+            // resolution, neither of which a BuffEffect can reach.
+            BuffKind::Charmed | BuffKind::Dominated | BuffKind::Maddened => vec![],
             BuffKind::Hollowtouched => vec![BuffEffect::MaxHealthModifier {
                 value: 1.0 - (0.08 * data.strength).min(0.4),
                 kind: ModifierKind::Multiplicative,
@@ -1147,6 +1175,10 @@ impl BuffKind {
             BuffKind::Frozen => data.strength,
             BuffKind::Winded => data.strength / 3.0,
             BuffKind::Rooted => data.duration.map_or(0.1, |dur| dur.0 as f32 / 10.0),
+            // Automatic diminishing returns via the shipped Resilience grant —
+            // the safeguard that stops repeated re-application from becoming
+            // a permanent stun-lock.
+            BuffKind::Paralyzed => data.strength,
         )
     }
 

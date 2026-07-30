@@ -442,6 +442,20 @@ impl<'a> System<'a> for Sys {
                 }
             }
 
+            // A mind-altering buff whose caster entity no longer resolves
+            // (disconnected, died and despawned, etc.) is dropped rather than
+            // left running with nobody able to command or be excluded by it.
+            for (buff_key, buff) in &buff_comp.buffs {
+                if matches!(
+                    buff.kind,
+                    BuffKind::Charmed | BuffKind::Dominated | BuffKind::Maddened
+                ) && let BuffSource::Character { by, .. } = buff.source
+                    && read_data.id_maps.uid_entity(by).is_none()
+                {
+                    expired_buffs.push(buff_key);
+                }
+            }
+
             buff_comp.buffs.iter().for_each(|(buff_key, buff)| {
                 if buff.end_time.is_some_and(|end| end.0 < read_data.time.0) {
                     expired_buffs.push(buff_key);

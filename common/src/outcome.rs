@@ -104,6 +104,13 @@ pub enum Outcome {
         pos: Vec3<f32>,
         target: Uid,
     },
+    /// A mind-altering buff (Charmed/Dominated/Maddened/Paralyzed) was
+    /// resisted by the target's magic resistance roll. Drives a floating
+    /// "Resisted" indicator, the mind-altering counterpart of `Miss`.
+    Resisted {
+        pos: Vec3<f32>,
+        target: Uid,
+    },
     PoiseChange {
         pos: Vec3<f32>,
         state: PoiseState,
@@ -235,6 +242,7 @@ impl Outcome {
             | Outcome::Death { pos, .. }
             | Outcome::Block { pos, .. }
             | Outcome::Miss { pos, .. }
+            | Outcome::Resisted { pos, .. }
             | Outcome::PoiseChange { pos, .. }
             | Outcome::GroundSlam { pos }
             | Outcome::FlashFreeze { pos }

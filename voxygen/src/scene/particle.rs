@@ -709,7 +709,8 @@ impl ParticleMgr {
             | Outcome::FromTheAshes { .. }
             | Outcome::LaserBeam { .. }
             // BL-52 P4: miss feedback is a HUD floater, no particle.
-            | Outcome::Miss { .. } => {},
+            | Outcome::Miss { .. }
+            | Outcome::Resisted { .. } => {},
         }
     }
 

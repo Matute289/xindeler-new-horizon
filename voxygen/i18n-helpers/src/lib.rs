@@ -437,6 +437,9 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::ArdentHunted
         | BuffKind::Terrified
         | BuffKind::Charmed
+        | BuffKind::Dominated
+        | BuffKind::Maddened
+        | BuffKind::Paralyzed
         | BuffKind::Hollowtouched
         | BuffKind::DifficultTerrain
         | BuffKind::Antimagic
