@@ -222,6 +222,7 @@ lazy_static! {
             BuffKind::Asleep => "asleep",
             BuffKind::Blinded => "blinded",
             BuffKind::Slowed => "slowed",
+            BuffKind::Agonized => "agonized",
             BuffKind::Detecting => "detecting",
             BuffKind::SeeInvisible => "see_invisible",
             BuffKind::TrueSight => "true_sight",

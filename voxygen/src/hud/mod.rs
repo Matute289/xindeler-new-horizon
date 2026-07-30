@@ -5825,6 +5825,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // star). Bloodfeast + Asleep keep their prior icons; Bleeding reuses the
         // BleedingMark drop.
         BuffKind::Agility => imgs.buff_agility,
+        // No dedicated art yet; reuses Enfeebled/Crippled's icon, the closest
+        // existing debuff (also a reduced-capability effect).
+        BuffKind::Agonized => imgs.debuff_crippled,
         BuffKind::Amnesia => imgs.debuff_confused,
         BuffKind::Anchored => imgs.debuff_anchored,
         BuffKind::Antimagic => imgs.debuff_antimagic,

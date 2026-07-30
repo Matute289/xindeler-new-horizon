@@ -369,6 +369,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Asleep => "buff-asleep",
         BuffKind::Blinded => "buff-blinded",
         BuffKind::Slowed => "buff-slowed",
+        BuffKind::Agonized => "buff-agonized",
         // Neutral
         BuffKind::Polymorphed => "buff-polymorphed",
         // Positive
@@ -535,6 +536,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Asleep
                         | BuffKind::Blinded
                         | BuffKind::Slowed
+                        | BuffKind::Agonized
                         | BuffKind::ArdentHunt
                         | BuffKind::IgniteArrow
                         | BuffKind::FreezeArrow
