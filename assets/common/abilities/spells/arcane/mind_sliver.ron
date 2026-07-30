@@ -1,0 +1,22 @@
+BasicRanged(
+    energy_cost: 15.0,
+    buildup_duration: 0.3,
+    recover_duration: 0.25,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 6,
+            buff: Some((
+                kind: Bane,
+                dur_secs: 4,
+                strength: Value(0.4),
+                chance: 1.0,
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Enchantment), source: Some(Arcane)),
+)
