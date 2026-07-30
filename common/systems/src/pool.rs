@@ -2,9 +2,9 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory, Mass, Ori,
-        PhysicsState, Player, Pos, Scale, Stats, ability::Dodgeable, aura::EnteredAuras,
-        pool::Pool,
+        Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
+        Inventory, Mass, Ori, PhysicsState, Player, Pos, Scale, Stats, ability::Dodgeable,
+        aura::EnteredAuras, pool::Pool,
     },
     event::{
         BuffEvent, ComboChangeEvent, DeleteEvent, EmitExt, EnergyChangeEvent,
@@ -68,6 +68,7 @@ pub struct ReadData<'a> {
     entered_auras: ReadStorage<'a, EnteredAuras>,
     outcomes: Read<'a, EventBus<Outcome>>,
     physics_states: ReadStorage<'a, PhysicsState>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 #[derive(Default)]
@@ -172,6 +173,7 @@ impl<'a> System<'a> for Sys {
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pool_pos.0),
                                 buffs: read_data.buffs.get(entity),
+                                character_class: read_data.character_classes.get(entity),
                             });
 
                     let target_info = TargetInfo {

@@ -2,8 +2,8 @@ use common::{
     Damage, DamageKind, Explosion, GroupTarget, RadiusEffect,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Body, Buffs, CharacterState, Combo, Content, Energy, Group, Health, Inventory,
-        Mass, Ori, PhysicsState, Player, Poise, Pos, Projectile, Stats, Vel,
+        Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Content, Energy, Group,
+        Health, Inventory, Mass, Ori, PhysicsState, Player, Poise, Pos, Projectile, Stats, Vel,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
         object,
@@ -87,6 +87,7 @@ pub struct ReadData<'a> {
     buffs: ReadStorage<'a, Buffs>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 /// This system is responsible for handling projectile effect triggers
@@ -610,6 +611,7 @@ fn dispatch_hit(
                         mass: read_data.masses.get(entity),
                         pos: read_data.positions.get(entity).map(|p| p.0),
                         buffs: read_data.buffs.get(entity),
+                        character_class: read_data.character_classes.get(entity),
                     });
 
             let target_info = TargetInfo {

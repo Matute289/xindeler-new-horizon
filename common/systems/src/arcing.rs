@@ -2,8 +2,8 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Arcing, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory,
-        Mass, Ori, Player, Pos, Scale, Stats, aura::EnteredAuras,
+        Alignment, Arcing, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group,
+        Health, Inventory, Mass, Ori, Player, Pos, Scale, Stats, aura::EnteredAuras,
     },
     event::{
         BuffEvent, ComboChangeEvent, DeleteEvent, EmitExt, EnergyChangeEvent,
@@ -57,6 +57,7 @@ pub struct ReadData<'a> {
     buffs: ReadStorage<'a, Buffs>,
     alignments: ReadStorage<'a, Alignment>,
     players: ReadStorage<'a, Player>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 /// This system is responsible for hit detection of arcing attacks. Arcing
@@ -214,6 +215,7 @@ impl<'a> System<'a> for Sys {
                                 mass: read_data.masses.get(entity),
                                 pos: Some(arc_pos.0),
                                 buffs: read_data.buffs.get(entity),
+                                character_class: read_data.character_classes.get(entity),
                             });
 
                         let target_info = TargetInfo {

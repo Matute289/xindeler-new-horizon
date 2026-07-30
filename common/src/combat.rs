@@ -1,13 +1,15 @@
 use crate::{
     assets::{AssetExt, Ron},
     comp::{
-        Alignment, AttunedItems, Body, Buffs, CharacterState, Combo, Energy, Group, Health,
-        HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange, SkillSet, Stats,
+        Alignment, AttunedItems, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group,
+        Health, HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange,
+        SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
         body::MagicResistTier,
         buff::{Buff, BuffChange, BuffData, BuffDescriptor, BuffKind, BuffSource, DestInfo},
+        class::ClassKind,
         inventory::{
             item::{
                 ItemDesc, ItemKind, MaterialStatManifest,
@@ -383,6 +385,10 @@ pub struct AttackerInfo<'a> {
     pub mass: Option<&'a Mass>,
     pub pos: Option<Vec3<f32>>,
     pub buffs: Option<&'a Buffs>,
+    /// The attacker's held class(es), so `CasterLevelFailChance` can resolve
+    /// the caster's own class level instead of the raw character level for
+    /// a multiclass character. `None` for non-caster entities.
+    pub character_class: Option<&'a CharacterClass>,
 }
 
 #[derive(Copy, Clone)]
@@ -745,6 +751,7 @@ impl Attack {
                                     self.ability_info,
                                     rng,
                                     attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                                    attacker.and_then(|a| a.character_class),
                                 )
                             })
                             .then_some((*mult, *ovrd))
@@ -1281,6 +1288,7 @@ impl Attack {
                     self.ability_info,
                     rng,
                     attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                    attacker.and_then(|a| a.character_class),
                 )
             });
             if requirements_met {
@@ -1954,6 +1962,7 @@ impl AttackedModification {
                             ability_info,
                             rng,
                             attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                            attacker.and_then(|a| a.character_class),
                         )
                     });
 
@@ -2019,11 +2028,19 @@ impl HealthThreshold {
 /// from `fail_chance_at_unlock` to `fail_chance_at_max_level`. This is a roll
 /// against the caster's own level, independent of the target — there is no
 /// target-side resistance to weigh against it.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CasterLevelFailChance {
     pub unlock_level: u16,
     pub fail_chance_at_unlock: f32,
     pub fail_chance_at_max_level: f32,
+    /// Classes this roll is keyed to. When the caster holds one or more of
+    /// these, the roll uses the max of those classes' own levels rather than
+    /// the raw character level -- a multiclass caster's fail chance tracks
+    /// how far they've progressed in the class that actually grants the
+    /// spell, not their unrelated total. Empty (the default) falls back to
+    /// the raw character level, for any non-spell use of this same curve.
+    #[serde(default)]
+    pub source_classes: Vec<ClassKind>,
 }
 
 impl CasterLevelFailChance {
@@ -2035,6 +2052,32 @@ impl CasterLevelFailChance {
         let progress = (f32::from(caster_level.saturating_sub(self.unlock_level)) / span).min(1.0);
         self.fail_chance_at_unlock
             + (self.fail_chance_at_max_level - self.fail_chance_at_unlock) * progress
+    }
+
+    /// Resolves the level to roll `fail_chance` against: the highest level
+    /// among `source_classes` the caster actually holds, or the caster's raw
+    /// character level when `source_classes` is empty or the caster holds
+    /// none of them (the latter should not happen if the ability's own class
+    /// gate already checked -- this is a defensive fallback, not a design
+    /// path).
+    pub fn effective_caster_level(
+        &self,
+        character_level: Option<u16>,
+        character_class: Option<&CharacterClass>,
+    ) -> Option<u16> {
+        if self.source_classes.is_empty() {
+            return character_level;
+        }
+        character_level
+            .and_then(|level| {
+                character_class.and_then(|cc| {
+                    cc.class_levels(level)
+                        .filter(|(class, _, _)| self.source_classes.contains(class))
+                        .map(|(_, class_level, _)| class_level)
+                        .max()
+                })
+            })
+            .or(character_level)
     }
 }
 
@@ -2097,6 +2140,10 @@ impl CombatRequirement {
         // from `attacker` (a `Uid` used for identity checks). Only
         // `CasterLevelRoll` and `All` (recursively) consume it.
         caster_level: Option<u16>,
+        // The caster's held class(es), so `CasterLevelRoll` can resolve a
+        // class-specific level for entries with `source_classes` set. Only
+        // `CasterLevelRoll` and `All` (recursively) consume it.
+        character_class: Option<&CharacterClass>,
     ) -> bool {
         let (target_health, target_buffs, target_char_state, target_ori, target_uid) = target;
         let (originator_entity, originator_energy, originator_combo) = originator;
@@ -2164,7 +2211,8 @@ impl CombatRequirement {
             },
             CombatRequirement::TargetHealthAtOrBelow(health_threshold) => target_health
                 .is_some_and(|h| h.current() <= health_threshold.threshold(h.maximum())),
-            CombatRequirement::CasterLevelRoll(fail_chance) => caster_level
+            CombatRequirement::CasterLevelRoll(fail_chance) => fail_chance
+                .effective_caster_level(caster_level, character_class)
                 .is_some_and(|level| rng.random::<f32>() >= fail_chance.fail_chance(level)),
             CombatRequirement::All(reqs) => reqs.iter().all(|req| {
                 req.requirement_met(
@@ -2178,6 +2226,7 @@ impl CombatRequirement {
                     ability_info,
                     rng,
                     caster_level,
+                    character_class,
                 )
             }),
         }
@@ -3119,7 +3168,8 @@ pub fn get_equip_slot_by_block_priority(inventory: Option<&Inventory>) -> EquipS
 
 #[cfg(test)]
 mod power_word_kill_threshold_tests {
-    use super::{CasterLevelFailChance, HealthThreshold};
+    use super::{CasterLevelFailChance, ClassKind, HealthThreshold};
+    use crate::comp::CharacterClass;
 
     // Base 100 HP up to 215 max health, then 100 + (1/3)(max_health - 215)
     // above it — continuous at the breakpoint (no discontinuous jump that
@@ -3148,12 +3198,99 @@ mod power_word_kill_threshold_tests {
             unlock_level: 50,
             fail_chance_at_unlock: 0.25,
             fail_chance_at_max_level: 0.05,
+            source_classes: vec![],
         };
         assert_eq!(curve.fail_chance(1), 0.25);
         assert_eq!(curve.fail_chance(50), 0.25);
         assert!((curve.fail_chance(60) - 0.05).abs() < 0.001);
         // Halfway from L50 to L60 (L55) should be halfway from 25% to 5%.
         assert!((curve.fail_chance(55) - 0.15).abs() < 0.001);
+    }
+
+    fn power_word_kill_curve() -> CasterLevelFailChance {
+        CasterLevelFailChance {
+            unlock_level: 50,
+            fail_chance_at_unlock: 0.25,
+            fail_chance_at_max_level: 0.05,
+            source_classes: vec![
+                ClassKind::Mage,
+                ClassKind::Sorcerer,
+                ClassKind::Warlock,
+                ClassKind::Bard,
+            ],
+        }
+    }
+
+    #[test]
+    fn effective_caster_level_falls_back_to_character_level_with_no_source_classes() {
+        let curve = CasterLevelFailChance {
+            unlock_level: 50,
+            fail_chance_at_unlock: 0.25,
+            fail_chance_at_max_level: 0.05,
+            source_classes: vec![],
+        };
+        assert_eq!(
+            curve.effective_caster_level(Some(60), None),
+            Some(60),
+            "no source_classes configured -> raw character level, unaffected by multiclass"
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_uses_the_eligible_class_own_level_for_a_single_class_caster() {
+        let curve = power_word_kill_curve();
+        let character_class = CharacterClass::single(ClassKind::Warlock);
+        // Single-class Warlock at character level 60 -> Warlock level 60 too.
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_uses_the_eligible_secondary_not_an_ineligible_primary() {
+        let curve = power_word_kill_curve();
+        // Warrior (not eligible for Power Word Kill) primary, Warlock (eligible)
+        // secondary at 20 of the 60 total -- the roll must use 20, not 60 or 40.
+        let character_class = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+            secondary_level: 20,
+            future_levels_to_secondary: false,
+        };
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_takes_the_max_when_both_held_classes_are_eligible() {
+        let curve = power_word_kill_curve();
+        // Mage/Sorcerer split 40/20 -- both eligible, so the max (40) applies,
+        // same composition rule as `energy_reward_mult`.
+        let character_class = CharacterClass {
+            primary: ClassKind::Mage,
+            secondary: Some(ClassKind::Sorcerer),
+            secondary_level: 20,
+            future_levels_to_secondary: false,
+        };
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_falls_back_to_character_level_if_no_held_class_is_eligible() {
+        let curve = power_word_kill_curve();
+        // Defensive fallback only -- should not occur if the ability's own
+        // class gate already checked, but must not panic or return None.
+        let character_class = CharacterClass::single(ClassKind::Warrior);
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(60)
+        );
     }
 }
 

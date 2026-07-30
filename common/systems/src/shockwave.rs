@@ -2,8 +2,9 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory, Mass, Ori,
-        PhysicsState, Player, Pos, Scale, Shockwave, ShockwaveHitEntities, Stats,
+        Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
+        Inventory, Mass, Ori, PhysicsState, Player, Pos, Scale, Shockwave, ShockwaveHitEntities,
+        Stats,
         ability::Dodgeable,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
@@ -67,6 +68,7 @@ pub struct ReadData<'a> {
     buffs: ReadStorage<'a, Buffs>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 /// This system is responsible for handling accepted inputs like moving or
@@ -235,6 +237,7 @@ impl<'a> System<'a> for Sys {
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pos.0),
                                 buffs: read_data.buffs.get(entity),
+                                character_class: read_data.character_classes.get(entity),
                             });
 
                     let target_info = TargetInfo {

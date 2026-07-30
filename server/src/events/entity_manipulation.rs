@@ -1009,6 +1009,7 @@ impl ServerEvent for DestroyEvent {
                             attacker_entity
                                 .and_then(|a| data.stats.get(a))
                                 .map(|s| s.character_level),
+                            attacker_entity.and_then(|a| data.character_classes.get(a)),
                         )
                     });
 
@@ -1864,6 +1865,7 @@ pub struct ExplosionData<'a> {
     physics_states: ReadStorage<'a, PhysicsState>,
     uids: ReadStorage<'a, Uid>,
     masses: ReadStorage<'a, comp::Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 impl ServerEvent for ExplosionEvent {
@@ -2256,6 +2258,7 @@ impl ServerEvent for ExplosionEvent {
                                             mass: data.masses.get(entity),
                                             pos: data.positions.get(entity).map(|p| p.0),
                                             buffs: data.buffs.get(entity),
+                                            character_class: data.character_classes.get(entity),
                                         }
                                     });
 
@@ -3229,6 +3232,7 @@ pub struct EntityAttackedHookData<'a> {
     orientations: ReadStorage<'a, comp::Ori>,
     combos: ReadStorage<'a, comp::Combo>,
     energies: ReadStorage<'a, comp::Energy>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 impl ServerEvent for EntityAttackedHookEvent {
@@ -3376,6 +3380,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                             ev.attacker
                                 .and_then(|e| data.stats.get(e))
                                 .map(|s| s.character_level),
+                            ev.attacker.and_then(|e| data.character_classes.get(e)),
                         )
                     });
 
