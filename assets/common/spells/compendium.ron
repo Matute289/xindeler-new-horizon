@@ -965,7 +965,7 @@
         source: Arcane,
         classes: [Mage, Sorcerer, Warlock, Bard],
         cast_time: Action,
-        duration: Secs(300.0),
+        duration: Instant,
         range: Meters(15.0),
         aoe: Some(Sphere(15.0)),
         description_i18n: "spell-power_word_fortify-desc",

@@ -7,7 +7,7 @@ BasicAura(
         (
             kind: Shielded,
             strength: 0.0,
-            duration: Some(300.0),
+            duration: None,
             category: Some(Magical),
             pool_split: Some((
                 unlock_level: 42,
