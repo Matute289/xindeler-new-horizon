@@ -6766,6 +6766,7 @@ fn build_buff(
             | BuffKind::ThunderousSmite
             | BuffKind::WrathfulSmite
             | BuffKind::Blessed
+            | BuffKind::CrusadersMantle
             | BuffKind::Bane
             | BuffKind::FaerieFire
             | BuffKind::Enfeebled

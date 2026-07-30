@@ -5846,7 +5846,8 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         | BuffKind::SearingSmite
         | BuffKind::StaggeringSmite
         | BuffKind::ThunderousSmite
-        | BuffKind::WrathfulSmite => imgs.buff_fury,
+        | BuffKind::WrathfulSmite
+        | BuffKind::CrusadersMantle => imgs.buff_fury,
         // Placeholder icon reuse pending dedicated art.
         BuffKind::Blessed => imgs.buff_fortitude,
         BuffKind::Bane | BuffKind::FaerieFire => imgs.debuff_cursed,

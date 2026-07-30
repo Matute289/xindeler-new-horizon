@@ -259,6 +259,11 @@ pub enum BuffKind {
     /// Sharpens the bearer's attacks and resolve. Strength scales the flat
     /// accuracy bonus.
     Blessed,
+    /// Grants the bearer's weapon attacks additional damage for as long as
+    /// the buff holds — unlike the smites above, not consumed after one hit
+    /// (granted by an aura, not a self-buff with `RemoveOnAttack`). Strength
+    /// scales the additional damage.
+    CrusadersMantle,
     // =================
     //      DEBUFFS
     // =================
@@ -512,6 +517,7 @@ impl BuffKind {
             | BuffKind::ThunderousSmite
             | BuffKind::WrathfulSmite
             | BuffKind::Blessed
+            | BuffKind::CrusadersMantle
             | BuffKind::FreedomOfMovement
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
@@ -1191,6 +1197,10 @@ impl BuffKind {
                 )),
             ],
             BuffKind::Blessed => vec![BuffEffect::Accuracy(12.0 * nn_scaling(data.strength))],
+            BuffKind::CrusadersMantle => vec![BuffEffect::AttackEffect(AttackEffect::new(
+                None,
+                CombatEffect::AdditionalDamage(data.strength),
+            ))],
             // Area/generic active senses: membership frozen at cast (`SenseMode::Snapshot`).
             BuffKind::Detecting => {
                 let mut effects = Vec::new();
