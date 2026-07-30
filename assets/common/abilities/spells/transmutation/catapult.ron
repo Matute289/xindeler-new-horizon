@@ -1,0 +1,26 @@
+TelekineticGrip(
+    energy_cost: 8,
+    energy_drain: 2.0,
+    buildup_duration: 0.2,
+    // Instant grab-then-launch, no real hold phase (unlike mage_hand/
+    // telekinesis) — charge_duration and place_threshold are both kept low
+    // so almost any release counts as a throw, per plan §2.3.
+    charge_duration: 0.15,
+    place_threshold: 0.05,
+    recover_duration: 0.25,
+    range: 12.0,           // ~40 ft grab range
+    tether_length: 1.0,
+    initial_projectile_speed: 18.0,
+    scaled_projectile_speed: 6.0,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 12.0,
+            poise: Some(15.0),
+            friendly_fire: true,
+            damage_kind: Crushing,
+        )),
+        pierce_entities: true,
+    ),
+    move_speed: 0.9,
+)
