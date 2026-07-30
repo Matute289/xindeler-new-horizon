@@ -116,6 +116,12 @@ impl ClassKind {
 pub struct CharacterClass {
     pub primary: ClassKind,
     pub secondary: Option<ClassKind>,
+    /// Class levels banked into the secondary class (only meaningful when
+    /// `secondary.is_some()`). The primary's own level is never stored — it
+    /// is always derived as `character_level - secondary_level`, so it can
+    /// never desync from the XP-derived character level the way a directly
+    /// stored value could. Always `0` for single-class characters.
+    pub secondary_level: u16,
 }
 
 impl CharacterClass {
@@ -123,6 +129,7 @@ impl CharacterClass {
         Self {
             primary: class,
             secondary: None,
+            secondary_level: 0,
         }
     }
 
@@ -136,6 +143,40 @@ impl CharacterClass {
     pub fn has(&self, class: ClassKind) -> bool { self.classes().any(|c| c == class) }
 
     pub fn is_multiclass(&self) -> bool { self.secondary.is_some() }
+
+    /// The primary class's own level at the given character level. Ignores
+    /// `secondary_level` when there is no secondary class, so a stale value
+    /// left behind by a bug can never make a single-class character's
+    /// primary level read low.
+    pub fn primary_level(&self, character_level: u16) -> u16 {
+        let secondary_level = if self.secondary.is_some() {
+            self.secondary_level
+        } else {
+            0
+        };
+        character_level.saturating_sub(secondary_level)
+    }
+
+    /// `(class, level, is_primary)` for every class held (1 or 2), primary
+    /// first. THE accessor for anything that must apply class-level-scaled
+    /// stats once per held class.
+    pub fn class_levels(
+        &self,
+        character_level: u16,
+    ) -> impl Iterator<Item = (ClassKind, u16, bool)> + '_ {
+        let primary = (self.primary, self.primary_level(character_level), true);
+        let secondary = self.secondary.map(|c| (c, self.secondary_level, false));
+        std::iter::once(primary).chain(secondary)
+    }
+
+    /// Sets the secondary class's banked level count directly, clamped to
+    /// `0..=character_level` so `primary_level` can never underflow or
+    /// exceed the character's total. Used by the multiclass grant (the
+    /// one-time reallocation of already-earned levels) and by
+    /// `/set_class_level` for testing — never called on a per-tick path.
+    pub fn set_secondary_level(&mut self, new_secondary_level: u16, character_level: u16) {
+        self.secondary_level = new_secondary_level.min(character_level);
+    }
 }
 
 impl Component for CharacterClass {
@@ -286,24 +327,34 @@ impl Default for ClassAttributes {
 }
 
 impl ClassAttributes {
-    /// Applies this class' scaling onto freshly-reset stats at character
-    /// `level`. Must run right after `Stats::reset_temp_modifiers` so it stacks
-    /// with buffs + racial passives (spec §6/§7.1).
-    pub fn apply(self, stats: &mut Stats, level: u16) {
+    /// Applies this class' scaling onto freshly-reset stats at `level` —
+    /// that class's own level, not necessarily the character level (a
+    /// multiclass character's primary and secondary each have their own).
+    /// Must run right after `Stats::reset_temp_modifiers` so it stacks with
+    /// buffs + racial passives (spec §6/§7.1). Call once per class the
+    /// character holds (1 or 2): `is_primary` gates the flat `base_*` L1
+    /// offsets, which come from the primary only — summing `base_*` from
+    /// both classes would make holding a second class a free one-time
+    /// bonus on top of a pure class of the same level, backwards from
+    /// multiclass's whole point. `energy_reward_modifier` is deliberately
+    /// NOT touched here: composing two classes' `energy_reward_mult` takes
+    /// the max, not the product of two `apply` calls, so callers apply it
+    /// once themselves after computing that max across every held class.
+    pub fn apply(self, stats: &mut Stats, level: u16, is_primary: bool) {
+        let base = |v: f32| if is_primary { v } else { 0.0 };
         stats.max_health_modifiers.add_mod +=
-            self.base_health + level_scaled(self.per_level_health, level);
+            base(self.base_health) + level_scaled(self.per_level_health, level);
         stats.max_energy_modifiers.add_mod +=
-            self.base_energy + level_scaled(self.per_level_energy, level);
+            base(self.base_energy) + level_scaled(self.per_level_energy, level);
         stats.attack_damage_modifier *= 1.0 + level_scaled(self.per_level_damage, level);
-        stats.energy_reward_modifier *= self.energy_reward_mult;
-        // BL-52 combat resolution: same `level_scaled` curve as HP/energy.
-        stats.accuracy += self.base_accuracy + level_scaled(self.per_level_accuracy, level);
-        stats.evasion += self.base_evasion + level_scaled(self.per_level_evasion, level);
-        stats.crit_chance += self.base_crit + level_scaled(self.per_level_crit, level);
+        // Same `level_scaled` curve as HP/energy above.
+        stats.accuracy += base(self.base_accuracy) + level_scaled(self.per_level_accuracy, level);
+        stats.evasion += base(self.base_evasion) + level_scaled(self.per_level_evasion, level);
+        stats.crit_chance += base(self.base_crit) + level_scaled(self.per_level_crit, level);
         stats.magic_accuracy +=
-            self.base_magic_accuracy + level_scaled(self.per_level_magic_accuracy, level);
+            base(self.base_magic_accuracy) + level_scaled(self.per_level_magic_accuracy, level);
         stats.magic_evasion +=
-            self.base_magic_evasion + level_scaled(self.per_level_magic_evasion, level);
+            base(self.base_magic_evasion) + level_scaled(self.per_level_magic_evasion, level);
     }
 }
 
@@ -358,6 +409,7 @@ mod tests {
         let multi = CharacterClass {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
+            secondary_level: 20,
         };
         assert_eq!(multi.classes().collect::<Vec<_>>(), vec![
             ClassKind::Warrior,
@@ -367,6 +419,68 @@ mod tests {
         assert!(multi.has(ClassKind::Warlock));
         assert!(!multi.has(ClassKind::Mage));
         assert!(multi.is_multiclass());
+    }
+
+    #[test]
+    fn single_class_primary_level_always_equals_character_level() {
+        let single = CharacterClass::single(ClassKind::Warrior);
+        for character_level in [1, 20, 40, 60] {
+            assert_eq!(single.primary_level(character_level), character_level);
+            assert_eq!(single.secondary_level, 0);
+            assert_eq!(
+                single.class_levels(character_level).collect::<Vec<_>>(),
+                vec![(ClassKind::Warrior, character_level, true)]
+            );
+        }
+    }
+
+    #[test]
+    fn multiclass_primary_level_is_character_level_minus_secondary() {
+        // 40 primary + 20 secondary levels summing to a 60 character level.
+        let multi = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+            secondary_level: 20,
+        };
+        assert_eq!(multi.primary_level(60), 40);
+        assert_eq!(multi.class_levels(60).collect::<Vec<_>>(), vec![
+            (ClassKind::Warrior, 40, true),
+            (ClassKind::Warlock, 20, false)
+        ]);
+    }
+
+    #[test]
+    fn secondary_level_ignored_without_a_secondary_class() {
+        // A stale `secondary_level` left behind by a bug must never make a
+        // single-class character's primary level read low.
+        let stale = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: None,
+            secondary_level: 20,
+        };
+        assert_eq!(stale.primary_level(60), 60);
+        assert_eq!(stale.class_levels(60).collect::<Vec<_>>(), vec![(
+            ClassKind::Warrior,
+            60,
+            true
+        )]);
+    }
+
+    #[test]
+    fn set_secondary_level_clamps_to_character_level() {
+        let mut multi = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+            secondary_level: 0,
+        };
+        multi.set_secondary_level(20, 60);
+        assert_eq!(multi.secondary_level, 20);
+        assert_eq!(multi.primary_level(60), 40);
+
+        // Can never exceed the character's total level.
+        multi.set_secondary_level(100, 60);
+        assert_eq!(multi.secondary_level, 60);
+        assert_eq!(multi.primary_level(60), 0);
     }
 
     #[test]
@@ -434,19 +548,21 @@ mod tests {
 
         // Mage L60: energy add = 30 + 7*(49+25) = 548; HP add = 0 + 4*74 = 296.
         let mut mage = Stats::empty(body);
-        class_attributes(ClassKind::Mage).apply(&mut mage, 60);
+        class_attributes(ClassKind::Mage).apply(&mut mage, 60, true);
         assert_eq!(mage.max_energy_modifiers.add_mod, 548.0);
         assert_eq!(mage.max_health_modifiers.add_mod, 296.0);
         assert!(mage.attack_damage_modifier > 1.0); // per-level damage baseline
-        assert!((mage.energy_reward_modifier - 1.4).abs() < f32::EPSILON);
+        // energy_reward_modifier composition (single- vs multi-class) is now
+        // the caller's job, not apply()'s -- see the shipped rate directly.
+        assert!((class_attributes(ClassKind::Mage).energy_reward_mult - 1.4).abs() < f32::EPSILON);
 
         // Warrior L1: HP add = base 40; energy stays tiny.
         let mut warrior1 = Stats::empty(body);
-        class_attributes(ClassKind::Warrior).apply(&mut warrior1, 1);
+        class_attributes(ClassKind::Warrior).apply(&mut warrior1, 1, true);
         assert_eq!(warrior1.max_health_modifiers.add_mod, 40.0);
         // Warrior L60 energy = 0 + 2*74 = 148 (can't spam high-circle spells).
         let mut warrior60 = Stats::empty(body);
-        class_attributes(ClassKind::Warrior).apply(&mut warrior60, 60);
+        class_attributes(ClassKind::Warrior).apply(&mut warrior60, 60, true);
         assert_eq!(warrior60.max_energy_modifiers.add_mod, 148.0);
         // Warrior is far tankier than Mage at L60.
         assert!(warrior60.max_health_modifiers.add_mod > mage.max_health_modifiers.add_mod);
@@ -455,12 +571,34 @@ mod tests {
 
         // Adventurer (legacy default) = neutral no-op.
         let mut adv = Stats::empty(body);
-        class_attributes(ClassKind::Adventurer).apply(&mut adv, 60);
+        class_attributes(ClassKind::Adventurer).apply(&mut adv, 60, true);
         assert_eq!(adv.max_energy_modifiers.add_mod, 0.0);
         assert_eq!(adv.max_health_modifiers.add_mod, 0.0);
         assert_eq!(adv.attack_damage_modifier, 1.0);
         assert_eq!(adv.accuracy, 0.0);
         assert_eq!(adv.evasion, 0.0);
+    }
+
+    #[test]
+    fn class_attributes_apply_base_only_from_primary() {
+        // A "secondary" application (is_primary = false) must not add the
+        // flat base_* offset -- only the per-level-scaled growth.
+        use crate::comp::Stats;
+        let body = crate::comp::Body::Humanoid(crate::comp::humanoid::Body::random());
+
+        let mut warrior_secondary = Stats::empty(body);
+        class_attributes(ClassKind::Warrior).apply(&mut warrior_secondary, 20, false);
+        // per_level_health = 12, base_health = 40 (from class_attributes.ron)
+        // -- base must be excluded, only 12 * level_scaled(20) contributes.
+        let expected_per_level_only = crate::comp::class::level_scaled(12.0, 20);
+        assert_eq!(
+            warrior_secondary.max_health_modifiers.add_mod,
+            expected_per_level_only
+        );
+        assert_ne!(
+            warrior_secondary.max_health_modifiers.add_mod,
+            40.0 + expected_per_level_only
+        );
     }
 
     #[test]
@@ -471,14 +609,14 @@ mod tests {
 
         // Warrior L60 accuracy = 5 + 0.50*(49+25) = 42.
         let mut warrior = Stats::empty(body);
-        class_attributes(ClassKind::Warrior).apply(&mut warrior, 60);
+        class_attributes(ClassKind::Warrior).apply(&mut warrior, 60, true);
         assert!((warrior.accuracy - 42.0).abs() < 1e-3);
 
         // Rogue out-evades and out-crits the Warrior; Mage out-magics it.
         let mut rogue = Stats::empty(body);
-        class_attributes(ClassKind::Rogue).apply(&mut rogue, 60);
+        class_attributes(ClassKind::Rogue).apply(&mut rogue, 60, true);
         let mut mage = Stats::empty(body);
-        class_attributes(ClassKind::Mage).apply(&mut mage, 60);
+        class_attributes(ClassKind::Mage).apply(&mut mage, 60, true);
         assert!(rogue.evasion > warrior.evasion);
         assert!(rogue.crit_chance > warrior.crit_chance);
         assert!(mage.magic_accuracy > warrior.magic_accuracy);

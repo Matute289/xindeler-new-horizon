@@ -524,14 +524,37 @@ impl<'a> System<'a> for Sys {
                     read_data.character_classes.get(entity),
                     read_data.skill_sets.get(entity),
                 ) {
-                    stat.character_level = skill_set.character_level();
+                    let character_level = skill_set.character_level();
+                    stat.character_level = character_level;
 
-                    class_attributes
-                        .0
-                        .get(&character_class.primary)
-                        .copied()
-                        .unwrap_or_default()
-                        .apply(&mut stat, skill_set.character_level());
+                    // energy_reward_mult composes as the max across every
+                    // held class, not the product of applying each one --
+                    // computed once here rather than inside `apply` itself,
+                    // so it stays a single multiplication regardless of how
+                    // many classes are held (see `ClassAttributes::apply`'s
+                    // own doc comment for why).
+                    let energy_reward_mult = character_class
+                        .classes()
+                        .map(|class| {
+                            class_attributes
+                                .0
+                                .get(&class)
+                                .copied()
+                                .unwrap_or_default()
+                                .energy_reward_mult
+                        })
+                        .fold(1.0_f32, f32::max);
+                    stat.energy_reward_modifier *= energy_reward_mult;
+
+                    for (class, level, is_primary) in character_class.class_levels(character_level)
+                    {
+                        class_attributes
+                            .0
+                            .get(&class)
+                            .copied()
+                            .unwrap_or_default()
+                            .apply(&mut stat, level, is_primary);
+                    }
 
                     // BL-06: passive class-skill bonuses, same per-tick slot as
                     // the per-class attribute scaling (derived from purchased
