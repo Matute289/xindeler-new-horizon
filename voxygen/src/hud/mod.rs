@@ -98,8 +98,8 @@ use client::{Client, UserNotification};
 use common::{
     combat,
     comp::{
-        self, AbilityCooldowns, BuffData, BuffKind, Content, Health, Item, MapMarkerChange,
-        PickupItem, PresenceKind,
+        self, AbilityCooldowns, BuffData, BuffKind, Content, Detected, Health, Item,
+        MapMarkerChange, PickupItem, PresenceKind, SenseKind,
         ability::{AuxiliaryAbility, Stance},
         fluid_dynamics,
         inventory::{
@@ -268,6 +268,7 @@ widget_ids! {
 
         overheads[],
         overitems[],
+        detected_points[],
 
         // Game Version
         version,
@@ -668,6 +669,9 @@ pub struct HudInfo<'a> {
     pub mutable_viewpoint: bool,
     pub target_entity: Option<specs::Entity>,
     pub selected_entity: Option<(specs::Entity, Instant)>,
+    /// Entities the viewpoint entity currently perceives through a magical
+    /// sense, each tagged with the sense that revealed it.
+    pub revealed_entities: &'a HashMap<specs::Entity, SenseKind>,
     pub persistence_load_error: Option<SkillsPersistenceError>,
     pub key_state: &'a KeyState,
 }
@@ -2391,6 +2395,50 @@ impl Hud {
                 .set(overitem_id, ui_widgets);
             }
 
+            // Render an in-world label for every world point a magical sense has
+            // revealed to us (e.g. a revealed path's waypoint). These are bare
+            // positions rather than entities, so they get their own label pass
+            // instead of riding along with the figure tint.
+            let detecteds = ecs.read_storage::<Detected>();
+            if let Some(detected) = detecteds.get(me) {
+                let mut detected_point_walker = self.ids.detected_points.walk();
+                for point in detected.points.iter() {
+                    let detected_point_id = detected_point_walker.next(
+                        &mut self.ids.detected_points,
+                        &mut ui_widgets.widget_id_generator(),
+                    );
+
+                    let name = i18n.get_msg(match point.sense {
+                        SenseKind::Path => "hud-detected-path",
+                        _ => "hud-detected-point",
+                    });
+                    let offset = point.pos - player_pos;
+                    let bearing = i18n.get_msg_ctx("hud-detected-bearing", &i18n::fluent_args! {
+                        "bearing" => i18n.get_msg(cardinal_direction_key(offset.xy())),
+                        "distance" => offset.magnitude().round() as i64,
+                    });
+
+                    overitem::Overitem::new(
+                        name,
+                        overitem::TEXT_COLOR,
+                        point.pos.distance_squared(player_pos),
+                        &self.fonts,
+                        i18n,
+                        overitem::OveritemProperties {
+                            active: true,
+                            pickup_failed_pulse: None,
+                        },
+                        self.pulse,
+                        vec![(None, bearing.into_owned(), overitem::TEXT_COLOR)],
+                        &self.imgs,
+                        global_state,
+                    )
+                    .x_y(0.0, 100.0)
+                    .position_ingame(point.pos + Vec3::unit_z() * 1.5)
+                    .set(detected_point_id, ui_widgets);
+                }
+            }
+
             let speech_bubbles = &self.speech_bubbles;
             let my_stats = stats.get(me);
             // Render overhead name tags and health bars
@@ -2456,7 +2504,8 @@ impl Hud {
                         let is_me = entity == me;
                         let dist_sqr = pos.distance_squared(player_pos);
 
-                        let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid));
+                        let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid))
+                            || info.revealed_entities.contains_key(&entity);
 
                         // Determine whether to display nametag and healthbar based on whether the
                         // entity is mounted, has been damaged, is targeted/selected, or is in your
@@ -5698,6 +5747,31 @@ pub fn get_quality_col(quality: Quality) -> Color {
         Quality::Artifact => QUALITY_ARTIFACT,
         Quality::Debug => QUALITY_DEBUG,
     }
+}
+
+/// The i18n key for the compass point nearest to a horizontal world-space
+/// offset. World `+y` is north, so an offset straight along `+y` reads as `N`.
+/// A zero-length offset (we are standing on the thing) has no meaningful
+/// bearing and reports north.
+fn cardinal_direction_key(offset: Vec2<f32>) -> &'static str {
+    const KEYS: [&str; 8] = [
+        "hud-compass-north",
+        "hud-compass-northeast",
+        "hud-compass-east",
+        "hud-compass-southeast",
+        "hud-compass-south",
+        "hud-compass-southwest",
+        "hud-compass-west",
+        "hud-compass-northwest",
+    ];
+    if offset.magnitude_squared() < f32::EPSILON {
+        return KEYS[0];
+    }
+    // `atan2` measures counter-clockwise from east; rotate so 0 lands on north
+    // and each step of 45 degrees advances one compass point clockwise.
+    let clockwise_from_north = 90.0 - offset.y.atan2(offset.x).to_degrees();
+    let index = ((clockwise_from_north / 45.0).round() as i32).rem_euclid(8) as usize;
+    KEYS[index]
 }
 
 fn try_hotbar_slot_from_input(input: GameInput) -> Option<hotbar::Slot> {

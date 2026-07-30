@@ -115,3 +115,15 @@ hud-init-stage-server-worldsim-erosion_time_left =
         }
 hud-tutorial-disable = Desactivar permanentemente las sugerencias del tutorial
 hud-steal = Robar
+
+hud-detected-path = Camino revelado
+hud-detected-point = Ubicación revelada
+hud-detected-bearing = { $bearing } · { $distance } m
+hud-compass-north = N
+hud-compass-northeast = NE
+hud-compass-east = E
+hud-compass-southeast = SE
+hud-compass-south = S
+hud-compass-southwest = SO
+hud-compass-west = O
+hud-compass-northwest = NO

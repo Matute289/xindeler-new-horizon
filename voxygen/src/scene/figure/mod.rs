@@ -54,7 +54,7 @@ use common::{
     comp::{
         self, Body, CharacterActivity, CharacterState, Collider, Controller, Health, Inventory,
         ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhysicsState, PickupItem,
-        PoiseState, Pos, Scale, ThrownItem, Vel,
+        PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
         body::{self, parts::HeadState},
         inventory::slot::EquipSlot,
         item::{Hands, ItemKind, ToolKind, armor::ArmorKind},
@@ -95,6 +95,40 @@ use super::terrain::{BlocksOfInterest, SPRITE_LOD_LEVELS};
 const DAMAGE_FADE_COEFFICIENT: f64 = 15.0;
 const MOVING_THRESHOLD: f32 = 0.2;
 const MOVING_THRESHOLD_SQR: f32 = MOVING_THRESHOLD * MOVING_THRESHOLD;
+
+/// The colour a figure is tinted with while it is revealed by an active
+/// magical sense, one tint per sense so a caster can tell at a glance *which*
+/// sense picked something up. Multiplied into the per-figure colour, so
+/// channels above `1.0` brighten and channels below it darken.
+fn sense_tint(sense: SenseKind) -> Rgba<f32> {
+    let (r, g, b) = match sense {
+        // Cool blue.
+        SenseKind::Magic => (0.9, 1.1, 1.8),
+        // Blood red.
+        SenseKind::Aberrant => (1.8, 0.7, 0.7),
+        // Sickly green.
+        SenseKind::Affliction => (0.7, 1.7, 0.8),
+        // Violet.
+        SenseKind::Thought => (1.5, 0.8, 1.7),
+        // Cyan.
+        SenseKind::Portal => (0.7, 1.6, 1.7),
+        // Orange.
+        SenseKind::Creature => (1.8, 1.2, 0.6),
+        // Amber.
+        SenseKind::Fauna => (1.7, 1.5, 0.6),
+        // Lime.
+        SenseKind::Flora => (1.2, 1.7, 0.7),
+        // Pale gold.
+        SenseKind::Object => (1.6, 1.5, 1.1),
+        // Teal.
+        SenseKind::Nature => (0.7, 1.6, 1.3),
+        // Pale blue-white.
+        SenseKind::Path => (1.3, 1.5, 1.8),
+        // Neutral silver-white.
+        SenseKind::True => (1.6, 1.6, 1.6),
+    };
+    Rgba::new(r, g, b, 1.0)
+}
 
 /// camera data, figure LOD render distance.
 pub type CameraData<'a> = (&'a Camera, f32);
@@ -1328,7 +1362,13 @@ impl FigureMgr {
                 Rgba::new(1.5, 1.5, 1.5, 1.0)
             } else {
                 Rgba::one()
-            };
+            }
+            // Tint entities revealed to us by an active magical sense
+            * data
+                .scene_data
+                .revealed_entities
+                .get(&entity)
+                .map_or_else(Rgba::one, |sense| sense_tint(*sense));
 
         let scale = scale.map(|s| s.0).unwrap_or(1.0);
 
