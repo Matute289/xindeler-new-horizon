@@ -107,6 +107,8 @@ hud-skill_tree-mining = Minería
 hud-skill_tree-class = Clase
 hud-skill_tree-class-title = Habilidades de Clase
 hud-skill_tree-class-empty = Sin habilidades de clase disponibles aún
+hud-skill_tree-multiclass_switch_to = Ver { $class } en su lugar
+hud-skill_tree-multiclass_future_levels = Niveles futuros a { $class }
 hud-skill_tree-feats = Dotes
 
 ## Etiquetas genéricas del árbol de habilidades para el estado de nodos (pasiva, máximo, nivel, costo, bloqueado)

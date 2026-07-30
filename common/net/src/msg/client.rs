@@ -111,6 +111,7 @@ pub enum ClientGeneral {
         force_counter: u64,
     },
     UnlockSkill(Skill),
+    SetFutureLevelsToSecondary(bool),
     RequestSiteInfo(SiteId),
     UpdateMapMarker(comp::MapMarkerChange),
     SetBattleMode(BattleMode),
@@ -178,6 +179,7 @@ impl ClientMsg {
                         | ClientGeneral::PlayerPhysics { .. }
                         | ClientGeneral::TerrainChunkRequest { .. }
                         | ClientGeneral::UnlockSkill(_)
+                        | ClientGeneral::SetFutureLevelsToSecondary(_)
                         | ClientGeneral::RequestSiteInfo(_)
                         | ClientGeneral::RequestPlayerPhysics { .. }
                         | ClientGeneral::RequestLossyTerrainCompression { .. }

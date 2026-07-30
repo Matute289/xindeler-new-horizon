@@ -11,6 +11,8 @@ hud-skill_tree-mining = Mining
 hud-skill_tree-class = Class
 hud-skill_tree-class-title = Class Skills
 hud-skill_tree-class-empty = No class skills available yet
+hud-skill_tree-multiclass_switch_to = View { $class } instead
+hud-skill_tree-multiclass_future_levels = Future levels to { $class }
 
 ## BL-06 P3a — Warrior class skill strings
 

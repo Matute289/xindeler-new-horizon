@@ -1970,6 +1970,11 @@ impl PlayState for SessionState {
                     HudEvent::UnlockSkill(skill) => {
                         self.client.borrow_mut().unlock_skill(skill);
                     },
+                    HudEvent::SetFutureLevelsToSecondary(value) => {
+                        self.client
+                            .borrow_mut()
+                            .set_future_levels_to_secondary(value);
+                    },
                     HudEvent::UseSlot {
                         slot,
                         bypass_dialog,

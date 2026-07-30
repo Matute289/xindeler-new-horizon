@@ -1399,6 +1399,7 @@ impl Client {
                     | ClientGeneral::ExitInGame
                     | ClientGeneral::PlayerPhysics { .. }
                     | ClientGeneral::UnlockSkill(_)
+                    | ClientGeneral::SetFutureLevelsToSecondary(_)
                     | ClientGeneral::RequestSiteInfo(_)
                     | ClientGeneral::RequestPlayerPhysics { .. }
                     | ClientGeneral::RequestLossyTerrainCompression { .. }
@@ -1983,6 +1984,10 @@ impl Client {
 
     pub fn unlock_skill(&mut self, skill: Skill) {
         self.send_msg(ClientGeneral::UnlockSkill(skill));
+    }
+
+    pub fn set_future_levels_to_secondary(&mut self, value: bool) {
+        self.send_msg(ClientGeneral::SetFutureLevelsToSecondary(value));
     }
 
     pub fn max_group_size(&self) -> u32 { self.max_group_size }

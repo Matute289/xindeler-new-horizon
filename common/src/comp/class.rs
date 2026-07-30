@@ -126,6 +126,11 @@ pub struct CharacterClass {
     /// never desync from the XP-derived character level the way a directly
     /// stored value could. Always `0` for single-class characters.
     pub secondary_level: u16,
+    /// Set-and-forget toggle: when `true`, character levels earned AFTER the
+    /// multiclass grant are routed to the secondary class instead of the
+    /// primary. Always `false` on grant (opt-in) and forced `false` for
+    /// single-class characters, since there is no secondary to route to.
+    pub future_levels_to_secondary: bool,
 }
 
 impl CharacterClass {
@@ -134,6 +139,7 @@ impl CharacterClass {
             primary: class,
             secondary: None,
             secondary_level: 0,
+            future_levels_to_secondary: false,
         }
     }
 
@@ -180,6 +186,27 @@ impl CharacterClass {
     /// `/set_class_level` for testing — never called on a per-tick path.
     pub fn set_secondary_level(&mut self, new_secondary_level: u16, character_level: u16) {
         self.secondary_level = new_secondary_level.min(character_level);
+    }
+
+    /// Sets the "future levels" routing preference. Forced to `false` when
+    /// there is no secondary class, so the flag can never be left dangling
+    /// in a `true` state that would silently activate the moment a
+    /// secondary is later granted.
+    pub fn set_future_levels_to_secondary(&mut self, value: bool) {
+        self.future_levels_to_secondary = value && self.is_multiclass();
+    }
+
+    /// Call once per character-level-up (i.e. when `character_level` has
+    /// just increased by `levels_gained`). Routes the newly earned levels to
+    /// the secondary class's bank when the player has opted in via
+    /// [`Self::set_future_levels_to_secondary`]; otherwise the new levels
+    /// fall to the primary automatically, since `primary_level` is derived
+    /// by subtraction and needs no action. A no-op for single-class
+    /// characters.
+    pub fn route_levels_gained(&mut self, levels_gained: u16, character_level: u16) {
+        if self.future_levels_to_secondary && levels_gained > 0 {
+            self.set_secondary_level(self.secondary_level + levels_gained, character_level);
+        }
     }
 }
 
@@ -463,6 +490,7 @@ mod tests {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
             secondary_level: 20,
+            future_levels_to_secondary: false,
         };
         assert_eq!(multi.classes().collect::<Vec<_>>(), vec![
             ClassKind::Warrior,
@@ -494,6 +522,7 @@ mod tests {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
             secondary_level: 20,
+            future_levels_to_secondary: false,
         };
         assert_eq!(multi.primary_level(60), 40);
         assert_eq!(multi.class_levels(60).collect::<Vec<_>>(), vec![
@@ -510,6 +539,7 @@ mod tests {
             primary: ClassKind::Warrior,
             secondary: None,
             secondary_level: 20,
+            future_levels_to_secondary: false,
         };
         assert_eq!(stale.primary_level(60), 60);
         assert_eq!(stale.class_levels(60).collect::<Vec<_>>(), vec![(
@@ -525,6 +555,7 @@ mod tests {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
             secondary_level: 0,
+            future_levels_to_secondary: false,
         };
         multi.set_secondary_level(20, 60);
         assert_eq!(multi.secondary_level, 20);
@@ -561,6 +592,7 @@ mod tests {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Warlock),
             secondary_level: 20,
+            future_levels_to_secondary: false,
         };
         let mut skill_set = SkillSet::default();
         skill_set.set_level(40);
@@ -607,6 +639,42 @@ mod tests {
         );
         // Rejected: nothing should have been mutated.
         assert!(!character_class.is_multiclass());
+    }
+
+    #[test]
+    fn future_levels_toggle_forced_off_without_a_secondary() {
+        let mut single = CharacterClass::single(ClassKind::Warrior);
+        single.set_future_levels_to_secondary(true);
+        assert!(!single.future_levels_to_secondary);
+    }
+
+    #[test]
+    fn future_levels_toggle_routes_new_levels_to_secondary() {
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(40);
+        grant_second_class(&mut character_class, &mut skill_set, ClassKind::Warlock, 20).unwrap();
+        character_class.set_future_levels_to_secondary(true);
+
+        // 3 new character levels, all routed to the secondary.
+        character_class.route_levels_gained(3, 43);
+        assert_eq!(character_class.secondary_level, 23);
+        assert_eq!(character_class.primary_level(43), 20);
+    }
+
+    #[test]
+    fn future_levels_toggle_off_leaves_new_levels_on_primary() {
+        // Default (opt-out) behaviour: the primary absorbs new levels
+        // automatically since `primary_level` is derived by subtraction, so
+        // `route_levels_gained` must be a no-op here.
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(40);
+        grant_second_class(&mut character_class, &mut skill_set, ClassKind::Warlock, 20).unwrap();
+
+        character_class.route_levels_gained(3, 43);
+        assert_eq!(character_class.secondary_level, 20);
+        assert_eq!(character_class.primary_level(43), 23);
     }
 
     #[test]

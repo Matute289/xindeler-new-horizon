@@ -2616,6 +2616,7 @@ mod tests {
                 primary: ClassKind::Warrior,
                 secondary: Some(ClassKind::Cleric),
                 secondary_level: 20,
+                future_levels_to_secondary: false,
             }),
             &skill_set_at_level(20),
             &human,

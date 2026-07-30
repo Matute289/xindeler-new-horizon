@@ -16,7 +16,8 @@ use crate::{
             convert_background_from_database, convert_background_to_database,
             convert_body_from_database, convert_body_to_database_json,
             convert_character_from_database, convert_class_from_database,
-            convert_class_to_database, convert_ethos_from_database, convert_hardcore_from_database,
+            convert_class_to_database, convert_ethos_from_database,
+            convert_future_levels_to_secondary_to_database, convert_hardcore_from_database,
             convert_hardcore_to_database, convert_inventory_from_database_items,
             convert_items_to_database_items, convert_loadout_from_database_items,
             convert_recipe_book_from_database_items, convert_secondary_class_level_to_database,
@@ -157,7 +158,8 @@ pub fn load_character_data(
                 c.background,
                 c.background_custom_note,
                 c.secondary_class,
-                c.secondary_class_level
+                c.secondary_class_level,
+                c.secondary_class_future_levels
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -180,6 +182,7 @@ pub fn load_character_data(
                 background_custom_note: row.get(10)?,
                 secondary_class: row.get(11)?,
                 secondary_class_level: row.get(12)?,
+                secondary_class_future_levels: row.get(13)?,
             };
 
             let body_data = Body {
@@ -318,6 +321,7 @@ pub fn load_character_data(
                 &character_data.class,
                 character_data.secondary_class.as_deref(),
                 character_data.secondary_class_level,
+                character_data.secondary_class_future_levels,
             ),
             stats: convert_stats_from_database(character_data.alias, body),
             skill_set,
@@ -384,6 +388,7 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 // Nor the secondary class: defaulted, same reasoning.
                 secondary_class: None,
                 secondary_class_level: 0,
+                secondary_class_future_levels: 0,
             })
         })?
         .map(|x| x.unwrap())
@@ -580,8 +585,9 @@ pub fn create_character(
                                background,
                                background_custom_note,
                                secondary_class,
-                               secondary_class_level)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                               secondary_class_level,
+                               secondary_class_future_levels)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
 
     stmt.execute([
@@ -597,6 +603,7 @@ pub fn create_character(
         &background_custom_note_db,
         &convert_secondary_class_to_database(character_class),
         &convert_secondary_class_level_to_database(character_class),
+        &convert_future_levels_to_secondary_to_database(character_class),
     ])?;
     drop(stmt);
 
@@ -1289,8 +1296,9 @@ pub fn update(
                 background = ?5,
                 background_custom_note = ?6,
                 secondary_class = ?7,
-                secondary_class_level = ?8
-        WHERE   character_id = ?9
+                secondary_class_level = ?8,
+                secondary_class_future_levels = ?9
+        WHERE   character_id = ?10
     ",
     )?;
 
@@ -1303,6 +1311,7 @@ pub fn update(
         &background_custom_note_db,
         &convert_secondary_class_to_database(character_class),
         &convert_secondary_class_level_to_database(character_class),
+        &convert_future_levels_to_secondary_to_database(character_class),
         &char_id.0,
     ])?;
 
