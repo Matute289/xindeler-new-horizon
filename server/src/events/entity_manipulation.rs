@@ -759,6 +759,40 @@ mod handle_exp_gain_tests {
             25
         );
     }
+
+    /// The banishment reward is the *same* generic `combat_rating`-derived XP
+    /// every kill uses, scaled by `RemovalInfo::reward_fraction` — not a
+    /// separate reward system. This pins the multiplier at the one point it is
+    /// applied, so a later refactor of the XP block cannot silently drop it.
+    #[test]
+    fn a_banishment_awards_a_quarter_of_the_kill_experience() {
+        const RAW_EXP: f32 = 400.0;
+        let killed = RAW_EXP * combat::RemovalInfo::killed().reward_fraction;
+        let banished = RAW_EXP * combat::RemovalInfo::banished(0.25).reward_fraction;
+        assert!((killed - 400.0).abs() < f32::EPSILON);
+        assert!((banished - 100.0).abs() < f32::EPSILON);
+
+        let mut killed_set = SkillSet::default();
+        killed_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        gain_exp(&mut killed_set, killed);
+
+        let mut banished_set = SkillSet::default();
+        banished_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        gain_exp(&mut banished_set, banished);
+
+        assert_eq!(
+            earned_exp(&killed_set, SkillGroupKind::General),
+            (killed / 2.0).ceil() as u32
+        );
+        assert_eq!(
+            earned_exp(&banished_set, SkillGroupKind::General),
+            (banished / 2.0).ceil() as u32
+        );
+        assert!(
+            earned_exp(&banished_set, SkillGroupKind::General)
+                < earned_exp(&killed_set, SkillGroupKind::General)
+        );
+    }
 }
 
 #[derive(SystemData)]
@@ -832,8 +866,21 @@ impl ServerEvent for DestroyEvent {
             }
 
             let mut outcomes = data.outcomes.emitter();
+            // A banishment removes the creature *without killing it*: no death
+            // flag, no `entities_died_last_tick`, no ethos drift, no kill
+            // metrics, no `Outcome::Death`, no `effects_on_death`, no death
+            // chat line, no equipment-durability hit, and no deletion. It still
+            // runs the reward and loot paths below, scaled by
+            // `removal.reward_fraction` (spec §6).
+            let is_kill = ev.removal.cause.counts_as_kill();
             if let Some(mut health) = data.healths.get_mut(ev.entity) {
-                if !health.is_dead {
+                // A corpse is skipped whatever the removal cause: re-running
+                // the reward block for an entity that already paid out would
+                // double-award it.
+                if health.is_dead {
+                    continue;
+                }
+                if is_kill {
                     health.is_dead = true;
 
                     // BL-33 Phase 3: a player's deeds drift their moral
@@ -906,9 +953,6 @@ impl ServerEvent for DestroyEvent {
                                 .inc();
                         }
                     }
-                } else {
-                    // Skip for entities that have already died
-                    continue;
                 }
             }
 
@@ -934,9 +978,10 @@ impl ServerEvent for DestroyEvent {
 
             // Push an outcome if entity is has a character state (entities that don't have
             // one, we probably don't care about emitting death outcome)
-            if let Some((pos, _)) = (&data.positions, &data.character_states)
-                .lend_join()
-                .get(ev.entity, &data.entities)
+            if is_kill
+                && let Some((pos, _)) = (&data.positions, &data.character_states)
+                    .lend_join()
+                    .get(ev.entity, &data.entities)
             {
                 outcomes_emitter.emit(Outcome::Death { pos: pos.0 });
             }
@@ -944,7 +989,7 @@ impl ServerEvent for DestroyEvent {
             let mut should_delete = true;
 
             // Handle any effects on death
-            if let Some(killed_stats) = data.stats.get(ev.entity) {
+            if is_kill && let Some(killed_stats) = data.stats.get(ev.entity) {
                 let attacker_entity = ev.cause.by.and_then(|x| data.id_maps.uid_entity(x.uid()));
                 let attacker_dir = attacker_entity
                     .and_then(|a| data.positions.get(a))
@@ -1281,9 +1326,10 @@ impl ServerEvent for DestroyEvent {
 
             // Chat message
             // If it was a player that died
-            if let Some((uid, _player)) = (&data.uids, &data.players)
-                .lend_join()
-                .get(ev.entity, &data.entities)
+            if is_kill
+                && let Some((uid, _player)) = (&data.uids, &data.players)
+                    .lend_join()
+                    .get(ev.entity, &data.entities)
             {
                 let kill_source = match (ev.cause.cause, ev.cause.by.map(|x| x.uid())) {
                     (Some(DamageSource::Attack(AttackSource::Melee)), Some(by)) => {
@@ -1353,7 +1399,10 @@ impl ServerEvent for DestroyEvent {
                     break 'xp;
                 };
 
-                // Calculate the total EXP award for the kill
+                // Calculate the total EXP award for the removal. A banishment
+                // pays `RemovalInfo::reward_fraction` of a kill's XP (spec §6)
+                // — the same generic `combat_rating`-derived number, scaled,
+                // never a separate reward table.
                 let exp_reward = combat::combat_rating(
                     entity_inventory,
                     entity_health,
@@ -1362,7 +1411,8 @@ impl ServerEvent for DestroyEvent {
                     entity_skill_set,
                     *entity_body,
                     &data.msm,
-                ) * 20.0;
+                ) * 20.0
+                    * ev.removal.reward_fraction;
 
                 let mut damage_contributors = HashMap::<DamageContrib, (u64, f32)>::new();
                 for (damage_contributor, damage) in entity_health.damage_contributions() {
@@ -1392,6 +1442,26 @@ impl ServerEvent for DestroyEvent {
                                 .or_insert((0, 0.0));
                             entry.0 += damage;
                         },
+                    }
+                }
+
+                // A banishment is not gated on the target's current health, so
+                // it can land on a creature nobody ever hit. The
+                // damage-proportional split has nothing to divide in that case
+                // (`total_damage == 0` would make every percentage `NaN`), so
+                // credit the banisher with the whole already-scaled reward.
+                if !is_kill && damage_contributors.is_empty() {
+                    let contrib = match ev.cause.by {
+                        Some(DamageContributor::Solo(uid)) => {
+                            data.id_maps.uid_entity(uid).map(DamageContrib::Solo)
+                        },
+                        Some(DamageContributor::Group { group, .. }) => {
+                            Some(DamageContrib::Group(group))
+                        },
+                        None => None,
+                    };
+                    if let Some(contrib) = contrib {
+                        damage_contributors.insert(contrib, (1, 0.0));
                     }
                 }
 
@@ -1505,6 +1575,11 @@ impl ServerEvent for DestroyEvent {
                 });
             };
 
+            // A banished creature is never deleted — it is coming back, and the
+            // same ECS entity is what `banishment::maintain` parks and
+            // un-parks. `&=` (not `&&`) on purpose: the loot/reward branch
+            // below must still run.
+            should_delete &= is_kill;
             should_delete &= if data.clients.contains(ev.entity) {
                 if let Some(vel) = data.velocities.get_mut(ev.entity) {
                     vel.0 = Vec3::zero();
@@ -1533,10 +1608,28 @@ impl ServerEvent for DestroyEvent {
                     // Only drop loot if entity has agency (not a player),
                     // and if it is not owned by another entity (not a pet)
                     if !matches!(alignment, Some(Alignment::Owned(_)))
-                        && let Some(items) = data
-                            .item_drops
-                            .remove(ev.entity)
-                            .map(|comp::ItemDrops(item)| item)
+                        && let Some(items) = if is_kill {
+                            data.item_drops
+                                .remove(ev.entity)
+                                .map(|comp::ItemDrops(item)| item)
+                        } else if let Some(comp::ItemDrops(remaining)) =
+                            data.item_drops.get_mut(ev.entity)
+                        {
+                            // A banishment yields `reward_fraction` of the loot
+                            // entries and the creature keeps the rest — it is
+                            // coming back, and killing it later must still pay
+                            // out. Deliberately NOT `remove()`: dropping the
+                            // whole component would leave a returned creature
+                            // lootless forever.
+                            let fraction = ev.removal.reward_fraction;
+                            let (dropped, kept): (Vec<_>, Vec<_>) = remaining
+                                .drain(..)
+                                .partition(|_| rng.random::<f32>() < fraction);
+                            *remaining = kept;
+                            Some(dropped)
+                        } else {
+                            None
+                        }
                     {
                         // Remove entries where zero exp was awarded - this happens because some
                         // entities like Object bodies don't give EXP.
@@ -1629,8 +1722,11 @@ impl ServerEvent for DestroyEvent {
                                 .any(|(_, area)| area.contains_point(our_pos))
                         });
 
-                // Modify durability on all equipped items
-                if !resists_durability
+                // Modify durability on all equipped items. Not for a
+                // banishment: the creature did not die, so its gear takes no
+                // death penalty.
+                if is_kill
+                    && !resists_durability
                     && let Some(mut inventory) = data.inventories.get_mut(ev.entity)
                 {
                     inventory.damage_items(&data.ability_map, &data.msm, *data.time);
