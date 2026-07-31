@@ -307,6 +307,7 @@ impl State {
         ecs.register::<comp::Energy>();
         ecs.register::<comp::Combo>();
         ecs.register::<comp::Health>();
+        ecs.register::<comp::Banished>();
         ecs.register::<comp::Poise>();
         ecs.register::<comp::CanBuild>();
         ecs.register::<comp::LightEmitter>();
