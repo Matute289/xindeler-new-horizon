@@ -47,6 +47,11 @@ mod trade;
 pub(crate) use event_types::register_event_busses;
 /// Shared utilities used by other code **in this crate**
 pub(crate) mod shared {
+    /// `crate::banishment`'s rehydration pass is the only consumer, and it is
+    /// itself `worldgen`-only (no rtsim means no persisted registry to
+    /// rehydrate from).
+    #[cfg(feature = "worldgen")]
+    pub(crate) use super::entity_creation::handle_create_npc;
     pub(crate) use super::{
         entity_manipulation::{TransformEntityError, transform_entity},
         group_manip::update_map_markers,
