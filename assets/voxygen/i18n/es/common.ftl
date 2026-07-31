@@ -110,6 +110,7 @@ common-tool-throwable = Lanzable
 common-kind-lantern = Linterna
 hud-diary-sections-skill_trees-title = Árboles de Habilidades
 hud-diary-sections-abilities-title = Habilidades
+hud-diary-sections-spells-title = Hechizos
 hud-diary-sections-character-title = Caracter
 hud-diary-sections-recipes-title = Recetas
 hud-battle-mode = Modo de Batalla
