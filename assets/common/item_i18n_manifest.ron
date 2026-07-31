@@ -907,8 +907,8 @@
             "common.items.weapons.holy_symbol.initiate_symbol",
         ): "weapon-holy_symbol-initiate_symbol",
         Simple(
-            "common.items.weapons.focus.wanderer_focus",
-        ): "weapon-focus-wanderer_focus",
+            "common.items.weapons.focus.primordial_focus",
+        ): "weapon-focus-primordial_focus",
         Simple(
             "common.items.weapons.empty.empty",
         ): "common-items-weapons-empty-empty",

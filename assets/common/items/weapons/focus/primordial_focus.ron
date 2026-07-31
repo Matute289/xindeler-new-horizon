@@ -1,5 +1,5 @@
 ItemDef(
-    legacy_name: "Wanderer's Focus",
+    legacy_name: "Primordial Focus",
     legacy_description: "A smooth river stone worn as a channel for wild spirits.",
     kind: Tool((
         kind: Focus,
