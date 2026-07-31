@@ -3,8 +3,7 @@
 //!
 //! # Why a `&mut Server` pass and not a `specs` system
 //!
-//! Rehydration needs
-//! [`handle_create_npc`](crate::events::shared::handle_create_npc)'s
+//! Rehydration needs `handle_create_npc`'s
 //! **returned** `EcsEntity` so the freshly spawned creature can be marked
 //! `Banished` in the same statement. A system that emits `CreateNpcEvent`
 //! never learns which entity it created, so the whole pass lives here and is
@@ -24,9 +23,14 @@
 //! | return | restore the components on the parked entity | restore `presence`; rtsim's load loop rebuilds the entity |
 //! | rehydrate | respawn a frozen entity from the persisted archetype | nothing — `Banishments::prepare` never queues one |
 
-use common::comp::{self, Agent, Auras, Banished, Buffs, Combo, Energy, EnteredAuras, Health, Pos};
+use common::{
+    comp::{self, Agent, Auras, Banished, Buffs, Combo, Energy, EnteredAuras, Health, Pos},
+    link::Is,
+    mounting::{Mount, Rider, VolumeRider},
+};
 use common_base::prof_span;
-use specs::{Join, WorldExt};
+use common_net::sync::WorldSyncExt;
+use specs::{Entity as EcsEntity, Join, WorldExt};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "worldgen")]
@@ -39,9 +43,7 @@ use common::{
 };
 #[cfg(feature = "worldgen")]
 use rtsim::data::{BanishedCreature, BanishedKind};
-#[cfg(feature = "worldgen")]
-use specs::Entity as EcsEntity;
-#[cfg(feature = "worldgen")] use tracing::warn;
+use tracing::warn;
 
 use crate::Server;
 
@@ -117,6 +119,7 @@ pub fn maintain(server: &mut Server) {
 fn park_newly_banished(server: &mut Server) {
     #[cfg(feature = "worldgen")]
     let mut rtsim_actors: Vec<(EcsEntity, common::rtsim::ActorId)> = Vec::new();
+    let mut players = Vec::new();
 
     let plain = {
         let ecs = server.state.ecs();
@@ -126,11 +129,25 @@ fn park_newly_banished(server: &mut Server) {
         // on an earlier tick has none, which is what keeps this pass O(newly
         // banished) rather than O(banished).
         let positions = ecs.read_storage::<Pos>();
+        // 🔴 Defence in depth: a player must never be parked. The spell cannot
+        // reach one (`Body::Humanoid` is unconditionally
+        // `CreatureKind::Humanoid`, which is never in the banishable set), but
+        // a player carries an `ActorId`, so a future ability-free caller such
+        // as `/banish` (N38B21-J) would otherwise fall into the rtsim branch
+        // below and *delete a logged-in player's entity* outside the
+        // disconnect path — something rtsim itself explicitly refuses to do.
+        // `Presence` is the same marker the engine's own NPC-unload sweep uses
+        // to mean "this is a client, not a mob".
+        let presences = ecs.read_storage::<comp::Presence>();
         #[cfg(feature = "worldgen")]
         let actor_ids = ecs.read_storage::<common::rtsim::ActorId>();
 
         let mut plain = Vec::new();
         for (entity, _, _) in (&entities, &banished, &positions).join() {
+            if presences.contains(entity) {
+                players.push(entity);
+                continue;
+            }
             #[cfg(feature = "worldgen")]
             if let Some(actor) = actor_ids.get(entity).copied() {
                 rtsim_actors.push((entity, actor));
@@ -141,15 +158,58 @@ fn park_newly_banished(server: &mut Server) {
         plain
     };
 
+    // Refuse the banishment outright rather than merely skipping the park:
+    // leaving the marker on would make the return pass later "reset" a live
+    // player's buffs and health.
+    for entity in players {
+        warn!("Refusing to banish a player entity; dropping the banishment");
+        let ecs = server.state.ecs();
+        let id = ecs.write_storage::<Banished>().remove(entity).map(|b| b.id);
+        #[cfg(feature = "worldgen")]
+        if let Some(id) = id {
+            ecs.read_resource::<RtSim>()
+                .with_banishments(|banishments| {
+                    banishments.remove(id);
+                });
+        }
+        let _ = id;
+    }
+
     if !plain.is_empty() {
+        // Break any mounting link first: `Mounting::persist`
+        // (`common/src/mounting.rs`) checks liveness, health, body and mass —
+        // but never `Pos`. A parked *mount* therefore keeps its rider linked
+        // and `common/systems/src/mount.rs` stops repositioning that rider,
+        // freezing it in place for the whole banishment; a parked *rider* is
+        // instead handed a fresh `Pos` by that same system every tick, which
+        // this pass strips again the next tick — a `CreateEntity` /
+        // `DeleteEntity` pair to every nearby client, every tick, for days.
+        for entity in &plain {
+            unlink_mounts(server, *entity);
+        }
+
         let ecs = server.state.ecs();
         let mut positions = ecs.write_storage::<Pos>();
         let mut agents = ecs.write_storage::<Agent>();
         let mut velocities = ecs.write_storage::<comp::Vel>();
-        for entity in plain {
-            positions.remove(entity);
-            agents.remove(entity);
-            velocities.remove(entity);
+        for entity in &plain {
+            positions.remove(*entity);
+            agents.remove(*entity);
+            velocities.remove(*entity);
+        }
+        drop((positions, agents, velocities));
+
+        // 🔴 Clear the creature's transient state **here**, not only on
+        // return. Neither the buff system (`common/systems/src/buff.rs`) nor
+        // the stat system (`common/systems/src/stats.rs`) joins on `Pos`, so a
+        // parked creature keeps ticking damage-over-time buffs and keeps being
+        // checked for death. A banished creature that was burning would
+        // therefore die in limbo, and a death is a `RemovalInfo::killed()`
+        // `DestroyEvent`, which *deletes the entity* — leaving its registry
+        // record orphaned forever, the creature gone for good, and its chunk
+        // permanently one spawn short.
+        for entity in &plain {
+            reset_transient_state(ecs, *entity);
         }
     }
 
@@ -176,6 +236,77 @@ fn park_newly_banished(server: &mut Server) {
             ecs.write_storage::<Agent>().remove(entity);
             ecs.write_storage::<comp::Vel>().remove(entity);
         }
+    }
+}
+
+/// Wipes everything that makes a creature "mid-fight", leaving the pristine
+/// state the design calls for on return.
+///
+/// Applied at **park** as well as at return, because most of these systems do
+/// not join on `Pos` and therefore keep running on a parked entity: buffs
+/// (`common/systems/src/buff.rs`) would tick damage-over-time and kill it in
+/// limbo, and `CharacterState`/`Controller`/`Stance` would otherwise be frozen
+/// mid-ability and resume days later on the tick it returns.
+///
+/// 🔴 Reset, do **not** remove. Every component here is inserted
+/// unconditionally by `StateExt::create_npc`, and the buff and aura systems
+/// *join* on `Buffs`/`EnteredAuras` rather than treating them as optional — a
+/// creature missing `Buffs` could never be buffed or debuffed again, and one
+/// missing `EnteredAuras` would be invisible to every aura in the game,
+/// including the spell that banished it.
+fn reset_transient_state(ecs: &specs::World, entity: EcsEntity) {
+    if let Some(mut health) = ecs.write_storage::<Health>().get_mut(entity) {
+        // `revive` rather than `set_fraction(1.0)`: it also clears `is_dead`
+        // and restores death protection, which is what "fully reset" means —
+        // and a creature parked at 0 HP would otherwise be killed outright by
+        // `stats.rs`'s `Pos`-free death check.
+        health.revive();
+        health.clear_absorb();
+    }
+    if let Some(mut energy) = ecs.write_storage::<Energy>().get_mut(entity) {
+        energy.refresh();
+    }
+    let _ = ecs
+        .write_storage::<Buffs>()
+        .insert(entity, Buffs::default());
+    let _ = ecs
+        .write_storage::<Auras>()
+        .insert(entity, Auras::default());
+    let _ = ecs
+        .write_storage::<EnteredAuras>()
+        .insert(entity, EnteredAuras::default());
+    let _ = ecs
+        .write_storage::<Combo>()
+        .insert(entity, Combo::default());
+    let _ = ecs
+        .write_storage::<comp::CharacterState>()
+        .insert(entity, comp::CharacterState::default());
+    let _ = ecs
+        .write_storage::<comp::Controller>()
+        .insert(entity, comp::Controller::default());
+    let _ = ecs
+        .write_storage::<comp::Stance>()
+        .insert(entity, comp::Stance::default());
+}
+
+/// Breaks any mounting link the banished entity takes part in, in whichever
+/// direction. Mirrors `events::mounting`'s own unmount: only the *rider* side
+/// is removed, and `State::maintain_links` drops the matching `Is<Mount>` on
+/// the next tick.
+fn unlink_mounts(server: &mut Server, entity: EcsEntity) {
+    let rider = {
+        let ecs = server.state.ecs();
+        // If the banished entity is itself a mount, its rider is the one that
+        // has to be freed.
+        ecs.read_storage::<Is<Mount>>()
+            .get(entity)
+            .map(|is_mount| is_mount.rider)
+            .and_then(|rider_uid| ecs.entity_from_uid(rider_uid))
+    };
+    let ecs = server.state.ecs();
+    for entity in [Some(entity), rider].into_iter().flatten() {
+        ecs.write_storage::<Is<Rider>>().remove(entity);
+        ecs.write_storage::<Is<VolumeRider>>().remove(entity);
     }
 }
 
@@ -256,52 +387,38 @@ fn return_due(server: &mut Server, now_unix_secs: u64) {
 
     {
         let ecs = server.state.ecs();
-        let bodies = ecs.read_storage::<comp::Body>();
-        let mut positions = ecs.write_storage::<Pos>();
-        let mut velocities = ecs.write_storage::<comp::Vel>();
-        let mut agents = ecs.write_storage::<Agent>();
-        let mut healths = ecs.write_storage::<Health>();
-        let mut energies = ecs.write_storage::<Energy>();
-        let mut buffs = ecs.write_storage::<Buffs>();
-        let mut auras = ecs.write_storage::<Auras>();
-        let mut entered_auras = ecs.write_storage::<EnteredAuras>();
-        let mut combos = ecs.write_storage::<Combo>();
-        let mut banished = ecs.write_storage::<Banished>();
-
         for (entity, record) in &due {
             let entity = *entity;
-            let _ = positions.insert(entity, Pos(record.return_pos));
-            let _ = velocities.insert(entity, comp::Vel::zero());
-            // ⚠️ A creature that was authored with `has_agency: false` comes
-            // back with agency, because the record does not remember that it
-            // had none. Unreachable through the spell — every banishable
-            // `CreatureKind` is a living, acting creature — but reachable
-            // through `/banish` (N38B21-J) on a hand-picked target.
-            if let Some(body) = bodies.get(entity) {
-                let _ = agents.insert(entity, Agent::from_body(body));
+            // Anything that could have accumulated while parked. Almost always
+            // a no-op — park already did this — but it costs nothing and keeps
+            // "a returned creature is pristine" true by construction rather
+            // than by an argument about which systems skip a `Pos`-less
+            // entity.
+            reset_transient_state(ecs, entity);
+
+            let body = ecs.read_storage::<comp::Body>().get(entity).copied();
+            let _ = ecs
+                .write_storage::<Pos>()
+                .insert(entity, Pos(record.return_pos));
+            let _ = ecs
+                .write_storage::<comp::Vel>()
+                .insert(entity, comp::Vel::zero());
+            // ⚠️ Two known fidelity losses, both accepted for now and both
+            // only reachable via `/banish` (N38B21-J) on a hand-picked target:
+            // a creature authored with `has_agency: false` comes back with
+            // agency, and any authored `Behavior` — trade site, patrol origin,
+            // `no_flee`, aggro-range multiplier — is replaced by the body's
+            // default, because park removed the `Agent` rather than keeping
+            // it. Removing `Agent` is what the task board specifies; keeping
+            // it (the AI already stops the moment `Pos` and `Vel` go, since
+            // `server/src/sys/agent/mod.rs` joins on both) would preserve all
+            // of it and is the obvious follow-up.
+            if let Some(body) = body {
+                let _ = ecs
+                    .write_storage::<Agent>()
+                    .insert(entity, Agent::from_body(&body));
             }
-            if let Some(mut health) = healths.get_mut(entity) {
-                // `revive` rather than `set_fraction(1.0)`: it also clears
-                // `is_dead` and restores death protection, which is what
-                // "fully reset" means.
-                health.revive();
-                health.clear_absorb();
-            }
-            if let Some(mut energy) = energies.get_mut(entity) {
-                energy.refresh();
-            }
-            // 🔴 Reset, do **not** remove. Every one of these is inserted
-            // unconditionally by `StateExt::create_npc`, and the buff and aura
-            // systems join on them (`common/systems/src/buff.rs`,
-            // `common/systems/src/aura.rs`) rather than treating them as
-            // optional — a returned creature missing `Buffs` could never be
-            // buffed or debuffed again, and one missing `EnteredAuras` would
-            // be invisible to every aura in the game, including this spell.
-            let _ = buffs.insert(entity, Buffs::default());
-            let _ = auras.insert(entity, Auras::default());
-            let _ = entered_auras.insert(entity, EnteredAuras::default());
-            let _ = combos.insert(entity, Combo::default());
-            banished.remove(entity);
+            ecs.write_storage::<Banished>().remove(entity);
         }
     }
 
@@ -339,15 +456,7 @@ fn return_due(server: &mut Server, now_unix_secs: u64) {
 /// `ItemDrops` (see N38B21-G), which is what the smoke test's K8 exercises.
 #[cfg(feature = "worldgen")]
 fn rehydration_entity_info(record: &BanishedCreature) -> Option<EntityInfo> {
-    let BanishedKind::Freestanding {
-        body,
-        alignment,
-        creature_kind,
-        scale,
-    } = record.kind
-    else {
-        return None;
-    };
+    let (body, alignment, creature_kind, scale) = freestanding_archetype(record)?;
 
     let mut info = EntityInfo::at(record.return_pos)
         .with_body(body)
@@ -361,16 +470,50 @@ fn rehydration_entity_info(record: &BanishedCreature) -> Option<EntityInfo> {
     Some(info)
 }
 
-/// Re-create a frozen entity for every persisted **`Freestanding`** record
-/// that has no live one: every such record right after a server start, plus
-/// any whose parked entity was lost mid-session. A record whose deadline
-/// already passed while the server was down comes back immediately.
+/// Whether this record describes a plain world mob (and therefore needs a
+/// rehydrated entity) rather than an rtsim actor.
 ///
-/// `RtsimActor` records never reach here — `Banishments::prepare` does not
-/// queue them, because rtsim re-materialises those itself once `return_due`
-/// restores their `presence`. The `rehydration_entity_info` fork is a second,
-/// belt-and-braces guard against a future caller of `queue_rehydration` that
-/// forgets.
+/// Exhaustive on purpose, mirroring `BanishedCreature::is_freestanding`: a
+/// future `BanishedKind` variant must make this decision explicitly instead of
+/// silently defaulting to "never rehydrated", which is a duplicate-creature
+/// bug waiting to happen in the other direction.
+#[cfg(feature = "worldgen")]
+fn freestanding_archetype(
+    record: &BanishedCreature,
+) -> Option<(comp::Body, comp::Alignment, Option<comp::CreatureKind>, f32)> {
+    match record.kind {
+        BanishedKind::Freestanding {
+            body,
+            alignment,
+            creature_kind,
+            scale,
+        } => Some((body, alignment, creature_kind, scale)),
+        BanishedKind::RtsimActor(_) => None,
+    }
+}
+
+/// Re-create a frozen entity for every persisted **`Freestanding`** record in
+/// the rehydration queue. In practice that means every such record right after
+/// a server start, since `Banishments::prepare` is the only thing that fills
+/// the queue. A record whose deadline already passed while the server was down
+/// comes back immediately.
+///
+/// ⚠️ **Known gap.** `Banishments`' own doc comment also claims the queue holds
+/// "any [record] whose parked entity was lost mid-session", but nothing
+/// detects that — there is no reconciliation sweep comparing live `Banished`
+/// entities against the registry, so a parked entity destroyed by some other
+/// route (an admin `/kill`, a future sweep) leaves its record orphaned and its
+/// chunk permanently one spawn short. The two routes that actually made this
+/// reachable are closed — a parked creature no longer dies of a lingering
+/// damage-over-time buff (see `reset_transient_state`), and a rehydrated one
+/// is no longer culled the tick it is created — so this is a durability gap,
+/// not a live bug. Closing it needs a way to enumerate the registry's records,
+/// which `Banishments` does not currently expose.
+///
+/// `RtsimActor` records never reach here — `prepare` does not queue them,
+/// because rtsim re-materialises those itself once `return_due` restores their
+/// `presence`. The `rehydration_entity_info` fork is a second, belt-and-braces
+/// guard against a future caller of `queue_rehydration` that forgets.
 #[cfg(feature = "worldgen")]
 fn rehydrate_pending(server: &mut Server, now_unix_secs: u64) {
     let pending = server
@@ -405,7 +548,11 @@ fn rehydrate_pending(server: &mut Server, now_unix_secs: u64) {
         let entity = crate::events::shared::handle_create_npc(server, CreateNpcEvent {
             pos,
             ori: Ori::default(),
-            npc,
+            // The same anchor worldgen's own chunk supplement gives every mob
+            // it spawns, using the chunk key the record already persists.
+            // Without it the returned creature would be culled by a different
+            // rule than its chunk-mates.
+            npc: npc.with_anchor(comp::Anchor::Chunk(record.return_chunk)),
         });
 
         if record.returns_at_unix_secs <= now_unix_secs {
@@ -482,6 +629,142 @@ mod tests {
         let a = now_unix_secs();
         let b = now_unix_secs();
         assert!(b >= a);
+    }
+}
+
+/// `reset_transient_state` needs only a `&specs::World`, so the load-bearing
+/// half of park/return is testable without a live `Server`.
+#[cfg(test)]
+mod limbo_reset_tests {
+    use super::*;
+    use common::{
+        comp::{
+            Body, BuffData, BuffKind, BuffSource, Stance, bird_large,
+            buff::{Buff, BuffCategory, DestInfo},
+        },
+        resources::{Secs, Time},
+    };
+    use specs::Builder;
+
+    fn phoenix_body() -> Body {
+        Body::BirdLarge(bird_large::Body {
+            species: bird_large::Species::Phoenix,
+            body_type: bird_large::BodyType::Female,
+        })
+    }
+
+    /// A parked creature, at 2% health with a burning debuff still on it —
+    /// exactly the state a mid-combat banishment leaves behind.
+    fn parked_creature() -> (specs::World, EcsEntity) {
+        let mut world = specs::World::new();
+        world.register::<Health>();
+        world.register::<Energy>();
+        world.register::<Buffs>();
+        world.register::<Auras>();
+        world.register::<EnteredAuras>();
+        world.register::<Combo>();
+        world.register::<comp::CharacterState>();
+        world.register::<comp::Controller>();
+        world.register::<Stance>();
+
+        let body = phoenix_body();
+        let mut health = Health::new(body);
+        health.set_fraction(0.02);
+
+        let mut buffs = Buffs::default();
+        buffs.insert(
+            Buff::new(
+                BuffKind::Burning,
+                BuffData::new(10.0, Some(Secs(60.0))),
+                Vec::<BuffCategory>::new(),
+                BuffSource::World,
+                Time(0.0),
+                DestInfo {
+                    stats: None,
+                    mass: None,
+                },
+                None,
+                None,
+            ),
+            Time(0.0),
+        );
+
+        let mut combo = Combo::default();
+        combo.change_by(7, 0.0);
+
+        let entity = world
+            .create_entity()
+            .with(health)
+            .with(Energy::new(body))
+            .with(buffs)
+            .with(Auras::default())
+            .with(EnteredAuras::default())
+            .with(combo)
+            .with(comp::CharacterState::default())
+            .with(comp::Controller::default())
+            .with(Stance::default())
+            .build();
+        (world, entity)
+    }
+
+    /// 🔴 The regression this pins is a silent, permanent data loss, not a
+    /// cosmetic one. Neither `common/systems/src/buff.rs` nor
+    /// `common/systems/src/stats.rs` joins on `Pos`, so a parked creature keeps
+    /// taking damage-over-time and keeps being checked for death. Dying in
+    /// limbo raises a `RemovalInfo::killed()` `DestroyEvent`, which **deletes
+    /// the entity** — the creature never returns and its registry record is
+    /// orphaned forever, permanently suppressing one worldgen spawn in its
+    /// chunk. Clearing the buffs and topping the health at park time is what
+    /// makes that unreachable.
+    #[test]
+    fn parking_clears_the_damage_over_time_that_would_kill_a_creature_in_limbo() {
+        let (world, entity) = parked_creature();
+        assert!(
+            !world
+                .read_storage::<Buffs>()
+                .get(entity)
+                .unwrap()
+                .buffs
+                .is_empty(),
+            "test setup: the creature must start out burning"
+        );
+
+        reset_transient_state(&world, entity);
+
+        assert!(
+            world
+                .read_storage::<Buffs>()
+                .get(entity)
+                .unwrap()
+                .buffs
+                .is_empty(),
+            "a parked creature must not keep ticking a damage-over-time buff"
+        );
+        let healths = world.read_storage::<Health>();
+        let health = healths.get(entity).unwrap();
+        assert_eq!(health.fraction(), 1.0, "it must not be left near death");
+        assert!(!health.is_dead);
+    }
+
+    /// The components are *reset*, never removed: `StateExt::create_npc`
+    /// inserts all of them unconditionally and the buff and aura systems join
+    /// on `Buffs`/`EnteredAuras` non-optionally, so a creature that came back
+    /// missing one could never be buffed, debuffed, or touched by any aura
+    /// again — including the spell that banished it.
+    #[test]
+    fn the_reset_replaces_every_component_rather_than_removing_it() {
+        let (world, entity) = parked_creature();
+        reset_transient_state(&world, entity);
+
+        assert!(world.read_storage::<Buffs>().get(entity).is_some());
+        assert!(world.read_storage::<Auras>().get(entity).is_some());
+        assert!(world.read_storage::<EnteredAuras>().get(entity).is_some());
+        assert!(world.read_storage::<Combo>().get(entity).is_some());
+        assert_eq!(
+            world.read_storage::<Combo>().get(entity).unwrap().counter(),
+            0,
+            "combo must not survive the trip"
+        );
     }
 }
 
