@@ -1,6 +1,7 @@
 pub mod actor;
 pub mod airship;
 pub mod architect;
+pub mod banished;
 pub mod faction;
 pub mod nature;
 pub mod quest;
@@ -10,6 +11,7 @@ pub mod site;
 
 pub use self::{
     actor::{Actor, Actors},
+    banished::{BanishedCreature, BanishedKind, Banishments},
     faction::{Faction, FactionId, Factions},
     nature::Nature,
     quest::Quests,
@@ -55,6 +57,13 @@ pub struct Data {
     pub architect: Architect,
     #[serde(default)]
     pub quests: Quests,
+    /// Creatures temporarily removed from the world by a banishment effect,
+    /// due to return at their own wall-clock deadline. Additive
+    /// `#[serde(default)]` field: per `CURRENT_VERSION`'s doc comment above,
+    /// this needs **no** version bump — an older save simply loads with an
+    /// empty registry.
+    #[serde(default)]
+    pub banished: Banishments,
 
     #[serde(default)]
     pub tick: u64,
@@ -116,7 +125,10 @@ impl Data {
     /// ready for simulation.
     ///
     /// This might include populating caches, normalising data, etc.
-    pub fn prepare(&mut self) { self.quests.prepare(); }
+    pub fn prepare(&mut self) {
+        self.quests.prepare();
+        self.banished.prepare();
+    }
 }
 
 fn rugged_ser_enum_map<

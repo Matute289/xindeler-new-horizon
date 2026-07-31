@@ -15,7 +15,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use enum_map::EnumMap;
 use rtsim::{
     RtState,
-    data::{Data, ReadError, actor::SimulationMode},
+    data::{Banishments, Data, ReadError, actor::SimulationMode},
     event::{OnDeath, OnHealthChange, OnHelped, OnMountVolume, OnSetup, OnTheft},
 };
 use specs::DispatcherBuilder;
@@ -350,6 +350,13 @@ impl RtSim {
     }
 
     pub fn state(&self) -> &RtState { &self.state }
+
+    /// Runs `f` against the persisted banishment registry. Takes `&self`
+    /// because `RtState::data_mut` is interior-mutable, so callers only need
+    /// a `ReadExpect<RtSim>`.
+    pub fn with_banishments<R>(&self, f: impl FnOnce(&mut Banishments) -> R) -> R {
+        f(&mut self.state.data_mut().banished)
+    }
 
     pub fn set_should_purge(&mut self, should_purge: bool) {
         self.state.data_mut().should_purge = should_purge;
