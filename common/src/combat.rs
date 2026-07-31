@@ -2359,6 +2359,65 @@ impl From<AttackSource> for DamageSource {
     fn from(attack: AttackSource) -> Self { DamageSource::Attack(attack) }
 }
 
+/// Why an entity left the world, threaded through
+/// [`crate::event::DestroyEvent`] so a removal that is *not* a kill can be
+/// told apart from one that is.
+///
+/// Nothing reads this for quest/achievement purposes yet —
+/// `QuestKind::Slay` (`rtsim/src/rule/npc_ai/quest.rs:487`) is still a no-op.
+/// It exists now, deliberately, so the eventual kill-tracking system has a
+/// signal to key off from day one instead of retrofitting death-cause
+/// tracking later (spec §7). Extend the enum rather than adding a parallel
+/// flag.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemovalCause {
+    /// Killed outright. The only cause that counts as a kill.
+    Killed,
+    /// Banished: temporarily removed, due to return later, and therefore
+    /// never a kill — see `aura::BanishmentEffect`.
+    Banished,
+}
+
+impl RemovalCause {
+    /// Whether this removal should be credited as a kill by any future
+    /// quest / achievement / statistics consumer.
+    pub fn counts_as_kill(self) -> bool { matches!(self, RemovalCause::Killed) }
+}
+
+/// A [`RemovalCause`] plus how much of the normal XP and loot the removal
+/// awards. The fraction is carried alongside the cause rather than derived
+/// from it so the number stays authored in RON
+/// (`aura::BanishmentEffect::reward_fraction`) instead of hardcoded here.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct RemovalInfo {
+    pub cause: RemovalCause,
+    /// Multiplier in `0.0..=1.0` applied to the XP award and to each loot
+    /// entry's chance to drop. `1.0` for an ordinary kill.
+    pub reward_fraction: f32,
+}
+
+impl Default for RemovalInfo {
+    fn default() -> Self {
+        Self {
+            cause: RemovalCause::Killed,
+            reward_fraction: 1.0,
+        }
+    }
+}
+
+impl RemovalInfo {
+    /// An ordinary kill: full rewards.
+    pub fn killed() -> Self { Self::default() }
+
+    /// A banishment awarding `reward_fraction` of the normal rewards.
+    pub fn banished(reward_fraction: f32) -> Self {
+        Self {
+            cause: RemovalCause::Banished,
+            reward_fraction: reward_fraction.clamp(0.0, 1.0),
+        }
+    }
+}
+
 /// DamageKind for the purpose of differentiating damage reduction.
 ///
 /// The three physical kinds (Piercing/Slashing/Crushing) carry distinct
@@ -3931,5 +3990,41 @@ mod charm_resist_tests {
         c.target_last_change = Some(&health.last_change);
         // A freshly-built `Health` has no damaging change, so it must not fire.
         assert!(!is_fighting_caster(&c));
+    }
+}
+
+#[cfg(test)]
+mod removal_cause_tests {
+    use super::{RemovalCause, RemovalInfo};
+
+    #[test]
+    fn a_kill_awards_the_full_reward_and_counts_as_a_kill() {
+        let info = RemovalInfo::killed();
+        assert_eq!(info.cause, RemovalCause::Killed);
+        assert!((info.reward_fraction - 1.0).abs() < f32::EPSILON);
+        assert!(info.cause.counts_as_kill());
+    }
+
+    #[test]
+    fn a_banishment_is_not_a_kill_and_carries_its_own_fraction() {
+        let info = RemovalInfo::banished(0.25);
+        assert_eq!(info.cause, RemovalCause::Banished);
+        assert!((info.reward_fraction - 0.25).abs() < f32::EPSILON);
+        assert!(!info.cause.counts_as_kill());
+    }
+
+    /// A malformed RON fraction must not be able to award more than a kill
+    /// does, nor a negative amount.
+    #[test]
+    fn a_banishment_reward_fraction_is_clamped() {
+        assert!((RemovalInfo::banished(4.0).reward_fraction - 1.0).abs() < f32::EPSILON);
+        assert!((RemovalInfo::banished(-1.0).reward_fraction - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// `Default` exists so the ~2 shipped `DestroyEvent` construction sites
+    /// stay readable; it must mean "a normal kill".
+    #[test]
+    fn default_removal_info_is_a_kill() {
+        assert_eq!(RemovalInfo::default(), RemovalInfo::killed());
     }
 }

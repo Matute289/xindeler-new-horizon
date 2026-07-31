@@ -78,6 +78,7 @@ impl<'a> System<'a> for Sys {
                     emitters.emit(DestroyEvent {
                         entity,
                         cause: health.last_change,
+                        removal: combat::RemovalInfo::killed(),
                     });
                 }
             }
