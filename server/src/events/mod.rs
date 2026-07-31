@@ -258,13 +258,16 @@ mod dispatcher_tests {
     /// *string* (`event_sys_name`) resolved against the systems registered
     /// before it, and `shred` panics on one it cannot resolve. Several of those
     /// edges are load-bearing correctness, not tuning — `BanishEvent` after
-    /// `HealthChangeEvent` so a creature that died this tick can never be
+    /// every `Health` writer so a creature that died this tick can never be
     /// banished, `DestroyEvent` after both so the banishment's reward is paid
-    /// while the creature still has a position — and a reordering of
-    /// `register_event_systems` would break them at server start-up rather
-    /// than at compile time.
+    /// while the creature still has a position — and reordering
+    /// `register_event_systems` would break them at server start-up rather than
+    /// at compile time. Building the real dispatcher is the only thing that
+    /// resolves them all.
     ///
-    /// Building the real dispatcher is the only thing that resolves them all.
+    /// Scope, stated plainly: this proves every declared edge *resolves* and
+    /// that the graph is acyclic. It does not prove any particular edge is
+    /// declared — deleting one still builds fine.
     #[test]
     fn every_declared_ordering_edge_resolves() {
         let pools = Arc::new(

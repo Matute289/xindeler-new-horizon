@@ -62,20 +62,8 @@ fn roll_return_deadline(
     now_unix_secs.saturating_add(delay)
 }
 
-/// Whether `health` forbids committing a banishment at all.
-///
-/// `is_dead` on its own is **not** a sufficient guard, and that is the whole
-/// point of this function. The flag is latched inside `DestroyEvent::handle`,
-/// which runs strictly after this handler, so a creature whose HP already
-/// reached zero this tick — its `DestroyEvent{Killed}` already queued — still
-/// reads as alive here. Banishing it would insert a `Banished` marker and a
-/// persisted record that the kill immediately makes meaningless: an orphan
-/// that suppresses one worldgen spawn in that chunk forever.
-///
-/// A real death always wins, so a creature that is dead or about to be is
-/// simply not banishable.
 #[cfg(feature = "worldgen")]
-fn death_forestalls_banishment(health: &Health) -> bool { health.is_dead || health.should_die() }
+use crate::banishment::death_forestalls_banishment;
 
 #[cfg(feature = "worldgen")]
 #[derive(SystemData)]
@@ -288,50 +276,6 @@ impl ServerEvent for BanishEvent {
 #[cfg(all(test, feature = "worldgen"))]
 mod tests {
     use super::*;
-    use common::comp::{bird_large, body::Body};
-
-    fn phoenix_body() -> Body {
-        Body::BirdLarge(bird_large::Body {
-            species: bird_large::Species::Phoenix,
-            body_type: bird_large::BodyType::Female,
-        })
-    }
-
-    /// The half of the death/banishment race that this handler owns. A
-    /// creature whose HP already reached zero this tick is doomed — its
-    /// `DestroyEvent{Killed}` is in flight — but `is_dead` is only latched
-    /// later, inside `DestroyEvent::handle`, so the shipped `is_dead` guard
-    /// still sees a live creature and would commit a record that nothing will
-    /// ever honour.
-    #[test]
-    fn a_target_whose_health_already_hit_zero_is_never_banished() {
-        let mut health = Health::new(phoenix_body());
-        assert!(
-            !death_forestalls_banishment(&health),
-            "a healthy creature is banishable"
-        );
-
-        health.kill();
-        assert!(
-            !health.is_dead,
-            "`is_dead` is latched by `DestroyEvent::handle`, not by the damage — that is exactly \
-             why `is_dead` alone is not a sufficient guard"
-        );
-        assert!(
-            death_forestalls_banishment(&health),
-            "a creature at zero HP is already dead in every way that matters this tick; \
-             committing a record for it would orphan the record"
-        );
-    }
-
-    /// The shipped guard, kept: a corpse left over from an earlier tick is
-    /// still refused.
-    #[test]
-    fn a_corpse_from_an_earlier_tick_is_never_banished() {
-        let mut health = Health::new(phoenix_body());
-        health.is_dead = true;
-        assert!(death_forestalls_banishment(&health));
-    }
 
     #[test]
     fn a_return_deadline_lands_inside_the_authored_window() {

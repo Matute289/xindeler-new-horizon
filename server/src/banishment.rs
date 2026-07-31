@@ -65,16 +65,62 @@ pub fn admin_return_deadline(now_unix_secs: u64, secs: u64) -> u64 {
     now_unix_secs.saturating_add(secs)
 }
 
+/// Whether `health` forbids committing a banishment at all.
+///
+/// `is_dead` on its own is **not** a sufficient guard, and that is the whole
+/// point of this function. The flag is latched inside `DestroyEvent::handle`,
+/// which runs after every writer of the `Banished` marker, so a creature whose
+/// HP already reached zero this tick — its `DestroyEvent{Killed}` already
+/// queued — still reads as alive to them. Banishing it would insert a marker
+/// and a persisted record that the kill immediately makes meaningless: an
+/// orphan that suppresses one worldgen spawn in that chunk forever.
+///
+/// A real death always wins, so a creature that is dead or about to be is
+/// simply not banishable.
+///
+/// A creature at zero HP that is about to be *downed* rather than killed
+/// (`Health::death_protection`, handled by `DownedEvent`) is refused too. That
+/// is deliberate but currently unreachable: death protection is
+/// `Body::Humanoid`-only (`Body::has_death_protection`) and a humanoid is
+/// never a banishable `CreatureKind`. If either fact ever changes, decide
+/// explicitly whether a downed creature should be banishable rather than
+/// inheriting this answer.
+#[cfg(feature = "worldgen")]
+pub(crate) fn death_forestalls_banishment(health: &Health) -> bool {
+    health.is_dead || health.should_die()
+}
+
+/// Whether `entity` may be banished right now: not already banished, and not
+/// dead or dying.
+///
+/// Split out of `banish_entity` so the two gates are testable without a live
+/// `Server`, and so the death gate is visibly the *same* rule the spell path
+/// applies rather than a second, drifting copy.
+#[cfg(feature = "worldgen")]
+fn is_banishable(ecs: &specs::World, entity: EcsEntity) -> bool {
+    !ecs.read_storage::<Banished>().contains(entity)
+        && ecs
+            .read_storage::<Health>()
+            .get(entity)
+            .is_none_or(|health| !death_forestalls_banishment(health))
+}
+
 /// Banishes `entity` for `secs` seconds, recording it durably. Returns the new
-/// record's id, or `None` if the entity has no position/body or is already
-/// banished. Shared by the `/banish` admin command and available to any future
-/// caller that wants a banishment without an ability behind it.
+/// record's id, or `None` if the entity has no position/body, is already
+/// banished, or is dead or dying. Shared by the `/banish` admin command and
+/// available to any future caller that wants a banishment without an ability
+/// behind it.
 ///
 /// Deliberately reuses the exact rtsim-vs-plain-mob fork and `Owned` →
 /// `Tame` alignment normalisation the spell path
 /// (`server/src/events/banishment.rs`) uses, so `/banish` exercises the real
-/// code paths rather than a simplified one. Unlike the spell path there is no
-/// saving throw: an admin-forced banishment always succeeds.
+/// code paths rather than a simplified one — including its death gate, which
+/// matters more here than there: a command runs in the *serial* phase, after
+/// the whole event dispatcher, so a target killed earlier in the same tick
+/// still has every component this function reads.
+///
+/// Unlike the spell path there is no saving throw: an admin-forced banishment
+/// on a living target always succeeds.
 #[cfg(feature = "worldgen")]
 pub fn banish_entity(
     server: &mut Server,
@@ -82,7 +128,7 @@ pub fn banish_entity(
     secs: u64,
 ) -> Option<comp::BanishmentId> {
     let ecs = server.state.ecs();
-    if ecs.read_storage::<Banished>().contains(entity) {
+    if !is_banishable(ecs, entity) {
         return None;
     }
     let pos = ecs.read_storage::<Pos>().get(entity)?.0;
@@ -141,12 +187,17 @@ pub fn banish_entity(
     Some(id)
 }
 
-/// Erases a banishment outright, given the `Banished` marker the entity was
-/// carrying (if any). Returns the id of the record it forgot.
+/// Erases `entity`'s banishment outright: drops the `Banished` marker **and**
+/// the persisted record, together. Returns the id of the record it forgot, or
+/// `None` if the entity was not banished. Idempotent.
+///
+/// The two halves are one fact and are removed as one, on purpose. A record
+/// without a marker is the orphan that suppresses a chunk spawn forever; a
+/// marker without a record is an entity the return pass can never free.
 ///
 /// This is the "a real death always wins" half of the lifecycle, and it is
 /// deliberately *not* the same thing as a return: nothing is spawned, nothing
-/// is un-parked, the record simply stops existing. Two consequences, both
+/// is un-parked, the banishment simply stops existing. Two consequences, both
 /// intended:
 ///
 /// * The chunk the creature was taken from stops having one spawn suppressed
@@ -156,16 +207,28 @@ pub fn banish_entity(
 /// * Nothing can ever bring that individual back. Once it has really died it
 ///   must not rehydrate, not on this tick, not after a server restart.
 ///
-/// Clearing rtsim `presence` is deliberately not part of this. An rtsim actor
-/// is parked by *deleting* its ECS entity, so a parked actor can never receive
-/// a `DestroyEvent` at all; one killed before the park pass runs never had its
-/// `presence` cleared in the first place.
+/// 🔴 **Reachable for plain mobs only, and that is a real limitation, not a
+/// proof.** Being keyed on the marker means this can only ever be called for a
+/// banishment that still has an ECS entity behind it. A parked *plain mob*
+/// keeps its entity (minus `Pos`/`Vel`), so it qualifies. A parked *rtsim
+/// actor* does not: `park_newly_banished` deletes its entity outright, and
+/// with `presence` cleared rtsim itself cannot record its death either
+/// (`Actor::is_present_and_dead` is false while `presence` is `None`). So an
+/// rtsim actor cannot die while banished *today* — but nothing here would
+/// catch it if some future path let it, e.g. killing a banished creature in
+/// the plane it was sent to. That path will need an `ActorId`-keyed
+/// counterpart; it is deliberately not written in advance of a caller.
+///
+/// Clearing rtsim `presence` is likewise not part of this: an actor killed
+/// before the park pass runs never had its `presence` cleared in the first
+/// place, and `DestroyEvent`'s own `hook_rtsim_actor_death` marks it dead.
 #[cfg(feature = "worldgen")]
 pub(crate) fn revoke_banishment(
+    banished: &mut specs::WriteStorage<Banished>,
     banishments: &mut Banishments,
-    marker: Option<Banished>,
+    entity: EcsEntity,
 ) -> Option<comp::BanishmentId> {
-    let marker = marker?;
+    let marker = banished.remove(entity)?;
     banishments.remove(marker.id);
     Some(marker.id)
 }
@@ -1026,50 +1089,176 @@ mod rehydration_tests {
     }
 }
 
-/// Revocation: the "a real death always wins" half of the lifecycle, testable
-/// against a bare `Banishments` because it touches nothing else.
+/// The "a real death always wins" half of the lifecycle: the pre-commit guard
+/// that keeps a doomed creature from being banished at all, and the revocation
+/// that erases a banishment when the creature dies anyway.
 #[cfg(all(test, feature = "worldgen"))]
-mod revocation_tests {
+mod death_wins_tests {
     use super::*;
     use common::comp::{Alignment, Body, bird_large};
     use rtsim::data::{BanishedCreature, BanishedKind, Banishments};
+    use specs::Builder;
     use vek::{Vec2, Vec3};
 
     const RETURN_POS: Vec3<f32> = Vec3::new(512.0, 640.0, 90.0);
     const RETURN_CHUNK: Vec2<i32> = Vec2::new(1, 1);
+    const DEADLINE: u64 = 1_700_000_000;
 
-    fn registry_with_one_banished_phoenix() -> (Banishments, Banished) {
+    fn phoenix_body() -> Body {
+        Body::BirdLarge(bird_large::Body {
+            species: bird_large::Species::Phoenix,
+            body_type: bird_large::BodyType::Female,
+        })
+    }
+
+    fn world_with_storages() -> specs::World {
+        let mut world = specs::World::new();
+        world.register::<Banished>();
+        world.register::<Health>();
+        world
+    }
+
+    /// One phoenix genuinely banished: the persisted record *and* the marker
+    /// on its entity, which is the only state in which the two are consistent.
+    fn a_banished_phoenix() -> (specs::World, EcsEntity, Banishments) {
         let mut banishments = Banishments::default();
         let id = banishments.insert(BanishedCreature {
             kind: BanishedKind::Freestanding {
-                body: Body::BirdLarge(bird_large::Body {
-                    species: bird_large::Species::Phoenix,
-                    body_type: bird_large::BodyType::Female,
-                }),
+                body: phoenix_body(),
                 alignment: Alignment::Enemy,
                 creature_kind: None,
                 scale: 1.0,
             },
             return_pos: RETURN_POS,
             return_chunk: RETURN_CHUNK,
-            returns_at_unix_secs: 1_700_000_000,
+            returns_at_unix_secs: DEADLINE,
         });
-        let marker = Banished {
-            id,
-            return_pos: RETURN_POS,
-            returns_at_unix_secs: 1_700_000_000,
-        };
-        (banishments, marker)
+
+        let mut world = world_with_storages();
+        let entity = world
+            .create_entity()
+            .with(Banished {
+                id,
+                return_pos: RETURN_POS,
+                returns_at_unix_secs: DEADLINE,
+            })
+            .build();
+        (world, entity, banishments)
     }
 
-    /// 🔴 The permanent data loss this guard exists for. A record left behind
-    /// after its creature really died keeps suppressing one worldgen spawn in
-    /// that chunk **forever**, and nothing will ever bring the creature back
-    /// to release it. Revoking has to erase the record, not merely drop the
-    /// marker.
+    // --- the pre-commit guard ---------------------------------------------
+
+    /// The half of the race the *spell* handler owns. A creature whose HP
+    /// already reached zero this tick is doomed — its `DestroyEvent{Killed}`
+    /// is in flight — but `is_dead` is only latched later, inside
+    /// `DestroyEvent::handle`, so an `is_dead` guard still sees a live
+    /// creature and would commit a record nothing will ever honour.
     #[test]
-    fn revoking_a_banishment_gives_the_chunk_its_suppressed_spawn_back() {
-        let (mut banishments, marker) = registry_with_one_banished_phoenix();
+    fn a_creature_whose_health_already_hit_zero_is_doomed_not_banishable() {
+        let mut health = Health::new(phoenix_body());
+        assert!(
+            !death_forestalls_banishment(&health),
+            "a healthy creature is banishable"
+        );
+
+        health.kill();
+        assert!(
+            !health.is_dead,
+            "`is_dead` is latched by `DestroyEvent::handle`, not by the damage — that is exactly \
+             why `is_dead` alone is not a sufficient guard"
+        );
+        assert!(
+            death_forestalls_banishment(&health),
+            "a creature at zero HP is already dead in every way that matters this tick; \
+             committing a record for it would orphan the record"
+        );
+    }
+
+    /// The shipped guard, kept: a corpse left over from an earlier tick is
+    /// still refused.
+    #[test]
+    fn a_corpse_from_an_earlier_tick_is_never_banishable() {
+        let mut health = Health::new(phoenix_body());
+        health.is_dead = true;
+        assert!(death_forestalls_banishment(&health));
+    }
+
+    /// 🔴 `/banish` is the *other* writer of the marker, and it does not go
+    /// through the spell handler at all: it runs in the serial command phase,
+    /// **after** the whole event dispatcher. A target that took a lethal hit
+    /// earlier in the same tick still has every component the command reads —
+    /// including a `Health` at zero whose `is_dead` was never latched — so
+    /// without this guard the admin path commits exactly the orphan the spell
+    /// path no longer can.
+    #[test]
+    fn a_creature_that_died_this_tick_is_not_banishable_by_command_either() {
+        let mut world = world_with_storages();
+        let mut health = Health::new(phoenix_body());
+        health.kill();
+        let doomed = world.create_entity().with(health).build();
+
+        assert!(!is_banishable(&world, doomed));
+    }
+
+    #[test]
+    fn a_healthy_creature_is_banishable_by_command() {
+        let mut world = world_with_storages();
+        let healthy = world
+            .create_entity()
+            .with(Health::new(phoenix_body()))
+            .build();
+
+        assert!(is_banishable(&world, healthy));
+    }
+
+    /// A second banishment would overwrite the marker and strand the first
+    /// record — the shipped guard, kept.
+    #[test]
+    fn an_already_banished_creature_is_not_banishable_again() {
+        let (world, entity, _) = a_banished_phoenix();
+
+        assert!(!is_banishable(&world, entity));
+    }
+
+    // --- revocation --------------------------------------------------------
+
+    /// The marker and the record are two halves of one fact, so revoking has
+    /// to drop **both**. Either half surviving alone is a corruption: a record
+    /// without a marker is the orphan that suppresses a chunk spawn forever, a
+    /// marker without a record is an entity the return pass can never free.
+    #[test]
+    fn revoking_drops_the_marker_and_erases_the_record_together() {
+        let (world, entity, mut banishments) = a_banished_phoenix();
+        let id = world
+            .read_storage::<Banished>()
+            .get(entity)
+            .expect("banished")
+            .id;
+
+        let revoked = revoke_banishment(
+            &mut world.write_storage::<Banished>(),
+            &mut banishments,
+            entity,
+        );
+
+        assert_eq!(revoked, Some(id));
+        assert!(
+            !world.read_storage::<Banished>().contains(entity),
+            "the marker must not outlive the banishment"
+        );
+        assert!(
+            banishments.get(id).is_none(),
+            "a creature that really died must never be able to return"
+        );
+    }
+
+    /// 🔴 The permanent data loss this exists for. A record left behind after
+    /// its creature really died keeps suppressing one worldgen spawn in that
+    /// chunk **forever**, and nothing will ever bring the creature back to
+    /// release it.
+    #[test]
+    fn revoking_gives_the_chunk_its_suppressed_spawn_back() {
+        let (world, entity, mut banishments) = a_banished_phoenix();
         assert_eq!(
             banishments
                 .freestanding_suppressions_in_chunk(RETURN_CHUNK)
@@ -1078,13 +1267,12 @@ mod revocation_tests {
             "while banished, the chunk carries one fewer creature of that kind"
         );
 
-        let revoked = revoke_banishment(&mut banishments, Some(marker));
-
-        assert_eq!(revoked, Some(marker.id));
-        assert!(
-            banishments.get(marker.id).is_none(),
-            "a creature that really died must never be able to return"
+        revoke_banishment(
+            &mut world.write_storage::<Banished>(),
+            &mut banishments,
+            entity,
         );
+
         assert!(
             banishments
                 .freestanding_suppressions_in_chunk(RETURN_CHUNK)
@@ -1092,18 +1280,24 @@ mod revocation_tests {
             "the chunk gets its spawn slot back, so an ordinary respawn can make a new creature \
              there"
         );
-        assert!(banishments.is_empty());
     }
 
-    /// The overwhelmingly common case: an entity dies carrying no banishment
-    /// at all. Revocation has to be a total no-op there.
+    /// The overwhelmingly common case: something dies carrying no banishment
+    /// at all. Revocation must be targeted, not a clear-all — every other
+    /// creature's record has to survive untouched.
     #[test]
-    fn revoking_an_entity_that_was_never_banished_is_a_no_op() {
-        let (mut banishments, _) = registry_with_one_banished_phoenix();
+    fn revoking_an_entity_that_was_never_banished_leaves_every_record_alone() {
+        let (mut world, _banished, mut banishments) = a_banished_phoenix();
+        let bystander = world.create_entity().build();
         let before = banishments.len();
 
-        assert_eq!(revoke_banishment(&mut banishments, None), None);
+        let revoked = revoke_banishment(
+            &mut world.write_storage::<Banished>(),
+            &mut banishments,
+            bystander,
+        );
 
+        assert_eq!(revoked, None);
         assert_eq!(banishments.len(), before);
     }
 }
