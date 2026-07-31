@@ -1,5 +1,5 @@
 pub use common::event::{
-    ArcingEvent, AuraEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
+    ArcingEvent, AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
     ChangeStanceEvent, ChatEvent, ClientDisconnectEvent, ClientDisconnectWithoutPersistenceEvent,
     ComboChangeEvent, CommandEvent, CreateAuraEntityEvent, CreateFloatingDiskEvent,
     CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent,
@@ -44,6 +44,7 @@ macro_rules! server_events {
             DownedEvent
             PoiseChangeEvent
             DeleteEvent
+            BanishEvent
             DestroyEvent
             InventoryManipEvent
             RemoteUnlockEvent

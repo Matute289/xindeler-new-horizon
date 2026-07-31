@@ -41,15 +41,15 @@ use common::{
     },
     consts::TELEPORTER_RADIUS,
     event::{
-        AuraEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent, ChangeStanceEvent,
-        ChatEvent, ComboChangeEvent, CreateItemDropEvent, CreateNpcEvent, CreateObjectEvent,
-        DeleteEvent, DestroyEvent, DownedEvent, EmitExt, Emitter, EnergyChangeEvent,
-        EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent, HelpDownedEvent,
-        KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent, ParryHookEvent,
-        PermanentChange, PoiseChangeEvent, RegrowHeadEvent, RemoveLightEmitterEvent, RespawnEvent,
-        SetAbilityCooldownEvent, ShootEvent, SoundEvent, StartInteractionEvent,
-        StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent, TransformEvent,
-        UpdateMapMarkerEvent,
+        AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
+        ChangeStanceEvent, ChatEvent, ComboChangeEvent, CreateItemDropEvent, CreateNpcEvent,
+        CreateObjectEvent, DeleteEvent, DestroyEvent, DownedEvent, EmitExt, Emitter,
+        EnergyChangeEvent, EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent,
+        HelpDownedEvent, KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent,
+        ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
+        RemoveLightEmitterEvent, RespawnEvent, SetAbilityCooldownEvent, ShootEvent, SoundEvent,
+        StartInteractionEvent, StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent,
+        TransformEvent, UpdateMapMarkerEvent,
     },
     event_emitters,
     explosion::{ColorPreset, TerrainReplacementPreset},
@@ -92,7 +92,16 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<HelpDownedEvent>(builder, &[]);
     event_dispatch::<DownedEvent>(builder, &[&event_sys_name::<HealthChangeEvent>()]);
     event_dispatch::<KnockbackEvent>(builder, &[]);
-    event_dispatch::<DestroyEvent>(builder, &[&event_sys_name::<HealthChangeEvent>()]);
+    // 🔴 Ordering is load-bearing: `BanishEvent`'s handler raises the
+    // banishment's `DestroyEvent`, and that `DestroyEvent` must be consumed in
+    // the *same* tick. Otherwise `banishment::maintain` parks the entity
+    // (removing `Pos`) before the reward/loot block ever sees where to drop the
+    // loot.
+    event_dispatch::<BanishEvent>(builder, &[]);
+    event_dispatch::<DestroyEvent>(builder, &[
+        &event_sys_name::<HealthChangeEvent>(),
+        &event_sys_name::<BanishEvent>(),
+    ]);
     event_dispatch::<LandOnGroundEvent>(builder, &[]);
     event_dispatch::<RespawnEvent>(builder, &[]);
     event_dispatch::<ExplosionEvent>(builder, &[]);
