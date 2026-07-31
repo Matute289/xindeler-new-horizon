@@ -104,32 +104,32 @@ pub struct CombatTuning {
     /// Flat evasion penalty while a shield is equipped — a shield pays off via
     /// block/mitigation, not dodge.
     pub shield_evasion_penalty: f32,
-    /// Chance for a resisted mind-altering effect (charm / domination /
-    /// compulsion) to land when the caster's magic accuracy exactly equals the
+    /// Chance for a resisted magical effect (charm / domination / compulsion /
+    /// banishment) to land when the caster's magic accuracy exactly equals the
     /// target's *effective* magic evasion. Deliberately below `base_hit` so
     /// these effects can be tuned without touching the damage curve.
-    pub charm_base_hit: f32,
-    /// Minimum landing chance for a mind-altering effect, for a caster that is
-    /// merely at a disadvantage rather than hard-walled by
-    /// `charm_outclassed_wall` — such an attempt is unlikely, never impossible.
-    pub charm_hit_floor: f32,
-    /// Maximum landing chance for a mind-altering effect. Deliberately below
-    /// `hit_ceil`: damage may become guaranteed, a charm never may, so every
-    /// target keeps an escape roll no matter the level gap.
-    pub charm_hit_ceil: f32,
+    pub save_base_hit: f32,
+    /// Minimum landing chance for a resisted magical effect, for a caster that
+    /// is merely at a disadvantage rather than hard-walled by
+    /// `save_outclassed_wall` — such an attempt is unlikely, never impossible.
+    pub save_hit_floor: f32,
+    /// Maximum landing chance for a resisted magical effect. Deliberately
+    /// below `hit_ceil`: damage may become guaranteed, a save never may, so
+    /// every target keeps an escape roll no matter the level gap.
+    pub save_hit_ceil: f32,
     /// Hard cap on the combined magic-resistance + crowd-control-resistance
     /// subtraction, mirroring `resist_soft_cap`. Stacked resistances can never
     /// reach immunity — only `Body::immune_to` grants that.
-    pub charm_mr_soft_cap: f32,
+    pub save_mr_soft_cap: f32,
     /// Points of effective magic evasion granted per point of the target's
     /// `combat_rating`. Creatures carry no class attributes, so their
     /// `Stats::magic_evasion` is 0.0; without this term a world boss would be
     /// as charmable as a rabbit.
-    pub charm_cr_to_evasion: f32,
+    pub save_cr_to_evasion: f32,
     /// Flat penalty subtracted when the target is already fighting the caster
-    /// or the caster's group, which makes a charm an opener rather than a
-    /// mid-duel button. Applies identically in PvE and PvP.
-    pub charm_in_combat_penalty: f32,
+    /// or the caster's group, which makes a resisted effect an opener rather
+    /// than a mid-duel button. Applies identically in PvE and PvP.
+    pub save_in_combat_penalty: f32,
     /// Resistance fraction each `MagicResistTier` above `None` is worth. The
     /// tier *taxonomy* lives in code (`Body::magic_resist_tier`); only these
     /// numbers are data.
@@ -140,9 +140,9 @@ pub struct CombatTuning {
     /// the level term itself uses (not raw accuracy/evasion points). A caster
     /// whose accuracy deficit against the target's effective magic evasion
     /// reaches this magnitude always fails outright, bypassing
-    /// `charm_hit_floor` entirely: being sufficiently outclassed removes the
+    /// `save_hit_floor` entirely: being sufficiently outclassed removes the
     /// rescue roll, while a merely unfavourable matchup keeps it.
-    pub charm_outclassed_wall: f32,
+    pub save_outclassed_wall: f32,
 }
 
 impl Default for CombatTuning {
@@ -161,16 +161,16 @@ impl Default for CombatTuning {
             gear_evasion_floor: -10.0,
             armor_evasion_per_protection: 0.3,
             shield_evasion_penalty: 2.0,
-            charm_base_hit: 0.70,
-            charm_hit_floor: 0.05,
-            charm_hit_ceil: 0.95,
-            charm_mr_soft_cap: 0.75,
-            charm_cr_to_evasion: 2.0,
-            charm_in_combat_penalty: 0.20,
+            save_base_hit: 0.70,
+            save_hit_floor: 0.05,
+            save_hit_ceil: 0.95,
+            save_mr_soft_cap: 0.75,
+            save_cr_to_evasion: 2.0,
+            save_in_combat_penalty: 0.20,
             magic_resist_minor: 0.15,
             magic_resist_major: 0.30,
             magic_resist_legendary: 0.50,
-            charm_outclassed_wall: 0.30,
+            save_outclassed_wall: 0.30,
         }
     }
 }
@@ -188,17 +188,17 @@ impl CombatTuning {
     }
 }
 
-/// The caster side of a resisted mind-altering roll.
+/// The caster side of a resisted magical roll.
 #[derive(Copy, Clone, Debug)]
-pub struct CharmCasterInfo {
+pub struct SaveCasterInfo {
     /// `Stats::magic_accuracy` of the caster.
     pub magic_accuracy: f32,
 }
 
-/// The target side of a resisted mind-altering roll, gathered once from shipped
+/// The target side of a resisted magical roll, gathered once from shipped
 /// components at application time.
 #[derive(Copy, Clone, Debug)]
-pub struct CharmTargetInfo {
+pub struct SaveTargetInfo {
     /// `Stats::magic_evasion` — class/level derived, so 0.0 for a plain
     /// creature.
     pub stats_magic_evasion: f32,
@@ -214,7 +214,7 @@ pub struct CharmTargetInfo {
     pub combat_rating: f32,
 }
 
-impl CharmTargetInfo {
+impl SaveTargetInfo {
     /// Total magic resistance: the innate creature tier plus whatever has
     /// already accumulated on `Stats`.
     pub fn magic_resistance(&self, tuning: &CombatTuning) -> f32 {
@@ -222,57 +222,59 @@ impl CharmTargetInfo {
     }
 }
 
-/// The evasion a resisted mind-altering roll is made against: the target's
+/// The evasion a resisted magical roll is made against: the target's
 /// class/level magic evasion plus a contribution derived from its
 /// `combat_rating`, which is the only difficulty signal a creature without
 /// class attributes has.
-pub fn effective_magic_evasion(target: &CharmTargetInfo, tuning: &CombatTuning) -> f32 {
-    target.stats_magic_evasion + target.combat_rating * tuning.charm_cr_to_evasion
+pub fn effective_magic_evasion(target: &SaveTargetInfo, tuning: &CombatTuning) -> f32 {
+    target.stats_magic_evasion + target.combat_rating * tuning.save_cr_to_evasion
 }
 
-/// Probability in `0.0..=1.0` that a resisted mind-altering effect lands on
-/// `target`.
+/// Probability in `0.0..=1.0` that a resisted magical effect lands on
+/// `target` — the engine's single saving-throw roll, shared by charm /
+/// domination and by `power_word_divine_word`'s banishment. Any future
+/// resisted effect uses this rather than inventing a second curve.
 ///
 /// `fighting_caster` is the [`is_fighting_caster`] predicate: a target already
-/// in a fight with the caster (or the caster's group) is harder to charm.
+/// in a fight with the caster (or the caster's group) is harder to affect.
 ///
 /// A caster far enough below the target's effective magic evasion returns
 /// exactly `0.0` — the outclassed wall is checked *before* the clamp, which is
 /// what distinguishes it from one more subtracted term and is why it can
-/// produce a result below `charm_hit_floor`.
-pub fn charm_success_chance(
-    caster: &CharmCasterInfo,
-    target: &CharmTargetInfo,
+/// produce a result below `save_hit_floor`.
+pub fn saving_throw_chance(
+    caster: &SaveCasterInfo,
+    target: &SaveTargetInfo,
     fighting_caster: bool,
     tuning: &CombatTuning,
 ) -> f32 {
     let level_term =
         (caster.magic_accuracy - effective_magic_evasion(target, tuning)) * tuning.hit_k;
 
-    if level_term <= -tuning.charm_outclassed_wall {
+    if level_term <= -tuning.save_outclassed_wall {
         return 0.0;
     }
 
     let resist = (target.magic_resistance(tuning) + target.crowd_control_resistance)
-        .clamp(0.0, tuning.charm_mr_soft_cap);
+        .clamp(0.0, tuning.save_mr_soft_cap);
     let in_combat = if fighting_caster {
-        tuning.charm_in_combat_penalty
+        tuning.save_in_combat_penalty
     } else {
         0.0
     };
-    (tuning.charm_base_hit + level_term - resist - in_combat)
-        .clamp(tuning.charm_hit_floor, tuning.charm_hit_ceil)
+    (tuning.save_base_hit + level_term - resist - in_combat)
+        .clamp(tuning.save_hit_floor, tuning.save_hit_ceil)
 }
 
 /// How recent a hostile health change must be to still count as "currently
 /// fighting", matching the window the pet behaviour tree already uses to decide
 /// that its owner was attacked.
-pub const CHARM_RECENT_COMBAT_SECS: f64 = 5.0;
+pub const SAVE_RECENT_COMBAT_SECS: f64 = 5.0;
 
 /// Everything [`is_fighting_caster`] needs, read once from already-shipped
 /// components at application time — no new component, no timer, no per-tick
 /// scan.
-pub struct CharmCombatContext<'a> {
+pub struct SaveCombatContext<'a> {
     pub caster_uid: Uid,
     pub caster_group: Option<Group>,
     pub target_uid: Uid,
@@ -291,14 +293,14 @@ pub struct CharmCombatContext<'a> {
     pub now: f64,
 }
 
-/// Whether the target of a mind-altering effect already counts as fighting the
-/// caster or the caster's group, which costs the caster
-/// `charm_in_combat_penalty`.
+/// Whether the target of a resisted magical effect already counts as fighting
+/// the caster or the caster's group, which costs the caster
+/// `save_in_combat_penalty`.
 ///
 /// Creature targets answer this from their existing hostile agent target;
 /// players, having no agent, fall back to recent attributable damage in *both*
 /// directions.
-pub fn is_fighting_caster(ctx: &CharmCombatContext<'_>) -> bool {
+pub fn is_fighting_caster(ctx: &SaveCombatContext<'_>) -> bool {
     if let Some((focus_uid, focus_group)) = ctx.target_hostile_focus
         && (focus_uid == ctx.caster_uid
             || (focus_group.is_some() && focus_group == ctx.caster_group))
@@ -319,7 +321,7 @@ pub fn is_fighting_caster(ctx: &CharmCombatContext<'_>) -> bool {
 }
 
 /// Whether `change` is a damaging health change taken within
-/// [`CHARM_RECENT_COMBAT_SECS`] and attributable to `uid` or to `group`.
+/// [`SAVE_RECENT_COMBAT_SECS`] and attributable to `uid` or to `group`.
 fn recent_hostile_change_by(
     change: Option<&HealthChange>,
     now: f64,
@@ -328,7 +330,7 @@ fn recent_hostile_change_by(
 ) -> bool {
     change.is_some_and(|change| {
         change.amount < 0.0
-            && now - change.time.0 < CHARM_RECENT_COMBAT_SECS
+            && now - change.time.0 < SAVE_RECENT_COMBAT_SECS
             && match change.damage_by() {
                 Some(DamageContributor::Solo(by)) => by == uid,
                 Some(DamageContributor::Group {
@@ -3545,11 +3547,11 @@ mod combat_resolution_tests {
 }
 
 #[cfg(test)]
-mod charm_resist_tests {
+mod saving_throw_tests {
     use super::{
-        AttackSource, CharmCasterInfo, CharmCombatContext, CharmTargetInfo, CombatTuning,
-        DamageContributor, DamageSource, charm_success_chance, effective_magic_evasion,
-        is_fighting_caster,
+        AttackSource, CombatTuning, DamageContributor, DamageSource, SaveCasterInfo,
+        SaveCombatContext, SaveTargetInfo, effective_magic_evasion, is_fighting_caster,
+        saving_throw_chance,
     };
     use crate::{
         assets::{AssetExt, Ron},
@@ -3565,8 +3567,8 @@ mod charm_resist_tests {
 
     /// A creature target: no class attributes, so its whole magic evasion comes
     /// from the `combat_rating` term.
-    fn creature(combat_rating: f32, tier: MagicResistTier) -> CharmTargetInfo {
-        CharmTargetInfo {
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> SaveTargetInfo {
+        SaveTargetInfo {
             stats_magic_evasion: 0.0,
             crowd_control_resistance: 0.0,
             stats_magic_resistance: 0.0,
@@ -3579,8 +3581,8 @@ mod charm_resist_tests {
     /// The calibration table quotes a PC's `magic_evasion` directly and gives
     /// it no `combat_rating`, so that term is held at 0 here to reproduce the
     /// table's stated accuracy differences exactly.
-    fn player(magic_evasion: f32, magic_resistance: f32) -> CharmTargetInfo {
-        CharmTargetInfo {
+    fn player(magic_evasion: f32, magic_resistance: f32) -> SaveTargetInfo {
+        SaveTargetInfo {
             stats_magic_evasion: magic_evasion,
             crowd_control_resistance: 0.0,
             stats_magic_resistance: magic_resistance,
@@ -3589,9 +3591,9 @@ mod charm_resist_tests {
         }
     }
 
-    fn chance(t: &CombatTuning, accuracy: f32, target: &CharmTargetInfo, fighting: bool) -> f32 {
-        charm_success_chance(
-            &CharmCasterInfo {
+    fn chance(t: &CombatTuning, accuracy: f32, target: &SaveTargetInfo, fighting: bool) -> f32 {
+        saving_throw_chance(
+            &SaveCasterInfo {
                 magic_accuracy: accuracy,
             },
             target,
@@ -3620,7 +3622,7 @@ mod charm_resist_tests {
     fn calibration_table() {
         let t = CombatTuning::default();
         let row =
-            |accuracy, target: &CharmTargetInfo, fighting| chance(&t, accuracy, target, fighting);
+            |accuracy, target: &SaveTargetInfo, fighting| chance(&t, accuracy, target, fighting);
 
         // 1. L10 caster (acc 12) vs a CR 1 beast with no resistance.
         assert!((row(12.0, &creature(1.0, MagicResistTier::None), false) - 0.85).abs() < EPS);
@@ -3636,10 +3638,10 @@ mod charm_resist_tests {
         // 5. L40 caster vs an equal-level PC.
         assert!((row(42.0, &player(30.0, 0.0), false) - 0.88).abs() < EPS);
         // 6. L40 caster vs a L5 PC — clamped by the 0.95 ceiling.
-        assert!((row(42.0, &player(4.0, 0.0), false) - t.charm_hit_ceil).abs() < EPS);
+        assert!((row(42.0, &player(4.0, 0.0), false) - t.save_hit_ceil).abs() < EPS);
         // 6b. Same, mid-fight: the level term is far past the ceiling, so the
         //     in-combat penalty does not rescue the victim.
-        assert!((row(42.0, &player(4.0, 0.0), true) - t.charm_hit_ceil).abs() < EPS);
+        assert!((row(42.0, &player(4.0, 0.0), true) - t.save_hit_ceil).abs() < EPS);
         // 7. L5 caster (acc 7) vs a L40 PC — outclassed wall.
         assert_eq!(row(7.0, &player(30.0, 0.0), false), 0.0);
         // 7b. Same, mid-duel: still the wall, which is checked first.
@@ -3679,7 +3681,7 @@ mod charm_resist_tests {
         target.crowd_control_resistance = 0.75;
         // Level term -0.27 (inside the wall) minus the capped resist and the
         // in-combat penalty lands far below zero, so the floor catches it.
-        assert!((chance(&t, 12.0, &target, true) - t.charm_hit_floor).abs() < EPS);
+        assert!((chance(&t, 12.0, &target, true) - t.save_hit_floor).abs() < EPS);
     }
 
     /// Magic resistance and crowd-control resistance are summed and then
@@ -3698,7 +3700,7 @@ mod charm_resist_tests {
         let at = chance(&t, 12.0, &at_cap, false);
         assert!((over - at).abs() < EPS);
         // 0.70 - 0.75 is negative, so both rest on the floor rather than 0.0.
-        assert!((over - t.charm_hit_floor).abs() < EPS);
+        assert!((over - t.save_hit_floor).abs() < EPS);
     }
 
     /// The in-combat penalty is exactly the tuned value in the unclamped band,
@@ -3709,7 +3711,7 @@ mod charm_resist_tests {
         let target = player(6.0, 0.0);
         let calm = chance(&t, 12.0, &target, false);
         let fighting = chance(&t, 12.0, &target, true);
-        assert!((calm - fighting - t.charm_in_combat_penalty).abs() < EPS);
+        assert!((calm - fighting - t.save_in_combat_penalty).abs() < EPS);
         assert!((calm - 0.79).abs() < EPS);
     }
 
@@ -3732,28 +3734,28 @@ mod charm_resist_tests {
             assert_eq!(chance(&t, accuracy, &boss, false), 0.0);
         }
         // Past the wall threshold the floor takes over again.
-        assert!((chance(&t, 55.0, &boss, false) - t.charm_hit_floor).abs() < EPS);
+        assert!((chance(&t, 55.0, &boss, false) - t.save_hit_floor).abs() < EPS);
     }
 
     /// The shipped asset carries the confirmed constants, and stays loadable.
     #[test]
-    fn combat_tuning_asset_carries_charm_constants() {
+    fn combat_tuning_asset_carries_saving_throw_constants() {
         let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning");
         let t = &tuning.read().0;
-        assert!((t.charm_base_hit - 0.70).abs() < 1e-6);
-        assert!((t.charm_hit_floor - 0.05).abs() < 1e-6);
-        assert!((t.charm_hit_ceil - 0.95).abs() < 1e-6);
-        assert!((t.charm_mr_soft_cap - 0.75).abs() < 1e-6);
-        assert!((t.charm_cr_to_evasion - 2.0).abs() < 1e-6);
-        assert!((t.charm_in_combat_penalty - 0.20).abs() < 1e-6);
+        assert!((t.save_base_hit - 0.70).abs() < 1e-6);
+        assert!((t.save_hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.save_hit_ceil - 0.95).abs() < 1e-6);
+        assert!((t.save_mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.save_cr_to_evasion - 2.0).abs() < 1e-6);
+        assert!((t.save_in_combat_penalty - 0.20).abs() < 1e-6);
         assert!((t.magic_resist_minor - 0.15).abs() < 1e-6);
         assert!((t.magic_resist_major - 0.30).abs() < 1e-6);
         assert!((t.magic_resist_legendary - 0.50).abs() < 1e-6);
-        assert!((t.charm_outclassed_wall - 0.30).abs() < 1e-6);
+        assert!((t.save_outclassed_wall - 0.30).abs() < 1e-6);
         // A mind-altering effect is never guaranteed, unlike damage.
-        assert!(t.charm_hit_ceil < t.hit_ceil);
+        assert!(t.save_hit_ceil < t.hit_ceil);
         // Charm has its own, stingier base than the damage curve.
-        assert!(t.charm_base_hit < t.base_hit);
+        assert!(t.save_base_hit < t.base_hit);
         // The tier ladder is monotonic.
         assert!(t.magic_resist_minor < t.magic_resist_major);
         assert!(t.magic_resist_major < t.magic_resist_legendary);
@@ -3769,18 +3771,18 @@ mod charm_resist_tests {
     fn partial_asset_falls_back_to_tuned_defaults() {
         let t: CombatTuning = ron::from_str("(base_hit: 0.85, hit_k: 0.015)").unwrap();
         let d = CombatTuning::default();
-        assert!((t.charm_base_hit - d.charm_base_hit).abs() < 1e-6);
-        assert!((t.charm_hit_floor - d.charm_hit_floor).abs() < 1e-6);
-        assert!((t.charm_hit_ceil - d.charm_hit_ceil).abs() < 1e-6);
-        assert!((t.charm_mr_soft_cap - d.charm_mr_soft_cap).abs() < 1e-6);
-        assert!((t.charm_cr_to_evasion - d.charm_cr_to_evasion).abs() < 1e-6);
-        assert!((t.charm_in_combat_penalty - d.charm_in_combat_penalty).abs() < 1e-6);
+        assert!((t.save_base_hit - d.save_base_hit).abs() < 1e-6);
+        assert!((t.save_hit_floor - d.save_hit_floor).abs() < 1e-6);
+        assert!((t.save_hit_ceil - d.save_hit_ceil).abs() < 1e-6);
+        assert!((t.save_mr_soft_cap - d.save_mr_soft_cap).abs() < 1e-6);
+        assert!((t.save_cr_to_evasion - d.save_cr_to_evasion).abs() < 1e-6);
+        assert!((t.save_in_combat_penalty - d.save_in_combat_penalty).abs() < 1e-6);
         assert!((t.magic_resist_minor - d.magic_resist_minor).abs() < 1e-6);
         assert!((t.magic_resist_major - d.magic_resist_major).abs() < 1e-6);
         assert!((t.magic_resist_legendary - d.magic_resist_legendary).abs() < 1e-6);
-        assert!((t.charm_outclassed_wall - d.charm_outclassed_wall).abs() < 1e-6);
-        assert!(t.charm_cr_to_evasion > 0.0);
-        assert!(t.charm_outclassed_wall > 0.0);
+        assert!((t.save_outclassed_wall - d.save_outclassed_wall).abs() < 1e-6);
+        assert!(t.save_cr_to_evasion > 0.0);
+        assert!(t.save_outclassed_wall > 0.0);
     }
 
     /// Every tier maps to its tuned number, and `None` is exactly zero.
@@ -3813,8 +3815,8 @@ mod charm_resist_tests {
     const ALLY: u64 = 3;
     const STRANGER: u64 = 4;
 
-    fn ctx<'a>(now: f64) -> CharmCombatContext<'a> {
-        CharmCombatContext {
+    fn ctx<'a>(now: f64) -> SaveCombatContext<'a> {
+        SaveCombatContext {
             caster_uid: uid(CASTER),
             caster_group: None,
             target_uid: uid(TARGET),
@@ -3931,5 +3933,31 @@ mod charm_resist_tests {
         c.target_last_change = Some(&health.last_change);
         // A freshly-built `Health` has no damaging change, so it must not fire.
         assert!(!is_fighting_caster(&c));
+    }
+
+    /// The roll is not charm-specific: a fiend with Legendary innate magic
+    /// resistance resolves through the same generic function a banishment
+    /// save uses, with no charm-shaped types in the signature.
+    #[test]
+    fn saving_throw_chance_is_callable_for_a_non_charm_effect() {
+        let t = CombatTuning::default();
+        let target = SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: MagicResistTier::Legendary,
+            combat_rating: 10.0,
+        };
+        let chance = saving_throw_chance(
+            &SaveCasterInfo {
+                magic_accuracy: 40.0,
+            },
+            &target,
+            false,
+            &t,
+        );
+        // 0.70 base + (40 - 20)*0.015 - 0.50 legendary resist = 0.50
+        assert!((chance - 0.50).abs() < 1e-5, "got {chance}");
+        assert!(chance >= t.save_hit_floor && chance <= t.save_hit_ceil);
     }
 }
