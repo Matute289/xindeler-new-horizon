@@ -66,6 +66,17 @@ fn roll_return_deadline(
 #[derive(SystemData)]
 pub struct BanishEventData<'a> {
     entities: Entities<'a>,
+    /// 🔴 `ReadExpect`, not `WriteExpect`, is deliberate — `with_banishments`
+    /// takes `&self` because `RtState::data_mut` is interior-mutable
+    /// (`rtsim/src/lib.rs`). **That makes shared access a scheduler
+    /// invariant, not a free choice:** this is currently the only
+    /// `ReadExpect<RtSim>` in the crate (every other consumer takes
+    /// `WriteExpect`, which specs serialises). A *second* in-dispatcher
+    /// `ReadExpect<RtSim>` that also mutates would be free to run in parallel
+    /// with this one, and the inner `AtomicRefCell::borrow_mut` would panic at
+    /// runtime. If one is ever added, promote both to `WriteExpect` — the
+    /// `DestroyEvent` dependency edge already serialises this handler, so it
+    /// costs no throughput.
     rtsim: ReadExpect<'a, crate::rtsim::RtSim>,
     id_maps: Read<'a, IdMaps>,
     msm: ReadExpect<'a, MaterialStatManifest>,

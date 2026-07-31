@@ -1621,6 +1621,19 @@ impl ServerEvent for DestroyEvent {
                             // out. Deliberately NOT `remove()`: dropping the
                             // whole component would leave a returned creature
                             // lootless forever.
+                            //
+                            // Per **entry**, chosen over per-item-count on
+                            // purpose. `ItemDrops(Vec<(u32, Item)>)` pairs a
+                            // stack count with an item; rolling each count down
+                            // by `reward_fraction` would round every 1–3-count
+                            // entry to zero, i.e. a quarter-reward would drop
+                            // *nothing* off most tables. Rolling per entry
+                            // keeps stacks intact and matches the shipped
+                            // contract on `RemovalInfo::reward_fraction`
+                            // ("applied to … each loot entry's chance to
+                            // drop"). The cost is variance: a single-entry
+                            // table pays everything or nothing. Expected value
+                            // is exactly `reward_fraction` either way.
                             let fraction = ev.removal.reward_fraction;
                             let (dropped, kept): (Vec<_>, Vec<_>) = remaining
                                 .drain(..)
