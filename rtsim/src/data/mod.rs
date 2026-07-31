@@ -176,3 +176,63 @@ fn rugged_de_enum_map<
 
     de.deserialize_map(Visitor::<_, _, DEFAULT>(PhantomData))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::grid::Grid;
+    use vek::Vec2;
+
+    /// The exact wire shape of an rtsim save written *before* `banished`
+    /// existed: every field `Data` has today except that one, in order, named
+    /// the same way `write_named` names them.
+    #[derive(Serialize)]
+    struct PreBanishmentData {
+        version: u32,
+        nature: Nature,
+        actors: Actors,
+        sites: Sites,
+        factions: Factions,
+        reports: Reports,
+        architect: Architect,
+        quests: Quests,
+        tick: u64,
+        time_of_day: TimeOfDay,
+        should_purge: bool,
+    }
+
+    /// `banished` is an additive `#[serde(default)]` field, which is why
+    /// `CURRENT_VERSION` does **not** move for it (see the constant's own doc
+    /// comment, and `quests`, which was added the same way). This pins that
+    /// claim end to end: a payload missing the key entirely must still load
+    /// through the real MessagePack codec, at the *unchanged* version, and
+    /// come up with an empty registry. It fails loudly if anyone drops the
+    /// `#[serde(default)]`.
+    #[test]
+    fn a_save_written_before_the_banishment_registry_still_loads_at_the_same_version() {
+        let old = PreBanishmentData {
+            version: CURRENT_VERSION,
+            nature: Nature {
+                chunks: Grid::populate_from(Vec2::new(1, 1), |_| nature::Chunk {
+                    res: Default::default(),
+                }),
+            },
+            actors: Default::default(),
+            sites: Default::default(),
+            factions: Default::default(),
+            reports: Default::default(),
+            architect: Default::default(),
+            quests: Default::default(),
+            tick: 7,
+            time_of_day: TimeOfDay(1234.0),
+            should_purge: false,
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect("serialise the old save");
+
+        let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
+        assert_eq!(data.tick, 7);
+        assert!(data.banished.is_empty());
+    }
+}
