@@ -407,6 +407,21 @@ pub struct DestroyEvent {
     pub removal: crate::combat::RemovalInfo,
 }
 
+/// Intent to banish `entity`, raised by an aura carrying a
+/// `BanishmentEffect`. Only the two cheap gates — creature kind and "not
+/// already banished" — have been applied at this point; the resisted roll and
+/// everything authoritative happen in the server-side handler, the same split
+/// charm resistance already uses.
+pub struct BanishEvent {
+    pub entity: EcsEntity,
+    /// The caster, for the saving throw's in-combat penalty and for reward
+    /// attribution.
+    pub banished_by: Uid,
+    pub min_return_hours: f64,
+    pub max_return_hours: f64,
+    pub reward_fraction: f32,
+}
+
 pub struct InventoryManipEvent(pub EcsEntity, pub comp::InventoryManip);
 
 /// A ranged, keyless request to unlock a keyhole/lock sprite at `pos` — e.g.
