@@ -17,4 +17,11 @@ ItemDef(
     quality: Low,
     tags: [],
     ability_spec: None,
+    // Primordial-core implement: restricted to the two classes whose magic
+    // core is Primordial.
+    requirements: Some((
+        classes: Some([Druid, Ranger]),
+        min_level: None,
+        races: None,
+    )),
 )

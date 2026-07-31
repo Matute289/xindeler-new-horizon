@@ -17,4 +17,11 @@ ItemDef(
     quality: Low,
     tags: [],
     ability_spec: None,
+    // Tome is Mage-only: no other class's kit uses this implement. Do not
+    // widen this whitelist to other Arcane-adjacent classes.
+    requirements: Some((
+        classes: Some([Mage]),
+        min_level: None,
+        races: None,
+    )),
 )
