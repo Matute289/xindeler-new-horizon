@@ -28,6 +28,10 @@ pub type CharacterUpdateData = (
     Vec<PetPersistenceData>,
     Option<comp::Waypoint>,
     comp::ability::ActiveAbilities,
+    // Xindeler: carried alongside `ActiveAbilities` because persisted `Innate`
+    // hotbar slots are stored by pool key; the writer needs the pool those keys
+    // index to translate them.
+    comp::ability::AbilityPool,
     Option<comp::MapMarker>,
     comp::CharacterClass,
     comp::Ethos,
@@ -433,6 +437,7 @@ fn execute_batch_update(
             pets,
             waypoint,
             active_abilities,
+            ability_pool,
             map_marker,
             character_class,
             ethos,
@@ -444,6 +449,7 @@ fn execute_batch_update(
             pets,
             waypoint,
             active_abilities,
+            ability_pool,
             map_marker,
             character_class,
             ethos,

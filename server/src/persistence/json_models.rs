@@ -222,19 +222,66 @@ pub struct DatabaseAbilitySet {
     abilities: Vec<String>,
 }
 
-fn aux_ability_to_string(ability: comp::ability::AuxiliaryAbility) -> String {
+/// Xindeler: the on-disk form for an `Innate` slot.
+///
+/// `AuxiliaryAbility::Innate(i)` indexes into `AbilityPool::abilities`, whose
+/// contents are content-derived: a class's spell list grows and shrinks as the
+/// compendium does, and new entries land in the middle of the ordering rather
+/// than at the end. Persisting the raw index would therefore silently re-point
+/// every bound slot above an insertion, quietly rearranging a player's action
+/// bar after a content patch. Storing the pool *key* instead makes a slot
+/// follow its ability, whatever position that ability ends up in.
+///
+/// The legacy positional form is still accepted on read (see
+/// [`aux_ability_from_string`]), so old rows keep working and each character's
+/// row is rewritten in the key form the first time it is saved — no migration.
+const INNATE_KEY_PREFIX: &str = "Innate:key:";
+
+fn aux_ability_to_string(
+    ability: comp::ability::AuxiliaryAbility,
+    ability_pool: &comp::ability::AbilityPool,
+) -> String {
     use common::comp::ability::AuxiliaryAbility;
     match ability {
         AuxiliaryAbility::MainWeapon(index) => format!("Main Weapon:index:{}", index),
         AuxiliaryAbility::OffWeapon(index) => format!("Off Weapon:index:{}", index),
         AuxiliaryAbility::Glider(index) => format!("Glider:index:{}", index),
-        AuxiliaryAbility::Innate(index) => format!("Innate:index:{}", index),
+        AuxiliaryAbility::Innate(index) => match ability_pool.abilities.get(index) {
+            Some(key) => format!("{}{}", INNATE_KEY_PREFIX, key),
+            // Should never happen: an `Innate` slot always names a pool entry.
+            // Falling back to the positional form loses nothing that the old
+            // format did not already lose.
+            None => format!("Innate:index:{}", index),
+        },
         AuxiliaryAbility::Empty => String::from("Empty"),
     }
 }
 
-fn aux_ability_from_string(ability: &str) -> comp::ability::AuxiliaryAbility {
+fn aux_ability_from_string(
+    ability: &str,
+    ability_pool: &comp::ability::AbilityPool,
+) -> comp::ability::AuxiliaryAbility {
     use common::comp::ability::AuxiliaryAbility;
+    // Key form first: it does not contain the `:index:` separator the rest of
+    // this function splits on.
+    if let Some(key) = ability.strip_prefix(INNATE_KEY_PREFIX) {
+        return match ability_pool.abilities.iter().position(|k| k == key) {
+            Some(index) => AuxiliaryAbility::Innate(index),
+            // Deliberately NOT a `dev_panic!`, unlike every other failure path
+            // here: an ability that is no longer in the pool means the content
+            // changed (a spell was removed) or the character no longer holds
+            // the class that granted it. Both are legitimate — the slot just
+            // empties.
+            None => {
+                tracing::debug!(
+                    ?key,
+                    "Persisted innate ability is no longer in this character's pool; clearing the \
+                     slot"
+                );
+                AuxiliaryAbility::Empty
+            },
+        };
+    }
     let mut parts = ability.split(":index:");
     match parts.next() {
         Some("Main Weapon") => match parts
@@ -396,6 +443,7 @@ fn tool_kind_from_string(tool: String) -> Option<comp::item::tool::ToolKind> {
 
 pub fn active_abilities_to_db_model(
     active_abilities: &comp::ability::ActiveAbilities,
+    ability_pool: &comp::ability::AbilityPool,
 ) -> Vec<DatabaseAbilitySet> {
     active_abilities
         .auxiliary_sets
@@ -405,7 +453,7 @@ pub fn active_abilities_to_db_model(
             offhand: tool_kind_to_string(*offhand),
             abilities: abilities
                 .iter()
-                .map(|ability| aux_ability_to_string(*ability))
+                .map(|ability| aux_ability_to_string(*ability, ability_pool))
                 .collect(),
         })
         .collect::<Vec<_>>()
@@ -413,6 +461,7 @@ pub fn active_abilities_to_db_model(
 
 pub fn active_abilities_from_db_model(
     ability_sets: Vec<DatabaseAbilitySet>,
+    ability_pool: &comp::ability::AbilityPool,
 ) -> comp::ability::ActiveAbilities {
     let ability_sets = ability_sets
         .into_iter()
@@ -425,7 +474,7 @@ pub fn active_abilities_from_db_model(
                 let mut auxiliary_abilities =
                     vec![comp::ability::AuxiliaryAbility::Empty; comp::ability::BASE_ABILITY_LIMIT];
                 for (empty, ability) in auxiliary_abilities.iter_mut().zip(abilities) {
-                    *empty = aux_ability_from_string(&ability);
+                    *empty = aux_ability_from_string(&ability, ability_pool);
                 }
                 (
                     (
@@ -563,21 +612,153 @@ pub mod tests {
         assert_eq!(super::db_string_to_background("custom"), None);
     }
 
+    /// A synthetic pool, built by hand rather than through
+    /// `AbilityPool::for_character`, so these tests neither load assets nor
+    /// depend on what any particular class currently grants.
+    fn test_pool(keys: &[&str]) -> common::comp::ability::AbilityPool {
+        common::comp::ability::AbilityPool {
+            abilities: keys.iter().map(|k| (*k).to_string()).collect(),
+            spell_gates: vec![None; keys.len()],
+        }
+    }
+
     #[test]
     fn innate_aux_ability_round_trips() {
         use common::comp::ability::AuxiliaryAbility;
+        let pool = test_pool(&[
+            "class.mage.arcane_bolt",
+            "innate.human",
+            "spells.evocation.shatterburst",
+            "spells.abjuration.ward",
+        ]);
         for ability in [
             AuxiliaryAbility::Innate(0),
             AuxiliaryAbility::Innate(3),
             AuxiliaryAbility::MainWeapon(1),
             AuxiliaryAbility::Empty,
         ] {
-            let s = super::aux_ability_to_string(ability);
-            assert_eq!(super::aux_ability_from_string(&s), ability);
+            let s = super::aux_ability_to_string(ability, &pool);
+            assert_eq!(super::aux_ability_from_string(&s, &pool), ability);
         }
+        // Innate slots are now written by key, not by position.
         assert_eq!(
-            super::aux_ability_to_string(AuxiliaryAbility::Innate(3)),
-            "Innate:index:3"
+            super::aux_ability_to_string(AuxiliaryAbility::Innate(3), &pool),
+            "Innate:key:spells.abjuration.ward"
+        );
+    }
+
+    /// Back-compat guarantee: rows written before the key format still resolve
+    /// exactly as they did, so no DB migration is needed.
+    #[test]
+    fn legacy_index_form_still_parses() {
+        use common::comp::ability::AuxiliaryAbility;
+        let pool = test_pool(&[
+            "class.mage.arcane_bolt",
+            "innate.human",
+            "spells.evocation.shatterburst",
+            "spells.abjuration.ward",
+        ]);
+        assert_eq!(
+            super::aux_ability_from_string("Innate:index:3", &pool),
+            AuxiliaryAbility::Innate(3)
+        );
+        // Even an index the current pool cannot back — the resolution is
+        // positional and unchanged from before.
+        assert_eq!(
+            super::aux_ability_from_string("Innate:index:9", &pool),
+            AuxiliaryAbility::Innate(9)
+        );
+    }
+
+    #[test]
+    fn key_form_round_trips() {
+        use common::comp::ability::AuxiliaryAbility;
+        let pool = test_pool(&[
+            "class.mage.arcane_bolt",
+            "innate.human",
+            "spells.evocation.shatterburst",
+            "spells.abjuration.ward",
+            "spells.necromancy.wither",
+            "spells.divination.foresight",
+        ]);
+        let ability = AuxiliaryAbility::Innate(5);
+        let s = super::aux_ability_to_string(ability, &pool);
+        assert_eq!(s, format!("Innate:key:{}", pool.abilities[5]));
+        assert_eq!(super::aux_ability_from_string(&s, &pool), ability);
+    }
+
+    /// A removed spell, or a class the character no longer holds, is a
+    /// legitimate content change — the slot clears, and must NOT `dev_panic!`
+    /// (which, under `debug_assertions`, would fail this test).
+    #[test]
+    fn a_key_that_left_the_pool_clears_the_slot_quietly() {
+        use common::comp::ability::AuxiliaryAbility;
+        let warrior_pool = test_pool(&["class.warrior.rally", "innate.human"]);
+        assert_eq!(
+            super::aux_ability_from_string(
+                "Innate:key:spells.evocation.shatterburst",
+                &warrior_pool
+            ),
+            AuxiliaryAbility::Empty,
+        );
+        // Including against a pool with nothing in it at all.
+        assert_eq!(
+            super::aux_ability_from_string(
+                "Innate:key:spells.evocation.shatterburst",
+                &test_pool(&[])
+            ),
+            AuxiliaryAbility::Empty,
+        );
+    }
+
+    /// The whole point of the key format: growing the compendium re-numbers the
+    /// pool, and a bound slot must follow its spell rather than its old
+    /// position.
+    #[test]
+    fn adding_spells_to_the_compendium_no_longer_moves_a_bound_slot() {
+        use common::comp::ability::AuxiliaryAbility;
+        let before = test_pool(&[
+            "class.mage.arcane_bolt",
+            "spells.evocation.shatterburst",
+            "spells.abjuration.ward",
+        ]);
+        // The same pool after a content patch inserted one spell in the middle.
+        let after = test_pool(&[
+            "class.mage.arcane_bolt",
+            "spells.conjuration.summon_imp",
+            "spells.evocation.shatterburst",
+            "spells.abjuration.ward",
+        ]);
+
+        // The player had `shatterburst` on the bar: index 1 before, 2 after.
+        let bound = AuxiliaryAbility::Innate(1);
+        let persisted = super::aux_ability_to_string(bound, &before);
+        assert_eq!(persisted, "Innate:key:spells.evocation.shatterburst");
+
+        let reloaded = super::aux_ability_from_string(&persisted, &after);
+        assert_eq!(reloaded, AuxiliaryAbility::Innate(2));
+        // …and it still names the same spell on the next save.
+        assert_eq!(
+            super::aux_ability_to_string(reloaded, &after),
+            persisted,
+            "the slot must round-trip to the same key across the insertion"
+        );
+
+        // Contrast with what the old positional format would have done: index 1
+        // in the patched pool is the newly inserted spell, not the bound one.
+        assert_eq!(after.abilities[1], "spells.conjuration.summon_imp");
+    }
+
+    /// Defensive only — `Innate(i)` should never point past the pool. If it
+    /// somehow does, fall back to the legacy positional form rather than
+    /// silently dropping the slot.
+    #[test]
+    fn an_out_of_range_innate_index_falls_back_to_the_legacy_form() {
+        use common::comp::ability::AuxiliaryAbility;
+        let pool = test_pool(&["class.mage.arcane_bolt"]);
+        assert_eq!(
+            super::aux_ability_to_string(AuxiliaryAbility::Innate(7), &pool),
+            "Innate:index:7"
         );
     }
 }

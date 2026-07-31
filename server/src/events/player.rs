@@ -388,6 +388,15 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .copied()
                         .unwrap_or_default();
 
+                    // Xindeler: needed to persist `Innate` hotbar slots by pool
+                    // key rather than by their (content-derived) position.
+                    let ability_pool = state
+                        .ecs()
+                        .read_storage::<comp::AbilityPool>()
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_default();
+
                     let ethos = state
                         .ecs()
                         .read_storage::<comp::Ethos>()
@@ -409,6 +418,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         pets,
                         waypoint,
                         active_abilities.clone(),
+                        ability_pool,
                         map_marker,
                         character_class,
                         ethos,
