@@ -278,15 +278,18 @@ impl PoolSplit {
     }
 }
 
-/// A tier-independent, saving-throw-resisted banishment layered alongside a
-/// [`AuraKind::TieredHealthEffect`] ladder.
+/// A saving-throw-resisted banishment that pre-empts a
+/// [`AuraKind::TieredHealthEffect`] ladder for any creature kind it applies
+/// to.
 ///
-/// Tier-independent on purpose: real Divine Word banishes a qualifying
-/// creature that fails its save "regardless of its current hit points", so a
-/// celestial above every HP threshold is still banished, and a fiend that
-/// lands in the Blinded tier gets *both* effects. Every number here is
-/// authored in the ability's RON, not hardcoded — this type carries no
-/// balance defaults.
+/// Exclusive of the tier ladder on purpose: a target whose `CreatureKind`
+/// this effect applies to is resolved solely by the banishment check,
+/// regardless of its current hit points — it never enters the HP-tier
+/// ladder at all, at any HP. A celestial above every HP threshold is still
+/// banished; a fiend that would otherwise land in the Blinded tier is
+/// banished instead of Blinded, never both. Every number here is authored
+/// in the ability's RON, not hardcoded — this type carries no balance
+/// defaults.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct BanishmentEffect {
