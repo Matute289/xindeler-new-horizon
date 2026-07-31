@@ -4228,6 +4228,42 @@ pub enum MagicSource {
     Ki,
 }
 
+bitflags::bitflags! {
+    /// Per-`MagicSource` castable-cores bitset. Build/query via
+    /// [`MagicSourceMask::for_source`]/[`MagicSourceMask::allows`], never by
+    /// constructing bits directly. `Default` is deliberately empty
+    /// (non-permissive); permissiveness is an explicit opt-in via
+    /// `MagicSourceMask::all()` at the call site, so a missing narrowing can
+    /// never silently read as "can cast everything".
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+    pub struct MagicSourceMask: u8 {
+        const ARCANE     = 0b00001;
+        const DIVINE     = 0b00010;
+        const PRIMORDIAL = 0b00100;
+        const PSIONIC    = 0b01000;
+        const KI         = 0b10000;
+    }
+}
+
+impl MagicSourceMask {
+    /// The bit covering `source`. Exhaustive match, deliberately with no
+    /// `_ =>` arm: a new `MagicSource` variant added without a
+    /// corresponding bit here fails the build instead of silently resolving
+    /// to an empty mask.
+    pub fn for_source(source: MagicSource) -> Self {
+        match source {
+            MagicSource::Arcane => Self::ARCANE,
+            MagicSource::Divine => Self::DIVINE,
+            MagicSource::Primordial => Self::PRIMORDIAL,
+            MagicSource::Psionic => Self::PSIONIC,
+            MagicSource::Ki => Self::KI,
+        }
+    }
+
+    /// Does this mask allow casting from `source`?
+    pub fn allows(self, source: MagicSource) -> bool { self.contains(Self::for_source(source)) }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AbilityMeta {

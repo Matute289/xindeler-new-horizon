@@ -145,6 +145,86 @@ pub enum Hands {
     Two,
 }
 
+bitflags::bitflags! {
+    /// Per-`ToolKind` weapon-proficiency bitset. `Sword` is split into two
+    /// bits (`SWORD_1H`/`SWORD_2H`) instead of getting one bit like every
+    /// other variant, because `ToolKind::Sword` covers both `sword/` (2h
+    /// greatswords) and `sword_1h/` (1h gladii) assets — the grip lives on
+    /// the item's `Hands` field, not the tool kind. Build/query via
+    /// [`ToolKindMask::for_tool`]/[`ToolKindMask::allows`], never by
+    /// constructing bits directly. `Default` is deliberately empty
+    /// (non-permissive) — permissiveness is an explicit opt-in via
+    /// `ToolKindMask::all()` at the call site, so a missing narrowing can
+    /// never silently read as "proficient with everything".
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+    pub struct ToolKindMask: u32 {
+        const SWORD_1H    = 0b1 << 0;
+        const SWORD_2H    = 0b1 << 1;
+        const AXE         = 0b1 << 2;
+        const HAMMER      = 0b1 << 3;
+        const BOW         = 0b1 << 4;
+        const STAFF       = 0b1 << 5;
+        const SCEPTRE     = 0b1 << 6;
+        const TOME        = 0b1 << 7;
+        const HOLY_SYMBOL = 0b1 << 8;
+        const FOCUS       = 0b1 << 9;
+        const DAGGER      = 0b1 << 10;
+        const SHIELD      = 0b1 << 11;
+        const SPEAR       = 0b1 << 12;
+        const BLOWGUN     = 0b1 << 13;
+        const DEBUG       = 0b1 << 14;
+        const FARMING     = 0b1 << 15;
+        const PICK        = 0b1 << 16;
+        const SHOVEL      = 0b1 << 17;
+        const INSTRUMENT  = 0b1 << 18;
+        const THROWABLE   = 0b1 << 19;
+        const NATURAL     = 0b1 << 20;
+        const EMPTY       = 0b1 << 21;
+    }
+}
+
+impl ToolKindMask {
+    /// The bit(s) covering `kind` at grip `hands`. `hands == None` (unknown
+    /// grip, e.g. a natural/NPC attack resolved with no item in hand) means
+    /// "either grip" for `Sword`; every other `ToolKind` has exactly one bit
+    /// regardless of `hands`. Exhaustive match (no `_ =>` arm) so a future
+    /// `ToolKind` variant added without a corresponding bit fails the build.
+    pub fn for_tool(kind: ToolKind, hands: Option<Hands>) -> Self {
+        match kind {
+            ToolKind::Sword => match hands {
+                Some(Hands::One) => Self::SWORD_1H,
+                Some(Hands::Two) => Self::SWORD_2H,
+                None => Self::SWORD_1H | Self::SWORD_2H,
+            },
+            ToolKind::Axe => Self::AXE,
+            ToolKind::Hammer => Self::HAMMER,
+            ToolKind::Bow => Self::BOW,
+            ToolKind::Staff => Self::STAFF,
+            ToolKind::Sceptre => Self::SCEPTRE,
+            ToolKind::Tome => Self::TOME,
+            ToolKind::HolySymbol => Self::HOLY_SYMBOL,
+            ToolKind::Focus => Self::FOCUS,
+            ToolKind::Dagger => Self::DAGGER,
+            ToolKind::Shield => Self::SHIELD,
+            ToolKind::Spear => Self::SPEAR,
+            ToolKind::Blowgun => Self::BLOWGUN,
+            ToolKind::Debug => Self::DEBUG,
+            ToolKind::Farming => Self::FARMING,
+            ToolKind::Pick => Self::PICK,
+            ToolKind::Shovel => Self::SHOVEL,
+            ToolKind::Instrument => Self::INSTRUMENT,
+            ToolKind::Throwable => Self::THROWABLE,
+            ToolKind::Natural => Self::NATURAL,
+            ToolKind::Empty => Self::EMPTY,
+        }
+    }
+
+    /// Is this mask proficient with `kind` at grip `hands`?
+    pub fn allows(self, kind: ToolKind, hands: Option<Hands>) -> bool {
+        self.intersects(Self::for_tool(kind, hands))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Stats {
     pub equip_time_secs: f32,

@@ -8,7 +8,9 @@ use crate::{
     assets::{AssetExt, Ron},
     comp::{
         Stats,
+        ability::{MagicSource, MagicSourceMask},
         body::humanoid::Species,
+        inventory::item::tool::{Hands, ToolKind, ToolKindMask},
         skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind, SkillSet},
     },
 };
@@ -207,6 +209,40 @@ impl CharacterClass {
         if self.future_levels_to_secondary && levels_gained > 0 {
             self.set_secondary_level(self.secondary_level + levels_gained, character_level);
         }
+    }
+
+    /// The union (bitwise OR) of every held class's weapon-proficiency mask,
+    /// looked up in the already-hoisted `manifest` (see
+    /// [`class_proficiencies_manifest`]'s own doc comment — never pass a
+    /// manifest freshly loaded per entity). A class absent from `manifest`
+    /// resolves to [`ClassProficiencies::All`] (permissive fail-open),
+    /// mirroring [`class_proficiencies`]'s own missing-key rule. Iterates
+    /// [`Self::classes`] so a multiclass character's mask covers both held
+    /// classes, not just `primary`.
+    pub fn proficient_tools_mask(
+        &self,
+        manifest: &HashMap<ClassKind, ClassProficiencies>,
+    ) -> ToolKindMask {
+        self.classes().fold(ToolKindMask::empty(), |mask, class| {
+            mask | manifest
+                .get(&class)
+                .map_or(ToolKindMask::all(), ClassProficiencies::mask)
+        })
+    }
+
+    /// The union (bitwise OR) of every held class's castable-magic-source
+    /// mask. Same shape and same fail-open rule as
+    /// [`Self::proficient_tools_mask`]; see that method's doc comment.
+    pub fn castable_sources_mask(
+        &self,
+        manifest: &HashMap<ClassKind, ClassMagicSources>,
+    ) -> MagicSourceMask {
+        self.classes()
+            .fold(MagicSourceMask::empty(), |mask, class| {
+                mask | manifest
+                    .get(&class)
+                    .map_or(MagicSourceMask::all(), ClassMagicSources::mask)
+            })
     }
 }
 
@@ -453,6 +489,106 @@ pub fn class_attributes(class: ClassKind) -> ClassAttributes {
 pub fn class_attributes_manifest()
 -> crate::assets::AssetReadGuard<Ron<HashMap<ClassKind, ClassAttributes>>> {
     Ron::<HashMap<ClassKind, ClassAttributes>>::load_expect("common.class.class_attributes").read()
+}
+
+/// One proficiency entry as written in the RON. `Any` covers every grip of a
+/// tool kind; `Handed` restricts to one grip (today only meaningful for
+/// `Sword`, whose 1h/2h assets share a `ToolKind`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub enum ProficientTool {
+    Any(ToolKind),
+    Handed(ToolKind, Hands),
+}
+
+/// A class's weapon proficiency (soft gate: non-proficient use is never
+/// blocked, only penalised elsewhere). `All` is the legacy-permissive value
+/// used by `Adventurer`, and is future-proof against new `ToolKind` variants
+/// in a way an exhaustive list would not be.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub enum ClassProficiencies {
+    All,
+    Only(Vec<ProficientTool>),
+}
+
+impl ClassProficiencies {
+    pub fn mask(&self) -> ToolKindMask {
+        match self {
+            ClassProficiencies::All => ToolKindMask::all(),
+            ClassProficiencies::Only(tools) => {
+                tools.iter().fold(ToolKindMask::empty(), |mask, tool| {
+                    mask | match *tool {
+                        ProficientTool::Any(kind) => ToolKindMask::for_tool(kind, None),
+                        ProficientTool::Handed(kind, hands) => {
+                            ToolKindMask::for_tool(kind, Some(hands))
+                        },
+                    }
+                })
+            },
+        }
+    }
+}
+
+/// A class's castable magic sources ("cores", hard gate: casting a
+/// `source`-carrying ability outside this set is refused outright). `All` =
+/// every source.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub enum ClassMagicSources {
+    All,
+    Only(Vec<MagicSource>),
+}
+
+impl ClassMagicSources {
+    pub fn mask(&self) -> MagicSourceMask {
+        match self {
+            ClassMagicSources::All => MagicSourceMask::all(),
+            ClassMagicSources::Only(sources) => sources
+                .iter()
+                .fold(MagicSourceMask::empty(), |mask, &source| {
+                    mask | MagicSourceMask::for_source(source)
+                }),
+        }
+    }
+}
+
+/// Per-class weapon proficiency for `class` (one cache read). A class
+/// missing from the manifest resolves to [`ClassProficiencies::All`]
+/// (permissive fail-open) — a typo in the RON must never silently mute a
+/// class's own proficiency. Do NOT call per-entity in tick systems — hoist
+/// [`class_proficiencies_manifest`] once per run.
+pub fn class_proficiencies(class: ClassKind) -> ClassProficiencies {
+    class_proficiencies_manifest()
+        .0
+        .get(&class)
+        .cloned()
+        .unwrap_or(ClassProficiencies::All)
+}
+
+/// One manifest read for per-tick consumers (mirrors
+/// [`class_attributes_manifest`]).
+pub fn class_proficiencies_manifest()
+-> crate::assets::AssetReadGuard<Ron<HashMap<ClassKind, ClassProficiencies>>> {
+    Ron::<HashMap<ClassKind, ClassProficiencies>>::load_expect("common.class.class_proficiencies")
+        .read()
+}
+
+/// Per-class castable magic sources for `class` (one cache read). Same
+/// missing-key rule as [`class_proficiencies`]: absent ⇒
+/// [`ClassMagicSources::All`], never empty. Do NOT call per-entity in tick
+/// systems — hoist [`class_magic_sources_manifest`] once per run.
+pub fn class_magic_sources(class: ClassKind) -> ClassMagicSources {
+    class_magic_sources_manifest()
+        .0
+        .get(&class)
+        .cloned()
+        .unwrap_or(ClassMagicSources::All)
+}
+
+/// One manifest read for per-tick consumers (mirrors
+/// [`class_attributes_manifest`]).
+pub fn class_magic_sources_manifest()
+-> crate::assets::AssetReadGuard<Ron<HashMap<ClassKind, ClassMagicSources>>> {
+    Ron::<HashMap<ClassKind, ClassMagicSources>>::load_expect("common.class.class_magic_sources")
+        .read()
 }
 
 #[cfg(test)]
@@ -820,5 +956,131 @@ mod tests {
         // caster leans on magic accuracy, a martial on physical.
         assert!(mage.magic_accuracy > mage.accuracy);
         assert!(warrior.accuracy > warrior.magic_accuracy);
+    }
+
+    #[test]
+    fn class_proficiencies_manifest_covers_every_class() {
+        // Every ClassKind::ALL variant must be an actual key in the RON
+        // file, not merely resolve via the permissive fallback — a class
+        // silently missing from the manifest is a data bug even though the
+        // fallback happens to be safe.
+        let manifest = class_proficiencies_manifest();
+        for class in ClassKind::ALL {
+            assert!(
+                manifest.0.contains_key(&class),
+                "class_proficiencies.ron is missing a row for {class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn class_magic_sources_manifest_covers_every_class() {
+        let manifest = class_magic_sources_manifest();
+        for class in ClassKind::ALL {
+            assert!(
+                manifest.0.contains_key(&class),
+                "class_magic_sources.ron is missing a row for {class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn adventurer_is_permissive_on_both_gates() {
+        assert_eq!(
+            class_proficiencies(ClassKind::Adventurer).mask(),
+            ToolKindMask::all()
+        );
+        assert_eq!(
+            class_magic_sources(ClassKind::Adventurer).mask(),
+            MagicSourceMask::all()
+        );
+    }
+
+    #[test]
+    fn martial_classes_have_no_magic_core() {
+        for class in [
+            ClassKind::Warrior,
+            ClassKind::Barbarian,
+            ClassKind::Rogue,
+            ClassKind::BloodSlayer,
+        ] {
+            assert_eq!(
+                class_magic_sources(class).mask(),
+                MagicSourceMask::empty(),
+                "{class:?} should have an empty castable-sources mask"
+            );
+        }
+    }
+
+    #[test]
+    fn caster_classes_resolve_to_their_own_core() {
+        assert_eq!(
+            class_magic_sources(ClassKind::Cleric).mask(),
+            MagicSourceMask::DIVINE
+        );
+        assert_eq!(
+            class_magic_sources(ClassKind::Druid).mask(),
+            MagicSourceMask::PRIMORDIAL
+        );
+        assert_eq!(
+            class_magic_sources(ClassKind::Monk).mask(),
+            MagicSourceMask::KI
+        );
+        assert_eq!(
+            class_magic_sources(ClassKind::Mage).mask(),
+            MagicSourceMask::all()
+        );
+    }
+
+    #[test]
+    fn sword_proficiency_respects_the_1h_2h_split() {
+        let rogue = class_proficiencies(ClassKind::Rogue).mask();
+        assert!(rogue.allows(ToolKind::Sword, Some(Hands::One)));
+        assert!(!rogue.allows(ToolKind::Sword, Some(Hands::Two)));
+
+        let warrior = class_proficiencies(ClassKind::Warrior).mask();
+        assert!(warrior.allows(ToolKind::Sword, Some(Hands::One)));
+        assert!(warrior.allows(ToolKind::Sword, Some(Hands::Two)));
+    }
+
+    #[test]
+    fn magic_source_mask_covers_every_variant() {
+        // Hand-written, not derived from the enum, so a new MagicSource
+        // variant added without extending this array is caught here rather
+        // than silently passing.
+        let sources = [
+            MagicSource::Arcane,
+            MagicSource::Divine,
+            MagicSource::Primordial,
+            MagicSource::Psionic,
+            MagicSource::Ki,
+        ];
+        for source in sources {
+            assert!(MagicSourceMask::for_source(source).allows(source));
+        }
+    }
+
+    #[test]
+    fn multiclass_masks_union_across_both_held_classes() {
+        let multi = CharacterClass {
+            primary: ClassKind::Cleric,
+            secondary: Some(ClassKind::Mage),
+            secondary_level: 20,
+            future_levels_to_secondary: false,
+        };
+
+        let proficiencies = class_proficiencies_manifest();
+        let proficiency_mask = multi.proficient_tools_mask(&proficiencies.0);
+        let cleric_mask = class_proficiencies(ClassKind::Cleric).mask();
+        let mage_mask = class_proficiencies(ClassKind::Mage).mask();
+        assert_eq!(proficiency_mask, cleric_mask | mage_mask);
+        // Sanity: the union must be a strict superset of either class alone
+        // whenever they differ (Cleric carries HolySymbol, Mage carries Tome).
+        assert!(proficiency_mask.contains(ToolKindMask::HOLY_SYMBOL));
+        assert!(proficiency_mask.contains(ToolKindMask::TOME));
+
+        let sources = class_magic_sources_manifest();
+        let source_mask = multi.castable_sources_mask(&sources.0);
+        assert!(source_mask.contains(MagicSourceMask::DIVINE));
     }
 }

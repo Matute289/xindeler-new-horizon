@@ -48,4 +48,9 @@
     magic_resist_minor:     0.15, // e.g. fey ancestry
     magic_resist_major:     0.30, // the magic-resistance trait
     magic_resist_legendary: 0.50, // magic resistance + legendary-resistance analogue
+
+    // --- weapon proficiency ---
+    // Physical damage/poise/knockback/crit multiplier when the swung weapon is
+    // not in the wielder's class proficiency set. 0.40 = -60%. Retune here, no rebuild.
+    non_proficient_damage_mult: 0.40,
 )
