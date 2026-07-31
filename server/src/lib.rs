@@ -903,6 +903,14 @@ impl Server {
         // Handle game events
         frontend_events.append(&mut self.handle_events());
 
+        // Park newly banished creatures, return the ones whose real-time
+        // deadline has arrived, and rehydrate records loaded from the save
+        // file. Runs after `handle_events` so a banishment raised this tick is
+        // parked this tick — and only *after* the `DestroyEvent` reward block
+        // has already read the creature's position, which stripping `Pos`
+        // would otherwise destroy.
+        banishment::maintain(self);
+
         let before_update_terrain_and_regions = Instant::now();
 
         // Apply terrain changes and update the region map after processing server
