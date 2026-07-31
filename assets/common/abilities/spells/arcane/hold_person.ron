@@ -6,11 +6,19 @@ BasicRanged(
         kind: Simple,
         attack: Some((
             damage: 3,
-            buff: Some((
-                kind: Paralyzed,
-                dur_secs: 60,
-                strength: Value(1.0),
-                chance: 1.0,
+            attack_effect: Some((
+                Buff((
+                    kind: Paralyzed,
+                    dur_secs: 7,
+                    strength: Value(1.0),
+                    chance: 1.0,
+                )),
+                CasterLevelRoll((
+                    unlock_level: 12,
+                    fail_chance_at_unlock: 0.25,
+                    fail_chance_at_max_level: 0.05,
+                    source_classes: [Mage],
+                )),
             )),
             damage_kind: Psychic,
         )),
@@ -18,5 +26,9 @@ BasicRanged(
     projectile_body: Object(BoltFire),
     projectile_speed: 55.0,
     num_projectiles: Value(1),
-    meta: (school: Some(Enchantment), source: Some(Arcane)),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        requirements: (min_level: Some(12)),
+    ),
 )
