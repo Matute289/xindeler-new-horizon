@@ -143,6 +143,10 @@ pub struct CombatTuning {
     /// `save_hit_floor` entirely: being sufficiently outclassed removes the
     /// rescue roll, while a merely unfavourable matchup keeps it.
     pub save_outclassed_wall: f32,
+    /// Multiplier applied to physical damage, poise/knockback and crit when
+    /// the swung weapon is not in the wielder's proficiency set (a soft
+    /// weapon-proficiency gate). 1.0 = no penalty.
+    pub non_proficient_damage_mult: f32,
 }
 
 impl Default for CombatTuning {
@@ -171,6 +175,7 @@ impl Default for CombatTuning {
             magic_resist_major: 0.30,
             magic_resist_legendary: 0.50,
             save_outclassed_wall: 0.30,
+            non_proficient_damage_mult: 0.40,
         }
     }
 }

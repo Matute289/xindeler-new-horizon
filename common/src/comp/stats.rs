@@ -6,7 +6,8 @@ use std::{error::Error, fmt};
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
     comp::{
-        buff::SenseMode, creature_type::CreatureKind, detection::SenseKind,
+        ability::MagicSourceMask, buff::SenseMode, creature_type::CreatureKind,
+        detection::SenseKind, inventory::item::tool::ToolKindMask,
         projectile::ProjectileConstructorEffect,
     },
     uid::Uid,
@@ -235,7 +236,26 @@ pub struct Stats {
     /// stored here.
     #[serde(default)]
     pub creature_kind: Option<CreatureKind>,
+    /// The weapon kinds this entity swings competently. Per-tick, not
+    /// persisted. Narrowed only for entities carrying a `CharacterClass`;
+    /// everything else (every NPC, summon and boss) stays fully permissive
+    /// — see `Stats::new`'s default.
+    #[serde(default)]
+    pub proficient_tools: ToolKindMask,
+    /// The physical-damage (and poise/knockback/crit) multiplier applied
+    /// when the swung weapon is NOT in `proficient_tools`. 1.0 = no
+    /// penalty. Sourced from `combat_tuning.non_proficient_damage_mult` for
+    /// class-carrying entities; a future feat/buff can raise it back toward
+    /// 1.0.
+    #[serde(default = "one_f32")]
+    pub non_proficient_damage_mult: f32,
+    /// The magic sources this entity may cast. Per-tick, not persisted.
+    /// Same permissive-by-default rule as `proficient_tools`.
+    #[serde(default)]
+    pub castable_sources: MagicSourceMask,
 }
+
+fn one_f32() -> f32 { 1.0 }
 
 impl Stats {
     pub fn new(name: Content, body: Body) -> Self {
@@ -293,6 +313,15 @@ impl Stats {
             projectile_constructor_effects: Vec::new(),
             marked_entities: Vec::new(),
             senses: Vec::new(),
+            // Permissive by construction: an entity with no `CharacterClass`
+            // (every NPC, summon and boss) must stay fully able to swing
+            // any weapon and cast any source. Narrowed only inside the
+            // per-tick class block for entities that actually carry a
+            // `CharacterClass`. Getting this backwards (empty by default)
+            // would silently mute every casting NPC in the world.
+            proficient_tools: ToolKindMask::all(),
+            non_proficient_damage_mult: 1.0,
+            castable_sources: MagicSourceMask::all(),
         }
     }
 
@@ -345,4 +374,34 @@ impl Stats {
 
 impl Component for Stats {
     type Storage = DerefFlaggedStorage<Self, specs::VecStorage<Self>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_body() -> Body { Body::Humanoid(crate::comp::humanoid::Body::random()) }
+
+    #[test]
+    fn empty_is_permissive_on_proficiency_and_magic_core() {
+        let stats = Stats::empty(test_body());
+        assert_eq!(stats.proficient_tools, ToolKindMask::all());
+        assert_eq!(stats.castable_sources, MagicSourceMask::all());
+        assert_eq!(stats.non_proficient_damage_mult, 1.0);
+    }
+
+    #[test]
+    fn reset_temp_modifiers_restores_the_permissive_defaults() {
+        let mut stats = Stats::empty(test_body());
+        // Clobber the fields the way a narrowing consumer would.
+        stats.proficient_tools = ToolKindMask::empty();
+        stats.castable_sources = MagicSourceMask::empty();
+        stats.non_proficient_damage_mult = 0.40;
+
+        stats.reset_temp_modifiers();
+
+        assert_eq!(stats.proficient_tools, ToolKindMask::all());
+        assert_eq!(stats.castable_sources, MagicSourceMask::all());
+        assert_eq!(stats.non_proficient_damage_mult, 1.0);
+    }
 }

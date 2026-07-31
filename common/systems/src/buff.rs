@@ -1,6 +1,7 @@
 use common::{
     Damage, DamageSource,
-    combat::{self, DamageContributor},
+    assets::{AssetExt, Ron},
+    combat::{self, CombatTuning, DamageContributor},
     comp::{
         ActiveSense, Alignment, Energy, Group, Health, HealthChange, Inventory, LightEmitter, Mass,
         ModifierKind, PhysicsState, Player, Pos, Stats,
@@ -162,6 +163,16 @@ impl<'a> System<'a> for Sys {
         let racial_traits = common::comp::class::racial_traits_manifest();
         // BL-01 per-class scaling manifest: one cache access per system run.
         let class_attributes = common::comp::class::class_attributes_manifest();
+        // Weapon-proficiency and castable-magic-source manifests: one cache
+        // access per system run each, mirroring the manifest above.
+        let class_proficiencies = common::comp::class::class_proficiencies_manifest();
+        let class_magic_sources = common::comp::class::class_magic_sources_manifest();
+        // Non-proficient damage multiplier: one cached read per system run
+        // (mirrors how `Attack::apply_attack` caches `combat_tuning` per
+        // attack rather than per damage instance).
+        let combat_tuning = &Ron::<CombatTuning>::load_expect("common.combat_tuning")
+            .read()
+            .0;
         let buff_join = (
             &read_data.entities,
             &read_data.buffs,
@@ -563,6 +574,18 @@ impl<'a> System<'a> for Sys {
                     // BL-20: passive feat bonuses, same per-tick slot as the
                     // class-skill passives above.
                     skill_set.apply_feat_passives(&mut stat);
+
+                    // Weapon proficiency + castable magic sources: union
+                    // (bitwise OR) across every held class, using the
+                    // manifests hoisted once per system run above. A class
+                    // absent from either manifest resolves permissive
+                    // (`All`), not empty — see the manifest types' own doc
+                    // comments.
+                    stat.proficient_tools =
+                        character_class.proficient_tools_mask(&class_proficiencies.0);
+                    stat.castable_sources =
+                        character_class.castable_sources_mask(&class_magic_sources.0);
+                    stat.non_proficient_damage_mult = combat_tuning.non_proficient_damage_mult;
                 }
             }
 
