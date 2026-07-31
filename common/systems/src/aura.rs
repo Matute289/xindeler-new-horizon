@@ -473,11 +473,14 @@ fn apply_buff_aura(
     });
 }
 
-/// Resolves the single worst tier `target`'s own current health qualifies
-/// for and applies its effect, then — independently of that ladder — raises a
-/// banishment intent if the aura carries one and the target qualifies. Split
-/// out of `activate_aura` to keep that function under clippy's line-count
-/// lint.
+/// Resolves the effect for `target`. A `CreatureKind` the aura's
+/// `BanishmentEffect` applies to is resolved *exclusively* via banishment
+/// and never enters the HP-tier ladder at all, at any HP: outcome is binary
+/// — save fails → banished (below); save succeeds → `Outcome::Resisted`
+/// (rolled server-side), no effect at all. Every other creature kind is
+/// unaffected and still resolves the single worst tier `target`'s own
+/// current health qualifies for, exactly as before. Split out of
+/// `activate_aura` to keep that function under clippy's line-count lint.
 fn apply_tiered_health_effect(
     tiers: &[combat::HealthTier],
     banishment: Option<&common::comp::aura::BanishmentEffect>,
@@ -488,15 +491,7 @@ fn apply_tiered_health_effect(
     read_data: &ReadData,
     emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent> + EmitExt<BanishEvent>),
 ) {
-    // Banishment is NOT gated on landing in a tier: a qualifying creature
-    // above every threshold is still banished (spec §3). Evaluated first so
-    // an ordinary-creature death tier below can't short-circuit it.
     if let Some(banishment) = banishment
-        // Already parked — a 0.5 s aura ticks more than once, and the
-        // server-side handler is idempotent too, but not emitting is cheaper.
-        // rtsim actors are NOT excluded: the rtsim-vs-mob fork is the server
-        // handler's job, not the aura's.
-        && !read_data.banished.contains(target)
         && banishment.applies_to(
             read_data
                 .stats
@@ -504,13 +499,23 @@ fn apply_tiered_health_effect(
                 .and_then(|stats| stats.creature_kind),
         )
     {
-        emitters.emit(BanishEvent {
-            entity: target,
-            banished_by: applier_uid,
-            min_return_hours: banishment.min_return_hours,
-            max_return_hours: banishment.max_return_hours,
-            reward_fraction: banishment.reward_fraction,
-        });
+        // Already parked — a 0.5 s aura ticks more than once, and the
+        // server-side handler is idempotent too, but not emitting is cheaper.
+        // rtsim actors are NOT excluded: the rtsim-vs-mob fork is the server
+        // handler's job, not the aura's.
+        if !read_data.banished.contains(target) {
+            emitters.emit(BanishEvent {
+                entity: target,
+                banished_by: applier_uid,
+                min_return_hours: banishment.min_return_hours,
+                max_return_hours: banishment.max_return_hours,
+                reward_fraction: banishment.reward_fraction,
+            });
+        }
+        // A banishable creature kind never falls through to the tier
+        // ladder below — not even to be Resisted-and-then-tiered. The
+        // banishment check is its only resolution path.
+        return;
     }
 
     let Some(tier) = tiers
@@ -551,5 +556,208 @@ fn apply_tiered_health_effect(
                 },
             });
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::{
+        comp::{
+            Body, Content, Stats, aura::BanishmentEffect, creature_type::CreatureKind, humanoid,
+        },
+        event::EventBus,
+        uid::IdMaps,
+    };
+    use specs::{Builder, WorldExt};
+    use std::num::NonZeroU64;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// Registers every storage/resource `ReadData` needs to `fetch`
+    /// successfully, mirroring `server/src/sys/remote_sense.rs`'s
+    /// `setup_world` idiom.
+    fn setup_world() -> specs::World {
+        let mut world = specs::World::new();
+        world.register::<Player>();
+        world.register::<Pos>();
+        world.register::<CharacterState>();
+        world.register::<Alignment>();
+        world.register::<Health>();
+        world.register::<Group>();
+        world.register::<Uid>();
+        world.register::<Stats>();
+        world.register::<Buffs>();
+        world.register::<Auras>();
+        world.register::<EnteredAuras>();
+        world.register::<Mass>();
+        world.register::<CharacterClass>();
+        world.register::<Banished>();
+        world.insert(Time(0.0));
+        world.insert(IdMaps::default());
+        world.insert(common::CachedSpatialGrid::default());
+        world.insert(EventBus::<AuraEvent>::default());
+        world.insert(EventBus::<BuffEvent>::default());
+        world.insert(EventBus::<HealthChangeEvent>::default());
+        world.insert(EventBus::<BanishEvent>::default());
+        world
+    }
+
+    /// The tier ladder and banishment block Divine Word's tier 4 actually
+    /// ships (`assets/common/abilities/spells/divine/power_word_divine_word.
+    /// ron`): the lethal tier goes first per `HealthTier`'s first-match doc
+    /// comment.
+    fn divine_word_tiers() -> Vec<combat::HealthTier> {
+        vec![combat::HealthTier {
+            max_current_health: 35.0,
+            effect: TierEffect::AdditionalDamage(2000.0),
+        }]
+    }
+
+    fn divine_word_banishment() -> BanishmentEffect {
+        BanishmentEffect {
+            creature_kinds: vec![
+                CreatureKind::Celestial,
+                CreatureKind::Elemental,
+                CreatureKind::Fey,
+                CreatureKind::Fiend,
+            ],
+            min_return_hours: 24.0,
+            max_return_hours: 168.0,
+            reward_fraction: 0.25,
+        }
+    }
+
+    /// The exact scenario that motivated N38B21-E2: a banishable creature
+    /// kind landing in the tier-4 threshold must be resolved *exclusively*
+    /// via banishment (spec §3, corrected 2026-07-31) -- never also (or
+    /// instead) via the tier ladder's instant-death `AdditionalDamage`. PR
+    /// #62 shipped the "both apply" behavior; this pins the fix.
+    #[test]
+    fn a_banishable_creature_kind_at_lethal_health_is_banished_not_killed() {
+        let mut world = setup_world();
+
+        let applier_uid = uid(1);
+        let target_uid = uid(2);
+
+        let applier = world.create_entity().with(applier_uid).build();
+
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut stats = Stats::new(Content::dummy(), body);
+        // A reskin: the body's own `creature_kind()` is irrelevant here, only
+        // the (overridable) `Stats::creature_kind` the aura reads.
+        stats.creature_kind = Some(CreatureKind::Fiend);
+        let target = world.create_entity().with(target_uid).with(stats).build();
+
+        let mut health = Health::new(body);
+        // Exactly the tier-4 threshold: if the tier ladder were consulted at
+        // all, this is the HP value that would trigger instant death.
+        health.set_amount(35.0);
+
+        let tiers = divine_word_tiers();
+        let banishment = divine_word_banishment();
+
+        let read_data = ReadData::fetch(&world);
+        let mut emitters = read_data.events.get_emitters();
+
+        apply_tiered_health_effect(
+            &tiers,
+            Some(&banishment),
+            &health,
+            applier,
+            applier_uid,
+            target,
+            &read_data,
+            &mut emitters,
+        );
+        drop(emitters);
+
+        let banish_events: Vec<_> = world
+            .read_resource::<EventBus<BanishEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            banish_events.len(),
+            1,
+            "a banishable creature kind must be banished"
+        );
+        assert_eq!(banish_events[0].entity, target);
+
+        let health_change_events = world
+            .read_resource::<EventBus<HealthChangeEvent>>()
+            .recv_all()
+            .count();
+        assert_eq!(
+            health_change_events, 0,
+            "a banishable creature kind must never resolve the tier ladder's lethal \
+             AdditionalDamage -- it is exclusively banished, not also killed"
+        );
+
+        let buff_events = world
+            .read_resource::<EventBus<BuffEvent>>()
+            .recv_all()
+            .count();
+        assert_eq!(
+            buff_events, 0,
+            "a banishable creature kind must never resolve any tier effect at all"
+        );
+    }
+
+    /// Non-banishable creature kinds are unaffected by the fix: they still
+    /// evaluate against the tier ladder exactly as before.
+    #[test]
+    fn a_non_banishable_creature_kind_at_lethal_health_still_resolves_the_tier() {
+        let mut world = setup_world();
+
+        let applier_uid = uid(1);
+        let target_uid = uid(2);
+
+        let applier = world.create_entity().with(applier_uid).build();
+
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut stats = Stats::new(Content::dummy(), body);
+        stats.creature_kind = Some(CreatureKind::Beast);
+        let target = world.create_entity().with(target_uid).with(stats).build();
+
+        let mut health = Health::new(body);
+        health.set_amount(35.0);
+
+        let tiers = divine_word_tiers();
+        let banishment = divine_word_banishment();
+
+        let read_data = ReadData::fetch(&world);
+        let mut emitters = read_data.events.get_emitters();
+
+        apply_tiered_health_effect(
+            &tiers,
+            Some(&banishment),
+            &health,
+            applier,
+            applier_uid,
+            target,
+            &read_data,
+            &mut emitters,
+        );
+        drop(emitters);
+
+        let banish_events = world
+            .read_resource::<EventBus<BanishEvent>>()
+            .recv_all()
+            .count();
+        assert_eq!(
+            banish_events, 0,
+            "a non-banishable creature kind must never be banished"
+        );
+
+        let health_change_events: Vec<_> = world
+            .read_resource::<EventBus<HealthChangeEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            health_change_events.len(),
+            1,
+            "a non-banishable creature kind must still resolve the tier ladder"
+        );
+        assert_eq!(health_change_events[0].change.amount, -2000.0);
     }
 }
