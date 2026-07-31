@@ -2817,10 +2817,10 @@ impl ServerEvent for BuffEvent {
                                 );
                                 let target_stats = stats.get(ev.entity);
 
-                                let caster_info = combat::CharmCasterInfo {
+                                let caster_info = combat::SaveCasterInfo {
                                     magic_accuracy: caster_stats.magic_accuracy,
                                 };
-                                let target_info = combat::CharmTargetInfo {
+                                let target_info = combat::SaveTargetInfo {
                                     stats_magic_evasion: target_stats
                                         .map_or(0.0, |s| s.magic_evasion),
                                     crowd_control_resistance: target_stats
@@ -2830,7 +2830,7 @@ impl ServerEvent for BuffEvent {
                                     magic_resist_tier: target_body.magic_resist_tier(),
                                     combat_rating,
                                 };
-                                let ctx = combat::CharmCombatContext {
+                                let ctx = combat::SaveCombatContext {
                                     caster_uid,
                                     caster_group: groups.get(caster).copied(),
                                     target_uid,
@@ -2849,7 +2849,7 @@ impl ServerEvent for BuffEvent {
                                     now: time.0,
                                 };
                                 let fighting_caster = combat::is_fighting_caster(&ctx);
-                                let chance = combat::charm_success_chance(
+                                let chance = combat::saving_throw_chance(
                                     &caster_info,
                                     &target_info,
                                     fighting_caster,
