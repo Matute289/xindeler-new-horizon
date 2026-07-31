@@ -1464,6 +1464,7 @@ fn handle_ability(
                     Some(data.stats),
                     data.buffs,
                     data.ability_pool,
+                    data.character_class,
                     data.ability_map,
                 )
             })

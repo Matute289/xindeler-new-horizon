@@ -4008,13 +4008,31 @@ impl ServerEvent for ChangeAbilityEvent {
         WriteStorage<'a, comp::ActiveAbilities>,
         ReadStorage<'a, Inventory>,
         ReadStorage<'a, SkillSet>,
+        // Xindeler: needed to refuse binding a spell whose class-level band
+        // the character has not reached.
+        ReadStorage<'a, comp::AbilityPool>,
+        ReadStorage<'a, comp::CharacterClass>,
     );
 
     fn handle(
         events: impl ExactSizeIterator<Item = Self>,
-        (mut active_abilities, inventories, skill_sets): Self::SystemData<'_>,
+        (mut active_abilities, inventories, skill_sets, ability_pools, character_classes): Self::SystemData<'_>,
     ) {
         for ev in events {
+            // Xindeler: the client picks what goes on the action bar, so a
+            // modified one could otherwise bind a spell it cannot yet cast.
+            // Drop such a write silently — a well-behaved client never sends
+            // it (the Diary makes locked spells undraggable).
+            if !comp::ability::may_bind_ability(
+                ability_pools.get(ev.entity),
+                character_classes.get(ev.entity),
+                skill_sets
+                    .get(ev.entity)
+                    .map_or(1, |skill_set| skill_set.character_level()),
+                ev.new_ability,
+            ) {
+                continue;
+            }
             if let Some(mut active_abilities) = active_abilities.get_mut(ev.entity) {
                 active_abilities.change_ability(
                     ev.slot,

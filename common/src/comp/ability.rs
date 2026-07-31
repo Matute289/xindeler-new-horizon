@@ -129,7 +129,8 @@ impl Component for AbilityCooldowns {
 /// ```
 ///
 /// Deduplicated by key, so a spell both held classes can cast appears exactly
-/// once, under the primary. A single-class character is
+/// once — at the primary's position, but with BOTH grantor classes recorded in
+/// its gate, so either class's level can unlock it. A single-class character is
 /// `[P keys][innate][P spells]`; granting a second class appends
 /// `[S keys][S spells]` and shifts nothing that already existed — granting a
 /// second class to an existing single-class character must never shift the
@@ -164,37 +165,100 @@ pub struct AbilityPool {
 /// invalidation when the character levels up or multiclasses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpellGate {
-    /// The class that grants this spell. Under multiclass a spell can be
-    /// listed by both held classes; the pool keeps the entry from the *first*
-    /// class that grants it (the primary), and [`Self::is_unlocked`] checks
-    /// only that class.
-    pub class: crate::comp::ClassKind,
+    /// Every class the character HOLDS that lists this spell. A spell unlocks
+    /// as soon as ANY of them has reached the band, so a level-59 Cleric /
+    /// level-1 Mage casts a Cleric+Mage spell off the Cleric side. At most two
+    /// entries: `CharacterClass` holds at most two classes by design, and the
+    /// pool records only the held ones (a spell's compendium `classes` list
+    /// may be longer, but the classes the character does not hold could never
+    /// unlock it anyway).
+    ///
+    /// Private so the "at most two, no duplicates" invariant can only be
+    /// established through [`Self::new`] / [`Self::add_class`].
+    classes: [Option<crate::comp::ClassKind>; 2],
     /// The spell's own level; 0 = cantrip.
     pub spell_level: u8,
 }
 
 impl SpellGate {
-    /// `true` when the character's own level in `self.class` has reached the
-    /// band that unlocks `self.spell_level`. Cantrips pass from class level 1.
+    /// A gate granted by a single class. Merge further grantors in with
+    /// [`Self::add_class`].
+    pub fn new(class: crate::comp::ClassKind, spell_level: u8) -> Self {
+        Self {
+            classes: [Some(class), None],
+            spell_level,
+        }
+    }
+
+    /// Record another held class that also grants this spell. A no-op when the
+    /// class is already recorded, or when both slots are taken — which cannot
+    /// happen for a real pool, since `CharacterClass` holds at most two
+    /// classes.
+    pub fn add_class(&mut self, class: crate::comp::ClassKind) {
+        if self.classes.contains(&Some(class)) {
+            return;
+        }
+        if let Some(slot) = self.classes.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(class);
+        }
+    }
+
+    /// The classes that grant this spell, in the order they were recorded
+    /// (primary first). Never empty.
+    pub fn classes(&self) -> impl Iterator<Item = crate::comp::ClassKind> + '_ {
+        self.classes.iter().copied().flatten()
+    }
+
+    /// Does `class` grant this spell?
+    pub fn granted_by(&self, class: crate::comp::ClassKind) -> bool {
+        self.classes.contains(&Some(class))
+    }
+
+    /// The class level any grantor class must reach to unlock this spell.
+    /// Floored at 1 because class levels start at 1 — a cantrip is available
+    /// from the first class level, not from a level 0 that cannot exist.
+    pub fn required_class_level(&self) -> u16 {
+        (crate::comp::spell::CLASS_LEVELS_PER_SPELL_LEVEL * u16::from(self.spell_level)).max(1)
+    }
+
+    /// `(class, its own level)` for the held grantor class that will unlock
+    /// this spell soonest — the one already at the highest class level, since
+    /// every grantor needs the same [`Self::required_class_level`]. `None`
+    /// when the character holds none of the grantor classes (or has no
+    /// `CharacterClass` at all).
     ///
-    /// Gates off the CLASS's level via `CharacterClass::class_levels`, never
-    /// `character_level` directly: a Warrior 40 / Warlock 20 must be capped at
-    /// the Warlock's spell level 3, not the character's 60.
+    /// The UI renders "Requires &lt;class&gt; level N" off this, so a spell two
+    /// held classes grant names the one the player will actually reach first
+    /// rather than an arbitrary side.
+    pub fn nearest_grantor(
+        &self,
+        class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> Option<(crate::comp::ClassKind, u16)> {
+        class?
+            .class_levels(character_level)
+            .filter(|(class, _, _)| self.granted_by(*class))
+            .map(|(class, class_level, _)| (class, class_level))
+            .max_by_key(|(_, class_level)| *class_level)
+    }
+
+    /// `true` when ANY class the character holds that grants this spell has
+    /// reached the band unlocking [`Self::spell_level`]. Cantrips pass from
+    /// class level 1.
     ///
-    /// Fails CLOSED: a character that does not hold `self.class` at all — or
+    /// Gates off each CLASS's own level via `CharacterClass::class_levels`,
+    /// never `character_level` directly: a Warrior 40 / Warlock 20 must be
+    /// capped at the Warlock's spell level 3, not the character's 60.
+    ///
+    /// Fails CLOSED: a character that holds none of the grantor classes — or
     /// whose `CharacterClass` is missing entirely, e.g. an NPC — gets `false`.
     pub fn is_unlocked(
         &self,
         class: Option<&crate::comp::CharacterClass>,
         character_level: u16,
     ) -> bool {
-        class
-            .and_then(|cc| {
-                cc.class_levels(character_level)
-                    .find(|(c, _, _)| *c == self.class)
-                    .map(|(_, class_level, _)| class_level)
-            })
-            .is_some_and(|class_level| {
+        self.nearest_grantor(class, character_level)
+            .is_some_and(|(_, class_level)| {
                 u16::from(self.spell_level) <= crate::comp::spell::spell_level_unlocked(class_level)
             })
     }
@@ -246,17 +310,29 @@ impl AbilityPool {
 
         // Appends a key unless it is already present, keeping the two arrays
         // exactly parallel. Deduplication matters under multiclass, where a
-        // spell can be listed by both held classes.
+        // spell can be listed by both held classes: the key is emitted once,
+        // at the position the FIRST grantor put it (the ordering contract is
+        // append-only), but the second grantor is MERGED INTO the existing
+        // gate — a spell both held classes grant must unlock as soon as
+        // either of them reaches the band, not only the primary.
         fn push_key(
             abilities: &mut Vec<String>,
             spell_gates: &mut Vec<Option<SpellGate>>,
             key: String,
             gate: Option<SpellGate>,
         ) {
-            if !abilities.contains(&key) {
-                abilities.push(key);
-                spell_gates.push(gate);
+            if let Some(existing) = abilities.iter().position(|existing| *existing == key) {
+                if let (Some(existing_gate), Some(incoming)) =
+                    (spell_gates[existing].as_mut(), gate)
+                {
+                    for class in incoming.classes() {
+                        existing_gate.add_class(class);
+                    }
+                }
+                return;
             }
+            abilities.push(key);
+            spell_gates.push(gate);
         }
 
         // 1. Primary's class ability keys.
@@ -282,10 +358,7 @@ impl AbilityPool {
                     abilities,
                     spell_gates,
                     spell.pool_key().to_string(),
-                    Some(SpellGate {
-                        class,
-                        spell_level: spell.level,
-                    }),
+                    Some(SpellGate::new(class, spell.level)),
                 );
             }
         };
@@ -353,6 +426,36 @@ impl AbilityPool {
             Species::Danari => "innate.danari",
             Species::Draugr => "innate.draugr",
         }
+    }
+}
+
+/// Xindeler: may this character legitimately *bind* `ability` to one of its
+/// auxiliary slots right now?
+///
+/// Extracted from the `ChangeAbilityEvent` handler so the rule is unit-testable
+/// on its own. Only spell keys are judged: an `Innate` index carrying a
+/// [`SpellGate`] must have its class-level band reached, and an entity with no
+/// [`AbilityPool`] at all has no innate abilities to bind, so it is refused.
+/// Every other binding — weapon, glider, empty, and gate-free innate keys —
+/// answers `true`, preserving the pre-existing (unvalidated) behaviour rather
+/// than silently taking on the whole client-trust problem here.
+///
+/// The authoritative check still lives at
+/// [`ActiveAbilities::activate_ability`]; this one only keeps the action bar
+/// honest.
+pub fn may_bind_ability(
+    ability_pool: Option<&AbilityPool>,
+    character_class: Option<&crate::comp::CharacterClass>,
+    character_level: u16,
+    ability: AuxiliaryAbility,
+) -> bool {
+    match ability {
+        AuxiliaryAbility::Innate(index) => ability_pool
+            .is_some_and(|pool| pool.is_unlocked(index, character_class, character_level)),
+        AuxiliaryAbility::MainWeapon(_)
+        | AuxiliaryAbility::OffWeapon(_)
+        | AuxiliaryAbility::Glider(_)
+        | AuxiliaryAbility::Empty => true,
     }
 }
 
@@ -481,6 +584,11 @@ impl ActiveAbilities {
         stats: Option<&comp::Stats>,
         buffs: Option<&Buffs>,
         ability_pool: Option<&AbilityPool>,
+        // Xindeler: the caster's class(es), so a spell key in `ability_pool`
+        // can be checked against the class-level band that unlocks it. `None`
+        // means "no class", which refuses every gated key — correct for NPCs,
+        // whose pools hold no spells anyway.
+        character_class: Option<&crate::comp::CharacterClass>,
         ability_map: &AbilityMap,
         // bool is from_offhand
     ) -> Option<(CharacterAbility, bool, SpecifiedAbility)> {
@@ -566,6 +674,13 @@ impl ActiveAbilities {
             Ability::OffWeaponAux(_) => inst_ability(EquipSlot::ActiveOffhand, true),
             Ability::GliderAux(_) => inst_ability(EquipSlot::Glider, false),
             Ability::InnateAux(index) => ability_pool
+                // Xindeler: a spell key whose class-level band has not been
+                // reached yet is not castable. Non-spell keys keep their
+                // existing behaviour (`is_unlocked` answers `true` for them),
+                // so this is a no-op for class and racial innates.
+                .filter(|pool| {
+                    pool.is_unlocked(index, character_class, skill_set.character_level())
+                })
                 .and_then(|pool| pool.abilities.get(index))
                 .and_then(|key| {
                     ability_map
@@ -5046,8 +5161,13 @@ mod class_ability_pool_tests {
 
 #[cfg(test)]
 mod spell_gate_tests {
-    use super::{AbilityPool, ActiveAbilities, AuxiliaryAbility, SpellGate};
-    use crate::comp::{Body, CharacterClass, ClassKind, humanoid, spell::SpellCompendium};
+    use super::{
+        AbilityInput, AbilityPool, ActiveAbilities, AuxiliaryAbility, SpellGate, may_bind_ability,
+    };
+    use crate::comp::{
+        Body, CharacterClass, ClassKind, SkillSet, humanoid, item::tool::AbilityMap,
+        spell::SpellCompendium,
+    };
 
     /// Build a minimal Human body for deterministic testing.
     fn human_body() -> Body {
@@ -5063,6 +5183,32 @@ mod spell_gate_tests {
             eyes: 0,
             height_scale: 0,
         })
+    }
+
+    /// A skill set whose derived character level is exactly `level`.
+    fn skill_set_at_level(level: u16) -> SkillSet {
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(level);
+        assert_eq!(skill_set.character_level(), level, "test setup");
+        skill_set
+    }
+
+    /// An `ActiveAbilities` whose auxiliary slot 0 holds pool index `index`,
+    /// under the empty-handed auxiliary key so no equipped weapon is needed.
+    fn bound_to_pool_index(index: usize) -> ActiveAbilities {
+        let mut sets = hashbrown::HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(index)]);
+        ActiveAbilities::from_auxiliary(sets, None)
+    }
+
+    /// The first pool index holding a spell of exactly `spell_level`.
+    fn spell_index_of_level(pool: &AbilityPool, spell_level: u8) -> usize {
+        (0..pool.abilities.len())
+            .find(|i| {
+                pool.spell_gate(*i)
+                    .is_some_and(|gate| gate.spell_level == spell_level)
+            })
+            .unwrap_or_else(|| panic!("the compendium has a Mage spell of level {spell_level}"))
     }
 
     #[test]
@@ -5085,64 +5231,272 @@ mod spell_gate_tests {
         assert!(pool.spell_gates[3..].iter().all(Option::is_some));
     }
 
+    /// The ordering contract: persisted hotbar slots store `Innate:index:N`
+    /// positions, so granting a second class must APPEND only — every index
+    /// that already existed must still name the same key afterwards.
+    ///
+    /// A gate may legitimately gain a grantor class in place (a spell both
+    /// held classes list), which changes no index; that is asserted here as
+    /// the only permitted difference.
     #[test]
     fn granting_a_second_class_shifts_no_existing_index() {
         let body = human_body();
         let before = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
-        let mut multi = CharacterClass::single(ClassKind::Mage);
-        multi.secondary = Some(ClassKind::Cleric);
-        let after = AbilityPool::for_character(&body, &multi);
+        let after = AbilityPool::for_character(&body, &mage_cleric());
 
         assert!(after.abilities.len() > before.abilities.len());
         assert_eq!(
             &after.abilities[..before.abilities.len()],
-            &before.abilities[..]
+            &before.abilities[..],
+            "every pre-existing index must still name the same key"
         );
+
+        for (index, before_gate) in before.spell_gates.iter().enumerate() {
+            let after_gate = &after.spell_gates[index];
+            match (before_gate, after_gate) {
+                (None, None) => {},
+                (Some(before_gate), Some(after_gate)) => {
+                    assert_eq!(
+                        before_gate.spell_level, after_gate.spell_level,
+                        "index {index} changed spell level"
+                    );
+                    // The Mage was and remains the first grantor; the Cleric
+                    // may have been merged in beside it, never in front.
+                    assert_eq!(
+                        after_gate.classes().next(),
+                        before_gate.classes().next(),
+                        "index {index} changed its primary grantor"
+                    );
+                    for class in before_gate.classes() {
+                        assert!(
+                            after_gate.granted_by(class),
+                            "index {index} lost grantor {class:?}"
+                        );
+                    }
+                },
+                _ => panic!("index {index} changed between spell and non-spell"),
+            }
+        }
+    }
+
+    /// A Mage(primary)/Cleric(secondary) character.
+    fn mage_cleric() -> CharacterClass {
+        let mut multi = CharacterClass::single(ClassKind::Mage);
+        multi.secondary = Some(ClassKind::Cleric);
+        multi
+    }
+
+    /// The key and level of a compendium spell BOTH `Mage` and `Cleric` can
+    /// cast, above cantrip level so there is a band to be locked out of.
+    /// Derived from the compendium rather than named, so re-authoring content
+    /// cannot silently make this suite vacuous.
+    fn shared_mage_cleric_spell() -> (String, u8) {
+        let book = SpellCompendium::load_expect_cloned();
+        let def = book
+            .iter()
+            .find(|s| {
+                s.level > 0
+                    && s.classes.contains(&ClassKind::Mage)
+                    && s.classes.contains(&ClassKind::Cleric)
+            })
+            .expect("the compendium has a non-cantrip spell listed for both Cleric and Mage");
+        (def.id.clone(), def.level)
+    }
+
+    fn gate_for<'a>(pool: &'a AbilityPool, key: &str) -> &'a SpellGate {
+        let index = pool
+            .abilities
+            .iter()
+            .position(|k| k == key)
+            .unwrap_or_else(|| panic!("'{key}' is not in the pool"));
+        pool.spell_gate(index)
+            .unwrap_or_else(|| panic!("'{key}' carries no spell gate"))
+    }
+
+    #[test]
+    fn a_spell_both_held_classes_grant_appears_once_and_records_both() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(&body, &mage_cleric());
+        let (key, _) = shared_mage_cleric_spell();
+
+        // Emitted once, and the parallel-array invariant survives the merge.
         assert_eq!(
-            &after.spell_gates[..before.spell_gates.len()],
-            &before.spell_gates[..]
+            pool.abilities.iter().filter(|k| *k == &key).count(),
+            1,
+            "'{key}' must be emitted exactly once"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for k in &pool.abilities {
+            assert!(seen.insert(k.clone()), "duplicate pool key: {k}");
+        }
+        assert_eq!(pool.abilities.len(), pool.spell_gates.len());
+
+        // ... but its gate names BOTH grantors, primary first.
+        let classes: Vec<ClassKind> = gate_for(&pool, &key).classes().collect();
+        assert_eq!(classes, vec![ClassKind::Mage, ClassKind::Cleric]);
+    }
+
+    #[test]
+    fn a_shared_spell_unlocks_off_whichever_held_class_reached_the_band() {
+        let body = human_body();
+        let multi = mage_cleric();
+        let pool = AbilityPool::for_character(&body, &multi);
+        let (key, spell_level) = shared_mage_cleric_spell();
+        let gate = gate_for(&pool, &key);
+        assert_eq!(gate.spell_level, spell_level);
+
+        // Mage 1 / Cleric 59: the Cleric side is far past the band. Before the
+        // gate recorded both grantors this read the Mage's level 1 and locked
+        // a spell the character's level-59 Cleric plainly knows.
+        let mut mage_1_cleric_59 = multi;
+        mage_1_cleric_59.set_secondary_level(59, 60);
+        assert!(
+            gate.is_unlocked(Some(&mage_1_cleric_59), 60),
+            "the Cleric side must unlock it"
+        );
+
+        // Mage 59 / Cleric 1: the same spell off the other side.
+        let mut mage_59_cleric_1 = multi;
+        mage_59_cleric_1.set_secondary_level(1, 60);
+        assert!(
+            gate.is_unlocked(Some(&mage_59_cleric_1), 60),
+            "the Mage side must unlock it"
+        );
+
+        // Mage 1 / Cleric 1: neither side has reached the band.
+        let mut both_at_1 = multi;
+        both_at_1.set_secondary_level(1, 2);
+        assert!(
+            !gate.is_unlocked(Some(&both_at_1), 2),
+            "neither side has reached the band"
+        );
+    }
+
+    /// The concrete case that exposed the single-grantor gate: a level-7
+    /// `[Cleric, Mage]` spell on a Mage(1)/Cleric(59) character. Reading only
+    /// the primary's level locked a spell the character's level-59 Cleric
+    /// plainly knows.
+    #[test]
+    fn a_level_59_secondary_unlocks_its_own_high_level_shared_spell() {
+        const KEY: &str = "spells.transmutation.regenerate";
+
+        let book = SpellCompendium::load_expect_cloned();
+        let def = book.get(KEY).expect("'{KEY}' is in the compendium");
+        assert_eq!(def.level, 7);
+        assert!(def.classes.contains(&ClassKind::Cleric) && def.classes.contains(&ClassKind::Mage));
+
+        let pool = AbilityPool::for_character(&human_body(), &mage_cleric());
+        let gate = gate_for(&pool, KEY);
+
+        let mut mage_1_cleric_59 = mage_cleric();
+        mage_1_cleric_59.set_secondary_level(59, 60);
+        assert_eq!(
+            gate.nearest_grantor(Some(&mage_1_cleric_59), 60),
+            Some((ClassKind::Cleric, 59))
+        );
+        assert!(gate.is_unlocked(Some(&mage_1_cleric_59), 60));
+    }
+
+    #[test]
+    fn a_single_class_character_gates_a_shared_spell_on_that_class_alone() {
+        let body = human_body();
+        let (key, _) = shared_mage_cleric_spell();
+
+        for class in [ClassKind::Mage, ClassKind::Cleric] {
+            let single = CharacterClass::single(class);
+            let pool = AbilityPool::for_character(&body, &single);
+            let gate = gate_for(&pool, &key);
+            assert_eq!(
+                gate.classes().collect::<Vec<_>>(),
+                vec![class],
+                "a single-class {class:?} records only its own class"
+            );
+            // The class the character does NOT hold can never unlock it.
+            let other = if class == ClassKind::Mage {
+                ClassKind::Cleric
+            } else {
+                ClassKind::Mage
+            };
+            assert!(
+                !gate.is_unlocked(Some(&CharacterClass::single(other)), 60),
+                "a {other:?} must not unlock a gate recorded for {class:?} only"
+            );
+        }
+    }
+
+    #[test]
+    fn the_nearest_grantor_is_the_class_that_will_reach_the_band_first() {
+        let body = human_body();
+        let multi = mage_cleric();
+        let pool = AbilityPool::for_character(&body, &multi);
+        let (key, spell_level) = shared_mage_cleric_spell();
+        let gate = gate_for(&pool, &key);
+
+        // Cleric is further along, so it is the class the UI must name.
+        let mut mage_20_cleric_40 = multi;
+        mage_20_cleric_40.set_secondary_level(40, 60);
+        assert_eq!(
+            gate.nearest_grantor(Some(&mage_20_cleric_40), 60),
+            Some((ClassKind::Cleric, 40))
+        );
+
+        // With the split reversed it names the Mage instead.
+        let mut mage_40_cleric_20 = multi;
+        mage_40_cleric_20.set_secondary_level(20, 60);
+        assert_eq!(
+            gate.nearest_grantor(Some(&mage_40_cleric_20), 60),
+            Some((ClassKind::Mage, 40))
+        );
+
+        // A character holding neither grantor, or none at all, has no answer.
+        assert!(
+            gate.nearest_grantor(Some(&CharacterClass::single(ClassKind::Warrior)), 60)
+                .is_none()
+        );
+        assert!(gate.nearest_grantor(None, 60).is_none());
+
+        // The requirement the UI prints alongside it.
+        assert_eq!(
+            gate.required_class_level(),
+            6 * u16::from(spell_level),
+            "six class levels per spell level"
         );
     }
 
     #[test]
-    fn a_spell_shared_by_both_classes_appears_once_under_the_primary() {
-        let body = human_body();
-        let mut multi = CharacterClass::single(ClassKind::Mage);
-        multi.secondary = Some(ClassKind::Cleric);
-        let pool = AbilityPool::for_character(&body, &multi);
+    fn a_cantrips_requirement_is_class_level_one_not_zero() {
+        // Class levels start at 1, so a cantrip's requirement must not read 0.
+        assert_eq!(SpellGate::new(ClassKind::Mage, 0).required_class_level(), 1);
+    }
 
-        let mut seen = std::collections::HashSet::new();
-        for key in &pool.abilities {
-            assert!(seen.insert(key.clone()), "duplicate pool key: {key}");
-        }
+    #[test]
+    fn add_class_is_idempotent_and_capped_at_two() {
+        let mut gate = SpellGate::new(ClassKind::Mage, 3);
+        gate.add_class(ClassKind::Mage);
+        assert_eq!(gate.classes().collect::<Vec<_>>(), vec![ClassKind::Mage]);
 
-        // A spell listed for both held classes must carry the PRIMARY's gate.
-        let book = SpellCompendium::load_expect_cloned();
-        let shared_def = book
-            .iter()
-            .find(|s| {
-                s.classes.contains(&ClassKind::Mage) && s.classes.contains(&ClassKind::Cleric)
-            })
-            .expect("the compendium has a spell listed for both Cleric and Mage");
-        let (_, gate) = pool
-            .abilities
-            .iter()
-            .zip(&pool.spell_gates)
-            .find(|(k, _)| k.as_str() == shared_def.id)
-            .expect("shared spell in pool");
-        assert_eq!(gate.unwrap().class, ClassKind::Mage, "primary grants it");
+        gate.add_class(ClassKind::Cleric);
+        assert_eq!(gate.classes().collect::<Vec<_>>(), vec![
+            ClassKind::Mage,
+            ClassKind::Cleric
+        ]);
+        assert!(gate.granted_by(ClassKind::Cleric));
+        assert!(!gate.granted_by(ClassKind::Warlock));
+
+        // `CharacterClass` holds at most two classes, so a third can never
+        // arrive from a real pool; if one ever did it must not corrupt the
+        // gate.
+        gate.add_class(ClassKind::Warlock);
+        assert_eq!(gate.classes().collect::<Vec<_>>(), vec![
+            ClassKind::Mage,
+            ClassKind::Cleric
+        ]);
     }
 
     #[test]
     fn cantrips_unlock_at_class_level_one_and_level_one_spells_at_six() {
-        let cantrip = SpellGate {
-            class: ClassKind::Mage,
-            spell_level: 0,
-        };
-        let lvl1 = SpellGate {
-            class: ClassKind::Mage,
-            spell_level: 1,
-        };
+        let cantrip = SpellGate::new(ClassKind::Mage, 0);
+        let lvl1 = SpellGate::new(ClassKind::Mage, 1);
         let cc = CharacterClass::single(ClassKind::Mage);
 
         assert!(cantrip.is_unlocked(Some(&cc), 1));
@@ -5157,14 +5511,8 @@ mod spell_gate_tests {
         cc.secondary = Some(ClassKind::Warlock);
         cc.set_secondary_level(20, 60);
 
-        let lvl3 = SpellGate {
-            class: ClassKind::Warlock,
-            spell_level: 3,
-        };
-        let lvl4 = SpellGate {
-            class: ClassKind::Warlock,
-            spell_level: 4,
-        };
+        let lvl3 = SpellGate::new(ClassKind::Warlock, 3);
+        let lvl4 = SpellGate::new(ClassKind::Warlock, 4);
         // Warlock class level 20 -> floor(20/6) = 3.
         assert!(lvl3.is_unlocked(Some(&cc), 60));
         assert!(
@@ -5176,10 +5524,7 @@ mod spell_gate_tests {
     #[test]
     fn a_gate_for_a_class_the_character_does_not_hold_fails_closed() {
         let cc = CharacterClass::single(ClassKind::Mage);
-        let cleric_cantrip = SpellGate {
-            class: ClassKind::Cleric,
-            spell_level: 0,
-        };
+        let cleric_cantrip = SpellGate::new(ClassKind::Cleric, 0);
         assert!(!cleric_cantrip.is_unlocked(Some(&cc), 60));
         assert!(
             !cleric_cantrip.is_unlocked(None, 60),
@@ -5268,5 +5613,185 @@ mod spell_gate_tests {
 
         // No pool, no spells.
         assert!(ActiveAbilities::all_available_spells(None, Some(&cc), 60).is_empty());
+    }
+
+    /// Bind pool `index` to auxiliary slot 0 and try to activate it at
+    /// `character_level`; `true` when the activation produced an ability.
+    fn activates(
+        body: &Body,
+        pool: &AbilityPool,
+        character_class: Option<&CharacterClass>,
+        index: usize,
+        character_level: u16,
+        ability_map: &AbilityMap,
+    ) -> bool {
+        bound_to_pool_index(index)
+            .activate_ability(
+                AbilityInput::Auxiliary(0),
+                None,
+                None,
+                &skill_set_at_level(character_level),
+                Some(body),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(pool),
+                character_class,
+                ability_map,
+            )
+            .is_some()
+    }
+
+    #[test]
+    fn activate_ability_refuses_a_locked_spell_and_allows_an_unlocked_one() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc);
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let index = spell_index_of_level(&pool, 1);
+
+        assert!(
+            !activates(&body, &pool, Some(&cc), index, 1, &ability_map),
+            "a class-level-1 Mage must not cast a level-1 spell"
+        );
+        assert!(
+            activates(&body, &pool, Some(&cc), index, 6, &ability_map),
+            "the same character at class level 6 must cast it"
+        );
+    }
+
+    #[test]
+    fn a_cantrip_activates_at_class_level_one() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc);
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let index = spell_index_of_level(&pool, 0);
+
+        assert!(activates(&body, &pool, Some(&cc), index, 1, &ability_map));
+    }
+
+    #[test]
+    fn a_spell_of_a_class_the_character_does_not_hold_never_activates() {
+        // A Mage carrying a Cleric-gated key (only reachable by hand-crafting
+        // the pool) must be refused at every level: the gate fails closed.
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let mut pool = AbilityPool::for_character(&body, &cc);
+        let index = spell_index_of_level(&pool, 0);
+        pool.spell_gates[index] = Some(SpellGate::new(ClassKind::Cleric, 0));
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+
+        assert!(!activates(&body, &pool, Some(&cc), index, 60, &ability_map));
+    }
+
+    #[test]
+    fn npc_innate_activation_is_unaffected_by_the_gate() {
+        // An NPC pool (`for_body`) carries no gates and no `CharacterClass`,
+        // so its racial innate activates exactly as it did before the gate
+        // existed.
+        let body = human_body();
+        let pool = AbilityPool::for_body(&body);
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        assert_eq!(pool.abilities, vec!["innate.human"]);
+
+        assert!(
+            activates(&body, &pool, None, 0, 1, &ability_map),
+            "a gate-free pool entry stays castable with no CharacterClass"
+        );
+    }
+
+    #[test]
+    fn may_bind_rejects_a_locked_spell_and_accepts_an_unlocked_one() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc);
+        let locked = spell_index_of_level(&pool, 1);
+        let cantrip = spell_index_of_level(&pool, 0);
+
+        assert!(!may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(locked)
+        ));
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            6,
+            AuxiliaryAbility::Innate(locked)
+        ));
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(cantrip)
+        ));
+    }
+
+    #[test]
+    fn may_bind_accepts_non_spell_abilities_unconditionally() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc);
+
+        // A class-signature key: an `Innate` index carrying no gate.
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(0)
+        ));
+        // Weapon / glider / empty bindings are outside this predicate's remit
+        // and keep their (unvalidated) behaviour, pool or no pool.
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::MainWeapon(99)
+        ));
+        assert!(may_bind_ability(None, None, 1, AuxiliaryAbility::Empty));
+        assert!(may_bind_ability(None, None, 1, AuxiliaryAbility::Glider(0)));
+    }
+
+    #[test]
+    fn may_bind_refuses_an_innate_binding_when_the_entity_has_no_pool() {
+        // An entity with no `AbilityPool` has no innate abilities to bind, so
+        // every `Innate(_)` write from such a client is dropped.
+        let cc = CharacterClass::single(ClassKind::Mage);
+        assert!(!may_bind_ability(
+            None,
+            Some(&cc),
+            60,
+            AuxiliaryAbility::Innate(0)
+        ));
+        assert!(!may_bind_ability(
+            None,
+            None,
+            60,
+            AuxiliaryAbility::Innate(0)
+        ));
+    }
+
+    #[test]
+    fn may_bind_refuses_an_out_of_range_innate_index_only_when_gated() {
+        // Out-of-range indices answer `true` (they resolve to nothing at use
+        // time, exactly as before this change) — the predicate narrows the
+        // hole for spells, it does not become a general bounds check.
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc);
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(9_999)
+        ));
     }
 }

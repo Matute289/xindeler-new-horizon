@@ -1,7 +1,7 @@
 use crate::{
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, Alignment, AttunedItems, Beam, Body,
-        Buffs, CharacterActivity, CharacterState, Combo, ControlAction, Controller,
+        Buffs, CharacterActivity, CharacterClass, CharacterState, Combo, ControlAction, Controller,
         ControllerInputs, Density, Energy, Health, Immovable, InputAttr, InputKind, Inventory,
         InventoryAction, Mass, Melee, Ori, PhysicsState, PickupItem, Pos, PreviousPhysCache, Scale,
         SkillSet, Stance, StateUpdate, Stats, Vel,
@@ -174,6 +174,10 @@ pub struct JoinData<'a> {
     pub active_abilities: Option<&'a ActiveAbilities>,
     pub ability_cooldowns: Option<&'a AbilityCooldowns>,
     pub ability_pool: Option<&'a AbilityPool>,
+    /// Xindeler: the character's class(es), so the spell-level gate can read
+    /// each held class's OWN level (`AbilityPool::is_unlocked`). `None` for
+    /// NPCs, which have no `CharacterClass` and no spell keys in their pool.
+    pub character_class: Option<&'a CharacterClass>,
     pub ability_map: &'a AbilityMap,
     pub msm: &'a MaterialStatManifest,
     pub combo: Option<&'a Combo>,
@@ -226,6 +230,8 @@ pub struct JoinStruct<'a> {
     pub active_abilities: Option<&'a ActiveAbilities>,
     pub ability_cooldowns: Option<&'a AbilityCooldowns>,
     pub ability_pool: Option<&'a AbilityPool>,
+    /// Xindeler: see [`JoinData::character_class`].
+    pub character_class: Option<&'a CharacterClass>,
     pub combo: Option<&'a Combo>,
     pub alignment: Option<&'a comp::Alignment>,
     pub terrain: &'a TerrainGrid,
@@ -288,6 +294,7 @@ impl<'a> JoinData<'a> {
             active_abilities: j.active_abilities,
             ability_cooldowns: j.ability_cooldowns,
             ability_pool: j.ability_pool,
+            character_class: j.character_class,
             mount_data: j.mount_data,
             volume_mount_data: j.volume_mount_data,
             stance: j.stance,
