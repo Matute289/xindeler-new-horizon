@@ -28,4 +28,5 @@ BasicRanged(
         buildup: Some(0.3),
         recover: Some(0.3),
     ),
+    meta: (source: Some(Arcane)),
 )

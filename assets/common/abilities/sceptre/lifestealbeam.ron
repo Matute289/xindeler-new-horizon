@@ -11,5 +11,6 @@ BasicBeam(
     energy_drain: 0,
     move_efficiency: 0.4,
     ori_rate: 0.4,
-    specifier: LifestealBeam
+    specifier: LifestealBeam,
+    meta: (source: Some(Primordial)),
 )

@@ -38,4 +38,5 @@ RapidRanged(
     )),
     projectile_speed: 60.0,
     specifier: Some(PyroclasmCharge(height: 3.5, radius: 1.5)),
+    meta: (source: Some(Arcane)),
 )

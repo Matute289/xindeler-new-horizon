@@ -15,4 +15,5 @@ BasicAura(
     energy_cost: 35.0,
     scales_with_combo: false,
     specifier: Some(WardingAura),
+    meta: (source: Some(Divine)),
 )
