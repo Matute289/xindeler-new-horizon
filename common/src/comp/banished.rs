@@ -37,7 +37,7 @@ pub struct Banished {
     ///
     /// Wall clock, not `Time` or `TimeOfDay`, on purpose: the design calls
     /// for a 1–7 day *real time* absence; `Time` is reset to `Time(0.0)` on
-    /// every server start (`common/state/src/state.rs:398`) and is never
+    /// every server start (`common/state/src/state.rs:400`) and is never
     /// restored from any save, and `TimeOfDay` advances at
     /// `day_cycle_coefficient ×` real time
     /// (`common/state/src/state.rs:881-883`). Only a wall-clock instant means

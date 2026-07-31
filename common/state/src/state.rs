@@ -307,7 +307,6 @@ impl State {
         ecs.register::<comp::Energy>();
         ecs.register::<comp::Combo>();
         ecs.register::<comp::Health>();
-        ecs.register::<comp::Banished>();
         ecs.register::<comp::Poise>();
         ecs.register::<comp::CanBuild>();
         ecs.register::<comp::LightEmitter>();
@@ -391,6 +390,8 @@ impl State {
         ecs.register::<comp::SpectatingEntity>();
         ecs.register::<comp::RemoteSense>();
         ecs.register::<comp::ConcealedUnlessTrueSight>();
+        // Deliberately not net-synced — see `comp::Banished`'s doc comment.
+        ecs.register::<comp::Banished>();
 
         // Register synced resources used by the ECS.
         ecs.insert(TimeOfDay(0.0));
