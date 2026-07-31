@@ -538,11 +538,15 @@ mod tests {
                 .into_inner();
         let CharacterAbility::BasicAura {
             tiered_health_effects,
+            meta,
             ..
         } = &ability
         else {
             panic!("power_word_divine_word is not a BasicAura");
         };
+        // Shares Power Word Pain's 60s cooldown and min_level 42 unlock.
+        assert_eq!(meta.requirements.min_level, Some(42));
+        assert_eq!(meta.cooldown, Some(60.0));
         let effect = tiered_health_effects
             .first()
             .expect("no tiered health effect authored");

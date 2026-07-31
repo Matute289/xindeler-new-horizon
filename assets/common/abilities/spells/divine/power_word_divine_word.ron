@@ -80,6 +80,7 @@ BasicAura(
     meta: (
         school: Some(Enchantment),
         source: Some(Divine),
+        cooldown: Some(60.0),
         requirements: (min_level: Some(42)),
     ),
 )

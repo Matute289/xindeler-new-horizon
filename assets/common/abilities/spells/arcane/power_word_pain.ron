@@ -36,6 +36,7 @@ BasicRanged(
     meta: (
         school: Some(Enchantment),
         source: Some(Arcane),
+        cooldown: Some(60.0),
         requirements: (min_level: Some(42)),
     ),
 )

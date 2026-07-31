@@ -3343,21 +3343,21 @@ mod power_word_kill_threshold_tests {
     #[test]
     fn caster_level_roll_clamps_below_unlock_and_interpolates_to_max_level() {
         let curve = CasterLevelFailChance {
-            unlock_level: 50,
+            unlock_level: 54,
             fail_chance_at_unlock: 0.25,
             fail_chance_at_max_level: 0.05,
             source_classes: vec![],
         };
         assert_eq!(curve.fail_chance(1), 0.25);
-        assert_eq!(curve.fail_chance(50), 0.25);
+        assert_eq!(curve.fail_chance(54), 0.25);
         assert!((curve.fail_chance(60) - 0.05).abs() < 0.001);
-        // Halfway from L50 to L60 (L55) should be halfway from 25% to 5%.
-        assert!((curve.fail_chance(55) - 0.15).abs() < 0.001);
+        // Halfway from L54 to L60 (L57) should be halfway from 25% to 5%.
+        assert!((curve.fail_chance(57) - 0.15).abs() < 0.001);
     }
 
     fn power_word_kill_curve() -> CasterLevelFailChance {
         CasterLevelFailChance {
-            unlock_level: 50,
+            unlock_level: 54,
             fail_chance_at_unlock: 0.25,
             fail_chance_at_max_level: 0.05,
             source_classes: vec![
@@ -3439,6 +3439,83 @@ mod power_word_kill_threshold_tests {
             curve.effective_caster_level(Some(60), Some(&character_class)),
             Some(60)
         );
+    }
+}
+
+/// Pins the authored RON content for the three `BasicRanged` Power Words
+/// (Kill/Pain/Stun) -- unlike `power_word_kill_threshold_tests` above (which
+/// exercises `CasterLevelFailChance`'s math in isolation with hand-built
+/// mock values), these tests load the actual shipped assets so a future edit
+/// to the RON that regresses the cooldown, the ability-side `min_level` gate,
+/// or the `CasterLevelRoll.unlock_level` fails here instead of shipping
+/// silently.
+#[cfg(test)]
+mod power_word_ron_content_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::CombatRequirement,
+        comp::ability::CharacterAbility,
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// Digs the `CasterLevelRoll` out of a `BasicRanged` Power Word's nested
+    /// `TargetHealthAtOrBelow` + `CasterLevelRoll` `All(..)` combinator --
+    /// same shape all three of Kill/Pain/Stun share.
+    fn unlock_level_of(ability: &CharacterAbility) -> u16 {
+        let CharacterAbility::BasicRanged { projectile, .. } = ability else {
+            panic!("expected a BasicRanged Power Word");
+        };
+        let attack = projectile
+            .attack
+            .as_ref()
+            .expect("Power Word projectile must carry an attack");
+        let (_effect, requirement) = attack
+            .attack_effect
+            .as_ref()
+            .expect("Power Word attack must carry an attack_effect");
+        let CombatRequirement::All(reqs) = requirement else {
+            panic!("expected an All(..) combinator");
+        };
+        reqs.iter()
+            .find_map(|r| match r {
+                CombatRequirement::CasterLevelRoll(curve) => Some(curve.unlock_level),
+                _ => None,
+            })
+            .expect("no CasterLevelRoll among the All(..) requirements")
+    }
+
+    #[test]
+    fn power_word_kill_unlocks_at_54_with_a_90s_cooldown() {
+        let ability = load("common.abilities.spells.arcane.power_word_kill");
+        let CharacterAbility::BasicRanged { meta, .. } = &ability else {
+            panic!("power_word_kill is not a BasicRanged");
+        };
+        assert_eq!(meta.requirements.min_level, Some(54));
+        assert_eq!(meta.cooldown, Some(90.0));
+        assert_eq!(unlock_level_of(&ability), 54);
+    }
+
+    #[test]
+    fn power_word_pain_has_a_60s_cooldown_and_unlocks_at_42() {
+        let ability = load("common.abilities.spells.arcane.power_word_pain");
+        let CharacterAbility::BasicRanged { meta, .. } = &ability else {
+            panic!("power_word_pain is not a BasicRanged");
+        };
+        assert_eq!(meta.requirements.min_level, Some(42));
+        assert_eq!(meta.cooldown, Some(60.0));
+        assert_eq!(unlock_level_of(&ability), 42);
+    }
+
+    #[test]
+    fn power_word_stun_has_a_75s_cooldown_and_unlocks_at_48() {
+        let ability = load("common.abilities.spells.arcane.power_word_stun");
+        let CharacterAbility::BasicRanged { meta, .. } = &ability else {
+            panic!("power_word_stun is not a BasicRanged");
+        };
+        assert_eq!(meta.requirements.min_level, Some(48));
+        assert_eq!(meta.cooldown, Some(75.0));
+        assert_eq!(unlock_level_of(&ability), 48);
     }
 }
 
