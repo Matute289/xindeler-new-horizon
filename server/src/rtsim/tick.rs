@@ -660,6 +660,11 @@ impl<'a> System<'a> for Sys {
                 && chunk_states.0.get(chunk).is_some_and(|c| c.is_some())
                 // Riding npcs will be spawned by the vehicle.
                 && data.actors.mounts.get_mount_link(actor_id).is_none()
+                // An actor with no `presence` is not in the world at all — it
+                // has been banished, or (for a character) its player logged
+                // off. Spawning it would undo the banishment the instant a
+                // player walked into its chunk.
+                && actor.presence.is_some()
             {
                 actor.mode = SimulationMode::Loaded;
                 // Don't 'spawn in' players, their entities are managed by the server

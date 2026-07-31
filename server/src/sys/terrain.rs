@@ -53,6 +53,50 @@ pub type TerrainPersistenceData<'a> = ();
 
 pub const SAFE_ZONE_RADIUS: f32 = 200.0;
 
+/// The `CreatureKind` a chunk-supplement spawn candidate will actually have
+/// once it exists: the authored `EntityConfig::creature_type` override if
+/// there is one, else the body's own default.
+///
+/// This mirrors `SpawnEntityData::from_entity_info` exactly — it seeds
+/// `comp::Stats::new` from the body and then lets the override win — which is
+/// what makes it comparable to the kind stored on a banishment record.
+fn spawn_creature_kind(entity: &EntityInfo) -> Option<comp::CreatureKind> {
+    entity.creature_kind.or_else(|| entity.body.creature_kind())
+}
+
+/// Consumes one banishment suppression slot if `candidate_kind` matches a
+/// creature currently banished from this chunk, and reports whether the spawn
+/// should therefore be skipped.
+///
+/// 🔴 **Headcount, not identity.** Worldgen cannot be asked to leave out *the
+/// same individual*: `world/src/lib.rs` reseeds its `dynamic_rng` per
+/// generation (`ChaCha8Rng::from_seed(rand::rng().random())`, commented "Only
+/// use for rng affecting dynamic elements like chests and entities!"), so
+/// `apply_wildlife_supplement` rolls a fresh random population on every chunk
+/// load. An earlier revision matched on the exact `comp::Body`; that only
+/// succeeded by coincidence, and never at all for bodies whose randomised
+/// appearance fields are part of the derived `PartialEq`.
+///
+/// The invariant that actually matters is a counting one — while a creature is
+/// away the chunk must carry one fewer of its kind, or its return makes the
+/// world a net +1 — and a count is immune to the non-deterministic roll. The
+/// `CreatureKind` filter is what stops a banished fiend from suppressing an
+/// unrelated deer.
+fn take_suppression(
+    suppressed_kinds: &mut Vec<Option<comp::CreatureKind>>,
+    candidate_kind: Option<comp::CreatureKind>,
+) -> bool {
+    if let Some(i) = suppressed_kinds
+        .iter()
+        .position(|kind| *kind == candidate_kind)
+    {
+        suppressed_kinds.swap_remove(i);
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(feature = "worldgen")]
 type RtSimData<'a> = WriteExpect<'a, rtsim::RtSim>;
 #[cfg(not(feature = "worldgen"))]
@@ -175,6 +219,21 @@ impl<'a> System<'a> for Sys {
             }
 
             // Handle chunk supplement
+            //
+            // A creature that is currently banished from this chunk must not be
+            // regenerated while it is away: it is still owed a return, so a
+            // fresh copy plus the returning original is a net +1 creature of
+            // that kind. One suppressed spawn per banished record — see
+            // `take_suppression` for why this counts heads rather than
+            // matching individuals.
+            #[cfg(feature = "worldgen")]
+            let mut suppressed_kinds: Vec<Option<comp::CreatureKind>> =
+                data.rtsim.with_banishments(|banishments| {
+                    banishments.freestanding_suppressions_in_chunk(key)
+                });
+            #[cfg(not(feature = "worldgen"))]
+            let mut suppressed_kinds: Vec<Option<comp::CreatureKind>> = Vec::new();
+
             for entity_spawn in supplement.entity_spawns {
                 // Check this because it's a common source of weird bugs
                 let check_pos = |pos: Vec3<f32>| {
@@ -191,12 +250,23 @@ impl<'a> System<'a> for Sys {
                     EntitySpawn::Entity(entity) => {
                         check_pos(entity.pos);
 
+                        // Resolved before the `EntityInfo` is consumed below.
+                        let candidate_kind = spawn_creature_kind(&entity);
+
                         let data = SpawnEntityData::from_entity_info(*entity);
                         match data {
                             SpawnEntityData::Special(pos, entity) => {
                                 emitters.emit(CreateSpecialEntityEvent { pos, entity });
                             },
                             SpawnEntityData::Npc(data) => {
+                                // Checked only once this is known to be a real
+                                // creature: a waypoint or teleporter carries a
+                                // random humanoid body and must never eat a
+                                // suppression slot.
+                                if take_suppression(&mut suppressed_kinds, candidate_kind) {
+                                    continue;
+                                }
+
                                 let (npc_builder, pos) = data.to_npc_builder();
 
                                 emitters.emit(CreateNpcEvent {
@@ -214,16 +284,22 @@ impl<'a> System<'a> for Sys {
 
                         let create_npc_events = group
                             .into_iter()
-                            .filter_map(|entity| match SpawnEntityData::from_entity_info(entity) {
-                                SpawnEntityData::Special(..) => None,
-                                SpawnEntityData::Npc(data) => {
-                                    let (npc_builder, pos) = data.to_npc_builder();
-                                    Some(CreateNpcEvent {
-                                        pos,
-                                        ori: comp::Ori::from(Dir::random_2d(&mut rng)),
-                                        npc: npc_builder.with_anchor(comp::Anchor::Chunk(key)),
-                                    })
-                                },
+                            .filter_map(|entity| {
+                                let candidate_kind = spawn_creature_kind(&entity);
+                                match SpawnEntityData::from_entity_info(entity) {
+                                    SpawnEntityData::Special(..) => None,
+                                    SpawnEntityData::Npc(data) => {
+                                        if take_suppression(&mut suppressed_kinds, candidate_kind) {
+                                            return None;
+                                        }
+                                        let (npc_builder, pos) = data.to_npc_builder();
+                                        Some(CreateNpcEvent {
+                                            pos,
+                                            ori: comp::Ori::from(Dir::random_2d(&mut rng)),
+                                            npc: npc_builder.with_anchor(comp::Anchor::Chunk(key)),
+                                        })
+                                    },
+                                }
                             })
                             .collect::<Vec<_>>();
 
@@ -877,5 +953,103 @@ mod creature_kind_override_tests {
             Some(CreatureKind::Fiend),
             "the EntityConfig override must win over the Humanoid body's own default"
         );
+    }
+
+    /// `spawn_creature_kind` is the bridge between a chunk-supplement spawn
+    /// candidate and a banishment record: both sides must resolve the kind
+    /// the same way, or the suppression compares apples to oranges.
+    #[test]
+    fn a_spawn_candidates_kind_resolves_the_override_then_the_body() {
+        let source = r#"
+            #![enable(implicit_some)]
+            (
+                name: Automatic,
+                body: RandomWith("humanoid"),
+                alignment: Alignment(Enemy),
+                creature_type: Fiend,
+                loot: Nothing,
+                inventory: (
+                    loadout: FromBody,
+                ),
+            )
+        "#;
+        let config: EntityConfig = ron::from_str(source).expect("test config must deserialize");
+        let overridden =
+            EntityInfo::at(Vec3::zero()).with_entity_config(config, None, &mut rand::rng(), None);
+        assert_eq!(spawn_creature_kind(&overridden), Some(CreatureKind::Fiend));
+
+        let plain = EntityInfo::at(Vec3::zero()).with_body(Body::Humanoid(
+            common::comp::humanoid::Body::random_with(
+                &mut rand::rng(),
+                &common::comp::humanoid::Species::Human,
+            ),
+        ));
+        assert_eq!(
+            spawn_creature_kind(&plain),
+            Some(CreatureKind::Humanoid),
+            "with no override the body's own kind is used"
+        );
+    }
+}
+
+#[cfg(test)]
+mod banishment_suppression_tests {
+    use super::*;
+    use common::comp::CreatureKind;
+
+    /// The suppression is a **headcount**: two banished creatures of the same
+    /// kind must swallow two spawns, and the third candidate of that kind must
+    /// get through. A set-like implementation would let the second one spawn.
+    #[test]
+    fn suppression_is_consumed_once_per_banished_creature() {
+        let mut suppressed = vec![Some(CreatureKind::Celestial), Some(CreatureKind::Celestial)];
+
+        assert!(take_suppression(
+            &mut suppressed,
+            Some(CreatureKind::Celestial)
+        ));
+        assert!(take_suppression(
+            &mut suppressed,
+            Some(CreatureKind::Celestial)
+        ));
+        assert!(
+            !take_suppression(&mut suppressed, Some(CreatureKind::Celestial)),
+            "only two were banished, so only two spawns may be swallowed"
+        );
+        assert!(suppressed.is_empty());
+    }
+
+    /// A banished creature must not suppress an unrelated species — the whole
+    /// point of filtering by kind rather than blindly subtracting a headcount
+    /// from the chunk.
+    #[test]
+    fn suppression_never_swallows_a_different_creature_kind() {
+        let mut suppressed = vec![Some(CreatureKind::Fiend)];
+
+        assert!(!take_suppression(
+            &mut suppressed,
+            Some(CreatureKind::Beast)
+        ));
+        assert!(!take_suppression(&mut suppressed, None));
+        assert_eq!(
+            suppressed.len(),
+            1,
+            "a non-matching candidate must not consume the slot"
+        );
+
+        assert!(take_suppression(&mut suppressed, Some(CreatureKind::Fiend)));
+        assert!(suppressed.is_empty());
+    }
+
+    /// A chunk with nothing banished from it must never skip a spawn. This is
+    /// the common case — the early-out that keeps the feature invisible.
+    #[test]
+    fn an_unbanished_chunk_suppresses_nothing() {
+        let mut suppressed: Vec<Option<CreatureKind>> = Vec::new();
+        assert!(!take_suppression(
+            &mut suppressed,
+            Some(CreatureKind::Celestial)
+        ));
+        assert!(!take_suppression(&mut suppressed, None));
     }
 }
