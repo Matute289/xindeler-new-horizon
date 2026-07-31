@@ -603,10 +603,11 @@ mod tests {
         world
     }
 
-    /// The tier ladder and banishment block Divine Word's tier 4 actually
-    /// ships (`assets/common/abilities/spells/divine/power_word_divine_word.
-    /// ron`): the lethal tier goes first per `HealthTier`'s first-match doc
-    /// comment.
+    /// A synthetic tier-4 fixture shaped like the lethal
+    /// `AdditionalDamage` tier Divine Word's RON is expected to eventually
+    /// carry -- not (yet) the shipped asset, which currently authors only
+    /// its first 3 tiers and no `banishment` block. The lethal tier goes
+    /// first per `HealthTier`'s first-match doc comment.
     fn divine_word_tiers() -> Vec<combat::HealthTier> {
         vec![combat::HealthTier {
             max_current_health: 35.0,
@@ -628,11 +629,9 @@ mod tests {
         }
     }
 
-    /// The exact scenario that motivated N38B21-E2: a banishable creature
-    /// kind landing in the tier-4 threshold must be resolved *exclusively*
-    /// via banishment (spec §3, corrected 2026-07-31) -- never also (or
-    /// instead) via the tier ladder's instant-death `AdditionalDamage`. PR
-    /// #62 shipped the "both apply" behavior; this pins the fix.
+    /// A banishable creature kind landing in the tier-4 threshold must be
+    /// resolved *exclusively* via banishment -- never also (or instead) via
+    /// the tier ladder's instant-death `AdditionalDamage`.
     #[test]
     fn a_banishable_creature_kind_at_lethal_health_is_banished_not_killed() {
         let mut world = setup_world();
