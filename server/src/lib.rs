@@ -7,6 +7,7 @@
 #![feature(box_patterns, option_zip, const_type_name, slice_partition_dedup)]
 
 pub mod automod;
+pub mod banishment;
 mod character_creator;
 pub mod chat;
 pub mod chunk_generator;

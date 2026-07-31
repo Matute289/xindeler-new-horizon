@@ -31,6 +31,7 @@ use self::{
     trade::handle_process_trade_action,
 };
 
+mod banishment;
 mod entity_creation;
 mod entity_manipulation;
 mod event_types;
