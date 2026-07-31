@@ -163,9 +163,10 @@ pub fn banish_entity(
 ///   immediately instead of spending a tick parked.
 ///
 /// There is no "unbanished and re-banished in the same tick" case to worry
-/// about: the only writer of `Banished` is `BanishEvent`'s handler, which runs
-/// inside `handle_events` (i.e. strictly before this pass) and skips any
-/// entity that already carries the component. An entity this pass returns is
+/// about: the only writers of `Banished` are `BanishEvent`'s handler and the
+/// admin-only `banish_entity` (`/banish`, N38B21-J) — both run inside
+/// `handle_events` (i.e. strictly before this pass) and both skip any entity
+/// that already carries the component. An entity this pass returns is
 /// therefore banishable again at the earliest on the *next* tick, and gets a
 /// brand-new record and id when it is.
 pub fn maintain(server: &mut Server) {
