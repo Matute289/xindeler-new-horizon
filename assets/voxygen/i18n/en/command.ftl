@@ -28,6 +28,7 @@ command-buff-desc = Cast a buff on player
 command-build-desc = Toggles build mode on and off
 command-ban-desc = Ban a player with a given username, for a given duration (if provided). Pass true for overwrite to alter an existing ban.
 command-ban-ip-desc = Ban a player with a given username, for a given duration (if provided). Unlike the normal ban this also additionally bans the IP-address associated with this user. Pass true for overwrite to alter an existing ban.
+command-banish-desc = (Admin) Temporarily banish the target for N seconds (testing seam for the real 1-7 day banishment)
 command-set_class-desc = One-time class pick for legacy characters: warrior, mage, cleric or rogue
 command-set_class_level-desc = (Admin) Set a multiclass character's primary or secondary class level, for testing
 command-set_level-desc = (Admin) Set the target's character level (1-60) for testing, no grinding

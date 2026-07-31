@@ -411,6 +411,7 @@ pub enum ServerChatCommand {
     Ban,
     BanIp,
     BanLog,
+    Banish,
     BattleMode,
     BattleModeForce,
     Body,
@@ -594,6 +595,11 @@ impl ServerChatCommand {
                 vec![PlayerName(Required), Integer("max entries", 10, Optional)],
                 Content::localized("command-ban-ip-desc"),
                 Some(Moderator),
+            ),
+            ServerChatCommand::Banish => cmd(
+                vec![Integer("secs", 60, Optional)],
+                Content::localized("command-banish-desc"),
+                Some(Admin),
             ),
             #[rustfmt::skip]
             ServerChatCommand::BattleMode => cmd(
@@ -1351,6 +1357,7 @@ impl ServerChatCommand {
             ServerChatCommand::Ban => "ban",
             ServerChatCommand::BanIp => "ban_ip",
             ServerChatCommand::BanLog => "ban_log",
+            ServerChatCommand::Banish => "banish",
             ServerChatCommand::BattleMode => "battlemode",
             ServerChatCommand::BattleModeForce => "battlemode_force",
             ServerChatCommand::Body => "body",

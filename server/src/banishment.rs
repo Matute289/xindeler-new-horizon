@@ -40,6 +40,7 @@ use common::{
     comp::{Ori, inventory::loadout_builder::LoadoutBuilder},
     event::CreateNpcEvent,
     generation::EntityInfo,
+    terrain::CoordinateConversions,
 };
 #[cfg(feature = "worldgen")]
 use rtsim::data::{BanishedCreature, BanishedKind};
@@ -55,6 +56,89 @@ pub fn now_unix_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Deadline for an admin-forced banishment: a plain offset in seconds, so
+/// `/banish 10` is testable by hand. Kept here rather than in `cmd.rs` so the
+/// clock arithmetic has exactly one home.
+pub fn admin_return_deadline(now_unix_secs: u64, secs: u64) -> u64 {
+    now_unix_secs.saturating_add(secs)
+}
+
+/// Banishes `entity` for `secs` seconds, recording it durably. Returns the new
+/// record's id, or `None` if the entity has no position/body or is already
+/// banished. Shared by the `/banish` admin command and available to any future
+/// caller that wants a banishment without an ability behind it.
+///
+/// Deliberately reuses the exact rtsim-vs-plain-mob fork and `Owned` →
+/// `Tame` alignment normalisation the spell path
+/// (`server/src/events/banishment.rs`) uses, so `/banish` exercises the real
+/// code paths rather than a simplified one. Unlike the spell path there is no
+/// saving throw: an admin-forced banishment always succeeds.
+#[cfg(feature = "worldgen")]
+pub fn banish_entity(
+    server: &mut Server,
+    entity: EcsEntity,
+    secs: u64,
+) -> Option<comp::BanishmentId> {
+    let ecs = server.state.ecs();
+    if ecs.read_storage::<Banished>().contains(entity) {
+        return None;
+    }
+    let pos = ecs.read_storage::<Pos>().get(entity)?.0;
+    let body = *ecs.read_storage::<comp::Body>().get(entity)?;
+    let alignment = match ecs.read_storage::<comp::Alignment>().get(entity).copied() {
+        Some(comp::Alignment::Owned(_)) => comp::Alignment::Tame,
+        Some(alignment) => alignment,
+        None => comp::Alignment::Wild,
+    };
+    let creature_kind = ecs
+        .read_storage::<comp::Stats>()
+        .get(entity)
+        .and_then(|stats| stats.creature_kind);
+    let scale = ecs
+        .read_storage::<comp::Scale>()
+        .get(entity)
+        .map_or(1.0, |s| s.0);
+    let returns_at_unix_secs = admin_return_deadline(now_unix_secs(), secs);
+
+    // Same rtsim-vs-plain-mob fork as the spell path (N38B21-F), so `/banish`
+    // exercises the real code paths rather than a simplified one.
+    let kind = match ecs
+        .read_storage::<common::rtsim::ActorId>()
+        .get(entity)
+        .copied()
+    {
+        Some(actor) => BanishedKind::RtsimActor(actor),
+        None => BanishedKind::Freestanding {
+            body,
+            alignment,
+            creature_kind,
+            scale,
+        },
+    };
+
+    let id = ecs
+        .read_resource::<RtSim>()
+        .with_banishments(|banishments| {
+            banishments.insert(BanishedCreature {
+                kind,
+                return_pos: pos,
+                return_chunk: pos.xy().as_::<i32>().wpos_to_cpos(),
+                returns_at_unix_secs,
+            })
+        });
+
+    let _ = server
+        .state
+        .ecs_mut()
+        .write_storage::<Banished>()
+        .insert(entity, Banished {
+            id,
+            return_pos: pos,
+            returns_at_unix_secs,
+        });
+    Some(id)
 }
 
 /// One tick of banishment upkeep.
@@ -79,9 +163,10 @@ pub fn now_unix_secs() -> u64 {
 ///   immediately instead of spending a tick parked.
 ///
 /// There is no "unbanished and re-banished in the same tick" case to worry
-/// about: the only writer of `Banished` is `BanishEvent`'s handler, which runs
-/// inside `handle_events` (i.e. strictly before this pass) and skips any
-/// entity that already carries the component. An entity this pass returns is
+/// about: the only writers of `Banished` are `BanishEvent`'s handler and the
+/// admin-only `banish_entity` (`/banish`, N38B21-J) — both run inside
+/// `handle_events` (i.e. strictly before this pass) and both skip any entity
+/// that already carries the component. An entity this pass returns is
 /// therefore banishable again at the earliest on the *next* tick, and gets a
 /// brand-new record and id when it is.
 pub fn maintain(server: &mut Server) {
@@ -630,6 +715,16 @@ mod tests {
         let a = now_unix_secs();
         let b = now_unix_secs();
         assert!(b >= a);
+    }
+
+    /// `/banish <secs>` has to be able to produce a deadline seconds away, not
+    /// only the authored 24–168 hour window, or the feature cannot be smoke
+    /// tested by hand at all.
+    #[test]
+    fn an_admin_deadline_can_be_seconds_away() {
+        let now = now_unix_secs();
+        assert_eq!(admin_return_deadline(now, 10), now + 10);
+        assert_eq!(admin_return_deadline(now, 0), now);
     }
 }
 

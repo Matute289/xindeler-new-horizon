@@ -524,6 +524,20 @@ fn apply_tiered_health_effect(
     else {
         return;
     };
+
+    // A tier's optional `requirement` (currently only ever a
+    // `CasterLevelRoll`, e.g. `power_word_divine_word`'s instant-death tier)
+    // is a pass/fail gate on the *entire* tier, resolved with the same
+    // roll `power_word_kill`/`pain`/`stun` already use. A failed roll is not
+    // "fall through to the next tier" -- it is "no tier effect at all this
+    // cast", matching those spells' own all-or-nothing result.
+    if !tier.requirement_met(
+        read_data.stats.get(applier).map(|s| s.character_level),
+        read_data.character_classes.get(applier),
+    ) {
+        return;
+    }
+
     match &tier.effect {
         TierEffect::Buff(b) => {
             if rand::random::<f32>() < b.chance {
@@ -612,6 +626,7 @@ mod tests {
         vec![combat::HealthTier {
             max_current_health: 35.0,
             effect: TierEffect::AdditionalDamage(2000.0),
+            requirement: None,
         }]
     }
 
@@ -756,6 +771,118 @@ mod tests {
             health_change_events.len(),
             1,
             "a non-banishable creature kind must still resolve the tier ladder"
+        );
+        assert_eq!(health_change_events[0].change.amount, -2000.0);
+    }
+
+    /// Tier 4's instant death is gated by a `CasterLevelRoll`, the same
+    /// all-or-nothing margin `power_word_kill`/`pain`/`stun` already give
+    /// their own permanent results -- unlike the target-side saving throw
+    /// the banishment path resolves server-side, this is a *caster*-side
+    /// check, resolved right here in the aura tick. A failed roll must not
+    /// merely weaken the effect or fall through to a lower tier -- it must
+    /// produce no tier effect at all this cast.
+    #[test]
+    fn divine_word_tier4_death_is_gated_by_caster_level_roll() {
+        use common::comp::class::ClassKind;
+
+        let mut world = setup_world();
+
+        let applier_uid = uid(1);
+        let target_uid = uid(2);
+
+        let body = Body::Humanoid(humanoid::Body::random());
+        let mut applier_stats = Stats::new(Content::dummy(), body);
+        applier_stats.character_level = 60;
+        let applier = world
+            .create_entity()
+            .with(applier_uid)
+            .with(applier_stats)
+            .with(CharacterClass::single(ClassKind::Cleric))
+            .build();
+
+        let mut target_stats = Stats::new(Content::dummy(), body);
+        target_stats.creature_kind = Some(CreatureKind::Beast);
+        let target = world
+            .create_entity()
+            .with(target_uid)
+            .with(target_stats)
+            .build();
+
+        let mut health = Health::new(body);
+        health.set_amount(35.0);
+
+        let never_passes = vec![combat::HealthTier {
+            max_current_health: 35.0,
+            effect: TierEffect::AdditionalDamage(2000.0),
+            requirement: Some(combat::CombatRequirement::CasterLevelRoll(
+                combat::CasterLevelFailChance {
+                    unlock_level: 42,
+                    fail_chance_at_unlock: 1.0,
+                    fail_chance_at_max_level: 1.0,
+                    source_classes: vec![ClassKind::Cleric],
+                },
+            )),
+        }];
+
+        {
+            let read_data = ReadData::fetch(&world);
+            let mut emitters = read_data.events.get_emitters();
+            apply_tiered_health_effect(
+                &never_passes,
+                None,
+                &health,
+                applier,
+                applier_uid,
+                target,
+                &read_data,
+                &mut emitters,
+            );
+        }
+        assert_eq!(
+            world
+                .read_resource::<EventBus<HealthChangeEvent>>()
+                .recv_all()
+                .count(),
+            0,
+            "a failed CasterLevelRoll must not apply tier 4's AdditionalDamage"
+        );
+
+        let always_passes = vec![combat::HealthTier {
+            max_current_health: 35.0,
+            effect: TierEffect::AdditionalDamage(2000.0),
+            requirement: Some(combat::CombatRequirement::CasterLevelRoll(
+                combat::CasterLevelFailChance {
+                    unlock_level: 42,
+                    fail_chance_at_unlock: 0.0,
+                    fail_chance_at_max_level: 0.0,
+                    source_classes: vec![ClassKind::Cleric],
+                },
+            )),
+        }];
+
+        {
+            let read_data = ReadData::fetch(&world);
+            let mut emitters = read_data.events.get_emitters();
+            apply_tiered_health_effect(
+                &always_passes,
+                None,
+                &health,
+                applier,
+                applier_uid,
+                target,
+                &read_data,
+                &mut emitters,
+            );
+        }
+        let health_change_events: Vec<_> = world
+            .read_resource::<EventBus<HealthChangeEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            health_change_events.len(),
+            1,
+            "a passed CasterLevelRoll must apply tier 4's AdditionalDamage"
         );
         assert_eq!(health_change_events[0].change.amount, -2000.0);
     }

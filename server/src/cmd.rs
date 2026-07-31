@@ -154,6 +154,7 @@ fn do_command(
         ServerChatCommand::Ban => handle_ban,
         ServerChatCommand::BanIp => handle_ban_ip,
         ServerChatCommand::BanLog => handle_ban_log,
+        ServerChatCommand::Banish => handle_banish,
         ServerChatCommand::BattleMode => handle_battlemode,
         ServerChatCommand::BattleModeForce => handle_battlemode_force,
         ServerChatCommand::Body => handle_body,
@@ -6151,6 +6152,57 @@ fn handle_ban_log(
     );
 
     Ok(())
+}
+
+/// `/banish <secs>` — admin-only test seam: banishes `target` (self, or
+/// whoever `/sudo` redirected onto) for `secs` seconds instead of the
+/// authored 24-168 hour window, so the park -> invisible -> return ->
+/// fully-reset cycle can be walked in under a minute. Server-authoritative:
+/// gated by `needs_role: Admin` AND re-checked here via `real_role(..) ==
+/// Admin` so players can never invoke it (same pattern as `/set_level`).
+fn handle_banish(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain("Only admins may use /banish.".to_string()));
+    }
+
+    let secs = parse_cmd_args!(args, u64).unwrap_or(60);
+    let _ = action;
+
+    #[cfg(feature = "worldgen")]
+    {
+        match crate::banishment::banish_entity(server, target, secs) {
+            Some(id) => {
+                server.notify_client(
+                    client,
+                    ServerGeneral::server_msg(
+                        ChatType::CommandInfo,
+                        Content::Plain(format!(
+                            "Banished target (record {id}); it returns in {secs}s."
+                        )),
+                    ),
+                );
+                Ok(())
+            },
+            None => Err(Content::Plain(
+                "Target cannot be banished (already banished, or has no position/body)."
+                    .to_string(),
+            )),
+        }
+    }
+    #[cfg(not(feature = "worldgen"))]
+    {
+        let _ = (server, client, target, secs);
+        Err(Content::Plain(
+            "Banishment requires the `worldgen` feature.".to_string(),
+        ))
+    }
 }
 
 fn handle_battlemode(
