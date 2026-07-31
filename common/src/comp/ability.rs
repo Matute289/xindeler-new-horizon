@@ -4074,11 +4074,11 @@ bitflags::bitflags! {
     /// never silently read as "can cast everything".
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
     pub struct MagicSourceMask: u8 {
-        const ARCANE     = 0b00001;
-        const DIVINE     = 0b00010;
-        const PRIMORDIAL = 0b00100;
-        const PSIONIC    = 0b01000;
-        const KI         = 0b10000;
+        const ARCANE     = 1 << 0;
+        const DIVINE     = 1 << 1;
+        const PRIMORDIAL = 1 << 2;
+        const PSIONIC    = 1 << 3;
+        const KI         = 1 << 4;
     }
 }
 

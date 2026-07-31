@@ -531,6 +531,14 @@ impl ClassProficiencies {
 /// A class's castable magic sources ("cores", hard gate: casting a
 /// `source`-carrying ability outside this set is refused outright). `All` =
 /// every source.
+///
+/// `Only(vec![])` (an explicitly empty list) is meaningful and DIFFERENT
+/// from the class being absent from the manifest entirely: an empty
+/// `Only` means "this class can never cast any source-bearing ability" (the
+/// correct row for every martial class), while an absent key fails open to
+/// `All` (see [`class_magic_sources`]'s own doc comment). Do not "tidy" an
+/// `Only([])` row into an omitted key — that silently flips a class from
+/// "casts nothing" to "casts everything".
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum ClassMagicSources {
     All,
@@ -1026,9 +1034,25 @@ mod tests {
             class_magic_sources(ClassKind::Monk).mask(),
             MagicSourceMask::KI
         );
+    }
+
+    // Mage is a TEMPORARY stand-in, not a permanent design: it resolves to
+    // the fully-permissive core (all 5 sources) only until the spell
+    // identification/transcription core-unlock system narrows it to
+    // `Only([Arcane])`. This assertion is deliberately pinned so that
+    // narrowing breaks the build and forces a conscious update here rather
+    // than silently drifting — but if you're staring at a failure on this
+    // test, that's the transcription/unlock work landing, not a regression:
+    // update the assertion to `MagicSourceMask::ARCANE` and delete this
+    // comment.
+    #[test]
+    fn mage_is_a_temporary_fully_permissive_stand_in_pending_core_unlock() {
         assert_eq!(
             class_magic_sources(ClassKind::Mage).mask(),
-            MagicSourceMask::all()
+            MagicSourceMask::all(),
+            "Mage's castable-sources mask changed -- if this is the core-unlock system narrowing \
+             it to Only([Arcane]) as intended, update this assertion (and its message) rather \
+             than treating the failure as a bug"
         );
     }
 
@@ -1057,6 +1081,105 @@ mod tests {
         ];
         for source in sources {
             assert!(MagicSourceMask::for_source(source).allows(source));
+        }
+        // Injectivity: `each bit allows itself` (above) passes even if two
+        // variants collided on the same bit. Fold every variant's bit into
+        // one union and check both that nothing is missing (covers all 5
+        // MagicSource variants) and that nothing collided (exactly 5
+        // distinct bits set, not fewer).
+        let union = sources.iter().fold(MagicSourceMask::empty(), |mask, &s| {
+            mask | MagicSourceMask::for_source(s)
+        });
+        assert_eq!(union, MagicSourceMask::all());
+        assert_eq!(union.bits().count_ones(), 5);
+    }
+
+    #[test]
+    fn tool_kind_mask_for_tool_is_injective_across_kinds() {
+        // Every ToolKind, hand-written (not derived from an iterator over
+        // the enum) so a new variant added without extending this array is
+        // caught here instead of silently passing. Fixed at grip
+        // `Hands::Two` throughout -- for every kind other than `Sword` the
+        // grip is ignored and a single bit comes back; for `Sword` this
+        // grip yields only `SWORD_2H`, never `SWORD_1H`.
+        let kinds = [
+            ToolKind::Sword,
+            ToolKind::Axe,
+            ToolKind::Hammer,
+            ToolKind::Bow,
+            ToolKind::Staff,
+            ToolKind::Sceptre,
+            ToolKind::Tome,
+            ToolKind::HolySymbol,
+            ToolKind::Focus,
+            ToolKind::Dagger,
+            ToolKind::Shield,
+            ToolKind::Spear,
+            ToolKind::Blowgun,
+            ToolKind::Debug,
+            ToolKind::Farming,
+            ToolKind::Pick,
+            ToolKind::Shovel,
+            ToolKind::Instrument,
+            ToolKind::Throwable,
+            ToolKind::Natural,
+            ToolKind::Empty,
+        ];
+        let union = kinds.iter().fold(ToolKindMask::empty(), |mask, &k| {
+            mask | ToolKindMask::for_tool(k, Some(Hands::Two))
+        });
+        // 21 ToolKind variants, one bit each at this fixed grip -- `Sword`
+        // contributes only `SWORD_2H` here (its `SWORD_1H` bit is only
+        // reachable via `Hands::One` or `None`, checked separately below),
+        // so this union can never equal `ToolKindMask::all()` (22 bits): it
+        // is exactly `all()` minus `SWORD_1H`. If any two kinds collided on
+        // the same bit, this count would be lower than 21.
+        assert_eq!(
+            union,
+            ToolKindMask::all().difference(ToolKindMask::SWORD_1H)
+        );
+        assert_eq!(union.bits().count_ones(), 21);
+
+        // The grip split itself: 1h and 2h swords are different bits, and
+        // an unknown grip (`None`) is the union of both.
+        assert_ne!(
+            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::One)),
+            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::Two))
+        );
+        assert_eq!(
+            ToolKindMask::for_tool(ToolKind::Sword, None),
+            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::One))
+                | ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::Two))
+        );
+    }
+
+    // `Handed(kind, _)` is meaningless for any `ToolKind` whose grips
+    // resolve to the same bit -- it parses and loads but silently behaves
+    // exactly like `Any(kind)`, discarding a designer's intended
+    // restriction with no error anywhere. Walk every manifest row and fail
+    // loudly on that shape.
+    #[test]
+    fn class_proficiencies_manifest_never_uses_handed_on_a_kind_without_a_grip_split() {
+        let manifest = class_proficiencies_manifest();
+        for (class, proficiencies) in manifest.0.iter() {
+            let ClassProficiencies::Only(tools) = proficiencies else {
+                continue;
+            };
+            for tool in tools {
+                let ProficientTool::Handed(kind, _) = *tool else {
+                    continue;
+                };
+                let one = ToolKindMask::for_tool(kind, Some(Hands::One));
+                let two = ToolKindMask::for_tool(kind, Some(Hands::Two));
+                assert_ne!(
+                    one, two,
+                    "class_proficiencies.ron: {class:?} uses Handed({kind:?}, _), but {kind:?} \
+                     has no grip split (both hands resolve to the same bit) -- Handed is \
+                     meaningless here and silently behaves like Any({kind:?}). Use Any({kind:?}) \
+                     instead, or give {kind:?} its own grip-split bits like Sword's \
+                     SWORD_1H/SWORD_2H."
+                );
+            }
         }
     }
 

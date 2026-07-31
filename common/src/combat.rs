@@ -3792,6 +3792,10 @@ mod combat_resolution_tests {
         assert!(t.shield_evasion_penalty >= 0.0);
         // P6 crit-damage floor present + meaningful (>1.0).
         assert!(t.crit_damage_mult > 1.0);
+        // Weapon-proficiency penalty: pinned so a typo'd RON key can't
+        // silently fall back to `CombatTuning::default()`'s identical 0.40
+        // and read as a no-op retune.
+        assert!((t.non_proficient_damage_mult - 0.40).abs() < 1e-6);
     }
 
     // BL-52 P6: a full crit deals at least crit_damage_mult× at base gear and
