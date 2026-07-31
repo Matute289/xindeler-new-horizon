@@ -17,4 +17,11 @@ ItemDef(
     quality: Low,
     tags: [],
     ability_spec: None,
+    // Divine-core implement: restricted to the two classes whose magic core
+    // is Divine.
+    requirements: Some((
+        classes: Some([Cleric, Paladin]),
+        min_level: None,
+        races: None,
+    )),
 )

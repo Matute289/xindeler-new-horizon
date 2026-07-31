@@ -138,7 +138,7 @@ pub use self::{
         SkillGroup, SkillGroupKind, SkillSet,
         skills::{self, Skill},
     },
-    spell::{SpellCompendium, SpellDef},
+    spell::{CLASS_LEVELS_PER_SPELL_LEVEL, SpellCompendium, SpellDef, spell_level_unlocked},
     stats::{ActiveSense, Stats, StatsModifier},
     teleport::Teleporting,
     visual::{FrontendMarker, LightAnimation, LightEmitter},

@@ -17,4 +17,5 @@ Shockwave(
     ori_rate: 1.0,
     timing: PostBuildup,
     emit_outcome: true,
+    meta: (source: Some(Arcane)),
 )

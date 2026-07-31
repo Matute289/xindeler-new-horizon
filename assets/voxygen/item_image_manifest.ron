@@ -1368,7 +1368,7 @@
         "voxel.weapon.staff.firestaff_starter",
         (1.0, 0.0, 0.0), (-130., 90.0, 0.0), 1.2,
     ),
-    Simple("common.items.weapons.focus.wanderer_focus"): VoxTrans(
+    Simple("common.items.weapons.focus.primordial_focus"): VoxTrans(
         "voxel.weapon.staff.firestaff_starter",
         (1.0, 0.0, 0.0), (-130., 90.0, 0.0), 1.2,
     ),

@@ -27,4 +27,5 @@ DashMelee(
     auto_charge: true,
     charge_through: true,
     frontend_specifier: Some(FireDash),
+    meta: (source: Some(Arcane)),
 )

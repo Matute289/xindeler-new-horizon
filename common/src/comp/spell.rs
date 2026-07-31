@@ -9,7 +9,26 @@ use crate::{
         class::ClassKind,
     },
 };
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
+
+/// Class levels required per spell level: a class unlocks the next spell level
+/// every this many of its OWN levels.
+pub const CLASS_LEVELS_PER_SPELL_LEVEL: u16 = 6;
+
+/// The highest [`SpellDef::level`] a class of `class_level` has unlocked.
+///
+/// `floor(class_level / 6)`: class level 1-5 -> 0 (cantrips only), 6 -> 1, ...,
+/// 54-59 -> 9, and exactly 60 (`MAX_CHARACTER_LEVEL`) -> 10, which denotes the
+/// *possibility* of the capstone tier rather than an automatic unlock -- no
+/// level-10 spell exists or is castable yet, so nothing consumes that value
+/// today. Deliberately NOT clamped to 9, so that when the capstone tier is
+/// designed the boundary is already where the design put it.
+///
+/// The input is a single class's own level (`CharacterClass::class_levels`),
+/// never the raw character level: a multiclass character's caster side is
+/// capped by how far that class itself has progressed.
+pub fn spell_level_unlocked(class_level: u16) -> u16 { class_level / CLASS_LEVELS_PER_SPELL_LEVEL }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CastTime {
@@ -61,22 +80,71 @@ pub struct SpellDef {
     pub ability: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct SpellCompendium(pub Vec<SpellDef>);
+impl SpellDef {
+    /// The `AbilityPool` / `AbilityMap` key for this spell. The compendium
+    /// `id` is already in `"spells.<school>.<name>"` shape, so it doubles as
+    /// the `AbilitySpec::Custom` key, the frontend ability id, and the i18n
+    /// key stem -- exactly like the `class.*` and `innate.*` keys.
+    pub fn pool_key(&self) -> &str { &self.id }
+}
+
+/// The catalogue of every authored spell, indexed by id.
+///
+/// Fields are private so the `id -> index` map can never drift out of sync
+/// with the `Vec`; read it through [`Self::iter`], [`Self::get`] and
+/// [`Self::spells_for_class`].
+#[derive(Clone, Debug, Default)]
+pub struct SpellCompendium {
+    spells: Vec<SpellDef>,
+    /// `id` -> index into `spells`, built once at asset load.
+    by_id: HashMap<String, usize>,
+}
 
 impl Asset for SpellCompendium {
     fn load(cache: &AssetCache, specifier: &SharedString) -> Result<Self, BoxedError> {
-        let inner = cache
+        let spells = cache
             .load::<Ron<Vec<SpellDef>>>(specifier)?
             .read()
             .0
             .clone();
-        Ok(SpellCompendium(inner))
+        let mut by_id = HashMap::with_capacity(spells.len());
+        for (i, spell) in spells.iter().enumerate() {
+            // A duplicate id would silently make one of the two entries
+            // unreachable through `get`, so refuse to load at all.
+            if by_id.insert(spell.id.clone(), i).is_some() {
+                return Err(format!("duplicate spell id in compendium: {}", spell.id).into());
+            }
+        }
+        Ok(SpellCompendium { spells, by_id })
     }
 }
 
 impl SpellCompendium {
     pub fn load_expect_cloned() -> Self { Self::load_expect("common.spells.compendium").cloned() }
+
+    pub fn iter(&self) -> impl Iterator<Item = &SpellDef> { self.spells.iter() }
+
+    pub fn get(&self, id: &str) -> Option<&SpellDef> {
+        self.by_id.get(id).and_then(|i| self.spells.get(*i))
+    }
+
+    pub fn len(&self) -> usize { self.spells.len() }
+
+    pub fn is_empty(&self) -> bool { self.spells.is_empty() }
+
+    /// Every spell `class` can ever cast, in the canonical pool order:
+    /// ascending `(level, id)`. Deterministic and independent of the order
+    /// entries happen to appear in the RON, so re-sorting the asset file
+    /// never changes a character's ability-pool indices.
+    pub fn spells_for_class(&self, class: ClassKind) -> Vec<&SpellDef> {
+        let mut out: Vec<&SpellDef> = self
+            .spells
+            .iter()
+            .filter(|s| s.classes.contains(&class))
+            .collect();
+        out.sort_by(|a, b| (a.level, &a.id).cmp(&(b.level, &b.id)));
+        out
+    }
 }
 
 #[cfg(test)]
@@ -84,11 +152,72 @@ mod tests {
     use super::*;
     use crate::{assets::AssetExt, comp::ability::CharacterAbility};
 
+    /// Every boundary row of the spell-level unlock table.
+    #[test]
+    fn unlock_table_matches_the_spec() {
+        // 1-5: cantrips only.
+        for lvl in 1..=5 {
+            assert_eq!(spell_level_unlocked(lvl), 0, "class level {lvl}");
+        }
+        // 6 is the first level that unlocks spell level 1.
+        assert_eq!(spell_level_unlocked(6), 1);
+        assert_eq!(spell_level_unlocked(11), 1);
+        assert_eq!(spell_level_unlocked(12), 2);
+        assert_eq!(spell_level_unlocked(17), 2);
+        assert_eq!(spell_level_unlocked(18), 3);
+        assert_eq!(spell_level_unlocked(23), 3);
+        assert_eq!(spell_level_unlocked(24), 4);
+        assert_eq!(spell_level_unlocked(30), 5);
+        assert_eq!(spell_level_unlocked(36), 6);
+        assert_eq!(spell_level_unlocked(42), 7);
+        assert_eq!(spell_level_unlocked(48), 8);
+        // 54 is the first level with all nine normal spell levels.
+        assert_eq!(spell_level_unlocked(54), 9);
+        assert_eq!(spell_level_unlocked(59), 9);
+        // 60 = MAX_CHARACTER_LEVEL produces 10: the *possibility* of the
+        // capstone tier, deliberately unclamped.
+        assert_eq!(spell_level_unlocked(60), 10);
+    }
+
+    #[test]
+    fn level_zero_is_defensive_not_a_real_band() {
+        // A class level of 0 should never occur, but must not panic or wrap.
+        assert_eq!(spell_level_unlocked(0), 0);
+    }
+
+    #[test]
+    fn compendium_lookup_by_id_is_exact() {
+        let book = SpellCompendium::load_expect_cloned();
+        assert!(!book.is_empty());
+        for spell in book.iter() {
+            assert_eq!(book.get(&spell.id).map(|s| &s.id), Some(&spell.id));
+            // `pool_key` is the id itself -- the manifest/pool/i18n stem.
+            assert_eq!(spell.pool_key(), spell.id.as_str());
+        }
+        assert!(book.get("spells.nope.not_a_spell").is_none());
+        assert_eq!(book.len(), book.iter().count());
+    }
+
+    #[test]
+    fn spells_for_class_is_sorted_and_filtered() {
+        let book = SpellCompendium::load_expect_cloned();
+        let mage = book.spells_for_class(ClassKind::Mage);
+        assert!(!mage.is_empty(), "the compendium has Mage spells");
+        assert!(mage.iter().all(|s| s.classes.contains(&ClassKind::Mage)));
+        // Canonical order: ascending (level, id).
+        let keys: Vec<_> = mage.iter().map(|s| (s.level, s.id.as_str())).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted, "spells_for_class must be (level, id)-sorted");
+        // A class with no spells authored yet returns empty, not a panic.
+        assert!(book.spells_for_class(ClassKind::Warrior).is_empty());
+    }
+
     #[test]
     fn compendium_loads_and_abilities_resolve() {
         let book = SpellCompendium::load_expect_cloned();
-        assert!(!book.0.is_empty(), "compendium is empty");
-        for spell in &book.0 {
+        assert!(!book.is_empty(), "compendium is empty");
+        for spell in book.iter() {
             Ron::<CharacterAbility>::load_expect(&spell.ability).read();
         }
     }
