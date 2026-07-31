@@ -176,15 +176,6 @@ impl Banishments {
             .collect()
     }
 
-    /// Whether this rtsim actor is currently banished. rtsim's load loop asks
-    /// before spawning, so a banished actor is not re-materialised the moment
-    /// a player walks into its chunk.
-    pub fn is_actor_banished(&self, actor: ActorId) -> bool {
-        self.creatures
-            .values()
-            .any(|creature| matches!(creature.kind, BanishedKind::RtsimActor(id) if id == actor))
-    }
-
     /// `RtsimActor` records whose deadline has arrived. These are the ones the
     /// return pass cannot discover by joining on the `Banished` component,
     /// because parking an rtsim actor deletes its ECS entity outright.
@@ -420,20 +411,6 @@ mod tests {
             banishments.freestanding_suppressions_in_chunk(Vec2::new(1, 1)),
             vec![phoenix_body().creature_kind()]
         );
-    }
-
-    /// Task 4B's other half: rtsim's load loop asks this before spawning.
-    #[test]
-    fn a_banished_rtsim_actor_is_reported_until_its_record_is_removed() {
-        let [actor, other] = actor_ids();
-        let mut banishments = Banishments::default();
-        let id = banishments.insert(rtsim_phoenix(actor, 100));
-
-        assert!(banishments.is_actor_banished(actor));
-        assert!(!banishments.is_actor_banished(other));
-
-        banishments.remove(id);
-        assert!(!banishments.is_actor_banished(actor));
     }
 
     /// The return pass cannot find a banished rtsim actor by joining on

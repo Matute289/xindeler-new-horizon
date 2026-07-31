@@ -2196,11 +2196,25 @@ pub enum CombatRequirement {
     TargetHealthAtOrBelow(HealthThreshold),
     /// Met by a random roll against the caster's own level (see
     /// [`CasterLevelFailChance`]) — no target-side term at all.
-    CasterLevelRoll(CasterLevelFailChance),
+    ///
+    /// Boxed for the same reason `AuraKind::Buff::pool_split` and
+    /// `AuraKind::TieredHealthEffect::banishment` box `PoolSplit` /
+    /// `BanishmentEffect`: `CasterLevelFailChance` carries a
+    /// `Vec<ClassKind>`, which would otherwise make this the largest variant
+    /// and bloat every `CombatRequirement`, most of which never use it.
+    ///
+    /// This alone does not make `CombatRequirement` `Copy` — `All` below
+    /// already rules that out unconditionally (a `Vec` can never be `Copy`,
+    /// regardless of what this variant does), so call sites that need an
+    /// owned `CombatRequirement`/`CustomCombo` still `.clone()` one.
+    CasterLevelRoll(Box<CasterLevelFailChance>),
     /// Met when every inner requirement is met — an AND combinator, for
     /// composing more than one `CombatRequirement` where an ability's RON
     /// shape only has room for a single requirement slot (e.g.
-    /// `attack_effect: Option<(CombatEffect, CombatRequirement)>`).
+    /// `attack_effect: Option<(CombatEffect, CombatRequirement)>`). Shipped
+    /// content (`power_word_kill`/`pain`/`stun`) already composes
+    /// `TargetHealthAtOrBelow` + `CasterLevelRoll` through this variant, so it
+    /// cannot be dropped to make room for `Copy`.
     All(Vec<CombatRequirement>),
 }
 
@@ -3565,12 +3579,12 @@ mod health_tier_requirement_tests {
     }
 
     fn cleric_roll(fail_chance_at_unlock: f32, fail_chance_at_max_level: f32) -> CombatRequirement {
-        CombatRequirement::CasterLevelRoll(CasterLevelFailChance {
+        CombatRequirement::CasterLevelRoll(Box::new(CasterLevelFailChance {
             unlock_level: 42,
             fail_chance_at_unlock,
             fail_chance_at_max_level,
             source_classes: vec![ClassKind::Cleric],
-        })
+        }))
     }
 
     /// Tiers 1-3 (and any other future tier) never authored a `requirement`
@@ -3618,13 +3632,14 @@ mod health_tier_requirement_tests {
     /// it.
     #[test]
     fn resolves_the_casters_class_level_not_the_raw_character_level() {
-        let tier =
-            tier_with_requirement(CombatRequirement::CasterLevelRoll(CasterLevelFailChance {
+        let tier = tier_with_requirement(CombatRequirement::CasterLevelRoll(Box::new(
+            CasterLevelFailChance {
                 unlock_level: 42,
                 fail_chance_at_unlock: 1.0,
                 fail_chance_at_max_level: 0.0,
                 source_classes: vec![ClassKind::Cleric],
-            }));
+            },
+        )));
         let character_class = CharacterClass {
             primary: ClassKind::Warrior,
             secondary: Some(ClassKind::Cleric),
