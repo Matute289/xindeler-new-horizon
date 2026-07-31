@@ -98,15 +98,25 @@ pub fn maintain(server: &mut Server) {
 
 /// Freeze. Two branches:
 ///
-/// * **Plain mob** — strip the components every simulating system joins on.
-///   `Pos` is what takes the entity out of physics
-///   (`common/systems/src/phys/mod.rs`), out of client entity-sync and
-///   therefore out of rendering (`server/src/sys/entity_sync.rs`), and out of
-///   every `CachedSpatialGrid` target query; `Agent` and `Vel` are what stop
-///   the AI (`server/src/sys/agent/mod.rs` joins on all three). This ECS has no
-///   generic "disabled entity" marker to reuse — absence of the component a
-///   system joins on *is* how it expresses "not simulated", and
+/// * **Plain mob** — strip `Pos` and `Vel`, and *only* those two. `Pos` is what
+///   takes the entity out of physics (`common/systems/src/phys/mod.rs`), out of
+///   client entity-sync and therefore out of rendering
+///   (`server/src/sys/entity_sync.rs`), out of every `CachedSpatialGrid` target
+///   query, and — together with `Vel` — out of the AI, because
+///   `server/src/sys/agent/mod.rs` joins on `&positions` and `&velocities`.
+///   This ECS has no generic "disabled entity" marker to reuse — absence of the
+///   component a system joins on *is* how it expresses "not simulated", and
 ///   `common/src/region.rs` documents a removed `Pos` as an anticipated state.
+///
+///   🟢 **`Agent` is deliberately left in place.** Removing it would stop
+///   nothing that removing `Pos`/`Vel` has not already stopped, but it *would*
+///   throw away everything `SpawnEntityData` authored on that agent —
+///   `patrol_origin`, merchant/guard `Behavior` and trade site, `no_flee`,
+///   `idle_wander_factor`, `aggro_range_multiplier` — because the return pass
+///   could then only rebuild a generic `Agent::from_body`. The creature would
+///   come back subtly wrong: a merchant that no longer trades, a guard that
+///   flees, a beast that wanders off the spawn it used to patrol. Keeping the
+///   component is both cheaper and higher fidelity.
 /// * **rtsim actor** — clear `Actor::presence` and delete the entity, the exact
 ///   pair the engine's own chunk-unload sweep uses (`server/src/lib.rs`). The
 ///   `Actor` stays in `data.actors`, and every simulation path skips it because
@@ -190,14 +200,12 @@ fn park_newly_banished(server: &mut Server) {
 
         let ecs = server.state.ecs();
         let mut positions = ecs.write_storage::<Pos>();
-        let mut agents = ecs.write_storage::<Agent>();
         let mut velocities = ecs.write_storage::<comp::Vel>();
         for entity in &plain {
             positions.remove(*entity);
-            agents.remove(*entity);
             velocities.remove(*entity);
         }
-        drop((positions, agents, velocities));
+        drop((positions, velocities));
 
         // 🔴 Clear the creature's transient state **here**, not only on
         // return. Neither the buff system (`common/systems/src/buff.rs`) nor
@@ -233,7 +241,6 @@ fn park_newly_banished(server: &mut Server) {
             );
             let ecs = server.state.ecs();
             ecs.write_storage::<Pos>().remove(entity);
-            ecs.write_storage::<Agent>().remove(entity);
             ecs.write_storage::<comp::Vel>().remove(entity);
         }
     }
@@ -287,6 +294,17 @@ fn reset_transient_state(ecs: &specs::World, entity: EcsEntity) {
     let _ = ecs
         .write_storage::<comp::Stance>()
         .insert(entity, comp::Stance::default());
+
+    // The `Agent` itself survives the trip — that is the point of not removing
+    // it — but the *fight* it was in must not. Only the combat-scratch fields
+    // are cleared; everything `SpawnEntityData` authored (`patrol_origin`,
+    // `behavior`, `psyche`) is left exactly as it was, which is the whole
+    // reason the component is kept in the first place.
+    if let Some(agent) = ecs.write_storage::<Agent>().get_mut(entity) {
+        agent.target = None;
+        agent.inbox.clear();
+        agent.sounds_heard.clear();
+    }
 }
 
 /// Breaks any mounting link the banished entity takes part in, in whichever
@@ -396,28 +414,12 @@ fn return_due(server: &mut Server, now_unix_secs: u64) {
             // entity.
             reset_transient_state(ecs, entity);
 
-            let body = ecs.read_storage::<comp::Body>().get(entity).copied();
             let _ = ecs
                 .write_storage::<Pos>()
                 .insert(entity, Pos(record.return_pos));
             let _ = ecs
                 .write_storage::<comp::Vel>()
                 .insert(entity, comp::Vel::zero());
-            // ⚠️ Two known fidelity losses, both accepted for now and both
-            // only reachable via `/banish` (N38B21-J) on a hand-picked target:
-            // a creature authored with `has_agency: false` comes back with
-            // agency, and any authored `Behavior` — trade site, patrol origin,
-            // `no_flee`, aggro-range multiplier — is replaced by the body's
-            // default, because park removed the `Agent` rather than keeping
-            // it. Removing `Agent` is what the task board specifies; keeping
-            // it (the AI already stops the moment `Pos` and `Vel` go, since
-            // `server/src/sys/agent/mod.rs` joins on both) would preserve all
-            // of it and is the obvious follow-up.
-            if let Some(body) = body {
-                let _ = ecs
-                    .write_storage::<Agent>()
-                    .insert(entity, Agent::from_body(&body));
-            }
             ecs.write_storage::<Banished>().remove(entity);
         }
     }
@@ -589,7 +591,6 @@ fn rehydrate_pending(server: &mut Server, now_unix_secs: u64) {
         }) {
             Ok(_) => {
                 ecs.write_storage::<Pos>().remove(entity);
-                ecs.write_storage::<Agent>().remove(entity);
                 ecs.write_storage::<comp::Vel>().remove(entity);
             },
             Err(e) => {
@@ -639,12 +640,19 @@ mod limbo_reset_tests {
     use super::*;
     use common::{
         comp::{
-            Body, BuffData, BuffKind, BuffSource, Stance, bird_large,
+            Body, BuffData, BuffKind, BuffSource, Stance, UtteranceKind,
+            agent::{Sound, SoundKind, Target},
+            bird_large,
             buff::{Buff, BuffCategory, DestInfo},
         },
         resources::{Secs, Time},
     };
     use specs::Builder;
+    use vek::Vec3;
+
+    /// Somewhere distinctive, so "the authored value survived" cannot pass by
+    /// coincidence against a default.
+    const PATROL_ORIGIN: Vec3<f32> = Vec3::new(1234.0, 5678.0, 90.0);
 
     fn phoenix_body() -> Body {
         Body::BirdLarge(bird_large::Body {
@@ -666,6 +674,7 @@ mod limbo_reset_tests {
         world.register::<comp::CharacterState>();
         world.register::<comp::Controller>();
         world.register::<Stance>();
+        world.register::<Agent>();
 
         let body = phoenix_body();
         let mut health = Health::new(body);
@@ -692,6 +701,20 @@ mod limbo_reset_tests {
         let mut combo = Combo::default();
         combo.change_by(7, 0.0);
 
+        // The banisher, so the parked creature can be holding a real aggro
+        // target rather than a synthetic one.
+        let caster = world.create_entity().build();
+        // Authored state that must survive the whole banishment, alongside the
+        // combat scratch that must not.
+        let mut agent = Agent::from_body(&body).with_patrol_origin(PATROL_ORIGIN);
+        agent.target = Some(Target::new(caster, true, 0.0, true, None));
+        agent.sounds_heard.push(Sound::new(
+            SoundKind::Utterance(UtteranceKind::Angry, body),
+            Vec3::zero(),
+            1.0,
+            0.0,
+        ));
+
         let entity = world
             .create_entity()
             .with(health)
@@ -703,6 +726,7 @@ mod limbo_reset_tests {
             .with(comp::CharacterState::default())
             .with(comp::Controller::default())
             .with(Stance::default())
+            .with(agent)
             .build();
         (world, entity)
     }
@@ -765,6 +789,40 @@ mod limbo_reset_tests {
             0,
             "combo must not survive the trip"
         );
+    }
+
+    /// The `Agent` is never removed, so the return pass never has to rebuild a
+    /// generic one — which is exactly what preserves the authored behaviour a
+    /// rebuilt agent would lose. This test is the guard on both halves of that
+    /// trade: the authored fields must survive, and the combat scratch must
+    /// not.
+    #[test]
+    fn the_agent_keeps_its_authored_behaviour_but_loses_the_fight_it_was_in() {
+        let (world, entity) = parked_creature();
+        {
+            let agents = world.read_storage::<Agent>();
+            let agent = agents.get(entity).unwrap();
+            assert!(agent.target.is_some(), "test setup: it must start aggroed");
+            assert!(!agent.sounds_heard.is_empty(), "test setup");
+        }
+
+        reset_transient_state(&world, entity);
+
+        let agents = world.read_storage::<Agent>();
+        let agent = agents
+            .get(entity)
+            .expect("the agent must survive parking, not be rebuilt on return");
+        assert_eq!(
+            agent.patrol_origin,
+            Some(PATROL_ORIGIN),
+            "the authored patrol origin is the whole reason the component is kept"
+        );
+        assert!(
+            agent.target.is_none(),
+            "a creature gone for days must not come back still aggroed on its banisher"
+        );
+        assert!(agent.inbox.is_empty());
+        assert!(agent.sounds_heard.is_empty(), "stale by days");
     }
 }
 
