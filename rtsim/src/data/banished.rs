@@ -52,11 +52,35 @@ pub struct BanishedCreature {
 }
 
 impl BanishedCreature {
-    /// The body worldgen would respawn for this record, or `None` for an
-    /// rtsim actor (which worldgen never spawns).
-    pub fn freestanding_body(&self) -> Option<Body> {
+    /// Whether *worldgen* (rather than rtsim) is what would put this creature
+    /// back in the world — i.e. whether it needs a rehydrated entity and a
+    /// suppressed chunk spawn.
+    ///
+    /// Exhaustive on purpose: a future `BanishedKind` variant must make this
+    /// decision explicitly rather than silently defaulting either way.
+    pub fn is_freestanding(&self) -> bool {
         match &self.kind {
-            BanishedKind::Freestanding { body, .. } => Some(*body),
+            BanishedKind::Freestanding { .. } => true,
+            BanishedKind::RtsimActor(_) => false,
+        }
+    }
+
+    /// The effective `CreatureKind` this creature had when it was banished:
+    /// the authored `EntityConfig::creature_type` override if there was one,
+    /// else the body's own default. This is the *same* formula
+    /// `SpawnEntityData::from_entity_info` resolves at spawn time
+    /// (`comp::Stats::new` seeds `creature_kind` from the body, then the
+    /// override wins), which is what makes the two comparable.
+    ///
+    /// `None` for an rtsim actor: worldgen never spawns those, so they never
+    /// contribute a suppression.
+    pub fn freestanding_creature_kind(&self) -> Option<Option<CreatureKind>> {
+        match &self.kind {
+            BanishedKind::Freestanding {
+                body,
+                creature_kind,
+                ..
+            } => Some(creature_kind.or_else(|| body.creature_kind())),
             BanishedKind::RtsimActor(_) => None,
         }
     }
@@ -114,15 +138,41 @@ impl Banishments {
         std::mem::take(&mut self.pending_rehydration)
     }
 
-    /// Bodies of the `Freestanding` creatures currently banished from `chunk`.
-    /// Worldgen's chunk supplement subtracts these when it loads that chunk,
-    /// so a banished mob and a freshly generated copy of it never coexist.
-    /// rtsim actors are excluded: worldgen never spawns them.
-    pub fn freestanding_bodies_in_chunk(&self, chunk: Vec2<i32>) -> Vec<Body> {
+    /// One entry per `Freestanding` creature currently banished from `chunk`,
+    /// carrying that creature's effective `CreatureKind`. Worldgen's chunk
+    /// supplement subtracts these when it loads that chunk.
+    ///
+    /// 🔴 This is a **headcount**, not an identity list, and that is
+    /// deliberate. Worldgen cannot be asked to leave *the same individual*
+    /// out: `world/src/lib.rs`'s `dynamic_rng` is reseeded per generation
+    /// (`ChaCha8Rng::from_seed(rand::rng().random())`, commented "Only use
+    /// for rng affecting dynamic elements like chests and entities!"), so
+    /// `apply_wildlife_supplement` rolls a **fresh random population** on
+    /// every chunk load and the banished individual is never guaranteed to
+    /// reappear. Matching on the exact `Body` therefore succeeded only by
+    /// coincidence — and never at all for bodies with randomised appearance
+    /// fields, which are part of the derived `PartialEq`.
+    ///
+    /// The invariant that actually matters is a *count* one: while a creature
+    /// is away it is still owed a return, so the chunk must carry one fewer
+    /// creature of its kind, or the return makes it a net +1. Counting is
+    /// immune to the non-deterministic roll. The `CreatureKind` filter keeps
+    /// a banished fiend from suppressing an unrelated deer.
+    ///
+    /// The inner `Option` is the creature kind itself — a mob whose body has
+    /// no `CreatureKind` at all (reachable through `/banish`) suppresses a
+    /// candidate that likewise has none.
+    ///
+    /// rtsim actors are excluded: worldgen never spawns them, and their own
+    /// re-materialisation is suppressed deterministically via `presence`.
+    pub fn freestanding_suppressions_in_chunk(
+        &self,
+        chunk: Vec2<i32>,
+    ) -> Vec<Option<CreatureKind>> {
         self.creatures
             .values()
             .filter(|creature| creature.return_chunk == chunk)
-            .filter_map(|creature| creature.freestanding_body())
+            .filter_map(|creature| creature.freestanding_creature_kind())
             .collect()
     }
 
@@ -167,7 +217,7 @@ impl Banishments {
         self.pending_rehydration = self
             .creatures
             .iter()
-            .filter(|(_, creature)| creature.freestanding_body().is_some())
+            .filter(|(_, creature)| creature.is_freestanding())
             .map(|(id, _)| *id)
             .collect();
     }
@@ -300,7 +350,7 @@ mod tests {
     /// `Freestanding` records count: an rtsim actor is never spawned by the
     /// chunk supplement, it is spawned by rtsim's own load loop.
     #[test]
-    fn only_freestanding_records_report_a_body_for_their_chunk() {
+    fn only_freestanding_records_contribute_a_suppression_for_their_chunk() {
         let [actor] = actor_ids();
         let mut banishments = Banishments::default();
         banishments.insert(phoenix(100));
@@ -312,17 +362,63 @@ mod tests {
         // Two phoenixes banished from (1,1), but only the freestanding one
         // was ever spawned by worldgen.
         assert_eq!(
-            banishments.freestanding_bodies_in_chunk(Vec2::new(1, 1)),
-            vec![phoenix_body()]
+            banishments.freestanding_suppressions_in_chunk(Vec2::new(1, 1)),
+            vec![Some(CreatureKind::Celestial)]
         );
         assert_eq!(
-            banishments.freestanding_bodies_in_chunk(Vec2::new(9, 9)),
-            vec![phoenix_body()]
+            banishments.freestanding_suppressions_in_chunk(Vec2::new(9, 9)),
+            vec![Some(CreatureKind::Celestial)]
         );
         assert!(
             banishments
-                .freestanding_bodies_in_chunk(Vec2::new(5, 5))
+                .freestanding_suppressions_in_chunk(Vec2::new(5, 5))
                 .is_empty()
+        );
+    }
+
+    /// The suppression must carry the creature kind the mob *actually* had,
+    /// which is the authored `EntityConfig::creature_type` override when
+    /// there is one — the same resolution `SpawnEntityData::from_entity_info`
+    /// performs on the spawn candidate it is compared against. Reverting to
+    /// `body.creature_kind()` here would make a reskinned mob suppress the
+    /// wrong species.
+    #[test]
+    fn a_suppression_carries_the_authored_creature_kind_override() {
+        let mut reskinned = phoenix(100);
+        reskinned.kind = BanishedKind::Freestanding {
+            body: phoenix_body(),
+            alignment: Alignment::Enemy,
+            creature_kind: Some(CreatureKind::Fiend),
+            scale: 1.0,
+        };
+        let mut banishments = Banishments::default();
+        banishments.insert(reskinned);
+
+        assert_eq!(
+            banishments.freestanding_suppressions_in_chunk(Vec2::new(1, 1)),
+            vec![Some(CreatureKind::Fiend)],
+            "the authored override must win over the phoenix body's Celestial default"
+        );
+    }
+
+    /// With no override the body's own kind is used — again matching what the
+    /// spawn candidate resolves to (`comp::Stats::new` seeds `creature_kind`
+    /// from the body).
+    #[test]
+    fn a_suppression_falls_back_to_the_bodys_own_creature_kind() {
+        let mut banishments = Banishments::default();
+        let mut no_override = phoenix(100);
+        no_override.kind = BanishedKind::Freestanding {
+            body: phoenix_body(),
+            alignment: Alignment::Enemy,
+            creature_kind: None,
+            scale: 1.0,
+        };
+        banishments.insert(no_override);
+
+        assert_eq!(
+            banishments.freestanding_suppressions_in_chunk(Vec2::new(1, 1)),
+            vec![phoenix_body().creature_kind()]
         );
     }
 
@@ -368,30 +464,29 @@ mod tests {
         let id = banishments.insert(phoenix(100));
         assert_eq!(
             banishments
-                .freestanding_bodies_in_chunk(Vec2::new(1, 1))
+                .freestanding_suppressions_in_chunk(Vec2::new(1, 1))
                 .len(),
             1
         );
         banishments.remove(id);
         assert!(
             banishments
-                .freestanding_bodies_in_chunk(Vec2::new(1, 1))
+                .freestanding_suppressions_in_chunk(Vec2::new(1, 1))
                 .is_empty()
         );
     }
 
-    /// Two of the same species banished from one chunk must suppress two
-    /// spawns, not one — the suppression is a multiset, not a set.
+    /// Two creatures of the same kind banished from one chunk must suppress
+    /// two spawns, not one — this is a headcount, so equal kinds must not
+    /// collapse into a single entry the way a set would.
     #[test]
     fn two_banished_creatures_in_one_chunk_suppress_two_spawns() {
         let mut banishments = Banishments::default();
         banishments.insert(phoenix(100));
         banishments.insert(phoenix(200));
         assert_eq!(
-            banishments
-                .freestanding_bodies_in_chunk(Vec2::new(1, 1))
-                .len(),
-            2
+            banishments.freestanding_suppressions_in_chunk(Vec2::new(1, 1)),
+            vec![Some(CreatureKind::Celestial), Some(CreatureKind::Celestial)]
         );
     }
 }
