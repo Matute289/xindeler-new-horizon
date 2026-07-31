@@ -519,4 +519,54 @@ mod tests {
         assert!(!effect.applies_to(None));
         assert!(!effect.applies_to(Some(CreatureKind::Humanoid)));
     }
+
+    /// Pins the authored tier-4 + banishment content, so a future edit to the
+    /// RON that drops the death tier or the banishment block fails here
+    /// instead of silently shipping a 3-tier spell again.
+    #[test]
+    fn divine_words_ron_carries_four_tiers_and_a_banishment() {
+        use crate::{
+            assets::{AssetExt, Ron},
+            comp::ability::CharacterAbility,
+        };
+
+        // Same load shape `EntityInfo::with_asset_expect` uses
+        // (`common/src/generation.rs:312`): `load_expect_cloned` yields a
+        // `Ron<T>` wrapper, `into_inner()` unwraps it.
+        let ability: CharacterAbility =
+            Ron::load_expect_cloned("common.abilities.spells.divine.power_word_divine_word")
+                .into_inner();
+        let CharacterAbility::BasicAura {
+            tiered_health_effects,
+            ..
+        } = &ability
+        else {
+            panic!("power_word_divine_word is not a BasicAura");
+        };
+        let effect = tiered_health_effects
+            .first()
+            .expect("no tiered health effect authored");
+
+        // Most severe first — resolution takes the first match, it does not sort.
+        let thresholds = effect
+            .tiers
+            .iter()
+            .map(|t| t.max_current_health)
+            .collect::<Vec<_>>();
+        assert_eq!(thresholds, vec![35.0, 45.0, 55.0, 65.0]);
+
+        let banishment = effect
+            .banishment
+            .as_ref()
+            .expect("no banishment authored on divine word");
+        assert_eq!(banishment.creature_kinds, vec![
+            CreatureKind::Celestial,
+            CreatureKind::Elemental,
+            CreatureKind::Fey,
+            CreatureKind::Fiend,
+        ]);
+        assert!((banishment.min_return_hours - 24.0).abs() < f64::EPSILON);
+        assert!((banishment.max_return_hours - 168.0).abs() < f64::EPSILON);
+        assert!((banishment.reward_fraction - 0.25).abs() < f32::EPSILON);
+    }
 }
