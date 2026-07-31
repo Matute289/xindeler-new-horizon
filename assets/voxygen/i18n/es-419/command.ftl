@@ -24,6 +24,7 @@ command-buff-desc = Aplica un potenciador al jugador
 command-build-desc = Activa y desactiva el modo de construcción
 command-ban-desc = Bloquea a un jugador con un determinado nombre de usuario, por un periodo determinado (si se proporciona). Indique "true for overwrite" para modificar un bloqueo existente.
 command-ban-ip-desc = Bloquea a un determinado jugador, por un periodo de tiempo determinado (si es provisto). A diferencia de un bloqueo normal, este también bloquea la dirección IP asociada con este usuario. Indique "true for overwrite" para modificar un bloqueo existente.
+command-banish-desc = (Administrador) Destierra temporalmente al objetivo por N segundos (herramienta de prueba para el destierro real de 1 a 7 días)
 command-battlemode-desc =
     Configura tu modo de batalla a:
     + pvp (jugador vs jugador)
