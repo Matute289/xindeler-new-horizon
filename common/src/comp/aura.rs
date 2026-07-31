@@ -538,11 +538,17 @@ mod tests {
                 .into_inner();
         let CharacterAbility::BasicAura {
             tiered_health_effects,
+            meta,
             ..
         } = &ability
         else {
             panic!("power_word_divine_word is not a BasicAura");
         };
+        // Heavier than Pain's 60s despite sharing its spell level (7) --
+        // Divine Word's 4-target reach plus the death/banishment branch
+        // weighs more, so it gets its own 75s. min_level 42 unlock stays.
+        assert_eq!(meta.requirements.min_level, Some(42));
+        assert_eq!(meta.cooldown, Some(75.0));
         let effect = tiered_health_effects
             .first()
             .expect("no tiered health effect authored");
@@ -574,9 +580,30 @@ mod tests {
             },
             other => panic!("tier 4's requirement should be a CasterLevelRoll, got {other:?}"),
         }
+
+        // Tier 3 (the hour-long, `dur_secs: 3600` Paralyzed result) is the
+        // worst temporary outcome in the ladder, so it now carries the same
+        // caster-side margin as tier 4's instant death instead of applying
+        // unconditionally.
+        let tier3 = &effect.tiers[1];
+        assert_eq!(tier3.max_current_health, 45.0);
+        let tier3_requirement = tier3
+            .requirement
+            .as_ref()
+            .expect("tier 3's hour-long paralysis must be gated by a CasterLevelRoll");
+        match tier3_requirement {
+            CombatRequirement::CasterLevelRoll(curve) => {
+                assert_eq!(curve.unlock_level, 42);
+                assert!((curve.fail_chance_at_unlock - 0.25).abs() < f32::EPSILON);
+                assert!((curve.fail_chance_at_max_level - 0.05).abs() < f32::EPSILON);
+                assert_eq!(curve.source_classes, vec![ClassKind::Cleric]);
+            },
+            other => panic!("tier 3's requirement should be a CasterLevelRoll, got {other:?}"),
+        }
         assert!(
-            effect.tiers[1..].iter().all(|t| t.requirement.is_none()),
-            "only tier 4 (the instant-death tier) is gated -- tiers 1-3 are unaffected"
+            effect.tiers[2..].iter().all(|t| t.requirement.is_none()),
+            "only tiers 3 and 4 (the two most severe results) are gated -- tiers 1-2 (Blinded, \
+             the short Paralyzed) are unaffected"
         );
 
         let banishment = effect

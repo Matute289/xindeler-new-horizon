@@ -9,7 +9,7 @@ BasicRanged(
             attack_effect: Some((
                 Buff((
                     kind: Paralyzed,
-                    dur_secs: 15,
+                    dur_secs: 60,
                     strength: Value(1.0),
                     chance: 1.0,
                 )),
@@ -36,6 +36,7 @@ BasicRanged(
     meta: (
         school: Some(Enchantment),
         source: Some(Arcane),
+        cooldown: Some(75.0),
         requirements: (min_level: Some(48)),
     ),
 )

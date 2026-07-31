@@ -15,7 +15,7 @@ BasicRanged(
                         scale: 0.33333334,
                     )),
                     CasterLevelRoll((
-                        unlock_level: 50,
+                        unlock_level: 54,
                         fail_chance_at_unlock: 0.25,
                         fail_chance_at_max_level: 0.05,
                         source_classes: [Mage, Sorcerer, Warlock, Bard],
@@ -31,6 +31,7 @@ BasicRanged(
     meta: (
         school: Some(Enchantment),
         source: Some(Arcane),
-        requirements: (min_level: Some(50)),
+        cooldown: Some(90.0),
+        requirements: (min_level: Some(54)),
     ),
 )
