@@ -795,9 +795,27 @@ fn selected_entity_window(
     }
 }
 
+fn humanoid_species_debug_label(species: common::comp::body::humanoid::Species) -> &'static str {
+    use common::comp::body::humanoid::Species;
+    // Danari/Draugr are the internal engine identifiers (kept forever per
+    // docs/design/specs/2026-07-02-race-rename-ingame.md); the player-facing
+    // canon names are Gnome/Dhampir. This inspector has no access to the
+    // Fluent i18n system (voxygen-egui doesn't depend on voxygen), so this is
+    // a plain label like every other debug string in this file, not a
+    // localization lookup.
+    match species {
+        Species::Danari => "Gnome",
+        Species::Draugr => "Dhampir",
+        Species::Dwarf => "Dwarf",
+        Species::Elf => "Elf",
+        Species::Human => "Human",
+        Species::Orc => "Orc",
+    }
+}
+
 fn body_species(body: &Body) -> String {
     match body {
-        Body::Humanoid(body) => format!("{:?}", body.species),
+        Body::Humanoid(body) => humanoid_species_debug_label(body.species).to_string(),
         Body::QuadrupedSmall(body) => format!("{:?}", body.species),
         Body::QuadrupedMedium(body) => format!("{:?}", body.species),
         Body::BirdMedium(body) => format!("{:?}", body.species),
