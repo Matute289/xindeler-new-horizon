@@ -357,4 +357,41 @@ mod tests {
         assert_eq!(banishments.due_rtsim_actors(50).count(), 0);
         assert_eq!(banishments.due_rtsim_actors(300).count(), 2);
     }
+
+    // ── Task 4B: the worldgen respawn-suppression contract ──────────────────
+
+    /// The suppression list must shrink the moment the creature comes back,
+    /// or its chunk stays permanently one mob short.
+    #[test]
+    fn suppression_stops_as_soon_as_the_record_is_removed() {
+        let mut banishments = Banishments::default();
+        let id = banishments.insert(phoenix(100));
+        assert_eq!(
+            banishments
+                .freestanding_bodies_in_chunk(Vec2::new(1, 1))
+                .len(),
+            1
+        );
+        banishments.remove(id);
+        assert!(
+            banishments
+                .freestanding_bodies_in_chunk(Vec2::new(1, 1))
+                .is_empty()
+        );
+    }
+
+    /// Two of the same species banished from one chunk must suppress two
+    /// spawns, not one — the suppression is a multiset, not a set.
+    #[test]
+    fn two_banished_creatures_in_one_chunk_suppress_two_spawns() {
+        let mut banishments = Banishments::default();
+        banishments.insert(phoenix(100));
+        banishments.insert(phoenix(200));
+        assert_eq!(
+            banishments
+                .freestanding_bodies_in_chunk(Vec2::new(1, 1))
+                .len(),
+            2
+        );
+    }
 }

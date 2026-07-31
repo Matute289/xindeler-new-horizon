@@ -15,7 +15,10 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use enum_map::EnumMap;
 use rtsim::{
     RtState,
-    data::{Banishments, Data, ReadError, actor::SimulationMode},
+    data::{
+        Banishments, Data, ReadError,
+        actor::{Presence, SimulationMode},
+    },
     event::{OnDeath, OnHealthChange, OnHelped, OnMountVolume, OnSetup, OnTheft},
 };
 use specs::DispatcherBuilder;
@@ -356,6 +359,29 @@ impl RtSim {
     /// a `ReadExpect<RtSim>`.
     pub fn with_banishments<R>(&self, f: impl FnOnce(&mut Banishments) -> R) -> R {
         f(&mut self.state.data_mut().banished)
+    }
+
+    /// Sets or clears an actor's `presence` — rtsim's own "is this actor in
+    /// the world at all" flag (`rtsim::data::actor::Actor::presence`).
+    /// Clearing it is how a banished rtsim actor is put into limbo: it stops
+    /// `npc_ai` and `simulate_npcs`, both of which filter on
+    /// `Actor::is_present_and_alive`, and drops the actor from the
+    /// `actor_grid`.
+    ///
+    /// Restoring it always restores full health — a returning creature is
+    /// fully reset by design, and rtsim's load loop reads `health_fraction`
+    /// when it rebuilds the entity.
+    ///
+    /// Returns `false` if the actor no longer exists.
+    pub fn set_actor_presence(&self, actor: ActorId, present: bool) -> bool {
+        let mut data = self.state.data_mut();
+        let Some(actor) = data.actors.get_mut(actor) else {
+            return false;
+        };
+        actor.presence = present.then_some(Presence {
+            health_fraction: 1.0,
+        });
+        true
     }
 
     pub fn set_should_purge(&mut self, should_purge: bool) {

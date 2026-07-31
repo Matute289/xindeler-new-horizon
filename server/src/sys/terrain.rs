@@ -175,6 +175,31 @@ impl<'a> System<'a> for Sys {
             }
 
             // Handle chunk supplement
+            //
+            // A creature that is currently banished from this chunk must not be
+            // regenerated while it is away: it is still owed a return, so a
+            // fresh copy plus the returning original is a net +1 creature. One
+            // suppressed spawn per banished record, matched by body — a
+            // multiset, so two banished phoenixes suppress two spawns.
+            #[cfg(feature = "worldgen")]
+            let mut suppressed_bodies: Vec<comp::Body> = data
+                .rtsim
+                .with_banishments(|banishments| banishments.freestanding_bodies_in_chunk(key));
+            #[cfg(not(feature = "worldgen"))]
+            let mut suppressed_bodies: Vec<comp::Body> = Vec::new();
+
+            // Consumes one suppression slot if this body matches a banished
+            // creature of this chunk, and reports whether the spawn should be
+            // skipped.
+            let mut suppress = |body: &comp::Body| -> bool {
+                if let Some(i) = suppressed_bodies.iter().position(|b| b == body) {
+                    suppressed_bodies.swap_remove(i);
+                    true
+                } else {
+                    false
+                }
+            };
+
             for entity_spawn in supplement.entity_spawns {
                 // Check this because it's a common source of weird bugs
                 let check_pos = |pos: Vec3<f32>| {
@@ -190,6 +215,10 @@ impl<'a> System<'a> for Sys {
                 match entity_spawn {
                     EntitySpawn::Entity(entity) => {
                         check_pos(entity.pos);
+
+                        if suppress(&entity.body) {
+                            continue;
+                        }
 
                         let data = SpawnEntityData::from_entity_info(*entity);
                         match data {
@@ -214,6 +243,7 @@ impl<'a> System<'a> for Sys {
 
                         let create_npc_events = group
                             .into_iter()
+                            .filter(|entity| !suppress(&entity.body))
                             .filter_map(|entity| match SpawnEntityData::from_entity_info(entity) {
                                 SpawnEntityData::Special(..) => None,
                                 SpawnEntityData::Npc(data) => {
