@@ -63,6 +63,9 @@ fn roll_return_deadline(
 }
 
 #[cfg(feature = "worldgen")]
+use crate::banishment::death_forestalls_banishment;
+
+#[cfg(feature = "worldgen")]
 #[derive(SystemData)]
 pub struct BanishEventData<'a> {
     entities: Entities<'a>,
@@ -141,9 +144,11 @@ impl ServerEvent for BanishEvent {
             else {
                 continue;
             };
-            // A corpse pending deletion cannot be banished: the record would
-            // outlive the entity and rehydrate a creature that was killed.
-            if target_health.is_dead {
+            // A creature that is dead — or that reached zero HP this tick and
+            // is only waiting for `DestroyEvent` to say so — cannot be
+            // banished: the record would outlive the entity and either
+            // rehydrate a creature that was killed or sit orphaned forever.
+            if death_forestalls_banishment(target_health) {
                 continue;
             }
 

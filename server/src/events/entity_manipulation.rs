@@ -92,12 +92,31 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<HelpDownedEvent>(builder, &[]);
     event_dispatch::<DownedEvent>(builder, &[&event_sys_name::<HealthChangeEvent>()]);
     event_dispatch::<KnockbackEvent>(builder, &[]);
-    // 🔴 Ordering is load-bearing: `BanishEvent`'s handler raises the
-    // banishment's `DestroyEvent`, and that `DestroyEvent` must be consumed in
-    // the *same* tick. Otherwise `banishment::maintain` parks the entity
-    // (removing `Pos`) before the reward/loot block ever sees where to drop the
-    // loot.
-    event_dispatch::<BanishEvent>(builder, &[]);
+    // 🔴 Ordering is load-bearing, in both directions.
+    //
+    // *After* every handler that writes `Health`. `BanishEvent` only reads it,
+    // so `shred` already refuses to run them concurrently — but which side it
+    // ran *first* was left to the scheduler, and the answer decided whether a
+    // creature banished and killed in the same tick left an orphaned registry
+    // record behind. With the edges, all of this tick's damage has landed
+    // before the saving throw is rolled, so `death_forestalls_banishment` sees
+    // the true health and a doomed creature is simply never banished. Costs no
+    // throughput: these were serialised against each other either way.
+    //
+    // `KillEvent` is unreachable for a banishable target today — it comes only
+    // from `ControlEvent::GiveUp`, which is gated on death protection, which is
+    // `Body::Humanoid`-only, and a humanoid is never a banishable
+    // `CreatureKind`. The edge is declared anyway rather than left as an
+    // argument the next reader has to re-derive.
+    //
+    // *Before* `DestroyEvent`: this handler raises the banishment's
+    // `DestroyEvent`, and that `DestroyEvent` must be consumed in the *same*
+    // tick. Otherwise `banishment::maintain` parks the entity (removing `Pos`)
+    // before the reward/loot block ever sees where to drop the loot.
+    event_dispatch::<BanishEvent>(builder, &[
+        &event_sys_name::<HealthChangeEvent>(),
+        &event_sys_name::<KillEvent>(),
+    ]);
     event_dispatch::<DestroyEvent>(builder, &[
         &event_sys_name::<HealthChangeEvent>(),
         &event_sys_name::<BanishEvent>(),
@@ -795,6 +814,125 @@ mod handle_exp_gain_tests {
     }
 }
 
+#[cfg(test)]
+mod death_supersedes_banishment_tests {
+    use super::*;
+    use common::combat::RemovalInfo;
+    use specs::{Builder, WorldExt};
+
+    fn removal_of(entity: EcsEntity, removal: RemovalInfo) -> DestroyEvent {
+        DestroyEvent {
+            entity,
+            cause: HealthChange {
+                amount: 0.0,
+                by: None,
+                cause: None,
+                time: Time(0.0),
+                precise: false,
+                instance: 0,
+            },
+            removal,
+        }
+    }
+
+    /// Drives the *production* filter — the same call `DestroyEvent::handle`
+    /// makes — rather than restating the rule in test code.
+    fn honoured(batch: Vec<DestroyEvent>) -> Vec<DestroyEvent> {
+        let deaths = DeathsInBatch::of(&batch);
+        deaths.honoured(batch).collect()
+    }
+
+    /// 🔴 The race. A `DestroyEvent{Killed}` can be raised by
+    /// `HealthChangeEvent`'s handler or, from outside the dispatcher entirely,
+    /// by `common/systems`' stats system during `State::tick`; a
+    /// `DestroyEvent{Banished}` is raised by `BanishEvent`'s handler. Nothing
+    /// orders all three against each other, so one creature can be banished
+    /// and killed inside a single tick and both removals land in this batch.
+    /// Which one was emitted first is the scheduler's choice; the outcome must
+    /// not be.
+    ///
+    /// Real death always wins: exactly one removal survives for that entity,
+    /// and it is the kill. Anything else is either ~125% XP (the banishment's
+    /// quarter *plus* the kill's whole) or a banishment record with no
+    /// creature behind it.
+    #[test]
+    fn a_death_supersedes_a_banishment_in_the_same_batch_whichever_arrives_first() {
+        let mut world = specs::World::new();
+        let doomed = world.create_entity().build();
+        let bystander = world.create_entity().build();
+
+        let kill_first = vec![
+            removal_of(doomed, RemovalInfo::killed()),
+            removal_of(doomed, RemovalInfo::banished(0.25)),
+            removal_of(bystander, RemovalInfo::banished(0.25)),
+        ];
+        let banish_first = vec![
+            removal_of(doomed, RemovalInfo::banished(0.25)),
+            removal_of(doomed, RemovalInfo::killed()),
+            removal_of(bystander, RemovalInfo::banished(0.25)),
+        ];
+
+        for batch in [kill_first, banish_first] {
+            let honoured = honoured(batch);
+            let for_doomed: Vec<_> = honoured.iter().filter(|ev| ev.entity == doomed).collect();
+            assert_eq!(
+                for_doomed.len(),
+                1,
+                "the doomed creature must be removed exactly once, so it is rewarded exactly once"
+            );
+            assert!(
+                for_doomed[0].removal.cause.counts_as_kill(),
+                "the surviving removal must be the death, not the banishment"
+            );
+            assert_eq!(
+                honoured.iter().filter(|ev| ev.entity == bystander).count(),
+                1,
+                "an unrelated banishment in the same batch is untouched"
+            );
+        }
+    }
+
+    /// The rule must not quietly swallow ordinary banishments: with no death
+    /// for that entity in the batch, the banishment is honoured exactly as
+    /// before.
+    #[test]
+    fn a_banishment_alone_in_its_batch_is_still_honoured() {
+        let mut world = specs::World::new();
+        let banished = world.create_entity().build();
+        let batch = vec![removal_of(banished, RemovalInfo::banished(0.25))];
+
+        assert_eq!(honoured(batch).len(), 1);
+    }
+
+    /// A creature killed while it is *already* in limbo arrives as a lone kill
+    /// in a later tick. Nothing supersedes it; revoking its record is the
+    /// handler's job, not this rule's.
+    #[test]
+    fn a_lone_death_is_never_superseded() {
+        let mut world = specs::World::new();
+        let slain = world.create_entity().build();
+        let batch = vec![removal_of(slain, RemovalInfo::killed())];
+
+        assert_eq!(honoured(batch).len(), 1);
+    }
+
+    /// Duplicate `Destroy{Killed}` events for one entity are a shipped
+    /// (TODO-flagged) reality. They are left to the existing `is_dead` latch —
+    /// this rule must not start dropping kills, or a double-kill batch would
+    /// remove the entity zero times.
+    #[test]
+    fn duplicate_deaths_are_left_to_the_is_dead_latch() {
+        let mut world = specs::World::new();
+        let slain = world.create_entity().build();
+        let batch = vec![
+            removal_of(slain, RemovalInfo::killed()),
+            removal_of(slain, RemovalInfo::killed()),
+        ];
+
+        assert_eq!(honoured(batch).len(), 2);
+    }
+}
+
 #[derive(SystemData)]
 pub struct DestroyEventData<'a> {
     entities: Entities<'a>,
@@ -843,6 +981,81 @@ pub struct DestroyEventData<'a> {
     orientations: ReadStorage<'a, comp::Ori>,
     combos: ReadStorage<'a, comp::Combo>,
     gameplay_metrics: ReadExpect<'a, GameplayMetrics>,
+    /// Written, not read: a genuine kill *revokes* the entity's banishment.
+    /// Only reachable with `worldgen`, since without rtsim nothing ever
+    /// inserts the marker in the first place.
+    #[cfg(feature = "worldgen")]
+    banished: WriteStorage<'a, comp::Banished>,
+}
+
+/// The entities that a **real death** claims inside one batch of
+/// [`DestroyEvent`]s.
+///
+/// A removal can reach this handler as a death or as a banishment, and both can
+/// be raised for the same creature in the same tick. Honouring both would pay
+/// the banishment's fractional reward *and* the kill's whole one — ~125% of a
+/// single creature's XP — and would leave a persisted banishment record behind
+/// for a creature that is about to be deleted.
+///
+/// So death wins, atomically: every removal that yields to death is dropped for
+/// an entity that also died in this batch, no matter which of the two was
+/// emitted first. The surviving kill is what pays out, exactly once, and it is
+/// also what revokes the banishment.
+///
+/// 🔴 This is not redundant with the guards that keep a doomed creature from
+/// being banished in the first place, because a `DestroyEvent{Killed}` can be
+/// raised from **outside** the event dispatcher entirely: `common/systems`'
+/// stats system emits one during `State::tick`, before any of these handlers
+/// run. A creature it condemned at zero HP that is then *healed* by a
+/// `HealthChangeEvent` in the same tick reads as perfectly alive by the time
+/// the banishment commits — and both removals still land in this batch.
+struct DeathsInBatch(HashSet<EcsEntity>);
+
+impl DeathsInBatch {
+    fn of(events: &[DestroyEvent]) -> Self {
+        // Nothing can be superseded unless some removal in this batch yields
+        // to death at all. The ordinary batch — a handful of creatures that
+        // simply died — takes this branch and hashes nothing.
+        if !events.iter().any(|ev| Self::yields_to_death(ev.removal)) {
+            return Self(HashSet::new());
+        }
+        Self(
+            events
+                .iter()
+                .filter(|ev| ev.removal.cause.counts_as_kill())
+                .map(|ev| ev.entity)
+                .collect(),
+        )
+    }
+
+    /// Whether a genuine death in the same tick voids this removal.
+    ///
+    /// Exhaustive on purpose. `RemovalCause`'s own contract invites new
+    /// variants ("Extend the enum rather than adding a parallel flag"), and a
+    /// new one must state whether death outranks it instead of silently
+    /// inheriting an answer from a negated `counts_as_kill()`.
+    fn yields_to_death(removal: combat::RemovalInfo) -> bool {
+        match removal.cause {
+            // A death cannot void itself. Duplicate `Destroy{Killed}` events
+            // are a separate, shipped concern handled by the `is_dead` latch
+            // below; dropping one here would remove the entity zero times.
+            combat::RemovalCause::Killed => false,
+            // The creature was to be taken away and brought back. It died
+            // instead, so there is nothing to take away and nothing to return.
+            combat::RemovalCause::Banished => true,
+        }
+    }
+
+    /// The removals that must actually be acted on: everything except a
+    /// yields-to-death removal for an entity this batch also killed.
+    ///
+    /// The production loop iterates exactly this, so a test that drives it is
+    /// driving the real filter rather than a restatement of it.
+    fn honoured(&self, events: Vec<DestroyEvent>) -> impl Iterator<Item = DestroyEvent> + '_ {
+        events
+            .into_iter()
+            .filter(|ev| !(Self::yields_to_death(ev.removal) && self.0.contains(&ev.entity)))
+    }
 }
 
 /// Handle an entity dying. If it is a player, it will send a message to all
@@ -858,11 +1071,42 @@ impl ServerEvent for DestroyEvent {
         let mut rng = rand::rng();
         data.entities_died_last_tick.0.clear();
 
-        for ev in events {
+        // Collected up front so the whole batch can be consulted before any of
+        // it is acted on — the only way "a real death always wins" can hold
+        // without depending on the order the scheduler happened to pick. The
+        // bus already hands over an owned `vec::IntoIter`, so re-collecting it
+        // reuses that allocation rather than making a second one.
+        let events: Vec<Self> = events.collect();
+        let deaths = DeathsInBatch::of(&events);
+
+        // A removal the batch's own deaths supersede never reaches the loop:
+        // the creature really died this tick, so its banishment never happened
+        // — no fractional reward, no partial loot roll. The surviving kill pays
+        // the whole reward once and revokes the banishment.
+        for ev in deaths.honoured(events) {
             // TODO: Investigate duplicate `Destroy` events (but don't remove this).
             // If the entity was already deleted, it can't be destroyed again.
             if !data.entities.is_alive(ev.entity) {
                 continue;
+            }
+
+            // A genuine death voids any banishment the entity is carrying,
+            // whether it was granted moments ago this tick or a whole session
+            // ago while the creature sat in limbo — `HealthChangeEvent` joins
+            // `positions.maybe()`, so damage queued before the park pass
+            // stripped `Pos` still lands on a parked mob a tick later.
+            // Forgetting the record is what keeps a killed creature from ever
+            // returning *and* releases the worldgen spawn its chunk was holding
+            // for it.
+            //
+            // Deliberately outside the `is_dead` latch below: a duplicate kill
+            // for an already-flagged corpse must still leave no record behind.
+            #[cfg(feature = "worldgen")]
+            if ev.removal.cause.counts_as_kill() && data.banished.contains(ev.entity) {
+                let banished = &mut data.banished;
+                data.rtsim.with_banishments(|banishments| {
+                    crate::banishment::revoke_banishment(banished, banishments, ev.entity)
+                });
             }
 
             let mut outcomes = data.outcomes.emitter();
