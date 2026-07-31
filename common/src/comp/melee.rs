@@ -98,6 +98,13 @@ pub struct MeleeConstructor {
     pub precision_flank_invert: bool,
 }
 
+/// Not `Copy`: it carries a `CombatRequirement`, which itself cannot be
+/// `Copy` because of `CombatRequirement::All(Vec<CombatRequirement>)` (used
+/// by shipped `power_word_kill`/`pain`/`stun` content) — a `Vec` can never be
+/// `Copy`, independent of anything done to `CombatRequirement`'s other
+/// variants. Call sites that need an owned value (e.g.
+/// `common/src/comp/ability.rs`'s `create_char_ability`) still `.clone()`
+/// one.
 #[derive(Clone, Debug, PartialEq, Serialize, Default, Deserialize)]
 pub struct CustomCombo {
     pub base: Option<i32>,

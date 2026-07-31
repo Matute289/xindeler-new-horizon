@@ -6,7 +6,7 @@ use common::{
         Alignment, Aura, Auras, Banished, BuffKind, Buffs, CharacterClass, CharacterState, Health,
         HealthChange, Mass, Player, Pos, Stats,
         aura::{AuraChange, AuraKey, AuraKind, AuraTarget, EnteredAuras},
-        buff::{Buff, BuffCategory, BuffChange, BuffSource, DestInfo},
+        buff::{Buff, BuffCategory, BuffChange, BuffData, BuffSource, DestInfo},
         group::Group,
     },
     event::{AuraEvent, BanishEvent, BuffEvent, EmitExt, HealthChangeEvent},
@@ -167,86 +167,106 @@ impl<'a> System<'a> for Sys {
                     };
                 let has_tiered_health_effect =
                     matches!(aura.aura_kind, AuraKind::TieredHealthEffect { .. });
+                // Both pool-split and tiered-health-effect auras already had
+                // their final, capped target set resolved by
+                // `nearest_eligible` above (`pool_split_strength`'s keys /
+                // `tiered_health_targets`). For those, `target_iter` below
+                // iterates that resolved set directly instead of rescanning
+                // `cached_spatial_grid` and re-running `eligible()` against
+                // every entity in radius a second time, only to discard
+                // everything outside the set. A plain `Buff` (no
+                // `pool_split`), `FriendlyFire` or `ForcePvP` aura has no such
+                // pre-resolved set, so it still does the one full-grid scan.
+                let has_resolved_target_set = has_pool_split || has_tiered_health_effect;
 
-                let target_iter = read_data
-                    .cached_spatial_grid
-                    .0
-                    .in_circle_aabr(pos.0.xy(), aura.radius)
-                    .filter_map(|target| {
-                        read_data.positions.get(target).and_then(|target_pos| {
-                            Some((
-                                target,
-                                target_pos,
-                                read_data.healths.get(target)?,
-                                read_data.uids.get(target)?,
-                                read_data.entered_auras.get(target)?,
-                            ))
-                        })
-                    });
-                target_iter.for_each(|(target, target_pos, health, target_uid, entered_auras)| {
-                    let target_buffs = match read_data.buffs.get(target) {
-                        Some(buff) => buff,
-                        None => return,
+                // Builds the (target_pos, health, target_uid, entered_auras,
+                // target_buffs) tuple for one candidate and, if it still
+                // qualifies, activates the aura against it.
+                //
+                // `needs_eligibility_check` is false when `target` came from
+                // the already-resolved pool-split/tiered-health-effect set:
+                // `nearest_eligible` ran `eligible()` for every one of those
+                // candidates once already while building that set.
+                let mut process_target = |target: specs::Entity, needs_eligibility_check: bool| {
+                    let Some(target_pos) = read_data.positions.get(target) else {
+                        return;
+                    };
+                    let Some(health) = read_data.healths.get(target) else {
+                        return;
+                    };
+                    let Some(target_uid) = read_data.uids.get(target) else {
+                        return;
+                    };
+                    let Some(entered_auras) = read_data.entered_auras.get(target) else {
+                        return;
+                    };
+                    let Some(target_buffs) = read_data.buffs.get(target) else {
+                        return;
                     };
 
-                    // A pool-split aura only ever activates for the targets
-                    // resolved above, at their computed share -- never the
-                    // aura's own (unused) flat strength.
-                    if has_pool_split && !pool_split_strength.contains_key(&target) {
-                        return;
-                    }
-                    // Likewise, a tiered-health-effect aura only ever
-                    // activates for its capped nearest-N selection.
-                    if has_tiered_health_effect && !tiered_health_targets.contains(&target) {
+                    if needs_eligibility_check && !eligible(target, target_pos, target_uid) {
                         return;
                     }
 
-                    // Ensure entity is within the aura radius
-                    if eligible(target, target_pos, target_uid) {
-                        let allow_friendly_fire =
-                            combat::allow_friendly_fire(&read_data.entered_auras, entity, target);
+                    let allow_friendly_fire =
+                        combat::allow_friendly_fire(&read_data.entered_auras, entity, target);
 
-                        let mut aura_for_target = std::borrow::Cow::Borrowed(aura);
-                        if let Some(share) = pool_split_strength.get(&target) {
-                            let mut owned = aura.clone();
-                            if let AuraKind::Buff { ref mut data, .. } = owned.aura_kind {
-                                data.strength = *share;
-                            }
-                            aura_for_target = std::borrow::Cow::Owned(owned);
+                    // A pool-split aura only ever activates at its computed
+                    // per-target share -- never the aura's own (unused) flat
+                    // strength. `None` for every other aura kind/target.
+                    let strength_override = pool_split_strength.get(&target).copied();
+
+                    let did_activate = activate_aura(
+                        key,
+                        aura,
+                        entity,
+                        *uid,
+                        target,
+                        health,
+                        target_buffs,
+                        allow_friendly_fire,
+                        strength_override,
+                        &read_data,
+                        &mut emitters,
+                    );
+
+                    if did_activate {
+                        if entered_auras
+                            .auras
+                            .get(aura.aura_kind.as_ref())
+                            .is_none_or(|auras| !auras.contains(&(*uid, key)))
+                        {
+                            emitters.emit(AuraEvent {
+                                entity: target,
+                                aura_change: AuraChange::EnterAura(
+                                    *uid,
+                                    key,
+                                    *aura.aura_kind.as_ref(),
+                                ),
+                            });
                         }
-
-                        let did_activate = activate_aura(
-                            key,
-                            &aura_for_target,
-                            entity,
-                            *uid,
-                            target,
-                            health,
-                            target_buffs,
-                            allow_friendly_fire,
-                            &read_data,
-                            &mut emitters,
-                        );
-
-                        if did_activate {
-                            if entered_auras
-                                .auras
-                                .get(aura.aura_kind.as_ref())
-                                .is_none_or(|auras| !auras.contains(&(*uid, key)))
-                            {
-                                emitters.emit(AuraEvent {
-                                    entity: target,
-                                    aura_change: AuraChange::EnterAura(
-                                        *uid,
-                                        key,
-                                        *aura.aura_kind.as_ref(),
-                                    ),
-                                });
-                            }
-                            active_auras.insert((*uid, *target_uid, key));
-                        }
+                        active_auras.insert((*uid, *target_uid, key));
                     }
-                });
+                };
+
+                if has_resolved_target_set {
+                    let resolved_targets: Vec<specs::Entity> = if has_pool_split {
+                        pool_split_strength.keys().copied().collect()
+                    } else {
+                        tiered_health_targets.iter().copied().collect()
+                    };
+                    for target in resolved_targets {
+                        process_target(target, false);
+                    }
+                } else {
+                    for target in read_data
+                        .cached_spatial_grid
+                        .0
+                        .in_circle_aabr(pos.0.xy(), aura.radius)
+                    {
+                        process_target(target, true);
+                    }
+                }
             }
             if !expired_auras.is_empty() {
                 emitters.emit(AuraEvent {
@@ -293,6 +313,12 @@ fn activate_aura(
     health: &Health,
     target_buffs: &Buffs,
     allow_friendly_fire: bool,
+    // A pool-split aura's computed per-target share, overriding the aura's
+    // own (unused) flat `BuffData::strength` -- `None` for every other aura
+    // kind/target. Passed as a plain value instead of cloning the whole
+    // `Aura` (which would deep-clone its `Box<PoolSplit>`) just to overwrite
+    // one field.
+    strength_override: Option<f32>,
     read_data: &ReadData,
     emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent> + EmitExt<BanishEvent>),
 ) -> bool {
@@ -370,19 +396,28 @@ fn activate_aura(
             ref category,
             source,
             pool_split: _,
-        } => apply_buff_aura(
-            kind,
-            data,
-            category,
-            source,
-            key,
-            applier,
-            applier_uid,
-            target,
-            target_buffs,
-            read_data,
-            emitters,
-        ),
+        } => {
+            // Overwrite just the one field a pool-split activation needs
+            // changed; `BuffData` is `Copy`, so this is a cheap struct-update,
+            // not a clone of the surrounding `Aura`/`PoolSplit`.
+            let data = match strength_override {
+                Some(strength) => BuffData { strength, ..data },
+                None => data,
+            };
+            apply_buff_aura(
+                kind,
+                data,
+                category,
+                source,
+                key,
+                applier,
+                applier_uid,
+                target,
+                target_buffs,
+                read_data,
+                emitters,
+            );
+        },
         AuraKind::TieredHealthEffect {
             ref tiers,
             ref banishment,
@@ -578,15 +613,34 @@ mod tests {
     use super::*;
     use common::{
         comp::{
-            Body, Content, Stats, aura::BanishmentEffect, creature_type::CreatureKind, humanoid,
+            Body, Content, Stats,
+            aura::{BanishmentEffect, PoolSplit},
+            creature_type::CreatureKind,
+            humanoid,
         },
         event::EventBus,
         uid::IdMaps,
     };
     use specs::{Builder, WorldExt};
     use std::num::NonZeroU64;
+    use vek::{Vec2, Vec3};
 
     fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// A minimal aura target: positioned, with just enough components for
+    /// `process_target` to reach its eligibility/activation checks (`Health`,
+    /// `Buffs`, `EnteredAuras`), placed at `x` on the x-axis so distance from
+    /// a caster at the origin is simply `x`.
+    fn make_target(world: &mut specs::World, body: Body, target_uid: Uid, x: f32) -> EcsEntity {
+        world
+            .create_entity()
+            .with(target_uid)
+            .with(Pos(Vec3::new(x, 0.0, 0.0)))
+            .with(Health::new(body))
+            .with(Buffs::default())
+            .with(EnteredAuras::default())
+            .build()
+    }
 
     /// Registers every storage/resource `ReadData` needs to `fetch`
     /// successfully, mirroring `server/src/sys/remote_sense.rs`'s
@@ -815,14 +869,14 @@ mod tests {
         let never_passes = vec![combat::HealthTier {
             max_current_health: 35.0,
             effect: TierEffect::AdditionalDamage(2000.0),
-            requirement: Some(combat::CombatRequirement::CasterLevelRoll(
+            requirement: Some(combat::CombatRequirement::CasterLevelRoll(Box::new(
                 combat::CasterLevelFailChance {
                     unlock_level: 42,
                     fail_chance_at_unlock: 1.0,
                     fail_chance_at_max_level: 1.0,
                     source_classes: vec![ClassKind::Cleric],
                 },
-            )),
+            ))),
         }];
 
         {
@@ -851,14 +905,14 @@ mod tests {
         let always_passes = vec![combat::HealthTier {
             max_current_health: 35.0,
             effect: TierEffect::AdditionalDamage(2000.0),
-            requirement: Some(combat::CombatRequirement::CasterLevelRoll(
+            requirement: Some(combat::CombatRequirement::CasterLevelRoll(Box::new(
                 combat::CasterLevelFailChance {
                     unlock_level: 42,
                     fail_chance_at_unlock: 0.0,
                     fail_chance_at_max_level: 0.0,
                     source_classes: vec![ClassKind::Cleric],
                 },
-            )),
+            ))),
         }];
 
         {
@@ -885,5 +939,196 @@ mod tests {
             "a passed CasterLevelRoll must apply tier 4's AdditionalDamage"
         );
         assert_eq!(health_change_events[0].change.amount, -2000.0);
+    }
+
+    // ── Cleanup pass: `nearest_eligible`'s resolved set drives target_iter
+    // directly for pool-split/tiered-health-effect auras, instead of
+    // `target_iter` rescanning `cached_spatial_grid` a second time. These
+    // two tests run the real `Sys::run` (not just the inner helper
+    // functions above) to pin the *observable* result of that selection --
+    // who gets activated, and at what strength -- so the scan-avoidance
+    // refactor can't silently change it. ──────────────────────────────────
+
+    /// A pool-split aura must activate only the capped nearest-N targets
+    /// `nearest_eligible` resolved, each at its even share of the pool --
+    /// never every entity found in radius, and never the aura's own (unused)
+    /// flat strength.
+    #[test]
+    fn pool_split_aura_activates_only_the_capped_nearest_targets_at_their_even_share() {
+        let mut world = setup_world();
+
+        let caster_uid = uid(1);
+        let body = Body::Humanoid(humanoid::Body::random());
+
+        // Three candidates within the aura's radius, at increasing distance.
+        // `max_targets` below caps the pool to the nearest two, so the
+        // farthest must be excluded entirely -- not merely under-shared.
+        let near = make_target(&mut world, body, uid(2), 10.0);
+        let mid = make_target(&mut world, body, uid(3), 20.0);
+        let far = make_target(&mut world, body, uid(4), 30.0);
+
+        {
+            let mut grid = world.write_resource::<common::CachedSpatialGrid>();
+            for (entity, x) in [(near, 10.0_f32), (mid, 20.0), (far, 30.0)] {
+                grid.0.insert(Vec2::new(x as i32, 0), 0, entity);
+            }
+        }
+
+        let pool_split = PoolSplit {
+            unlock_level: 0,
+            value_at_unlock: 60.0,
+            value_at_max_level: 60.0,
+            source_classes: vec![],
+            max_targets: 2,
+        };
+        let aura = Aura::new(
+            AuraKind::Buff {
+                kind: BuffKind::Shielded,
+                data: BuffData {
+                    strength: 0.0,
+                    duration: None,
+                    delay: None,
+                    secondary_duration: None,
+                    misc_data: None,
+                },
+                category: None,
+                source: BuffSource::Character {
+                    by: caster_uid,
+                    tool_kind: None,
+                },
+                pool_split: Some(Box::new(pool_split)),
+            },
+            50.0,
+            None,
+            AuraTarget::All,
+            Time(0.0),
+            None,
+        );
+        let mut auras = Auras::default();
+        auras.insert(aura);
+
+        world
+            .create_entity()
+            .with(caster_uid)
+            .with(Pos(Vec3::new(0.0, 0.0, 0.0)))
+            .with(auras)
+            .build();
+
+        let mut job = Job::<Sys>::default();
+        let read_data = ReadData::fetch(&world);
+        Sys::run(&mut job, read_data);
+
+        let buff_events: Vec<_> = world
+            .read_resource::<EventBus<BuffEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            buff_events.len(),
+            2,
+            "only the capped nearest-2 targets must be activated, not all 3 in radius"
+        );
+        let targeted: std::collections::HashSet<_> =
+            buff_events.iter().map(|ev| ev.entity).collect();
+        assert!(targeted.contains(&near) && targeted.contains(&mid));
+        assert!(
+            !targeted.contains(&far),
+            "the third-nearest target is outside max_targets and must be excluded entirely, not \
+             merely given a smaller share"
+        );
+        for ev in &buff_events {
+            let BuffChange::Add(buff) = &ev.buff_change else {
+                panic!("expected BuffChange::Add");
+            };
+            assert_eq!(
+                buff.data.strength, 30.0,
+                "the pool must be split evenly (60.0 / 2 resolved targets) across the resolved \
+                 targets, never the aura's own flat (and unused) strength"
+            );
+        }
+    }
+
+    /// The scan-avoidance shortcut is reserved for pool-split /
+    /// tiered-health-effect auras: a plain `Buff` aura with no `pool_split`
+    /// has no pre-resolved target set, so it must still take the full
+    /// `cached_spatial_grid` scan and activate every eligible target found in
+    /// radius -- unaffected by that refactor.
+    #[test]
+    fn a_plain_buff_aura_without_pool_split_still_activates_every_eligible_target_in_radius() {
+        let mut world = setup_world();
+
+        let caster_uid = uid(1);
+        let body = Body::Humanoid(humanoid::Body::random());
+
+        let target_a = make_target(&mut world, body, uid(2), 10.0);
+        let target_b = make_target(&mut world, body, uid(3), 20.0);
+        let target_c = make_target(&mut world, body, uid(4), 30.0);
+
+        {
+            let mut grid = world.write_resource::<common::CachedSpatialGrid>();
+            for (entity, x) in [(target_a, 10.0_f32), (target_b, 20.0), (target_c, 30.0)] {
+                grid.0.insert(Vec2::new(x as i32, 0), 0, entity);
+            }
+        }
+
+        let aura = Aura::new(
+            AuraKind::Buff {
+                kind: BuffKind::Shielded,
+                data: BuffData {
+                    strength: 5.0,
+                    duration: None,
+                    delay: None,
+                    secondary_duration: None,
+                    misc_data: None,
+                },
+                category: None,
+                source: BuffSource::Character {
+                    by: caster_uid,
+                    tool_kind: None,
+                },
+                pool_split: None,
+            },
+            50.0,
+            None,
+            AuraTarget::All,
+            Time(0.0),
+            None,
+        );
+        let mut auras = Auras::default();
+        auras.insert(aura);
+
+        world
+            .create_entity()
+            .with(caster_uid)
+            .with(Pos(Vec3::new(0.0, 0.0, 0.0)))
+            .with(auras)
+            .build();
+
+        let mut job = Job::<Sys>::default();
+        let read_data = ReadData::fetch(&world);
+        Sys::run(&mut job, read_data);
+
+        let buff_events: Vec<_> = world
+            .read_resource::<EventBus<BuffEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            buff_events.len(),
+            3,
+            "the full-grid-scan path (no pool_split) must still activate every eligible target in \
+             radius, unaffected by the pool-split/tiered-health-effect target-selection shortcut"
+        );
+        let targeted: std::collections::HashSet<_> =
+            buff_events.iter().map(|ev| ev.entity).collect();
+        assert!(
+            targeted.contains(&target_a)
+                && targeted.contains(&target_b)
+                && targeted.contains(&target_c)
+        );
+        for ev in &buff_events {
+            let BuffChange::Add(buff) = &ev.buff_change else {
+                panic!("expected BuffChange::Add");
+            };
+            assert_eq!(buff.data.strength, 5.0);
+        }
     }
 }
