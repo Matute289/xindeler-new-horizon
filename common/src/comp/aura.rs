@@ -4,6 +4,7 @@ use crate::{
         CharacterClass,
         buff::{BuffCategory, BuffData, BuffKind, BuffSource},
         class::ClassKind,
+        creature_type::CreatureKind,
         skillset::MAX_CHARACTER_LEVEL,
         tool::ToolKind,
     },
@@ -61,10 +62,17 @@ pub enum AuraKind {
     /// `CombatBuffStrength::DamageFraction` in a `TierEffect::Buff` resolves
     /// against `0.0` damage (effectively always `0`) — tier tables meant for
     /// aura use should stick to `CombatBuffStrength::Value`.
+    ///
+    /// `banishment`, when set, is evaluated for every selected target
+    /// **independently of the tier ladder** — including targets that match no
+    /// tier at all. Boxed for the same reason `PoolSplit` is: this variant
+    /// lives inside `AuraChange::Add(Aura)`, and the `Vec<CreatureKind>`
+    /// would otherwise bloat every `Aura`.
     TieredHealthEffect {
         tiers: Vec<HealthTier>,
         max_targets: usize,
         source: BuffSource,
+        banishment: Option<Box<BanishmentEffect>>,
     },
     /* TODO: Implement other effects here. Things to think about
      * are terrain/sprite effects, collision and physics, and
@@ -270,6 +278,39 @@ impl PoolSplit {
     }
 }
 
+/// A tier-independent, saving-throw-resisted banishment layered alongside a
+/// [`AuraKind::TieredHealthEffect`] ladder.
+///
+/// Tier-independent on purpose: real Divine Word banishes a qualifying
+/// creature that fails its save "regardless of its current hit points", so a
+/// celestial above every HP threshold is still banished, and a fiend that
+/// lands in the Blinded tier gets *both* effects. Every number here is
+/// authored in the ability's RON, not hardcoded — this type carries no
+/// balance defaults.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BanishmentEffect {
+    /// Only creatures whose `Stats::creature_kind` is in this list can be
+    /// banished at all.
+    pub creature_kinds: Vec<CreatureKind>,
+    /// Lower bound of the return delay, in hours of **real** time.
+    pub min_return_hours: f64,
+    /// Upper bound of the return delay, in hours of **real** time. Drawn
+    /// uniformly against `min_return_hours`.
+    pub max_return_hours: f64,
+    /// Fraction of the normal XP and loot a banishment awards, forwarded into
+    /// `combat::RemovalInfo::banished`.
+    pub reward_fraction: f32,
+}
+
+impl BanishmentEffect {
+    /// Whether a target of this creature kind is banishable. `None` (a body
+    /// that is not a creature at all) never is.
+    pub fn applies_to(&self, kind: Option<CreatureKind>) -> bool {
+        kind.is_some_and(|kind| self.creature_kinds.contains(&kind))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AuraBuffConstructor {
@@ -321,6 +362,8 @@ impl AuraBuffConstructor {
 pub struct TieredHealthEffectConstructor {
     pub tiers: Vec<HealthTier>,
     pub max_targets: usize,
+    #[serde(default)]
+    pub banishment: Option<BanishmentEffect>,
 }
 
 impl TieredHealthEffectConstructor {
@@ -340,6 +383,7 @@ impl TieredHealthEffectConstructor {
                 by: *entity_info.0,
                 tool_kind: entity_info.1,
             },
+            banishment: self.banishment.clone().map(Box::new),
         };
         Aura::new(
             aura_kind,
@@ -377,6 +421,7 @@ impl Component for EnteredAuras {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::comp::creature_type::CreatureKind;
 
     fn pool_split() -> PoolSplit {
         PoolSplit {
@@ -434,5 +479,41 @@ mod tests {
             ..pool_split()
         };
         assert_eq!(split.resolved_total(Some(60), None), 240.0);
+    }
+
+    fn divine_word_banishment() -> BanishmentEffect {
+        BanishmentEffect {
+            creature_kinds: vec![
+                CreatureKind::Celestial,
+                CreatureKind::Elemental,
+                CreatureKind::Fey,
+                CreatureKind::Fiend,
+            ],
+            min_return_hours: 24.0,
+            max_return_hours: 168.0,
+            reward_fraction: 0.25,
+        }
+    }
+
+    #[test]
+    fn banishment_applies_only_to_the_authored_creature_kinds() {
+        let effect = divine_word_banishment();
+        assert!(effect.applies_to(Some(CreatureKind::Celestial)));
+        assert!(effect.applies_to(Some(CreatureKind::Elemental)));
+        assert!(effect.applies_to(Some(CreatureKind::Fey)));
+        assert!(effect.applies_to(Some(CreatureKind::Fiend)));
+        assert!(!effect.applies_to(Some(CreatureKind::Beast)));
+        assert!(!effect.applies_to(Some(CreatureKind::Undead)));
+        assert!(!effect.applies_to(Some(CreatureKind::Dragon)));
+    }
+
+    /// A body with no creature kind at all (arrows, ships, most objects) is
+    /// never banishable, and neither is a humanoid — which is the whole
+    /// reason no player can be banished.
+    #[test]
+    fn banishment_never_applies_to_unclassified_bodies_or_humanoids() {
+        let effect = divine_word_banishment();
+        assert!(!effect.applies_to(None));
+        assert!(!effect.applies_to(Some(CreatureKind::Humanoid)));
     }
 }

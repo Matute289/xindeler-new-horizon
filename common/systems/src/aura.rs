@@ -3,13 +3,13 @@ use std::collections::HashSet;
 use common::{
     combat::{self, DamageSource, TierEffect},
     comp::{
-        Alignment, Aura, Auras, BuffKind, Buffs, CharacterClass, CharacterState, Health,
+        Alignment, Aura, Auras, Banished, BuffKind, Buffs, CharacterClass, CharacterState, Health,
         HealthChange, Mass, Player, Pos, Stats,
         aura::{AuraChange, AuraKey, AuraKind, AuraTarget, EnteredAuras},
         buff::{Buff, BuffCategory, BuffChange, BuffSource, DestInfo},
         group::Group,
     },
-    event::{AuraEvent, BuffEvent, EmitExt, HealthChangeEvent},
+    event::{AuraEvent, BanishEvent, BuffEvent, EmitExt, HealthChangeEvent},
     event_emitters, match_some,
     resources::Time,
     uid::{IdMaps, Uid},
@@ -22,6 +22,7 @@ event_emitters! {
         aura: AuraEvent,
         buff: BuffEvent,
         health_change: HealthChangeEvent,
+        banish: BanishEvent,
     }
 }
 
@@ -45,6 +46,7 @@ pub struct ReadData<'a> {
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    banished: ReadStorage<'a, Banished>,
 }
 
 #[derive(Default)]
@@ -292,7 +294,7 @@ fn activate_aura(
     target_buffs: &Buffs,
     allow_friendly_fire: bool,
     read_data: &ReadData,
-    emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent>),
+    emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent> + EmitExt<BanishEvent>),
 ) -> bool {
     let should_activate = match aura.aura_kind {
         AuraKind::Buff { kind, source, .. } => {
@@ -381,8 +383,13 @@ fn activate_aura(
             read_data,
             emitters,
         ),
-        AuraKind::TieredHealthEffect { ref tiers, .. } => apply_tiered_health_effect(
+        AuraKind::TieredHealthEffect {
+            ref tiers,
+            ref banishment,
+            ..
+        } => apply_tiered_health_effect(
             tiers,
+            banishment.as_deref(),
             health,
             applier,
             applier_uid,
@@ -467,17 +474,45 @@ fn apply_buff_aura(
 }
 
 /// Resolves the single worst tier `target`'s own current health qualifies
-/// for and applies its effect. Split out of `activate_aura` to keep that
-/// function under clippy's line-count lint.
+/// for and applies its effect, then — independently of that ladder — raises a
+/// banishment intent if the aura carries one and the target qualifies. Split
+/// out of `activate_aura` to keep that function under clippy's line-count
+/// lint.
 fn apply_tiered_health_effect(
     tiers: &[combat::HealthTier],
+    banishment: Option<&common::comp::aura::BanishmentEffect>,
     health: &Health,
     applier: EcsEntity,
     applier_uid: Uid,
     target: EcsEntity,
     read_data: &ReadData,
-    emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent>),
+    emitters: &mut (impl EmitExt<BuffEvent> + EmitExt<HealthChangeEvent> + EmitExt<BanishEvent>),
 ) {
+    // Banishment is NOT gated on landing in a tier: a qualifying creature
+    // above every threshold is still banished (spec §3). Evaluated first so
+    // an ordinary-creature death tier below can't short-circuit it.
+    if let Some(banishment) = banishment
+        // Already parked — a 0.5 s aura ticks more than once, and the
+        // server-side handler is idempotent too, but not emitting is cheaper.
+        // rtsim actors are NOT excluded: the rtsim-vs-mob fork is the server
+        // handler's job, not the aura's.
+        && !read_data.banished.contains(target)
+        && banishment.applies_to(
+            read_data
+                .stats
+                .get(target)
+                .and_then(|stats| stats.creature_kind),
+        )
+    {
+        emitters.emit(BanishEvent {
+            entity: target,
+            banished_by: applier_uid,
+            min_return_hours: banishment.min_return_hours,
+            max_return_hours: banishment.max_return_hours,
+            reward_fraction: banishment.reward_fraction,
+        });
+    }
+
     let Some(tier) = tiers
         .iter()
         .find(|t| health.current() <= t.max_current_health)

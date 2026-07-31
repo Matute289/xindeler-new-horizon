@@ -1690,4 +1690,32 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// 🔴 LOAD-BEARING INVARIANT — do not weaken.
+    ///
+    /// `power_word_divine_word`'s banishment is scoped to
+    /// `{Celestial, Elemental, Fey, Fiend}`, and the *only* thing that
+    /// guarantees a player character can never be banished is that every
+    /// `Body::Humanoid` (i.e. every playable race) classifies as
+    /// `CreatureKind::Humanoid`, unconditionally. If this ever becomes
+    /// conditional, banishment needs an explicit player guard.
+    #[test]
+    fn every_playable_humanoid_body_is_creature_kind_humanoid() {
+        use crate::comp::body::humanoid;
+
+        let mut rng = rand::rng();
+        let mut checked = 0;
+        // `ALL_SPECIES: [Species; 6]` (`common/src/comp/body/humanoid.rs:173`)
+        // is the playable-race list; `random_with` fills the cosmetic fields.
+        for species in humanoid::ALL_SPECIES {
+            let body = Body::Humanoid(humanoid::Body::random_with(&mut rng, &species));
+            assert_eq!(
+                body.creature_kind(),
+                Some(CreatureKind::Humanoid),
+                "{species:?} is not a Humanoid creature"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, humanoid::ALL_SPECIES.len());
+    }
 }
