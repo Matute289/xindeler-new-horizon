@@ -29,6 +29,12 @@ BasicAura(
                         source_classes: [Cleric],
                     ))),
                 ),
+                // Tier 3 — the hour-long Paralyzed result, the worst
+                // temporary outcome anywhere in the ladder. Gated by the same
+                // caster-side CasterLevelRoll margin as tier 4's instant
+                // death (was previously unconditional, unlike every other
+                // permanent/near-permanent result this family of spells
+                // authors).
                 (
                     max_current_health: 45.0,
                     effect: Buff((
@@ -37,6 +43,12 @@ BasicAura(
                         strength: Value(1.0),
                         chance: 1.0,
                     )),
+                    requirement: Some(CasterLevelRoll((
+                        unlock_level: 42,
+                        fail_chance_at_unlock: 0.25,
+                        fail_chance_at_max_level: 0.05,
+                        source_classes: [Cleric],
+                    ))),
                 ),
                 (
                     max_current_health: 55.0,
@@ -80,7 +92,7 @@ BasicAura(
     meta: (
         school: Some(Enchantment),
         source: Some(Divine),
-        cooldown: Some(60.0),
+        cooldown: Some(75.0),
         requirements: (min_level: Some(42)),
     ),
 )

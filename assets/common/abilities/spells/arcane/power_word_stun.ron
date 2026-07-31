@@ -9,7 +9,7 @@ BasicRanged(
             attack_effect: Some((
                 Buff((
                     kind: Paralyzed,
-                    dur_secs: 15,
+                    dur_secs: 60,
                     strength: Value(1.0),
                     chance: 1.0,
                 )),

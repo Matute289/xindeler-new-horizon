@@ -3453,11 +3453,34 @@ mod power_word_kill_threshold_tests {
 mod power_word_ron_content_tests {
     use crate::{
         assets::{AssetExt, Ron},
-        combat::CombatRequirement,
-        comp::ability::CharacterAbility,
+        combat::{CombatEffect, CombatRequirement},
+        comp::{ability::CharacterAbility, buff::BuffKind},
+        resources::Secs,
     };
 
     fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// Digs the Paralyzed `CombatBuff`'s `dur_secs` out of a `BasicRanged`
+    /// Power Word's `attack_effect` -- same nested shape `unlock_level_of`
+    /// digs the `CasterLevelRoll` out of.
+    fn paralyzed_dur_secs_of(ability: &CharacterAbility) -> Secs {
+        let CharacterAbility::BasicRanged { projectile, .. } = ability else {
+            panic!("expected a BasicRanged Power Word");
+        };
+        let attack = projectile
+            .attack
+            .as_ref()
+            .expect("Power Word projectile must carry an attack");
+        let (effect, _requirement) = attack
+            .attack_effect
+            .as_ref()
+            .expect("Power Word attack must carry an attack_effect");
+        let CombatEffect::Buff(buff) = effect else {
+            panic!("expected a Buff combat effect");
+        };
+        assert_eq!(buff.kind, BuffKind::Paralyzed, "expected a Paralyzed buff");
+        buff.dur_secs
+    }
 
     /// Digs the `CasterLevelRoll` out of a `BasicRanged` Power Word's nested
     /// `TargetHealthAtOrBelow` + `CasterLevelRoll` `All(..)` combinator --
@@ -3516,6 +3539,15 @@ mod power_word_ron_content_tests {
         assert_eq!(meta.requirements.min_level, Some(48));
         assert_eq!(meta.cooldown, Some(75.0));
         assert_eq!(unlock_level_of(&ability), 48);
+    }
+
+    /// Part of a wider reorder of the "Paralyzed" spell family (handled
+    /// elsewhere for `hold_person`/`hold_monster`/`irresistible_dance`) --
+    /// Stun's own Paralyzed duration goes from 15s to 60s.
+    #[test]
+    fn power_word_stun_paralyzes_for_60_seconds() {
+        let ability = load("common.abilities.spells.arcane.power_word_stun");
+        assert_eq!(paralyzed_dur_secs_of(&ability), Secs(60.0));
     }
 }
 
