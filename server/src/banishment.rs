@@ -25,6 +25,7 @@
 //! | rehydrate | respawn a frozen entity from the persisted archetype | nothing — `Banishments::prepare` never queues one |
 
 use common::comp::{self, Agent, Auras, Banished, Buffs, Combo, Energy, EnteredAuras, Health, Pos};
+use common_base::prof_span;
 use specs::{Join, WorldExt};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -82,6 +83,10 @@ pub fn now_unix_secs() -> u64 {
 /// therefore banishable again at the earliest on the *next* tick, and gets a
 /// brand-new record and id when it is.
 pub fn maintain(server: &mut Server) {
+    // Its own span: the tick's coarse timers would otherwise fold this pass
+    // into the event-handling bucket, and "free when nothing is banished" is a
+    // claim that should be checkable in Tracy rather than only asserted here.
+    prof_span!("banishment::maintain");
     let now = now_unix_secs();
     park_newly_banished(server);
     return_due(server, now);
@@ -156,7 +161,20 @@ fn park_newly_banished(server: &mut Server) {
             rtsim.hook_rtsim_entity_unload(actor);
         }
         if let Err(e) = server.state.delete_entity_recorded(entity) {
-            warn!(?e, "Failed to unload a banished rtsim actor");
+            // The actor is stranded either way — its `presence` is already
+            // cleared and its `mode` already `Simulated`. Strip the components
+            // too so this join stops re-selecting the same entity every tick,
+            // which would otherwise re-clear `presence` and re-run
+            // `hook_rtsim_entity_unload` forever, the latter logging
+            // "Unloaded already unloaded entity" on every single tick.
+            warn!(
+                ?e,
+                "Failed to unload a banished rtsim actor; parking it instead"
+            );
+            let ecs = server.state.ecs();
+            ecs.write_storage::<Pos>().remove(entity);
+            ecs.write_storage::<Agent>().remove(entity);
+            ecs.write_storage::<comp::Vel>().remove(entity);
         }
     }
 }
@@ -184,21 +202,25 @@ fn return_due(server: &mut Server, now_unix_secs: u64) {
             });
         if !due_actors.is_empty() {
             let rtsim = server.state.ecs().read_resource::<RtSim>();
-            for (id, actor) in due_actors {
+            for (id, actor) in &due_actors {
                 // Restoring `presence` is the whole return: rtsim's load loop
                 // re-materialises the entity the next time its chunk is
                 // loaded, rebuilt from the actor's `EntityConfig` — i.e. fully
                 // reset, for free.
-                if !rtsim.set_actor_presence(actor, true) {
+                if !rtsim.set_actor_presence(*actor, true) {
                     warn!(
                         ?id,
                         "Banished rtsim actor no longer exists; dropping its record"
                     );
                 }
-                rtsim.with_banishments(|banishments| {
-                    banishments.remove(id);
-                });
             }
+            // One borrow of the registry for the whole batch rather than one
+            // per actor.
+            rtsim.with_banishments(|banishments| {
+                for (id, _) in &due_actors {
+                    banishments.remove(*id);
+                }
+            });
         }
     }
 
@@ -388,7 +410,11 @@ fn rehydrate_pending(server: &mut Server, now_unix_secs: u64) {
 
         if record.returns_at_unix_secs <= now_unix_secs {
             // The deadline passed while the server was down: it is already
-            // back, so it is spawned live and the record is forgotten.
+            // back, so it is spawned live and the record is forgotten. If its
+            // chunk happens to be unloaded, `Server::tick`'s NPC-cleanup sweep
+            // culls it later this tick — which is the ordinary fate of any
+            // wild mob in an unloaded chunk, and correct: with the record
+            // gone, worldgen no longer suppresses a spawn there.
             server
                 .state
                 .ecs()
@@ -396,23 +422,45 @@ fn rehydrate_pending(server: &mut Server, now_unix_secs: u64) {
                 .with_banishments(|banishments| {
                     banishments.remove(id);
                 });
-        } else if let Err(e) =
-            server
-                .state
-                .ecs()
-                .write_storage::<Banished>()
-                .insert(entity, Banished {
-                    id,
-                    return_pos: record.return_pos,
-                    returns_at_unix_secs: record.returns_at_unix_secs,
-                })
-        {
-            warn!(?e, ?id, "Failed to re-park a rehydrated banished creature");
+            continue;
         }
-        // Stripping `Pos`/`Agent`/`Vel` happens on the next tick's
-        // `park_newly_banished`. One tick of visibility is harmless: at server
-        // start no client has been sent the entity yet, and mid-session the
-        // creature was already gone from every client.
+
+        // 🔴 Park in the same statement, **not** on the next tick's
+        // `park_newly_banished`. `Server::tick` runs its "remove NPCs outside
+        // every player's view distance" sweep later in this same tick, and
+        // that sweep joins on `&Pos` and deletes anything whose chunk is not
+        // loaded — which, at server start, is every chunk. Leaving the
+        // rehydrated creature holding a `Pos` for one tick therefore deletes
+        // it immediately and orphans its record forever (the rehydration
+        // queue has already been drained above), making the whole
+        // survives-a-restart guarantee inert.
+        let ecs = server.state.ecs();
+        match ecs.write_storage::<Banished>().insert(entity, Banished {
+            id,
+            return_pos: record.return_pos,
+            returns_at_unix_secs: record.returns_at_unix_secs,
+        }) {
+            Ok(_) => {
+                ecs.write_storage::<Pos>().remove(entity);
+                ecs.write_storage::<Agent>().remove(entity);
+                ecs.write_storage::<comp::Vel>().remove(entity);
+            },
+            Err(e) => {
+                // The entity died between creation and here. Re-queue rather
+                // than drop: the record is still owed a return, and the next
+                // tick builds a fresh entity for it. This cannot spin — a
+                // successful insert leaves the queue empty.
+                warn!(
+                    ?e,
+                    ?id,
+                    "Failed to re-park a rehydrated banished creature; re-queueing it"
+                );
+                ecs.read_resource::<RtSim>()
+                    .with_banishments(|banishments| {
+                        banishments.queue_rehydration(id);
+                    });
+            },
+        }
     }
 }
 
