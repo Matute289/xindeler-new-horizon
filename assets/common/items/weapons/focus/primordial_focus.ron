@@ -1,5 +1,5 @@
 ItemDef(
-    legacy_name: "Wanderer's Focus",
+    legacy_name: "Primordial Focus",
     legacy_description: "A smooth river stone worn as a channel for wild spirits.",
     kind: Tool((
         kind: Focus,
@@ -17,4 +17,11 @@ ItemDef(
     quality: Low,
     tags: [],
     ability_spec: None,
+    // Primordial-core implement: restricted to the two classes whose magic
+    // core is Primordial.
+    requirements: Some((
+        classes: Some([Druid, Ranger]),
+        min_level: None,
+        races: None,
+    )),
 )

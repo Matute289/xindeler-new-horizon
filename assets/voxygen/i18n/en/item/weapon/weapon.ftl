@@ -52,7 +52,7 @@ weapon-tome-apprentice_tome = Apprentice Tome
 weapon-holy_symbol-initiate_symbol = Initiate's Symbol
     .desc = A carved wooden pendant blessed at a roadside shrine.
 
-weapon-focus-wanderer_focus = Wanderer's Focus
+weapon-focus-primordial_focus = Primordial Focus
     .desc = A smooth river stone worn as a channel for wild spirits.
 
 weapon-sword-caladbolg = Caladbolg
