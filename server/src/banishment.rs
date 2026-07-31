@@ -43,7 +43,7 @@ use common::{
     terrain::CoordinateConversions,
 };
 #[cfg(feature = "worldgen")]
-use rtsim::data::{BanishedCreature, BanishedKind};
+use rtsim::data::{BanishedCreature, BanishedKind, Banishments};
 use tracing::warn;
 
 use crate::Server;
@@ -139,6 +139,35 @@ pub fn banish_entity(
             returns_at_unix_secs,
         });
     Some(id)
+}
+
+/// Erases a banishment outright, given the `Banished` marker the entity was
+/// carrying (if any). Returns the id of the record it forgot.
+///
+/// This is the "a real death always wins" half of the lifecycle, and it is
+/// deliberately *not* the same thing as a return: nothing is spawned, nothing
+/// is un-parked, the record simply stops existing. Two consequences, both
+/// intended:
+///
+/// * The chunk the creature was taken from stops having one spawn suppressed
+///   (`Banishments::freestanding_suppressions_in_chunk`), so ordinary respawn
+///   can populate it again — with a *different* creature, which is the correct
+///   outcome: the banished individual died.
+/// * Nothing can ever bring that individual back. Once it has really died it
+///   must not rehydrate, not on this tick, not after a server restart.
+///
+/// Clearing rtsim `presence` is deliberately not part of this. An rtsim actor
+/// is parked by *deleting* its ECS entity, so a parked actor can never receive
+/// a `DestroyEvent` at all; one killed before the park pass runs never had its
+/// `presence` cleared in the first place.
+#[cfg(feature = "worldgen")]
+pub(crate) fn revoke_banishment(
+    banishments: &mut Banishments,
+    marker: Option<Banished>,
+) -> Option<comp::BanishmentId> {
+    let marker = marker?;
+    banishments.remove(marker.id);
+    Some(marker.id)
 }
 
 /// One tick of banishment upkeep.
@@ -994,5 +1023,87 @@ mod rehydration_tests {
             returns_at_unix_secs: 1_700_000_000,
         };
         assert!(rehydration_entity_info(&record).is_none());
+    }
+}
+
+/// Revocation: the "a real death always wins" half of the lifecycle, testable
+/// against a bare `Banishments` because it touches nothing else.
+#[cfg(all(test, feature = "worldgen"))]
+mod revocation_tests {
+    use super::*;
+    use common::comp::{Alignment, Body, bird_large};
+    use rtsim::data::{BanishedCreature, BanishedKind, Banishments};
+    use vek::{Vec2, Vec3};
+
+    const RETURN_POS: Vec3<f32> = Vec3::new(512.0, 640.0, 90.0);
+    const RETURN_CHUNK: Vec2<i32> = Vec2::new(1, 1);
+
+    fn registry_with_one_banished_phoenix() -> (Banishments, Banished) {
+        let mut banishments = Banishments::default();
+        let id = banishments.insert(BanishedCreature {
+            kind: BanishedKind::Freestanding {
+                body: Body::BirdLarge(bird_large::Body {
+                    species: bird_large::Species::Phoenix,
+                    body_type: bird_large::BodyType::Female,
+                }),
+                alignment: Alignment::Enemy,
+                creature_kind: None,
+                scale: 1.0,
+            },
+            return_pos: RETURN_POS,
+            return_chunk: RETURN_CHUNK,
+            returns_at_unix_secs: 1_700_000_000,
+        });
+        let marker = Banished {
+            id,
+            return_pos: RETURN_POS,
+            returns_at_unix_secs: 1_700_000_000,
+        };
+        (banishments, marker)
+    }
+
+    /// 🔴 The permanent data loss this guard exists for. A record left behind
+    /// after its creature really died keeps suppressing one worldgen spawn in
+    /// that chunk **forever**, and nothing will ever bring the creature back
+    /// to release it. Revoking has to erase the record, not merely drop the
+    /// marker.
+    #[test]
+    fn revoking_a_banishment_gives_the_chunk_its_suppressed_spawn_back() {
+        let (mut banishments, marker) = registry_with_one_banished_phoenix();
+        assert_eq!(
+            banishments
+                .freestanding_suppressions_in_chunk(RETURN_CHUNK)
+                .len(),
+            1,
+            "while banished, the chunk carries one fewer creature of that kind"
+        );
+
+        let revoked = revoke_banishment(&mut banishments, Some(marker));
+
+        assert_eq!(revoked, Some(marker.id));
+        assert!(
+            banishments.get(marker.id).is_none(),
+            "a creature that really died must never be able to return"
+        );
+        assert!(
+            banishments
+                .freestanding_suppressions_in_chunk(RETURN_CHUNK)
+                .is_empty(),
+            "the chunk gets its spawn slot back, so an ordinary respawn can make a new creature \
+             there"
+        );
+        assert!(banishments.is_empty());
+    }
+
+    /// The overwhelmingly common case: an entity dies carrying no banishment
+    /// at all. Revocation has to be a total no-op there.
+    #[test]
+    fn revoking_an_entity_that_was_never_banished_is_a_no_op() {
+        let (mut banishments, _) = registry_with_one_banished_phoenix();
+        let before = banishments.len();
+
+        assert_eq!(revoke_banishment(&mut banishments, None), None);
+
+        assert_eq!(banishments.len(), before);
     }
 }

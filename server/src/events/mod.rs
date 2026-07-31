@@ -249,3 +249,30 @@ impl Server {
             .expect("This should be sendable")
     }
 }
+
+#[cfg(test)]
+mod dispatcher_tests {
+    use super::*;
+
+    /// Every ordering guarantee in the event dispatcher is declared as a
+    /// *string* (`event_sys_name`) resolved against the systems registered
+    /// before it, and `shred` panics on one it cannot resolve. Several of those
+    /// edges are load-bearing correctness, not tuning — `BanishEvent` after
+    /// `HealthChangeEvent` so a creature that died this tick can never be
+    /// banished, `DestroyEvent` after both so the banishment's reward is paid
+    /// while the creature still has a position — and a reordering of
+    /// `register_event_systems` would break them at server start-up rather
+    /// than at compile time.
+    ///
+    /// Building the real dispatcher is the only thing that resolves them all.
+    #[test]
+    fn every_declared_ordering_edge_resolves() {
+        let pools = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("thread pool"),
+        );
+        let _ = Server::create_event_dispatcher(pools);
+    }
+}
