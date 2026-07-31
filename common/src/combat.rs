@@ -1784,6 +1784,70 @@ pub struct HealthTier {
     /// this value.
     pub max_current_health: f32,
     pub effect: TierEffect,
+    /// An optional additional gate, checked *after* the health threshold
+    /// matches and *before* `effect` is applied. `None` (the default, and
+    /// what every tier authored before this field existed still resolves to)
+    /// always passes.
+    ///
+    /// Currently only meaningful with [`CombatRequirement::CasterLevelRoll`]
+    /// (optionally composed via [`CombatRequirement::All`] of more rolls) --
+    /// see [`HealthTier::requirement_met`] for why every other
+    /// `CombatRequirement` variant is out of scope on a health-tier ladder.
+    /// `power_word_divine_word`'s instant-death tier is the first (and so
+    /// far only) tier to set this: real 5e's instant death at 0 HP has no
+    /// caster-side margin for failure anywhere else in the spell, unlike
+    /// `power_word_kill`/`pain`/`stun`, which all gate their permanent
+    /// result behind the same roll.
+    #[serde(default)]
+    pub requirement: Option<CombatRequirement>,
+}
+
+impl HealthTier {
+    /// Whether this tier's optional [`HealthTier::requirement`] is satisfied
+    /// for a cast by `caster_level`/`character_class`. `None` always passes.
+    ///
+    /// Deliberately narrower than [`CombatRequirement::requirement_met`]: a
+    /// health tier already gates on the target's current health via
+    /// `max_current_health`, and the tick that resolves it
+    /// (`common-systems/src/aura.rs`'s `apply_tiered_health_effect`) has no
+    /// attack, target buffs/combo, stage-section, or direction to resolve
+    /// the attack-pipeline-only variants against. Only `CasterLevelRoll`
+    /// (and `All` composed purely of more `CasterLevelRoll`s, for forward
+    /// compatibility, though nothing authors that yet) is meaningful here;
+    /// anything else is an authoring error caught by the `debug_assert`
+    /// below rather than silently bypassed or silently always-failing in a
+    /// release build.
+    pub fn requirement_met(
+        &self,
+        caster_level: Option<u16>,
+        character_class: Option<&CharacterClass>,
+    ) -> bool {
+        fn met(
+            req: &CombatRequirement,
+            caster_level: Option<u16>,
+            character_class: Option<&CharacterClass>,
+        ) -> bool {
+            match req {
+                CombatRequirement::CasterLevelRoll(fail_chance) => fail_chance
+                    .effective_caster_level(caster_level, character_class)
+                    .is_some_and(|level| rand::random::<f32>() >= fail_chance.fail_chance(level)),
+                CombatRequirement::All(reqs) => reqs
+                    .iter()
+                    .all(|req| met(req, caster_level, character_class)),
+                _ => {
+                    debug_assert!(
+                        false,
+                        "HealthTier::requirement only supports CasterLevelRoll (optionally \
+                         wrapped in All) -- got {req:?}"
+                    );
+                    false
+                },
+            }
+        }
+        self.requirement
+            .as_ref()
+            .is_none_or(|req| met(req, caster_level, character_class))
+    }
 }
 
 /// What a [`HealthTier`] grants once its threshold is the worst one met.
@@ -3375,6 +3439,100 @@ mod power_word_kill_threshold_tests {
             curve.effective_caster_level(Some(60), Some(&character_class)),
             Some(60)
         );
+    }
+}
+
+#[cfg(test)]
+mod health_tier_requirement_tests {
+    use super::{CasterLevelFailChance, ClassKind, CombatRequirement, HealthTier, TierEffect};
+    use crate::comp::CharacterClass;
+
+    fn tier_with_requirement(requirement: CombatRequirement) -> HealthTier {
+        HealthTier {
+            max_current_health: 35.0,
+            effect: TierEffect::AdditionalDamage(2000.0),
+            requirement: Some(requirement),
+        }
+    }
+
+    fn cleric_roll(fail_chance_at_unlock: f32, fail_chance_at_max_level: f32) -> CombatRequirement {
+        CombatRequirement::CasterLevelRoll(CasterLevelFailChance {
+            unlock_level: 42,
+            fail_chance_at_unlock,
+            fail_chance_at_max_level,
+            source_classes: vec![ClassKind::Cleric],
+        })
+    }
+
+    /// Tiers 1-3 (and any other future tier) never authored a `requirement`
+    /// at all -- `#[serde(default)]` must mean "always applies", identical to
+    /// the shipped behaviour before this field existed.
+    #[test]
+    fn no_requirement_always_passes() {
+        let tier = HealthTier {
+            max_current_health: 45.0,
+            effect: TierEffect::AdditionalDamage(1.0),
+            requirement: None,
+        };
+        assert!(tier.requirement_met(Some(60), None));
+        assert!(tier.requirement_met(None, None));
+    }
+
+    /// A fail chance of exactly 1.0 is a deterministic "never" -- `rng.random`
+    /// draws in `0.0..1.0`, so `roll >= 1.0` can never be true regardless of
+    /// the actual random draw. Picking this edge keeps the test free of any
+    /// dependency on RNG seeding.
+    #[test]
+    fn a_guaranteed_fail_curve_never_passes() {
+        let tier = tier_with_requirement(cleric_roll(1.0, 1.0));
+        let character_class = CharacterClass::single(ClassKind::Cleric);
+        for _ in 0..100 {
+            assert!(!tier.requirement_met(Some(60), Some(&character_class)));
+        }
+    }
+
+    /// A fail chance of exactly 0.0 is a deterministic "always" -- `roll >=
+    /// 0.0` is true for every possible draw in `0.0..1.0`.
+    #[test]
+    fn a_guaranteed_pass_curve_always_passes() {
+        let tier = tier_with_requirement(cleric_roll(0.0, 0.0));
+        let character_class = CharacterClass::single(ClassKind::Cleric);
+        for _ in 0..100 {
+            assert!(tier.requirement_met(Some(60), Some(&character_class)));
+        }
+    }
+
+    /// The roll must resolve against the caster's own *Cleric* level, not
+    /// their raw multiclass character level -- a Warrior/Cleric multiclass
+    /// whose Cleric secondary hasn't reached `unlock_level` yet must still
+    /// fail the roll even though their combined character level is far above
+    /// it.
+    #[test]
+    fn resolves_the_casters_class_level_not_the_raw_character_level() {
+        let tier =
+            tier_with_requirement(CombatRequirement::CasterLevelRoll(CasterLevelFailChance {
+                unlock_level: 42,
+                fail_chance_at_unlock: 1.0,
+                fail_chance_at_max_level: 0.0,
+                source_classes: vec![ClassKind::Cleric],
+            }));
+        let character_class = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Cleric),
+            secondary_level: 10,
+            future_levels_to_secondary: false,
+        };
+        assert!(!tier.requirement_met(Some(60), Some(&character_class)));
+    }
+
+    /// No resolvable caster level at all (e.g. a non-player source) must not
+    /// panic, and is treated as failing the roll -- the same conservative
+    /// default `CombatRequirement::CasterLevelRoll` already uses via
+    /// `is_some_and`.
+    #[test]
+    fn an_unresolvable_caster_level_fails_closed() {
+        let tier = tier_with_requirement(cleric_roll(0.0, 0.0));
+        assert!(!tier.requirement_met(None, None));
     }
 }
 

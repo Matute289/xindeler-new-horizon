@@ -555,6 +555,30 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(thresholds, vec![35.0, 45.0, 55.0, 65.0]);
 
+        // Tier 4's instant death is the only permanent result in the whole
+        // ladder, so — unlike tiers 1-3, which have no `requirement` at all —
+        // it must carry the same caster-side `CasterLevelRoll` margin
+        // power_word_kill/pain/stun already give their own permanent results.
+        use crate::combat::CombatRequirement;
+        let tier4 = &effect.tiers[0];
+        let requirement = tier4
+            .requirement
+            .as_ref()
+            .expect("tier 4's instant death must be gated by a CasterLevelRoll");
+        match requirement {
+            CombatRequirement::CasterLevelRoll(curve) => {
+                assert_eq!(curve.unlock_level, 42);
+                assert!((curve.fail_chance_at_unlock - 0.25).abs() < f32::EPSILON);
+                assert!((curve.fail_chance_at_max_level - 0.05).abs() < f32::EPSILON);
+                assert_eq!(curve.source_classes, vec![ClassKind::Cleric]);
+            },
+            other => panic!("tier 4's requirement should be a CasterLevelRoll, got {other:?}"),
+        }
+        assert!(
+            effect.tiers[1..].iter().all(|t| t.requirement.is_none()),
+            "only tier 4 (the instant-death tier) is gated -- tiers 1-3 are unaffected"
+        );
+
         let banishment = effect
             .banishment
             .as_ref()
