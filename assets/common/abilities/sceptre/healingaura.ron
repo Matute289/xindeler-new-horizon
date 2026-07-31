@@ -15,4 +15,5 @@ BasicAura(
     energy_cost: 20.0,
     scales_with_combo: true,
     specifier: Some(HealingAura),
+    meta: (source: Some(Divine)),
 )
