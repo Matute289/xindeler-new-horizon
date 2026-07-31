@@ -121,21 +121,83 @@ impl Component for AbilityCooldowns {
 /// first (spec order), then racial innates, never reordering existing
 /// entries.
 ///
-/// Canonical order under multiclass: **primary class keys, then the racial
-/// innate, then the secondary class's keys last.** The secondary's keys
-/// always go at the very end, never between the primary and the racial
-/// innate — granting a second class to an existing single-class character
-/// must never shift the racial innate's index, or every persisted
-/// `Innate:index:N` hotbar slot silently re-points to something else on
-/// relog. Any future producer appending to this Vec must append after *all*
-/// of the above, in whatever order is agreed centrally — never insert into
-/// the middle.
+/// Canonical order under multiclass:
 ///
-/// Revisit key-based persistence before the pool producer ships
-/// (magic plan Phase 4) if this contract proves too fragile.
+/// ```text
+/// [primary class keys] [racial innate] [primary spells]
+///                      [secondary class keys] [secondary spells]
+/// ```
+///
+/// Deduplicated by key, so a spell both held classes can cast appears exactly
+/// once, under the primary. A single-class character is
+/// `[P keys][innate][P spells]`; granting a second class appends
+/// `[S keys][S spells]` and shifts nothing that already existed — granting a
+/// second class to an existing single-class character must never shift the
+/// racial innate's index, or every persisted `Innate:index:N` hotbar slot
+/// silently re-points to something else on relog. Any future producer
+/// appending to this Vec must append after *all* of the above, in whatever
+/// order is agreed centrally — never insert into the middle.
+///
+/// Every spell of every held class is emitted whether or not its class-level
+/// band has been reached, exactly like the always-emitted class keys above:
+/// the gate lives in [`Self::spell_gates`], never in whether the key is
+/// present, so levelling up can never shift an index either.
+///
+/// Revisit key-based persistence before spell content grows large if this
+/// contract proves too fragile.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AbilityPool {
     pub abilities: Vec<String>,
+    /// Parallel to [`Self::abilities`] and ALWAYS the same length:
+    /// `Some(gate)` for a spell key, `None` for class-signature and
+    /// racial-innate keys (those are gated by `Skill` inside the ability
+    /// manifest instead). Kept as a parallel Vec rather than folded into
+    /// `abilities` so the index contract documented above, the wire format,
+    /// and every existing `abilities` reader stay exactly as they are.
+    #[serde(default)]
+    pub spell_gates: Vec<Option<SpellGate>>,
+}
+
+/// The class-level requirement a spell key in an [`AbilityPool`] carries.
+/// Baked in when the pool is built; evaluated live against the character's
+/// current `CharacterClass` + level, so it never goes stale and needs no
+/// invalidation when the character levels up or multiclasses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpellGate {
+    /// The class that grants this spell. Under multiclass a spell can be
+    /// listed by both held classes; the pool keeps the entry from the *first*
+    /// class that grants it (the primary), and [`Self::is_unlocked`] checks
+    /// only that class.
+    pub class: crate::comp::ClassKind,
+    /// The spell's own level; 0 = cantrip.
+    pub spell_level: u8,
+}
+
+impl SpellGate {
+    /// `true` when the character's own level in `self.class` has reached the
+    /// band that unlocks `self.spell_level`. Cantrips pass from class level 1.
+    ///
+    /// Gates off the CLASS's level via `CharacterClass::class_levels`, never
+    /// `character_level` directly: a Warrior 40 / Warlock 20 must be capped at
+    /// the Warlock's spell level 3, not the character's 60.
+    ///
+    /// Fails CLOSED: a character that does not hold `self.class` at all — or
+    /// whose `CharacterClass` is missing entirely, e.g. an NPC — gets `false`.
+    pub fn is_unlocked(
+        &self,
+        class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> bool {
+        class
+            .and_then(|cc| {
+                cc.class_levels(character_level)
+                    .find(|(c, _, _)| *c == self.class)
+                    .map(|(_, class_level, _)| class_level)
+            })
+            .is_some_and(|class_level| {
+                u16::from(self.spell_level) <= crate::comp::spell::spell_level_unlocked(class_level)
+            })
+    }
 }
 
 impl Component for AbilityPool {
@@ -153,42 +215,114 @@ impl AbilityPool {
             Body::Humanoid(humanoid) => Some(Self::innate_set_key(humanoid.species)),
             _ => None,
         };
+        let abilities: Vec<String> = key.into_iter().map(String::from).collect();
         Self {
-            abilities: key.into_iter().map(String::from).collect(),
+            // A body-only pool never contains spells, but the parallel array
+            // must still be exactly as long as `abilities`.
+            spell_gates: vec![None; abilities.len()],
+            abilities,
         }
     }
 
     /// Full ability pool for a player character: primary class active-ability
     /// keys FIRST (spec order, stable indices for persisted hotbar slots),
-    /// then the racial innate key, then — if the character is multiclass —
-    /// the secondary class's keys last (see the ordering contract on
-    /// [`Self::abilities`]'s doc comment for why the secondary goes at the
-    /// very end rather than after the primary).
+    /// then the racial innate key, then the primary's spells, then — if the
+    /// character is multiclass — the secondary class's keys and spells last
+    /// (see the ordering contract on [`Self::abilities`]'s doc comment for
+    /// why the secondary goes at the very end rather than after the primary).
     ///
-    /// ALL class-ability keys are always emitted regardless of whether the
-    /// player has unlocked the skill yet. The manifest `Simple(Some(skill), …)`
-    /// gate makes an un-unlocked key resolve to nothing at use-time — stable
-    /// pool indices are thereby guaranteed even for locked skills.
+    /// ALL class-ability keys and ALL spells of every held class are emitted
+    /// regardless of whether the player has unlocked them yet. The manifest
+    /// `Simple(Some(skill), …)` gate makes an un-unlocked class key resolve to
+    /// nothing at use-time, and a spell's class-level band is checked through
+    /// [`Self::is_unlocked`] — stable pool indices are thereby guaranteed even
+    /// for locked entries.
     pub fn for_character(
         body: &crate::comp::Body,
         character_class: &crate::comp::CharacterClass,
     ) -> Self {
-        // Primary's class keys, then the racial innate (delegated to
-        // `for_body` so the species→key logic lives in exactly one place),
-        // then the secondary's class keys strictly appended at the end.
-        let mut abilities: Vec<String> = Self::class_ability_keys(character_class.primary)
-            .iter()
-            .map(|k| k.to_string())
-            .collect();
-        abilities.extend(Self::for_body(body).abilities);
-        if let Some(secondary) = character_class.secondary {
-            abilities.extend(
-                Self::class_ability_keys(secondary)
-                    .iter()
-                    .map(|k| k.to_string()),
-            );
+        let mut abilities: Vec<String> = Vec::new();
+        let mut spell_gates: Vec<Option<SpellGate>> = Vec::new();
+
+        // Appends a key unless it is already present, keeping the two arrays
+        // exactly parallel. Deduplication matters under multiclass, where a
+        // spell can be listed by both held classes.
+        fn push_key(
+            abilities: &mut Vec<String>,
+            spell_gates: &mut Vec<Option<SpellGate>>,
+            key: String,
+            gate: Option<SpellGate>,
+        ) {
+            if !abilities.contains(&key) {
+                abilities.push(key);
+                spell_gates.push(gate);
+            }
         }
-        Self { abilities }
+
+        // 1. Primary's class ability keys.
+        for key in Self::class_ability_keys(character_class.primary) {
+            push_key(&mut abilities, &mut spell_gates, key.to_string(), None);
+        }
+        // 2. The racial innate (delegated to `for_body` so the species->key logic lives
+        //    in exactly one place). Its index MUST stay put across a multiclass grant.
+        for key in Self::for_body(body).abilities {
+            push_key(&mut abilities, &mut spell_gates, key, None);
+        }
+        // 3. Primary's spells, then 4. the secondary's class keys, then
+        //    5. the secondary's spells.
+        use crate::assets::AssetExt;
+        let compendium =
+            crate::comp::spell::SpellCompendium::load_expect("common.spells.compendium");
+        let compendium = compendium.read();
+        let push_spells = |abilities: &mut Vec<String>,
+                           spell_gates: &mut Vec<Option<SpellGate>>,
+                           class: crate::comp::ClassKind| {
+            for spell in compendium.spells_for_class(class) {
+                push_key(
+                    abilities,
+                    spell_gates,
+                    spell.pool_key().to_string(),
+                    Some(SpellGate {
+                        class,
+                        spell_level: spell.level,
+                    }),
+                );
+            }
+        };
+        push_spells(&mut abilities, &mut spell_gates, character_class.primary);
+        if let Some(secondary) = character_class.secondary {
+            for key in Self::class_ability_keys(secondary) {
+                push_key(&mut abilities, &mut spell_gates, key.to_string(), None);
+            }
+            push_spells(&mut abilities, &mut spell_gates, secondary);
+        }
+
+        debug_assert_eq!(abilities.len(), spell_gates.len());
+        Self {
+            abilities,
+            spell_gates,
+        }
+    }
+
+    /// `true` if index `i` may be used right now. Non-spell entries and
+    /// out-of-range indices answer `true`, preserving existing behaviour for
+    /// everything that is not a spell (weapon/class/racial gating is unchanged
+    /// and lives elsewhere).
+    pub fn is_unlocked(
+        &self,
+        index: usize,
+        class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> bool {
+        match self.spell_gates.get(index) {
+            Some(Some(gate)) => gate.is_unlocked(class, character_level),
+            _ => true,
+        }
+    }
+
+    /// `Some(gate)` iff index `index` is a spell.
+    pub fn spell_gate(&self, index: usize) -> Option<&SpellGate> {
+        self.spell_gates.get(index).and_then(Option::as_ref)
     }
 
     /// Manifest `Custom(...)` keys for a class's active abilities (BL-06
@@ -486,6 +620,9 @@ impl ActiveAbilities {
             })
     }
 
+    /// Weapon, glider, and class/racial innate abilities. Spells are
+    /// EXCLUDED — they are listed separately by [`Self::all_available_spells`]
+    /// so the UI can present them on their own terms.
     pub fn all_available_abilities(
         inv: Option<&Inventory>,
         skill_set: Option<&SkillSet>,
@@ -523,14 +660,40 @@ impl ActiveAbilities {
             .map(AuxiliaryAbility::Glider)
             .for_each(|a| ability_buff.push(a));
 
-        // Push innate (class/racial) abilities
+        // Push innate (class/racial) abilities. Spell keys are skipped: they
+        // are listed by `all_available_spells` instead.
         if let Some(pool) = ability_pool {
             (0..pool.abilities.len())
+                .filter(|i| pool.spell_gate(*i).is_none())
                 .map(AuxiliaryAbility::Innate)
                 .for_each(|a| ability_buff.push(a));
         }
 
         ability_buff
+    }
+
+    /// Every spell key in the pool, unlocked or not, in pool order, paired
+    /// with whether it is currently castable. Locked entries are returned
+    /// rather than filtered out so the UI can show them greyed with their
+    /// requirement instead of hiding what is coming.
+    pub fn all_available_spells(
+        ability_pool: Option<&AbilityPool>,
+        character_class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> Vec<(AuxiliaryAbility, bool)> {
+        ability_pool
+            .into_iter()
+            .flat_map(|pool| {
+                (0..pool.abilities.len()).filter_map(move |i| {
+                    pool.spell_gate(i).map(|gate| {
+                        (
+                            AuxiliaryAbility::Innate(i),
+                            gate.is_unlocked(character_class, character_level),
+                        )
+                    })
+                })
+            })
+            .collect()
     }
 
     fn default_ability_set<'a>(
@@ -4746,13 +4909,17 @@ mod class_ability_pool_tests {
             future_levels_to_secondary: false,
         };
         let pool = AbilityPool::for_character(&body, &character_class);
-        assert_eq!(pool.abilities, vec![
+        // The Warrior has no spells, so its keys, the racial innate, and the
+        // Mage's keys are still the first five entries in that exact order;
+        // the Mage's spells follow.
+        assert_eq!(pool.abilities[..5], [
             "class.warrior.rally",
             "class.warrior.onslaught",
             "innate.human",
             "class.mage.arcanesurge",
             "class.mage.arcanemastery",
         ]);
+        assert!(pool.abilities[5..].iter().all(|k| k.starts_with("spells.")));
 
         // A single-class Warrior's pool is an exact prefix of this one -- the
         // primary+racial portion never changes shape when a second class is
@@ -4838,5 +5005,232 @@ mod class_ability_pool_tests {
         for id in ids {
             crate::assets::Ron::<CharacterAbility>::load_expect(id).read();
         }
+    }
+}
+
+#[cfg(test)]
+mod spell_gate_tests {
+    use super::{AbilityPool, ActiveAbilities, AuxiliaryAbility, SpellGate};
+    use crate::comp::{Body, CharacterClass, ClassKind, humanoid, spell::SpellCompendium};
+
+    /// Build a minimal Human body for deterministic testing.
+    fn human_body() -> Body {
+        Body::Humanoid(humanoid::Body {
+            species: humanoid::Species::Human,
+            body_type: humanoid::BodyType::Male,
+            hair_style: 0,
+            beard: 0,
+            accessory: 0,
+            hair_color: 0,
+            skin: 0,
+            eye_color: 0,
+            eyes: 0,
+            height_scale: 0,
+        })
+    }
+
+    #[test]
+    fn pool_appends_spells_after_the_racial_innate() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
+
+        // Class signature + capstone first, then the racial innate, then spells.
+        assert_eq!(pool.abilities[0], "class.mage.arcanesurge");
+        assert_eq!(pool.abilities[1], "class.mage.arcanemastery");
+        assert_eq!(pool.abilities[2], "innate.human");
+        assert!(pool.abilities[3..].iter().all(|k| k.starts_with("spells.")));
+        assert!(
+            pool.abilities.len() > 3,
+            "the Mage has spells in the compendium"
+        );
+        // The parallel invariant, everywhere.
+        assert_eq!(pool.abilities.len(), pool.spell_gates.len());
+        assert!(pool.spell_gates[..3].iter().all(Option::is_none));
+        assert!(pool.spell_gates[3..].iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn granting_a_second_class_shifts_no_existing_index() {
+        let body = human_body();
+        let before = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
+        let mut multi = CharacterClass::single(ClassKind::Mage);
+        multi.secondary = Some(ClassKind::Cleric);
+        let after = AbilityPool::for_character(&body, &multi);
+
+        assert!(after.abilities.len() > before.abilities.len());
+        assert_eq!(
+            &after.abilities[..before.abilities.len()],
+            &before.abilities[..]
+        );
+        assert_eq!(
+            &after.spell_gates[..before.spell_gates.len()],
+            &before.spell_gates[..]
+        );
+    }
+
+    #[test]
+    fn a_spell_shared_by_both_classes_appears_once_under_the_primary() {
+        let body = human_body();
+        let mut multi = CharacterClass::single(ClassKind::Mage);
+        multi.secondary = Some(ClassKind::Cleric);
+        let pool = AbilityPool::for_character(&body, &multi);
+
+        let mut seen = std::collections::HashSet::new();
+        for key in &pool.abilities {
+            assert!(seen.insert(key.clone()), "duplicate pool key: {key}");
+        }
+
+        // A spell listed for both held classes must carry the PRIMARY's gate.
+        let book = SpellCompendium::load_expect_cloned();
+        let shared_def = book
+            .iter()
+            .find(|s| {
+                s.classes.contains(&ClassKind::Mage) && s.classes.contains(&ClassKind::Cleric)
+            })
+            .expect("the compendium has a spell listed for both Cleric and Mage");
+        let (_, gate) = pool
+            .abilities
+            .iter()
+            .zip(&pool.spell_gates)
+            .find(|(k, _)| k.as_str() == shared_def.id)
+            .expect("shared spell in pool");
+        assert_eq!(gate.unwrap().class, ClassKind::Mage, "primary grants it");
+    }
+
+    #[test]
+    fn cantrips_unlock_at_class_level_one_and_level_one_spells_at_six() {
+        let cantrip = SpellGate {
+            class: ClassKind::Mage,
+            spell_level: 0,
+        };
+        let lvl1 = SpellGate {
+            class: ClassKind::Mage,
+            spell_level: 1,
+        };
+        let cc = CharacterClass::single(ClassKind::Mage);
+
+        assert!(cantrip.is_unlocked(Some(&cc), 1));
+        assert!(!lvl1.is_unlocked(Some(&cc), 5));
+        assert!(lvl1.is_unlocked(Some(&cc), 6));
+    }
+
+    #[test]
+    fn multiclass_gates_off_the_classs_own_level_not_the_characters() {
+        // Warrior 40 / Warlock 20, character level 60.
+        let mut cc = CharacterClass::single(ClassKind::Warrior);
+        cc.secondary = Some(ClassKind::Warlock);
+        cc.set_secondary_level(20, 60);
+
+        let lvl3 = SpellGate {
+            class: ClassKind::Warlock,
+            spell_level: 3,
+        };
+        let lvl4 = SpellGate {
+            class: ClassKind::Warlock,
+            spell_level: 4,
+        };
+        // Warlock class level 20 -> floor(20/6) = 3.
+        assert!(lvl3.is_unlocked(Some(&cc), 60));
+        assert!(
+            !lvl4.is_unlocked(Some(&cc), 60),
+            "60 char levels must NOT grant level 4"
+        );
+    }
+
+    #[test]
+    fn a_gate_for_a_class_the_character_does_not_hold_fails_closed() {
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let cleric_cantrip = SpellGate {
+            class: ClassKind::Cleric,
+            spell_level: 0,
+        };
+        assert!(!cleric_cantrip.is_unlocked(Some(&cc), 60));
+        assert!(
+            !cleric_cantrip.is_unlocked(None, 60),
+            "no CharacterClass means refuse"
+        );
+    }
+
+    #[test]
+    fn is_unlocked_defaults_open_for_non_spell_and_out_of_range_indices() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Warrior));
+        assert!(
+            pool.is_unlocked(0, None, 1),
+            "class keys keep their old behaviour"
+        );
+        assert!(
+            pool.is_unlocked(9_999, None, 1),
+            "out of range must not panic"
+        );
+        assert!(pool.spell_gate(0).is_none());
+        assert!(pool.spell_gate(9_999).is_none());
+    }
+
+    #[test]
+    fn npc_pools_from_for_body_carry_no_spell_gates() {
+        let body = human_body();
+        let pool = AbilityPool::for_body(&body);
+        assert_eq!(pool.abilities.len(), pool.spell_gates.len());
+        assert!(pool.spell_gates.iter().all(Option::is_none));
+    }
+
+    /// A class with no authored spells keeps exactly the pool it had before
+    /// spells entered it.
+    #[test]
+    fn a_spell_less_class_pool_is_unchanged() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Warrior));
+        assert_eq!(pool.abilities, vec![
+            "class.warrior.rally",
+            "class.warrior.onslaught",
+            "innate.human",
+        ]);
+        assert_eq!(pool.spell_gates, vec![None, None, None]);
+    }
+
+    #[test]
+    fn all_available_abilities_excludes_spells() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
+        let listed = ActiveAbilities::all_available_abilities(None, None, Some(&pool));
+        let innate: Vec<usize> = listed
+            .iter()
+            .filter_map(|a| match a {
+                AuxiliaryAbility::Innate(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(innate, vec![0, 1, 2], "only the class + racial keys");
+    }
+
+    #[test]
+    fn all_available_spells_lists_every_spell_with_its_unlocked_flag() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc);
+        let spell_count = pool.spell_gates.iter().filter(|g| g.is_some()).count();
+
+        // At class level 1 every spell is listed, but only the cantrips are
+        // castable.
+        let at_1 = ActiveAbilities::all_available_spells(Some(&pool), Some(&cc), 1);
+        assert_eq!(at_1.len(), spell_count);
+        for (ability, unlocked) in &at_1 {
+            let AuxiliaryAbility::Innate(i) = ability else {
+                panic!("all_available_spells must only yield Innate entries")
+            };
+            let gate = pool.spell_gate(*i).expect("spell index");
+            assert_eq!(*unlocked, gate.spell_level == 0);
+        }
+        assert!(at_1.iter().any(|(_, unlocked)| *unlocked), "cantrips");
+        assert!(at_1.iter().any(|(_, unlocked)| !*unlocked), "higher levels");
+
+        // At level 60 everything the compendium holds (levels 0-9) is open.
+        let at_60 = ActiveAbilities::all_available_spells(Some(&pool), Some(&cc), 60);
+        assert_eq!(at_60.len(), spell_count);
+        assert!(at_60.iter().all(|(_, unlocked)| *unlocked));
+
+        // No pool, no spells.
+        assert!(ActiveAbilities::all_available_spells(None, Some(&cc), 60).is_empty());
     }
 }

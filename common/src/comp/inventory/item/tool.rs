@@ -728,6 +728,42 @@ impl Asset for AbilityMap {
             ability_map.insert(spec, entry);
         }
 
+        // Xindeler: every catalogued spell becomes a `Custom(<spell id>)`
+        // ability set, derived from the spell compendium rather than
+        // hand-written in the manifest, so the compendium's `ability` field
+        // stays the single source of truth as the catalogue grows. Injected
+        // here -- after the override inheritance fixpoint, before the
+        // `String -> AbilityItem` resolution below -- so the entries pick up
+        // the same RON resolution and missing-file warning as every
+        // hand-written one. Loaded through `cache` (not the global asset
+        // cache) so hot-reload dependency tracking works.
+        //
+        // On a compendium load failure nothing is injected and every spell key
+        // resolves to nothing at use time, which is the correct fail-closed
+        // behaviour.
+        if let Ok(compendium) =
+            cache.load::<crate::comp::spell::SpellCompendium>("common.spells.compendium")
+        {
+            for spell in compendium.read().iter() {
+                // `or_insert_with`: a hand-written manifest entry for the same
+                // key always wins, an escape hatch for a spell that ever needs
+                // a bespoke set.
+                ability_map
+                    .entry(AbilitySpec::Custom(spell.id.clone()))
+                    .or_insert_with(|| {
+                        AbilityMapEntry::AbilitySet(AbilitySet {
+                            guard: None,
+                            // No `Skill` gate: spell access is gated by class
+                            // level in `AbilityPool::is_unlocked`, not by a
+                            // spent skill point.
+                            primary: AbilityKind::Simple(None, spell.ability.clone()),
+                            secondary: AbilityKind::Simple(None, spell.ability.clone()),
+                            abilities: Vec::new(),
+                        })
+                    });
+            }
+        }
+
         Ok(AbilityMap(
             ability_map
                 .into_iter()
@@ -747,5 +783,57 @@ impl Asset for AbilityMap {
                 })
                 .collect::<HashMap<_, _>>(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every catalogued spell is reachable as a `Custom(<spell id>)` ability
+    /// set, resolving to the `CharacterAbility` RON the compendium names.
+    #[test]
+    fn every_compendium_spell_resolves_through_the_ability_map() {
+        let map = AbilityMap::load();
+        let map = map.read();
+        let book = crate::comp::spell::SpellCompendium::load_expect_cloned();
+        assert!(!book.is_empty());
+        for spell in book.iter() {
+            let set = map
+                .get_ability_set(&AbilitySpec::Custom(spell.id.clone()))
+                .unwrap_or_else(|| panic!("no ability set for spell {}", spell.id));
+            match &set.primary {
+                AbilityKind::Simple(skill, item) => {
+                    assert!(
+                        skill.is_none(),
+                        "spells are gated by class level, not Skill"
+                    );
+                    assert_eq!(item.id, spell.ability, "wrong ability RON for {}", spell.id);
+                    // A `CharacterAbility::default()` here means the RON was
+                    // missing and the resolution silently fell back.
+                    assert_ne!(
+                        item.ability,
+                        CharacterAbility::default(),
+                        "spell {} resolved to the default (missing RON?)",
+                        spell.id
+                    );
+                },
+                other => panic!("spell {} got a non-Simple set: {other:?}", spell.id),
+            }
+        }
+    }
+
+    /// The hand-written manifest entries always win over the injected ones.
+    #[test]
+    fn injection_never_overwrites_a_hand_written_manifest_entry() {
+        let map = AbilityMap::load();
+        let map = map.read();
+        let set = map
+            .get_ability_set(&AbilitySpec::Custom("class.mage.arcanesurge".into()))
+            .expect("hand-written class key still present");
+        assert!(
+            matches!(&set.primary, AbilityKind::Simple(Some(_), _)),
+            "keeps its Skill gate"
+        );
     }
 }
