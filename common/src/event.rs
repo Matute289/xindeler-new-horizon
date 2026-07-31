@@ -401,6 +401,10 @@ pub struct DeleteEvent(pub EcsEntity);
 pub struct DestroyEvent {
     pub entity: EcsEntity,
     pub cause: comp::HealthChange,
+    /// Why the entity is being removed, and what fraction of the normal
+    /// rewards that removal awards. `RemovalInfo::killed()` for every
+    /// ordinary death.
+    pub removal: crate::combat::RemovalInfo,
 }
 
 pub struct InventoryManipEvent(pub EcsEntity, pub comp::InventoryManip);

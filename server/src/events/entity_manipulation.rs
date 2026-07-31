@@ -341,6 +341,7 @@ impl ServerEvent for HealthChangeEvent {
                         emitters.emit(DestroyEvent {
                             entity: ev.entity,
                             cause: ev.change,
+                            removal: combat::RemovalInfo::killed(),
                         });
                     }
                 }

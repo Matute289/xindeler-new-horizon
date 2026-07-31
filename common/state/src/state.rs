@@ -390,6 +390,8 @@ impl State {
         ecs.register::<comp::SpectatingEntity>();
         ecs.register::<comp::RemoteSense>();
         ecs.register::<comp::ConcealedUnlessTrueSight>();
+        // Deliberately not net-synced — see `comp::Banished`'s doc comment.
+        ecs.register::<comp::Banished>();
 
         // Register synced resources used by the ECS.
         ecs.insert(TimeOfDay(0.0));
