@@ -4518,6 +4518,120 @@ mod ground_aoe_tests {
 }
 
 #[cfg(test)]
+mod hold_spell_rebalance_tests {
+    // hold_person/hold_monster/irresistible_dance grant Paralyzed at 100%
+    // chance with no caster-side fail-roll gate and a flat 60-second
+    // duration for all three, independent of each spell's own level. Pins
+    // the fix: each of the 3 now carries the same CasterLevelRoll curve as
+    // the other Paralyzed-granting spells, and each has its own duration
+    // scaled to its own spell level (unlock_level == spell_level * 6, the
+    // class-level-unlock table's `floor(class_level / 6)` formula inverted).
+    use crate::{
+        assets::AssetExt,
+        combat::{CombatEffect, CombatRequirement},
+        comp::{CharacterAbility, ClassKind},
+    };
+
+    struct Case {
+        id: &'static str,
+        // spell level (compendium.ron) * 6, per the spell-level-unlock table
+        expected_unlock_level: u16,
+        expected_dur_secs: f64,
+    }
+
+    #[test]
+    fn hold_and_dance_spells_gain_caster_level_roll_and_level_scaled_duration() {
+        let cases = [
+            Case {
+                id: "common.abilities.spells.arcane.hold_person",
+                expected_unlock_level: 12, // spell level 2 * 6
+                expected_dur_secs: 7.0,
+            },
+            Case {
+                id: "common.abilities.spells.arcane.hold_monster",
+                expected_unlock_level: 30, // spell level 5 * 6
+                expected_dur_secs: 21.0,
+            },
+            Case {
+                id: "common.abilities.spells.arcane.irresistible_dance",
+                expected_unlock_level: 36, // spell level 6 * 6
+                expected_dur_secs: 25.0,
+            },
+        ];
+
+        for case in cases {
+            let ability = crate::assets::Ron::<CharacterAbility>::load_expect(case.id)
+                .read()
+                .0
+                .clone();
+            let CharacterAbility::BasicRanged {
+                projectile, meta, ..
+            } = ability
+            else {
+                panic!(
+                    "{} did not deserialize as BasicRanged: {ability:?}",
+                    case.id
+                );
+            };
+            let attack = projectile
+                .attack
+                .unwrap_or_else(|| panic!("{} has no projectile attack", case.id));
+            let (effect, requirement) = attack.attack_effect.unwrap_or_else(|| {
+                panic!(
+                    "{} has no attack_effect -- still using an inline `buff:` with no \
+                     CasterLevelRoll gate?",
+                    case.id
+                )
+            });
+            let CombatEffect::Buff(buff) = effect else {
+                panic!("{} attack_effect is not a Buff: {effect:?}", case.id);
+            };
+            assert_eq!(
+                buff.dur_secs.0, case.expected_dur_secs,
+                "{} Paralyzed dur_secs",
+                case.id
+            );
+            assert_eq!(buff.chance, 1.0, "{} buff chance", case.id);
+
+            let CombatRequirement::CasterLevelRoll(curve) = requirement else {
+                panic!(
+                    "{} attack_effect requirement is not CasterLevelRoll: {requirement:?}",
+                    case.id
+                );
+            };
+            assert_eq!(
+                curve.unlock_level, case.expected_unlock_level,
+                "{} unlock_level",
+                case.id
+            );
+            assert_eq!(
+                curve.fail_chance_at_unlock, 0.25,
+                "{} fail_chance_at_unlock",
+                case.id
+            );
+            assert_eq!(
+                curve.fail_chance_at_max_level, 0.05,
+                "{} fail_chance_at_max_level",
+                case.id
+            );
+            assert_eq!(
+                curve.source_classes,
+                vec![ClassKind::Mage],
+                "{} source_classes",
+                case.id
+            );
+
+            assert_eq!(
+                meta.requirements.min_level,
+                Some(case.expected_unlock_level),
+                "{} ability-level min_level gate",
+                case.id
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod innate_tests {
     use crate::{
         assets::AssetExt,
