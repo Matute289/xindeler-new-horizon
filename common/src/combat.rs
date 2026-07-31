@@ -593,21 +593,21 @@ impl Attack {
         }
     }
 
-    /// A weapon outside the wielder's trained set lands clumsily: physical
-    /// output (damage, poise, knockback, crit chance) is scaled down.
-    /// Spells are never affected — a caster's magic does not care what is in
-    /// their hands. `tool: None` (unarmed strikes, natural weapons, an NPC
-    /// `Empty`-tool attack) is always treated as proficient, and an attacker
-    /// with no `Stats` (or one whose class leaves `proficient_tools`
-    /// permissive) is unaffected.
-    pub fn proficiency_multiplier(
+    /// The tool-kind proficiency check on its own, deliberately unaware of
+    /// whether the attack is magic: does `ability_info.tool` (at
+    /// `ability_info.hand`'s grip) sit inside `stats.proficient_tools`?
+    /// `tool: None` (unarmed strikes, natural weapons, an NPC `Empty`-tool
+    /// attack) is always treated as proficient, and an attacker with no
+    /// `Stats` (or one whose class leaves `proficient_tools` permissive) is
+    /// unaffected. Shared by [`Self::proficiency_multiplier`] (the
+    /// martial gate) and the magic-implement check folded into
+    /// `damage_modifier` in `apply_attack` — the same weapon-in-hand check
+    /// applies whether the wielder swings it or channels a spell through
+    /// it.
+    pub fn implement_proficiency_multiplier(
         stats: Option<&Stats>,
         ability_info: Option<AbilityInfo>,
-        is_magic: bool,
     ) -> f32 {
-        if is_magic {
-            return 1.0;
-        }
         let Some(stats) = stats else {
             return 1.0;
         };
@@ -619,6 +619,58 @@ impl Attack {
             HandInfo::MainHand | HandInfo::OffHand => Hands::One,
         });
         if stats.proficient_tools.allows(tool, hands) {
+            1.0
+        } else {
+            stats.non_proficient_damage_mult
+        }
+    }
+
+    /// A weapon outside the wielder's trained set lands clumsily: physical
+    /// output (damage, poise, knockback, crit chance) is scaled down.
+    /// Spells are never affected by this particular multiplier — poise,
+    /// knockback and crit chance stay untouched for a caster; only
+    /// `damage_modifier`'s magic branch in `apply_attack` separately
+    /// consults [`Self::caster_source_multiplier`], on a different axis
+    /// (magic source, not tool kind).
+    pub fn proficiency_multiplier(
+        stats: Option<&Stats>,
+        ability_info: Option<AbilityInfo>,
+        is_magic: bool,
+    ) -> f32 {
+        if is_magic {
+            1.0
+        } else {
+            Self::implement_proficiency_multiplier(stats, ability_info)
+        }
+    }
+
+    /// A caster channeling a magic source outside their trained core(s)
+    /// takes the same damage-only penalty [`Self::implement_proficiency_multiplier`]
+    /// applies to an off-kind weapon — but on the source axis, not the tool
+    /// axis, since a caster's proficiency is about which magic they know,
+    /// not which implement is in their hand. Reads the already-resolved,
+    /// per-tick `Stats.castable_sources` directly, so it stays a single
+    /// struct-field read with no new lock or asset lookup in the hot path.
+    /// That field is populated once per tick (see `class_magic_sources` and
+    /// its caller in `common/systems/src/buff.rs`) as the union of every
+    /// held class's native core(s) from the shipped manifest — so today
+    /// this function is exactly "the caster's class's native source(s)".
+    /// A future mechanic that lets a caster permanently learn an
+    /// off-core source belongs entirely in that per-tick population step:
+    /// once `Stats.castable_sources` itself grows to include the learned
+    /// source, this function (and its one call site below) needs no
+    /// further changes to pick it up.
+    pub fn caster_source_multiplier(
+        stats: Option<&Stats>,
+        ability_info: Option<AbilityInfo>,
+    ) -> f32 {
+        let Some(stats) = stats else {
+            return 1.0;
+        };
+        let Some(source) = ability_info.and_then(|ai| ai.ability_meta.source) else {
+            return 1.0;
+        };
+        if stats.castable_sources.allows(source) {
             1.0
         } else {
             stats.non_proficient_damage_mult
@@ -876,9 +928,18 @@ impl Attack {
         // `is_magic` signal used for the to-hit roll), so caster damage passives
         // never leak onto physical weapon swings. Physical attacks use the global
         // `attack_damage_modifier` alone.
+        // A caster channeling a magic source outside their trained core(s)
+        // takes the same damage-only penalty a martial swinging an off-kind
+        // weapon does — independent of the `proficiency_mult` above, which
+        // stays pinned to 1.0 for magic (poise, knockback and crit chance
+        // stay source-blind for spells). `spell_power` itself is untouched:
+        // this scales how well the caster channels this particular source,
+        // not their overall magic potency.
         let damage_modifier = attacker.and_then(|a| a.stats).map_or(1.0, |s| {
             if is_magic {
-                s.attack_damage_modifier * s.spell_power
+                s.attack_damage_modifier
+                    * s.spell_power
+                    * Self::caster_source_multiplier(Some(s), self.ability_info)
             } else {
                 s.attack_damage_modifier * proficiency_mult
             }
