@@ -361,6 +361,70 @@ pub fn db_string_to_trigger_slots(
     slots
 }
 
+/// On-disk form of `comp::SpellMastery`: one named field per non-`Arcane`
+/// source. `Arcane` has no field at all -- its mastery is never written, so
+/// there is nothing to persist for it. No `#[serde(deny_unknown_fields)]`:
+/// an unrecognised key (a typo, or a retired source) is silently ignored
+/// rather than failing the whole load, and every field defaults to `0` when
+/// absent.
+#[derive(Serialize, Deserialize, Default)]
+struct DatabaseSpellMastery {
+    #[serde(default)]
+    divine: u32,
+    #[serde(default)]
+    primordial: u32,
+    #[serde(default)]
+    psionic: u32,
+    #[serde(default)]
+    ki: u32,
+}
+
+/// Serialise a character's spell mastery for the `character.spell_mastery`
+/// column. `None` (a SQL NULL) when nothing has accrued in any source yet, so
+/// a character that never lands a source-attributed effect costs nothing.
+pub fn spell_mastery_to_db_string(mastery: &comp::SpellMastery) -> Option<String> {
+    use comp::ability::MagicSource;
+
+    let db = DatabaseSpellMastery {
+        divine: mastery.source_xp(MagicSource::Divine),
+        primordial: mastery.source_xp(MagicSource::Primordial),
+        psionic: mastery.source_xp(MagicSource::Psionic),
+        ki: mastery.source_xp(MagicSource::Ki),
+    };
+    if db.divine == 0 && db.primordial == 0 && db.psionic == 0 && db.ki == 0 {
+        return None;
+    }
+    serde_json::to_string(&db)
+        .inspect_err(|err| {
+            tracing::error!(?err, "Failed to serialize spell mastery; dropping it");
+        })
+        .ok()
+}
+
+/// Inverse of [`spell_mastery_to_db_string`]. Malformed JSON yields all zeros
+/// rather than failing the load: a character must never be locked out by a
+/// bad mastery payload.
+pub fn db_string_to_spell_mastery(payload: Option<&str>) -> comp::SpellMastery {
+    use comp::ability::MagicSource;
+
+    let mut mastery = comp::SpellMastery::default();
+    let Some(payload) = payload else {
+        return mastery;
+    };
+    let db: DatabaseSpellMastery = match serde_json::from_str(payload) {
+        Ok(db) => db,
+        Err(err) => {
+            tracing::warn!(?err, "Unreadable spell mastery in database, ignoring it");
+            return mastery;
+        },
+    };
+    mastery.set_source_xp(MagicSource::Divine, db.divine);
+    mastery.set_source_xp(MagicSource::Primordial, db.primordial);
+    mastery.set_source_xp(MagicSource::Psionic, db.psionic);
+    mastery.set_source_xp(MagicSource::Ki, db.ki);
+    mastery
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DatabaseAbilitySet {
     mainhand: String,
@@ -1127,6 +1191,76 @@ pub mod tests {
         fn an_unreadable_column_loads_as_nothing_configured() {
             let loaded = super::super::db_string_to_trigger_slots(Some("{not json"), &four_keys());
             assert!(!loaded.has_any_configured());
+        }
+    }
+
+    mod spell_mastery {
+        use common::comp::{SpellMastery, ability::MagicSource};
+
+        #[test]
+        fn a_fresh_character_writes_no_column() {
+            assert_eq!(
+                super::super::spell_mastery_to_db_string(&SpellMastery::default()),
+                None
+            );
+        }
+
+        #[test]
+        fn a_null_column_loads_as_all_zeros() {
+            let loaded = super::super::db_string_to_spell_mastery(None);
+            for source in MagicSource::ALL {
+                assert_eq!(loaded.source_xp(source), 0);
+            }
+        }
+
+        #[test]
+        fn every_non_arcane_source_round_trips_independently() {
+            let mut before = SpellMastery::default();
+            before.set_source_xp(MagicSource::Divine, 12_345);
+            before.set_source_xp(MagicSource::Primordial, 67_890);
+            before.set_source_xp(MagicSource::Psionic, 1);
+            before.set_source_xp(MagicSource::Ki, 199_999);
+
+            let column = super::super::spell_mastery_to_db_string(&before).expect("a column");
+            let after = super::super::db_string_to_spell_mastery(Some(&column));
+
+            assert_eq!(after.source_xp(MagicSource::Divine), 12_345);
+            assert_eq!(after.source_xp(MagicSource::Primordial), 67_890);
+            assert_eq!(after.source_xp(MagicSource::Psionic), 1);
+            assert_eq!(after.source_xp(MagicSource::Ki), 199_999);
+        }
+
+        /// `Arcane` is never written, so it never survives into the column at
+        /// all -- confirming the writer's own guard, not just the reader's.
+        #[test]
+        fn arcane_never_reaches_the_column() {
+            let mut before = SpellMastery::default();
+            before.set_source_xp(MagicSource::Arcane, 999);
+            before.set_source_xp(MagicSource::Divine, 1);
+            let column = super::super::spell_mastery_to_db_string(&before).expect("a column");
+            assert!(
+                !column.contains("999"),
+                "Arcane's xp leaked into the persisted column: {column}"
+            );
+        }
+
+        /// A corrupt payload must never lock a character out of the game.
+        #[test]
+        fn an_unreadable_column_loads_as_all_zeros() {
+            let loaded = super::super::db_string_to_spell_mastery(Some("{not json"));
+            for source in MagicSource::ALL {
+                assert_eq!(loaded.source_xp(source), 0);
+            }
+        }
+
+        /// A typo'd or retired source key must not fail the whole load --
+        /// the rest of the payload still comes through.
+        #[test]
+        fn an_unknown_source_key_is_ignored_not_fatal() {
+            let payload = r#"{"divine": 42, "bogus_source": 999}"#;
+            let loaded = super::super::db_string_to_spell_mastery(Some(payload));
+            assert_eq!(loaded.source_xp(MagicSource::Divine), 42);
+            assert_eq!(loaded.source_xp(MagicSource::Primordial), 0);
         }
     }
 }

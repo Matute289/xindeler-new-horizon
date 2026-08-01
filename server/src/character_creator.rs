@@ -219,6 +219,8 @@ pub fn create_character(
         background,
         // Trigger slots are configured in-game, never at creation.
         trigger_slots: common::comp::TriggerSlots::default(),
+        // Mastery accrues in-game, never at creation.
+        spell_mastery: common::comp::SpellMastery::default(),
     });
     Ok(())
 }

@@ -52,6 +52,9 @@ pub struct PersistedComponents {
     /// every cooling slot; `state_ext` rebuilds the projection from the
     /// authoritative wall clock before inserting the component.
     pub trigger_slots: comp::TriggerSlots,
+    /// Per-`MagicSource` mastery progress. No load-time transform needed --
+    /// unlike `trigger_slots` it carries no wall-clock state.
+    pub spell_mastery: comp::SpellMastery,
 }
 
 pub type EditableComponents = (comp::Body,);

@@ -35,6 +35,7 @@ command-set_level-desc = (Admin) Set the target's character level (1-60) for tes
 command-multiclass-desc = (Admin) Grant a second class to the target (hard cap of 2), for testing
 command-trigger_slot-desc = (Admin) Configure a reactive trigger slot: <slot 0-3> <ability pool index> <health_below|damage_taken|energy_below> [threshold 0-1]
 command-trigger_ready-desc = (Admin) Force a reactive trigger slot back to ready, clearing its real-world cooldown
+command-set_mastery-desc = (Admin) Set the target's mastery percentage in one magic source (divine, primordial, psionic, ki), for testing
 command-set_ethos-desc = (Admin) Set the target's moral alignment: <good|neutral|evil> <lawful|neutral|chaotic>
 command-make_test_char-desc = (Admin) Configure a test character in one shot: level [class] [kit]
 command-battlemode-desc = Set your battle mode to:

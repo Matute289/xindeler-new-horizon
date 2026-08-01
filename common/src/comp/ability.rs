@@ -4466,6 +4466,25 @@ pub enum MagicSource {
     Ki,
 }
 
+impl MagicSource {
+    /// Every variant, including Arcane. Same shape as the `ClassKind::ALL`
+    /// precedent (`common/src/comp/class.rs`): persistence round-trips and
+    /// per-source arrays iterate this, so a new source added here cannot
+    /// silently fall out of any converter or leave a stale hardcoded `5`.
+    pub const ALL: [MagicSource; 5] = [
+        MagicSource::Arcane,
+        MagicSource::Divine,
+        MagicSource::Primordial,
+        MagicSource::Psionic,
+        MagicSource::Ki,
+    ];
+    /// Number of variants. Single source of truth for anything that sizes or
+    /// indexes a fixed-size per-source array — see [`Self::ALL`]'s doc
+    /// comment for why this exists rather than a literal `5` scattered
+    /// across callers.
+    pub const COUNT: usize = Self::ALL.len();
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AbilityMeta {

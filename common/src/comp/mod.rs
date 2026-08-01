@@ -46,6 +46,7 @@ pub mod remote_sense;
 pub mod shockwave;
 pub mod skillset;
 pub mod spell;
+pub mod spell_mastery;
 mod stats;
 pub mod teleport;
 pub mod trigger;
@@ -143,6 +144,10 @@ pub use self::{
         skills::{self, Skill},
     },
     spell::{CLASS_LEVELS_PER_SPELL_LEVEL, SpellCompendium, SpellDef, spell_level_unlocked},
+    spell_mastery::{
+        MASTERY_XP_FULL, NON_DAMAGE_WEIGHT, POLYGLOT_BONUS_PER_RANK, SpellMastery,
+        grant_source_mastery, level_delta_weight, mastery_tier_max_level,
+    },
     stats::{ActiveSense, Stats, StatsModifier},
     teleport::Teleporting,
     trigger::{
