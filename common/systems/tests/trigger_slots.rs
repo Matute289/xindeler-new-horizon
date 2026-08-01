@@ -10,10 +10,11 @@ mod tests {
     use common::{
         comp::{
             AbilityCooldowns, AbilityPool, ActiveAbilities, CharacterActivity, CharacterState,
-            Combo, Controller, Energy, Health, Ori, PhysicsState, Poise, Pos, SkillSet, SlotState,
-            Stats, TriggerCondition, TriggerSlot, TriggerSlots, Vel,
+            Combo, Controller, Energy, Health, Inventory, Item, Ori, PhysicsState, Poise, Pos,
+            SkillSet, SlotState, Stats, TriggerCondition, TriggerSlot, TriggerSlots, Vel,
             ability::AuxiliaryAbility,
             controller::{ControlAction, InputKind},
+            inventory::slot::EquipSlot,
             item::MaterialStatManifest,
             tool::AbilityMap,
         },
@@ -427,9 +428,34 @@ mod tests {
     const WARD: &str = "spells.hemomancy.sanguine_ward";
 
     fn point_slot_at_the_ward(state: &mut State, entity: Entity) {
-        let mut pools = state.ecs().write_storage::<AbilityPool>();
-        let mut pool = pools.get_mut(entity).expect("pool");
-        pool.abilities[0] = WARD.to_string();
+        {
+            let mut pools = state.ecs().write_storage::<AbilityPool>();
+            let mut pool = pools.get_mut(entity).expect("pool");
+            pool.abilities[0] = WARD.to_string();
+        }
+        // The ward is a levelled spell, so it also needs a Tome equipped. The
+        // entity is jumped straight to `Wielding` rather than routed through
+        // the normal `Idle` -> equip-time -> `Wielding` transition, which is
+        // irrelevant to what these tests are actually probing.
+        let mut inventory = Inventory::with_empty();
+        inventory.replace_loadout_item(
+            EquipSlot::ActiveMainhand,
+            Some(Item::new_from_asset_expect(
+                "common.items.weapons.tome.apprentice_tome",
+            )),
+            Time(0.0),
+        );
+        state
+            .ecs()
+            .write_storage::<Inventory>()
+            .insert(entity, inventory)
+            .expect("insert inventory");
+        *state
+            .ecs()
+            .write_storage::<CharacterState>()
+            .get_mut(entity)
+            .expect("character state") =
+            CharacterState::Wielding(common::states::wielding::Data { is_sneaking: false });
     }
 
     fn warded(state: &State, entity: Entity) -> bool {
