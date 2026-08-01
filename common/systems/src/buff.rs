@@ -163,10 +163,9 @@ impl<'a> System<'a> for Sys {
         let racial_traits = common::comp::class::racial_traits_manifest();
         // BL-01 per-class scaling manifest: one cache access per system run.
         let class_attributes = common::comp::class::class_attributes_manifest();
-        // Weapon-proficiency and castable-magic-source manifests: one cache
-        // access per system run each, mirroring the manifest above.
+        // Weapon-proficiency manifest: one cache access per system run,
+        // mirroring the manifest above.
         let class_proficiencies = common::comp::class::class_proficiencies_manifest();
-        let class_magic_sources = common::comp::class::class_magic_sources_manifest();
         // Non-proficient damage multiplier: one cached read per system run
         // (mirrors how `Attack::apply_attack` caches `combat_tuning` per
         // attack rather than per damage instance).
@@ -575,25 +574,18 @@ impl<'a> System<'a> for Sys {
                     // class-skill passives above.
                     skill_set.apply_feat_passives(&mut stat);
 
-                    // Weapon proficiency + castable magic sources: union
-                    // (bitwise OR) across every held class, using the
-                    // manifests hoisted once per system run above. A class
-                    // absent from either manifest resolves permissive
-                    // (`All`), not empty — see the manifest types' own doc
-                    // comments. Running this BEFORE the buff-effect loop
-                    // below is load-bearing: it lets a future buff/feat
-                    // widen these masks or restore the damage multiplier on
-                    // top of the class narrowing, rather than being clobbered
-                    // by it.
+                    // Weapon proficiency: union (bitwise OR) across every held
+                    // class, using the manifest hoisted once per system run
+                    // above. A class absent from the manifest resolves
+                    // permissive (`All`), not empty — see the manifest type's
+                    // own doc comment. Running this BEFORE the buff-effect
+                    // loop below is load-bearing: it lets a future buff/feat
+                    // widen the mask or restore the damage multiplier on top
+                    // of the class narrowing, rather than being clobbered by
+                    // it.
                     stat.proficient_tools =
                         character_class.proficient_tools_mask(&class_proficiencies.0);
-                    stat.castable_sources =
-                        character_class.castable_sources_mask(&class_magic_sources.0);
                     stat.non_proficient_damage_mult = combat_tuning.non_proficient_damage_mult;
-                    // Mirrored alongside castable_sources so the cast-time
-                    // per-spell compendium filter has the caster's actual
-                    // class identity without widening JoinData.
-                    stat.character_class = Some(*character_class);
                 }
             }
 

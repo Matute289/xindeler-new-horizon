@@ -1520,26 +1520,17 @@ fn handle_ability(
                     // BL-36: an antimagic field blocks magic abilities (those with a
                     // magic `source`); physical + innate abilities (source: None) pass.
                     && !(data.stats.disable_magic && ability.ability_meta().source.is_some())
-                    // The cast-time magic-core gate: a spell's `source` must be
-                    // one of the caster's class-derived `castable_sources`.
-                    // Applies uniformly, including `Ability::InnateAux` — every
-                    // catalogued spell for a held class is delivered through the
-                    // ability pool as an `InnateAux` entry
-                    // (`AbilityPool::for_character`), so exempting that variant
-                    // here would exempt nearly the entire spell catalogue from
-                    // this gate instead of just the rare cross-source grant it
-                    // was once meant to cover.
-                    && data.stats.can_cast(ability.ability_meta().source)
-                    // Per-spell compendium filter: a finer check below the core
-                    // gate — even a class whose core allows a spell's source may
-                    // be excluded from that specific spell's own `classes` list.
-                    // Uncatalogued abilities and entities without a
-                    // `CharacterClass` are exempt; see
+                    // Per-spell class filter: a spell is castable only by the
+                    // classes its own compendium `classes` list names. This is
+                    // the ONLY class-side restriction on casting — a spell's
+                    // `source` records where its magic comes from and never
+                    // narrows who may cast it. Uncatalogued abilities and
+                    // entities without a `CharacterClass` are exempt; see
                     // `SpellCompendium::allows`'s own doc comment.
                     && spec_ability
                         .ability_id(Some(data.character), data.inventory, data.ability_pool)
                         .is_none_or(|id| {
-                            spell_compendium_manifest().allows(id, data.stats.character_class.as_ref())
+                            spell_compendium_manifest().allows(id, data.character_class)
                         })
             })
     {
@@ -2288,12 +2279,9 @@ mod hp_cost_tests {
 }
 
 #[cfg(test)]
-mod magic_core_gate_asset_tests {
+mod cast_gate_asset_tests {
     use crate::comp::{
-        ability::MagicSource,
-        class::{
-            CharacterClass, ClassKind, class_magic_sources_manifest, class_proficiencies_manifest,
-        },
+        class::{CharacterClass, ClassKind, class_proficiencies_manifest},
         inventory::item::tool::{AbilityKind, AbilityMap, AbilitySpec, ToolKind},
         spell::spell_compendium_manifest,
     };
@@ -2314,21 +2302,11 @@ mod magic_core_gate_asset_tests {
             .collect()
     }
 
-    fn core_gate_allows(class: ClassKind, source: Option<MagicSource>) -> bool {
-        let manifest = class_magic_sources_manifest();
-        source.is_none_or(|src| {
-            CharacterClass::single(class)
-                .castable_sources_mask(&manifest.0)
-                .allows(src)
-        })
-    }
-
     /// Every ability an implement's `primary`/`secondary` resolves to (in
-    /// `ability_set_manifest.ron`) must be castable — both the magic-core
-    /// gate and the per-spell compendium filter — by at least one class
-    /// that can actually equip that implement. A class-gated implement
-    /// whose own attack no class holding it can cast is unusable content;
-    /// this test exists to keep that caught.
+    /// `ability_set_manifest.ron`) must clear the per-spell class filter for
+    /// at least one class that can actually equip that implement. A
+    /// class-gated implement whose own attack no class holding it can cast is
+    /// unusable content; this test exists to keep that caught.
     #[test]
     fn implement_abilities_are_castable_by_a_class_that_can_equip_them() {
         let ability_map = AbilityMap::load().read();
@@ -2354,17 +2332,14 @@ mod magic_core_gate_asset_tests {
                 let AbilityKind::Simple(_, item) = kind else {
                     panic!("{tool:?} {slot} is Contextualized; extend this test to walk it");
                 };
-                let source = item.ability.ability_meta().source;
-
                 let castable_by_some_class = proficient_classes.iter().any(|&class| {
-                    core_gate_allows(class, source)
-                        && compendium.allows(&item.id, Some(&CharacterClass::single(class)))
+                    compendium.allows(&item.id, Some(&CharacterClass::single(class)))
                 });
 
                 assert!(
                     castable_by_some_class,
-                    "{tool:?} {slot} ability {:?} (source {source:?}) is not castable by any \
-                     class proficient with {tool:?} ({proficient_classes:?})",
+                    "{tool:?} {slot} ability {:?} is not castable by any class proficient with \
+                     {tool:?} ({proficient_classes:?})",
                     item.id,
                 );
             }

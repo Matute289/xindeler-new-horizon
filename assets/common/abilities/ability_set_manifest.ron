@@ -318,9 +318,11 @@
             Simple(Some(Sceptre(UnlockAura)), "common.abilities.sceptre.wardingaura"),
         ],
     )),
-    // Caster implements (MAG-P3.11). Primaries are free cantrips; the secondary
-    // spell is class-gated (MAG-P4.15): Tome->Mage, HolySymbol->Cleric. Focus stays
-    // ungated — no caster class fits its Warden/Occultist archetype yet.
+    // Caster implements. Primaries are free cantrips; the secondary spell sits
+    // behind a class skill unlock for Tome (Mage) and HolySymbol (Cleric).
+    // Focus's secondary has no unlock yet — who may hold a Focus at all is
+    // decided by the item's own `requirements.classes` whitelist, as for every
+    // implement.
     Tool(Tome): AbilitySet((
         primary: Simple(None, "common.abilities.spells.arcane.cinderbolt"),
         secondary: Simple(Some(UnlockGroup(Class(Mage))), "common.abilities.spells.ruin.shatterburst"),

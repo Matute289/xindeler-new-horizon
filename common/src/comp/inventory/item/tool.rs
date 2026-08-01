@@ -220,11 +220,9 @@ impl ToolKindMask {
     }
 
     /// Is this mask proficient with `kind` at grip `hands`? Uses
-    /// `intersects` rather than `contains` (unlike
-    /// [`MagicSourceMask::allows`](crate::comp::ability::MagicSourceMask::allows),
-    /// which uses `contains`): an unknown grip (`hands == None`) resolves
-    /// permissively for `Sword`, so having either of its two bits is
-    /// enough, not both.
+    /// `intersects` rather than `contains`: an unknown grip
+    /// (`hands == None`) resolves permissively for `Sword`, so having either
+    /// of its two bits is enough, not both.
     pub fn allows(self, kind: ToolKind, hands: Option<Hands>) -> bool {
         self.intersects(Self::for_tool(kind, hands))
     }

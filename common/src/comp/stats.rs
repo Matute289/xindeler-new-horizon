@@ -6,13 +6,8 @@ use std::{error::Error, fmt};
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
     comp::{
-        ability::{MagicSource, MagicSourceMask},
-        buff::SenseMode,
-        class::CharacterClass,
-        creature_type::CreatureKind,
-        detection::SenseKind,
-        inventory::item::tool::ToolKindMask,
-        projectile::ProjectileConstructorEffect,
+        buff::SenseMode, creature_type::CreatureKind, detection::SenseKind,
+        inventory::item::tool::ToolKindMask, projectile::ProjectileConstructorEffect,
     },
     uid::Uid,
 };
@@ -265,23 +260,6 @@ pub struct Stats {
     /// 1.0.
     #[serde(default = "one_f32")]
     pub non_proficient_damage_mult: f32,
-    /// The magic sources this entity may cast. Per-tick, not persisted.
-    /// Narrowed only for entities carrying a `CharacterClass` (set from
-    /// `class_magic_sources.ron` every tick in the buff system); same
-    /// permissive-by-default rule and same "empty would silently mute every
-    /// casting NPC in the world" hazard as `proficient_tools` above — see
-    /// that field's doc comment.
-    #[serde(default = "magic_mask_all")]
-    pub castable_sources: MagicSourceMask,
-    /// A copy of the entity's `CharacterClass` component, mirrored here each
-    /// tick alongside `castable_sources` so per-spell class gating
-    /// (`SpellCompendium::allows`) has the actual class identity to check
-    /// without widening `JoinData`. `None` for any entity with no
-    /// `CharacterClass` (every NPC, summon and boss) — the compendium filter
-    /// treats that the same as "no restriction", matching `castable_sources`'
-    /// own permissive-by-absence rule.
-    #[serde(default)]
-    pub character_class: Option<CharacterClass>,
 }
 
 fn one_f32() -> f32 { 1.0 }
@@ -291,11 +269,6 @@ fn one_f32() -> f32 { 1.0 }
 /// own doc comment) — a missing key in a self-describing format must fail
 /// open (permissive), mirroring `Stats::new`'s constructor default.
 fn tool_mask_all() -> ToolKindMask { ToolKindMask::all() }
-
-/// Serde default for [`Stats::castable_sources`]. Same reasoning as
-/// `tool_mask_all` above: `MagicSourceMask::default()` is empty by design,
-/// which is the wrong polarity for a missing key here.
-fn magic_mask_all() -> MagicSourceMask { MagicSourceMask::all() }
 
 impl Stats {
     pub fn new(name: Content, body: Body) -> Self {
@@ -356,29 +329,18 @@ impl Stats {
             senses: Vec::new(),
             // Permissive by construction: an entity with no `CharacterClass`
             // (every NPC, summon and boss) must stay fully able to swing
-            // any weapon and cast any source. Narrowed only inside the
-            // per-tick class block for entities that actually carry a
-            // `CharacterClass`. Getting this backwards (empty by default)
-            // would silently mute every casting NPC in the world.
+            // any weapon. Narrowed only inside the per-tick class block for
+            // entities that actually carry a `CharacterClass`. Getting this
+            // backwards (empty by default) would silently mute every NPC's
+            // weapon attacks.
             proficient_tools: ToolKindMask::all(),
             non_proficient_damage_mult: 1.0,
-            castable_sources: MagicSourceMask::all(),
-            character_class: None,
         }
     }
 
     /// Creates an empty `Stats` instance - used during character loading from
     /// the database
     pub fn empty(body: Body) -> Self { Self::new(Content::dummy(), body) }
-
-    /// The cast-time magic-core gate (magic-system-v2 §7): can this entity
-    /// cast an ability whose `AbilityMeta.source` is `source`? A physical or
-    /// innate ability (`source: None`) is castable by every class,
-    /// including one with an empty `castable_sources` mask — the mask only
-    /// ever narrows source-bearing (spell) abilities.
-    pub fn can_cast(&self, source: Option<MagicSource>) -> bool {
-        source.is_none_or(|src| self.castable_sources.allows(src))
-    }
 
     /// Combat resolution (BL-52 P3): the elemental resistance fraction that
     /// mitigates **AoE** damage of `kind`. Physical kinds return 0.0 — they are
@@ -434,10 +396,9 @@ mod tests {
     fn test_body() -> Body { Body::Humanoid(crate::comp::humanoid::Body::random()) }
 
     #[test]
-    fn empty_is_permissive_on_proficiency_and_magic_core() {
+    fn empty_is_permissive_on_proficiency() {
         let stats = Stats::empty(test_body());
         assert_eq!(stats.proficient_tools, ToolKindMask::all());
-        assert_eq!(stats.castable_sources, MagicSourceMask::all());
         assert_eq!(stats.non_proficient_damage_mult, 1.0);
     }
 
@@ -446,90 +407,36 @@ mod tests {
         let mut stats = Stats::empty(test_body());
         // Clobber the fields the way a narrowing consumer would.
         stats.proficient_tools = ToolKindMask::empty();
-        stats.castable_sources = MagicSourceMask::empty();
         stats.non_proficient_damage_mult = 0.40;
 
         stats.reset_temp_modifiers();
 
         assert_eq!(stats.proficient_tools, ToolKindMask::all());
-        assert_eq!(stats.castable_sources, MagicSourceMask::all());
         assert_eq!(stats.non_proficient_damage_mult, 1.0);
     }
 
-    // Regression test for an inverted `#[serde(default)]` on the two mask
-    // fields: `ToolKindMask`/`MagicSourceMask`'s own `Default` impls are
-    // deliberately EMPTY (see their doc comments), so a bare
-    // `#[serde(default)]` would resolve a missing key to "proficient with
-    // nothing" / "can cast nothing" -- the exact inversion of the
-    // permissive-by-default invariant the rest of this module is built on.
-    // The production wire/save format (bincode) is non-self-describing and
-    // never omits fields, so this is unreachable there; it only bites the
-    // moment `Stats` gains a self-describing serialization path. JSON
-    // stands in for that here since it's already a crate dependency.
+    // Regression test for an inverted `#[serde(default)]` on
+    // `proficient_tools`: `ToolKindMask`'s own `Default` impl is deliberately
+    // EMPTY (see its doc comment), so a bare `#[serde(default)]` would
+    // resolve a missing key to "proficient with nothing" -- the exact
+    // inversion of the permissive-by-default invariant the rest of this
+    // module is built on. The production wire/save format (bincode) is
+    // non-self-describing and never omits fields, so this is unreachable
+    // there; it only bites the moment `Stats` gains a self-describing
+    // serialization path. JSON stands in for that here since it's already a
+    // crate dependency.
     #[test]
-    fn missing_proficiency_and_magic_fields_deserialize_permissive_through_a_self_describing_format()
-     {
+    fn missing_proficiency_field_deserializes_permissive_through_a_self_describing_format() {
         let stats = Stats::new(Content::dummy(), test_body());
         let mut value = serde_json::to_value(&stats).expect("Stats must serialize to JSON");
         let map = value
             .as_object_mut()
             .expect("Stats must serialize as a JSON object");
-        // Simulate a payload authored/saved before these two fields
-        // existed.
+        // Simulate a payload authored/saved before the field existed.
         map.remove("proficient_tools");
-        map.remove("castable_sources");
 
         let restored: Stats =
-            serde_json::from_value(value).expect("Stats must deserialize with both keys absent");
+            serde_json::from_value(value).expect("Stats must deserialize with the key absent");
         assert_eq!(restored.proficient_tools, ToolKindMask::all());
-        assert_eq!(restored.castable_sources, MagicSourceMask::all());
-    }
-
-    #[test]
-    fn can_cast_empty_mask_refuses_a_source() {
-        let mut stats = Stats::empty(test_body());
-        stats.castable_sources = MagicSourceMask::empty();
-
-        assert!(!stats.can_cast(Some(MagicSource::Arcane)));
-    }
-
-    #[test]
-    fn can_cast_narrow_mask_allows_only_its_own_source() {
-        // A Cleric-shaped mask (Only([Divine])), built the way
-        // `castable_sources_mask` would.
-        let mut stats = Stats::empty(test_body());
-        stats.castable_sources = MagicSourceMask::for_source(MagicSource::Divine);
-
-        assert!(stats.can_cast(Some(MagicSource::Divine)));
-        assert!(!stats.can_cast(Some(MagicSource::Arcane)));
-    }
-
-    #[test]
-    fn can_cast_none_source_passes_even_with_an_empty_mask() {
-        // A physical ability, or one riding a magic item (a flaming sword's
-        // fire): `source: None` is not a spell and never checks the core.
-        let mut stats = Stats::empty(test_body());
-        stats.castable_sources = MagicSourceMask::empty();
-
-        assert!(stats.can_cast(None));
-    }
-
-    #[test]
-    fn can_cast_no_character_class_allows_every_source() {
-        // Built the way the engine does for an entity with no
-        // `CharacterClass` (every NPC, summon and boss): `Stats::empty`,
-        // not a hand-set mask.
-        let stats = Stats::empty(test_body());
-        assert!(stats.character_class.is_none());
-
-        for source in [
-            MagicSource::Arcane,
-            MagicSource::Divine,
-            MagicSource::Primordial,
-            MagicSource::Psionic,
-            MagicSource::Ki,
-        ] {
-            assert!(stats.can_cast(Some(source)));
-        }
     }
 }

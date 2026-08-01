@@ -182,22 +182,24 @@ impl SpellCompendium {
             .and_then(|&i| self.spells.get(i))
     }
 
-    /// The cast-time per-spell class filter (magic-system-v2 spec §7),
-    /// applied below the class-vs-source core gate
-    /// (`Stats::can_cast`/`states::utils::handle_ability`). `ability_id` is
-    /// whatever `SpecifiedAbility::ability_id` resolved for the activation —
-    /// checked against both `by_id` (pool/`InnateAux` spells) and
-    /// `by_ability` (a spell wired directly into a weapon/implement ability
-    /// set), so this catches a catalogued spell regardless of which path
-    /// delivered it.
+    /// The cast-time per-spell class filter, applied in
+    /// `states::utils::handle_ability`. A spell's own `classes` list is the
+    /// ONLY class-side restriction on casting: `SpellDef::source` records
+    /// where the magic comes from and never narrows who may cast it, so no
+    /// class-to-source rule exists (or may be reintroduced) here.
+    ///
+    /// `ability_id` is whatever `SpecifiedAbility::ability_id` resolved for
+    /// the activation — checked against both `by_id` (pool/`InnateAux`
+    /// spells) and `by_ability` (a spell wired directly into a
+    /// weapon/implement ability set), so this catches a catalogued spell
+    /// regardless of which path delivered it.
     ///
     /// Three cases pass unconditionally, each backing a specific shipped
     /// design:
     /// - `ability_id` matches no compendium entry by either key — most
     ///   abilities aren't catalogued at all; absence is not denial.
     /// - `character_class` is `None` — an entity with no `CharacterClass`
-    ///   (every NPC, summon and boss) keeps casting, same rule as the core
-    ///   gate.
+    ///   (every NPC, summon and boss) keeps casting; permissive by absence.
     /// - the caster holds `ClassKind::Adventurer` — the legacy pre-class value;
     ///   most catalogued entries only list `Mage`, so gating Adventurer would
     ///   strip every legacy character's kit.
@@ -207,7 +209,7 @@ impl SpellCompendium {
     /// a multiclass character needs only one of its two classes to match.
     ///
     /// Deliberately has no `Ability::InnateAux` exemption: every catalogued
-    /// spell for a held class now reaches `handle_ability` as `InnateAux`
+    /// spell for a held class reaches `handle_ability` as `InnateAux`
     /// (`AbilityPool::for_character` embeds the whole compendium per class),
     /// so exempting that variant here would exempt nearly the entire
     /// catalogue from this filter.
@@ -230,7 +232,7 @@ impl SpellCompendium {
 /// One cache read for per-activation consumers — an `AssetReadGuard`, not a
 /// clone, so the cast-time per-spell filter can read the catalogue once per
 /// ability activation without cloning `spells` or rebuilding the `by_id`/
-/// `by_ability` indices (mirrors `class::class_magic_sources_manifest`'s own
+/// `by_ability` indices (mirrors `class::class_proficiencies_manifest`'s own
 /// doc comment).
 pub fn spell_compendium_manifest() -> AssetReadGuard<SpellCompendium> {
     SpellCompendium::load_expect("common.spells.compendium").read()
@@ -300,6 +302,48 @@ mod tests {
         assert_eq!(keys, sorted, "spells_for_class must be (level, id)-sorted");
         // A class with no spells authored yet returns empty, not a panic.
         assert!(book.spells_for_class(ClassKind::Warrior).is_empty());
+    }
+
+    /// Design invariant: **a spell's `classes` list is the only thing that
+    /// decides who may cast it**. A spell's `source` is provenance/flavor,
+    /// authored per spell, but classes are NOT bound to sources — so no
+    /// source-derived rule may ever refuse a class the compendium itself
+    /// lists on that spell.
+    ///
+    /// Guards the link this invariant actually runs through: `allows` must
+    /// never refuse a listed class under EITHER keying. The `by_ability` half
+    /// is the one that can genuinely break — two entries sharing one
+    /// executing ability RON collapse to "first entry wins" (see
+    /// `by_ability`'s doc comment), which would silently answer with the
+    /// wrong entry's `classes` list. A gate reintroduced elsewhere in the
+    /// activation chain is out of this test's reach.
+    #[test]
+    fn every_class_the_compendium_lists_can_cast_that_spell() {
+        let book = SpellCompendium::load_expect_cloned();
+        let mut refused: Vec<String> = Vec::new();
+
+        for spell in book.iter() {
+            for &class in &spell.classes {
+                let character_class = CharacterClass::single(class);
+                // Both keyings `allows` is reachable under: the pool/InnateAux
+                // path (compendium id) and the direct weapon-ability path
+                // (the executing ability's own specifier).
+                if !book.allows(&spell.id, Some(&character_class))
+                    || !book.allows(&spell.ability, Some(&character_class))
+                {
+                    refused.push(format!(
+                        "{} ({:?}) refused for {class:?}",
+                        spell.id, spell.source
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            refused.is_empty(),
+            "a class the compendium lists on a spell cannot cast it:\n{}",
+            refused.join("\n")
+        );
     }
 
     #[test]
