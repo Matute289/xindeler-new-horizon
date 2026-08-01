@@ -22,6 +22,7 @@ use crate::{
             SkillSet,
             skills::{self, SKILL_MODIFIERS, Skill},
         },
+        trigger::TriggerSlots,
     },
     explosion::{ColorPreset, TerrainReplacementPreset},
     match_some,
@@ -619,12 +620,35 @@ impl ActiveAbilities {
             .unwrap_or_else(|| Cow::Owned(Self::default_ability_set(inv, skill_set, self.limit)))
     }
 
+    /// Resolve an ability input against the hotbar. `AbilityInput::Trigger`
+    /// always resolves to [`Ability::Empty`] here because a trigger slot lives
+    /// in [`TriggerSlots`], not in the hotbar — use
+    /// [`Self::get_ability_with_triggers`] on any path that can see one.
     pub fn get_ability(
         &self,
         input: AbilityInput,
         inventory: Option<&Inventory>,
         skill_set: Option<&SkillSet>,
         stats: Option<&comp::Stats>,
+    ) -> Ability {
+        self.get_ability_with_triggers(input, inventory, skill_set, stats, None)
+    }
+
+    /// As [`Self::get_ability`], but able to resolve
+    /// [`AbilityInput::Trigger`] against the character's trigger slots.
+    ///
+    /// Trigger slots deliberately do **not** honour
+    /// `Stats::disable_auxiliary_abilities`: that flag disables the hotbar, and
+    /// a trigger is not a hotbar slot. Everything that gates a *cast* (energy,
+    /// antimagic, teleport suppression, castable sources) is applied later, on
+    /// the shared activation path.
+    pub fn get_ability_with_triggers(
+        &self,
+        input: AbilityInput,
+        inventory: Option<&Inventory>,
+        skill_set: Option<&SkillSet>,
+        stats: Option<&comp::Stats>,
+        trigger_slots: Option<&TriggerSlots>,
     ) -> Ability {
         match input {
             AbilityInput::Guard => self.guard.into(),
@@ -642,6 +666,9 @@ impl ActiveAbilities {
                         .unwrap_or(Ability::Empty)
                 }
             },
+            AbilityInput::Trigger(slot) => trigger_slots
+                .and_then(|slots| slots.configured_ability(usize::from(slot)))
+                .map_or(Ability::Empty, Ability::from),
         }
     }
 
@@ -665,10 +692,15 @@ impl ActiveAbilities {
         // means "no class", which refuses every gated key — correct for NPCs,
         // whose pools hold no spells anyway.
         character_class: Option<&crate::comp::CharacterClass>,
+        // The caster's reactive trigger slots, so `AbilityInput::Trigger` can
+        // name the ability the slot stores rather than a hotbar position.
+        // `None` on the UI paths that only ever ask about hotbar inputs.
+        trigger_slots: Option<&TriggerSlots>,
         ability_map: &AbilityMap,
         // bool is from_offhand
     ) -> Option<(CharacterAbility, bool, SpecifiedAbility)> {
-        let ability = self.get_ability(input, inv, Some(skill_set), stats);
+        let ability =
+            self.get_ability_with_triggers(input, inv, Some(skill_set), stats, trigger_slots);
 
         // ENG-D2c: a weapon that RequiresAttunement grants no abilities until its
         // slot is attuned (the item is inert).
@@ -718,7 +750,9 @@ impl ActiveAbilities {
                     I::Auxiliary(index) => {
                         abilities.auxiliary(index, Some(skill_set), stance, inv, combo, buffs)
                     },
-                    I::Movement => return None,
+                    // A trigger slot never names an equipment ability set;
+                    // `try_ability_set_key` cannot produce it.
+                    I::Movement | I::Trigger(_) => return None,
                 };
 
                 dispatched
@@ -916,6 +950,9 @@ pub enum AbilityInput {
     Secondary,
     Movement,
     Auxiliary(usize),
+    /// A reactive trigger slot, resolved against [`TriggerSlots`] rather than
+    /// against the hotbar. Never produced by a hotbar key press.
+    Trigger(u8),
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -992,7 +1029,9 @@ impl Ability {
                     I::Auxiliary(index) => {
                         abilities.auxiliary(index, skill_set, stance, inv, combo, buffs)
                     },
-                    I::Movement => return None,
+                    // A trigger slot never names an equipment ability set;
+                    // `try_ability_set_key` cannot produce it.
+                    I::Movement | I::Trigger(_) => return None,
                 };
 
                 dispatched.map(|(a, _)| a.id.as_str()).or_else(|| {
@@ -1004,7 +1043,7 @@ impl Ability {
                         I::Primary => contextual_id(Some(&abilities.primary)),
                         I::Secondary => contextual_id(Some(&abilities.secondary)),
                         I::Auxiliary(index) => contextual_id(abilities.abilities.get(index)),
-                        I::Movement => None,
+                        I::Movement | I::Trigger(_) => None,
                     }
                 })
             })
@@ -1113,7 +1152,9 @@ impl SpecifiedAbility {
                     I::Primary => Some(&abilities.primary),
                     I::Secondary => Some(&abilities.secondary),
                     I::Auxiliary(index) => abilities.abilities.get(index),
-                    I::Movement => return None,
+                    // A trigger slot never names an equipment ability set;
+                    // `try_ability_set_key` cannot produce it.
+                    I::Movement | I::Trigger(_) => return None,
                 };
                 dispatched.map(|a| ability_id(self, a))
             })
@@ -5966,6 +6007,7 @@ mod spell_gate_tests {
                 None,
                 Some(pool),
                 character_class,
+                None,
                 ability_map,
             )
             .is_some()

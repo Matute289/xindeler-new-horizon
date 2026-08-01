@@ -2,7 +2,7 @@ use crate::{persistence::character_updater, sys::SysScheduler};
 use common::{
     comp::{
         ActiveAbilities, Alignment, Background, Body, CharacterClass, Ethos, Inventory, MapMarker,
-        Presence, PresenceKind, SkillSet, Stats, Waypoint,
+        Presence, PresenceKind, SkillSet, Stats, TriggerSlots, Waypoint,
         ability::AbilityPool,
         pet::{Pet, is_tameable},
     },
@@ -34,6 +34,7 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, CharacterClass>,
         ReadStorage<'a, Ethos>,
         ReadStorage<'a, Background>,
+        ReadStorage<'a, TriggerSlots>,
         WriteExpect<'a, character_updater::CharacterUpdater>,
         Write<'a, SysScheduler<Self>>,
     );
@@ -60,6 +61,7 @@ impl<'a> System<'a> for Sys {
             character_classes,
             ethoses,
             backgrounds,
+            trigger_slots,
             mut updater,
             mut scheduler,
         ): Self::SystemData,
@@ -78,6 +80,7 @@ impl<'a> System<'a> for Sys {
                     character_classes.maybe(),
                     ethoses.maybe(),
                     backgrounds.maybe(),
+                    trigger_slots.maybe(),
                 )
                     .join()
                     .filter_map(
@@ -93,6 +96,7 @@ impl<'a> System<'a> for Sys {
                             character_class,
                             ethos,
                             background,
+                            trigger_slots,
                         )| match presence.kind {
                             PresenceKind::LoadingCharacter(_char_id) => {
                                 error!(
@@ -130,6 +134,7 @@ impl<'a> System<'a> for Sys {
                                     character_class.copied().unwrap_or_default(),
                                     ethos.copied().unwrap_or_default(),
                                     background.cloned().unwrap_or_default(),
+                                    trigger_slots.cloned().unwrap_or_default(),
                                 ))
                             },
                             PresenceKind::Spectator | PresenceKind::Possessor => None,

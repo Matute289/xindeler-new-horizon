@@ -411,6 +411,15 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .copied()
                         .unwrap_or_default();
 
+                    // A slot's wait is real-world time, so the logout save is
+                    // exactly the moment it must not be lost.
+                    let trigger_slots = state
+                        .ecs()
+                        .read_storage::<comp::TriggerSlots>()
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_default();
+
                     character_updater.add_pending_logout_update((
                         char_id,
                         skill_set.clone(),
@@ -423,6 +432,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         character_class,
                         ethos,
                         background,
+                        trigger_slots,
                     ));
                 }
             },

@@ -10969,6 +10969,8 @@ dependencies = [
 name = "xindeler-common-systems"
 version = "0.18.0"
 dependencies = [
+ "chrono",
+ "hashbrown 0.17.1",
  "itertools 0.14.0",
  "ordered-float 5.3.0",
  "rand 0.10.1",

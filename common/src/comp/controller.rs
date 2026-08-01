@@ -221,13 +221,33 @@ pub enum InputKind {
     Jump = 5,
     Fly = 6,
     WallJump = 7,
+    /// A reactive trigger slot firing the ability it holds, named by slot
+    /// index rather than by hotbar position — `Ability(n)` would fire whatever
+    /// currently sits in hotbar slot `n`, not the ability the trigger stored.
+    ///
+    /// 🔴 **This must keep the HIGHEST discriminant.** `attempt_input` takes
+    /// `queued_inputs.keys().next()` from a `BTreeMap`, so the *lowest*
+    /// discriminant wins a tick. Being highest guarantees any explicit player
+    /// input beats a trigger, which is both the behaviour players expect and
+    /// the thing that closes the authorisation-token theft race in
+    /// `handle_ability`.
+    ///
+    /// 🔴 Naming a slot is not the same as being allowed to use it: this input
+    /// says *which slot*, never *that it is permitted*. The server drops it
+    /// outright when a client sends one, and the cooldown bypass is bound to a
+    /// separate server-minted token.
+    TriggerAbility(u8) = 8,
 }
 
 impl InputKind {
     pub fn is_ability(self) -> bool {
         matches!(
             self,
-            Self::Primary | Self::Secondary | Self::Ability(_) | Self::Block
+            Self::Primary
+                | Self::Secondary
+                | Self::Ability(_)
+                | Self::Block
+                | Self::TriggerAbility(_)
         )
     }
 }
@@ -241,6 +261,7 @@ impl From<InputKind> for Option<ability::AbilityInput> {
             InputKind::Secondary => Some(AbilityInput::Secondary),
             InputKind::Roll => Some(AbilityInput::Movement),
             InputKind::Ability(index) => Some(AbilityInput::Auxiliary(index)),
+            InputKind::TriggerAbility(slot) => Some(AbilityInput::Trigger(slot)),
             InputKind::Jump | InputKind::WallJump | InputKind::Fly => None,
         }
     }

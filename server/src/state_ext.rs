@@ -705,6 +705,7 @@ impl StateExt for State {
             map_marker,
             ethos,
             background,
+            mut trigger_slots,
         } = components;
 
         if let Some(player_uid) = self.read_component_copied::<Uid>(entity) {
@@ -753,6 +754,15 @@ impl StateExt for State {
             self.write_component_ignore_entity_dead(entity, background);
             self.write_component_ignore_entity_dead(entity, active_abilities);
             self.write_component_ignore_entity_dead(entity, comp::AbilityCooldowns::default());
+            // Reactive trigger slots are the opposite of `AbilityCooldowns`
+            // above: they MUST survive a relog, because a slot's wait is
+            // real-world time and runs from ten minutes to thirty-six hours.
+            // The stored wall-clock instant is authoritative; this is the one
+            // moment outside a slot firing that the system clock is read, to
+            // rebuild the in-game projection everything else compares against.
+            let now_game = *self.ecs().read_resource::<Time>();
+            trigger_slots.reproject_cooldowns(chrono::Utc::now(), now_game);
+            self.write_component_ignore_entity_dead(entity, trigger_slots);
             // Grant class active-ability keys + racial innate + anything the
             // character has learned into its spellbook. Built before the
             // inventory is moved into its component write, since the

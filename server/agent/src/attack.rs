@@ -2682,6 +2682,7 @@ impl AgentData<'_> {
                     self.buffs,
                     None, // NPCs don't have an ability pool (ENG-D2c)
                     None, // ... nor a CharacterClass, so no spell gate applies
+                    None, // ... nor trigger slots
                     &read_data.ability_map,
                 )
                 .map_or(Default::default(), |a| a.0)

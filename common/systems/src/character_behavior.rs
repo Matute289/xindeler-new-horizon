@@ -1,16 +1,23 @@
+use chrono::Utc;
 use common_net::synced_components::Heads;
 use specs::{
     Entities, LazyUpdate, LendJoin, Read, ReadExpect, ReadStorage, SystemData, WriteStorage, shred,
 };
 
 use common::{
+    assets::{AssetExt, Ron},
+    combat::CombatTuning,
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, AttunedItems, Beam, Body, Buffs,
         CharacterActivity, CharacterState, Combo, Controller, Density, Energy, Hardcore, Health,
         Immovable, Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState, PickupItem, Poise,
-        Pos, PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats, Vel,
+        Pos, PreviousPhysCache, Scale, SkillSet, SlotState, Stance, StateUpdate, Stats,
+        TriggerSlots, Vel,
+        ability::{Ability, AuxiliaryAbility, SpecifiedAbility},
         character_state::{CharacterStateEvents, OutputEvents},
+        controller::{ControlAction, InputKind},
         inventory::item::{MaterialStatManifest, tool::AbilityMap},
+        trigger::{FIRING_DEADLINE_SECS, MAX_TRIGGER_SLOTS, unlocked_trigger_slots},
     },
     event::{self, EventBus, KnockbackEvent, LocalEvent},
     link::Is,
@@ -89,6 +96,7 @@ impl<'a> System<'a> for Sys {
         WriteStorage<'a, Energy>,
         WriteStorage<'a, Controller>,
         WriteStorage<'a, Poise>,
+        WriteStorage<'a, TriggerSlots>,
         Read<'a, EventBus<Outcome>>,
         Read<'a, IdMaps>,
     );
@@ -110,10 +118,32 @@ impl<'a> System<'a> for Sys {
             mut energies,
             mut controllers,
             mut poises,
+            mut trigger_slots,
             outcomes,
             id_maps,
         ): Self::SystemData,
     ) {
+        // Reactive trigger slots: evaluate conditions and fire, BEFORE
+        // `controller.actions` is drained below, so a slot that fires this tick
+        // is cast this tick.
+        //
+        // 🔴 Perf: this joins on `TriggerSlots` FIRST. The component is present
+        // on approximately zero entities in a live world, so the bitset
+        // intersection rejects them before `Health` / `Energy` / `SkillSet` are
+        // ever touched, and the whole block costs a single bitset test per
+        // entity. Nothing here reads the system clock.
+        Self::evaluate_triggers(
+            &read_data,
+            &mut trigger_slots,
+            &mut controllers,
+            &character_states,
+            &energies,
+        );
+
+        // Slots whose authorisation token was actually spent this tick, applied
+        // after the main loop releases its borrows.
+        let mut triggers_fired: Vec<(specs::Entity, u8)> = Vec::new();
+
         let mut local_emitter = read_data.local_bus.emitter();
         let mut outcomes_emitter = outcomes.emitter();
         let mut emitters = read_data.events.get_emitters();
@@ -267,6 +297,7 @@ impl<'a> System<'a> for Sys {
                 ability_cooldowns,
                 ability_pool,
                 character_class: read_data.character_classes.get(entity),
+                trigger_slots: trigger_slots.get(entity),
                 combo,
                 alignment: read_data.alignments.get(entity),
                 terrain: &read_data.terrain,
@@ -294,6 +325,9 @@ impl<'a> System<'a> for Sys {
                     &read_data.oracle_live,
                 );
                 let state_update = j.character.handle_event(&j, &mut output_events, action);
+                if let Some(slot) = state_update.triggered_slot_cast {
+                    triggers_fired.push((entity, slot));
+                }
                 Self::publish_state_update(&mut join_struct, state_update, &mut output_events);
             }
 
@@ -316,14 +350,204 @@ impl<'a> System<'a> for Sys {
             );
 
             let state_update = j.character.behavior(&j, &mut output_events);
+            if let Some(slot) = state_update.triggered_slot_cast {
+                triggers_fired.push((entity, slot));
+            }
             Self::publish_state_update(&mut join_struct, state_update, &mut output_events);
         });
+
+        Self::start_slot_cooldowns(
+            &read_data,
+            &mut trigger_slots,
+            &mut controllers,
+            &triggers_fired,
+        );
 
         local_emitter.append_vec(local_events);
     }
 }
 
 impl Sys {
+    /// Advance every trigger slot's state machine and fire the ones whose
+    /// condition just became true.
+    ///
+    /// ```text
+    /// Ready ──condition true──▶ Firing ──cast resolves──▶ CoolingDown ──clock──▶ Ready
+    ///                             │
+    ///                             └── deadline expires, cast never happened ──▶ Ready
+    /// ```
+    ///
+    /// Firing means two things, together: push a `StartInput` naming the slot,
+    /// and mint the one-shot authorisation token by moving the slot to
+    /// `Firing`. It deliberately does **not** write `CharacterState` directly
+    /// the way the poise → stunned override just above does: that route skips
+    /// `requirements_paid`, the energy charge, the antimagic check and the
+    /// castable-source gate, which would hand a client an unvalidated cast
+    /// path. A trigger takes exactly the same road a key press does.
+    ///
+    /// Only the `Ready` → `Firing` edge is gated on the slot being unlocked at
+    /// the character's level; a slot that is cooling down keeps cooling down
+    /// even if a level change hid it, and its configuration is never cleared.
+    fn evaluate_triggers(
+        read_data: &ReadData,
+        trigger_slots: &mut WriteStorage<TriggerSlots>,
+        controllers: &mut WriteStorage<Controller>,
+        character_states: &WriteStorage<CharacterState>,
+        energies: &WriteStorage<Energy>,
+    ) {
+        let now = *read_data.time;
+
+        (
+            // FIRST on purpose: nearly every entity in the world lacks this
+            // component and is rejected by the bitset intersection here, before
+            // anything else about it is read.
+            trigger_slots,
+            controllers,
+            &read_data.entities,
+            &read_data.skill_sets,
+        )
+            .lend_join()
+            .for_each(|(mut slots, controller, entity, skill_set)| {
+                if !slots.has_any_configured() {
+                    return;
+                }
+
+                let health = read_data.healths.get(entity);
+                let energy = energies.get(entity);
+                let inventory = read_data.inventories.get(entity);
+                let ability_pool = read_data.ability_pool.get(entity);
+                let char_state = character_states.get(entity);
+                let unlocked = unlocked_trigger_slots(skill_set.character_level());
+
+                // Decided by reading only, then applied in one pass: touching
+                // the component mutably marks it dirty and costs a network
+                // resync, so an idle tick must not touch it at all.
+                let mut transitions: [Option<SlotState>; MAX_TRIGGER_SLOTS] = Default::default();
+
+                for (index, transition) in transitions.iter_mut().enumerate() {
+                    let Some(slot) = slots.get(index) else {
+                        continue;
+                    };
+                    let input = InputKind::TriggerAbility(index as u8);
+
+                    match &slot.state {
+                        SlotState::Ready => {
+                            if index >= unlocked || !slot.condition.is_met(now, health, energy) {
+                                continue;
+                            }
+                            // The token names the ability by id, so it cannot be
+                            // spent on anything else the same tick.
+                            let spec = SpecifiedAbility {
+                                ability: Ability::from(slot.ability),
+                                context_index: None,
+                            };
+                            let Some(ability_id) = spec
+                                .ability_id(char_state, inventory, ability_pool)
+                                .map(str::to_string)
+                            else {
+                                continue;
+                            };
+                            controller.push_action(ControlAction::StartInput {
+                                input,
+                                target_entity: None,
+                                select_pos: None,
+                            });
+                            *transition = Some(SlotState::Firing {
+                                ability_id,
+                                deadline: now.add_seconds(FIRING_DEADLINE_SECS),
+                            });
+                        },
+                        SlotState::Firing { deadline, .. } => {
+                            // The cast never happened — out of energy, blocked
+                            // by an antimagic field, or the caster stayed busy
+                            // too long. Give the slot straight back, having
+                            // spent nothing: a failed cast must never burn a
+                            // cooldown measured in hours.
+                            if now.0 > deadline.0 {
+                                controller.queued_inputs.remove(&input);
+                                *transition = Some(SlotState::Ready);
+                            }
+                        },
+                        SlotState::CoolingDown { ready_at_time, .. } => {
+                            // Compared against the in-game `Time` projection the
+                            // server computed when the slot fired, never against
+                            // a system clock — this runs on the client too, and
+                            // a client's clock is attacker-controlled.
+                            if now.0 >= ready_at_time.0 {
+                                *transition = Some(SlotState::Ready);
+                            }
+                        },
+                    }
+                }
+
+                if transitions.iter().any(Option::is_some) {
+                    for (index, transition) in transitions.into_iter().enumerate() {
+                        if let Some(state) = transition
+                            && let Some(slot) = slots.get_mut(index)
+                        {
+                            slot.state = state;
+                        }
+                    }
+                }
+            });
+    }
+
+    /// Move the slots whose authorisation token was spent this tick from
+    /// `Firing` to `CoolingDown`, and clear the input they queued.
+    ///
+    /// The wait is looked up by the spell circle of the ability that fired;
+    /// anything without a circle (a racial innate, a weapon ability) uses the
+    /// circle-0 floor. This is one of only two places a wall-clock read is
+    /// allowed — the other is character load — and it is reached at most once
+    /// per slot per cooldown, i.e. once per slot per several hours.
+    fn start_slot_cooldowns(
+        read_data: &ReadData,
+        trigger_slots: &mut WriteStorage<TriggerSlots>,
+        controllers: &mut WriteStorage<Controller>,
+        fired: &[(specs::Entity, u8)],
+    ) {
+        if fired.is_empty() {
+            return;
+        }
+        let now = *read_data.time;
+        let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let tuning = &tuning.read().0;
+
+        for &(entity, index) in fired {
+            let circle = read_data
+                .ability_pool
+                .get(entity)
+                .and_then(|pool| {
+                    let ability = trigger_slots
+                        .get(entity)
+                        .and_then(|slots| slots.configured_ability(usize::from(index)))?;
+                    match ability {
+                        AuxiliaryAbility::Innate(i) => pool.spell_gate(i).map(|g| g.spell_level),
+                        _ => None,
+                    }
+                })
+                .unwrap_or(0);
+            let cooldown = f64::from(tuning.trigger_slot_cooldown(circle));
+
+            if let Some(mut slots) = trigger_slots.get_mut(entity)
+                && let Some(slot) = slots.get_mut(usize::from(index))
+                && matches!(slot.state, SlotState::Firing { .. })
+            {
+                slot.state = SlotState::CoolingDown {
+                    ready_at: Some(
+                        Utc::now() + chrono::TimeDelta::milliseconds((cooldown * 1000.0) as i64),
+                    ),
+                    ready_at_time: now.add_seconds(cooldown),
+                };
+            }
+            if let Some(controller) = controllers.get_mut(entity) {
+                controller
+                    .queued_inputs
+                    .remove(&InputKind::TriggerAbility(index));
+            }
+        }
+    }
+
     fn publish_state_update(
         join: &mut JoinStruct,
         state_update: StateUpdate,

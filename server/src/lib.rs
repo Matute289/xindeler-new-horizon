@@ -1150,6 +1150,7 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        trigger_slots,
                                     } = character_data;
                                     let character_data = (
                                         body,
@@ -1164,6 +1165,7 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        trigger_slots,
                                     );
                                     // TODO: Does this need to be a server event? E.g. we could
                                     // just handle it here.

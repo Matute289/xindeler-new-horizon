@@ -210,6 +210,9 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     *buffs,
                                     *ability_pool,
                                     *character_class,
+                                    // UI display only: hotbar inputs never
+                                    // resolve against a trigger slot.
+                                    None,
                                     ability_map,
                                 )
                             })

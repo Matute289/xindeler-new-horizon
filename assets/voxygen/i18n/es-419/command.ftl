@@ -397,6 +397,10 @@ command-set_level-desc = (Administrador) Establece el nivel de personaje del obj
 
 command-multiclass-desc = (Administrador) Otorga una segunda clase al objetivo (tope de 2), para pruebas
 
+command-trigger_slot-desc = (Administrador) Configura un slot de trigger: <slot 0-3> <índice del pool de habilidades> <health_below|damage_taken|energy_below> [umbral 0-1]
+
+command-trigger_ready-desc = (Administrador) Fuerza un slot de trigger a listo, borrando su cooldown de tiempo real
+
 command-set_motd-message-added = Se estableció el mensaje del servidor del día a { $message }
 
 command-set_motd-message-not-set = Esta configuración regional no tenía ningún motd establecido

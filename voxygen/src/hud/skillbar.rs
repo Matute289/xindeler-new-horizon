@@ -1490,6 +1490,9 @@ impl<'a> Skillbar<'a> {
                         self.buffs,
                         self.ability_pool,
                         self.character_class,
+                        // UI display only: hotbar inputs never resolve against
+                        // a trigger slot.
+                        None,
                         self.ability_map,
                     )
                 })

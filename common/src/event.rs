@@ -266,6 +266,7 @@ pub struct UpdateCharacterDataEvent {
         Option<comp::MapMarker>,
         comp::Ethos,
         comp::Background,
+        comp::TriggerSlots,
     ),
     pub metadata: UpdateCharacterMetadata,
 }

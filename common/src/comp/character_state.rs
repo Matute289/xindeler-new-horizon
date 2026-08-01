@@ -33,6 +33,15 @@ pub struct StateUpdate {
     pub queued_inputs: BTreeMap<InputKind, InputAttr>,
     pub removed_inputs: Vec<InputKind>,
     pub character_activity: CharacterActivity,
+    /// Set to `Some(slot)` when this update was produced by a trigger slot's
+    /// input actually entering a `CharacterState`, i.e. when the slot's
+    /// one-shot authorisation token was spent. The character-behavior system
+    /// reads it to move that slot from `Firing` to `CoolingDown`.
+    ///
+    /// 🔴 A cast that was *refused* (no energy, antimagic field, ...) must
+    /// leave this `None`, so a failed trigger never burns a cooldown measured
+    /// in hours.
+    pub triggered_slot_cast: Option<u8>,
 }
 
 event_emitters! {
@@ -102,6 +111,7 @@ impl From<&JoinData<'_>> for StateUpdate {
             queued_inputs: BTreeMap::new(),
             removed_inputs: Vec::new(),
             character_activity: data.character_activity.clone(),
+            triggered_slot_cast: None,
         }
     }
 }

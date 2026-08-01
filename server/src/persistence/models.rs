@@ -25,6 +25,8 @@ pub struct Character {
     /// place to avoid a migration (nullable, zero live rows referenced it).
     #[expect(dead_code)]
     pub background_custom_note: Option<String>,
+    /// Reactive trigger slots as a JSON array; `NULL` -> none configured.
+    pub trigger_slots: Option<String>,
 }
 
 #[derive(Debug)]

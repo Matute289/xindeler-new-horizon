@@ -48,6 +48,10 @@ pub struct PersistedComponents {
     /// `Background(None)` ("Uncommitted", P0 §Q1) if the client doesn't send
     /// one.
     pub background: comp::Background,
+    /// Reactive trigger slots. Loaded with an infinite in-game projection on
+    /// every cooling slot; `state_ext` rebuilds the projection from the
+    /// authoritative wall clock before inserting the component.
+    pub trigger_slots: comp::TriggerSlots,
 }
 
 pub type EditableComponents = (comp::Body,);
