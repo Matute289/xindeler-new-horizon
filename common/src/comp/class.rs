@@ -8,7 +8,6 @@ use crate::{
     assets::{AssetExt, Ron},
     comp::{
         Stats,
-        ability::{MagicSource, MagicSourceMask},
         body::humanoid::Species,
         inventory::item::tool::{Hands, ToolKind, ToolKindMask},
         skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind, SkillSet},
@@ -228,21 +227,6 @@ impl CharacterClass {
                 .get(&class)
                 .map_or(ToolKindMask::all(), ClassProficiencies::mask)
         })
-    }
-
-    /// The union (bitwise OR) of every held class's castable-magic-source
-    /// mask. Same shape and same fail-open rule as
-    /// [`Self::proficient_tools_mask`]; see that method's doc comment.
-    pub fn castable_sources_mask(
-        &self,
-        manifest: &HashMap<ClassKind, ClassMagicSources>,
-    ) -> MagicSourceMask {
-        self.classes()
-            .fold(MagicSourceMask::empty(), |mask, class| {
-                mask | manifest
-                    .get(&class)
-                    .map_or(MagicSourceMask::all(), ClassMagicSources::mask)
-            })
     }
 }
 
@@ -528,36 +512,6 @@ impl ClassProficiencies {
     }
 }
 
-/// A class's castable magic sources ("cores", hard gate: casting a
-/// `source`-carrying ability outside this set is refused outright). `All` =
-/// every source.
-///
-/// `Only(vec![])` (an explicitly empty list) is meaningful and DIFFERENT
-/// from the class being absent from the manifest entirely: an empty
-/// `Only` means "this class can never cast any source-bearing ability" (the
-/// correct row for every martial class), while an absent key fails open to
-/// `All` (see [`class_magic_sources`]'s own doc comment). Do not "tidy" an
-/// `Only([])` row into an omitted key — that silently flips a class from
-/// "casts nothing" to "casts everything".
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub enum ClassMagicSources {
-    All,
-    Only(Vec<MagicSource>),
-}
-
-impl ClassMagicSources {
-    pub fn mask(&self) -> MagicSourceMask {
-        match self {
-            ClassMagicSources::All => MagicSourceMask::all(),
-            ClassMagicSources::Only(sources) => sources
-                .iter()
-                .fold(MagicSourceMask::empty(), |mask, &source| {
-                    mask | MagicSourceMask::for_source(source)
-                }),
-        }
-    }
-}
-
 /// Per-class weapon proficiency for `class` (one cache read). A class
 /// missing from the manifest resolves to [`ClassProficiencies::All`]
 /// (permissive fail-open) — a typo in the RON must never silently mute a
@@ -576,26 +530,6 @@ pub fn class_proficiencies(class: ClassKind) -> ClassProficiencies {
 pub fn class_proficiencies_manifest()
 -> crate::assets::AssetReadGuard<Ron<HashMap<ClassKind, ClassProficiencies>>> {
     Ron::<HashMap<ClassKind, ClassProficiencies>>::load_expect("common.class.class_proficiencies")
-        .read()
-}
-
-/// Per-class castable magic sources for `class` (one cache read). Same
-/// missing-key rule as [`class_proficiencies`]: absent ⇒
-/// [`ClassMagicSources::All`], never empty. Do NOT call per-entity in tick
-/// systems — hoist [`class_magic_sources_manifest`] once per run.
-pub fn class_magic_sources(class: ClassKind) -> ClassMagicSources {
-    class_magic_sources_manifest()
-        .0
-        .get(&class)
-        .cloned()
-        .unwrap_or(ClassMagicSources::All)
-}
-
-/// One manifest read for per-tick consumers (mirrors
-/// [`class_attributes_manifest`]).
-pub fn class_magic_sources_manifest()
--> crate::assets::AssetReadGuard<Ron<HashMap<ClassKind, ClassMagicSources>>> {
-    Ron::<HashMap<ClassKind, ClassMagicSources>>::load_expect("common.class.class_magic_sources")
         .read()
 }
 
@@ -982,77 +916,10 @@ mod tests {
     }
 
     #[test]
-    fn class_magic_sources_manifest_covers_every_class() {
-        let manifest = class_magic_sources_manifest();
-        for class in ClassKind::ALL {
-            assert!(
-                manifest.0.contains_key(&class),
-                "class_magic_sources.ron is missing a row for {class:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn adventurer_is_permissive_on_both_gates() {
+    fn adventurer_is_permissive_on_weapon_proficiency() {
         assert_eq!(
             class_proficiencies(ClassKind::Adventurer).mask(),
             ToolKindMask::all()
-        );
-        assert_eq!(
-            class_magic_sources(ClassKind::Adventurer).mask(),
-            MagicSourceMask::all()
-        );
-    }
-
-    #[test]
-    fn martial_classes_have_no_magic_core() {
-        for class in [
-            ClassKind::Warrior,
-            ClassKind::Barbarian,
-            ClassKind::Rogue,
-            ClassKind::BloodSlayer,
-        ] {
-            assert_eq!(
-                class_magic_sources(class).mask(),
-                MagicSourceMask::empty(),
-                "{class:?} should have an empty castable-sources mask"
-            );
-        }
-    }
-
-    #[test]
-    fn caster_classes_resolve_to_their_own_core() {
-        assert_eq!(
-            class_magic_sources(ClassKind::Cleric).mask(),
-            MagicSourceMask::DIVINE
-        );
-        assert_eq!(
-            class_magic_sources(ClassKind::Druid).mask(),
-            MagicSourceMask::PRIMORDIAL
-        );
-        assert_eq!(
-            class_magic_sources(ClassKind::Monk).mask(),
-            MagicSourceMask::KI
-        );
-    }
-
-    // Mage is a TEMPORARY stand-in, not a permanent design: it resolves to
-    // the fully-permissive core (all 5 sources) only until the spell
-    // identification/transcription core-unlock system narrows it to
-    // `Only([Arcane])`. This assertion is deliberately pinned so that
-    // narrowing breaks the build and forces a conscious update here rather
-    // than silently drifting — but if you're staring at a failure on this
-    // test, that's the transcription/unlock work landing, not a regression:
-    // update the assertion to `MagicSourceMask::ARCANE` and delete this
-    // comment.
-    #[test]
-    fn mage_is_a_temporary_fully_permissive_stand_in_pending_core_unlock() {
-        assert_eq!(
-            class_magic_sources(ClassKind::Mage).mask(),
-            MagicSourceMask::all(),
-            "Mage's castable-sources mask changed -- if this is the core-unlock system narrowing \
-             it to Only([Arcane]) as intended, update this assertion (and its message) rather \
-             than treating the failure as a bug"
         );
     }
 
@@ -1065,33 +932,6 @@ mod tests {
         let warrior = class_proficiencies(ClassKind::Warrior).mask();
         assert!(warrior.allows(ToolKind::Sword, Some(Hands::One)));
         assert!(warrior.allows(ToolKind::Sword, Some(Hands::Two)));
-    }
-
-    #[test]
-    fn magic_source_mask_covers_every_variant() {
-        // Hand-written, not derived from the enum, so a new MagicSource
-        // variant added without extending this array is caught here rather
-        // than silently passing.
-        let sources = [
-            MagicSource::Arcane,
-            MagicSource::Divine,
-            MagicSource::Primordial,
-            MagicSource::Psionic,
-            MagicSource::Ki,
-        ];
-        for source in sources {
-            assert!(MagicSourceMask::for_source(source).allows(source));
-        }
-        // Injectivity: `each bit allows itself` (above) passes even if two
-        // variants collided on the same bit. Fold every variant's bit into
-        // one union and check both that nothing is missing (covers all 5
-        // MagicSource variants) and that nothing collided (exactly 5
-        // distinct bits set, not fewer).
-        let union = sources.iter().fold(MagicSourceMask::empty(), |mask, &s| {
-            mask | MagicSourceMask::for_source(s)
-        });
-        assert_eq!(union, MagicSourceMask::all());
-        assert_eq!(union.bits().count_ones(), 5);
     }
 
     #[test]
@@ -1184,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn multiclass_masks_union_across_both_held_classes() {
+    fn multiclass_proficiency_mask_unions_across_both_held_classes() {
         let multi = CharacterClass {
             primary: ClassKind::Cleric,
             secondary: Some(ClassKind::Mage),
@@ -1201,9 +1041,5 @@ mod tests {
         // whenever they differ (Cleric carries HolySymbol, Mage carries Tome).
         assert!(proficiency_mask.contains(ToolKindMask::HOLY_SYMBOL));
         assert!(proficiency_mask.contains(ToolKindMask::TOME));
-
-        let sources = class_magic_sources_manifest();
-        let source_mask = multi.castable_sources_mask(&sources.0);
-        assert!(source_mask.contains(MagicSourceMask::DIVINE));
     }
 }
