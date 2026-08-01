@@ -6,7 +6,7 @@ use std::{error::Error, fmt};
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
     comp::{
-        buff::SenseMode, creature_type::CreatureKind, detection::SenseKind,
+        ability::MagicSource, buff::SenseMode, creature_type::CreatureKind, detection::SenseKind,
         inventory::item::tool::ToolKindMask, projectile::ProjectileConstructorEffect,
     },
     uid::Uid,
@@ -205,6 +205,33 @@ pub struct Stats {
     /// since tool-stat scaling never applies with no tool in hand.
     pub spell_power: f32,
     pub heal_power: f32,
+    /// Per-`MagicSource` spell-power multiplier, layered ON TOP of the flat
+    /// `spell_power` above rather than replacing it: `spell_power_for`
+    /// multiplies the two together, so a source that never names a specific
+    /// `MagicSource` keeps boosting every magic-source spell exactly as
+    /// before (every slot defaults to 1.0 = a no-op), while a source that
+    /// DOES name one (e.g. an implement that boosts Divine spells
+    /// specifically) raises only that slot. Indexed by
+    /// `MagicSource::index`, sized `MagicSource::NUM_SOURCES` — a fixed
+    /// array for the same per-tick-rebuild reason as `bonus_damage_vs`
+    /// above (no per-entity heap allocation).
+    ///
+    /// This keys DAMAGE MAGNITUDE only. It must never be used to decide who
+    /// may cast a spell — that is the unrelated, spell-side `classes:`
+    /// compendium check; an implement's stats and a spell's `source` tag
+    /// stay independent axes. See `spell_power_for`.
+    pub spell_power_by_source: [f32; MagicSource::NUM_SOURCES],
+    /// Multiplicative modifier on `AbilityMeta.cooldown`, applied where the
+    /// cooldown is written in `states::utils::handle_ability` — not read by
+    /// the ready-check itself, since the stored `AbilityCooldowns` entry
+    /// already carries the reduced value (the write is the only place the
+    /// reduction needs to apply). 1.0 = no change; a value below 1.0
+    /// shortens the gate. The final cooldown is always floored (see
+    /// `states::utils::MIN_ABILITY_COOLDOWN_SECS`) so a large reduction can
+    /// never zero out or invert the gate. Sourced from equipped caster-role
+    /// gear via `combat::apply_gear_caster_stats`'s `cooldown_reduction`
+    /// tool stat.
+    pub cooldown_reduction_modifier: f32,
     /// Extra outgoing damage vs targets of a given `CreatureKind`
     /// (`Stats.creature_kind`), indexed by the kind's discriminant. Per-tick
     /// (not persisted), additive fraction per slot (0.0 = none). Applied in
@@ -329,6 +356,8 @@ impl Stats {
             knockback_mult: 1.0,
             spell_power: 1.0,
             heal_power: 1.0,
+            spell_power_by_source: [1.0; MagicSource::NUM_SOURCES],
+            cooldown_reduction_modifier: 1.0,
             bonus_damage_vs: [0.0; CreatureKind::NUM_KINDS],
             projectile_speed_mult: 1.0,
             projectile_constructor_effects: Vec::new(),
@@ -380,6 +409,19 @@ impl Stats {
             ResistKind::Poison => self.resist_poison += amount,
             ResistKind::Magic => self.resist_magic += amount,
         }
+    }
+
+    /// The effective spell-power multiplier for a magic attack whose
+    /// `AbilityMeta.source` is `source`. Composes the flat, unkeyed
+    /// `spell_power` channel (what every caster passive/gear source
+    /// contributes to today) with the `source`-specific
+    /// `spell_power_by_source` slot: a spell with no `source` (should not
+    /// reach a magic-damage path at all, since callers gate on `is_magic`
+    /// first) simply skips the keyed lookup and returns the flat multiplier
+    /// alone.
+    pub fn spell_power_for(&self, source: Option<MagicSource>) -> f32 {
+        let keyed = source.map_or(1.0, |source| self.spell_power_by_source[source.index()]);
+        self.spell_power * keyed
     }
 
     /// Resets temporary modifiers to default values
@@ -445,5 +487,54 @@ mod tests {
         let restored: Stats =
             serde_json::from_value(value).expect("Stats must deserialize with the key absent");
         assert_eq!(restored.proficient_tools, ToolKindMask::all());
+    }
+
+    #[test]
+    fn fresh_stats_have_identity_caster_channels() {
+        let stats = Stats::empty(test_body());
+        assert_eq!(stats.cooldown_reduction_modifier, 1.0);
+        assert_eq!(stats.spell_power_by_source, [1.0; MagicSource::NUM_SOURCES]);
+    }
+
+    #[test]
+    fn reset_temp_modifiers_restores_the_caster_channel_defaults() {
+        let mut stats = Stats::empty(test_body());
+        stats.cooldown_reduction_modifier = 0.5;
+        stats.spell_power_by_source[MagicSource::Divine.index()] = 2.0;
+
+        stats.reset_temp_modifiers();
+
+        assert_eq!(stats.cooldown_reduction_modifier, 1.0);
+        assert_eq!(stats.spell_power_by_source, [1.0; MagicSource::NUM_SOURCES]);
+    }
+
+    #[test]
+    fn unkeyed_spell_power_boosts_every_source_like_before() {
+        let mut stats = Stats::empty(test_body());
+        stats.spell_power = 2.0;
+
+        assert_eq!(stats.spell_power_for(Some(MagicSource::Arcane)), 2.0);
+        assert_eq!(stats.spell_power_for(Some(MagicSource::Divine)), 2.0);
+        assert_eq!(stats.spell_power_for(None), 2.0);
+    }
+
+    #[test]
+    fn keyed_spell_power_boosts_only_its_own_source() {
+        let mut stats = Stats::empty(test_body());
+        stats.spell_power_by_source[MagicSource::Divine.index()] = 3.0;
+
+        assert_eq!(stats.spell_power_for(Some(MagicSource::Divine)), 3.0);
+        assert_eq!(stats.spell_power_for(Some(MagicSource::Arcane)), 1.0);
+        assert_eq!(stats.spell_power_for(Some(MagicSource::Primordial)), 1.0);
+    }
+
+    #[test]
+    fn flat_and_keyed_spell_power_compose() {
+        let mut stats = Stats::empty(test_body());
+        stats.spell_power = 1.5;
+        stats.spell_power_by_source[MagicSource::Arcane.index()] = 2.0;
+
+        assert!((stats.spell_power_for(Some(MagicSource::Arcane)) - 3.0).abs() < 1e-5);
+        assert_eq!(stats.spell_power_for(Some(MagicSource::Divine)), 1.5);
     }
 }

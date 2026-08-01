@@ -4466,6 +4466,31 @@ pub enum MagicSource {
     Ki,
 }
 
+impl MagicSource {
+    /// Number of `MagicSource` variants — sizes
+    /// `comp::Stats::spell_power_by_source`, the per-source spell-power
+    /// multiplier channel. A hand-written const rather than adopting
+    /// `common_base::enum_iter!` (the `CreatureKind` pattern): `MagicSource`
+    /// is already widely used with its current derive list, and this is its
+    /// only consumer that needs an index, so retrofitting the macro isn't
+    /// worth the touched surface.
+    pub const NUM_SOURCES: usize = 5;
+
+    /// Stable array index for this source, matching
+    /// `comp::Stats::spell_power_by_source`. Exhaustive (no `_` arm) so a
+    /// future `MagicSource` variant fails the build here instead of
+    /// silently aliasing an existing slot.
+    pub fn index(self) -> usize {
+        match self {
+            MagicSource::Arcane => 0,
+            MagicSource::Divine => 1,
+            MagicSource::Primordial => 2,
+            MagicSource::Psionic => 3,
+            MagicSource::Ki => 4,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct AbilityMeta {
