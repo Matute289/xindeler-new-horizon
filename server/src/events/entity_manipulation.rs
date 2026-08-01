@@ -51,7 +51,7 @@ use common::{
         ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
         RemoveLightEmitterEvent, RespawnEvent, SetAbilityCooldownEvent, ShootEvent, SoundEvent,
         StartInteractionEvent, StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent,
-        TransformEvent, UpdateMapMarkerEvent,
+        TranscribeSpellEvent, TransformEvent, UpdateMapMarkerEvent,
     },
     event_emitters,
     explosion::{ColorPreset, TerrainReplacementPreset},
@@ -144,6 +144,7 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<TeleportToPositionEvent>(builder, &[]);
     event_dispatch::<StartTeleportingEvent>(builder, &[]);
     event_dispatch::<RegrowHeadEvent>(builder, &[]);
+    event_dispatch::<TranscribeSpellEvent>(builder, &[]);
 }
 
 event_emitters! {

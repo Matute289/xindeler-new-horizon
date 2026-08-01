@@ -14,7 +14,7 @@ pub use common::event::{
     SetAbilityCooldownEvent, SetBattleModeEvent, SetLanternEvent, SetPetStayEvent, ShockwaveEvent,
     ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent,
     TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent,
-    TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
+    TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
 };
 
 #[cfg(feature = "plugins")]
@@ -99,6 +99,7 @@ macro_rules! server_events {
             SummonBeamPillarsEvent
             ArcingEvent
             CreatePoolEvent
+            TranscribeSpellEvent
         }
 
         #[cfg(feature = "plugins")]

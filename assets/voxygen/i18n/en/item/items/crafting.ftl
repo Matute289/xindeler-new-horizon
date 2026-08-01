@@ -22,6 +22,9 @@ sprite-wood-item-wood = Wood Logs
 sprite-crafting_ing-abyssal_heart = Abyssal Heart
     .desc = Source of Dagons Power.
 
+sprite-crafting_ing-arcane_ink = High-Grade Arcane Ink
+    .desc = Leyline-charged ink, spent one measure per spell transcribed.
+
 sprite-crafting_ing-bowl = Bowl
     .desc = A simple bowl for preparing meals.
 

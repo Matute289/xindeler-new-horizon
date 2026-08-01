@@ -1399,6 +1399,7 @@ impl Client {
                     | ClientGeneral::ExitInGame
                     | ClientGeneral::PlayerPhysics { .. }
                     | ClientGeneral::UnlockSkill(_)
+                    | ClientGeneral::TranscribeSpell(_)
                     | ClientGeneral::SetFutureLevelsToSecondary(_)
                     | ClientGeneral::RequestSiteInfo(_)
                     | ClientGeneral::RequestPlayerPhysics { .. }
@@ -1984,6 +1985,13 @@ impl Client {
 
     pub fn unlock_skill(&mut self, skill: Skill) {
         self.send_msg(ClientGeneral::UnlockSkill(skill));
+    }
+
+    /// Request transcribing `page` (an item-definition id) from the player's
+    /// own equipped Tome into their spellbook. Every gate and the cost
+    /// deduction are re-checked authoritatively server-side.
+    pub fn transcribe_spell(&mut self, page: String) {
+        self.send_msg(ClientGeneral::TranscribeSpell(page));
     }
 
     pub fn set_future_levels_to_secondary(&mut self, value: bool) {

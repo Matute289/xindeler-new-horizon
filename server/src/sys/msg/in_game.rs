@@ -50,6 +50,7 @@ event_emitters! {
     struct Events[Emitters] {
         exit_ingame: event::ExitIngameEvent,
         request_site_info: event::RequestSiteInfoEvent,
+        transcribe_spell: event::TranscribeSpellEvent,
         update_map_marker: event::UpdateMapMarkerEvent,
         client_disconnect: event::ClientDisconnectEvent,
         set_battle_mode: event::SetBattleModeEvent,
@@ -252,6 +253,9 @@ impl Sys {
             },
             ClientGeneral::RequestSiteInfo(id) => {
                 emitters.emit(event::RequestSiteInfoEvent { entity, id });
+            },
+            ClientGeneral::TranscribeSpell(page) => {
+                emitters.emit(event::TranscribeSpellEvent { entity, page });
             },
             ClientGeneral::RequestPlayerPhysics {
                 server_authoritative,

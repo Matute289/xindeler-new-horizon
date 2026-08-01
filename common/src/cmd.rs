@@ -519,6 +519,7 @@ pub enum ServerChatCommand {
     Time,
     TimeScale,
     Tp,
+    TranscribeSpell,
     TriggerReady,
     TriggerSlot,
     Unban,
@@ -1202,6 +1203,11 @@ impl ServerChatCommand {
                 Content::localized("command-tp-desc"),
                 Some(Moderator),
             ),
+            ServerChatCommand::TranscribeSpell => cmd(
+                vec![Any("page", Required)],
+                Content::localized("command-transcribe_spell-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::RtsimTp => cmd(
                 vec![
                     Integer("npc index", 0, Required),
@@ -1503,6 +1509,7 @@ impl ServerChatCommand {
             ServerChatCommand::Time => "time",
             ServerChatCommand::TimeScale => "time_scale",
             ServerChatCommand::Tp => "tp",
+            ServerChatCommand::TranscribeSpell => "transcribe_spell",
             ServerChatCommand::RtsimTp => "rtsim_tp",
             ServerChatCommand::RtsimInfo => "rtsim_info",
             ServerChatCommand::RtsimNpc => "rtsim_npc",

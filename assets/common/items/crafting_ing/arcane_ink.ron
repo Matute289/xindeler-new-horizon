@@ -1,0 +1,9 @@
+ItemDef(
+    legacy_name: "High-Grade Arcane Ink",
+    legacy_description: "Leyline-charged ink, ground from powdered mica and bound with a drop of the writer's own blood. One measure is spent per transcription.",
+    kind: Ingredient(
+        // Descriptor not needed
+        descriptor: "",    ),
+    quality: High,
+    tags: [],
+)

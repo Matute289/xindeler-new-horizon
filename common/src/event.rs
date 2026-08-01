@@ -424,6 +424,18 @@ pub struct BanishEvent {
     pub reward_fraction: f32,
 }
 
+/// Intent to transcribe a spell out of `page` -- an `ItemKind::SpellGroup`
+/// item listed by an equipped item's `spell_pages` (a Tome, in the shipped
+/// scope) -- permanently into `entity`'s spellbook. Every gate (class,
+/// possession, the per-page mastery tier check) and the cost deduction are
+/// authoritative in the server-side handler; nothing here is trusted.
+pub struct TranscribeSpellEvent {
+    pub entity: EcsEntity,
+    /// Item-definition id of the page to transcribe, as listed in the
+    /// bearer's equipped Tome's `spell_pages`.
+    pub page: String,
+}
+
 pub struct InventoryManipEvent(pub EcsEntity, pub comp::InventoryManip);
 
 /// A ranged, keyless request to unlock a keyhole/lock sprite at `pos` — e.g.
