@@ -3197,6 +3197,57 @@ pub fn compute_max_energy_mod(
     })
 }
 
+/// The gear → `comp::Stats` fold for the caster role. Every equipped `Tool`
+/// item whose [`tool::WeaponRole`] resolves to `Caster` — this covers not
+/// just `Staff`/`Sceptre` but every dedicated caster implement (`Tome`,
+/// `HolySymbol`, `Focus`), since `ToolKind::default_role` maps all five to
+/// `Caster` — folds its `effect_power`/`buff_strength`/`energy_efficiency`
+/// tool stats into the matching character-level channel, gated by the same
+/// attunement rule that already governs armor's item-effect contributions
+/// ([`item_effects_active`]).
+///
+/// Called from `buff::Sys`'s per-tick `Stats` rebuild (it already holds the
+/// `Inventory`/`AttunedItems` storages, so no `SystemData` widening is
+/// needed) rather than from any per-ability path — this is the ONLY
+/// mechanism that reaches **weaponless pool spells**, since
+/// `states::utils::get_tool_stats` falls back to `tool::Stats::one()` (i.e.
+/// contributes nothing) whenever no tool occupies the ability's hand.
+///
+/// `energy_efficiency_modifier` is deliberately left untouched here: it
+/// already composes with the SAME equipped weapon's own
+/// `tool::Stats.energy_efficiency` at ability-construction time
+/// (`contextual_stats.energy_efficiency *= stats.energy_efficiency_modifier`
+/// in `states/utils.rs`), so routing gear's `energy_efficiency` there too
+/// would double-apply it whenever that weapon casts its own abilities.
+/// `energy_regen_modifier` has no existing tool-stat consumer, so gear's mana
+/// axis lands there instead — new, and non-overlapping with the per-ability
+/// path. The contribution here is deliberately flat/unkeyed; per-school
+/// keying and cooldown reduction are separate, later channels.
+pub fn apply_gear_caster_stats(
+    stats: &mut Stats,
+    inventory: Option<&Inventory>,
+    attuned: Option<&AttunedItems>,
+) {
+    let Some(inventory) = inventory else {
+        return;
+    };
+    for (slot, item) in inventory.equipped_items_with_slot() {
+        if !item_effects_active(slot, item.requires_attunement(), attuned) {
+            continue;
+        }
+        let ItemKind::Tool(tool) = &*item.kind() else {
+            continue;
+        };
+        if tool.role() != tool::WeaponRole::Caster {
+            continue;
+        }
+        let tool_stats = tool.stats(item.stats_durability_multiplier());
+        stats.spell_power *= tool_stats.effect_power;
+        stats.heal_power *= tool_stats.buff_strength;
+        stats.energy_regen_modifier *= tool_stats.energy_efficiency;
+    }
+}
+
 /// Returns a value to be included as a multiplicative factor in perception
 /// distance checks.
 pub fn perception_dist_multiplier_from_stealth(
@@ -4989,5 +5040,239 @@ mod trigger_slot_cooldown_tests {
         let t = shipped();
         assert_eq!(t.trigger_slot_cooldown(10), t.trigger_slot_cooldown(9));
         assert_eq!(t.trigger_slot_cooldown(u8::MAX), t.trigger_slot_cooldown(9));
+    }
+}
+
+#[cfg(test)]
+mod gear_caster_stats_tests {
+    use std::sync::Arc;
+
+    use super::{AttunedItems, Inventory, Stats, apply_gear_caster_stats, tool};
+    use crate::comp::{
+        Body, humanoid,
+        inventory::{
+            item::{AbilityMap, Item, ItemBase, ItemDef, ItemKind, ItemTag},
+            loadout_builder::LoadoutBuilder,
+            slot::EquipSlot,
+        },
+    };
+
+    fn test_body() -> Body { Body::Humanoid(humanoid::Body::random()) }
+
+    fn caster_staff_stats() -> tool::Stats {
+        tool::Stats {
+            equip_time_secs: 0.4,
+            power: 1.0,
+            effect_power: 1.5,
+            speed: 1.0,
+            range: 1.0,
+            energy_efficiency: 1.25,
+            buff_strength: 1.75,
+        }
+    }
+
+    fn tool_item(kind: tool::ToolKind, role: tool::WeaponRole, stats: tool::Stats) -> Item {
+        Item::create_test_item_from_kind(ItemKind::Tool(tool::Tool::new(
+            kind,
+            tool::Hands::Two,
+            Some(role),
+            stats,
+        )))
+    }
+
+    fn attunement_required_tool_item(
+        kind: tool::ToolKind,
+        role: tool::WeaponRole,
+        stats: tool::Stats,
+    ) -> Item {
+        let mut item_def = ItemDef::create_test_itemdef_from_kind(ItemKind::Tool(tool::Tool::new(
+            kind,
+            tool::Hands::Two,
+            Some(role),
+            stats,
+        )));
+        item_def.tags = vec![ItemTag::RequiresAttunement];
+        Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(item_def)),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &super::MaterialStatManifest::load().read(),
+        )
+    }
+
+    fn inventory_with_mainhand(item: Item) -> Inventory {
+        Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty().active_mainhand(Some(item)).build(),
+        )
+    }
+
+    fn empty_inventory() -> Inventory {
+        Inventory::with_loadout_humanoid(LoadoutBuilder::empty().build())
+    }
+
+    #[test]
+    fn no_inventory_leaves_stats_untouched() {
+        let mut stats = Stats::empty(test_body());
+        apply_gear_caster_stats(&mut stats, None, None);
+        assert_eq!(stats.spell_power, 1.0);
+        assert_eq!(stats.heal_power, 1.0);
+        assert_eq!(stats.energy_regen_modifier, 1.0);
+    }
+
+    #[test]
+    fn caster_staff_raises_the_three_caster_channels() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+        assert!((stats.heal_power - 1.75).abs() < 1e-5);
+        assert!((stats.energy_regen_modifier - 1.25).abs() < 1e-5);
+        // Deliberately not fed by this path: it already composes with the
+        // same tool stat at ability-construction time, so routing it here
+        // too would double-apply it for that weapon's own casts.
+        assert_eq!(stats.energy_efficiency_modifier, 1.0);
+    }
+
+    #[test]
+    fn martial_role_weapon_contributes_nothing() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Martial,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert_eq!(stats.spell_power, 1.0);
+        assert_eq!(stats.heal_power, 1.0);
+        assert_eq!(stats.energy_regen_modifier, 1.0);
+    }
+
+    #[test]
+    fn every_caster_implement_kind_contributes_not_just_staff_and_sceptre() {
+        for kind in [
+            tool::ToolKind::Staff,
+            tool::ToolKind::Sceptre,
+            tool::ToolKind::Tome,
+            tool::ToolKind::HolySymbol,
+            tool::ToolKind::Focus,
+        ] {
+            let inv = inventory_with_mainhand(tool_item(
+                kind,
+                tool::WeaponRole::Caster,
+                caster_staff_stats(),
+            ));
+            let mut stats = Stats::empty(test_body());
+
+            apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+            assert!(
+                (stats.spell_power - 1.5).abs() < 1e-5,
+                "{kind:?} caster implement should raise spell_power"
+            );
+        }
+    }
+
+    #[test]
+    fn unattuned_requires_attunement_item_contributes_nothing() {
+        let inv = inventory_with_mainhand(attunement_required_tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert_eq!(stats.spell_power, 1.0, "unattuned item must stay inert");
+    }
+
+    #[test]
+    fn attuning_the_slot_activates_the_contribution() {
+        let inv = inventory_with_mainhand(attunement_required_tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let attuned = AttunedItems(vec![EquipSlot::ActiveMainhand]);
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), Some(&attuned));
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn unequipping_removes_the_contribution_on_the_next_reset() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+
+        // A later tick resets to defaults before re-running the fold; the
+        // weapon is no longer equipped by then.
+        stats.reset_temp_modifiers();
+        apply_gear_caster_stats(&mut stats, Some(&empty_inventory()), None);
+
+        assert_eq!(stats.spell_power, 1.0, "unequipped gear must not linger");
+    }
+
+    #[test]
+    fn repeated_ticks_with_the_same_gear_do_not_compound() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+        let first_tick = stats.spell_power;
+
+        // A second tick: reset (mirroring what the per-tick rebuild does
+        // before re-running every contribution) then re-fold the SAME gear —
+        // the result must be identical, not doubled.
+        stats.reset_temp_modifiers();
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - first_tick).abs() < 1e-5);
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_weaponless_pool_caster_still_benefits_from_an_equipped_caster_implement() {
+        // A per-ability tool-stat scaling path only ever reads the specific
+        // ability hand, and falls back to a neutral multiplier when it finds
+        // no tool there. This fold does not consult any "ability hand" at
+        // all — it walks every equipped item — so a caster implement in the
+        // OFFHAND slot still raises the character's spell_power even though
+        // no ability-hand lookup would ever find it there.
+        let offhand_item = Item::create_test_item_from_kind(ItemKind::Tool(tool::Tool::new(
+            tool::ToolKind::Focus,
+            tool::Hands::One,
+            Some(tool::WeaponRole::Caster),
+            caster_staff_stats(),
+        )));
+        let inv = Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty()
+                .active_offhand(Some(offhand_item))
+                .build(),
+        );
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
     }
 }
