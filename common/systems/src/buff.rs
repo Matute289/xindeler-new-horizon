@@ -590,6 +590,10 @@ impl<'a> System<'a> for Sys {
                     stat.castable_sources =
                         character_class.castable_sources_mask(&class_magic_sources.0);
                     stat.non_proficient_damage_mult = combat_tuning.non_proficient_damage_mult;
+                    // Mirrored alongside castable_sources so the cast-time
+                    // per-spell compendium filter has the caster's actual
+                    // class identity without widening JoinData.
+                    stat.character_class = Some(*character_class);
                 }
             }
 
