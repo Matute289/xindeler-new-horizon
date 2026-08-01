@@ -49,11 +49,19 @@ fn valid_starter_items(class: ClassKind) -> &'static [[Option<&'static str>; 2]]
             Some("common.items.weapons.hammer.starter_hammer"),
             None,
         ]],
-        ClassKind::Sorcerer
-        | ClassKind::Warlock
-        | ClassKind::Bard
-        | ClassKind::Druid
-        | ClassKind::Artificer => &[[Some("common.items.weapons.staff.starter_staff"), None]],
+        ClassKind::Sorcerer | ClassKind::Warlock | ClassKind::Druid | ClassKind::Artificer => {
+            &[[Some("common.items.weapons.staff.starter_staff"), None]]
+        },
+        // The Bard starts with a musical instrument, not a mage's staff.
+        // `starter_staff`'s own `requirements:` block doesn't list Bard
+        // (only Mage/Sorcerer/Warlock/Druid), so handing it out here would
+        // give a class a starter item that fails that same item's own
+        // equip gate. Instrument items carry no `requirements:` block at
+        // all (see class_proficiencies.ron's Bard comment) — equipping and
+        // playing one is open to every class; only casting spells through
+        // an instrument is meant to stay Bard-only, and that mechanism
+        // does not exist in the ability-set data yet.
+        ClassKind::Bard => &[[Some("common.items.tool.instruments.lute"), None]],
         ClassKind::Paladin | ClassKind::BloodSlayer => {
             &[[Some("common.items.weapons.sword.starter"), None]]
         },
@@ -242,6 +250,88 @@ mod tests {
             for pair in kits {
                 for item in pair.iter().flatten() {
                     Item::new_from_asset_expect(item);
+                }
+            }
+        }
+    }
+
+    /// The Bard's starter weapon must be a musical instrument, not a staff —
+    /// a Bard has no `Staff` proficiency in `class_proficiencies.ron`, and
+    /// `starter_staff`'s own equip gate doesn't even list Bard.
+    #[test]
+    fn bard_starts_with_an_instrument_not_a_staff() {
+        use common::comp::item::{ItemKind, ToolKind};
+
+        let kits = valid_starter_items(ClassKind::Bard);
+        assert!(
+            !kits.is_empty(),
+            "Bard has no starter items configured at all"
+        );
+        for pair in kits {
+            for item_id in pair.iter().flatten() {
+                assert!(
+                    !item_id.contains("staff"),
+                    "Bard's starter kit still hands out a staff: {item_id}"
+                );
+                let item = Item::new_from_asset_expect(item_id);
+                assert!(
+                    matches!(
+                        &*item.kind(),
+                        ItemKind::Tool(tool) if tool.kind == ToolKind::Instrument
+                    ),
+                    "Bard's starter item {item_id} is not a musical instrument"
+                );
+            }
+        }
+    }
+
+    /// Instrument items must stay usable by every class — they carry no
+    /// `requirements:` equip gate at all, unlike Tome/HolySymbol/Focus/
+    /// Staff/Sceptre. Any class can pick one up and make music; only actual
+    /// spellcasting through an instrument is meant to be Bard-only, and that
+    /// is enforced (once it exists) at the ability level, not the equip
+    /// level.
+    #[test]
+    fn bard_starter_instrument_has_no_class_equip_gate() {
+        let item = Item::new_from_asset_expect("common.items.tool.instruments.lute");
+        assert_eq!(
+            item.requirements(),
+            None,
+            "instrument starter item must not carry a class equip-gate"
+        );
+    }
+
+    /// A class's starter item must never fail that same class's own equip
+    /// gate — otherwise a fresh character can spawn holding gear it could
+    /// never legally re-equip after unequipping it.
+    ///
+    /// Artificer is deliberately excluded here: it still hands out
+    /// `starter_staff` even though `starter_staff`'s gate doesn't list
+    /// Artificer either (see the comment on that arm above and on Artificer
+    /// in `class_proficiencies.ron`) — a pre-existing, separately tracked
+    /// mismatch this test does not attempt to fix.
+    #[test]
+    fn starter_items_pass_their_own_class_gate() {
+        use common::comp::body::humanoid;
+
+        let body = Body::Humanoid(humanoid::Body::random());
+        let skill_set = SkillSet::default();
+        for class in ClassKind::PLAYABLE {
+            if class == ClassKind::Artificer {
+                continue;
+            }
+            let character_class = CharacterClass::single(class);
+            for pair in valid_starter_items(class) {
+                for item_id in pair.iter().flatten() {
+                    let item = Item::new_from_asset_expect(item_id);
+                    assert!(
+                        item.meets_requirements_with_class(
+                            Some(&character_class),
+                            &skill_set,
+                            &body
+                        ),
+                        "{class:?}'s starter item {item_id} fails {class:?}'s own equip gate"
+                    );
                 }
             }
         }
