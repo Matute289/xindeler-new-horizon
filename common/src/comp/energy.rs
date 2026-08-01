@@ -95,11 +95,14 @@ impl Energy {
     /// Returns `true` if the current value is less than the maximum
     pub fn needs_regen(&self) -> bool { self.current < self.maximum }
 
-    /// Regenerates energy based on the provided acceleration
-    pub fn regen(&mut self, accel: f32, dt: f32) {
+    /// Regenerates energy based on the provided acceleration. `modifier`
+    /// (1.0 = no change) scales both the acceleration itself and the rate
+    /// ceiling it climbs toward, so a large regen-rate bonus doesn't
+    /// eventually saturate against a fixed cap and silently stop mattering.
+    pub fn regen(&mut self, accel: f32, dt: f32, modifier: f32) {
         if self.current < self.maximum {
             self.change_by(self.regen_rate * dt);
-            self.regen_rate = (self.regen_rate + accel * dt).min(10.0);
+            self.regen_rate = (self.regen_rate + accel * modifier * dt).min(10.0 * modifier);
         }
     }
 

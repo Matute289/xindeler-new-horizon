@@ -162,6 +162,301 @@ fn class_skill_modifiers_manifest_integrity() {
     }
 }
 
+// ---- Mage tree extension: ManaRecover / ManaFlow / ArcaneVigor / Polyglot,
+// and the ManaEfficiency repoint (EnergyReward -> EnergyEfficiency) ----
+
+#[test]
+fn mage_tree_extension_new_nodes_apply_expected_stats_deltas() {
+    use crate::comp::{Body, Stats, body::humanoid, skills::MageSkill};
+
+    let body = Body::Humanoid(humanoid::Body::iter().next().expect("a humanoid body"));
+
+    // ManaRecover: EnergyReward, 0.06/level, max 3 -> +18% energy on hit.
+    // The magnitude is carried forward verbatim from the pre-repoint
+    // ManaEfficiency, so this also pins that the shipped balance did not
+    // move.
+    let mut skillset = SkillSet::default();
+    skillset
+        .skills
+        .insert(Skill::Mage(MageSkill::ManaRecover), 3);
+    let mut stats = Stats::empty(body);
+    skillset.apply_class_passives(&mut stats);
+    assert!((stats.energy_reward_modifier - 1.18).abs() < 1e-5);
+
+    // ManaFlow: EnergyRegen, 0.08/level, max 3 -> +24% regen rate.
+    let mut skillset = SkillSet::default();
+    skillset.skills.insert(Skill::Mage(MageSkill::ManaFlow), 3);
+    let mut stats = Stats::empty(body);
+    skillset.apply_class_passives(&mut stats);
+    assert!((stats.energy_regen_modifier - 1.24).abs() < 1e-5);
+
+    // ArcaneVigor: MaxHealth, 0.03/level, max 3 -> +9% max health.
+    let mut skillset = SkillSet::default();
+    skillset
+        .skills
+        .insert(Skill::Mage(MageSkill::ArcaneVigor), 3);
+    let mut stats = Stats::empty(body);
+    skillset.apply_class_passives(&mut stats);
+    assert!((stats.max_health_modifiers.mult_mod - 1.09).abs() < 1e-5);
+
+    // ManaEfficiency (repointed): EnergyEfficiency, 0.05/level, max 3 ->
+    // stats.energy_efficiency_modifier reaches 1.15 (the divisor; see the
+    // dedicated cost-reduction test below for what that means in ability
+    // terms).
+    let mut skillset = SkillSet::default();
+    skillset
+        .skills
+        .insert(Skill::Mage(MageSkill::ManaEfficiency), 3);
+    let mut stats = Stats::empty(body);
+    skillset.apply_class_passives(&mut stats);
+    assert!((stats.energy_efficiency_modifier - 1.15).abs() < 1e-5);
+
+    // Polyglot carries no ClassPassiveStat -- it must not appear in the
+    // modifier manifest at all (read via skill_level at the transcription
+    // site instead).
+    assert!(
+        CLASS_SKILL_MODIFIERS
+            .get(&Skill::Mage(MageSkill::Polyglot))
+            .is_none(),
+        "Polyglot must have no class_skill_modifiers.ron entry",
+    );
+}
+
+#[test]
+fn mana_efficiency_divisor_yields_13_percent_not_15_percent() {
+    // EnergyEfficiency is a DIVISOR (`*energy_cost /= stats.energy_efficiency`),
+    // so a naive reading of "0.05/level x 3 = +15%" is wrong: max-rank
+    // ManaEfficiency must cut a real ability's energy_cost by 13.0%, not 15%.
+    use crate::{
+        comp::{
+            Body, CharacterAbility, Stats,
+            body::humanoid,
+            buff::{BuffData, BuffKind},
+            inventory::item::tool,
+            skills::MageSkill,
+        },
+        resources::Secs,
+        states::self_buff::BuffDesc,
+    };
+
+    let body = Body::Humanoid(humanoid::Body::iter().next().expect("a humanoid body"));
+    let mut skillset = SkillSet::default();
+    skillset
+        .skills
+        .insert(Skill::Mage(MageSkill::ManaEfficiency), 3);
+    let mut player_stats = Stats::empty(body);
+    skillset.apply_class_passives(&mut player_stats);
+    assert!((player_stats.energy_efficiency_modifier - 1.15).abs() < 1e-5);
+
+    let ability = CharacterAbility::SelfBuff {
+        buildup_duration: 0.1,
+        cast_duration: 0.1,
+        recover_duration: 0.1,
+        buffs: vec![BuffDesc {
+            kind: BuffKind::Hastened,
+            data: BuffData::new(1.0, Some(Secs(5.0))),
+        }],
+        use_raw_buff_strength: false,
+        buff_cat: None,
+        energy_cost: 100.0,
+        enforced_limit: true,
+        combo_cost: 0,
+        combo_scaling: None,
+        meta: Default::default(),
+        specifier: None,
+    };
+
+    let mut contextual_stats = tool::Stats::one();
+    contextual_stats.energy_efficiency *= player_stats.energy_efficiency_modifier;
+    let adjusted = ability.adjusted_by_stats(contextual_stats);
+
+    let CharacterAbility::SelfBuff { energy_cost, .. } = adjusted else {
+        panic!("expected SelfBuff variant");
+    };
+    // 100 / 1.15 = 86.9565... -- a 13.0% reduction, NOT 15%.
+    assert!(
+        (energy_cost - 86.9565).abs() < 0.01,
+        "expected energy_cost ~86.96, got {energy_cost}"
+    );
+    let pct_reduction = (100.0 - energy_cost) / 100.0 * 100.0;
+    assert!(
+        (pct_reduction - 13.0).abs() < 0.1,
+        "expected a ~13.0% cost reduction, got {pct_reduction}% (15% would be the wrong, naive \
+         reading)"
+    );
+}
+
+#[test]
+fn every_mage_skill_resolves_a_max_level() {
+    use crate::comp::{class::ClassKind, skills::MageSkill};
+
+    // Asset-walk: every skill listed in the Class(Mage) group must resolve a
+    // real max_level. Active/capstone skills (ArcaneSurge, Overcharge,
+    // ArcaneMastery) are deliberately absent from skill_max_levels.ron and
+    // fall back to the default of 1 (Skill::max_level's documented
+    // behaviour); every other (passive) skill must have an EXPLICIT entry so
+    // a missing row doesn't silently default to 1.
+    let known_actives = [
+        Skill::Mage(MageSkill::ArcaneSurge),
+        Skill::Mage(MageSkill::Overcharge),
+        Skill::Mage(MageSkill::ArcaneMastery),
+    ];
+
+    let mage_skills = &SKILL_GROUP_DEFS
+        .get(&SkillGroupKind::Class(ClassKind::Mage))
+        .expect("Class(Mage) must be defined in the skill-groups manifest")
+        .skills;
+    for skill in mage_skills {
+        if known_actives.contains(skill) {
+            continue;
+        }
+        assert!(
+            SKILL_MAX_LEVEL.contains_key(skill),
+            "{skill:?} is a passive Mage skill and must have an explicit skill_max_levels.ron \
+             entry (found none -- would silently default to 1)",
+        );
+    }
+
+    // The four new nodes specifically, at their intended max level.
+    for skill in [
+        Skill::Mage(MageSkill::ManaRecover),
+        Skill::Mage(MageSkill::ManaFlow),
+        Skill::Mage(MageSkill::ArcaneVigor),
+        Skill::Mage(MageSkill::Polyglot),
+    ] {
+        assert_eq!(
+            SKILL_MAX_LEVEL.get(&skill).copied(),
+            Some(3),
+            "{skill:?} must have max_level: 3",
+        );
+    }
+}
+
+#[test]
+fn arcane_vigor_max_keeps_mage_the_lowest_hp_class_at_level_60() {
+    use crate::comp::{
+        Body, Stats,
+        body::humanoid,
+        class::{self, ClassKind},
+        skills::ClassPassiveStat,
+    };
+
+    let body = Body::Humanoid(humanoid::Body::random());
+    let manifest = class::class_attributes_manifest();
+
+    let hp_at_60 = |class_kind: ClassKind| -> f32 {
+        let mut stats = Stats::empty(body);
+        let attrs =
+            manifest.0.get(&class_kind).copied().unwrap_or_else(|| {
+                panic!("{class_kind:?} must be defined in class_attributes.ron")
+            });
+        attrs.apply(&mut stats, 60, true);
+        if class_kind == ClassKind::Mage {
+            // ArcaneVigor at max rank 3: 0.03/level -> +9%.
+            ClassPassiveStat::MaxHealth.apply(&mut stats, 0.03 * 3.0);
+        }
+        stats
+            .max_health_modifiers
+            .compute_maximum(body.base_health() as f32)
+    };
+
+    let mage_hp = hp_at_60(ClassKind::Mage);
+    let sorcerer_hp = hp_at_60(ClassKind::Sorcerer);
+
+    let mut third_lowest = f32::MAX;
+    for &class_kind in manifest.0.keys() {
+        if class_kind == ClassKind::Mage || class_kind == ClassKind::Sorcerer {
+            continue;
+        }
+        let hp = hp_at_60(class_kind);
+        assert!(
+            mage_hp < hp,
+            "Mage HP ({mage_hp}) at L60 must stay below {class_kind:?} ({hp}) even with \
+             ArcaneVigor at max rank",
+        );
+        third_lowest = third_lowest.min(hp);
+    }
+
+    // "Tied with Sorcerer": the Mage/Sorcerer gap must be far smaller than
+    // the gap from either of them to the next class up.
+    let mage_sorcerer_gap = (mage_hp - sorcerer_hp).abs();
+    let gap_to_third = third_lowest - mage_hp.max(sorcerer_hp);
+    assert!(
+        mage_sorcerer_gap < gap_to_third,
+        "Mage/Sorcerer HP gap ({mage_sorcerer_gap}) should be far smaller than the gap to the \
+         third-lowest class ({gap_to_third}), i.e. they should remain tied for last",
+    );
+}
+
+#[test]
+fn adding_the_four_new_mage_nodes_changed_the_class_group_hash() {
+    // SKILL_GROUP_HASHES SHA-256s a group's `(skill, max_level)` membership
+    // list; a changed hash force-respecs (and refunds) every character
+    // holding that group on load. Adding ManaRecover/ManaFlow/ArcaneVigor/
+    // Polyglot to Class(Mage) MUST move the hash -- a silent non-change would
+    // mean the repointed ManaEfficiency node quietly changed meaning under
+    // already-invested points with no refund, which is the one bad outcome
+    // this mechanism exists to prevent.
+    use crate::comp::{class::ClassKind, skills::MageSkill};
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeSet;
+
+    // The pre-extension Class(Mage) membership (12 nodes). ManaEfficiency's
+    // *meaning* was repointed by this same change (EnergyReward ->
+    // EnergyEfficiency) but its variant name and max_level (3) are
+    // unchanged, so it round-trips into this reconstruction unchanged --
+    // only the group's skill MEMBERSHIP is what moves the hash.
+    let pre_extension: BTreeSet<Skill> = [
+        Skill::Mage(MageSkill::FocusedMind),
+        Skill::Mage(MageSkill::TrueAim),
+        Skill::Mage(MageSkill::ArcaneSurge),
+        Skill::Mage(MageSkill::SpellPotency),
+        Skill::Mage(MageSkill::PyromanticAttunement),
+        Skill::Mage(MageSkill::CryomanticAttunement),
+        Skill::Mage(MageSkill::QuickCasting),
+        Skill::Mage(MageSkill::PenetratingMagic),
+        Skill::Mage(MageSkill::WardedSkin),
+        Skill::Mage(MageSkill::ManaEfficiency),
+        Skill::Mage(MageSkill::Overcharge),
+        Skill::Mage(MageSkill::ArcaneMastery),
+    ]
+    .into_iter()
+    .collect();
+
+    let pre_extension_json: Vec<_> = pre_extension
+        .iter()
+        .map(|skill| (*skill, skill.max_level()))
+        .collect();
+    let mut hasher = Sha256::new();
+    hasher.update(
+        serde_json::to_string(&pre_extension_json)
+            .unwrap()
+            .as_bytes(),
+    );
+    let pre_extension_hash: Vec<u8> = hasher.finalize().iter().copied().collect();
+
+    let live_hash = SKILL_GROUP_HASHES
+        .get(&SkillGroupKind::Class(ClassKind::Mage))
+        .expect("Class(Mage) must have a hash entry")
+        .clone();
+
+    assert_ne!(
+        pre_extension_hash, live_hash,
+        "adding ManaRecover/ManaFlow/ArcaneVigor/Polyglot must change the Class(Mage) skill-group \
+         hash so every persisted Mage is force-respec'd and refunded",
+    );
+
+    let live_len = SKILL_GROUP_DEFS
+        .get(&SkillGroupKind::Class(ClassKind::Mage))
+        .expect("Class(Mage) must be defined")
+        .skills
+        .len();
+    assert_eq!(
+        live_len, 16,
+        "Class(Mage) should now have 16 nodes (12 existing + 4 new)"
+    );
+}
+
 // ---- BL-20 feats/skills system ----
 
 #[test]

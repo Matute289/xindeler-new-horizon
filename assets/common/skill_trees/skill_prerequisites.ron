@@ -98,6 +98,10 @@
     Mage(PenetratingMagic): Any({Mage(TrueAim): 1, Mage(SpellPotency): 1}),
     Mage(WardedSkin): Any({Mage(PyromanticAttunement): 1, Mage(CryomanticAttunement): 1}),
     Mage(ManaEfficiency): All({Mage(FocusedMind): 1}),
+    Mage(ManaRecover): All({Mage(ManaEfficiency): 1}),
+    Mage(ManaFlow): All({Mage(FocusedMind): 1}),
+    Mage(Polyglot): All({Mage(FocusedMind): 1}),
+    Mage(ArcaneVigor): All({Mage(WardedSkin): 1}),
     Mage(Overcharge): All({Mage(SpellPotency): 1, Mage(PenetratingMagic): 1}),
     Mage(ArcaneMastery): All({Mage(QuickCasting): 1, Mage(Overcharge): 1}),
     // --- Cleric ---

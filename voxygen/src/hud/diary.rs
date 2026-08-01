@@ -2318,6 +2318,8 @@ impl Diary<'_> {
             Some(PoiseDamage) => self.imgs.buff_frenzy_0,
             Some(MoveSpeed | RecoverySpeed) => self.imgs.utility_speed_skill,
             Some(EnergyReward) => self.imgs.magic_energy_regen_skill,
+            Some(EnergyEfficiency) => self.imgs.magic_cost_skill,
+            Some(EnergyRegen) => self.imgs.magic_energy_regen_skill,
             Some(BonusVs(_)) => self.imgs.buff_plus_0,
             None => self.imgs.buff_cost_skill,
         }
@@ -4055,6 +4057,22 @@ fn mage_skill_strings(skill: MageSkill) -> SkillStrings<'static> {
         MageSkill::ManaEfficiency => SkillStrings::plain(
             "hud-skill-class-mage-mana_efficiency_title",
             "hud-skill-class-mage-mana_efficiency",
+        ),
+        MageSkill::ManaRecover => SkillStrings::plain(
+            "hud-skill-class-mage-mana_recover_title",
+            "hud-skill-class-mage-mana_recover",
+        ),
+        MageSkill::ManaFlow => SkillStrings::plain(
+            "hud-skill-class-mage-mana_flow_title",
+            "hud-skill-class-mage-mana_flow",
+        ),
+        MageSkill::ArcaneVigor => SkillStrings::plain(
+            "hud-skill-class-mage-arcane_vigor_title",
+            "hud-skill-class-mage-arcane_vigor",
+        ),
+        MageSkill::Polyglot => SkillStrings::plain(
+            "hud-skill-class-mage-polyglot_title",
+            "hud-skill-class-mage-polyglot",
         ),
         MageSkill::Overcharge => SkillStrings::plain(
             "hud-skill-class-mage-overcharge_title",

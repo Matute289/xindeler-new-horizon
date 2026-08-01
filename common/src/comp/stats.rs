@@ -138,6 +138,10 @@ pub struct Stats {
     pub mitigations_penetration: f32,
     pub energy_reward_modifier: f32,
     pub energy_efficiency_modifier: f32,
+    /// Multiplier on energy regeneration rate (both the per-tick
+    /// acceleration and the rate ceiling it climbs toward — see
+    /// `Energy::regen`'s `modifier` parameter). 1.0 = no change.
+    pub energy_regen_modifier: f32,
     /// This creates effects when the entity is damaged
     pub effects_on_damaged: Vec<StatEffect>,
     /// This creates effects when the entity is killed
@@ -321,6 +325,7 @@ impl Stats {
             mitigations_penetration: 0.0,
             energy_reward_modifier: 1.0,
             energy_efficiency_modifier: 1.0,
+            energy_regen_modifier: 1.0,
             effects_on_damaged: Vec::new(),
             effects_on_death: Vec::new(),
             disable_auxiliary_abilities: false,

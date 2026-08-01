@@ -42,7 +42,10 @@
     Mage(QuickCasting): [(RecoverySpeed, 0.04)],
     Mage(PenetratingMagic): [(CritChance, 0.02)],
     Mage(WardedSkin): [(ResistMagic, 0.03)],
-    Mage(ManaEfficiency): [(EnergyReward, 0.06)],
+    Mage(ManaEfficiency): [(EnergyEfficiency, 0.05)],
+    Mage(ManaRecover): [(EnergyReward, 0.06)],
+    Mage(ManaFlow): [(EnergyRegen, 0.08)],
+    Mage(ArcaneVigor): [(MaxHealth, 0.03)],
     Mage(Overcharge): [(SpellPower, 0.10), (PrecisionMult, 0.10)],
     // ---------- Cleric ----------
     Cleric(FaithfulVigor): [(MaxHealth, 0.04)],
