@@ -49,6 +49,7 @@ pub mod spell;
 pub mod spell_mastery;
 mod stats;
 pub mod teleport;
+pub mod transcription;
 pub mod trigger;
 pub mod visual;
 

@@ -43,6 +43,7 @@ mod invite;
 mod mounting;
 mod player;
 mod trade;
+mod transcription;
 
 pub(crate) use event_types::register_event_busses;
 /// Shared utilities used by other code **in this crate**

@@ -111,6 +111,10 @@ pub enum ClientGeneral {
         force_counter: u64,
     },
     UnlockSkill(Skill),
+    /// Intent to transcribe the named page (an item-definition id) from the
+    /// sender's own equipped Tome into their spellbook. Every gate and the
+    /// cost deduction are re-checked authoritatively server-side.
+    TranscribeSpell(String),
     SetFutureLevelsToSecondary(bool),
     RequestSiteInfo(SiteId),
     UpdateMapMarker(comp::MapMarkerChange),
@@ -179,6 +183,7 @@ impl ClientMsg {
                         | ClientGeneral::PlayerPhysics { .. }
                         | ClientGeneral::TerrainChunkRequest { .. }
                         | ClientGeneral::UnlockSkill(_)
+                        | ClientGeneral::TranscribeSpell(_)
                         | ClientGeneral::SetFutureLevelsToSecondary(_)
                         | ClientGeneral::RequestSiteInfo(_)
                         | ClientGeneral::RequestPlayerPhysics { .. }

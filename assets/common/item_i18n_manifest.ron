@@ -13,6 +13,24 @@
             "common.items.testing.test_draugr_blade",
         ): "common-items-testing-test_draugr_blade",
         Simple(
+            "common.items.testing.test_page_divine_l1",
+        ): "common-items-testing-test_page_divine_l1",
+        Simple(
+            "common.items.testing.test_page_divine_l2",
+        ): "common-items-testing-test_page_divine_l2",
+        Simple(
+            "common.items.testing.test_page_divine_l3",
+        ): "common-items-testing-test_page_divine_l3",
+        Simple(
+            "common.items.testing.test_page_divine_l7",
+        ): "common-items-testing-test_page_divine_l7",
+        Simple(
+            "common.items.testing.test_page_uncatalogued",
+        ): "common-items-testing-test_page_uncatalogued",
+        Simple(
+            "common.items.testing.test_tome_of_transcription",
+        ): "common-items-testing-test_tome_of_transcription",
+        Simple(
             "common.items.npc_armor.pants.leather_blue",
         ): "common-items-npc_armor-pants-leather_blue",
         Simple(
@@ -3513,6 +3531,9 @@
         Simple(
             "common.items.crafting_ing.abyssal_heart",
         ): "sprite-crafting_ing-abyssal_heart",
+        Simple(
+            "common.items.crafting_ing.arcane_ink",
+        ): "sprite-crafting_ing-arcane_ink",
         Simple(
             "common.items.crafting_ing.bowl",
         ): "sprite-crafting_ing-bowl",

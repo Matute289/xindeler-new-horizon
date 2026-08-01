@@ -1,0 +1,12 @@
+// Test fixture: a single-spell transcription page, level 3 Divine.
+ItemDef(
+    legacy_name: "Test Page (Divine, L3)",
+    legacy_description: "Transcription test fixture.",
+    kind: SpellGroup(
+        spells: [
+            "spells.evocation.blinding_smite",
+        ],
+    ),
+    quality: Common,
+    tags: [],
+)

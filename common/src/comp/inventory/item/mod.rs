@@ -952,6 +952,20 @@ pub struct ItemDef {
     /// (every item shipped today).
     #[serde(default)]
     pub condition: Option<ItemCondition>,
+    /// Item-definition ids of `ItemKind::SpellGroup` "pages" this item offers
+    /// for transcription into a character's spellbook. Kept as item ids --
+    /// not raw spell/ability keys -- for the same reason `comp::SpellBook`
+    /// itself is a `Vec<Item>` rather than bare strings (`spell_book.rs`'s
+    /// doc comment): the referenced `SpellGroup` item stays the single
+    /// source of truth for what it actually teaches, re-balanceable by
+    /// editing its own RON.
+    ///
+    /// `None` for an item with no transcribable spells (every item shipped
+    /// before this field existed, including the one shipped Tome). Kept
+    /// generic rather than Tome-specific: a rune, a scroll, or any other
+    /// item type can list pages through the same field.
+    #[serde(default)]
+    pub spell_pages: Option<Vec<String>>,
 }
 
 impl PartialEq for ItemDef {
@@ -1062,6 +1076,7 @@ impl ItemDef {
             ability_spec: None,
             requirements: None,
             condition: None,
+            spell_pages: None,
         }
     }
 
@@ -1083,6 +1098,7 @@ impl ItemDef {
             ability_spec: None,
             requirements: None,
             condition: None,
+            spell_pages: None,
         }
     }
 }
@@ -1126,6 +1142,7 @@ impl Asset for ItemDef {
             ability_spec,
             requirements,
             condition,
+            spell_pages,
         } = cache.load::<Ron<_>>(specifier)?.cloned().into_inner();
 
         // Some commands like /give_item provide the asset specifier separated with \
@@ -1145,6 +1162,7 @@ impl Asset for ItemDef {
             ability_spec,
             requirements,
             condition,
+            spell_pages,
         })
     }
 }
@@ -1164,6 +1182,8 @@ struct RawItemDef {
     requirements: Option<ItemRequirements>,
     #[serde(default)]
     condition: Option<ItemCondition>,
+    #[serde(default)]
+    spell_pages: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -1705,6 +1725,17 @@ impl Item {
     pub fn condition(&self) -> Option<&ItemCondition> {
         match &self.item_base {
             ItemBase::Simple(item_def) => item_def.condition.as_ref(),
+            ItemBase::Modular(_) => None,
+        }
+    }
+
+    /// Item-definition ids of the `ItemKind::SpellGroup` pages this item
+    /// offers for transcription, if any. `None` for a modular (crafted) item
+    /// and for a simple item that declares no pages -- mirrors
+    /// `condition()`.
+    pub fn spell_pages(&self) -> Option<&[String]> {
+        match &self.item_base {
+            ItemBase::Simple(item_def) => item_def.spell_pages.as_deref(),
             ItemBase::Modular(_) => None,
         }
     }
@@ -2528,6 +2559,25 @@ mod tests {
 
         let duplicated = item.duplicate(&ability_map, &msm);
         assert_eq!(duplicated.quality(), Quality::Epic);
+    }
+
+    #[test]
+    fn spell_pages_reads_back_the_declared_pages_in_order() {
+        let tome = Item::new_from_asset_expect("common.items.testing.test_tome_of_transcription");
+        let pages = tome.spell_pages().expect("fixture declares pages");
+        assert_eq!(pages, [
+            "common.items.testing.test_page_divine_l1",
+            "common.items.testing.test_page_divine_l2",
+            "common.items.testing.test_page_divine_l3",
+            "common.items.testing.test_page_divine_l7",
+            "common.items.testing.test_page_uncatalogued",
+        ]);
+    }
+
+    #[test]
+    fn spell_pages_is_none_for_an_item_that_declares_no_pages() {
+        let sword = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        assert!(sword.spell_pages().is_none());
     }
 
     #[test]

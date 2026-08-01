@@ -236,6 +236,7 @@ fn do_command(
         ServerChatCommand::Time => handle_time,
         ServerChatCommand::TimeScale => handle_time_scale,
         ServerChatCommand::Tp => handle_tp,
+        ServerChatCommand::TranscribeSpell => handle_transcribe_spell,
         ServerChatCommand::RtsimTp => handle_rtsim_tp,
         ServerChatCommand::RtsimInfo => handle_rtsim_info,
         ServerChatCommand::RtsimNpc => handle_rtsim_npc,
@@ -4966,6 +4967,36 @@ fn handle_set_mastery(
             Content::Plain(format!("Set {source_arg} mastery to {pct}% ({xp} xp).")),
         ),
     );
+    Ok(())
+}
+
+/// `/transcribe_spell <page>` -- admin-only test tool: emits the same
+/// `TranscribeSpellEvent` a real player action would, so it exercises every
+/// gate (class, possession, mastery tier, cost) rather than bypassing them
+/// the way `/learn_spells` deliberately does.
+fn handle_transcribe_spell(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /transcribe_spell.".to_string(),
+        ));
+    }
+
+    let page = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let page = page.replace(['/', '\\'], ".");
+
+    server
+        .state
+        .emit_event_now(common::event::TranscribeSpellEvent {
+            entity: target,
+            page,
+        });
     Ok(())
 }
 
