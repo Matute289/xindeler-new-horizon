@@ -71,7 +71,8 @@ rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 prometheus = { workspace = true }
 portpicker = { git = "https://github.com/xMAC94x/portpicker-rs", rev = "e04e3a61d6c1645c865b36c57877f1f8e48e0cb7" }
-authc = { git = "https://gitlab.com/veloren/auth.git", rev = "ae0e16783a9f9041951296885f082308e155db79" }           # xMAC94x/current_master_till_refactored branch
+# Private repository. See the note in README.md before cloning.
+authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", branch = "main" }
 enum-map = { workspace = true }
 noise = { workspace = true }
 censor = "0.3"

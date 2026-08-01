@@ -45,6 +45,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             mold binutils pkg-config libasound2-dev libudev-dev
 
+      # The authc dependency lives in a private repository, so the runner needs
+      # a credential to fetch it. AUTH_REPO_SSH_KEY is a deploy key with
+      # read-only access to Matute289/xindeler-auth.
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
       - name: Install Rust toolchain (pinned, read from rust-toolchain)
         # Read the pin dynamically so this stays in sync with the monthly bump
         # (unlike publish-docker.yml which hardcodes an old nightly).

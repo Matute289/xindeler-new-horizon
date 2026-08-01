@@ -12,6 +12,10 @@ use std::{str::FromStr, sync::Arc};
 use tokio::{runtime::Runtime, sync::oneshot};
 use tracing::{error, info};
 
+/// Environment variable holding the shared secret this server presents to the
+/// auth server's service endpoints. Kept out of settings.ron on purpose.
+pub const AUTH_SERVICE_TOKEN_VAR: &str = "AUTH_SERVICE_TOKEN";
+
 /// Determines whether a user is banned, given a ban record connected to a user,
 /// the `AdminRecord` of that user (if it exists), and the current time.
 pub fn ban_applies(
@@ -71,16 +75,26 @@ impl LoginProvider {
         tracing::trace!(?auth_addr, "Starting LoginProvider");
 
         let auth_server = auth_addr.map(|addr| {
-            let (scheme, authority) = addr.split_once("://").expect("invalid auth url");
+            // The service credential authenticates this game server to the
+            // auth server's service endpoints (/verify, /uuid_to_username).
+            // It is read from the environment rather than settings.ron,
+            // because that file is written to disk and shared, and this is a
+            // shared secret.
+            //
+            // Failing here is deliberate: without it every single login would
+            // be rejected with 401, and a server that cannot authenticate
+            // anyone should not come up pretending it can.
+            let service_token = std::env::var(AUTH_SERVICE_TOKEN_VAR).unwrap_or_else(|_| {
+                panic!(
+                    "{AUTH_SERVICE_TOKEN_VAR} must be set when auth_server_address is configured \
+                     (got auth_server_address = {addr:?})"
+                )
+            });
 
-            let scheme = scheme
-                .parse::<authc::Scheme>()
-                .expect("invalid auth url scheme");
-            let authority = authority
-                .parse::<authc::Authority>()
-                .expect("invalid auth url authority");
-
-            Arc::new(AuthClient::new(scheme, authority).expect("insecure auth scheme"))
+            Arc::new(
+                AuthClient::with_service_token(addr.as_str(), service_token)
+                    .expect("invalid auth server address"),
+            )
         });
 
         Self {
@@ -189,26 +203,28 @@ impl LoginProvider {
         // Parse token
         let token = AuthToken::from_str(username_or_token)
             .map_err(|e| RegisterError::AuthError(e.to_string()))?;
-        // Validate token
-        match async {
-            let uuid = srv.validate(token).await?;
-            let username = srv.uuid_to_username(uuid).await?;
+        // The auth client is blocking, so it must not run on the async
+        // reactor: two HTTPS round-trips would stall every other task on that
+        // worker thread.
+        let lookup = tokio::task::spawn_blocking(move || {
+            let uuid = srv.validate(token)?;
+            let username = srv.uuid_to_username(uuid)?;
             let r: Result<_, AuthClientError> = Ok((username, uuid));
             r
-        }
-        .await
-        {
+        })
+        .await;
+
+        match lookup {
+            Ok(Ok((username, uuid))) => Ok((username, uuid)),
+            Ok(Err(e)) => Err(RegisterError::AuthError(e.to_string())),
             Err(e) => Err(RegisterError::AuthError(e.to_string())),
-            Ok((username, uuid)) => Ok((username, uuid)),
         }
     }
 
     pub fn username_to_uuid(&self, username: &str) -> Result<Uuid, AuthClientError> {
         match &self.auth_server {
-            Some(srv) => {
-                //TODO: optimize
-                self.runtime.block_on(srv.username_to_uuid(&username))
-            },
+            // Already blocking, so no runtime round-trip is needed.
+            Some(srv) => srv.username_to_uuid(username),
             None => Ok(derive_uuid(username)),
         }
     }
@@ -219,10 +235,7 @@ impl LoginProvider {
         fallback_alias: &str,
     ) -> Result<String, AuthClientError> {
         match &self.auth_server {
-            Some(srv) => {
-                //TODO: optimize
-                self.runtime.block_on(srv.uuid_to_username(uuid))
-            },
+            Some(srv) => srv.uuid_to_username(uuid),
             None => Ok(fallback_alias.into()),
         }
     }
