@@ -28,6 +28,7 @@ mod health;
 mod inputs;
 pub mod inventory;
 pub mod invite;
+pub mod item_condition;
 mod last;
 mod location;
 pub mod loot_owner;
@@ -85,7 +86,7 @@ pub use self::{
     chat::{
         ChatMode, ChatMsg, ChatType, Faction, SpeechBubble, SpeechBubbleType, UnresolvedChatMsg,
     },
-    class::{CharacterClass, ClassKind},
+    class::{CharacterClass, ClassKind, EquipmentGroup},
     combo::Combo,
     controller::{
         ControlAction, ControlEvent, Controller, ControllerInputs, GroupManip, InputAttr,
@@ -119,6 +120,7 @@ pub use self::{
         slot,
         spell_book::SpellBook,
     },
+    item_condition::{ConditionPredicate, ItemCondition, item_condition_buff_data},
     last::Last,
     location::{MapMarker, MapMarkerChange, MapMarkerUpdate, Waypoint, WaypointArea},
     loot_owner::LootOwner,

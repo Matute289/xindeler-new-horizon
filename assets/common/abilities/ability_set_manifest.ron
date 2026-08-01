@@ -453,6 +453,17 @@
         secondary: Simple(None, "common.abilities.staffsimple.flamethrower"),
         abilities: [],
     )),
+    // The martial-role Staff kit (quarterstaff): plain physical strikes, no
+    // spellcasting. Kept entirely separate from `Tool(Staff)` above, which is
+    // the caster (fire) kit — a martial staff item points here via its own
+    // `ability_spec: Some(Custom("staff_martial"))` instead of falling back
+    // to the tool-kind default, which is what used to hand a non-caster a
+    // legacy fire spell kit just for picking up any `Staff`.
+    Custom("staff_martial"): AbilitySet((
+        primary: Simple(None, "common.abilities.staff_martial.quarterstaff_strikes"),
+        secondary: Simple(None, "common.abilities.staff_martial.frost_strike"),
+        abilities: [],
+    )),
     Custom("Bow Simple"): AbilitySet((
         primary: Simple(None, "common.abilities.bowsimple.basic"),
         secondary: Simple(None, "common.abilities.bowsimple.basic"),

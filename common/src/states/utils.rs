@@ -10,6 +10,7 @@ use crate::{
         arthropod, biped_large, biped_small, bird_medium,
         buff::{Buff, BuffCategory, BuffChange, BuffData, BuffSource, DestInfo},
         character_state::OutputEvents,
+        class::{CharacterClass, ClassKind},
         controller::InventoryManip,
         crustacean, golem,
         inventory::slot::{ArmorSlot, EquipSlot, Slot},
@@ -1539,6 +1540,7 @@ fn handle_ability(
                     // permitted to know it.
                     && tome_possession_ok(
                         data.inventory,
+                        data.character_class,
                         spec_ability.ability_id(
                             Some(data.character),
                             data.inventory,
@@ -1765,17 +1767,30 @@ fn hp_cost_affordable(hp_cost: Option<f32>, current_hp: Option<f32>, hardcore: b
     hp_cost.is_none_or(|cost| hardcore || current_hp.is_none_or(|hp| hp >= cost + 1.0))
 }
 
-/// The possession gate for spellcasting: a spell of `SpellDef::level >= 1`
-/// may only be cast while a `ToolKind::Tome` is equipped in either active
-/// hand. Cantrips (`level == 0`) are exempt, and so is any `ability_id` that
-/// resolves to no compendium entry at all -- bespoke/legacy content that
-/// this gate does not govern; its own gating, if any, is authored
-/// elsewhere.
+/// The possession gate for spellcasting: **for a Mage** (spec
+/// `2026-08-01-nh26-mage-mastery-percent-design.md` §1 gate 2 — the
+/// fragility payoff for the Mage's versatility, not a general caster rule),
+/// a spell of `SpellDef::level >= 1` may only be cast while a
+/// `ToolKind::Tome` is equipped in either active hand. Cantrips
+/// (`level == 0`) are exempt, and so is any `ability_id` that resolves to no
+/// compendium entry at all -- bespoke/legacy content that this gate does not
+/// govern; its own gating, if any, is authored elsewhere. Any caster who
+/// does not hold the Mage class (Sorcerer, Warlock, Cleric, Druid, an
+/// entity with no `CharacterClass` at all, ...) is exempt entirely --
+/// Sorcerer/Warlock cast without any implement by design, and
+/// Cleric/Druid's own implements (Sceptre/HolySymbol/Focus) are not Tomes.
 ///
 /// `ability_id` is `None` for an activation that never resolved to any
 /// concrete ability id (e.g. a missing item-config ability set); that case
 /// passes for the same reason an uncatalogued id does.
-fn tome_possession_ok(inventory: Option<&Inventory>, ability_id: Option<&str>) -> bool {
+fn tome_possession_ok(
+    inventory: Option<&Inventory>,
+    character_class: Option<&CharacterClass>,
+    ability_id: Option<&str>,
+) -> bool {
+    if !character_class.is_some_and(|class| class.has(ClassKind::Mage)) {
+        return true;
+    }
     let Some(ability_id) = ability_id else {
         return true;
     };
@@ -2341,7 +2356,11 @@ mod hp_cost_tests {
 mod possession_gate_tests {
     use super::tome_possession_ok;
     use crate::{
-        comp::{Inventory, Item, inventory::slot::EquipSlot},
+        comp::{
+            Inventory, Item,
+            class::{CharacterClass, ClassKind},
+            inventory::slot::EquipSlot,
+        },
         resources::Time,
     };
 
@@ -2351,6 +2370,8 @@ mod possession_gate_tests {
     const LEVEL_ONE: &str = "spells.hemomancy.hemal_spike"; // level 1
     const LEVEL_NINE: &str = "spells.hemomancy.the_last_vein"; // level 9
     const UNCATALOGUED: &str = "spells.not_a_real_spell.made_up_for_this_test";
+
+    fn mage() -> CharacterClass { CharacterClass::single(ClassKind::Mage) }
 
     fn inventory_with_tome_in(slot: EquipSlot) -> Inventory {
         let mut inv = Inventory::with_empty();
@@ -2366,18 +2387,20 @@ mod possession_gate_tests {
 
     #[test]
     fn cantrip_with_no_tome_is_allowed() {
-        assert!(tome_possession_ok(None, Some(CANTRIP)));
+        assert!(tome_possession_ok(None, Some(&mage()), Some(CANTRIP)));
         assert!(tome_possession_ok(
             Some(&Inventory::with_empty()),
+            Some(&mage()),
             Some(CANTRIP)
         ));
     }
 
     #[test]
-    fn levelled_spell_with_no_tome_is_refused() {
-        assert!(!tome_possession_ok(None, Some(LEVEL_ONE)));
+    fn levelled_spell_with_no_tome_is_refused_for_a_mage() {
+        assert!(!tome_possession_ok(None, Some(&mage()), Some(LEVEL_ONE)));
         assert!(!tome_possession_ok(
             Some(&Inventory::with_empty()),
+            Some(&mage()),
             Some(LEVEL_ONE)
         ));
     }
@@ -2385,36 +2408,95 @@ mod possession_gate_tests {
     #[test]
     fn levelled_spell_with_tome_in_mainhand_is_allowed() {
         let inv = inventory_with_tome_in(EquipSlot::ActiveMainhand);
-        assert!(tome_possession_ok(Some(&inv), Some(LEVEL_ONE)));
+        assert!(tome_possession_ok(
+            Some(&inv),
+            Some(&mage()),
+            Some(LEVEL_ONE)
+        ));
     }
 
     #[test]
     fn levelled_spell_with_tome_in_offhand_is_allowed() {
         let inv = inventory_with_tome_in(EquipSlot::ActiveOffhand);
-        assert!(tome_possession_ok(Some(&inv), Some(LEVEL_ONE)));
+        assert!(tome_possession_ok(
+            Some(&inv),
+            Some(&mage()),
+            Some(LEVEL_ONE)
+        ));
     }
 
     #[test]
     fn highest_spell_level_with_tome_is_allowed() {
         let inv = inventory_with_tome_in(EquipSlot::ActiveMainhand);
-        assert!(tome_possession_ok(Some(&inv), Some(LEVEL_NINE)));
+        assert!(tome_possession_ok(
+            Some(&inv),
+            Some(&mage()),
+            Some(LEVEL_NINE)
+        ));
     }
 
     #[test]
     fn uncatalogued_ability_with_no_tome_is_allowed() {
         // Bespoke/legacy content with no compendium entry is not governed by
         // this gate at all.
-        assert!(tome_possession_ok(None, Some(UNCATALOGUED)));
+        assert!(tome_possession_ok(None, Some(&mage()), Some(UNCATALOGUED)));
         assert!(tome_possession_ok(
             Some(&Inventory::with_empty()),
+            Some(&mage()),
             Some(UNCATALOGUED)
         ));
     }
 
     #[test]
     fn missing_ability_id_is_allowed() {
-        assert!(tome_possession_ok(None, None));
-        assert!(tome_possession_ok(Some(&Inventory::with_empty()), None));
+        assert!(tome_possession_ok(None, Some(&mage()), None));
+        assert!(tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(&mage()),
+            None
+        ));
+    }
+
+    /// The bug this test guards against: the gate must never apply to a
+    /// caster who isn't a Mage. Sorcerer/Warlock cast without any implement
+    /// by design; Cleric/Druid's own implements (Sceptre/HolySymbol/Focus)
+    /// are not Tomes and were never meant to be gated by this rule.
+    #[test]
+    fn levelled_spell_with_no_tome_is_allowed_for_a_non_mage_caster() {
+        for class in [
+            ClassKind::Sorcerer,
+            ClassKind::Warlock,
+            ClassKind::Cleric,
+            ClassKind::Druid,
+        ] {
+            let character_class = CharacterClass::single(class);
+            assert!(
+                tome_possession_ok(None, Some(&character_class), Some(LEVEL_ONE)),
+                "{class:?} should not be gated by the Mage-specific Tome possession rule"
+            );
+        }
+    }
+
+    #[test]
+    fn levelled_spell_with_no_tome_is_allowed_with_no_character_class() {
+        // Entities with no CharacterClass at all (e.g. NPCs) are exempt,
+        // matching SpellCompendium::allows's own None-is-permissive rule.
+        assert!(tome_possession_ok(None, None, Some(LEVEL_ONE)));
+    }
+
+    #[test]
+    fn a_multiclass_mage_is_still_gated() {
+        let multiclass = CharacterClass {
+            primary: ClassKind::Warlock,
+            secondary: Some(ClassKind::Mage),
+            secondary_level: 5,
+            future_levels_to_secondary: false,
+        };
+        assert!(!tome_possession_ok(
+            None,
+            Some(&multiclass),
+            Some(LEVEL_ONE)
+        ));
     }
 }
 

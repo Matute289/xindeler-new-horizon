@@ -9,7 +9,9 @@ pub use tool::{AbilityMap, AbilitySet, AbilitySpec, Hands, Tool, ToolKind, Weapo
 
 use crate::{
     assets::{self, Asset, AssetCache, AssetExt, BoxedError, Error, Ron, SharedString},
-    comp::{Body, body::humanoid, inventory::InvSlot, skillset::SkillSet},
+    comp::{
+        Body, body::humanoid, inventory::InvSlot, item_condition::ItemCondition, skillset::SkillSet,
+    },
     effect::Effect,
     lottery::LootSpec,
     recipe::RecipeInput,
@@ -945,6 +947,11 @@ pub struct ItemDef {
     /// None = unrestricted.
     #[serde(default)]
     pub requirements: Option<ItemRequirements>,
+    /// A conditional buff/debuff pair evaluated per tick against this item's
+    /// current bearer. `None` for an item with no bearer-dependent effect
+    /// (every item shipped today).
+    #[serde(default)]
+    pub condition: Option<ItemCondition>,
 }
 
 impl PartialEq for ItemDef {
@@ -1054,10 +1061,16 @@ impl ItemDef {
             slots,
             ability_spec: None,
             requirements: None,
+            condition: None,
         }
     }
 
-    #[cfg(test)]
+    /// Builds a minimal `ItemDef` for tests that need a real `Item` without
+    /// going through asset loading. Kept as a normal (not `#[cfg(test)]`)
+    /// function — unlike `new_test` above — so fixture code in other crates
+    /// (e.g. `common-systems`) can use it too; `item_definition_id` and
+    /// `legacy_name` are private fields, so this is the only way to build an
+    /// `ItemDef` outside of RON deserialization.
     pub fn create_test_itemdef_from_kind(kind: ItemKind) -> Self {
         #[expect(deprecated)]
         Self {
@@ -1069,6 +1082,7 @@ impl ItemDef {
             slots: 0,
             ability_spec: None,
             requirements: None,
+            condition: None,
         }
     }
 }
@@ -1111,6 +1125,7 @@ impl Asset for ItemDef {
             slots,
             ability_spec,
             requirements,
+            condition,
         } = cache.load::<Ron<_>>(specifier)?.cloned().into_inner();
 
         // Some commands like /give_item provide the asset specifier separated with \
@@ -1129,6 +1144,7 @@ impl Asset for ItemDef {
             slots,
             ability_spec,
             requirements,
+            condition,
         })
     }
 }
@@ -1146,6 +1162,8 @@ struct RawItemDef {
     ability_spec: Option<AbilitySpec>,
     #[serde(default)]
     requirements: Option<ItemRequirements>,
+    #[serde(default)]
+    condition: Option<ItemCondition>,
 }
 
 #[derive(Debug)]
@@ -1678,6 +1696,16 @@ impl Item {
         match &self.item_base {
             ItemBase::Simple(item_def) => item_def.tags.contains(&ItemTag::RequiresAttunement),
             ItemBase::Modular(_) => false,
+        }
+    }
+
+    /// The `ItemCondition` this item declares, if any. `None` for ~every
+    /// item shipped today, and always `None` for modular (crafted) items —
+    /// mirrors `requires_attunement()`.
+    pub fn condition(&self) -> Option<&ItemCondition> {
+        match &self.item_base {
+            ItemBase::Simple(item_def) => item_def.condition.as_ref(),
+            ItemBase::Modular(_) => None,
         }
     }
 
@@ -2965,6 +2993,68 @@ mod tests {
         }
         if !errs.is_empty() {
             panic!("item i18n manifest missing fragment-id for following items {errs:#?}")
+        }
+    }
+
+    #[test]
+    // The shipped martial staff (Q3/Q9/Q10): `role: Martial`, no per-item
+    // `requirements:` block, and resolves the physical `staff_martial`
+    // ability kit instead of falling back to `Tool(Staff)` -- the caster
+    // fire kit that used to hand any Staff wielder a full fireball kit
+    // regardless of proficiency.
+    fn martial_staff_item_resolves_the_martial_kit_not_the_fire_kit() {
+        use crate::comp::tool::AbilityKind;
+
+        let id = "common.items.weapons.staff.frostbound_quarterstaff";
+        let item = Item::new_from_asset_expect(id);
+
+        match &*item.kind() {
+            ItemKind::Tool(tool) => {
+                assert_eq!(
+                    tool.role(),
+                    WeaponRole::Martial,
+                    "{id} must be Martial-role"
+                );
+            },
+            other => panic!("{id} is not a Tool: {other:?}"),
+        }
+
+        assert_eq!(
+            item.requirements(),
+            None,
+            "{id} must carry no equip gate at all (Q3)"
+        );
+
+        let spec = item
+            .ability_spec()
+            .unwrap_or_else(|| panic!("{id} resolved no AbilitySpec at all"));
+        assert_eq!(
+            *spec,
+            AbilitySpec::Custom("staff_martial".to_owned()),
+            "{id} must resolve the martial kit via its own ability_spec, not the tool-kind \
+             fallback (which would be the caster fire kit)"
+        );
+
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let set = ability_map
+            .get_ability_set(&spec)
+            .unwrap_or_else(|| panic!("{id}'s ability_spec {spec:?} has no manifest entry"));
+        let AbilityKind::Simple(_, primary_id) = &set.primary else {
+            panic!("staff_martial primary must be a Simple ability");
+        };
+        let AbilityKind::Simple(_, secondary_id) = &set.secondary else {
+            panic!("staff_martial secondary must be a Simple ability");
+        };
+        for ability_id in [&primary_id.id, &secondary_id.id] {
+            assert!(
+                ability_id.starts_with("common.abilities.staff_martial."),
+                "{id}'s {ability_id} does not come from the martial kit"
+            );
+            assert!(
+                !ability_id.contains("staff.fire") && !ability_id.contains("staffsimple"),
+                "{id}'s {ability_id} leaked in the caster fire kit"
+            );
         }
     }
 }

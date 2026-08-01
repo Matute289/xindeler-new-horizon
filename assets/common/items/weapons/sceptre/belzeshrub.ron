@@ -4,6 +4,7 @@ ItemDef(
     kind: Tool((
         kind: Sceptre,
         hands: Two,
+        role: Some(Caster),
         stats: (
             equip_time_secs: 0.4,
             power: 2.5,

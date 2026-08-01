@@ -34,8 +34,18 @@ fn valid_starter_items(class: ClassKind) -> &'static [[Option<&'static str>; 2]]
             [Some("common.items.weapons.axe.starter_axe"), None],
             [Some("common.items.weapons.hammer.starter_hammer"), None],
         ],
-        ClassKind::Mage => &[[Some("common.items.weapons.staff.starter_staff"), None]],
-        ClassKind::Cleric => &[[Some("common.items.weapons.sceptre.starter_sceptre"), None]],
+        // Mage's kit is a plain, unbuffed Tome -- explicitly no staff. The
+        // Tome's own equip gate lists only Mage.
+        ClassKind::Mage => &[[Some("common.items.weapons.tome.apprentice_tome"), None]],
+        // Cleric picks between a Sceptre or a Holy Symbol at creation, both
+        // plain/unbuffed tier.
+        ClassKind::Cleric => &[
+            [Some("common.items.weapons.sceptre.starter_sceptre"), None],
+            [
+                Some("common.items.weapons.holy_symbol.initiate_symbol"),
+                None,
+            ],
+        ],
         ClassKind::Rogue => &[
             [
                 Some("common.items.weapons.sword_1h.starter"),
@@ -43,15 +53,34 @@ fn valid_starter_items(class: ClassKind) -> &'static [[Option<&'static str>; 2]]
             ],
             [Some("common.items.weapons.bow.starter"), None],
         ],
-        // Classes-wave (BL-04): valid existing starters by archetype; thematic
-        // implements (tome/instrument/quarterstaff) come with BL-06.
+        // Valid existing starters by archetype; thematic implements beyond
+        // the ones already assigned are a later content pass.
         ClassKind::Barbarian => &[[Some("common.items.weapons.axe.starter_axe"), None], [
             Some("common.items.weapons.hammer.starter_hammer"),
             None,
         ]],
-        ClassKind::Sorcerer | ClassKind::Warlock | ClassKind::Druid | ClassKind::Artificer => {
-            &[[Some("common.items.weapons.staff.starter_staff"), None]]
-        },
+        // Sorcerer and Warlock cast their spell-slot kits with no implement
+        // equipped at all -- `AbilityPool::for_character` embeds
+        // `spells_for_class` unconditionally, so pool spells cast fine with
+        // nothing in hand. Their only starter "kit" is empty-handed;
+        // whatever they later equip is a pure stat buff, never a casting
+        // requirement.
+        ClassKind::Sorcerer | ClassKind::Warlock => &[[None, None]],
+        // Druid picks between a Staff, a Sceptre, or a Focus at creation,
+        // all plain/unbuffed tier.
+        ClassKind::Druid => &[
+            [Some("common.items.weapons.staff.starter_staff"), None],
+            [Some("common.items.weapons.sceptre.starter_sceptre"), None],
+            [Some("common.items.weapons.focus.primordial_focus"), None],
+        ],
+        // Artificer was previously lumped in with the staff-starting classes
+        // above, but `starter_staff`'s own equip gate (its `requirements:`
+        // block / `equip_gates.ron`'s `(Staff, Caster)` row) only lists
+        // Mage/Sorcerer/Warlock/Druid — never Artificer. Artificer's own
+        // `class_proficiencies.ron` entry is `Any(Hammer)`, so hand out the
+        // (ungated, martial) Hammer instead, matching every other class's
+        // own proficiency.
+        ClassKind::Artificer => &[[Some("common.items.weapons.hammer.starter_hammer"), None]],
         // The Bard starts with a musical instrument, not a mage's staff.
         // `starter_staff`'s own `requirements:` block doesn't list Bard
         // (only Mage/Sorcerer/Warlock/Druid), so handing it out here would
@@ -305,13 +334,8 @@ mod tests {
 
     /// A class's starter item must never fail that same class's own equip
     /// gate — otherwise a fresh character can spawn holding gear it could
-    /// never legally re-equip after unequipping it.
-    ///
-    /// Artificer is deliberately excluded here: it still hands out
-    /// `starter_staff` even though `starter_staff`'s gate doesn't list
-    /// Artificer either (see the comment on that arm above and on Artificer
-    /// in `class_proficiencies.ron`) — a pre-existing, separately tracked
-    /// mismatch this test does not attempt to fix.
+    /// never legally re-equip after unequipping it. Covers all 14 playable
+    /// classes with no exceptions.
     #[test]
     fn starter_items_pass_their_own_class_gate() {
         use common::comp::body::humanoid;
@@ -319,9 +343,6 @@ mod tests {
         let body = Body::Humanoid(humanoid::Body::random());
         let skill_set = SkillSet::default();
         for class in ClassKind::PLAYABLE {
-            if class == ClassKind::Artificer {
-                continue;
-            }
             let character_class = CharacterClass::single(class);
             for pair in valid_starter_items(class) {
                 for item_id in pair.iter().flatten() {
@@ -337,6 +358,70 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Mage's only starter kit is a plain Tome, not a staff -- guards
+    /// against a future edit accidentally re-adding `starter_staff` to this
+    /// arm.
+    #[test]
+    fn mage_starts_with_only_a_tome_and_no_staff() {
+        let kits = valid_starter_items(ClassKind::Mage);
+        assert_eq!(kits, &[[
+            Some("common.items.weapons.tome.apprentice_tome"),
+            None
+        ]]);
+    }
+
+    /// Sorcerer and Warlock cast their spell-slot kits with nothing
+    /// equipped, so their only starter kit alternative is empty-handed.
+    #[test]
+    fn sorcerer_and_warlock_start_empty_handed() {
+        for class in [ClassKind::Sorcerer, ClassKind::Warlock] {
+            let kits = valid_starter_items(class);
+            assert_eq!(kits, &[[None, None]], "{class:?} should start empty-handed");
+        }
+    }
+
+    /// A class whose starter kit is empty-handed must still expose at least
+    /// one pool spell it can cast at creation -- otherwise "no implement" is
+    /// indistinguishable from "no spells".
+    #[test]
+    fn sorcerer_and_warlock_have_a_castable_pool_spell_with_no_implement() {
+        use common::comp::spell::SpellCompendium;
+
+        let compendium = SpellCompendium::load_expect_cloned();
+        for class in [ClassKind::Sorcerer, ClassKind::Warlock] {
+            assert!(
+                !compendium.spells_for_class(class).is_empty(),
+                "{class:?} starts with no implement but has no pool-eligible spell either"
+            );
+        }
+    }
+
+    /// Cleric's chargen choice is exactly Sceptre or Holy Symbol, both
+    /// single-hand-slot kits (`initiate_symbol.ron` is `hands: Two`, so it
+    /// can never pair with a shield in the same kit).
+    #[test]
+    fn cleric_offers_sceptre_or_holy_symbol_choice() {
+        let kits = valid_starter_items(ClassKind::Cleric);
+        assert_eq!(kits, &[
+            [Some("common.items.weapons.sceptre.starter_sceptre"), None],
+            [
+                Some("common.items.weapons.holy_symbol.initiate_symbol"),
+                None
+            ],
+        ]);
+    }
+
+    /// Druid's chargen choice is exactly Staff, Sceptre, or Focus.
+    #[test]
+    fn druid_offers_staff_sceptre_or_focus_choice() {
+        let kits = valid_starter_items(ClassKind::Druid);
+        assert_eq!(kits, &[
+            [Some("common.items.weapons.staff.starter_staff"), None],
+            [Some("common.items.weapons.sceptre.starter_sceptre"), None],
+            [Some("common.items.weapons.focus.primordial_focus"), None],
+        ]);
     }
 
     #[test]

@@ -61,7 +61,7 @@ weapon-sword-frost-1 = 霜鋸
 weapon-sword-starter = 損壞的大劍  
 .desc = 劍隨時可能斷裂，但你希望它能挺過接下來的戰鬥
 
-weapon-sceptre-amethyst = 紫水晶法杖  
+weapon-sceptre-amethyst = 紫水晶權杖
 .desc = 它的石頭是最接近完美的物品
 
 weapon-sceptre-caduceus = 赫耳墨斯權杖  

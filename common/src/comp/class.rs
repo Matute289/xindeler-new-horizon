@@ -111,6 +111,62 @@ impl ClassKind {
             .copied()
             .find(|c| c.keyword() == keyword)
     }
+
+    /// The cross-class equipment taxonomy group this class belongs to: a
+    /// real, queryable grouping used for equip-gating decisions, not just a
+    /// documentation label. `None` only for [`ClassKind::Adventurer`], which
+    /// is not playable and has no equipment-gating identity of its own —
+    /// every one of the 14 playable classes maps to exactly one group.
+    /// Deliberately no `_` arm: a future `ClassKind` variant fails to
+    /// compile here until someone decides which group it belongs to.
+    pub fn equipment_group(self) -> Option<EquipmentGroup> {
+        match self {
+            ClassKind::Adventurer => None,
+            ClassKind::Warrior
+            | ClassKind::Barbarian
+            | ClassKind::Paladin
+            | ClassKind::BloodSlayer => Some(EquipmentGroup::HeavyMartial),
+            ClassKind::Rogue | ClassKind::Ranger | ClassKind::Bard => {
+                Some(EquipmentGroup::LightFinesse)
+            },
+            ClassKind::Monk => Some(EquipmentGroup::Disciplined),
+            ClassKind::Artificer => Some(EquipmentGroup::Artisan),
+            ClassKind::Mage | ClassKind::Sorcerer | ClassKind::Warlock => {
+                Some(EquipmentGroup::ArcaneCaster)
+            },
+            ClassKind::Cleric => Some(EquipmentGroup::DivineCaster),
+            ClassKind::Druid => Some(EquipmentGroup::PrimordialCaster),
+        }
+    }
+}
+
+/// Cross-class equipment taxonomy: "martial gear is gated by ROLE and
+/// shared broadly; caster implements are gated per IMPLEMENT and shared
+/// narrowly." One group per playable class — see [`ClassKind::equipment_group`]
+/// for the mapping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EquipmentGroup {
+    /// Warrior, Barbarian, Paladin, BloodSlayer. All martial gear ungated;
+    /// Paladin alone also carries a HolySymbol.
+    HeavyMartial,
+    /// Rogue, Ranger, Bard. All martial gear ungated; Ranger carries a
+    /// Focus, Bard an Instrument.
+    LightFinesse,
+    /// Monk. All martial gear ungated, plus the martial-role Staff that no
+    /// other class in this group has access to.
+    Disciplined,
+    /// Artificer. All martial gear ungated (Pick/Farming included).
+    Artisan,
+    /// Mage, Sorcerer, Warlock. Martial gear ungated but heavily
+    /// proficiency-penalised; caster Staff (all three) and Tome (Mage
+    /// only).
+    ArcaneCaster,
+    /// Cleric. Martial gear ungated but penalised; caster Sceptre and
+    /// HolySymbol.
+    DivineCaster,
+    /// Druid — the widest caster (Staff, Sceptre and Focus). Martial gear
+    /// ungated but penalised.
+    PrimordialCaster,
 }
 
 /// The class(es) a player character holds. `secondary` is `None` for the
@@ -1114,5 +1170,45 @@ mod tests {
         // whenever they differ (Cleric carries HolySymbol, Mage carries Tome).
         assert!(proficiency_mask.contains(ToolKindMask::HOLY_SYMBOL));
         assert!(proficiency_mask.contains(ToolKindMask::TOME));
+    }
+
+    #[test]
+    fn equipment_group_covers_every_playable_class() {
+        for class in ClassKind::PLAYABLE {
+            assert!(
+                class.equipment_group().is_some(),
+                "{class:?} has no equipment group"
+            );
+        }
+        assert_eq!(ClassKind::Adventurer.equipment_group(), None);
+    }
+
+    #[test]
+    fn equipment_group_matches_the_locked_grouping_table() {
+        use EquipmentGroup::*;
+        let expected = [
+            (ClassKind::Warrior, HeavyMartial),
+            (ClassKind::Barbarian, HeavyMartial),
+            (ClassKind::Paladin, HeavyMartial),
+            (ClassKind::BloodSlayer, HeavyMartial),
+            (ClassKind::Rogue, LightFinesse),
+            (ClassKind::Ranger, LightFinesse),
+            (ClassKind::Bard, LightFinesse),
+            (ClassKind::Monk, Disciplined),
+            (ClassKind::Artificer, Artisan),
+            (ClassKind::Mage, ArcaneCaster),
+            (ClassKind::Sorcerer, ArcaneCaster),
+            (ClassKind::Warlock, ArcaneCaster),
+            (ClassKind::Cleric, DivineCaster),
+            (ClassKind::Druid, PrimordialCaster),
+        ];
+        assert_eq!(expected.len(), ClassKind::PLAYABLE.len());
+        for (class, group) in expected {
+            assert_eq!(
+                class.equipment_group(),
+                Some(group),
+                "{class:?} should be in {group:?}"
+            );
+        }
     }
 }

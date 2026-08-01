@@ -70,6 +70,9 @@ const STARTER_STAFF: &str = "common.items.weapons.staff.starter_staff";
 const STARTER_SWORD: &str = "common.items.weapons.sword.starter";
 const STARTER_SWORDS: &str = "common.items.weapons.sword_1h.starter";
 const STARTER_SCEPTRE: &str = "common.items.weapons.sceptre.starter_sceptre";
+const STARTER_TOME: &str = "common.items.weapons.tome.apprentice_tome";
+const STARTER_HOLY_SYMBOL: &str = "common.items.weapons.holy_symbol.initiate_symbol";
+const STARTER_FOCUS: &str = "common.items.weapons.focus.primordial_focus";
 
 /// Default starter weapon shown when a class is picked; must be a member of
 /// the server-side whitelist in server/src/character_creator.rs.
@@ -79,16 +82,21 @@ fn default_starter_for_class(class: ClassKind) -> (Option<&'static str>, Option<
         // the server's empty whitelist).
         ClassKind::Adventurer => (None, None),
         ClassKind::Warrior => (Some(STARTER_SWORD), None),
-        ClassKind::Mage => (Some(STARTER_STAFF), None),
+        // Mage's only starter kit is a plain Tome -- no staff.
+        ClassKind::Mage => (Some(STARTER_TOME), None),
+        // Cleric's first alternative is the Sceptre; Holy Symbol is picked
+        // explicitly via the second button.
         ClassKind::Cleric => (Some(STARTER_SCEPTRE), None),
         ClassKind::Rogue => (Some(STARTER_SWORDS), Some(STARTER_SWORDS)),
-        // Classes-wave (BL-04): the default mirrors the first server whitelist entry.
+        // Classes-wave: the default mirrors the first server whitelist entry.
         ClassKind::Barbarian => (Some(STARTER_AXE), None),
-        ClassKind::Sorcerer
-        | ClassKind::Warlock
-        | ClassKind::Bard
-        | ClassKind::Druid
-        | ClassKind::Artificer => (Some(STARTER_STAFF), None),
+        // Sorcerer and Warlock cast with nothing equipped -- there is no
+        // implement to default to.
+        ClassKind::Sorcerer | ClassKind::Warlock => (None, None),
+        ClassKind::Bard | ClassKind::Artificer => (Some(STARTER_STAFF), None),
+        // Druid's first alternative is the Staff; Sceptre/Focus are picked
+        // explicitly via the second/third buttons.
+        ClassKind::Druid => (Some(STARTER_STAFF), None),
         ClassKind::Paladin | ClassKind::BloodSlayer => (Some(STARTER_SWORD), None),
         ClassKind::Ranger => (Some(STARTER_BOW), None),
         ClassKind::Monk => (Some(STARTER_SWORDS), None),
@@ -465,6 +473,9 @@ image_ids_ice! {
         bow: "voxygen.element.weapons.bow",
         staff: "voxygen.element.weapons.staff",
         sceptre: "voxygen.element.weapons.sceptre",
+        tome: "voxygen.element.weapons.tome",
+        holy_symbol: "voxygen.element.weapons.holy_symbol",
+        focus: "voxygen.element.weapons.focus",
 
         // Hardcore icon
         hardcore: "voxygen.element.ui.map.icons.dif_map_icon",
@@ -573,7 +584,13 @@ enum Mode {
         /// One button per `ClassKind::PLAYABLE` entry, same order: all
         /// playable classes are selectable at creation.
         class_buttons: [button::State; 14],
-        tool_buttons: [button::State; 6],
+        /// Named slots reused across the per-class tool picker match arms
+        /// below (only one arm renders per frame, so distinct classes may
+        /// share a slot's interaction state when they never render
+        /// simultaneously). Sized for the widest single arm today (Druid's
+        /// three-way Staff/Sceptre/Focus choice) plus the remaining named
+        /// slots destructured alongside it.
+        tool_buttons: [button::State; 10],
         ethos_moral_buttons: [button::State; 3],
         ethos_order_buttons: [button::State; 3],
         /// BL-31: one button per `BackgroundKind::ALL` entry, resized on
@@ -1847,6 +1864,10 @@ impl Controls {
                         hammer_button,
                         bow_button,
                         staff_button,
+                        tome_button,
+                        sceptre_button,
+                        holy_symbol_button,
+                        focus_button,
                     ] = tool_buttons;
                     let tool = match *class {
                         ClassKind::Warrior | ClassKind::Adventurer => Column::with_children(vec![
@@ -1879,13 +1900,26 @@ impl Controls {
                             .spacing(1)
                             .into(),
                         ]),
-                        // BL-04: all staff-starter casters share the staff picker.
-                        ClassKind::Mage
-                        | ClassKind::Sorcerer
-                        | ClassKind::Warlock
-                        | ClassKind::Bard
-                        | ClassKind::Druid
-                        | ClassKind::Artificer => Column::with_children(vec![
+                        // Mage's only starter kit is a plain Tome -- no staff.
+                        ClassKind::Mage => Column::with_children(vec![
+                            icon_button_tooltip_opt(
+                                tome_button,
+                                *mainhand == Some(STARTER_TOME),
+                                Some(Message::Tool((Some(STARTER_TOME), None))),
+                                imgs.tome,
+                                "common-weapons-tome",
+                            )
+                            .into(),
+                        ]),
+                        // Sorcerer and Warlock cast with nothing equipped --
+                        // no implement to pick, so no button is rendered.
+                        ClassKind::Sorcerer | ClassKind::Warlock => {
+                            Column::with_children(Vec::new())
+                        },
+                        // Bard/Artificer still default to the shared staff
+                        // picker (a pre-existing mismatch against their
+                        // server-side whitelists, tracked separately).
+                        ClassKind::Bard | ClassKind::Artificer => Column::with_children(vec![
                             icon_button_tooltip_opt(
                                 staff_button,
                                 *mainhand == Some(STARTER_STAFF),
@@ -1895,14 +1929,58 @@ impl Controls {
                             )
                             .into(),
                         ]),
+                        // Cleric picks between a Sceptre and a Holy Symbol.
                         ClassKind::Cleric => Column::with_children(vec![
-                            icon_button_tooltip_opt(
-                                staff_button,
-                                *mainhand == Some(STARTER_SCEPTRE),
-                                Some(Message::Tool((Some(STARTER_SCEPTRE), None))),
-                                imgs.sceptre,
-                                "common-weapons-sceptre",
-                            )
+                            Row::with_children(vec![
+                                icon_button_tooltip_opt(
+                                    sceptre_button,
+                                    *mainhand == Some(STARTER_SCEPTRE),
+                                    Some(Message::Tool((Some(STARTER_SCEPTRE), None))),
+                                    imgs.sceptre,
+                                    "common-weapons-sceptre",
+                                )
+                                .into(),
+                                icon_button_tooltip_opt(
+                                    holy_symbol_button,
+                                    *mainhand == Some(STARTER_HOLY_SYMBOL),
+                                    Some(Message::Tool((Some(STARTER_HOLY_SYMBOL), None))),
+                                    imgs.holy_symbol,
+                                    "common-weapons-holy_symbol",
+                                )
+                                .into(),
+                            ])
+                            .spacing(1)
+                            .into(),
+                        ]),
+                        // Druid picks between a Staff, a Sceptre, or a Focus.
+                        ClassKind::Druid => Column::with_children(vec![
+                            Row::with_children(vec![
+                                icon_button_tooltip_opt(
+                                    staff_button,
+                                    *mainhand == Some(STARTER_STAFF),
+                                    Some(Message::Tool((Some(STARTER_STAFF), None))),
+                                    imgs.staff,
+                                    "common-weapons-staff",
+                                )
+                                .into(),
+                                icon_button_tooltip_opt(
+                                    sceptre_button,
+                                    *mainhand == Some(STARTER_SCEPTRE),
+                                    Some(Message::Tool((Some(STARTER_SCEPTRE), None))),
+                                    imgs.sceptre,
+                                    "common-weapons-sceptre",
+                                )
+                                .into(),
+                                icon_button_tooltip_opt(
+                                    focus_button,
+                                    *mainhand == Some(STARTER_FOCUS),
+                                    Some(Message::Tool((Some(STARTER_FOCUS), None))),
+                                    imgs.focus,
+                                    "common-weapons-focus",
+                                )
+                                .into(),
+                            ])
+                            .spacing(1)
                             .into(),
                         ]),
                         ClassKind::Rogue => Column::with_children(vec![
@@ -3559,5 +3637,57 @@ mod background_ui_tests {
                 "{kind:?} has an empty starter kit description"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod starter_tool_picker_tests {
+    use super::*;
+
+    /// Every playable class must resolve to a definite default starter pick
+    /// so the tool picker never opens on a class in an inconsistent state.
+    /// Sorcerer and Warlock are the only exception: they cast with nothing
+    /// equipped, so there is no implement to default to.
+    #[test]
+    fn default_starter_for_class_is_empty_handed_only_for_sorcerer_and_warlock() {
+        for class in ClassKind::PLAYABLE {
+            let (mainhand, offhand) = default_starter_for_class(class);
+            match class {
+                ClassKind::Sorcerer | ClassKind::Warlock => {
+                    assert_eq!(
+                        (mainhand, offhand),
+                        (None, None),
+                        "{class:?} should default to no implement"
+                    );
+                },
+                _ => assert!(
+                    mainhand.is_some(),
+                    "{class:?} should default to a starter implement"
+                ),
+            }
+        }
+    }
+
+    /// Mage's default starter is the Tome, never the legacy staff.
+    #[test]
+    fn mage_default_starter_is_the_tome() {
+        assert_eq!(
+            default_starter_for_class(ClassKind::Mage),
+            (Some(STARTER_TOME), None)
+        );
+    }
+
+    /// Cleric and Druid's default is their first chargen alternative, not
+    /// an accidentally-empty pick.
+    #[test]
+    fn cleric_and_druid_default_to_their_first_alternative() {
+        assert_eq!(
+            default_starter_for_class(ClassKind::Cleric),
+            (Some(STARTER_SCEPTRE), None)
+        );
+        assert_eq!(
+            default_starter_for_class(ClassKind::Druid),
+            (Some(STARTER_STAFF), None)
+        );
     }
 }
