@@ -18,7 +18,12 @@
     // existing skill-tree unlocks, until the real identify/transcribe
     // system replaces this with Only([Arcane]).
     Mage: All,
-    Sorcerer: Only([Arcane]), // a small fixed set of Primordial spells is intended to arrive as class innates, not via this mask
+    // A couple of compendium entries list Sorcerer against a non-Arcane
+    // source (flavor: a small set of borrowed Primordial spells); this mask
+    // still refuses those at cast time, since the engine has no separate
+    // cross-source grant path today. Known, tracked gap -- do not widen this
+    // mask itself to paper over it.
+    Sorcerer: Only([Arcane]),
     Warlock: Only([Arcane]),
     Bard: Only([Arcane]),
     Artificer: Only([Arcane]),
@@ -26,8 +31,8 @@
     Paladin: Only([Divine]),
     Druid: Only([Primordial]),
     Ranger: Only([Primordial]),
-    // No core of its own; its Hemomancy spells are intended to arrive as
-    // class innates, exempted from this mask by a cast-gate exemption that
-    // will be added when that innate-spell delivery mechanism ships.
+    // No core of its own. No compendium entry lists BloodSlayer today either,
+    // so it currently has no reachable spells at all -- its Hemomancy is
+    // still pending a proper re-gate onto this ClassKind.
     BloodSlayer: Only([]),
 }

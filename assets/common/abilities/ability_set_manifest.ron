@@ -333,7 +333,7 @@
     )),
     Tool(Focus): AbilitySet((
         primary: Simple(None, "common.abilities.spells.primordial.thornspit"),
-        secondary: Simple(None, "common.abilities.spells.hollow.dread_whisper"),
+        secondary: Simple(None, "common.abilities.spells.transmutation.plant_growth"),
         abilities: [],
     )),
     Custom("Husk"): AbilitySet((

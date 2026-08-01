@@ -6,8 +6,12 @@ use std::{error::Error, fmt};
 use crate::{
     combat::{AttackEffect, AttackedModification, CombatRequirement, DamageKind, StatEffect},
     comp::{
-        ability::MagicSourceMask, buff::SenseMode, creature_type::CreatureKind,
-        detection::SenseKind, inventory::item::tool::ToolKindMask,
+        ability::{MagicSource, MagicSourceMask},
+        buff::SenseMode,
+        class::CharacterClass,
+        creature_type::CreatureKind,
+        detection::SenseKind,
+        inventory::item::tool::ToolKindMask,
         projectile::ProjectileConstructorEffect,
     },
     uid::Uid,
@@ -265,6 +269,15 @@ pub struct Stats {
     /// that field's doc comment.
     #[serde(default = "magic_mask_all")]
     pub castable_sources: MagicSourceMask,
+    /// A copy of the entity's `CharacterClass` component, mirrored here each
+    /// tick alongside `castable_sources` so per-spell class gating
+    /// (`SpellCompendium::allows`) has the actual class identity to check
+    /// without widening `JoinData`. `None` for any entity with no
+    /// `CharacterClass` (every NPC, summon and boss) — the compendium filter
+    /// treats that the same as "no restriction", matching `castable_sources`'
+    /// own permissive-by-absence rule.
+    #[serde(default)]
+    pub character_class: Option<CharacterClass>,
 }
 
 fn one_f32() -> f32 { 1.0 }
@@ -345,12 +358,22 @@ impl Stats {
             proficient_tools: ToolKindMask::all(),
             non_proficient_damage_mult: 1.0,
             castable_sources: MagicSourceMask::all(),
+            character_class: None,
         }
     }
 
     /// Creates an empty `Stats` instance - used during character loading from
     /// the database
     pub fn empty(body: Body) -> Self { Self::new(Content::dummy(), body) }
+
+    /// The cast-time magic-core gate (magic-system-v2 §7): can this entity
+    /// cast an ability whose `AbilityMeta.source` is `source`? A physical or
+    /// innate ability (`source: None`) is castable by every class,
+    /// including one with an empty `castable_sources` mask — the mask only
+    /// ever narrows source-bearing (spell) abilities.
+    pub fn can_cast(&self, source: Option<MagicSource>) -> bool {
+        source.is_none_or(|src| self.castable_sources.allows(src))
+    }
 
     /// Combat resolution (BL-52 P3): the elemental resistance fraction that
     /// mitigates **AoE** damage of `kind`. Physical kinds return 0.0 — they are
@@ -455,5 +478,53 @@ mod tests {
             serde_json::from_value(value).expect("Stats must deserialize with both keys absent");
         assert_eq!(restored.proficient_tools, ToolKindMask::all());
         assert_eq!(restored.castable_sources, MagicSourceMask::all());
+    }
+
+    #[test]
+    fn can_cast_empty_mask_refuses_a_source() {
+        let mut stats = Stats::empty(test_body());
+        stats.castable_sources = MagicSourceMask::empty();
+
+        assert!(!stats.can_cast(Some(MagicSource::Arcane)));
+    }
+
+    #[test]
+    fn can_cast_narrow_mask_allows_only_its_own_source() {
+        // A Cleric-shaped mask (Only([Divine])), built the way
+        // `castable_sources_mask` would.
+        let mut stats = Stats::empty(test_body());
+        stats.castable_sources = MagicSourceMask::for_source(MagicSource::Divine);
+
+        assert!(stats.can_cast(Some(MagicSource::Divine)));
+        assert!(!stats.can_cast(Some(MagicSource::Arcane)));
+    }
+
+    #[test]
+    fn can_cast_none_source_passes_even_with_an_empty_mask() {
+        // A physical ability, or one riding a magic item (a flaming sword's
+        // fire): `source: None` is not a spell and never checks the core.
+        let mut stats = Stats::empty(test_body());
+        stats.castable_sources = MagicSourceMask::empty();
+
+        assert!(stats.can_cast(None));
+    }
+
+    #[test]
+    fn can_cast_no_character_class_allows_every_source() {
+        // Built the way the engine does for an entity with no
+        // `CharacterClass` (every NPC, summon and boss): `Stats::empty`,
+        // not a hand-set mask.
+        let stats = Stats::empty(test_body());
+        assert!(stats.character_class.is_none());
+
+        for source in [
+            MagicSource::Arcane,
+            MagicSource::Divine,
+            MagicSource::Primordial,
+            MagicSource::Psionic,
+            MagicSource::Ki,
+        ] {
+            assert!(stats.can_cast(Some(source)));
+        }
     }
 }
