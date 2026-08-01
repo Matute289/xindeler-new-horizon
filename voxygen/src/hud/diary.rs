@@ -1732,7 +1732,12 @@ impl Widget for Diary<'_> {
                         && let Some(gate) =
                             pool_index.and_then(|i| pool.and_then(|p| p.spell_gate(i)))
                     {
-                        let requirement = spell_requirement(gate, self.localized_strings);
+                        let requirement = spell_requirement(
+                            gate,
+                            self.character_class,
+                            self.skill_set.character_level(),
+                            self.localized_strings,
+                        );
                         Text::new(&requirement)
                             .top_left_with_margins_on(align_state, 84.0 + image_offsets, 130.0)
                             .font_id(self.fonts.cyri.conrod_id)
@@ -2073,26 +2078,32 @@ impl Widget for Diary<'_> {
 /// Xindeler: the red "Requires &lt;class&gt; level N" line under a spell the
 /// character cannot cast yet.
 ///
-/// THE ONE PLACE that turns a spell gate into a requirement string. It is
-/// factored out because the gate's shape is expected to grow: a spell can be
-/// granted by more than one class, and once a gate carries every grantor this
-/// must name the class that unlocks it SOONEST for this character (the grantor
-/// whose own class level is highest), not an arbitrary one — a Mage 1 /
-/// Cleric 40 should read "Requires Cleric level 42", never "Requires Mage
-/// level 42". Doing that needs the character's own class levels, so the
-/// selection belongs beside the unlock check in `common`, not here; this
-/// function should then shrink to formatting whatever that returns.
-fn spell_requirement(gate: &SpellGate, i18n: &Localization) -> Cow<'static, str> {
-    let class_name = i18n
-        .get_msg(&format!("char_selection-class_{}", gate.class.keyword()))
-        .into_owned();
-    // Cantrips are castable from class level 1, so their band starts at 1
-    // rather than at the formula's 0.
-    let required_level =
-        (u16::from(gate.spell_level) * comp::spell::CLASS_LEVELS_PER_SPELL_LEVEL).max(1);
+/// THE ONE PLACE that turns a spell gate into a requirement string. A spell
+/// can be granted by more than one held class, so this names the grantor that
+/// unlocks it SOONEST for this character (the one already at the highest class
+/// level) rather than an arbitrary one — a Mage 1 / Cleric 40 reads "Requires
+/// Cleric level 42", never "Requires Mage level 42". Both the grantor choice
+/// and the required level come from the gate itself, so this only formats.
+fn spell_requirement(
+    gate: &SpellGate,
+    character_class: Option<&CharacterClass>,
+    character_level: u16,
+    i18n: &Localization,
+) -> Cow<'static, str> {
+    // Falls back to the first recorded grantor when the character holds none
+    // of them, so the line still names a class instead of rendering blank.
+    let class_name = gate
+        .nearest_grantor(character_class, character_level)
+        .map(|(class, _)| class)
+        .or_else(|| gate.classes().next())
+        .map(|class| {
+            i18n.get_msg(&format!("char_selection-class_{}", class.keyword()))
+                .into_owned()
+        })
+        .unwrap_or_default();
     i18n.get_msg_ctx("hud-diary-spells-locked", &i18n::fluent_args! {
         "class" => class_name,
-        "level" => required_level,
+        "level" => gate.required_class_level(),
     })
 }
 
