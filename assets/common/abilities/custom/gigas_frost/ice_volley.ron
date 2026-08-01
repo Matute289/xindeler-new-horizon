@@ -19,7 +19,7 @@ BasicRanged(
                 strength: DamageFraction(0.05),
                 chance: 1.0,
             )),
-            damage_kind: Energy,
+            damage_kind: Cold,
         )),
     ),
     projectile_body: Object(IceBomb),

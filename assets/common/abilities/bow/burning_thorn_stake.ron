@@ -12,7 +12,7 @@ BasicRanged(
         attack: Some((
             damage: 30,
             knockback: Some(8),
-            damage_kind: Energy,
+            damage_kind: Fire,
         )),
         lifetime_override: Some(30.0),
         is_point: false,

@@ -11,7 +11,7 @@ BasicRanged(
         ),
         attack: Some((
             damage: 25,
-            damage_kind: Energy,
+            damage_kind: Piercing,
         )),
         lifetime_override: Some(10.0),
         is_point: false,

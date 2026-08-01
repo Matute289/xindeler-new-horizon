@@ -16,7 +16,7 @@ ChargedRanged(
                 strength: Value(0.25),
                 chance: 1.0,
             )),
-            damage_kind: Energy,
+            damage_kind: Cold,
         )),
         scaled: Some((
             damage: 35,

@@ -2585,12 +2585,12 @@ impl RemovalInfo {
 ///
 /// The three physical kinds (Piercing/Slashing/Crushing) carry distinct
 /// mitigation behaviour (see the apply-damage match in this file). The
-/// magical/elemental kinds are the content damage taxonomy (Matias 2026-06-20,
-/// content-adaptation §6.2 / ENG-A2); for now they share the generic
-/// (no special physical interaction) mitigation of the legacy `Energy`
-/// placeholder. **Radiant is the opposite of Necrotic** — the resist/affinity
-/// interplay (e.g. undead take bonus Radiant; Necrotic harms the living /
-/// spares undead) is a future balance task and is NOT wired here yet.
+/// magical/elemental kinds form the broader content damage taxonomy; for now
+/// they share the generic (no special physical interaction) mitigation of the
+/// legacy `Energy` placeholder. **Radiant is the opposite of Necrotic** — the
+/// resist/affinity interplay (e.g. undead take bonus Radiant; Necrotic harms
+/// the living / spares undead) is a future balance feature and is NOT wired
+/// here yet.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DamageKind {
     // --- physical ---
@@ -3645,6 +3645,214 @@ mod power_word_ron_content_tests {
     fn power_word_stun_paralyzes_for_60_seconds() {
         let ability = load("common.abilities.spells.arcane.power_word_stun");
         assert_eq!(paralyzed_dur_secs_of(&ability), Secs(60.0));
+    }
+}
+
+/// The content migration off the legacy `Energy` damage kind: `Energy` is a
+/// back-compat catch-all (still valid for third-party/NPC content), but every
+/// shipped ability RON that used it as a placeholder has been reassigned to
+/// its real physical/elemental kind. `Energy` itself is not removed from
+/// `DamageKind` -- only its usage is drained.
+#[cfg(test)]
+mod damage_kind_energy_migration_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::DamageKind,
+        comp::ability::CharacterAbility,
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// Digs the `DamageKind` out of whichever shape the ability's attack
+    /// takes -- a `ProjectileConstructor`'s nested `attack.damage_kind` for
+    /// the ranged/thrown variants, or a top-level `damage_kind` /
+    /// `shockwave_damage_kind` field for the shockwave variants. Every one of
+    /// the 65 migrated RONs loads through one of these shapes.
+    fn damage_kind_of(ability: &CharacterAbility) -> DamageKind {
+        match ability {
+            CharacterAbility::BasicRanged { projectile, .. }
+            | CharacterAbility::RapidRanged { projectile, .. }
+            | CharacterAbility::ChargedRanged { projectile, .. }
+            | CharacterAbility::Throw { projectile, .. } => {
+                projectile
+                    .attack
+                    .as_ref()
+                    .expect("expected the projectile to carry an attack")
+                    .damage_kind
+            },
+            CharacterAbility::Shockwave { damage_kind, .. }
+            | CharacterAbility::LeapShockwave { damage_kind, .. } => *damage_kind,
+            CharacterAbility::LeapExplosionShockwave {
+                shockwave_damage_kind,
+                ..
+            } => *shockwave_damage_kind,
+            other => panic!("unexpected ability shape for a damage-kind check: {other:?}"),
+        }
+    }
+
+    /// Pins the legacy caster-staff fire kit (plan
+    /// `2026-08-01-nh69-item-categories-per-class-plan.md` §6: "starting with
+    /// the legacy staff fire spells -- firebomb, fire_breath, fireshockwave,
+    /// napalm_strike, pyroclasm all deal `Energy` today, so `resist_fire`
+    /// does nothing against a fireball") to `Fire`. This is the flagship
+    /// regression this migration exists to fix.
+    #[test]
+    fn legacy_staff_fire_kit_deals_fire_damage() {
+        for asset in [
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.pyroclasm",
+        ] {
+            let ability = load(asset);
+            assert_eq!(
+                damage_kind_of(&ability),
+                DamageKind::Fire,
+                "{asset} should deal Fire damage, not the legacy Energy catch-all"
+            );
+        }
+    }
+
+    /// Every ability RON touched by the migration still parses as a valid
+    /// `CharacterAbility` -- if any of the 65 edits had introduced a RON
+    /// syntax error or a bad enum variant, `load` would panic here instead of
+    /// shipping silently.
+    #[test]
+    fn every_migrated_ability_still_loads() {
+        let migrated_assets = [
+            "common.abilities.bow.burning_broadhead",
+            "common.abilities.bow.burning_hawkstrike_shot",
+            "common.abilities.bow.burning_heartseeker_shot",
+            "common.abilities.bow.burning_thorn_stake",
+            "common.abilities.bow.freezing_broadhead",
+            "common.abilities.bow.freezing_hawkstrike_shot",
+            "common.abilities.bow.freezing_heartseeker_shot",
+            "common.abilities.bow.freezing_thorn_stake",
+            "common.abilities.bow.lightning_thorn_stake",
+            "common.abilities.bow.poison_broadhead",
+            "common.abilities.bow.poison_hawkstrike_shot",
+            "common.abilities.bow.poison_heartseeker_shot",
+            "common.abilities.bow.poison_thorn_stake",
+            "common.abilities.custom.ancienteffigy.blast",
+            "common.abilities.custom.arthropods.blackwidow.poisonball",
+            "common.abilities.custom.ashen_warrior.axe.flame_wave",
+            "common.abilities.custom.ashen_warrior.staff.fireball",
+            "common.abilities.custom.asp.firebomb",
+            "common.abilities.custom.biped_large_cultist.staff.firebomb",
+            "common.abilities.custom.birdlargebreathe.firebomb",
+            "common.abilities.custom.birdlargefire.firerain",
+            "common.abilities.custom.birdlargefire.fireshockwave",
+            "common.abilities.custom.cloudwyvern.lightningbomb",
+            "common.abilities.custom.cursekeeper.poisonbomb",
+            "common.abilities.custom.cyclops.optic_blast",
+            "common.abilities.custom.dagon.dagonbombs",
+            "common.abilities.custom.dwarves.flamekeeper.mines",
+            "common.abilities.custom.dwarves.forgemaster.lava_mortar",
+            "common.abilities.custom.dwarves.snaretongue.bombs",
+            "common.abilities.custom.flamewyvern.firebomb",
+            "common.abilities.custom.frostwyvern.frostbomb",
+            "common.abilities.custom.gigas_fire.lava_leap",
+            "common.abilities.custom.gigas_frost.ice_volley",
+            "common.abilities.custom.gravewarden.rocket",
+            "common.abilities.custom.harvester.explodingpumpkin",
+            "common.abilities.custom.hydra.poison_ball",
+            "common.abilities.custom.icedrake.icebombs",
+            "common.abilities.custom.irongolemfist.iron_pike_bomb",
+            "common.abilities.custom.irrwurz.magicball",
+            "common.abilities.custom.maneater.poisonball",
+            "common.abilities.custom.mindflayer.necroticsphere_blast",
+            "common.abilities.custom.mindflayer.necroticsphere_multiblast",
+            "common.abilities.custom.mindflayer.necroticsphere",
+            "common.abilities.custom.minotaur.axethrow",
+            "common.abilities.custom.ogre_staff.firebomb",
+            "common.abilities.custom.quadlowranged.firebomb",
+            "common.abilities.custom.seawyvern.inkbomb",
+            "common.abilities.custom.terracotta_demolisher.drop",
+            "common.abilities.custom.terracotta_demolisher.throw",
+            "common.abilities.custom.terracotta_statue.blast",
+            "common.abilities.custom.wealdwyvern.poisonbomb",
+            "common.abilities.custom.wendigomagic.frostbomb",
+            "common.abilities.custom.yeti.snowball",
+            "common.abilities.gnarling.chieftain.firebarrage",
+            "common.abilities.gnarling.chieftain.fireshockwave",
+            "common.abilities.haniwa.archer.explosive",
+            "common.abilities.innate.draugr",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.pyroclasm",
+            "common.abilities.staffsimple.firebomb",
+            "common.abilities.throw.bomb",
+            "common.abilities.vampire.vampire_bat.drop",
+        ];
+        assert_eq!(
+            migrated_assets.len(),
+            65,
+            "this list should track all 65 files the migration touched"
+        );
+        for asset in migrated_assets {
+            let ability = load(asset);
+            // None of the migrated RONs should still carry the legacy
+            // catch-all -- that's the entire point of the migration.
+            assert_ne!(
+                damage_kind_of(&ability),
+                DamageKind::Energy,
+                "{asset} should no longer deal the legacy Energy damage kind"
+            );
+        }
+    }
+
+    /// Count-based guard: this migration drained `Energy` usage in shipped
+    /// ability RONs from 65 to 0. `Energy` stays in `DamageKind` for
+    /// back-compat, so new content is still free to declare it deliberately
+    /// -- but this test fails loudly if usage grows past the ceiling below,
+    /// so a silent regression to the catch-all doesn't ship unnoticed. Raise
+    /// the ceiling (with justification in the PR) if new content genuinely
+    /// needs `Energy`.
+    #[test]
+    fn energy_damage_kind_usage_does_not_grow_past_the_post_migration_ceiling() {
+        const MAX_ENERGY_USERS: usize = 0;
+
+        let assets_root = std::path::Path::new(
+            &std::env::var("VELOREN_ASSETS").expect("VELOREN_ASSETS must be set for tests"),
+        )
+        .join("common/abilities");
+
+        fn count_energy_users(dir: &std::path::Path) -> usize {
+            let mut count = 0;
+            for entry in std::fs::read_dir(dir).expect("abilities dir should be readable") {
+                let entry = entry.expect("dir entry should be readable");
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_energy_users(&path);
+                } else if path.extension().is_some_and(|ext| ext == "ron") {
+                    let contents =
+                        std::fs::read_to_string(&path).expect("ability RON should be readable");
+                    if contents.contains("damage_kind: Energy")
+                        || contents.contains("shockwave_damage_kind: Energy")
+                    {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        }
+
+        let energy_users = count_energy_users(&assets_root);
+        // The ceiling is 0 today (this migration drained every user), but the
+        // constant is written as a ceiling rather than an exact match so a
+        // future PR that deliberately raises it only has to edit the
+        // constant, not this comparison.
+        #[allow(clippy::absurd_extreme_comparisons)]
+        let within_ceiling = energy_users <= MAX_ENERGY_USERS;
+        assert!(
+            within_ceiling,
+            "expected at most {MAX_ENERGY_USERS} ability RON(s) still using the legacy Energy \
+             damage kind, found {energy_users} -- new content should declare a specific \
+             DamageKind instead of regressing to the catch-all"
+        );
     }
 }
 
