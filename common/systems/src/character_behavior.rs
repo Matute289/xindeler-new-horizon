@@ -52,6 +52,9 @@ pub struct ReadData<'a> {
     active_abilities: ReadStorage<'a, ActiveAbilities>,
     ability_cooldowns: ReadStorage<'a, AbilityCooldowns>,
     ability_pool: ReadStorage<'a, AbilityPool>,
+    // Xindeler: read alongside `ability_pool` so the spell-level gate can be
+    // evaluated against each held class's own level on the activation path.
+    character_classes: ReadStorage<'a, comp::CharacterClass>,
     msm: ReadExpect<'a, MaterialStatManifest>,
     ability_map: ReadExpect<'a, AbilityMap>,
     oracle_live: ReadExpect<'a, OracleLive>,
@@ -263,6 +266,7 @@ impl<'a> System<'a> for Sys {
                 active_abilities,
                 ability_cooldowns,
                 ability_pool,
+                character_class: read_data.character_classes.get(entity),
                 combo,
                 alignment: read_data.alignments.get(entity),
                 terrain: &read_data.terrain,

@@ -3384,6 +3384,7 @@ impl Hud {
                 skillset,
                 active_abilities.get(entity),
                 ability_pools.get(entity),
+                character_classes.get(entity),
                 body,
                 //&character_state,
                 self.pulse,

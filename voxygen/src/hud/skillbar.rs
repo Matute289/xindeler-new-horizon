@@ -27,8 +27,9 @@ use i18n::Localization;
 use client::{self, Client};
 use common::{
     comp::{
-        self, Ability, AbilityCooldowns, AbilityPool, ActiveAbilities, Body, Buffs, CharacterState,
-        Combo, Energy, Hardcore, Health, Inventory, Poise, PoiseState, SkillSet, Stats,
+        self, Ability, AbilityCooldowns, AbilityPool, ActiveAbilities, Body, Buffs, CharacterClass,
+        CharacterState, Combo, Energy, Hardcore, Health, Inventory, Poise, PoiseState, SkillSet,
+        Stats,
         ability::{AbilityInput, Stance},
         is_downed,
         item::{
@@ -285,6 +286,10 @@ pub struct Skillbar<'a> {
     skillset: &'a SkillSet,
     active_abilities: Option<&'a ActiveAbilities>,
     ability_pool: Option<&'a AbilityPool>,
+    /// Xindeler: the character's class(es), so an innate slot holding a spell
+    /// the class-level band has not reached yet is greyed out here exactly as
+    /// the server refuses it.
+    character_class: Option<&'a CharacterClass>,
     body: &'a Body,
     hotbar: &'a hotbar::State,
     tooltip_manager: &'a mut TooltipManager,
@@ -329,6 +334,7 @@ impl<'a> Skillbar<'a> {
         skillset: &'a SkillSet,
         active_abilities: Option<&'a ActiveAbilities>,
         ability_pool: Option<&'a AbilityPool>,
+        character_class: Option<&'a CharacterClass>,
         body: &'a Body,
         pulse: f32,
         hotbar: &'a hotbar::State,
@@ -365,6 +371,7 @@ impl<'a> Skillbar<'a> {
             skillset,
             active_abilities,
             ability_pool,
+            character_class,
             body,
             common: widget::CommonBuilder::default(),
             pulse,
@@ -1075,6 +1082,7 @@ impl<'a> Skillbar<'a> {
             self.buffs,
             self.ability_map,
             self.oracle_live,
+            self.character_class,
         );
 
         let image_source = (self.item_imgs, self.imgs);
@@ -1481,6 +1489,7 @@ impl<'a> Skillbar<'a> {
                         self.stats,
                         self.buffs,
                         self.ability_pool,
+                        self.character_class,
                         self.ability_map,
                     )
                 })

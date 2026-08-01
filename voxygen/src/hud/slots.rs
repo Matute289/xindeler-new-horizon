@@ -7,8 +7,8 @@ use super::{
 use crate::ui::slot::{self, SlotKey, SumSlot};
 use common::{
     comp::{
-        AbilityPool, ActiveAbilities, Body, Buffs, CharacterState, Combo, Energy, Inventory, Item,
-        ItemKey, SkillSet, Stance, Stats,
+        AbilityPool, ActiveAbilities, Body, Buffs, CharacterClass, CharacterState, Combo, Energy,
+        Inventory, Item, ItemKey, SkillSet, Stance, Stats,
         ability::{Ability, AbilityInput, AuxiliaryAbility},
         item::tool::{AbilityMap, ToolKind},
         slot::{InvSlotId, Slot},
@@ -137,6 +137,9 @@ type HotbarSource<'a> = (
     Option<&'a Buffs>,
     &'a AbilityMap,
     bool,
+    // Xindeler: the character's class(es), so a hotbar slot holding a spell
+    // that is not yet unlocked greys out exactly as the server refuses it.
+    Option<&'a CharacterClass>,
 );
 type HotbarImageSource<'a> = (&'a ItemImgs, &'a img_ids::Imgs);
 
@@ -160,6 +163,7 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
             buffs,
             ability_map,
             oracle_live,
+            character_class,
         ): &HotbarSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         const GREYED_OUT: Color = Color::Rgba(0.3, 0.3, 0.3, 0.8);
@@ -205,6 +209,7 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     *stats,
                                     *buffs,
                                     *ability_pool,
+                                    *character_class,
                                     ability_map,
                                 )
                             })
