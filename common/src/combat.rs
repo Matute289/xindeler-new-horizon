@@ -4441,6 +4441,7 @@ mod magic_source_attribution_tests {
         AbilityInfo {
             tool: None,
             hand: Some(HandInfo::MainHand),
+            role: None,
             input: InputKind::Primary,
             input_attr: None,
             ability_meta: AbilityMeta {

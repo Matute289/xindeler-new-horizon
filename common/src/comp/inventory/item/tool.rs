@@ -1008,8 +1008,8 @@ mod tests {
         assert_eq!(no_role.role(), WeaponRole::Caster);
 
         let explicit_role: Tool = ron::de::from_str(
-            "(kind: Staff, hands: Two, role: Some(Martial), stats: (equip_time_secs: 0.4, \
-             power: 1.0, effect_power: 1.0, speed: 1.0, range: 1.0, energy_efficiency: 1.0, \
+            "(kind: Staff, hands: Two, role: Some(Martial), stats: (equip_time_secs: 0.4, power: \
+             1.0, effect_power: 1.0, speed: 1.0, range: 1.0, energy_efficiency: 1.0, \
              buff_strength: 1.0))",
         )
         .expect("explicit role: must parse");
