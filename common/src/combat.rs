@@ -2,8 +2,8 @@ use crate::{
     assets::{AssetExt, Ron},
     comp::{
         Alignment, AttunedItems, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group,
-        Health, HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange,
-        SkillSet, Stats,
+        Health, HealthChange, InputKind, Inventory, MagicSource, Mass, Ori, Player, Poise,
+        PoiseChange, SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -480,6 +480,15 @@ impl Attack {
             blockable: true,
             ability_info,
         }
+    }
+
+    /// The magic source to attribute to any `HealthChange` this attack
+    /// causes, read once from `ability_info.ability_meta.source`. Threaded
+    /// into every damage-emitting `HealthChange` this attack constructs.
+    /// `None` for weapon swings, falls, environment, and sourceless
+    /// abilities.
+    fn magic_source(&self) -> Option<MagicSource> {
+        self.ability_info.and_then(|ai| ai.ability_meta.source)
     }
 
     #[must_use]
@@ -989,7 +998,7 @@ impl Attack {
                 &mut emit_outcome,
             );
 
-            let change = damage.damage.calculate_health_change(
+            let mut change = damage.damage.calculate_health_change(
                 damage_reduction,
                 block_damage_decrement,
                 attacker.map(|x| x.into()),
@@ -1001,6 +1010,10 @@ impl Attack {
                 damage_instance,
                 DamageSource::from(attack_source),
             );
+            // `calculate_health_change` is a method on `Damage`, which does not
+            // carry the ability that caused it, so the source is attributed here
+            // instead of threading a new parameter through that function.
+            change.magic_source = self.magic_source();
             let applied_damage = -change.amount;
             accumulated_damage += applied_damage;
 
@@ -1023,6 +1036,7 @@ impl Attack {
                                     amount: -health_damage,
                                     by: attacker.map(|x| x.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: precision_mult.is_some(),
                                     instance: damage_instance,
@@ -1076,6 +1090,7 @@ impl Attack {
                                     amount: health_change,
                                     by: attacker.map(|x| x.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     instance: damage_instance,
                                     precise: precision_mult.is_some(),
                                     time,
@@ -1159,6 +1174,7 @@ impl Attack {
                                     amount: applied_damage * l * strength_modifier,
                                     by: attacker.map(|a| a.into()),
                                     cause: None,
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: false,
                                     instance: rand::random(),
@@ -1202,6 +1218,7 @@ impl Attack {
                                 amount: *h * strength_modifier * heal_power,
                                 by: attacker.map(|a| a.into()),
                                 cause: None,
+                                magic_source: self.magic_source(),
                                 time,
                                 precise: false,
                                 instance: rand::random(),
@@ -1434,6 +1451,7 @@ impl Attack {
                                 amount: accumulated_damage * l * strength_modifier,
                                 by: attacker.map(|a| a.into()),
                                 cause: None,
+                                magic_source: self.magic_source(),
                                 time,
                                 precise: false,
                                 instance: rand::random(),
@@ -1477,6 +1495,7 @@ impl Attack {
                             amount: h * strength_modifier,
                             by: attacker.map(|a| a.into()),
                             cause: None,
+                            magic_source: self.magic_source(),
                             time,
                             precise: false,
                             instance: rand::random(),
@@ -1501,6 +1520,7 @@ impl Attack {
                             amount: -accumulated_damage * damage * strength_modifier,
                             by: attacker.map(|a| a.into()),
                             cause: Some(DamageSource::from(attack_source)),
+                            magic_source: self.magic_source(),
                             time,
                             precise: precision_mult.is_some(),
                             instance: rand::random(),
@@ -1596,6 +1616,7 @@ impl Attack {
                                         * strength_modifier,
                                     by: attacker.map(|a| a.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: precision_mult.is_some(),
                                     instance: rand::random(),
@@ -2717,6 +2738,9 @@ impl Damage {
             * precision_mult.unwrap_or(0.0)
             * ((crit_damage_mult - 1.0) + (precision_power - 1.0)))
             .max(0.0);
+        // `Self` (`Damage`) has no access to the `Attack`'s `ability_info`, so
+        // `magic_source` is left `None` here; the sole caller (`apply_attack`)
+        // overwrites it with the attributed source right after this returns.
         match damage_source {
             DamageSource::Attack(_) => {
                 // Precise hit
@@ -2730,6 +2754,7 @@ impl Damage {
                     amount: -damage,
                     by: damage_contributor,
                     cause: Some(damage_source),
+                    magic_source: None,
                     time,
                     precise: precision_mult.is_some(),
                     instance,
@@ -2744,6 +2769,7 @@ impl Damage {
                     amount: -damage,
                     by: None,
                     cause: Some(damage_source),
+                    magic_source: None,
                     time,
                     precise: false,
                     instance,
@@ -2753,6 +2779,7 @@ impl Damage {
                 amount: -damage,
                 by: None,
                 cause: Some(damage_source),
+                magic_source: None,
                 time,
                 precise: false,
                 instance,
@@ -4350,6 +4377,43 @@ mod weapon_proficiency_tests {
 }
 
 #[cfg(test)]
+mod magic_source_attribution_tests {
+    use super::{AbilityInfo, Attack, HandInfo, InputKind, MagicSource};
+    use crate::comp::ability::AbilityMeta;
+
+    fn ability_info_with_source(source: Option<MagicSource>) -> AbilityInfo {
+        AbilityInfo {
+            tool: None,
+            hand: Some(HandInfo::MainHand),
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta {
+                source,
+                ..Default::default()
+            },
+            ability: None,
+        }
+    }
+
+    /// An attack carrying an ability whose `ability_meta.source` is set
+    /// reports that source; a bare attack with no ability behind it (a
+    /// plain weapon swing, fall damage, etc.) reports `None`.
+    #[test]
+    fn magic_source_reads_from_ability_meta() {
+        let sourced = Attack::new(Some(ability_info_with_source(Some(
+            MagicSource::Primordial,
+        ))));
+        assert_eq!(sourced.magic_source(), Some(MagicSource::Primordial));
+
+        let sourceless_ability = Attack::new(Some(ability_info_with_source(None)));
+        assert_eq!(sourceless_ability.magic_source(), None);
+
+        let no_ability = Attack::new(None);
+        assert_eq!(no_ability.magic_source(), None);
+    }
+}
+
+#[cfg(test)]
 mod saving_throw_tests {
     use super::{
         AttackSource, CombatTuning, DamageContributor, DamageSource, SaveCasterInfo,
@@ -4607,6 +4671,7 @@ mod saving_throw_tests {
             amount,
             by,
             cause: Some(DamageSource::Attack(AttackSource::Melee)),
+            magic_source: None,
             time: Time(at),
             precise: false,
             instance: 0,

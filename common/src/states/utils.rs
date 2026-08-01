@@ -1630,6 +1630,7 @@ fn handle_ability(
                             amount: -hp_cost,
                             by: None,
                             cause: None,
+                            magic_source: None,
                             time: *data.time,
                             precise: false,
                             instance: rand::random(),

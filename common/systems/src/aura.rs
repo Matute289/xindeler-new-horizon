@@ -599,6 +599,7 @@ fn apply_tiered_health_effect(
                     amount: -amount,
                     by: Some(combat::DamageContributor::Solo(applier_uid)),
                     cause: Some(DamageSource::Other),
+                    magic_source: None,
                     time: *read_data.time,
                     precise: false,
                     instance: rand::random(),

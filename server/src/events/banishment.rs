@@ -263,6 +263,7 @@ impl ServerEvent for BanishEvent {
                     amount: 0.0,
                     by: Some(combat::DamageContributor::Solo(ev.banished_by)),
                     cause: Some(combat::DamageSource::Other),
+                    magic_source: None,
                     time: *data.time,
                     precise: false,
                     instance: rng.random(),
