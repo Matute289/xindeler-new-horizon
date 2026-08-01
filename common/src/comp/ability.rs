@@ -514,6 +514,12 @@ pub fn may_bind_ability(
 /// persistence holds keys. Without this, an in-session rebuild that reorders
 /// anything leaves the action bar pointing at the wrong ability until relog,
 /// at which point the persisted key silently wins and the bar changes again.
+///
+/// 🔴 **This covers the hotbar only.** Reactive trigger slots hold the same
+/// kind of raw index and need the same treatment — with worse consequences,
+/// since a re-pointed trigger mints its cooldown-bypass token for the wrong
+/// ability. Every site that calls this must also call the sibling
+/// [`TriggerSlots::remap_innate_bindings`](crate::comp::TriggerSlots::remap_innate_bindings).
 pub fn remap_innate_bindings(
     active: &mut ActiveAbilities,
     old_pool: &AbilityPool,

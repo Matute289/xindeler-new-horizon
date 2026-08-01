@@ -43,10 +43,12 @@ mod tests {
             panic!("Default world chunk size does not satisfy required invariants.");
         };
 
-    fn setup() -> State {
-        let pools = State::pools(GameMode::Server);
+    fn setup() -> State { setup_as(GameMode::Server) }
+
+    fn setup_as(game_mode: GameMode) -> State {
+        let pools = State::pools(game_mode);
         let mut state = State::new(
-            GameMode::Server,
+            game_mode,
             pools,
             DEFAULT_WORLD_CHUNKS_LG,
             Arc::new(TerrainChunk::water(0)),
@@ -102,7 +104,7 @@ mod tests {
         auxiliary_sets.insert((None, None), vec![AuxiliaryAbility::Innate(0)]);
 
         let mut slots = TriggerSlots::default();
-        slots.slots[0] = Some(TriggerSlot::new(AuxiliaryAbility::Innate(0), condition));
+        slots.slots[0] = Some(TriggerSlot::from_pool_index(0, condition));
 
         state
             .ecs_mut()
@@ -508,6 +510,371 @@ mod tests {
                 !matches!(slot_state(&state, entity), SlotState::CoolingDown { .. }),
                 "a blocked cast burned the slot cooldown",
             );
+        }
+    }
+
+    // ----------------------------------------------------------------- death
+
+    /// Kill the caster the way the engine does: zero the pool, then let the
+    /// health system's own `is_dead` latch stand in for the death event this
+    /// harness does not run.
+    fn kill(state: &State, entity: Entity) {
+        let mut healths = state.ecs().write_storage::<Health>();
+        let mut health = healths.get_mut(entity).expect("health");
+        health.kill();
+        health.is_dead = true;
+    }
+
+    fn revive(state: &State, entity: Entity) {
+        state
+            .ecs()
+            .write_storage::<Health>()
+            .get_mut(entity)
+            .expect("health")
+            .revive();
+    }
+
+    /// 🔴 At 0 HP every emergency condition is true, and the corpse cannot
+    /// cast. A death must not arm a slot: the evaluator runs before the
+    /// main loop's own `is_dead` guard, so it has to repeat it.
+    #[test]
+    fn a_death_does_not_arm_a_slot() {
+        let mut state = setup();
+        // `HealthBelow(0.05)` is false alive and true dead — the exact shape of
+        // an "emergency escape" trigger.
+        let entity = create_caster(&mut state, TriggerCondition::HealthBelow(0.05));
+        kill(&state, entity);
+
+        for _ in 0..20 {
+            tick(&mut state);
+            assert_eq!(
+                slot_state(&state, entity),
+                SlotState::Ready,
+                "a corpse armed its trigger"
+            );
+        }
+        assert!(!blinked(&state, entity));
+    }
+
+    /// A slot that was already `Firing` when its caster died gives itself back,
+    /// having spent nothing — and takes its queued input with it, so nothing is
+    /// left to fire on the first tick after a respawn.
+    #[test]
+    fn a_slot_firing_when_its_caster_dies_returns_to_ready_having_spent_nothing() {
+        let mut state = setup();
+        // An ability that never resolves, so the slot stays `Firing` and can be
+        // caught mid-flight.
+        let entity = create_caster(&mut state, always());
+        {
+            let mut pools = state.ecs().write_storage::<AbilityPool>();
+            pools.get_mut(entity).expect("pool").abilities[0] = "innate.does_not_exist".to_string();
+        }
+        let mut armed = false;
+        for _ in 0..6 {
+            tick(&mut state);
+            if matches!(slot_state(&state, entity), SlotState::Firing { .. }) {
+                armed = true;
+                break;
+            }
+        }
+        assert!(armed, "the slot never armed");
+
+        kill(&state, entity);
+        tick(&mut state);
+
+        assert_eq!(
+            slot_state(&state, entity),
+            SlotState::Ready,
+            "death left the slot holding an authorisation token"
+        );
+        assert!(
+            state
+                .ecs()
+                .read_storage::<Controller>()
+                .get(entity)
+                .expect("controller")
+                .queued_inputs
+                .keys()
+                .all(|k| !matches!(k, InputKind::TriggerAbility(_))),
+            "the dead caster kept a queued trigger input"
+        );
+    }
+
+    /// 🔴 The end of the same story: respawning restores `Health` without
+    /// clearing `Controller::queued_inputs`, so a stale trigger input survives
+    /// death. It must not cast at full health on the first tick back — that
+    /// would burn a cooldown of up to thirty-six real-world hours on a cast the
+    /// player never wanted, on every single death.
+    #[test]
+    fn respawning_at_full_health_does_not_cast_a_trigger() {
+        let mut state = setup();
+        let entity = create_caster(&mut state, TriggerCondition::HealthBelow(0.05));
+
+        kill(&state, entity);
+        for _ in 0..10 {
+            tick(&mut state);
+        }
+        revive(&state, entity);
+        for _ in 0..10 {
+            tick(&mut state);
+            assert!(
+                !blinked(&state, entity),
+                "a stale trigger input cast itself on respawn"
+            );
+            assert!(
+                !matches!(slot_state(&state, entity), SlotState::CoolingDown { .. }),
+                "a death burned the slot cooldown"
+            );
+        }
+        assert_eq!(slot_state(&state, entity), SlotState::Ready);
+    }
+
+    // ------------------------------------------------------------- the price
+
+    /// 🔴 The slot cooldown is priced from the spell circle carried **in the
+    /// token**, fixed when the slot armed — not re-read from the slot's
+    /// configuration when the cast resolves. Nothing can re-configure a slot
+    /// mid-`Firing` today, but the player-facing configure UI will, and then a
+    /// slot would fire one spell and be charged the price of another (a
+    /// ten-minute cantrip bought at a cantrip's price, cast as a circle-9
+    /// spell — or the reverse).
+    ///
+    /// Modelled by handing the slot a token that disagrees with its own
+    /// configuration, which is exactly the state a mid-cast reconfigure leaves.
+    #[test]
+    fn the_slot_cooldown_is_priced_from_the_token_not_from_the_configuration() {
+        let mut state = setup();
+        // Never fires by itself, so the token below is the only thing in play.
+        let entity = create_caster(&mut state, TriggerCondition::HealthBelow(0.05));
+        // The slot's own configuration prices at the circle-0 floor: its pool
+        // entry carries no spell gate (see `create_caster`).
+        const CIRCLE: u8 = 5;
+        const CIRCLE_5_SECS: f64 = 15300.0;
+        {
+            let mut slots = state.ecs().write_storage::<TriggerSlots>();
+            let mut entry = slots.get_mut(entity).expect("slots");
+            entry.get_mut(0).expect("slot 0").state =
+                SlotState::firing(BLINK.to_string(), Time(f64::MAX), CIRCLE);
+        }
+        state
+            .ecs()
+            .write_storage::<Controller>()
+            .get_mut(entity)
+            .expect("controller")
+            .push_action(ControlAction::StartInput {
+                input: InputKind::TriggerAbility(0),
+                target_entity: None,
+                select_pos: None,
+            });
+
+        assert!(
+            tick_until_cast(&mut state, entity, 6),
+            "the authorised trigger never cast"
+        );
+        let ready_at = slot_state(&state, entity)
+            .ready_at_time()
+            .expect("a cooling slot carries a projection");
+        let wait = ready_at.0 - now(&state).0;
+        assert!(
+            (wait - CIRCLE_5_SECS).abs() < 1.0,
+            "expected the circle-{CIRCLE} price of {CIRCLE_5_SECS} s, got {wait} s — the price \
+             was re-read from the configuration instead of taken from the token"
+        );
+    }
+
+    // ------------------------------------------------------------- the clocks
+
+    /// 🔴 The slot's wait is stored in **real-world** time precisely so that
+    /// nothing in-game can shorten it, but the tick path compares against the
+    /// in-game `Time` projection — which `/time_scale` distorts (`/time_scale
+    /// 1000` would collapse a thirty-six hour slot to about two minutes). So
+    /// when the projection says "ready", the server confirms against the wall
+    /// clock before releasing, and rebuilds the projection instead when the two
+    /// disagree.
+    #[test]
+    fn an_elapsed_projection_does_not_release_a_slot_the_wall_clock_still_holds() {
+        let mut state = setup();
+        let entity = create_caster(&mut state, always());
+        assert!(tick_until_cast(&mut state, entity, 6));
+
+        // Exactly what `/time_scale` produces: in-game time has run past the
+        // projection while barely any real time has passed.
+        let real_wait = chrono::TimeDelta::hours(12);
+        {
+            let mut slots = state.ecs().write_storage::<TriggerSlots>();
+            let mut entry = slots.get_mut(entity).expect("slots");
+            entry.get_mut(0).expect("slot 0").state = SlotState::CoolingDown {
+                ready_at: Some(chrono::Utc::now() + real_wait),
+                ready_at_time: Time(0.0),
+            };
+        }
+
+        tick(&mut state);
+        let projection = match slot_state(&state, entity) {
+            SlotState::CoolingDown { ready_at_time, .. } => ready_at_time,
+            other => panic!("a distorted in-game clock released a real-world cooldown: {other:?}"),
+        };
+        // Rebuilt from the real remaining wait, not merely left alone — so the
+        // wall clock is consulted once per drift, not once per tick.
+        let expected = now(&state).0 + real_wait.num_seconds() as f64;
+        assert!(
+            (projection.0 - expected).abs() < 5.0,
+            "expected the projection rebuilt to ~{expected}, got {projection:?}"
+        );
+
+        // And it keeps holding on every subsequent tick.
+        for _ in 0..20 {
+            tick(&mut state);
+            assert!(matches!(
+                slot_state(&state, entity),
+                SlotState::CoolingDown { .. }
+            ));
+        }
+    }
+
+    /// 🔴 `character_behavior` is a **common** system, so the client runs its
+    /// own predicted fire path. It must never stamp the authoritative
+    /// wall-clock instant from its own — attacker-controlled — system clock:
+    /// `ready_at` is `None` on a client, always. The client keeps the in-game
+    /// projection it needs for prediction, and nothing else.
+    #[test]
+    fn a_client_predicting_a_fire_never_writes_the_wall_clock() {
+        let mut server = setup_as(GameMode::Server);
+        let server_caster = create_caster(&mut server, always());
+        assert!(tick_until_cast(&mut server, server_caster, 6));
+        assert!(
+            slot_state(&server, server_caster).ready_at().is_some(),
+            "the server is the one that must stamp it"
+        );
+
+        let mut client = setup_as(GameMode::Client);
+        let client_caster = create_caster(&mut client, always());
+        assert!(tick_until_cast(&mut client, client_caster, 6));
+        let predicted = slot_state(&client, client_caster);
+        assert!(
+            matches!(predicted, SlotState::CoolingDown { .. }),
+            "the client should still predict the cooldown"
+        );
+        assert_eq!(
+            predicted.ready_at(),
+            None,
+            "the client wrote a wall-clock instant from its own system clock"
+        );
+        assert!(predicted.ready_at_time().is_some());
+    }
+
+    // ------------------------------------------------------------- invariants
+
+    /// 🔴 Steady-state net-sync cleanliness. `TriggerSlots` is a
+    /// `DerefFlaggedStorage`, so any mutable access — even one that writes the
+    /// same value back — marks the component modified and costs a full
+    /// component resync, per player, per tick. The evaluator's two-phase
+    /// `transitions` buffer exists solely to avoid that, and the failure is
+    /// silent: nothing breaks, bandwidth just quietly triples. This test is the
+    /// only thing standing between that buffer and a later "simplify" refactor.
+    #[test]
+    fn an_idle_tick_never_touches_the_component() {
+        let mut state = setup();
+        // Cooling down, with a condition that is true on every one of these
+        // ticks: the busiest an idle slot can possibly be.
+        let entity = create_caster(&mut state, always());
+        assert!(tick_until_cast(&mut state, entity, 6));
+        assert!(matches!(
+            slot_state(&state, entity),
+            SlotState::CoolingDown { .. }
+        ));
+
+        // Register only now, so the (legitimate) writes of the fire itself are
+        // not counted.
+        let mut reader = state
+            .ecs()
+            .write_storage::<TriggerSlots>()
+            .register_reader();
+
+        for tick_index in 0..20 {
+            tick(&mut state);
+            let storage = state.ecs().read_storage::<TriggerSlots>();
+            let events: Vec<_> = storage.channel().read(&mut reader).collect();
+            assert!(
+                events.is_empty(),
+                "tick {tick_index} dirtied `TriggerSlots` while nothing changed: {events:?}"
+            );
+        }
+    }
+
+    /// 🔴 The origin gate, end to end. `control_action_permitted_from_client`
+    /// drops a crafted `TriggerAbility` message at the network boundary, and
+    /// its own tests cover that predicate — but the predicate is only the
+    /// first of three locks (plan §10.3c). This test simulates the gate
+    /// being bypassed entirely by writing the input straight onto the
+    /// server's `Controller`, which is exactly the state a successful
+    /// exploit would reach, and asserts the token check in `handle_ability`
+    /// refuses it anyway: no cast, and no write to the ability's own
+    /// cooldown.
+    #[test]
+    fn a_trigger_input_on_a_ready_slot_casts_nothing() {
+        let mut state = setup();
+        // Never fires by itself, so the slot stays `Ready` and holds no token.
+        let entity = create_caster(&mut state, TriggerCondition::HealthBelow(0.05));
+        let _ = drain_cooldown_events(&state);
+
+        for _ in 0..20 {
+            state
+                .ecs()
+                .write_storage::<Controller>()
+                .get_mut(entity)
+                .expect("controller")
+                .push_action(ControlAction::StartInput {
+                    input: InputKind::TriggerAbility(0),
+                    target_entity: None,
+                    select_pos: None,
+                });
+            tick(&mut state);
+            assert!(
+                !blinked(&state, entity),
+                "an unauthorised trigger input cast for free"
+            );
+        }
+        assert_eq!(slot_state(&state, entity), SlotState::Ready);
+        assert!(
+            drain_cooldown_events(&state)
+                .iter()
+                .all(|ev| ev.ability_id != BLINK),
+            "an unauthorised trigger input wrote the ability's cooldown"
+        );
+        // And the manual route is genuinely still open, so the assertion above
+        // is about authorisation and not about a broken harness.
+        assert!(
+            state
+                .ecs()
+                .read_storage::<AbilityCooldowns>()
+                .get(entity)
+                .is_some_and(|cds| cds.ready_at(BLINK).is_none()),
+            "nothing should have touched the ability cooldown at all"
+        );
+    }
+
+    /// 🔴 `InputKind::TriggerAbility` must keep the HIGHEST discriminant:
+    /// `attempt_input` takes the lowest key from a `BTreeMap`, so this ordering
+    /// is what guarantees an explicit player input always beats a trigger on
+    /// the same tick — the property
+    /// `an_explicit_input_cannot_steal_the_bypass_token` above depends on.
+    /// Inserting a variant after it must fail loudly here rather than
+    /// silently there.
+    #[test]
+    fn a_trigger_input_sorts_after_every_other_input() {
+        assert!(InputKind::WallJump < InputKind::TriggerAbility(0));
+        for input in [
+            InputKind::Primary,
+            InputKind::Secondary,
+            InputKind::Block,
+            InputKind::Ability(0),
+            InputKind::Roll,
+            InputKind::Jump,
+            InputKind::Fly,
+            InputKind::WallJump,
+        ] {
+            assert!(input < InputKind::TriggerAbility(0), "{input:?}");
         }
     }
 

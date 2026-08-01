@@ -374,6 +374,7 @@ pub fn load_character_data(
             background: convert_background_from_database(character_data.background.as_deref()),
             trigger_slots: json_models::db_string_to_trigger_slots(
                 character_data.trigger_slots.as_deref(),
+                &ability_pool,
             ),
         },
         UpdateCharacterMetadata {
@@ -1391,7 +1392,7 @@ pub fn update(
         &convert_secondary_class_to_database(character_class),
         &convert_secondary_class_level_to_database(character_class),
         &convert_future_levels_to_secondary_to_database(character_class),
-        &json_models::trigger_slots_to_db_string(&trigger_slots),
+        &json_models::trigger_slots_to_db_string(&trigger_slots, &ability_pool),
         &char_id.0,
     ])?;
 
@@ -1766,6 +1767,83 @@ mod spell_book_persistence_tests {
             reloaded_pool.abilities[reloaded_index], bound_key,
             "if this ever passes, index stability was achieved some other way and the remap \
              requirement documented above can be revisited"
+        );
+    }
+
+    /// 🔴 The trigger-slot twin of
+    /// `learning_a_spell_between_saves_leaves_bound_slots_on_their_ability`,
+    /// and the one that actually matters: a hotbar slot that silently
+    /// re-pointed costs a mis-click, a trigger slot that silently re-points
+    /// mints a cooldown-bypass token for the wrong spell and charges up to
+    /// thirty-six real-world hours for it.
+    ///
+    /// Both halves of the fix are exercised at once — the persisted form names
+    /// a pool key rather than an index, and the in-memory binding is re-pointed
+    /// by `TriggerSlots::remap_innate_bindings` before the next save, exactly
+    /// as every live pool-rebuild site does.
+    #[test]
+    fn learning_a_spell_between_saves_leaves_a_trigger_on_its_ability() {
+        use common::comp::{TriggerCondition, TriggerSlot};
+
+        let db = TestDb::new();
+        let id = create(&db, "uuid-trigger", &[SPELL_BOOK]);
+
+        // Save 1: point a trigger at a learned spell.
+        let mut loaded = load(&db, "uuid-trigger", id);
+        let pool = pool_of(&loaded);
+        let index = pool.abilities.len() - 1;
+        let bound_key = pool.abilities[index].clone();
+        assert!(
+            loaded.inventory.spell_is_known(&bound_key),
+            "the last entry should be a learned spell"
+        );
+        loaded.trigger_slots.slots[0] = Some(TriggerSlot::from_pool_index(
+            index,
+            TriggerCondition::HealthBelow(0.25),
+        ));
+        save(&db, id, &loaded, &pool);
+
+        // Learn a second book whose keys sort before the bound one, then save.
+        let mut loaded = load(&db, "uuid-trigger", id);
+        loaded
+            .inventory
+            .push_spell_group(spell_group(SECOND_SPELL_BOOK))
+            .expect("a second, distinct group");
+        let grown = pool_of(&loaded);
+        assert_ne!(
+            grown.abilities.iter().position(|k| *k == bound_key),
+            pool.abilities.iter().position(|k| *k == bound_key),
+            "this test is only meaningful if the bound key actually moves"
+        );
+        loaded.trigger_slots.remap_innate_bindings(&pool, &grown);
+        // The in-memory binding already follows its ability, before any save.
+        let AuxiliaryAbility::Innate(live_index) = loaded
+            .trigger_slots
+            .configured_ability(0)
+            .expect("the slot survives the remap")
+        else {
+            panic!("a trigger slot always resolves to an innate binding")
+        };
+        assert_eq!(grown.abilities[live_index], bound_key);
+        save(&db, id, &loaded, &grown);
+
+        // And so does the persisted one.
+        let reloaded = load(&db, "uuid-trigger", id);
+        let reloaded_pool = pool_of(&reloaded);
+        let AuxiliaryAbility::Innate(reloaded_index) = reloaded
+            .trigger_slots
+            .configured_ability(0)
+            .expect("the trigger survives the reload")
+        else {
+            panic!("a trigger slot always resolves to an innate binding")
+        };
+        assert_eq!(
+            reloaded_pool.abilities[reloaded_index], bound_key,
+            "learning a spell between saves re-pointed a trigger at a different ability"
+        );
+        assert_eq!(
+            reloaded.trigger_slots.get(0).map(|s| s.condition),
+            Some(TriggerCondition::HealthBelow(0.25)),
         );
     }
 
