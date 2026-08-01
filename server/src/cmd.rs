@@ -6191,7 +6191,8 @@ fn handle_banish(
                 Ok(())
             },
             None => Err(Content::Plain(
-                "Target cannot be banished (already banished, or has no position/body)."
+                "Target cannot be banished (already banished, is dead/dying, has no \
+                 position/body, or is a player)."
                     .to_string(),
             )),
         }

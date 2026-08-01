@@ -90,15 +90,27 @@ pub(crate) fn death_forestalls_banishment(health: &Health) -> bool {
     health.is_dead || health.should_die()
 }
 
-/// Whether `entity` may be banished right now: not already banished, and not
-/// dead or dying.
+/// Whether `entity` may be banished right now: not already banished, not
+/// dead or dying, and not a player.
 ///
-/// Split out of `banish_entity` so the two gates are testable without a live
+/// The player check exists so `banish_entity` refuses **up front** instead of
+/// lying: without it, `/banish` on a player commits a `Banished` marker and a
+/// persisted record and reports success to the admin, only for
+/// `park_newly_banished`'s own player guard to silently strip the marker and
+/// erase the record one tick later — the command claims the target is gone
+/// when nothing ever happened. `comp::Presence` is the same marker that later
+/// guard uses to mean "this is a client, not a mob" (see its doc comment in
+/// `park_newly_banished`), reused here so both checks agree on what a player
+/// is. That later guard stays in place as defence in depth; this is the one
+/// that keeps the admin from being told something happened that didn't.
+///
+/// Split out of `banish_entity` so the gates are testable without a live
 /// `Server`, and so the death gate is visibly the *same* rule the spell path
 /// applies rather than a second, drifting copy.
 #[cfg(feature = "worldgen")]
 fn is_banishable(ecs: &specs::World, entity: EcsEntity) -> bool {
     !ecs.read_storage::<Banished>().contains(entity)
+        && !ecs.read_storage::<comp::Presence>().contains(entity)
         && ecs
             .read_storage::<Health>()
             .get(entity)
@@ -107,9 +119,9 @@ fn is_banishable(ecs: &specs::World, entity: EcsEntity) -> bool {
 
 /// Banishes `entity` for `secs` seconds, recording it durably. Returns the new
 /// record's id, or `None` if the entity has no position/body, is already
-/// banished, or is dead or dying. Shared by the `/banish` admin command and
-/// available to any future caller that wants a banishment without an ability
-/// behind it.
+/// banished, is dead or dying, or is a player. Shared by the `/banish` admin
+/// command and available to any future caller that wants a banishment without
+/// an ability behind it.
 ///
 /// Deliberately reuses the exact rtsim-vs-plain-mob fork and `Owned` →
 /// `Tame` alignment normalisation the spell path
@@ -318,13 +330,16 @@ fn park_newly_banished(server: &mut Server) {
         let positions = ecs.read_storage::<Pos>();
         // 🔴 Defence in depth: a player must never be parked. The spell cannot
         // reach one (`Body::Humanoid` is unconditionally
-        // `CreatureKind::Humanoid`, which is never in the banishable set), but
-        // a player carries an `ActorId`, so a future ability-free caller such
-        // as `/banish` (N38B21-J) would otherwise fall into the rtsim branch
-        // below and *delete a logged-in player's entity* outside the
-        // disconnect path — something rtsim itself explicitly refuses to do.
-        // `Presence` is the same marker the engine's own NPC-unload sweep uses
-        // to mean "this is a client, not a mob".
+        // `CreatureKind::Humanoid`, which is never in the banishable set), and
+        // `/banish` (N38B21-J) now also refuses a player up front via
+        // `is_banishable`'s own `Presence` check. This pass keeps its guard
+        // anyway: it is the last line of defence against any future
+        // ability-free caller that skips `is_banishable` and would otherwise
+        // fall into the rtsim branch below and *delete a logged-in player's
+        // entity* outside the disconnect path — something rtsim itself
+        // explicitly refuses to do. `Presence` is the same marker the
+        // engine's own NPC-unload sweep uses to mean "this is a client, not a
+        // mob".
         let presences = ecs.read_storage::<comp::Presence>();
         #[cfg(feature = "worldgen")]
         let actor_ids = ecs.read_storage::<common::rtsim::ActorId>();
@@ -1115,6 +1130,7 @@ mod death_wins_tests {
         let mut world = specs::World::new();
         world.register::<Banished>();
         world.register::<Health>();
+        world.register::<comp::Presence>();
         world
     }
 
@@ -1218,6 +1234,42 @@ mod death_wins_tests {
         let (world, entity, _) = a_banished_phoenix();
 
         assert!(!is_banishable(&world, entity));
+    }
+
+    // --- the player guard ---------------------------------------------------
+
+    /// Bug found by hand: `/banish 60` with no `/sudo` target targets the
+    /// admin's own entity, and before this guard `is_banishable` never
+    /// checked for a player — only `park_newly_banished`, one tick later,
+    /// did. That meant `banish_entity` committed a `Banished` marker and a
+    /// persisted record, `/banish` told the admin it had succeeded, and only
+    /// then did the park pass silently strip the marker and erase the record
+    /// with a server-side `warn!` the admin never saw. `is_banishable` is
+    /// `banish_entity`'s *first* check — `if !is_banishable(..) { return
+    /// None; }`, before any `Pos`/`Body` read or any registry/marker write —
+    /// so a `false` result here is exactly "`banish_entity` returns `None`
+    /// immediately, without creating any record or marker", the same
+    /// guarantee a live-`Server` call to `banish_entity` would demonstrate,
+    /// without needing one.
+    #[test]
+    fn a_player_is_never_banishable_by_command() {
+        let mut world = world_with_storages();
+        let player = world
+            .create_entity()
+            .with(Health::new(phoenix_body()))
+            .with(comp::Presence::new(
+                common::ViewDistances {
+                    terrain: 1,
+                    entity: 1,
+                },
+                comp::PresenceKind::Spectator,
+            ))
+            .build();
+
+        assert!(
+            !is_banishable(&world, player),
+            "a player must be refused up front, not merely un-parked a tick later"
+        );
     }
 
     // --- revocation --------------------------------------------------------
