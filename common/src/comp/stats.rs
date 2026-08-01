@@ -135,7 +135,10 @@ pub struct Stats {
     pub energy_efficiency_modifier: f32,
     /// Multiplier on energy regeneration rate (both the per-tick
     /// acceleration and the rate ceiling it climbs toward — see
-    /// `Energy::regen`'s `modifier` parameter). 1.0 = no change.
+    /// `Energy::regen`'s `modifier` parameter). 1.0 = no change. Sourced from
+    /// class-skill passives (`ClassPassiveStat::EnergyRegen`) and, for a
+    /// caster-role implement's `energy_efficiency` tool stat, from equipped
+    /// gear (`combat::apply_gear_caster_stats`).
     pub energy_regen_modifier: f32,
     /// This creates effects when the entity is damaged
     pub effects_on_damaged: Vec<StatEffect>,
@@ -195,7 +198,11 @@ pub struct Stats {
     /// `apply_attack`), so caster damage passives don't leak onto weapon
     /// swings. `heal_power` scales healing the entity does
     /// (`CombatEffect::Heal`). Kept separate from `attack_damage_modifier` so
-    /// a smiter Cleric and a pure healer scale independently.
+    /// a smiter Cleric and a pure healer scale independently. Sourced from
+    /// class-skill passives (`ClassPassiveStat::SpellPower`/`HealPower`) and
+    /// from equipped caster-role gear (`combat::apply_gear_caster_stats`) —
+    /// the latter is the only path that also reaches weaponless pool spells,
+    /// since tool-stat scaling never applies with no tool in hand.
     pub spell_power: f32,
     pub heal_power: f32,
     /// Extra outgoing damage vs targets of a given `CreatureKind`
