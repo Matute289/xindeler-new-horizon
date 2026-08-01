@@ -220,6 +220,7 @@ fn do_command(
         ServerChatCommand::SetClassLevel => handle_set_class_level,
         ServerChatCommand::SetEthos => handle_set_ethos,
         ServerChatCommand::SetLevel => handle_set_level,
+        ServerChatCommand::SetMastery => handle_set_mastery,
         ServerChatCommand::SetMotd => handle_set_motd,
         ServerChatCommand::SetWaypoint => handle_set_waypoint,
         ServerChatCommand::Ship => handle_spawn_ship,
@@ -4897,6 +4898,72 @@ fn handle_learn_spells(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::Plain(format!("Learned the spells in {spec}.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/set_mastery <divine|primordial|psionic|ki> <pct>` — admin-only test
+/// tool: sets the target's raw source-XP directly to whatever value reaches
+/// `pct`% mastery in that source, bypassing `grant_source_mastery`'s
+/// combat-earned weighting entirely. For the persistence smoke test and for
+/// exercising the transcription tier gate without grinding real kills.
+fn handle_set_mastery(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{SpellMastery, ability::MagicSource, spell_mastery::MASTERY_XP_FULL};
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /set_mastery.".to_string(),
+        ));
+    }
+
+    let (source_arg, pct) = parse_cmd_args!(args, String, f32);
+    let source_arg = source_arg.ok_or_else(|| action.help_content())?;
+    let pct = pct.ok_or_else(|| action.help_content())?;
+
+    let source = match source_arg.to_lowercase().as_str() {
+        "divine" => MagicSource::Divine,
+        "primordial" => MagicSource::Primordial,
+        "psionic" => MagicSource::Psionic,
+        "ki" => MagicSource::Ki,
+        other => {
+            return Err(Content::Plain(format!(
+                "Unknown source '{other}'. Options: divine, primordial, psionic, ki."
+            )));
+        },
+    };
+    if !(0.0..=100.0).contains(&pct) {
+        return Err(Content::Plain(
+            "Percentage must be between 0 and 100.".to_string(),
+        ));
+    }
+    let xp = ((pct / 100.0) * MASTERY_XP_FULL as f32).round() as u32;
+
+    let mut masteries = server.state.ecs().write_storage::<SpellMastery>();
+    let mut mastery = match masteries.get_mut(target) {
+        Some(existing) => existing,
+        None => {
+            let _ = masteries.insert(target, SpellMastery::default());
+            masteries
+                .get_mut(target)
+                .ok_or_else(|| Content::Plain("Target cannot hold spell mastery.".to_string()))?
+        },
+    };
+    mastery.set_source_xp(source, xp);
+    drop(masteries);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Set {source_arg} mastery to {pct}% ({xp} xp).")),
         ),
     );
     Ok(())

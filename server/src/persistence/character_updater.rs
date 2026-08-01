@@ -37,6 +37,7 @@ pub type CharacterUpdateData = (
     comp::Ethos,
     comp::Background,
     comp::TriggerSlots,
+    comp::SpellMastery,
 );
 
 pub type PetPersistenceData = (comp::Pet, comp::Body, comp::Stats);
@@ -444,6 +445,7 @@ fn execute_batch_update(
             ethos,
             background,
             trigger_slots,
+            spell_mastery,
         )) => super::character::update(
             character_id,
             stats,
@@ -457,6 +459,7 @@ fn execute_batch_update(
             ethos,
             background,
             trigger_slots,
+            spell_mastery,
             &mut transaction,
         ),
         DatabaseActionKind::DeleteCharacter {

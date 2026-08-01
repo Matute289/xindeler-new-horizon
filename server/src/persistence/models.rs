@@ -27,6 +27,9 @@ pub struct Character {
     pub background_custom_note: Option<String>,
     /// Reactive trigger slots as a JSON array; `NULL` -> none configured.
     pub trigger_slots: Option<String>,
+    /// Per-`MagicSource` mastery progress as a small JSON object; `NULL` ->
+    /// nothing accrued yet (every source at 0%).
+    pub spell_mastery: Option<String>,
 }
 
 #[derive(Debug)]

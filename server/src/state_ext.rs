@@ -706,6 +706,7 @@ impl StateExt for State {
             ethos,
             background,
             mut trigger_slots,
+            spell_mastery,
         } = components;
 
         if let Some(player_uid) = self.read_component_copied::<Uid>(entity) {
@@ -763,6 +764,10 @@ impl StateExt for State {
             let now_game = *self.ecs().read_resource::<Time>();
             trigger_slots.reproject_cooldowns(chrono::Utc::now(), now_game);
             self.write_component_ignore_entity_dead(entity, trigger_slots);
+            // Per-`MagicSource` mastery progress. No wall-clock state, so
+            // nothing to reproject -- unlike `trigger_slots` above, it is
+            // ready to insert as loaded.
+            self.write_component_ignore_entity_dead(entity, spell_mastery);
             // Grant class active-ability keys + racial innate + anything the
             // character has learned into its spellbook. Built before the
             // inventory is moved into its component write, since the

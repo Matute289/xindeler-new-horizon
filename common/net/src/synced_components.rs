@@ -86,6 +86,10 @@ macro_rules! synced_components {
             // the client only ever sees the in-game `Time` projection the
             // server computed for it.
             trigger_slots: TriggerSlots,
+            // Per-`MagicSource` mastery progress. Owner-private, same
+            // reasoning as `trigger_slots`: nobody else's business how far
+            // along a Mage is on any source.
+            spell_mastery: SpellMastery,
             // The attuned-item set (ENG-D2). `Attuning` (in-progress channels) is
             // NOT synced — it carries absolute server `Time`, a different epoch
             // than the client's, so a finish timestamp would be meaningless there.
@@ -357,6 +361,11 @@ impl NetSync for AbilityCooldowns {
 // Owner-private, and deliberately not `ClientSpectatorEntity`: an armed
 // trigger is information a PvP opponent would pay for.
 impl NetSync for TriggerSlots {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
+// Owner-private, same reasoning as `TriggerSlots` above.
+impl NetSync for SpellMastery {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 
