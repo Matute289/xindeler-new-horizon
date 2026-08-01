@@ -204,12 +204,22 @@ impl LoginProvider {
         let token = AuthToken::from_str(username_or_token)
             .map_err(|e| RegisterError::AuthError(e.to_string()))?;
         // The auth client is blocking, so it must not run on the async
-        // reactor: two HTTPS round-trips would stall every other task on that
+        // reactor: an HTTPS round-trip would stall every other task on that
         // worker thread.
         let lookup = tokio::task::spawn_blocking(move || {
-            let uuid = srv.validate(token)?;
-            let username = srv.uuid_to_username(uuid)?;
-            let r: Result<_, AuthClientError> = Ok((username, uuid));
+            let verified = srv.validate_full(token)?;
+            let username = match verified.username {
+                // The usual path. Answering with the name costs the auth server
+                // a local lookup and saves us a call to /uuid_to_username,
+                // which is rate limited per IP — and every login from this
+                // server shares one IP, so that limit is a hard ceiling on how
+                // many players can log in per window.
+                Some(username) => username,
+                // An auth server predating that field. Only reachable mid
+                // rolling deploy, but the fallback keeps logins working.
+                None => srv.uuid_to_username(verified.uuid)?,
+            };
+            let r: Result<_, AuthClientError> = Ok((username, verified.uuid));
             r
         })
         .await;
