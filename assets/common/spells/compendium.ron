@@ -1153,7 +1153,13 @@
     // SpellDef::pool_eligible's own doc comment. Classes mirror the
     // class_proficiencies.ron Any(Staff)/Any(Sceptre) rosters used for the
     // standard-item equip gate: Staff -> [Mage, Sorcerer, Warlock, Druid],
-    // Sceptre -> [Cleric, Druid].
+    // Sceptre -> [Cleric, Druid]. Kept in sync with the standard ItemDefs'
+    // requirements.classes by
+    // spell::tests::legacy_kit_classes_match_the_standard_item_equip_gate.
+    // Only `id`, `classes` and `ability` are load-bearing below -- `school`/
+    // `cast_time`/`duration`/`range`/`aoe` are authored for content honesty
+    // but never rendered (pool_eligible: false keeps these out of the Diary
+    // Spells tab, which is the only place that reads them).
     (
         id: "legacy.staff.firebomb",
         name_i18n: "spell-legacy-firebomb",

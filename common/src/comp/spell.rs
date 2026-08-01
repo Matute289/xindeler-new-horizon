@@ -1,7 +1,14 @@
-//! Spell compendium metadata (magic-system-v2 spec §3). Pure UI/gating layer:
-//! every `SpellDef` points at a `CharacterAbility` RON that actually executes.
-//! Combat reads the ability; spellbook UI, class gating, and tooltips read
-//! this.
+//! Spell compendium metadata (magic-system-v2 spec §3). A metadata layer over
+//! the ability pipeline: every `SpellDef` points at a `CharacterAbility` RON
+//! that actually executes, and combat reads that ability directly rather than
+//! this file. What DOES read this file is two-fold: presentational (spellbook
+//! UI, tooltips) AND load-bearing cast-time authorization — every ability
+//! activation, of any kind, is checked against `SpellCompendium::allows`
+//! (`states::utils::handle_ability`), so an entry catalogued here can refuse
+//! a class from casting an ability regardless of what equipped it. See
+//! `SpellDef::pool_eligible` for the one case where a catalogued entry exists
+//! ONLY for that authorization check and must not also grant the ability
+//! through the innate spell pool.
 use crate::{
     assets::{Asset, AssetCache, AssetExt, AssetReadGuard, BoxedError, Ron, SharedString},
     comp::{
@@ -661,6 +668,74 @@ mod tests {
                 !book.allows(ability, Some(&outsider)),
                 "Warrior must not be able to cast {ability}"
             );
+        }
+    }
+
+    /// The Staff/Sceptre class roster is authored in three places that
+    /// nothing else derives from one another: `class_proficiencies.ron`
+    /// (who may equip at all), the standard `ItemDef.requirements.classes`
+    /// on each shipped item (the equip gate), and the `classes:` list on
+    /// these `legacy.*` compendium entries (the cast-time gate, which also
+    /// covers modular/crafted items the equip gate cannot reach). Guards
+    /// against the equip gate and the cast gate drifting apart -- if a
+    /// future edit changes one without the other, a standard item and a
+    /// modular item of the same kind would enforce different class lists.
+    #[test]
+    fn legacy_kit_classes_match_the_standard_item_equip_gate() {
+        use crate::comp::inventory::item::Item;
+
+        let book = SpellCompendium::load_expect_cloned();
+
+        let staff_items = [
+            "common.items.weapons.staff.cultist_staff",
+            "common.items.weapons.staff.laevateinn",
+            "common.items.weapons.staff.staff_1",
+            "common.items.weapons.staff.starter_staff",
+        ];
+        let sceptre_items = [
+            "common.items.weapons.sceptre.amethyst",
+            "common.items.weapons.sceptre.belzeshrub",
+            "common.items.weapons.sceptre.caduceus",
+            "common.items.weapons.sceptre.root_evil",
+            "common.items.weapons.sceptre.sceptre_velorite_0",
+            "common.items.weapons.sceptre.starter_sceptre",
+        ];
+
+        let legacy_staff_classes: Vec<&SpellDef> = book
+            .iter()
+            .filter(|s| s.id.starts_with("legacy.staff."))
+            .collect();
+        let legacy_sceptre_classes: Vec<&SpellDef> = book
+            .iter()
+            .filter(|s| s.id.starts_with("legacy.sceptre."))
+            .collect();
+        assert!(!legacy_staff_classes.is_empty());
+        assert!(!legacy_sceptre_classes.is_empty());
+
+        for (item_ids, legacy_spells, kind) in [
+            (&staff_items[..], &legacy_staff_classes, "staff"),
+            (&sceptre_items[..], &legacy_sceptre_classes, "sceptre"),
+        ] {
+            for item_id in item_ids {
+                let item = Item::new_from_asset_expect(item_id);
+                let equip_gate = item
+                    .requirements()
+                    .and_then(|r| r.classes.as_ref())
+                    .unwrap_or_else(|| panic!("{item_id} has no requirements.classes equip gate"));
+
+                for spell in legacy_spells {
+                    let mut equip_gate_sorted = equip_gate.clone();
+                    equip_gate_sorted.sort_by_key(|c| format!("{c:?}"));
+                    let mut spell_classes_sorted = spell.classes.clone();
+                    spell_classes_sorted.sort_by_key(|c| format!("{c:?}"));
+                    assert_eq!(
+                        spell_classes_sorted, equip_gate_sorted,
+                        "legacy {kind} ability {} classes {:?} do not match {item_id}'s equip \
+                         gate {:?}",
+                        spell.id, spell.classes, equip_gate,
+                    );
+                }
+            }
         }
     }
 }
