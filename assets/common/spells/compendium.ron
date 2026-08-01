@@ -951,7 +951,7 @@
         source: Arcane,
         classes: [Mage, Sorcerer, Warlock, Bard],
         cast_time: Action,
-        duration: Secs(15.0),
+        duration: Secs(60.0),
         range: Meters(18.0),
         aoe: None,
         description_i18n: "spell-power_word_stun-desc",

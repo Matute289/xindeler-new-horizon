@@ -70,12 +70,14 @@ BasicAura(
                 ),
             ],
             max_targets: 4,
-            // Banishment is resolved for every selected target regardless of
-            // which tier it landed in (or whether it landed in one at all) --
-            // real Divine Word banishes a qualifying creature that fails its
-            // save "regardless of its current hit points". Resisted by the
-            // shared saving throw; 1-7 real days away; a quarter of the normal
-            // loot and XP, and it never counts as a kill.
+            // A selected target whose creature kind matches `banishment` is
+            // resolved *exclusively* via banishment -- it never enters the
+            // tier ladder above at all, at any HP -- matching real Divine
+            // Word's "banishes a qualifying creature that fails its save
+            // regardless of its current hit points". Resisted by the shared
+            // saving throw; 1-7 real days away; a quarter of the normal loot
+            // and XP, and it never counts as a kill. Every other creature
+            // kind is unaffected and resolves the tier ladder as usual.
             banishment: Some((
                 creature_kinds: [Celestial, Elemental, Fey, Fiend],
                 min_return_hours: 24.0,

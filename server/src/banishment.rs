@@ -19,7 +19,7 @@
 //!
 //! | | plain mob | rtsim actor |
 //! |---|---|---|
-//! | park | strip `Pos`/`Agent`/`Vel`, keep the entity | clear `Actor::presence` + unload-and-delete the entity |
+//! | park | strip `Pos`/`Vel`, keep the entity (`Agent` deliberately kept) | clear `Actor::presence` + unload-and-delete the entity |
 //! | return | restore the components on the parked entity | restore `presence`; rtsim's load loop rebuilds the entity |
 //! | rehydrate | respawn a frozen entity from the persisted archetype | nothing — `Banishments::prepare` never queues one |
 

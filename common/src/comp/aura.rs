@@ -63,11 +63,14 @@ pub enum AuraKind {
     /// against `0.0` damage (effectively always `0`) — tier tables meant for
     /// aura use should stick to `CombatBuffStrength::Value`.
     ///
-    /// `banishment`, when set, is evaluated for every selected target
-    /// **independently of the tier ladder** — including targets that match no
-    /// tier at all. Boxed for the same reason `PoolSplit` is: this variant
-    /// lives inside `AuraChange::Add(Aura)`, and the `Vec<CreatureKind>`
-    /// would otherwise bloat every `Aura`.
+    /// `banishment`, when set, is checked *before* the tier ladder for each
+    /// selected target: a target whose creature kind it matches is resolved
+    /// **exclusively** via banishment and never enters the tier ladder at
+    /// all, at any HP — it is one or the other, never both. Every other
+    /// creature kind is unaffected by `banishment` and resolves the tier
+    /// ladder exactly as if it were absent. Boxed for the same reason
+    /// `PoolSplit` is: this variant lives inside `AuraChange::Add(Aura)`,
+    /// and the `Vec<CreatureKind>` would otherwise bloat every `Aura`.
     TieredHealthEffect {
         tiers: Vec<HealthTier>,
         max_targets: usize,
