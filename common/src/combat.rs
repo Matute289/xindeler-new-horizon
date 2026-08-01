@@ -14,7 +14,7 @@ use crate::{
             item::{
                 ItemDesc, ItemKind, MaterialStatManifest,
                 armor::Protection,
-                tool::{self, ToolKind},
+                tool::{self, Hands, ToolKind},
             },
             slot::EquipSlot,
         },
@@ -28,7 +28,7 @@ use crate::{
     generation::{EntityConfig, EntityInfo},
     outcome::Outcome,
     resources::{Secs, Time},
-    states::utils::{AbilityInfo, StageSection},
+    states::utils::{AbilityInfo, HandInfo, StageSection},
     uid::{IdMaps, Uid},
     util::Dir,
 };
@@ -593,6 +593,38 @@ impl Attack {
         }
     }
 
+    /// A weapon outside the wielder's trained set lands clumsily: physical
+    /// output (damage, poise, knockback, crit chance) is scaled down.
+    /// Spells are never affected — a caster's magic does not care what is in
+    /// their hands. `tool: None` (unarmed strikes, natural weapons, an NPC
+    /// `Empty`-tool attack) is always treated as proficient, and an attacker
+    /// with no `Stats` (or one whose class leaves `proficient_tools`
+    /// permissive) is unaffected.
+    pub fn proficiency_multiplier(
+        stats: Option<&Stats>,
+        ability_info: Option<AbilityInfo>,
+        is_magic: bool,
+    ) -> f32 {
+        if is_magic {
+            return 1.0;
+        }
+        let Some(stats) = stats else {
+            return 1.0;
+        };
+        let Some(tool) = ability_info.and_then(|ai| ai.tool) else {
+            return 1.0;
+        };
+        let hands = ability_info.and_then(|ai| ai.hand).map(|hand| match hand {
+            HandInfo::TwoHanded => Hands::Two,
+            HandInfo::MainHand | HandInfo::OffHand => Hands::One,
+        });
+        if stats.proficient_tools.allows(tool, hands) {
+            1.0
+        } else {
+            stats.non_proficient_damage_mult
+        }
+    }
+
     pub fn apply_attack(
         &self,
         attacker: Option<AttackerInfo>,
@@ -661,6 +693,15 @@ impl Attack {
         let is_magic = self
             .ability_info
             .is_some_and(|ai| ai.ability_meta.source.is_some());
+        // A weapon outside the wielder's proficiency set (see `ClassProficiencies`)
+        // deals reduced physical output. Resolved once here and folded into
+        // damage, poise, knockback and crit chance below; never applied to
+        // `is_magic` attacks.
+        let proficiency_mult = Self::proficiency_multiplier(
+            attacker.and_then(|a| a.stats),
+            self.ability_info,
+            is_magic,
+        );
         let attack_missed = is_single_target && {
             let (accuracy, evasion) = if is_magic {
                 (
@@ -798,9 +839,10 @@ impl Attack {
         // refactoring the shared upstream precision path.
         let precision_mult = precision_mult.or_else(|| {
             if is_single_target && !attack_missed {
-                let crit_chance = attacker
+                let crit_chance = (attacker
                     .and_then(|a| a.stats)
                     .map_or(0.0, |s| s.crit_chance)
+                    * proficiency_mult)
                     .clamp(
                         combat_tuning.crit_chance_floor,
                         combat_tuning.crit_chance_cap,
@@ -838,7 +880,7 @@ impl Attack {
             if is_magic {
                 s.attack_damage_modifier * s.spell_power
             } else {
-                s.attack_damage_modifier
+                s.attack_damage_modifier * proficiency_mult
             }
         });
         // Conditional "vs creature kind" bonus — the Cleric smite (and any
@@ -975,7 +1017,8 @@ impl Attack {
                             * CRUSHING_POISE_FRACTION
                             * attacker
                                 .and_then(|a| a.stats)
-                                .map_or(1.0, |s| s.poise_damage_modifier);
+                                .map_or(1.0, |s| s.poise_damage_modifier)
+                            * proficiency_mult;
                         let change = -Poise::apply_poise_reduction(
                             poise,
                             target.inventory,
@@ -1037,7 +1080,7 @@ impl Attack {
                 for effect in damage.effects.iter() {
                     match effect {
                         CombatEffect::Knockback(kb) => {
-                            let impulse = kb.calculate_impulse(
+                            let impulse = kb.modify_strength(proficiency_mult).calculate_impulse(
                                 dir,
                                 target.char_state,
                                 attacker.and_then(|a| a.stats),
@@ -1105,7 +1148,8 @@ impl Attack {
                             ) * strength_modifier
                                 * attacker
                                     .and_then(|a| a.stats)
-                                    .map_or(1.0, |s| s.poise_damage_modifier);
+                                    .map_or(1.0, |s| s.poise_damage_modifier)
+                                * proficiency_mult;
                             if change.abs() > Poise::POISE_EPSILON {
                                 let poise_change = PoiseChange {
                                     amount: change,
@@ -1311,7 +1355,7 @@ impl Attack {
                 is_applied = true;
                 match &effect.effect {
                     CombatEffect::Knockback(kb) => {
-                        let impulse = kb.calculate_impulse(
+                        let impulse = kb.modify_strength(proficiency_mult).calculate_impulse(
                             dir,
                             target.char_state,
                             attacker.and_then(|a| a.stats),
@@ -1379,7 +1423,8 @@ impl Attack {
                         ) * strength_modifier
                             * attacker
                                 .and_then(|a| a.stats)
-                                .map_or(1.0, |s| s.poise_damage_modifier);
+                                .map_or(1.0, |s| s.poise_damage_modifier)
+                            * proficiency_mult;
                         if change.abs() > Poise::POISE_EPSILON {
                             let poise_change = PoiseChange {
                                 amount: change,
@@ -3893,6 +3938,173 @@ mod combat_resolution_tests {
         assert!((combine(0.0, 0.95) - cap).abs() < 1e-6);
         // Negative resist is floored at 0 — never amplifies AoE damage.
         assert!((combine(0.25, -0.5) - 0.25).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod weapon_proficiency_tests {
+    use super::{AbilityInfo, Attack, Body, CombatTuning, HandInfo, InputKind, Stats};
+    use crate::comp::{
+        ability::AbilityMeta,
+        class::{ClassKind, class_proficiencies},
+        humanoid,
+        inventory::item::tool::{ToolKind, ToolKindMask},
+    };
+
+    fn test_body() -> Body { Body::Humanoid(humanoid::Body::random()) }
+
+    fn stats_with_mask(mask: ToolKindMask) -> Stats {
+        let mut stats = Stats::empty(test_body());
+        stats.proficient_tools = mask;
+        stats.non_proficient_damage_mult = 0.40;
+        stats
+    }
+
+    fn ability_info(tool: ToolKind, hand: HandInfo) -> AbilityInfo {
+        AbilityInfo {
+            tool: Some(tool),
+            hand: Some(hand),
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta::default(),
+            ability: None,
+        }
+    }
+
+    #[test]
+    fn non_proficient_weapon_deals_forty_percent_physical_output() {
+        let proficient = stats_with_mask(ToolKindMask::DAGGER);
+        let non_proficient = stats_with_mask(ToolKindMask::SWORD_1H | ToolKindMask::SWORD_2H);
+        let ai = ability_info(ToolKind::Dagger, HandInfo::MainHand);
+
+        let proficient_mult = Attack::proficiency_multiplier(Some(&proficient), Some(ai), false);
+        let non_proficient_mult =
+            Attack::proficiency_multiplier(Some(&non_proficient), Some(ai), false);
+
+        assert!((proficient_mult - 1.0).abs() < 1e-6);
+        assert!((non_proficient_mult - 0.40).abs() < 1e-6);
+        // The proficient attacker deals 2.5x the non-proficient one's damage,
+        // all else equal (1.0 / 0.40).
+        assert!((proficient_mult / non_proficient_mult - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn magic_attacks_are_never_penalised() {
+        let non_proficient = stats_with_mask(ToolKindMask::DAGGER);
+        let ai = ability_info(ToolKind::Sword, HandInfo::TwoHanded);
+        let mult = Attack::proficiency_multiplier(Some(&non_proficient), Some(ai), true);
+        assert!((mult - 1.0).abs() < 1e-6);
+
+        let proficient = stats_with_mask(ToolKindMask::all());
+        let mult = Attack::proficiency_multiplier(Some(&proficient), Some(ai), true);
+        assert!((mult - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn permissive_classes_and_classless_entities_take_no_penalty() {
+        let adventurer = class_proficiencies(ClassKind::Adventurer).mask();
+        assert_eq!(adventurer, ToolKindMask::all());
+        let stats = stats_with_mask(adventurer);
+        let ai = ability_info(ToolKind::Staff, HandInfo::TwoHanded);
+        assert!((Attack::proficiency_multiplier(Some(&stats), Some(ai), false) - 1.0).abs() < 1e-6);
+
+        // An entity with no `CharacterClass` (every NPC/summon/boss) keeps
+        // `Stats::empty`'s permissive default untouched.
+        let empty = Stats::empty(test_body());
+        assert!((Attack::proficiency_multiplier(Some(&empty), Some(ai), false) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_tool_is_always_proficient() {
+        let non_proficient = stats_with_mask(ToolKindMask::empty());
+
+        // `ability_info: None` (e.g. a bare `AttackSource` with no ability
+        // behind it).
+        let mult = Attack::proficiency_multiplier(Some(&non_proficient), None, false);
+        assert!((mult - 1.0).abs() < 1e-6);
+
+        // `ability_info: Some(_)` but `tool: None` — unarmed strikes, natural
+        // weapons, NPC `Empty`-tool attacks.
+        let ai = AbilityInfo {
+            tool: None,
+            hand: None,
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta::default(),
+            ability: None,
+        };
+        let mult = Attack::proficiency_multiplier(Some(&non_proficient), Some(ai), false);
+        assert!((mult - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn main_hand_and_off_hand_are_judged_independently() {
+        // Proficient with Dagger, not with Sword.
+        let stats = stats_with_mask(ToolKindMask::DAGGER);
+        let dagger_main_hand = ability_info(ToolKind::Dagger, HandInfo::MainHand);
+        let sword_off_hand = ability_info(ToolKind::Sword, HandInfo::OffHand);
+
+        assert!(
+            (Attack::proficiency_multiplier(Some(&stats), Some(dagger_main_hand), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&stats), Some(sword_off_hand), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn sword_grip_split_follows_the_class_manifest() {
+        let one_handed = ability_info(ToolKind::Sword, HandInfo::MainHand);
+        let two_handed = ability_info(ToolKind::Sword, HandInfo::TwoHanded);
+
+        // Rogue: 1h swords (gladii) only, per class_proficiencies.ron.
+        let rogue_stats = stats_with_mask(class_proficiencies(ClassKind::Rogue).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&rogue_stats), Some(one_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&rogue_stats), Some(two_handed), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+
+        // Warrior: both grips.
+        let warrior_stats = stats_with_mask(class_proficiencies(ClassKind::Warrior).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&warrior_stats), Some(one_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&warrior_stats), Some(two_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    // Mirrors the pre-clamp scaling in `Attack::apply_attack`'s rolled-crit
+    // branch: the proficiency multiplier applies to `crit_chance` before the
+    // existing floor/cap clamp, so a scaled-down value can still be rescued
+    // by the floor.
+    #[test]
+    fn crit_chance_scales_by_proficiency_before_the_floor_clamp() {
+        let t = CombatTuning::default();
+        let scaled_crit_chance =
+            |base: f32, mult: f32| (base * mult).clamp(t.crit_chance_floor, t.crit_chance_cap);
+
+        // A typical build (0.30 base): scaling to 0.12 still clears the floor.
+        assert!((scaled_crit_chance(0.30, 0.40) - 0.12).abs() < 1e-6);
+
+        // A low-crit build (0.05 base) whose scaled value (0.02) would fall
+        // under the floor: the floor still guarantees a baseline chance.
+        assert!((0.05_f32 * 0.40 - t.crit_chance_floor).abs() > 1e-6);
+        assert!((scaled_crit_chance(0.05, 0.40) - t.crit_chance_floor).abs() < 1e-6);
     }
 }
 
