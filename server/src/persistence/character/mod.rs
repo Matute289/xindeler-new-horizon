@@ -1496,6 +1496,7 @@ mod spell_book_persistence_tests {
             map_marker: None,
             ethos: comp::Ethos::default(),
             background: comp::Background::default(),
+            trigger_slots: comp::TriggerSlots::default(),
         }
     }
 
@@ -1540,6 +1541,7 @@ mod spell_book_persistence_tests {
             loaded.character_class,
             loaded.ethos,
             loaded.background,
+            loaded.trigger_slots.clone(),
             &mut transaction,
         )
         .expect("character update");
