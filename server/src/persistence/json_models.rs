@@ -224,11 +224,36 @@ pub fn db_string_to_background(
 #[derive(Serialize, Deserialize)]
 pub struct DatabaseTriggerSlot {
     slot: u8,
-    ability: comp::ability::AuxiliaryAbility,
+    /// The bound ability, in the same key-bearing form the hotbar uses (see
+    /// [`aux_ability_to_string`]).
+    ///
+    /// 🔴 **Never the raw `AuxiliaryAbility`.** `AuxiliaryAbility::Innate(i)`
+    /// is a positional index into `AbilityPool`, which is *not* persisted: it
+    /// is rebuilt at every login, and learned spellbook keys are appended
+    /// **sorted by key**, so learning a spell that sorts earlier shifts every
+    /// later index. Persisting the index would silently re-point a trigger at a
+    /// different spell after any pool rebuild — and a trigger costs up to
+    /// thirty-six real-world hours. The hotbar already solved exactly this;
+    /// trigger slots must not reintroduce the hazard.
+    ability: DatabaseTriggerAbility,
     condition: comp::TriggerCondition,
     /// RFC-3339 UTC; absent when the slot is not cooling down.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ready_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The on-disk ability of a trigger slot. Only [`Self::Keyed`] is ever written;
+/// [`Self::Legacy`] exists purely so a row written by the first shipped version
+/// of the trigger engine still loads. (No such row is known to exist — the
+/// feature has never been live — but a load must never brick a character.)
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum DatabaseTriggerAbility {
+    /// `Innate:key:<pool key>`, via [`aux_ability_to_string`].
+    Keyed(String),
+    /// The raw enum, e.g. `{"Innate": 3}`. Positional, and therefore wrong the
+    /// moment the pool is rebuilt — accepted on read, never on write.
+    Legacy(comp::ability::AuxiliaryAbility),
 }
 
 /// Serialise a character's trigger slots for the `character.trigger_slots`
@@ -239,7 +264,10 @@ pub struct DatabaseTriggerSlot {
 /// the server saved re-derives as ready, which is the safe direction (it
 /// re-fires when its condition next holds, rather than holding an
 /// authorisation token no cast will ever claim).
-pub fn trigger_slots_to_db_string(slots: &comp::TriggerSlots) -> Option<String> {
+pub fn trigger_slots_to_db_string(
+    slots: &comp::TriggerSlots,
+    ability_pool: &comp::ability::AbilityPool,
+) -> Option<String> {
     let rows: Vec<DatabaseTriggerSlot> = slots
         .slots
         .iter()
@@ -248,7 +276,10 @@ pub fn trigger_slots_to_db_string(slots: &comp::TriggerSlots) -> Option<String> 
             let slot = slot.as_ref()?;
             Some(DatabaseTriggerSlot {
                 slot: index as u8,
-                ability: slot.ability,
+                ability: DatabaseTriggerAbility::Keyed(aux_ability_to_string(
+                    slot.ability.into(),
+                    ability_pool,
+                )),
                 condition: slot.condition,
                 ready_at: slot.state.ready_at(),
             })
@@ -275,7 +306,10 @@ pub fn trigger_slots_to_db_string(slots: &comp::TriggerSlots) -> Option<String> 
 ///
 /// Malformed JSON yields no slots rather than failing the load: a character
 /// must never be locked out by a bad trigger payload.
-pub fn db_string_to_trigger_slots(payload: Option<&str>) -> comp::TriggerSlots {
+pub fn db_string_to_trigger_slots(
+    payload: Option<&str>,
+    ability_pool: &comp::ability::AbilityPool,
+) -> comp::TriggerSlots {
     use common::{comp::trigger::SlotState, resources::Time};
 
     let mut slots = comp::TriggerSlots::default();
@@ -295,6 +329,22 @@ pub fn db_string_to_trigger_slots(payload: Option<&str>) -> comp::TriggerSlots {
             tracing::warn!(slot = row.slot, "Trigger slot index out of range, ignoring");
             continue;
         };
+        let auxiliary = match &row.ability {
+            DatabaseTriggerAbility::Keyed(key) => aux_ability_from_string(key, ability_pool),
+            DatabaseTriggerAbility::Legacy(ability) => *ability,
+        };
+        // A key that is no longer in the pool (a removed spell, a class the
+        // character no longer holds) resolves to `Empty`, and a trigger cannot
+        // hold `Empty` — nor anything else that is not a pool entry, see
+        // `TriggerAbility`. Either way the slot simply does not come back;
+        // an unresolvable trigger must never resolve to *some other* ability.
+        let Some(ability) = comp::TriggerAbility::from_auxiliary(auxiliary) else {
+            tracing::debug!(
+                slot = row.slot,
+                "Persisted trigger ability no longer resolves to a pool entry; clearing the slot"
+            );
+            continue;
+        };
         let state = match row.ready_at {
             Some(ready_at) => SlotState::CoolingDown {
                 ready_at: Some(ready_at),
@@ -303,7 +353,7 @@ pub fn db_string_to_trigger_slots(payload: Option<&str>) -> comp::TriggerSlots {
             None => SlotState::Ready,
         };
         *dest = Some(comp::TriggerSlot {
-            ability: row.ability,
+            ability,
             condition: row.condition,
             state,
         });
@@ -862,25 +912,37 @@ pub mod tests {
         use chrono::{DateTime, TimeDelta, Utc};
         use common::{
             comp::{
-                SlotState, TriggerCondition, TriggerSlot, TriggerSlots, ability::AuxiliaryAbility,
-                trigger::MAX_TRIGGER_SLOTS,
+                AbilityPool, SlotState, TriggerAbility, TriggerCondition, TriggerSlot,
+                TriggerSlots, ability::AuxiliaryAbility, trigger::MAX_TRIGGER_SLOTS,
             },
             resources::Time,
         };
 
         fn instant() -> DateTime<Utc> { DateTime::from_timestamp(1_700_000_000, 0).unwrap() }
 
+        fn pool(keys: &[&str]) -> AbilityPool {
+            AbilityPool {
+                abilities: keys.iter().map(|k| k.to_string()).collect(),
+                spell_gates: vec![None; keys.len()],
+            }
+        }
+
+        /// Keys that deliberately do NOT sort in index order, so a round trip
+        /// that accidentally preserved a raw index would still be visibly
+        /// different from one that preserved the key.
+        fn four_keys() -> AbilityPool { pool(&["zeta", "mid", "beta", "alpha"]) }
+
         #[test]
         fn a_character_with_no_triggers_writes_no_column() {
             assert_eq!(
-                super::super::trigger_slots_to_db_string(&TriggerSlots::default()),
+                super::super::trigger_slots_to_db_string(&TriggerSlots::default(), &four_keys()),
                 None
             );
         }
 
         #[test]
         fn a_null_column_loads_as_nothing_configured() {
-            let loaded = super::super::db_string_to_trigger_slots(None);
+            let loaded = super::super::db_string_to_trigger_slots(None, &four_keys());
             assert!(!loaded.has_any_configured());
         }
 
@@ -889,10 +951,11 @@ pub mod tests {
         /// remaining wait intact.
         #[test]
         fn a_running_cooldown_survives_the_round_trip_with_its_remaining_wait() {
+            let pool = four_keys();
             let ready_at = instant() + TimeDelta::hours(36);
             let mut before = TriggerSlots::default();
             before.slots[2] = Some(TriggerSlot {
-                ability: AuxiliaryAbility::Innate(3),
+                ability: TriggerAbility::from_pool_index(3),
                 condition: TriggerCondition::HealthBelow(0.25),
                 state: SlotState::CoolingDown {
                     ready_at: Some(ready_at),
@@ -900,11 +963,12 @@ pub mod tests {
                 },
             });
 
-            let column = super::super::trigger_slots_to_db_string(&before).expect("a column");
-            let mut after = super::super::db_string_to_trigger_slots(Some(&column));
+            let column =
+                super::super::trigger_slots_to_db_string(&before, &pool).expect("a column");
+            let mut after = super::super::db_string_to_trigger_slots(Some(&column), &pool);
 
             assert_eq!(
-                after.get(2).map(|s| s.ability),
+                after.configured_ability(2),
                 Some(AuxiliaryAbility::Innate(3))
             );
             assert_eq!(
@@ -933,18 +997,17 @@ pub mod tests {
         /// never holding an authorisation token no cast will ever claim.
         #[test]
         fn a_firing_slot_is_never_persisted_as_firing() {
+            let pool = four_keys();
             let mut before = TriggerSlots::default();
             before.slots[0] = Some(TriggerSlot {
-                ability: AuxiliaryAbility::Innate(0),
+                ability: TriggerAbility::from_pool_index(0),
                 condition: TriggerCondition::DamageTaken,
-                state: SlotState::Firing {
-                    ability_id: "innate.danari".to_string(),
-                    deadline: Time(5.0),
-                },
+                state: SlotState::firing("innate.danari".to_string(), Time(5.0), 0),
             });
 
-            let column = super::super::trigger_slots_to_db_string(&before).expect("a column");
-            let after = super::super::db_string_to_trigger_slots(Some(&column));
+            let column =
+                super::super::trigger_slots_to_db_string(&before, &pool).expect("a column");
+            let after = super::super::db_string_to_trigger_slots(Some(&column), &pool);
             assert_eq!(
                 after.get(0).map(|s| s.state.clone()),
                 Some(SlotState::Ready)
@@ -954,15 +1017,17 @@ pub mod tests {
 
         #[test]
         fn every_slot_index_round_trips_independently() {
+            let pool = four_keys();
             let mut before = TriggerSlots::default();
             for index in 0..MAX_TRIGGER_SLOTS {
-                before.slots[index] = Some(TriggerSlot::new(
-                    AuxiliaryAbility::Innate(index),
+                before.slots[index] = Some(TriggerSlot::from_pool_index(
+                    index,
                     TriggerCondition::EnergyBelow(0.1 * index as f32),
                 ));
             }
-            let column = super::super::trigger_slots_to_db_string(&before).expect("a column");
-            let after = super::super::db_string_to_trigger_slots(Some(&column));
+            let column =
+                super::super::trigger_slots_to_db_string(&before, &pool).expect("a column");
+            let after = super::super::db_string_to_trigger_slots(Some(&column), &pool);
             for index in 0..MAX_TRIGGER_SLOTS {
                 assert_eq!(
                     after.configured_ability(index),
@@ -972,10 +1037,95 @@ pub mod tests {
             }
         }
 
+        /// 🔴 The bug this column's format exists to prevent. `AbilityPool` is
+        /// NOT persisted — it is rebuilt at every login, and learned spellbook
+        /// keys are appended **sorted by key** — so learning a spell that sorts
+        /// earlier shifts every later index. A trigger persisted positionally
+        /// would come back pointing at a *different spell* and mint its
+        /// cooldown-bypass token for that one. Storing the pool key makes the
+        /// slot follow its ability instead. Mirrors
+        /// `learning_a_spell_between_saves_leaves_bound_slots_on_their_ability`
+        /// in `persistence::character`, which asserts the same for the hotbar.
+        #[test]
+        fn learning_a_spell_that_sorts_earlier_does_not_move_a_bound_trigger() {
+            let before_pool = pool(&["innate.danari", "spells.mid", "spells.zeta"]);
+            let after_pool = pool(&["innate.danari", "spells.alpha", "spells.mid", "spells.zeta"]);
+
+            let mut before = TriggerSlots::default();
+            before.slots[0] = Some(TriggerSlot::from_pool_index(
+                2,
+                TriggerCondition::HealthBelow(0.25),
+            ));
+            assert_eq!(before_pool.abilities[2], "spells.zeta");
+
+            let column =
+                super::super::trigger_slots_to_db_string(&before, &before_pool).expect("a column");
+            let after = super::super::db_string_to_trigger_slots(Some(&column), &after_pool);
+
+            let index = match after.configured_ability(0) {
+                Some(AuxiliaryAbility::Innate(index)) => index,
+                other => panic!("the slot must still be an innate binding, got {other:?}"),
+            };
+            assert_eq!(
+                after_pool.abilities[index], "spells.zeta",
+                "the trigger re-pointed at a different ability across a reload"
+            );
+            assert_ne!(index, 2, "this test is only meaningful if the key moved");
+        }
+
+        /// An ability that is no longer in the pool empties the slot rather
+        /// than resolving to whatever now sits at that index.
+        #[test]
+        fn a_trigger_bound_to_a_vanished_ability_simply_does_not_come_back() {
+            let before_pool = pool(&["innate.danari", "spells.gone"]);
+            let mut before = TriggerSlots::default();
+            before.slots[1] = Some(TriggerSlot::from_pool_index(
+                1,
+                TriggerCondition::DamageTaken,
+            ));
+            let column =
+                super::super::trigger_slots_to_db_string(&before, &before_pool).expect("a column");
+
+            let after =
+                super::super::db_string_to_trigger_slots(Some(&column), &pool(&["innate.danari"]));
+            assert!(!after.has_any_configured());
+        }
+
+        /// A row written by the first shipped version of the trigger engine —
+        /// the raw positional enum — still loads. No such row is known to exist
+        /// (the feature has never been live), but a load must never brick a
+        /// character.
+        #[test]
+        fn a_legacy_positional_row_is_still_readable() {
+            let legacy = r#"[{"slot":1,"ability":{"Innate":2},"condition":{"HealthBelow":0.25}}]"#;
+            let after = super::super::db_string_to_trigger_slots(Some(legacy), &four_keys());
+            assert_eq!(
+                after.configured_ability(1),
+                Some(AuxiliaryAbility::Innate(2))
+            );
+            assert_eq!(
+                after.get(1).map(|s| s.condition),
+                Some(TriggerCondition::HealthBelow(0.25))
+            );
+        }
+
+        /// A trigger may only ever hold a pool entry. A legacy row naming a
+        /// weapon ability — which the shipped `AuxiliaryAbility` column could
+        /// physically encode — is dropped, not resurrected: a contextualized
+        /// weapon ability's id would not match the token's, silently voiding
+        /// the bypass *and* writing the player's own manual cooldown.
+        #[test]
+        fn a_legacy_row_naming_a_weapon_ability_is_dropped() {
+            let legacy =
+                r#"[{"slot":0,"ability":{"MainWeapon":1},"condition":{"HealthBelow":0.25}}]"#;
+            let after = super::super::db_string_to_trigger_slots(Some(legacy), &four_keys());
+            assert!(!after.has_any_configured());
+        }
+
         /// A corrupt payload must never lock a character out of the game.
         #[test]
         fn an_unreadable_column_loads_as_nothing_configured() {
-            let loaded = super::super::db_string_to_trigger_slots(Some("{not json"));
+            let loaded = super::super::db_string_to_trigger_slots(Some("{not json"), &four_keys());
             assert!(!loaded.has_any_configured());
         }
     }

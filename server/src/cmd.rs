@@ -4880,6 +4880,12 @@ fn handle_learn_spells(
         if let Some(mut active) = ecs.write_storage::<comp::ActiveAbilities>().get_mut(target) {
             comp::ability::remap_innate_bindings(&mut active, &old_pool, &pool);
         }
+        // The hotbar is not the only thing holding raw pool indices: a live
+        // trigger slot does too, and a re-pointed one would mint its
+        // cooldown-bypass token for the wrong ability.
+        if let Some(mut slots) = ecs.write_storage::<comp::TriggerSlots>().get_mut(target) {
+            slots.remap_innate_bindings(&old_pool, &pool);
+        }
         let _ = ecs
             .write_storage::<comp::AbilityPool>()
             .insert(target, pool);
@@ -6496,6 +6502,12 @@ fn handle_multiclass(
         if let Some(mut active) = ecs.write_storage::<comp::ActiveAbilities>().get_mut(target) {
             comp::ability::remap_innate_bindings(&mut active, &old_pool, &pool);
         }
+        // Same for the trigger slots, for the same reason — with a worse
+        // failure mode, since a re-pointed trigger authorises a cooldown bypass
+        // for an ability the player never bound.
+        if let Some(mut slots) = ecs.write_storage::<comp::TriggerSlots>().get_mut(target) {
+            slots.remap_innate_bindings(&old_pool, &pool);
+        }
         let _ = ecs
             .write_storage::<comp::AbilityPool>()
             .insert(target, pool);
@@ -6531,10 +6543,7 @@ fn handle_trigger_slot(
     args: Vec<String>,
     action: &ServerChatCommand,
 ) -> CmdResult<()> {
-    use common::comp::{
-        TriggerCondition, TriggerSlot, TriggerSlots, ability::AuxiliaryAbility,
-        trigger::MAX_TRIGGER_SLOTS,
-    };
+    use common::comp::{TriggerCondition, TriggerSlot, TriggerSlots, trigger::MAX_TRIGGER_SLOTS};
 
     let (slot, pool_index, condition_arg, threshold) = parse_cmd_args!(args, u32, u32, String, f32);
     let (Some(slot), Some(pool_index), Some(condition_arg)) = (slot, pool_index, condition_arg)
@@ -6588,10 +6597,7 @@ fn handle_trigger_slot(
                 .ok_or_else(|| Content::Plain("Target cannot hold trigger slots.".to_string()))?
         },
     };
-    entry.slots[slot] = Some(TriggerSlot::new(
-        AuxiliaryAbility::Innate(pool_index as usize),
-        condition,
-    ));
+    entry.slots[slot] = Some(TriggerSlot::from_pool_index(pool_index as usize, condition));
     drop(trigger_slots);
 
     server.notify_client(

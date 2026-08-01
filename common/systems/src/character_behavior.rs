@@ -23,7 +23,7 @@ use common::{
     link::Is,
     mounting::{Rider, VolumeRider},
     outcome::Outcome,
-    resources::{DeltaTime, OracleLive, Time},
+    resources::{DeltaTime, GameMode, OracleLive, Time},
     states::{
         behavior::{JoinData, JoinStruct},
         idle,
@@ -65,6 +65,9 @@ pub struct ReadData<'a> {
     msm: ReadExpect<'a, MaterialStatManifest>,
     ability_map: ReadExpect<'a, AbilityMap>,
     oracle_live: ReadExpect<'a, OracleLive>,
+    // Xindeler: the trigger-slot cooldown is held in REAL-WORLD time, and the
+    // only clock that may write it is the server's. See `start_slot_cooldowns`.
+    game_mode: ReadExpect<'a, GameMode>,
     combos: ReadStorage<'a, Combo>,
     alignments: ReadStorage<'a, comp::Alignment>,
     terrain: ReadExpect<'a, TerrainGrid>,
@@ -388,6 +391,18 @@ impl Sys {
     /// Only the `Ready` → `Firing` edge is gated on the slot being unlocked at
     /// the character's level; a slot that is cooling down keeps cooling down
     /// even if a level change hid it, and its configuration is never cleared.
+    ///
+    /// 🔴 **A corpse neither arms nor fires.** This runs before the main loop's
+    /// own `if is_dead { return; }` guard, so it has to repeat it: at 0 HP
+    /// `HealthBelow(x)` and `DamageTaken` are both true, and without the check
+    /// a death would arm the slot, never cast (the corpse has no character
+    /// state to consume the input), re-arm on the next tick for as long as the
+    /// corpse exists — and, because respawning restores `Health` without
+    /// clearing `Controller::queued_inputs`, finally cast the queued input at
+    /// full health on the first tick after the respawn. That burns a cooldown
+    /// of up to thirty-six real-world hours on a cast the player never wanted.
+    /// So death both refuses the `Ready` → `Firing` edge and forces an
+    /// outstanding `Firing` back to `Ready`, taking its queued input with it.
     fn evaluate_triggers(
         read_data: &ReadData,
         trigger_slots: &mut WriteStorage<TriggerSlots>,
@@ -418,6 +433,8 @@ impl Sys {
                 let ability_pool = read_data.ability_pool.get(entity);
                 let char_state = character_states.get(entity);
                 let unlocked = unlocked_trigger_slots(skill_set.character_level());
+                // Mirrors the main loop's own guard, which this runs before.
+                let is_dead = health.is_some_and(|h| h.is_dead);
 
                 // Decided by reading only, then applied in one pass: touching
                 // the component mutably marks it dirty and costs a network
@@ -432,13 +449,18 @@ impl Sys {
 
                     match &slot.state {
                         SlotState::Ready => {
-                            if index >= unlocked || !slot.condition.is_met(now, health, energy) {
+                            if is_dead
+                                || index >= unlocked
+                                || !slot.condition.is_met(now, health, energy)
+                            {
                                 continue;
                             }
-                            // The token names the ability by id, so it cannot be
-                            // spent on anything else the same tick.
+                            // `AuxiliaryAbility::Innate` by construction (see
+                            // `TriggerAbility`), so `ability_id` is independent
+                            // of `context_index` and the token the evaluator
+                            // mints is exactly the id the cast will resolve to.
                             let spec = SpecifiedAbility {
-                                ability: Ability::from(slot.ability),
+                                ability: Ability::from(AuxiliaryAbility::from(slot.ability)),
                                 context_index: None,
                             };
                             let Some(ability_id) = spec
@@ -447,39 +469,84 @@ impl Sys {
                             else {
                                 continue;
                             };
+                            // Fix the price now, with the token: nothing may
+                            // re-configure the slot mid-cast and have it charged
+                            // as a different spell.
+                            let circle = ability_pool
+                                .and_then(|pool| pool.spell_gate(slot.ability.pool_index()))
+                                .map_or(0, |gate| gate.spell_level);
                             controller.push_action(ControlAction::StartInput {
                                 input,
                                 target_entity: None,
                                 select_pos: None,
                             });
-                            *transition = Some(SlotState::Firing {
+                            *transition = Some(SlotState::firing(
                                 ability_id,
-                                deadline: now.add_seconds(FIRING_DEADLINE_SECS),
-                            });
+                                now.add_seconds(FIRING_DEADLINE_SECS),
+                                circle,
+                            ));
                         },
                         SlotState::Firing { deadline, .. } => {
-                            // The cast never happened — out of energy, blocked
-                            // by an antimagic field, or the caster stayed busy
-                            // too long. Give the slot straight back, having
-                            // spent nothing: a failed cast must never burn a
-                            // cooldown measured in hours.
-                            if now.0 > deadline.0 {
+                            // The cast never happened — the caster died, ran out
+                            // of energy, was blocked by an antimagic field, or
+                            // stayed busy too long. Give the slot straight back,
+                            // having spent nothing: a failed cast must never
+                            // burn a cooldown measured in hours.
+                            if is_dead || now.0 > deadline.0 {
                                 controller.queued_inputs.remove(&input);
                                 *transition = Some(SlotState::Ready);
                             }
                         },
-                        SlotState::CoolingDown { ready_at_time, .. } => {
+                        SlotState::CoolingDown {
+                            ready_at,
+                            ready_at_time,
+                        } => {
                             // Compared against the in-game `Time` projection the
                             // server computed when the slot fired, never against
                             // a system clock — this runs on the client too, and
                             // a client's clock is attacker-controlled.
-                            if now.0 >= ready_at_time.0 {
-                                *transition = Some(SlotState::Ready);
+                            if now.0 < ready_at_time.0 {
+                                continue;
+                            }
+                            // 🔴 …but in-game `Time` is `/time_scale`-able, and
+                            // `/time_scale 1000` would collapse a thirty-six
+                            // hour wait into about two minutes. The wall clock
+                            // is the authority (which is exactly why the slot
+                            // stores it), so before actually releasing, the
+                            // server confirms against it — and, if the
+                            // projection merely ran ahead, rebuilds the
+                            // projection from the real remaining wait instead of
+                            // releasing. `ready_at` is `None` on a client (it is
+                            // `#[serde(skip)]`), so a client only ever predicts
+                            // from the projection and never reads a clock; and
+                            // because a failed confirmation re-projects, the
+                            // read happens once per drift, not once per tick.
+                            match ready_at {
+                                Some(at) => {
+                                    let now_utc = Utc::now();
+                                    if now_utc < *at {
+                                        let remaining =
+                                            (*at - now_utc).num_milliseconds() as f64 / 1000.0;
+                                        *transition = Some(SlotState::CoolingDown {
+                                            ready_at: Some(*at),
+                                            ready_at_time: now.add_seconds(remaining),
+                                        });
+                                    } else {
+                                        *transition = Some(SlotState::Ready);
+                                    }
+                                },
+                                None => *transition = Some(SlotState::Ready),
                             }
                         },
                     }
                 }
 
+                // 🔴 Guarded, and the order of these two `let`s matters: this
+                // component is a `DerefFlaggedStorage`, so reaching for
+                // `get_mut` at all — even to write the same value back — marks
+                // it modified and costs a full component resync for that player
+                // this tick. `an_idle_tick_never_touches_the_component` fails
+                // loudly if a later refactor swaps them round.
                 if transitions.iter().any(Option::is_some) {
                     for (index, transition) in transitions.into_iter().enumerate() {
                         if let Some(state) = transition
@@ -495,11 +562,20 @@ impl Sys {
     /// Move the slots whose authorisation token was spent this tick from
     /// `Firing` to `CoolingDown`, and clear the input they queued.
     ///
-    /// The wait is looked up by the spell circle of the ability that fired;
-    /// anything without a circle (a racial innate, a weapon ability) uses the
-    /// circle-0 floor. This is one of only two places a wall-clock read is
-    /// allowed — the other is character load — and it is reached at most once
-    /// per slot per cooldown, i.e. once per slot per several hours.
+    /// The wait is looked up by the spell circle **carried in the token**
+    /// (`SlotState::Firing { circle, .. }`), fixed when the slot armed — not
+    /// re-read from the slot's configuration here, which would let a slot fire
+    /// one spell and be priced as another once the configure UI exists.
+    /// Anything without a circle (a racial innate) uses the circle-0 floor.
+    ///
+    /// 🔴 The wall-clock instant is minted **server-side only**. This is a
+    /// common system, so a client running its own predicted fire path would
+    /// otherwise stamp `ready_at` from its own — attacker-controlled — system
+    /// clock, falsifying the invariant that `ready_at` is always `None` on a
+    /// client. The client keeps the in-game `Time` projection it needs for
+    /// prediction and nothing else. Together with character load, this is one
+    /// of only two places a wall-clock read is allowed, and it is reached at
+    /// most once per slot per cooldown, i.e. once per slot per several hours.
     fn start_slot_cooldowns(
         read_data: &ReadData,
         trigger_slots: &mut WriteStorage<TriggerSlots>,
@@ -510,33 +586,20 @@ impl Sys {
             return;
         }
         let now = *read_data.time;
+        let server_side = !matches!(*read_data.game_mode, GameMode::Client);
         let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning");
         let tuning = &tuning.read().0;
 
         for &(entity, index) in fired {
-            let circle = read_data
-                .ability_pool
-                .get(entity)
-                .and_then(|pool| {
-                    let ability = trigger_slots
-                        .get(entity)
-                        .and_then(|slots| slots.configured_ability(usize::from(index)))?;
-                    match ability {
-                        AuxiliaryAbility::Innate(i) => pool.spell_gate(i).map(|g| g.spell_level),
-                        _ => None,
-                    }
-                })
-                .unwrap_or(0);
-            let cooldown = f64::from(tuning.trigger_slot_cooldown(circle));
-
             if let Some(mut slots) = trigger_slots.get_mut(entity)
                 && let Some(slot) = slots.get_mut(usize::from(index))
-                && matches!(slot.state, SlotState::Firing { .. })
+                && let Some(circle) = slot.state.firing_circle()
             {
+                let cooldown = f64::from(tuning.trigger_slot_cooldown(circle));
                 slot.state = SlotState::CoolingDown {
-                    ready_at: Some(
-                        Utc::now() + chrono::TimeDelta::milliseconds((cooldown * 1000.0) as i64),
-                    ),
+                    ready_at: server_side.then(|| {
+                        Utc::now() + chrono::TimeDelta::milliseconds((cooldown * 1000.0) as i64)
+                    }),
                     ready_at_time: now.add_seconds(cooldown),
                 };
             }

@@ -28,6 +28,58 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 
+/// The only kind of ability a trigger slot may hold: an entry in the caster's
+/// [`AbilityPool`](crate::comp::ability::AbilityPool) — a class spell, a
+/// learned spell, or a racial innate. Exactly what
+/// [`AuxiliaryAbility::Innate`] names, and nothing else.
+///
+/// 🔴 **Deliberately not `AuxiliaryAbility`.** That type also admits
+/// `MainWeapon(i)` / `OffWeapon(i)` / `Glider(i)`, and a *contextualized*
+/// weapon ability resolves to a `SpecifiedAbility` carrying a
+/// `context_index: Some(_)`. The evaluator mints its authorisation token from
+/// `SpecifiedAbility { ability, context_index: None }`, so for such an ability
+/// the token's id and the resolved cast's id would **differ**: the bypass would
+/// silently not apply, and — worse — the cast would then be treated as a normal
+/// one and emit `SetAbilityCooldownEvent`, writing the player's *manual*
+/// cooldown. That is precisely the grief §10.3d of the plan forbids
+/// ("a triggered cast neither reads nor writes the triggered ability's
+/// `AbilityCooldowns` entry").
+///
+/// Narrowing the type is simpler and strictly safer than reconciling
+/// `context_index` on the token: `Ability::InnateAux`'s `ability_id` ignores
+/// `context_index` entirely, so for the innate case the two ids always agree by
+/// construction. `/trigger_slot` could never build anything else anyway.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerAbility(usize);
+
+impl TriggerAbility {
+    /// Name the pool entry at `index`.
+    pub fn from_pool_index(index: usize) -> Self { Self(index) }
+
+    /// Narrow an [`AuxiliaryAbility`] to what a trigger slot may hold. `None`
+    /// for every variant that is not an innate/spell pool entry — the setter
+    /// side of the invariant above.
+    pub fn from_auxiliary(ability: AuxiliaryAbility) -> Option<Self> {
+        match ability {
+            AuxiliaryAbility::Innate(index) => Some(Self(index)),
+            AuxiliaryAbility::MainWeapon(_)
+            | AuxiliaryAbility::OffWeapon(_)
+            | AuxiliaryAbility::Glider(_)
+            | AuxiliaryAbility::Empty => None,
+        }
+    }
+
+    /// Its index into `AbilityPool::abilities`.
+    pub fn pool_index(self) -> usize { self.0 }
+
+    /// Re-point this binding at `index` (used when the pool is rebuilt).
+    pub fn set_pool_index(&mut self, index: usize) { self.0 = index; }
+}
+
+impl From<TriggerAbility> for AuxiliaryAbility {
+    fn from(ability: TriggerAbility) -> Self { AuxiliaryAbility::Innate(ability.0) }
+}
+
 /// How many trigger slots a character can ever hold. The unlock schedule is
 /// [`TRIGGER_SLOT_LEVELS`].
 pub const MAX_TRIGGER_SLOTS: usize = 4;
@@ -116,11 +168,31 @@ pub enum SlotState {
     /// Evaluating its condition every tick.
     Ready,
     /// Input pushed; waiting for the cast to be consumed and resolve.
-    ///
-    /// `ability_id` is the **authorisation token**: `handle_ability` grants the
-    /// cooldown bypass only when the ability it resolved has exactly this id.
-    /// `deadline` abandons the attempt if the cast never happens.
-    Firing { ability_id: String, deadline: Time },
+    Firing {
+        /// The **authorisation token**: `handle_ability` grants the cooldown
+        /// bypass only when the ability it resolved has exactly this id.
+        ///
+        /// 🔴 `#[serde(skip)]`: a server-minted authorisation token has no
+        /// business crossing the wire, not even to its owner. It deserialises
+        /// as the empty string, which no `ability_id` can ever equal, so a
+        /// client predicting a triggered cast simply predicts it the way it
+        /// predicts a key press — without the bypass. A prediction that is
+        /// pessimistic about a cooldown is corrected by the next sync; leaking
+        /// the token would not be.
+        #[serde(skip)]
+        ability_id: String,
+        /// Abandons the attempt if the cast never happens.
+        deadline: Time,
+        /// The spell circle the slot cooldown will be priced from, fixed **at
+        /// the moment the token is minted** rather than re-read from the slot's
+        /// configuration when the cast resolves.
+        ///
+        /// 🔴 Nothing can re-configure a slot mid-`Firing` today, but the
+        /// player-facing configure UI will make that possible — and then a slot
+        /// would fire one spell and be charged the price of another. Carrying
+        /// the price with the token closes that by construction.
+        circle: u8,
+    },
     /// The slot cooldown is running.
     CoolingDown {
         /// Real-world wall clock — the **authoritative, persisted** field.
@@ -145,11 +217,28 @@ pub enum SlotState {
 }
 
 impl SlotState {
+    /// Mint an authorisation token for `ability_id`, priced at `circle`.
+    pub fn firing(ability_id: String, deadline: Time, circle: u8) -> Self {
+        Self::Firing {
+            ability_id,
+            deadline,
+            circle,
+        }
+    }
+
     /// The outstanding authorisation token's ability id, if this slot is
     /// currently `Firing`.
     pub fn firing_token(&self) -> Option<&str> {
         match self {
             Self::Firing { ability_id, .. } => Some(ability_id.as_str()),
+            _ => None,
+        }
+    }
+
+    /// The spell circle a `Firing` slot's cooldown will be priced from.
+    pub fn firing_circle(&self) -> Option<u8> {
+        match self {
+            Self::Firing { circle, .. } => Some(*circle),
             _ => None,
         }
     }
@@ -175,22 +264,35 @@ impl SlotState {
 /// One configured trigger.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TriggerSlot {
-    /// Reuses [`AuxiliaryAbility`] — it already covers `Innate(usize)`, which
-    /// is how a class ability, a racial innate and a learned spell are all
-    /// addressed.
-    pub ability: AuxiliaryAbility,
+    /// A [`TriggerAbility`] rather than an [`AuxiliaryAbility`] — see that
+    /// type's doc comment for why the weapon/glider variants are excluded.
+    pub ability: TriggerAbility,
     pub condition: TriggerCondition,
     pub state: SlotState,
 }
 
 impl TriggerSlot {
     /// A freshly configured slot, ready to fire.
-    pub fn new(ability: AuxiliaryAbility, condition: TriggerCondition) -> Self {
+    pub fn new(ability: TriggerAbility, condition: TriggerCondition) -> Self {
         Self {
             ability,
             condition,
             state: SlotState::Ready,
         }
+    }
+
+    /// A freshly configured slot naming pool entry `index`.
+    pub fn from_pool_index(index: usize, condition: TriggerCondition) -> Self {
+        Self::new(TriggerAbility::from_pool_index(index), condition)
+    }
+
+    /// A freshly configured slot, **refusing** any [`AuxiliaryAbility`] a
+    /// trigger may not hold. The setter half of [`TriggerAbility`]'s invariant.
+    pub fn from_auxiliary(ability: AuxiliaryAbility, condition: TriggerCondition) -> Option<Self> {
+        Some(Self::new(
+            TriggerAbility::from_auxiliary(ability)?,
+            condition,
+        ))
     }
 }
 
@@ -232,7 +334,44 @@ impl TriggerSlots {
     /// `ActiveAbilities::get_ability` to resolve
     /// [`AbilityInput::Trigger`](crate::comp::AbilityInput::Trigger).
     pub fn configured_ability(&self, index: usize) -> Option<AuxiliaryAbility> {
-        self.get(index).map(|s| s.ability)
+        self.get(index).map(|s| s.ability.into())
+    }
+
+    /// Re-point every binding from its index in `old_pool` to the index of the
+    /// SAME key in `new_pool`, **clearing** a slot whose key is gone.
+    ///
+    /// The trigger-slot twin of
+    /// [`remap_innate_bindings`](crate::comp::ability::remap_innate_bindings),
+    /// and needed for the identical reason: a slot holds a raw pool index while
+    /// persistence holds a pool *key*, so any in-session pool rebuild (granting
+    /// a class, learning a spell) that reorders anything silently re-points a
+    /// live trigger. The evaluator would then mint its authorisation token from
+    /// the shifted index and grant the cooldown bypass for the **wrong
+    /// ability**, with no warning and at the price of a cooldown measured in
+    /// real-world hours.
+    ///
+    /// A slot whose key vanished is cleared outright, because
+    /// [`TriggerAbility`] cannot represent "nothing" — the deliberate
+    /// difference from the hotbar, which empties the binding and keeps the
+    /// slot. In practice no player-reachable path removes a pool key (both
+    /// rebuild sites only ever grow the pool), so this is the unreachable
+    /// branch rather than the routine one.
+    pub fn remap_innate_bindings(
+        &mut self,
+        old_pool: &crate::comp::ability::AbilityPool,
+        new_pool: &crate::comp::ability::AbilityPool,
+    ) {
+        for entry in self.slots.iter_mut() {
+            let Some(slot) = entry else { continue };
+            match old_pool
+                .abilities
+                .get(slot.ability.pool_index())
+                .and_then(|key| new_pool.abilities.iter().position(|k| k == key))
+            {
+                Some(new_index) => slot.ability.set_pool_index(new_index),
+                None => *entry = None,
+            }
+        }
     }
 
     /// The outstanding authorisation token for slot `index`, if it holds one.
@@ -364,8 +503,8 @@ mod tests {
     #[test]
     fn a_locked_slot_is_hidden_never_cleared() {
         let mut slots = TriggerSlots::default();
-        slots.slots[3] = Some(TriggerSlot::new(
-            AuxiliaryAbility::Innate(0),
+        slots.slots[3] = Some(TriggerSlot::from_pool_index(
+            0,
             TriggerCondition::HealthBelow(0.3),
         ));
 
@@ -377,7 +516,7 @@ mod tests {
         assert!(!TriggerSlots::is_unlocked(3, 20));
         // ... but the configuration is still there, untouched.
         assert_eq!(
-            slots.get(3).map(|s| s.ability),
+            slots.configured_ability(3),
             Some(AuxiliaryAbility::Innate(0)),
         );
         assert_eq!(
@@ -393,8 +532,8 @@ mod tests {
     fn a_fresh_slot_is_ready_and_holds_no_token() {
         let slots = TriggerSlots {
             slots: [
-                Some(TriggerSlot::new(
-                    AuxiliaryAbility::Innate(2),
+                Some(TriggerSlot::from_pool_index(
+                    2,
                     TriggerCondition::DamageTaken,
                 )),
                 None,
@@ -416,12 +555,9 @@ mod tests {
     fn a_firing_slot_exposes_exactly_one_token() {
         let mut slots = TriggerSlots::default();
         slots.slots[1] = Some(TriggerSlot {
-            ability: AuxiliaryAbility::Innate(4),
+            ability: TriggerAbility::from_pool_index(4),
             condition: TriggerCondition::EnergyBelow(0.25),
-            state: SlotState::Firing {
-                ability_id: "common.abilities.innate.danari".to_string(),
-                deadline: Time(100.0),
-            },
+            state: SlotState::firing("common.abilities.innate.danari".to_string(), Time(100.0), 0),
         });
         assert_eq!(
             slots.firing_token(1),
@@ -443,7 +579,7 @@ mod tests {
         let cooling_for = |secs: i64| {
             let mut slots = TriggerSlots::default();
             slots.slots[0] = Some(TriggerSlot {
-                ability: AuxiliaryAbility::Innate(0),
+                ability: TriggerAbility::from_pool_index(0),
                 condition: TriggerCondition::HealthBelow(0.3),
                 state: SlotState::CoolingDown {
                     ready_at: Some(now_utc + chrono::TimeDelta::seconds(secs)),
@@ -487,5 +623,96 @@ mod tests {
         let seen_by_client: SlotState = serde_json::from_str(&wire).expect("deserialize");
         assert_eq!(seen_by_client.ready_at(), None);
         assert_eq!(seen_by_client.ready_at_time(), Some(Time(4242.0)));
+    }
+
+    /// The authorisation token is server-minted state and must not be
+    /// net-synced even to its owner: a round-trip through the wire format
+    /// drops it.
+    #[test]
+    fn the_synced_view_never_carries_the_authorisation_token() {
+        let firing = SlotState::firing("common.abilities.innate.danari".into(), Time(5.0), 3);
+        let wire = serde_json::to_string(&firing).expect("serialize");
+        assert!(
+            !wire.contains("danari"),
+            "the authorisation token leaked into the synced view: {wire}"
+        );
+        let seen_by_client: SlotState = serde_json::from_str(&wire).expect("deserialize");
+        // Present but empty — and no `ability_id` is ever the empty string, so
+        // it can authorise nothing.
+        assert_eq!(seen_by_client.firing_token(), Some(""));
+        assert_eq!(seen_by_client.firing_circle(), Some(3));
+    }
+
+    /// A trigger slot may only ever hold an innate/spell pool entry. See
+    /// [`TriggerAbility`]'s doc comment: a contextualized weapon ability would
+    /// make the token's id and the cast's id disagree, silently dropping the
+    /// bypass *and* writing the player's own manual cooldown.
+    #[test]
+    fn a_trigger_slot_refuses_every_ability_that_is_not_a_pool_entry() {
+        assert_eq!(
+            TriggerAbility::from_auxiliary(AuxiliaryAbility::Innate(7))
+                .map(TriggerAbility::pool_index),
+            Some(7),
+        );
+        for refused in [
+            AuxiliaryAbility::MainWeapon(0),
+            AuxiliaryAbility::OffWeapon(1),
+            AuxiliaryAbility::Glider(2),
+            AuxiliaryAbility::Empty,
+        ] {
+            assert_eq!(TriggerAbility::from_auxiliary(refused), None, "{refused:?}");
+            assert!(
+                TriggerSlot::from_auxiliary(refused, TriggerCondition::DamageTaken).is_none(),
+                "{refused:?} was accepted by the setter"
+            );
+        }
+    }
+
+    /// An in-session pool rebuild that reorders entries must leave a live
+    /// trigger on the SAME ability — the trigger-slot twin of the hotbar
+    /// property `remap_innate_bindings` already guarantees.
+    #[test]
+    fn a_pool_rebuild_keeps_a_trigger_on_its_own_ability() {
+        use crate::comp::ability::AbilityPool;
+
+        let before = AbilityPool {
+            abilities: vec!["mid".to_string(), "zeta".to_string()],
+            spell_gates: vec![None, None],
+        };
+        // A newly learned key that sorts BEFORE the bound one: every later
+        // index shifts by one.
+        let after = AbilityPool {
+            abilities: vec!["alpha".to_string(), "mid".to_string(), "zeta".to_string()],
+            spell_gates: vec![None, None, None],
+        };
+
+        let mut slots = TriggerSlots::default();
+        slots.slots[0] = Some(TriggerSlot::from_pool_index(
+            1,
+            TriggerCondition::HealthBelow(0.3),
+        ));
+        slots.remap_innate_bindings(&before, &after);
+        assert_eq!(
+            slots.configured_ability(0),
+            Some(AuxiliaryAbility::Innate(2)),
+            "the trigger re-pointed at a different ability after a pool rebuild"
+        );
+        // The condition and state are untouched.
+        assert_eq!(
+            slots.get(0).map(|s| s.condition),
+            Some(TriggerCondition::HealthBelow(0.3))
+        );
+
+        // A key that is gone leaves nothing to point at.
+        let mut orphaned = TriggerSlots::default();
+        orphaned.slots[0] = Some(TriggerSlot::from_pool_index(
+            1,
+            TriggerCondition::DamageTaken,
+        ));
+        orphaned.remap_innate_bindings(&before, &AbilityPool {
+            abilities: vec!["mid".to_string()],
+            spell_gates: vec![None],
+        });
+        assert!(orphaned.get(0).is_none());
     }
 }

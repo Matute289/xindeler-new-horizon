@@ -144,8 +144,8 @@ pub use self::{
     stats::{ActiveSense, Stats, StatsModifier},
     teleport::Teleporting,
     trigger::{
-        MAX_TRIGGER_SLOTS, SlotState, TRIGGER_SLOT_LEVELS, TriggerCondition, TriggerSlot,
-        TriggerSlots, unlocked_trigger_slots,
+        MAX_TRIGGER_SLOTS, SlotState, TRIGGER_SLOT_LEVELS, TriggerAbility, TriggerCondition,
+        TriggerSlot, TriggerSlots, unlocked_trigger_slots,
     },
     visual::{FrontendMarker, LightAnimation, LightEmitter},
 };
