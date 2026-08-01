@@ -728,7 +728,7 @@ mod tests {
                 let item = Item::new_from_asset_expect(item_id);
                 let equip_gate = item
                     .requirements()
-                    .and_then(|r| r.classes.as_ref())
+                    .and_then(|r| r.classes.clone())
                     .unwrap_or_else(|| panic!("{item_id} has no requirements.classes equip gate"));
 
                 for spell in legacy_spells {

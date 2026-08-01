@@ -9,7 +9,7 @@ use crate::{
     comp::{
         Stats,
         body::humanoid::Species,
-        inventory::item::tool::{Hands, ToolKind, ToolKindMask},
+        inventory::item::tool::{Hands, ToolKind, ToolKindMask, WeaponRole},
         skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind, SkillSet},
     },
 };
@@ -475,13 +475,16 @@ pub fn class_attributes_manifest()
     Ron::<HashMap<ClassKind, ClassAttributes>>::load_expect("common.class.class_attributes").read()
 }
 
-/// One proficiency entry as written in the RON. `Any` covers every grip of a
-/// tool kind; `Handed` restricts to one grip (today only meaningful for
-/// `Sword`, whose 1h/2h assets share a `ToolKind`).
+/// One proficiency entry as written in the RON. `Any` covers every grip (and
+/// every role) of a tool kind; `Handed` restricts to one grip (today only
+/// meaningful for `Sword`, whose 1h/2h assets share a `ToolKind`); `Roled`
+/// restricts to one `WeaponRole` (today only meaningful for `Staff`/
+/// `Sceptre`, whose caster and martial kits share a `ToolKind`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub enum ProficientTool {
     Any(ToolKind),
     Handed(ToolKind, Hands),
+    Roled(ToolKind, WeaponRole),
 }
 
 /// A class's weapon proficiency (soft gate: non-proficient use is never
@@ -501,9 +504,12 @@ impl ClassProficiencies {
             ClassProficiencies::Only(tools) => {
                 tools.iter().fold(ToolKindMask::empty(), |mask, tool| {
                     mask | match *tool {
-                        ProficientTool::Any(kind) => ToolKindMask::for_tool(kind, None),
+                        ProficientTool::Any(kind) => ToolKindMask::for_tool(kind, None, None),
                         ProficientTool::Handed(kind, hands) => {
-                            ToolKindMask::for_tool(kind, Some(hands))
+                            ToolKindMask::for_tool(kind, Some(hands), None)
+                        },
+                        ProficientTool::Roled(kind, role) => {
+                            ToolKindMask::for_tool(kind, None, Some(role))
                         },
                     }
                 })
@@ -926,12 +932,27 @@ mod tests {
     #[test]
     fn sword_proficiency_respects_the_1h_2h_split() {
         let rogue = class_proficiencies(ClassKind::Rogue).mask();
-        assert!(rogue.allows(ToolKind::Sword, Some(Hands::One)));
-        assert!(!rogue.allows(ToolKind::Sword, Some(Hands::Two)));
+        assert!(rogue.allows(ToolKind::Sword, Some(Hands::One), None));
+        assert!(!rogue.allows(ToolKind::Sword, Some(Hands::Two), None));
 
         let warrior = class_proficiencies(ClassKind::Warrior).mask();
-        assert!(warrior.allows(ToolKind::Sword, Some(Hands::One)));
-        assert!(warrior.allows(ToolKind::Sword, Some(Hands::Two)));
+        assert!(warrior.allows(ToolKind::Sword, Some(Hands::One), None));
+        assert!(warrior.allows(ToolKind::Sword, Some(Hands::Two), None));
+    }
+
+    /// Mirrors `sword_proficiency_respects_the_1h_2h_split` for the
+    /// `WeaponRole` axis: Monk is proficient with the martial staff kit and
+    /// not the caster kit; Mage is the exact inverse -- both narrowed from
+    /// the old blanket `Any(Staff)` in `class_proficiencies.ron`.
+    #[test]
+    fn staff_proficiency_respects_the_caster_martial_split() {
+        let monk = class_proficiencies(ClassKind::Monk).mask();
+        assert!(monk.allows(ToolKind::Staff, None, Some(WeaponRole::Martial)));
+        assert!(!monk.allows(ToolKind::Staff, None, Some(WeaponRole::Caster)));
+
+        let mage = class_proficiencies(ClassKind::Mage).mask();
+        assert!(mage.allows(ToolKind::Staff, None, Some(WeaponRole::Caster)));
+        assert!(!mage.allows(ToolKind::Staff, None, Some(WeaponRole::Martial)));
     }
 
     #[test]
@@ -939,9 +960,12 @@ mod tests {
         // Every ToolKind, hand-written (not derived from an iterator over
         // the enum) so a new variant added without extending this array is
         // caught here instead of silently passing. Fixed at grip
-        // `Hands::Two` throughout -- for every kind other than `Sword` the
-        // grip is ignored and a single bit comes back; for `Sword` this
-        // grip yields only `SWORD_2H`, never `SWORD_1H`.
+        // `Hands::Two` / each kind's own default role throughout -- for
+        // every kind other than `Sword`/`Staff`/`Sceptre` the grip and role
+        // are both ignored and a single bit comes back; for `Sword` this
+        // grip yields only `SWORD_2H`, never `SWORD_1H`, and for
+        // `Staff`/`Sceptre` the default (caster) role yields only their
+        // `_CASTER` bit, never `_MARTIAL`.
         let kinds = [
             ToolKind::Sword,
             ToolKind::Axe,
@@ -966,31 +990,52 @@ mod tests {
             ToolKind::Empty,
         ];
         let union = kinds.iter().fold(ToolKindMask::empty(), |mask, &k| {
-            mask | ToolKindMask::for_tool(k, Some(Hands::Two))
+            mask | ToolKindMask::for_tool(k, Some(Hands::Two), Some(k.default_role()))
         });
-        // 21 ToolKind variants, one bit each at this fixed grip -- `Sword`
-        // contributes only `SWORD_2H` here (its `SWORD_1H` bit is only
+        // 21 ToolKind variants, one bit each at this fixed grip/role --
+        // `Sword` contributes only `SWORD_2H` (its `SWORD_1H` bit is only
         // reachable via `Hands::One` or `None`, checked separately below),
-        // so this union can never equal `ToolKindMask::all()` (22 bits): it
-        // is exactly `all()` minus `SWORD_1H`. If any two kinds collided on
-        // the same bit, this count would be lower than 21.
+        // and `Staff`/`Sceptre` each contribute only their `_CASTER` bit
+        // (their `_MARTIAL` bit is only reachable via an explicit
+        // `WeaponRole::Martial` or `None`, also checked below). So this
+        // union can never equal `ToolKindMask::all()` (24 bits): it is
+        // exactly `all()` minus those three unreached bits. If any two
+        // kinds collided on the same bit, this count would be lower than 21.
         assert_eq!(
             union,
-            ToolKindMask::all().difference(ToolKindMask::SWORD_1H)
+            ToolKindMask::all()
+                .difference(ToolKindMask::SWORD_1H)
+                .difference(ToolKindMask::STAFF_MARTIAL)
+                .difference(ToolKindMask::SCEPTRE_MARTIAL)
         );
         assert_eq!(union.bits().count_ones(), 21);
 
         // The grip split itself: 1h and 2h swords are different bits, and
         // an unknown grip (`None`) is the union of both.
         assert_ne!(
-            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::One)),
-            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::Two))
+            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::One), None),
+            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::Two), None)
         );
         assert_eq!(
-            ToolKindMask::for_tool(ToolKind::Sword, None),
-            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::One))
-                | ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::Two))
+            ToolKindMask::for_tool(ToolKind::Sword, None, None),
+            ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::One), None)
+                | ToolKindMask::for_tool(ToolKind::Sword, Some(Hands::Two), None)
         );
+
+        // The role split, mirrored for Staff and Sceptre: caster and
+        // martial are different bits, and an unknown role (`None`) is the
+        // union of both.
+        for kind in [ToolKind::Staff, ToolKind::Sceptre] {
+            assert_ne!(
+                ToolKindMask::for_tool(kind, None, Some(WeaponRole::Caster)),
+                ToolKindMask::for_tool(kind, None, Some(WeaponRole::Martial))
+            );
+            assert_eq!(
+                ToolKindMask::for_tool(kind, None, None),
+                ToolKindMask::for_tool(kind, None, Some(WeaponRole::Caster))
+                    | ToolKindMask::for_tool(kind, None, Some(WeaponRole::Martial))
+            );
+        }
     }
 
     // `Handed(kind, _)` is meaningless for any `ToolKind` whose grips
@@ -1009,8 +1054,8 @@ mod tests {
                 let ProficientTool::Handed(kind, _) = *tool else {
                     continue;
                 };
-                let one = ToolKindMask::for_tool(kind, Some(Hands::One));
-                let two = ToolKindMask::for_tool(kind, Some(Hands::Two));
+                let one = ToolKindMask::for_tool(kind, Some(Hands::One), None);
+                let two = ToolKindMask::for_tool(kind, Some(Hands::Two), None);
                 assert_ne!(
                     one, two,
                     "class_proficiencies.ron: {class:?} uses Handed({kind:?}, _), but {kind:?} \
@@ -1018,6 +1063,34 @@ mod tests {
                      meaningless here and silently behaves like Any({kind:?}). Use Any({kind:?}) \
                      instead, or give {kind:?} its own grip-split bits like Sword's \
                      SWORD_1H/SWORD_2H."
+                );
+            }
+        }
+    }
+
+    // Mirrors the `Handed` guard above for the `Roled` axis: `Roled(kind,
+    // _)` is meaningless for any `ToolKind` whose roles resolve to the same
+    // bit.
+    #[test]
+    fn class_proficiencies_manifest_never_uses_roled_on_a_kind_without_a_role_split() {
+        let manifest = class_proficiencies_manifest();
+        for (class, proficiencies) in manifest.0.iter() {
+            let ClassProficiencies::Only(tools) = proficiencies else {
+                continue;
+            };
+            for tool in tools {
+                let ProficientTool::Roled(kind, _) = *tool else {
+                    continue;
+                };
+                let caster = ToolKindMask::for_tool(kind, None, Some(WeaponRole::Caster));
+                let martial = ToolKindMask::for_tool(kind, None, Some(WeaponRole::Martial));
+                assert_ne!(
+                    caster, martial,
+                    "class_proficiencies.ron: {class:?} uses Roled({kind:?}, _), but {kind:?} has \
+                     no role split (both roles resolve to the same bit) -- Roled is meaningless \
+                     here and silently behaves like Any({kind:?}). Use Any({kind:?}) instead, or \
+                     give {kind:?} its own role-split bits like Staff's \
+                     STAFF_CASTER/STAFF_MARTIAL."
                 );
             }
         }

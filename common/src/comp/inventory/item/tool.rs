@@ -58,7 +58,51 @@ pub enum ToolKind {
     Empty,
 }
 
+/// A second within-`ToolKind` discriminator, orthogonal to [`Hands`],
+/// distinguishing a caster implement's magic use from a martial/melee use of
+/// the *same* `ToolKind`. Introduced so `Staff`/`Sceptre` can carry two
+/// distinct kits (a Mage's caster staff vs a Monk's martial quarterstaff)
+/// without adding new `ToolKind` variants (`ToolKind` is upstream-owned).
+/// `Tool.role` is `Option<WeaponRole>` — `None` means "whatever
+/// `ToolKind::default_role` says" so the hundreds of shipped `kind: Tool((`
+/// RONs never need editing; only a deviation (e.g. a martial staff) declares
+/// an explicit `role:`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WeaponRole {
+    Martial,
+    Caster,
+}
+
 impl ToolKind {
+    /// The role a `Tool` of this kind has when it declares no explicit
+    /// `role:` in its RON. Exhaustive (no `_` arm) so a future `ToolKind`
+    /// variant forces a deliberate choice here instead of silently defaulting.
+    pub fn default_role(self) -> WeaponRole {
+        match self {
+            ToolKind::Staff
+            | ToolKind::Sceptre
+            | ToolKind::Tome
+            | ToolKind::HolySymbol
+            | ToolKind::Focus => WeaponRole::Caster,
+            ToolKind::Sword
+            | ToolKind::Axe
+            | ToolKind::Hammer
+            | ToolKind::Bow
+            | ToolKind::Dagger
+            | ToolKind::Shield
+            | ToolKind::Spear
+            | ToolKind::Blowgun
+            | ToolKind::Debug
+            | ToolKind::Farming
+            | ToolKind::Pick
+            | ToolKind::Shovel
+            | ToolKind::Instrument
+            | ToolKind::Throwable
+            | ToolKind::Natural
+            | ToolKind::Empty => WeaponRole::Martial,
+        }
+    }
+
     pub fn identifier_name(&self) -> &'static str {
         match self {
             ToolKind::Sword => "sword",
@@ -150,57 +194,71 @@ bitflags::bitflags! {
     /// bits (`SWORD_1H`/`SWORD_2H`) instead of getting one bit like every
     /// other variant, because `ToolKind::Sword` covers both `sword/` (2h
     /// greatswords) and `sword_1h/` (1h gladii) assets — the grip lives on
-    /// the item's `Hands` field, not the tool kind. Build/query via
-    /// [`ToolKindMask::for_tool`]/[`ToolKindMask::allows`], never by
+    /// the item's `Hands` field, not the tool kind. `Staff`/`Sceptre` are
+    /// likewise split into `_CASTER`/`_MARTIAL` pairs keyed on [`WeaponRole`]
+    /// instead of a single bit, mirroring the `Hands` split exactly. Build/
+    /// query via [`ToolKindMask::for_tool`]/[`ToolKindMask::allows`], never by
     /// constructing bits directly. `Default` is deliberately empty
     /// (non-permissive) — permissiveness is an explicit opt-in via
     /// `ToolKindMask::all()` at the call site, so a missing narrowing can
     /// never silently read as "proficient with everything".
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
     pub struct ToolKindMask: u32 {
-        const SWORD_1H    = 1 << 0;
-        const SWORD_2H    = 1 << 1;
-        const AXE         = 1 << 2;
-        const HAMMER      = 1 << 3;
-        const BOW         = 1 << 4;
-        const STAFF       = 1 << 5;
-        const SCEPTRE     = 1 << 6;
-        const TOME        = 1 << 7;
-        const HOLY_SYMBOL = 1 << 8;
-        const FOCUS       = 1 << 9;
-        const DAGGER      = 1 << 10;
-        const SHIELD      = 1 << 11;
-        const SPEAR       = 1 << 12;
-        const BLOWGUN     = 1 << 13;
-        const DEBUG       = 1 << 14;
-        const FARMING     = 1 << 15;
-        const PICK        = 1 << 16;
-        const SHOVEL      = 1 << 17;
-        const INSTRUMENT  = 1 << 18;
-        const THROWABLE   = 1 << 19;
-        const NATURAL     = 1 << 20;
-        const EMPTY       = 1 << 21;
+        const SWORD_1H      = 1 << 0;
+        const SWORD_2H      = 1 << 1;
+        const AXE           = 1 << 2;
+        const HAMMER        = 1 << 3;
+        const BOW           = 1 << 4;
+        const STAFF_CASTER  = 1 << 5;
+        const STAFF_MARTIAL = 1 << 6;
+        const SCEPTRE_CASTER  = 1 << 7;
+        const SCEPTRE_MARTIAL = 1 << 8;
+        const TOME        = 1 << 9;
+        const HOLY_SYMBOL = 1 << 10;
+        const FOCUS       = 1 << 11;
+        const DAGGER      = 1 << 12;
+        const SHIELD      = 1 << 13;
+        const SPEAR       = 1 << 14;
+        const BLOWGUN     = 1 << 15;
+        const DEBUG       = 1 << 16;
+        const FARMING     = 1 << 17;
+        const PICK        = 1 << 18;
+        const SHOVEL      = 1 << 19;
+        const INSTRUMENT  = 1 << 20;
+        const THROWABLE   = 1 << 21;
+        const NATURAL     = 1 << 22;
+        const EMPTY       = 1 << 23;
     }
 }
 
 impl ToolKindMask {
-    /// The bit(s) covering `kind` at grip `hands`. `hands == None` (unknown
-    /// grip, e.g. a natural/NPC attack resolved with no item in hand) means
-    /// "either grip" for `Sword`; every other `ToolKind` has exactly one bit
-    /// regardless of `hands`. Exhaustive match (no `_ =>` arm) so a future
-    /// `ToolKind` variant added without a corresponding bit fails the build.
-    pub fn for_tool(kind: ToolKind, hands: Option<Hands>) -> Self {
+    /// The bit(s) covering `kind` at grip `hands` and role `role`. `hands ==
+    /// None` (unknown grip, e.g. a natural/NPC attack resolved with no item
+    /// in hand) means "either grip" for `Sword`; `role == None` likewise
+    /// means "either role" for `Staff`/`Sceptre`. Every other `ToolKind` has
+    /// exactly one bit regardless of `hands`/`role`. Exhaustive match (no
+    /// `_ =>` arm) so a future `ToolKind` variant added without a
+    /// corresponding bit fails the build.
+    pub fn for_tool(kind: ToolKind, hands: Option<Hands>, role: Option<WeaponRole>) -> Self {
         match kind {
             ToolKind::Sword => match hands {
                 Some(Hands::One) => Self::SWORD_1H,
                 Some(Hands::Two) => Self::SWORD_2H,
                 None => Self::SWORD_1H | Self::SWORD_2H,
             },
+            ToolKind::Staff => match role {
+                Some(WeaponRole::Caster) => Self::STAFF_CASTER,
+                Some(WeaponRole::Martial) => Self::STAFF_MARTIAL,
+                None => Self::STAFF_CASTER | Self::STAFF_MARTIAL,
+            },
+            ToolKind::Sceptre => match role {
+                Some(WeaponRole::Caster) => Self::SCEPTRE_CASTER,
+                Some(WeaponRole::Martial) => Self::SCEPTRE_MARTIAL,
+                None => Self::SCEPTRE_CASTER | Self::SCEPTRE_MARTIAL,
+            },
             ToolKind::Axe => Self::AXE,
             ToolKind::Hammer => Self::HAMMER,
             ToolKind::Bow => Self::BOW,
-            ToolKind::Staff => Self::STAFF,
-            ToolKind::Sceptre => Self::SCEPTRE,
             ToolKind::Tome => Self::TOME,
             ToolKind::HolySymbol => Self::HOLY_SYMBOL,
             ToolKind::Focus => Self::FOCUS,
@@ -219,12 +277,13 @@ impl ToolKindMask {
         }
     }
 
-    /// Is this mask proficient with `kind` at grip `hands`? Uses
-    /// `intersects` rather than `contains`: an unknown grip
-    /// (`hands == None`) resolves permissively for `Sword`, so having either
-    /// of its two bits is enough, not both.
-    pub fn allows(self, kind: ToolKind, hands: Option<Hands>) -> bool {
-        self.intersects(Self::for_tool(kind, hands))
+    /// Is this mask proficient with `kind` at grip `hands` and role `role`?
+    /// Uses `intersects` rather than `contains`: an unknown grip (`hands ==
+    /// None`) resolves permissively for `Sword`, and an unknown role (`role
+    /// == None`) resolves permissively for `Staff`/`Sceptre`, so having
+    /// either bit of the relevant pair is enough, not both.
+    pub fn allows(self, kind: ToolKind, hands: Option<Hands>, role: Option<WeaponRole>) -> bool {
+        self.intersects(Self::for_tool(kind, hands, role))
     }
 }
 
@@ -372,6 +431,12 @@ impl Mul<DurabilityMultiplier> for Stats {
 pub struct Tool {
     pub kind: ToolKind,
     pub hands: Hands,
+    /// `None` = "whatever `kind.default_role()` says". Only a deviation
+    /// (e.g. a martial-role `Staff`) needs to declare this explicitly; read
+    /// it via [`Tool::role`], never the raw field, so the default always
+    /// applies. See [`WeaponRole`].
+    #[serde(default)]
+    role: Option<WeaponRole>,
     stats: Stats,
     // TODO: item specific abilities
 }
@@ -379,12 +444,20 @@ pub struct Tool {
 impl Tool {
     // DO NOT USE UNLESS YOU KNOW WHAT YOU ARE DOING
     // Added for CSV import of stats
-    pub fn new(kind: ToolKind, hands: Hands, stats: Stats) -> Self { Self { kind, hands, stats } }
+    pub fn new(kind: ToolKind, hands: Hands, role: Option<WeaponRole>, stats: Stats) -> Self {
+        Self {
+            kind,
+            hands,
+            role,
+            stats,
+        }
+    }
 
     pub fn empty() -> Self {
         Self {
             kind: ToolKind::Empty,
             hands: Hands::One,
+            role: None,
             stats: Stats {
                 equip_time_secs: 0.0,
                 power: 1.00,
@@ -396,6 +469,10 @@ impl Tool {
             },
         }
     }
+
+    /// This tool's effective [`WeaponRole`]: the explicit `role:` if the RON
+    /// declared one, otherwise `kind`'s default.
+    pub fn role(&self) -> WeaponRole { self.role.unwrap_or(self.kind.default_role()) }
 
     pub fn stats(&self, durability_multiplier: DurabilityMultiplier) -> Stats {
         self.stats * durability_multiplier
@@ -872,6 +949,72 @@ impl Asset for AbilityMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `ToolKind` variant maps to the expected default role,
+    /// hand-written (not derived from an iterator) so a new variant added
+    /// without extending this table is caught here instead of silently
+    /// falling through `default_role`'s own exhaustive match at compile
+    /// time only.
+    #[test]
+    fn default_role_covers_every_tool_kind() {
+        let expected = [
+            (ToolKind::Sword, WeaponRole::Martial),
+            (ToolKind::Axe, WeaponRole::Martial),
+            (ToolKind::Hammer, WeaponRole::Martial),
+            (ToolKind::Bow, WeaponRole::Martial),
+            (ToolKind::Staff, WeaponRole::Caster),
+            (ToolKind::Sceptre, WeaponRole::Caster),
+            (ToolKind::Tome, WeaponRole::Caster),
+            (ToolKind::HolySymbol, WeaponRole::Caster),
+            (ToolKind::Focus, WeaponRole::Caster),
+            (ToolKind::Dagger, WeaponRole::Martial),
+            (ToolKind::Shield, WeaponRole::Martial),
+            (ToolKind::Spear, WeaponRole::Martial),
+            (ToolKind::Blowgun, WeaponRole::Martial),
+            (ToolKind::Debug, WeaponRole::Martial),
+            (ToolKind::Farming, WeaponRole::Martial),
+            (ToolKind::Pick, WeaponRole::Martial),
+            (ToolKind::Shovel, WeaponRole::Martial),
+            (ToolKind::Instrument, WeaponRole::Martial),
+            (ToolKind::Throwable, WeaponRole::Martial),
+            (ToolKind::Natural, WeaponRole::Martial),
+            (ToolKind::Empty, WeaponRole::Martial),
+        ];
+        assert_eq!(
+            expected.len(),
+            21,
+            "a ToolKind variant is missing from this table"
+        );
+        for (kind, role) in expected {
+            assert_eq!(
+                kind.default_role(),
+                role,
+                "{kind:?} has an unexpected default role"
+            );
+        }
+    }
+
+    /// A `Tool` RON that omits `role:` resolves to its kind's default role,
+    /// and an explicit `role:` overrides it -- exercised through the actual
+    /// RON deserializer, not by constructing the struct directly, so a
+    /// `#[serde(default)]` regression would be caught here.
+    #[test]
+    fn tool_role_ron_defaults_to_kind_and_can_be_overridden() {
+        let no_role: Tool = ron::de::from_str(
+            "(kind: Staff, hands: Two, stats: (equip_time_secs: 0.4, power: 1.0, effect_power: \
+             1.0, speed: 1.0, range: 1.0, energy_efficiency: 1.0, buff_strength: 1.0))",
+        )
+        .expect("role: is optional");
+        assert_eq!(no_role.role(), WeaponRole::Caster);
+
+        let explicit_role: Tool = ron::de::from_str(
+            "(kind: Staff, hands: Two, role: Some(Martial), stats: (equip_time_secs: 0.4, power: \
+             1.0, effect_power: 1.0, speed: 1.0, range: 1.0, energy_efficiency: 1.0, \
+             buff_strength: 1.0))",
+        )
+        .expect("explicit role: must parse");
+        assert_eq!(explicit_role.role(), WeaponRole::Martial);
+    }
 
     /// Every catalogued spell is reachable as a `Custom(<spell id>)` ability
     /// set, resolving to the `CharacterAbility` RON the compendium names.
