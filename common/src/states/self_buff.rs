@@ -150,6 +150,7 @@ impl CharacterBehavior for Data {
                                 .ability_info
                                 .input_attr
                                 .and_then(|ia| ia.target_entity),
+                            self.static_data.ability_info.ability_meta.source,
                         );
                         output_events.emit_server(BuffEvent {
                             entity: data.entity,

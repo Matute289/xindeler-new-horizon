@@ -896,6 +896,7 @@ mod limbo_reset_tests {
                 },
                 None,
                 None,
+                None,
             ),
             Time(0.0),
         );

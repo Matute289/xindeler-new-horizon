@@ -130,6 +130,7 @@ impl<'a> System<'a> for Sys {
                                 // expect any abilities transferred from a mount to count as a
                                 // targeted ability though.
                                 None,
+                                None,
                             )),
                         });
                     }
@@ -278,6 +279,7 @@ impl<'a> System<'a> for Sys {
                                 // TODO: Maybe re-evaluate this if there is an issue? I wouldn't
                                 // expect any abilities transferred from mounting a volume entity
                                 // to count as a targeted ability though.
+                                None,
                                 None,
                             )),
                         });

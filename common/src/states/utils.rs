@@ -1680,6 +1680,7 @@ fn handle_ability(
                                     dest_info,
                                     Some(data.mass),
                                     target_uid,
+                                    ability_meta.source,
                                 )),
                             });
                         },
