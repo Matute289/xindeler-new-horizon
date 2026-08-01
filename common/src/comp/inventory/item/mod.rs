@@ -2635,6 +2635,75 @@ mod tests {
     }
 
     #[test]
+    // The legacy Staff/Sceptre kits' abilities carry no per-spell `classes:`
+    // list in the compendium, so the only thing that can restrict who casts
+    // them is restricting who may equip the implement in the first place.
+    // This walks every shipped legacy Staff/Sceptre item and asserts that
+    // equip gate is in place with the intended whitelist, using the same
+    // class-whitelist-on-the-item mechanism as the Tome/HolySymbol/Focus
+    // implements and mirroring class_proficiencies.ron's Any(Staff)/
+    // Any(Sceptre) entries.
+    fn legacy_staff_and_sceptre_items_are_class_gated() {
+        use crate::comp::class::ClassKind;
+
+        let staff_ids = [
+            "common.items.weapons.staff.starter_staff",
+            "common.items.weapons.staff.cultist_staff",
+            "common.items.weapons.staff.staff_1",
+            "common.items.weapons.staff.laevateinn",
+        ];
+        // Mirrors class_proficiencies.ron's Any(Staff) roster minus Monk:
+        // Monk's Staff proficiency there is for quarterstaff melee use, but
+        // every shipped Staff item has ability_spec: None, so equipping one
+        // grants the full legacy fire-spell kit (firebomb, pyroclasm, ...)
+        // regardless of proficiency -- gating Monk in would reopen exactly
+        // the "wrong class casts fireball" bug this test guards against.
+        let expected_staff_classes = [
+            ClassKind::Mage,
+            ClassKind::Sorcerer,
+            ClassKind::Warlock,
+            ClassKind::Druid,
+        ];
+        for id in staff_ids {
+            let item = Item::new_from_asset_expect(id);
+            let classes = item
+                .requirements()
+                .and_then(|r| r.classes.as_ref())
+                .unwrap_or_else(|| panic!("{id} has no class-gated requirements"));
+            assert_eq!(
+                classes.iter().collect::<HashSet<_>>(),
+                expected_staff_classes.iter().collect::<HashSet<_>>(),
+                "{id} has an unexpected class whitelist"
+            );
+        }
+
+        let sceptre_ids = [
+            "common.items.weapons.sceptre.starter_sceptre",
+            "common.items.weapons.sceptre.sceptre_velorite_0",
+            "common.items.weapons.sceptre.amethyst",
+            "common.items.weapons.sceptre.belzeshrub",
+            "common.items.weapons.sceptre.caduceus",
+            "common.items.weapons.sceptre.root_evil",
+        ];
+        // Mirrors class_proficiencies.ron's Any(Sceptre) roster exactly:
+        // Cleric (divine) and Druid (the sceptre kit's lifestealbeam is
+        // authored source: Primordial -- Druid's flavor, not Cleric's).
+        let expected_sceptre_classes = [ClassKind::Cleric, ClassKind::Druid];
+        for id in sceptre_ids {
+            let item = Item::new_from_asset_expect(id);
+            let classes = item
+                .requirements()
+                .and_then(|r| r.classes.as_ref())
+                .unwrap_or_else(|| panic!("{id} has no class-gated requirements"));
+            assert_eq!(
+                classes.iter().collect::<HashSet<_>>(),
+                expected_sceptre_classes.iter().collect::<HashSet<_>>(),
+                "{id} has an unexpected class whitelist"
+            );
+        }
+    }
+
+    #[test]
     // This exists to make translators' lives easier when translating
     // modulars.
     fn ensure_modular_fragments() {
