@@ -230,6 +230,17 @@ impl SpellCompendium {
             .and_then(|&i| self.spells.get(i))
     }
 
+    /// Resolves an `ability_id` to its catalogued [`SpellDef`], checking both
+    /// the compendium `id` and the underlying executing-ability specifier
+    /// (see `by_ability`'s doc comment) -- the same dual keying
+    /// [`Self::allows`] checks. Shared by `allows` (which only needs a
+    /// yes/no) and any cast-time gate that needs the resolved entry's own
+    /// fields (`level`, `source`), not just a boolean.
+    pub fn resolve(&self, ability_id: &str) -> Option<&SpellDef> {
+        self.get(ability_id)
+            .or_else(|| self.get_by_ability(ability_id))
+    }
+
     /// The cast-time per-spell class filter, applied in
     /// `states::utils::handle_ability`. A spell's own `classes` list is the
     /// ONLY class-side restriction on casting: `SpellDef::source` records
@@ -262,10 +273,7 @@ impl SpellCompendium {
     /// so exempting that variant here would exempt nearly the entire
     /// catalogue from this filter.
     pub fn allows(&self, ability_id: &str, character_class: Option<&CharacterClass>) -> bool {
-        let Some(spell) = self
-            .get(ability_id)
-            .or_else(|| self.get_by_ability(ability_id))
-        else {
+        let Some(spell) = self.resolve(ability_id) else {
             return true;
         };
         let Some(character_class) = character_class else {

@@ -17,7 +17,7 @@ BasicRanged(
                 strength: DamageFraction(0.4),
                 chance: 0.6,
             )),
-            damage_kind: Energy,
+            damage_kind: Fire,
         )),
     ),
     projectile_body: Object(TerracottaDemolisherBomb),

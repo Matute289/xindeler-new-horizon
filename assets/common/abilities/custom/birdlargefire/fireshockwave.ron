@@ -12,7 +12,7 @@ Shockwave(
     shockwave_duration: 0.5,
     dodgeable: Roll,
     move_efficiency: 0.1,
-    damage_kind: Energy,
+    damage_kind: Fire,
     specifier: Fire,
     ori_rate: 1.0,
     timing: PostBuildup,

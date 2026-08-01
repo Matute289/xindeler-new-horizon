@@ -2,8 +2,8 @@ use crate::{
     assets::{AssetExt, Ron},
     comp::{
         Alignment, AttunedItems, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group,
-        Health, HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange,
-        SkillSet, Stats,
+        Health, HealthChange, InputKind, Inventory, MagicSource, Mass, Ori, Player, Poise,
+        PoiseChange, SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -480,6 +480,15 @@ impl Attack {
             blockable: true,
             ability_info,
         }
+    }
+
+    /// The magic source to attribute to any `HealthChange` this attack
+    /// causes, read once from `ability_info.ability_meta.source`. Threaded
+    /// into every damage-emitting `HealthChange` this attack constructs.
+    /// `None` for weapon swings, falls, environment, and sourceless
+    /// abilities.
+    fn magic_source(&self) -> Option<MagicSource> {
+        self.ability_info.and_then(|ai| ai.ability_meta.source)
     }
 
     #[must_use]
@@ -993,7 +1002,7 @@ impl Attack {
                 &mut emit_outcome,
             );
 
-            let change = damage.damage.calculate_health_change(
+            let mut change = damage.damage.calculate_health_change(
                 damage_reduction,
                 block_damage_decrement,
                 attacker.map(|x| x.into()),
@@ -1005,6 +1014,10 @@ impl Attack {
                 damage_instance,
                 DamageSource::from(attack_source),
             );
+            // `calculate_health_change` is a method on `Damage`, which does not
+            // carry the ability that caused it, so the source is attributed here
+            // instead of threading a new parameter through that function.
+            change.magic_source = self.magic_source();
             let applied_damage = -change.amount;
             accumulated_damage += applied_damage;
 
@@ -1027,6 +1040,7 @@ impl Attack {
                                     amount: -health_damage,
                                     by: attacker.map(|x| x.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: precision_mult.is_some(),
                                     instance: damage_instance,
@@ -1080,6 +1094,7 @@ impl Attack {
                                     amount: health_change,
                                     by: attacker.map(|x| x.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     instance: damage_instance,
                                     precise: precision_mult.is_some(),
                                     time,
@@ -1163,6 +1178,7 @@ impl Attack {
                                     amount: applied_damage * l * strength_modifier,
                                     by: attacker.map(|a| a.into()),
                                     cause: None,
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: false,
                                     instance: rand::random(),
@@ -1206,6 +1222,7 @@ impl Attack {
                                 amount: *h * strength_modifier * heal_power,
                                 by: attacker.map(|a| a.into()),
                                 cause: None,
+                                magic_source: self.magic_source(),
                                 time,
                                 precise: false,
                                 instance: rand::random(),
@@ -1438,6 +1455,7 @@ impl Attack {
                                 amount: accumulated_damage * l * strength_modifier,
                                 by: attacker.map(|a| a.into()),
                                 cause: None,
+                                magic_source: self.magic_source(),
                                 time,
                                 precise: false,
                                 instance: rand::random(),
@@ -1481,6 +1499,7 @@ impl Attack {
                             amount: h * strength_modifier,
                             by: attacker.map(|a| a.into()),
                             cause: None,
+                            magic_source: self.magic_source(),
                             time,
                             precise: false,
                             instance: rand::random(),
@@ -1505,6 +1524,7 @@ impl Attack {
                             amount: -accumulated_damage * damage * strength_modifier,
                             by: attacker.map(|a| a.into()),
                             cause: Some(DamageSource::from(attack_source)),
+                            magic_source: self.magic_source(),
                             time,
                             precise: precision_mult.is_some(),
                             instance: rand::random(),
@@ -1600,6 +1620,7 @@ impl Attack {
                                         * strength_modifier,
                                     by: attacker.map(|a| a.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: precision_mult.is_some(),
                                     instance: rand::random(),
@@ -2589,12 +2610,12 @@ impl RemovalInfo {
 ///
 /// The three physical kinds (Piercing/Slashing/Crushing) carry distinct
 /// mitigation behaviour (see the apply-damage match in this file). The
-/// magical/elemental kinds are the content damage taxonomy (Matias 2026-06-20,
-/// content-adaptation §6.2 / ENG-A2); for now they share the generic
-/// (no special physical interaction) mitigation of the legacy `Energy`
-/// placeholder. **Radiant is the opposite of Necrotic** — the resist/affinity
-/// interplay (e.g. undead take bonus Radiant; Necrotic harms the living /
-/// spares undead) is a future balance task and is NOT wired here yet.
+/// magical/elemental kinds form the broader content damage taxonomy; for now
+/// they share the generic (no special physical interaction) mitigation of the
+/// legacy `Energy` placeholder. **Radiant is the opposite of Necrotic** — the
+/// resist/affinity interplay (e.g. undead take bonus Radiant; Necrotic harms
+/// the living / spares undead) is a future balance feature and is NOT wired
+/// here yet.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DamageKind {
     // --- physical ---
@@ -2721,6 +2742,9 @@ impl Damage {
             * precision_mult.unwrap_or(0.0)
             * ((crit_damage_mult - 1.0) + (precision_power - 1.0)))
             .max(0.0);
+        // `Self` (`Damage`) has no access to the `Attack`'s `ability_info`, so
+        // `magic_source` is left `None` here; the sole caller (`apply_attack`)
+        // overwrites it with the attributed source right after this returns.
         match damage_source {
             DamageSource::Attack(_) => {
                 // Precise hit
@@ -2734,6 +2758,7 @@ impl Damage {
                     amount: -damage,
                     by: damage_contributor,
                     cause: Some(damage_source),
+                    magic_source: None,
                     time,
                     precise: precision_mult.is_some(),
                     instance,
@@ -2748,6 +2773,7 @@ impl Damage {
                     amount: -damage,
                     by: None,
                     cause: Some(damage_source),
+                    magic_source: None,
                     time,
                     precise: false,
                     instance,
@@ -2757,6 +2783,7 @@ impl Damage {
                 amount: -damage,
                 by: None,
                 cause: Some(damage_source),
+                magic_source: None,
                 time,
                 precise: false,
                 instance,
@@ -3652,6 +3679,214 @@ mod power_word_ron_content_tests {
     }
 }
 
+/// The content migration off the legacy `Energy` damage kind: `Energy` is a
+/// back-compat catch-all (still valid for third-party/NPC content), but every
+/// shipped ability RON that used it as a placeholder has been reassigned to
+/// its real physical/elemental kind. `Energy` itself is not removed from
+/// `DamageKind` -- only its usage is drained.
+#[cfg(test)]
+mod damage_kind_energy_migration_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::DamageKind,
+        comp::ability::CharacterAbility,
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// Digs the `DamageKind` out of whichever shape the ability's attack
+    /// takes -- a `ProjectileConstructor`'s nested `attack.damage_kind` for
+    /// the ranged/thrown variants, or a top-level `damage_kind` /
+    /// `shockwave_damage_kind` field for the shockwave variants. Every one of
+    /// the 65 migrated RONs loads through one of these shapes.
+    fn damage_kind_of(ability: &CharacterAbility) -> DamageKind {
+        match ability {
+            CharacterAbility::BasicRanged { projectile, .. }
+            | CharacterAbility::RapidRanged { projectile, .. }
+            | CharacterAbility::ChargedRanged { projectile, .. }
+            | CharacterAbility::Throw { projectile, .. } => {
+                projectile
+                    .attack
+                    .as_ref()
+                    .expect("expected the projectile to carry an attack")
+                    .damage_kind
+            },
+            CharacterAbility::Shockwave { damage_kind, .. }
+            | CharacterAbility::LeapShockwave { damage_kind, .. } => *damage_kind,
+            CharacterAbility::LeapExplosionShockwave {
+                shockwave_damage_kind,
+                ..
+            } => *shockwave_damage_kind,
+            other => panic!("unexpected ability shape for a damage-kind check: {other:?}"),
+        }
+    }
+
+    /// Pins the legacy caster-staff fire kit (plan
+    /// `2026-08-01-nh69-item-categories-per-class-plan.md` §6: "starting with
+    /// the legacy staff fire spells -- firebomb, fire_breath, fireshockwave,
+    /// napalm_strike, pyroclasm all deal `Energy` today, so `resist_fire`
+    /// does nothing against a fireball") to `Fire`. This is the flagship
+    /// regression this migration exists to fix.
+    #[test]
+    fn legacy_staff_fire_kit_deals_fire_damage() {
+        for asset in [
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.pyroclasm",
+        ] {
+            let ability = load(asset);
+            assert_eq!(
+                damage_kind_of(&ability),
+                DamageKind::Fire,
+                "{asset} should deal Fire damage, not the legacy Energy catch-all"
+            );
+        }
+    }
+
+    /// Every ability RON touched by the migration still parses as a valid
+    /// `CharacterAbility` -- if any of the 65 edits had introduced a RON
+    /// syntax error or a bad enum variant, `load` would panic here instead of
+    /// shipping silently.
+    #[test]
+    fn every_migrated_ability_still_loads() {
+        let migrated_assets = [
+            "common.abilities.bow.burning_broadhead",
+            "common.abilities.bow.burning_hawkstrike_shot",
+            "common.abilities.bow.burning_heartseeker_shot",
+            "common.abilities.bow.burning_thorn_stake",
+            "common.abilities.bow.freezing_broadhead",
+            "common.abilities.bow.freezing_hawkstrike_shot",
+            "common.abilities.bow.freezing_heartseeker_shot",
+            "common.abilities.bow.freezing_thorn_stake",
+            "common.abilities.bow.lightning_thorn_stake",
+            "common.abilities.bow.poison_broadhead",
+            "common.abilities.bow.poison_hawkstrike_shot",
+            "common.abilities.bow.poison_heartseeker_shot",
+            "common.abilities.bow.poison_thorn_stake",
+            "common.abilities.custom.ancienteffigy.blast",
+            "common.abilities.custom.arthropods.blackwidow.poisonball",
+            "common.abilities.custom.ashen_warrior.axe.flame_wave",
+            "common.abilities.custom.ashen_warrior.staff.fireball",
+            "common.abilities.custom.asp.firebomb",
+            "common.abilities.custom.biped_large_cultist.staff.firebomb",
+            "common.abilities.custom.birdlargebreathe.firebomb",
+            "common.abilities.custom.birdlargefire.firerain",
+            "common.abilities.custom.birdlargefire.fireshockwave",
+            "common.abilities.custom.cloudwyvern.lightningbomb",
+            "common.abilities.custom.cursekeeper.poisonbomb",
+            "common.abilities.custom.cyclops.optic_blast",
+            "common.abilities.custom.dagon.dagonbombs",
+            "common.abilities.custom.dwarves.flamekeeper.mines",
+            "common.abilities.custom.dwarves.forgemaster.lava_mortar",
+            "common.abilities.custom.dwarves.snaretongue.bombs",
+            "common.abilities.custom.flamewyvern.firebomb",
+            "common.abilities.custom.frostwyvern.frostbomb",
+            "common.abilities.custom.gigas_fire.lava_leap",
+            "common.abilities.custom.gigas_frost.ice_volley",
+            "common.abilities.custom.gravewarden.rocket",
+            "common.abilities.custom.harvester.explodingpumpkin",
+            "common.abilities.custom.hydra.poison_ball",
+            "common.abilities.custom.icedrake.icebombs",
+            "common.abilities.custom.irongolemfist.iron_pike_bomb",
+            "common.abilities.custom.irrwurz.magicball",
+            "common.abilities.custom.maneater.poisonball",
+            "common.abilities.custom.mindflayer.necroticsphere_blast",
+            "common.abilities.custom.mindflayer.necroticsphere_multiblast",
+            "common.abilities.custom.mindflayer.necroticsphere",
+            "common.abilities.custom.minotaur.axethrow",
+            "common.abilities.custom.ogre_staff.firebomb",
+            "common.abilities.custom.quadlowranged.firebomb",
+            "common.abilities.custom.seawyvern.inkbomb",
+            "common.abilities.custom.terracotta_demolisher.drop",
+            "common.abilities.custom.terracotta_demolisher.throw",
+            "common.abilities.custom.terracotta_statue.blast",
+            "common.abilities.custom.wealdwyvern.poisonbomb",
+            "common.abilities.custom.wendigomagic.frostbomb",
+            "common.abilities.custom.yeti.snowball",
+            "common.abilities.gnarling.chieftain.firebarrage",
+            "common.abilities.gnarling.chieftain.fireshockwave",
+            "common.abilities.haniwa.archer.explosive",
+            "common.abilities.innate.draugr",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.pyroclasm",
+            "common.abilities.staffsimple.firebomb",
+            "common.abilities.throw.bomb",
+            "common.abilities.vampire.vampire_bat.drop",
+        ];
+        assert_eq!(
+            migrated_assets.len(),
+            65,
+            "this list should track all 65 files the migration touched"
+        );
+        for asset in migrated_assets {
+            let ability = load(asset);
+            // None of the migrated RONs should still carry the legacy
+            // catch-all -- that's the entire point of the migration.
+            assert_ne!(
+                damage_kind_of(&ability),
+                DamageKind::Energy,
+                "{asset} should no longer deal the legacy Energy damage kind"
+            );
+        }
+    }
+
+    /// Count-based guard: this migration drained `Energy` usage in shipped
+    /// ability RONs from 65 to 0. `Energy` stays in `DamageKind` for
+    /// back-compat, so new content is still free to declare it deliberately
+    /// -- but this test fails loudly if usage grows past the ceiling below,
+    /// so a silent regression to the catch-all doesn't ship unnoticed. Raise
+    /// the ceiling (with justification in the PR) if new content genuinely
+    /// needs `Energy`.
+    #[test]
+    fn energy_damage_kind_usage_does_not_grow_past_the_post_migration_ceiling() {
+        const MAX_ENERGY_USERS: usize = 0;
+
+        let assets_root = std::path::Path::new(
+            &std::env::var("VELOREN_ASSETS").expect("VELOREN_ASSETS must be set for tests"),
+        )
+        .join("common/abilities");
+
+        fn count_energy_users(dir: &std::path::Path) -> usize {
+            let mut count = 0;
+            for entry in std::fs::read_dir(dir).expect("abilities dir should be readable") {
+                let entry = entry.expect("dir entry should be readable");
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_energy_users(&path);
+                } else if path.extension().is_some_and(|ext| ext == "ron") {
+                    let contents =
+                        std::fs::read_to_string(&path).expect("ability RON should be readable");
+                    if contents.contains("damage_kind: Energy")
+                        || contents.contains("shockwave_damage_kind: Energy")
+                    {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        }
+
+        let energy_users = count_energy_users(&assets_root);
+        // The ceiling is 0 today (this migration drained every user), but the
+        // constant is written as a ceiling rather than an exact match so a
+        // future PR that deliberately raises it only has to edit the
+        // constant, not this comparison.
+        #[allow(clippy::absurd_extreme_comparisons)]
+        let within_ceiling = energy_users <= MAX_ENERGY_USERS;
+        assert!(
+            within_ceiling,
+            "expected at most {MAX_ENERGY_USERS} ability RON(s) still using the legacy Energy \
+             damage kind, found {energy_users} -- new content should declare a specific \
+             DamageKind instead of regressing to the catch-all"
+        );
+    }
+}
+
 #[cfg(test)]
 mod health_tier_requirement_tests {
     use super::{CasterLevelFailChance, ClassKind, CombatRequirement, HealthTier, TierEffect};
@@ -4198,6 +4433,43 @@ mod weapon_proficiency_tests {
 }
 
 #[cfg(test)]
+mod magic_source_attribution_tests {
+    use super::{AbilityInfo, Attack, HandInfo, InputKind, MagicSource};
+    use crate::comp::ability::AbilityMeta;
+
+    fn ability_info_with_source(source: Option<MagicSource>) -> AbilityInfo {
+        AbilityInfo {
+            tool: None,
+            hand: Some(HandInfo::MainHand),
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta {
+                source,
+                ..Default::default()
+            },
+            ability: None,
+        }
+    }
+
+    /// An attack carrying an ability whose `ability_meta.source` is set
+    /// reports that source; a bare attack with no ability behind it (a
+    /// plain weapon swing, fall damage, etc.) reports `None`.
+    #[test]
+    fn magic_source_reads_from_ability_meta() {
+        let sourced = Attack::new(Some(ability_info_with_source(Some(
+            MagicSource::Primordial,
+        ))));
+        assert_eq!(sourced.magic_source(), Some(MagicSource::Primordial));
+
+        let sourceless_ability = Attack::new(Some(ability_info_with_source(None)));
+        assert_eq!(sourceless_ability.magic_source(), None);
+
+        let no_ability = Attack::new(None);
+        assert_eq!(no_ability.magic_source(), None);
+    }
+}
+
+#[cfg(test)]
 mod saving_throw_tests {
     use super::{
         AttackSource, CombatTuning, DamageContributor, DamageSource, SaveCasterInfo,
@@ -4455,6 +4727,7 @@ mod saving_throw_tests {
             amount,
             by,
             cause: Some(DamageSource::Attack(AttackSource::Melee)),
+            magic_source: None,
             time: Time(at),
             precise: false,
             instance: 0,

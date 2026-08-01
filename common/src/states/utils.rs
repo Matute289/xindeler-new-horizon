@@ -1,7 +1,7 @@
 use crate::{
     astar::Astar,
     comp::{
-        Alignment, Body, CharacterState, Density, HealthChange, InputAttr, InputKind,
+        Alignment, Body, CharacterState, Density, HealthChange, InputAttr, InputKind, Inventory,
         InventoryAction, Melee, Ori, Pos, Scale, StateUpdate,
         ability::{
             AbilityInitEvent, AbilityMeta, AbilityRequirements, Capability, CharacterAbility,
@@ -1532,6 +1532,19 @@ fn handle_ability(
                         .is_none_or(|id| {
                             spell_compendium_manifest().allows(id, data.character_class)
                         })
+                    // Possession gate: independent of the class filter above
+                    // (both happen to do a compendium lookup, so they are
+                    // kept adjacent) -- casting a levelled spell additionally
+                    // requires a Tome in hand, regardless of who is
+                    // permitted to know it.
+                    && tome_possession_ok(
+                        data.inventory,
+                        spec_ability.ability_id(
+                            Some(data.character),
+                            data.inventory,
+                            data.ability_pool,
+                        ),
+                    )
             })
     {
         // TODO: Change requirements_paid to requirements_met, and then pay requirements
@@ -1617,6 +1630,7 @@ fn handle_ability(
                             amount: -hp_cost,
                             by: None,
                             cause: None,
+                            magic_source: None,
                             time: *data.time,
                             precise: false,
                             instance: rand::random(),
@@ -1749,6 +1763,41 @@ fn cooldown_ready(
 /// Entities without a `Health` component (e.g. invulnerable) ignore the cost.
 fn hp_cost_affordable(hp_cost: Option<f32>, current_hp: Option<f32>, hardcore: bool) -> bool {
     hp_cost.is_none_or(|cost| hardcore || current_hp.is_none_or(|hp| hp >= cost + 1.0))
+}
+
+/// The possession gate for spellcasting: a spell of `SpellDef::level >= 1`
+/// may only be cast while a `ToolKind::Tome` is equipped in either active
+/// hand. Cantrips (`level == 0`) are exempt, and so is any `ability_id` that
+/// resolves to no compendium entry at all -- bespoke/legacy content that
+/// this gate does not govern; its own gating, if any, is authored
+/// elsewhere.
+///
+/// `ability_id` is `None` for an activation that never resolved to any
+/// concrete ability id (e.g. a missing item-config ability set); that case
+/// passes for the same reason an uncatalogued id does.
+fn tome_possession_ok(inventory: Option<&Inventory>, ability_id: Option<&str>) -> bool {
+    let Some(ability_id) = ability_id else {
+        return true;
+    };
+    let level = match spell_compendium_manifest().resolve(ability_id) {
+        Some(spell) => spell.level,
+        // Uncatalogued: not governed by this gate.
+        None => return true,
+    };
+    if level == 0 {
+        // Cantrip: no Tome required.
+        return true;
+    }
+    let has_tome = |slot: EquipSlot| {
+        matches!(
+            inventory
+                .and_then(|inv| inv.equipped(slot))
+                .map(|item| item.kind())
+                .as_deref(),
+            Some(ItemKind::Tool(tool)) if tool.kind == ToolKind::Tome
+        )
+    };
+    has_tome(EquipSlot::ActiveMainhand) || has_tome(EquipSlot::ActiveOffhand)
 }
 
 pub fn handle_input(
@@ -2285,6 +2334,87 @@ mod hp_cost_tests {
     fn missing_health_skips_cost() {
         // entities without a Health component (e.g. invulnerable) ignore the cost
         assert!(hp_cost_affordable(Some(10.0), None, false));
+    }
+}
+
+#[cfg(test)]
+mod possession_gate_tests {
+    use super::tome_possession_ok;
+    use crate::{
+        comp::{Inventory, Item, inventory::slot::EquipSlot},
+        resources::Time,
+    };
+
+    // Real compendium entries, chosen to cover a cantrip, a low spell level
+    // and the highest normal spell level.
+    const CANTRIP: &str = "spells.hemomancy.bloodlet"; // level 0
+    const LEVEL_ONE: &str = "spells.hemomancy.hemal_spike"; // level 1
+    const LEVEL_NINE: &str = "spells.hemomancy.the_last_vein"; // level 9
+    const UNCATALOGUED: &str = "spells.not_a_real_spell.made_up_for_this_test";
+
+    fn inventory_with_tome_in(slot: EquipSlot) -> Inventory {
+        let mut inv = Inventory::with_empty();
+        inv.replace_loadout_item(
+            slot,
+            Some(Item::new_from_asset_expect(
+                "common.items.weapons.tome.apprentice_tome",
+            )),
+            Time(0.0),
+        );
+        inv
+    }
+
+    #[test]
+    fn cantrip_with_no_tome_is_allowed() {
+        assert!(tome_possession_ok(None, Some(CANTRIP)));
+        assert!(tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(CANTRIP)
+        ));
+    }
+
+    #[test]
+    fn levelled_spell_with_no_tome_is_refused() {
+        assert!(!tome_possession_ok(None, Some(LEVEL_ONE)));
+        assert!(!tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(LEVEL_ONE)
+        ));
+    }
+
+    #[test]
+    fn levelled_spell_with_tome_in_mainhand_is_allowed() {
+        let inv = inventory_with_tome_in(EquipSlot::ActiveMainhand);
+        assert!(tome_possession_ok(Some(&inv), Some(LEVEL_ONE)));
+    }
+
+    #[test]
+    fn levelled_spell_with_tome_in_offhand_is_allowed() {
+        let inv = inventory_with_tome_in(EquipSlot::ActiveOffhand);
+        assert!(tome_possession_ok(Some(&inv), Some(LEVEL_ONE)));
+    }
+
+    #[test]
+    fn highest_spell_level_with_tome_is_allowed() {
+        let inv = inventory_with_tome_in(EquipSlot::ActiveMainhand);
+        assert!(tome_possession_ok(Some(&inv), Some(LEVEL_NINE)));
+    }
+
+    #[test]
+    fn uncatalogued_ability_with_no_tome_is_allowed() {
+        // Bespoke/legacy content with no compendium entry is not governed by
+        // this gate at all.
+        assert!(tome_possession_ok(None, Some(UNCATALOGUED)));
+        assert!(tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(UNCATALOGUED)
+        ));
+    }
+
+    #[test]
+    fn missing_ability_id_is_allowed() {
+        assert!(tome_possession_ok(None, None));
+        assert!(tome_possession_ok(Some(&Inventory::with_empty()), None));
     }
 }
 

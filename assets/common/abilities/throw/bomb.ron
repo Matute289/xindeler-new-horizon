@@ -16,7 +16,7 @@ Throw(
             damage: 40,
             poise: Some(100),
             friendly_fire: true,
-            damage_kind: Energy,
+            damage_kind: Crushing,
         )),
     ),
     projectile_light: None,
