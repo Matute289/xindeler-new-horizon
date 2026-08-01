@@ -60,6 +60,13 @@ pub enum SpellAoe {
     Cube(f32),
 }
 
+/// Default for [`SpellDef::pool_eligible`] on any entry that omits the field
+/// -- every pre-existing compendium entry is a real pool spell, so silently
+/// defaulting to `false` would strip them all from every class's ability pool
+/// the moment this field shipped. Only content that explicitly opts out (see
+/// the field's own doc comment) sets `pool_eligible: false`.
+fn default_pool_eligible() -> bool { true }
+
 /// One catalogued spell. Metadata only; `ability` is the asset specifier of the
 /// `CharacterAbility` RON that runs when cast.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -78,6 +85,28 @@ pub struct SpellDef {
     pub description_i18n: String,
     /// Asset path of the executing `CharacterAbility` RON.
     pub ability: String,
+    /// Whether this entry may be granted as an innate, weaponless
+    /// `AbilityPool` slot (see [`SpellCompendium::spells_for_class`]).
+    /// Defaults to `true` (via [`default_pool_eligible`]) for every entry
+    /// that doesn't set it, which is every spell catalogued before this
+    /// field existed.
+    ///
+    /// `false` is for cataloguing an ability SOLELY to run it through the
+    /// per-spell `classes` filter in [`SpellCompendium::allows`] (checked at
+    /// cast time in `states::utils::handle_ability`, independent of the
+    /// activation pathway -- see `by_ability`'s doc comment) without also
+    /// granting it as a free weaponless spell. A weapon ability set (e.g. a
+    /// `Tool(ToolKind)` entry in `ability_set_manifest.ron`) can wire an
+    /// ability directly into its `primary`/`secondary`/`abilities` slots, so
+    /// it is already castable by any class holding that tool -- cataloguing
+    /// such an ability with `pool_eligible: true` would additionally make
+    /// every listed class able to cast it with NO weapon equipped at all,
+    /// because `AbilityPool::for_character` embeds `spells_for_class`
+    /// unconditionally. That is a new capability the class-gate alone should
+    /// never grant. `false` keeps the class check while refusing that pool
+    /// grant.
+    #[serde(default = "default_pool_eligible")]
+    pub pool_eligible: bool,
 }
 
 impl SpellDef {
@@ -85,6 +114,11 @@ impl SpellDef {
     /// `id` is already in `"spells.<school>.<name>"` shape, so it doubles as
     /// the `AbilitySpec::Custom` key, the frontend ability id, and the i18n
     /// key stem -- exactly like the `class.*` and `innate.*` keys.
+    ///
+    /// Still well-defined for a `pool_eligible: false` entry (it is what
+    /// `AbilityMap::load` injects as its `Custom(id)` key); it is simply
+    /// never referenced by any character's actual `AbilityPool.abilities`,
+    /// since `spells_for_class` excludes those entries.
     pub fn pool_key(&self) -> &str { &self.id }
 }
 
@@ -163,11 +197,18 @@ impl SpellCompendium {
     /// ascending `(level, id)`. Deterministic and independent of the order
     /// entries happen to appear in the RON, so re-sorting the asset file
     /// never changes a character's ability-pool indices.
+    ///
+    /// Excludes `pool_eligible: false` entries -- content catalogued only to
+    /// run the [`Self::allows`] class check on a weapon-bound ability, never
+    /// meant to be grantable as an innate weaponless spell. See that field's
+    /// doc comment. This is the sole choke point `AbilityPool::for_character`
+    /// reads spells through, so excluding an entry here is what keeps it out
+    /// of every character's pool.
     pub fn spells_for_class(&self, class: ClassKind) -> Vec<&SpellDef> {
         let mut out: Vec<&SpellDef> = self
             .spells
             .iter()
-            .filter(|s| s.classes.contains(&class))
+            .filter(|s| s.classes.contains(&class) && s.pool_eligible)
             .collect();
         out.sort_by(|a, b| (a.level, &a.id).cmp(&(b.level, &b.id)));
         out
@@ -369,6 +410,17 @@ mod tests {
             aoe: None,
             description_i18n: String::new(),
             ability: ability.to_string(),
+            pool_eligible: true,
+        }
+    }
+
+    /// Like [`test_spell`] but `pool_eligible: false` -- a weapon-bound
+    /// ability catalogued only for its cast-time class check, never meant to
+    /// be grantable as an innate weaponless spell.
+    fn test_weapon_bound_spell(id: &str, ability: &str, classes: &[ClassKind]) -> SpellDef {
+        SpellDef {
+            pool_eligible: false,
+            ..test_spell(id, ability, classes)
         }
     }
 
@@ -482,5 +534,133 @@ mod tests {
             "common.abilities.spells.transmutation.plant_growth",
             warrior.as_ref()
         ));
+    }
+
+    /// `pool_eligible: false` must not weaken `allows` at all -- the class
+    /// check is orthogonal to whether the entry may also be granted as a
+    /// weaponless pool spell.
+    #[test]
+    fn pool_ineligible_spell_still_gates_by_ability_id() {
+        let book = compendium_of(vec![test_weapon_bound_spell(
+            "legacy.staff.firebomb",
+            "common.abilities.staff.firebomb",
+            &[ClassKind::Mage],
+        )]);
+        let mage = Some(CharacterClass::single(ClassKind::Mage));
+        let warrior = Some(CharacterClass::single(ClassKind::Warrior));
+
+        assert!(book.allows("common.abilities.staff.firebomb", mage.as_ref()));
+        assert!(!book.allows("common.abilities.staff.firebomb", warrior.as_ref()));
+    }
+
+    /// The actual bug this field exists to avoid: a `pool_eligible: false`
+    /// entry must never appear in `spells_for_class`, or a class merely
+    /// catalogued on a weapon-bound ability would gain it as a free
+    /// weaponless spell via `AbilityPool::for_character`.
+    #[test]
+    fn pool_ineligible_spell_is_excluded_from_spells_for_class() {
+        let book = compendium_of(vec![
+            test_spell("spells.mage.cinder", "abilities.cinder", &[ClassKind::Mage]),
+            test_weapon_bound_spell(
+                "legacy.staff.firebomb",
+                "common.abilities.staff.firebomb",
+                &[ClassKind::Mage],
+            ),
+        ]);
+        let mage_spells = book.spells_for_class(ClassKind::Mage);
+        assert_eq!(mage_spells.len(), 1);
+        assert_eq!(mage_spells[0].id, "spells.mage.cinder");
+    }
+
+    /// Real-content guard: every legacy Staff/Sceptre ability catalogued
+    /// under the `legacy.` namespace is `pool_eligible: false` -- if a future
+    /// edit to `compendium.ron` flips this by accident, every class listed
+    /// on it silently gains a free weaponless cast of a full attack spell.
+    #[test]
+    fn legacy_weapon_bound_entries_are_pool_ineligible() {
+        let book = SpellCompendium::load_expect_cloned();
+        let legacy: Vec<&SpellDef> = book
+            .iter()
+            .filter(|s| s.id.starts_with("legacy."))
+            .collect();
+        assert!(
+            !legacy.is_empty(),
+            "expected the legacy Staff/Sceptre kit to be catalogued"
+        );
+        for spell in &legacy {
+            assert!(
+                !spell.pool_eligible,
+                "{} must be pool_eligible: false",
+                spell.id
+            );
+            for &class in &spell.classes {
+                assert!(
+                    !book
+                        .spells_for_class(class)
+                        .iter()
+                        .any(|s| s.id == spell.id),
+                    "{} leaked into {class:?}'s ability pool",
+                    spell.id
+                );
+            }
+        }
+    }
+
+    /// Real-content guard for the actual gap this catalogue closes: every
+    /// legacy Staff ability is castable by the Staff-proficient caster
+    /// classes and refused for a class that was never meant to hold a Staff,
+    /// and likewise for Sceptre -- checked through `allows` exactly as
+    /// `states::utils::handle_ability` checks it, so this is independent of
+    /// which item (standard or modular) resolved the ability.
+    #[test]
+    fn legacy_staff_and_sceptre_abilities_are_class_gated() {
+        let book = SpellCompendium::load_expect_cloned();
+        let staff_classes = [
+            ClassKind::Mage,
+            ClassKind::Sorcerer,
+            ClassKind::Warlock,
+            ClassKind::Druid,
+        ];
+        let sceptre_classes = [ClassKind::Cleric, ClassKind::Druid];
+        let outsider = CharacterClass::single(ClassKind::Warrior);
+
+        for ability in [
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.flamethrower",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.flame_cloak",
+            "common.abilities.staff.fire_dash",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.pyroclasm",
+        ] {
+            for &class in &staff_classes {
+                assert!(
+                    book.allows(ability, Some(&CharacterClass::single(class))),
+                    "{class:?} should be able to cast {ability}"
+                );
+            }
+            assert!(
+                !book.allows(ability, Some(&outsider)),
+                "Warrior must not be able to cast {ability}"
+            );
+        }
+
+        for ability in [
+            "common.abilities.sceptre.lifestealbeam",
+            "common.abilities.sceptre.healingaura",
+            "common.abilities.sceptre.wardingaura",
+        ] {
+            for &class in &sceptre_classes {
+                assert!(
+                    book.allows(ability, Some(&CharacterClass::single(class))),
+                    "{class:?} should be able to cast {ability}"
+                );
+            }
+            assert!(
+                !book.allows(ability, Some(&outsider)),
+                "Warrior must not be able to cast {ability}"
+            );
+        }
     }
 }
