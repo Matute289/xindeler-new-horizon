@@ -158,28 +158,28 @@ bitflags::bitflags! {
     /// never silently read as "proficient with everything".
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
     pub struct ToolKindMask: u32 {
-        const SWORD_1H    = 0b1 << 0;
-        const SWORD_2H    = 0b1 << 1;
-        const AXE         = 0b1 << 2;
-        const HAMMER      = 0b1 << 3;
-        const BOW         = 0b1 << 4;
-        const STAFF       = 0b1 << 5;
-        const SCEPTRE     = 0b1 << 6;
-        const TOME        = 0b1 << 7;
-        const HOLY_SYMBOL = 0b1 << 8;
-        const FOCUS       = 0b1 << 9;
-        const DAGGER      = 0b1 << 10;
-        const SHIELD      = 0b1 << 11;
-        const SPEAR       = 0b1 << 12;
-        const BLOWGUN     = 0b1 << 13;
-        const DEBUG       = 0b1 << 14;
-        const FARMING     = 0b1 << 15;
-        const PICK        = 0b1 << 16;
-        const SHOVEL      = 0b1 << 17;
-        const INSTRUMENT  = 0b1 << 18;
-        const THROWABLE   = 0b1 << 19;
-        const NATURAL     = 0b1 << 20;
-        const EMPTY       = 0b1 << 21;
+        const SWORD_1H    = 1 << 0;
+        const SWORD_2H    = 1 << 1;
+        const AXE         = 1 << 2;
+        const HAMMER      = 1 << 3;
+        const BOW         = 1 << 4;
+        const STAFF       = 1 << 5;
+        const SCEPTRE     = 1 << 6;
+        const TOME        = 1 << 7;
+        const HOLY_SYMBOL = 1 << 8;
+        const FOCUS       = 1 << 9;
+        const DAGGER      = 1 << 10;
+        const SHIELD      = 1 << 11;
+        const SPEAR       = 1 << 12;
+        const BLOWGUN     = 1 << 13;
+        const DEBUG       = 1 << 14;
+        const FARMING     = 1 << 15;
+        const PICK        = 1 << 16;
+        const SHOVEL      = 1 << 17;
+        const INSTRUMENT  = 1 << 18;
+        const THROWABLE   = 1 << 19;
+        const NATURAL     = 1 << 20;
+        const EMPTY       = 1 << 21;
     }
 }
 
@@ -219,7 +219,12 @@ impl ToolKindMask {
         }
     }
 
-    /// Is this mask proficient with `kind` at grip `hands`?
+    /// Is this mask proficient with `kind` at grip `hands`? Uses
+    /// `intersects` rather than `contains` (unlike
+    /// [`MagicSourceMask::allows`](crate::comp::ability::MagicSourceMask::allows),
+    /// which uses `contains`): an unknown grip (`hands == None`) resolves
+    /// permissively for `Sword`, so having either of its two bits is
+    /// enough, not both.
     pub fn allows(self, kind: ToolKind, hands: Option<Hands>) -> bool {
         self.intersects(Self::for_tool(kind, hands))
     }

@@ -237,10 +237,18 @@ pub struct Stats {
     #[serde(default)]
     pub creature_kind: Option<CreatureKind>,
     /// The weapon kinds this entity swings competently. Per-tick, not
-    /// persisted. Narrowed only for entities carrying a `CharacterClass`;
+    /// persisted. Narrowed only for entities carrying a `CharacterClass`
+    /// (set from `class_proficiencies.ron` every tick in the buff system);
     /// everything else (every NPC, summon and boss) stays fully permissive
-    /// — see `Stats::new`'s default.
-    #[serde(default)]
+    /// — see `Stats::new`'s default. Permissive (`ToolKindMask::all()`) is
+    /// the SAFE default here: an empty mask reaching an entity that never
+    /// goes through the class-narrowing block (i.e. anything without a
+    /// `CharacterClass`) would silently mute every NPC's weapon attacks.
+    /// This is why the default is pinned via `tool_mask_all`, not the
+    /// type's own (deliberately empty) `Default` impl — `#[serde(default)]`
+    /// alone would resolve to `ToolKindMask::empty()` and invert this
+    /// invariant.
+    #[serde(default = "tool_mask_all")]
     pub proficient_tools: ToolKindMask,
     /// The physical-damage (and poise/knockback/crit) multiplier applied
     /// when the swung weapon is NOT in `proficient_tools`. 1.0 = no
@@ -250,12 +258,27 @@ pub struct Stats {
     #[serde(default = "one_f32")]
     pub non_proficient_damage_mult: f32,
     /// The magic sources this entity may cast. Per-tick, not persisted.
-    /// Same permissive-by-default rule as `proficient_tools`.
-    #[serde(default)]
+    /// Narrowed only for entities carrying a `CharacterClass` (set from
+    /// `class_magic_sources.ron` every tick in the buff system); same
+    /// permissive-by-default rule and same "empty would silently mute every
+    /// casting NPC in the world" hazard as `proficient_tools` above — see
+    /// that field's doc comment.
+    #[serde(default = "magic_mask_all")]
     pub castable_sources: MagicSourceMask,
 }
 
 fn one_f32() -> f32 { 1.0 }
+
+/// Serde default for [`Stats::proficient_tools`]. Deliberately NOT
+/// `ToolKindMask::default()` (which is empty by design — see that type's
+/// own doc comment) — a missing key in a self-describing format must fail
+/// open (permissive), mirroring `Stats::new`'s constructor default.
+fn tool_mask_all() -> ToolKindMask { ToolKindMask::all() }
+
+/// Serde default for [`Stats::castable_sources`]. Same reasoning as
+/// `tool_mask_all` above: `MagicSourceMask::default()` is empty by design,
+/// which is the wrong polarity for a missing key here.
+fn magic_mask_all() -> MagicSourceMask { MagicSourceMask::all() }
 
 impl Stats {
     pub fn new(name: Content, body: Body) -> Self {
@@ -403,5 +426,34 @@ mod tests {
         assert_eq!(stats.proficient_tools, ToolKindMask::all());
         assert_eq!(stats.castable_sources, MagicSourceMask::all());
         assert_eq!(stats.non_proficient_damage_mult, 1.0);
+    }
+
+    // Regression test for an inverted `#[serde(default)]` on the two mask
+    // fields: `ToolKindMask`/`MagicSourceMask`'s own `Default` impls are
+    // deliberately EMPTY (see their doc comments), so a bare
+    // `#[serde(default)]` would resolve a missing key to "proficient with
+    // nothing" / "can cast nothing" -- the exact inversion of the
+    // permissive-by-default invariant the rest of this module is built on.
+    // The production wire/save format (bincode) is non-self-describing and
+    // never omits fields, so this is unreachable there; it only bites the
+    // moment `Stats` gains a self-describing serialization path. JSON
+    // stands in for that here since it's already a crate dependency.
+    #[test]
+    fn missing_proficiency_and_magic_fields_deserialize_permissive_through_a_self_describing_format()
+     {
+        let stats = Stats::new(Content::dummy(), test_body());
+        let mut value = serde_json::to_value(&stats).expect("Stats must serialize to JSON");
+        let map = value
+            .as_object_mut()
+            .expect("Stats must serialize as a JSON object");
+        // Simulate a payload authored/saved before these two fields
+        // existed.
+        map.remove("proficient_tools");
+        map.remove("castable_sources");
+
+        let restored: Stats =
+            serde_json::from_value(value).expect("Stats must deserialize with both keys absent");
+        assert_eq!(restored.proficient_tools, ToolKindMask::all());
+        assert_eq!(restored.castable_sources, MagicSourceMask::all());
     }
 }

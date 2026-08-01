@@ -18,7 +18,7 @@
     // existing skill-tree unlocks, until the real identify/transcribe
     // system replaces this with Only([Arcane]).
     Mage: All,
-    Sorcerer: Only([Arcane]), // a small fixed set of Primordial spells arrives as class innates, not via this mask
+    Sorcerer: Only([Arcane]), // a small fixed set of Primordial spells is intended to arrive as class innates, not via this mask
     Warlock: Only([Arcane]),
     Bard: Only([Arcane]),
     Artificer: Only([Arcane]),
@@ -26,7 +26,8 @@
     Paladin: Only([Divine]),
     Druid: Only([Primordial]),
     Ranger: Only([Primordial]),
-    // No core of its own; its Hemomancy spells arrive as class innates,
-    // which the InnateAux cast-gate exemption exempts from this mask.
+    // No core of its own; its Hemomancy spells are intended to arrive as
+    // class innates, exempted from this mask by a cast-gate exemption that
+    // will be added when that innate-spell delivery mechanism ships.
     BloodSlayer: Only([]),
 }

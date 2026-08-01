@@ -580,7 +580,11 @@ impl<'a> System<'a> for Sys {
                     // manifests hoisted once per system run above. A class
                     // absent from either manifest resolves permissive
                     // (`All`), not empty — see the manifest types' own doc
-                    // comments.
+                    // comments. Running this BEFORE the buff-effect loop
+                    // below is load-bearing: it lets a future buff/feat
+                    // widen these masks or restore the damage multiplier on
+                    // top of the class narrowing, rather than being clobbered
+                    // by it.
                     stat.proficient_tools =
                         character_class.proficient_tools_mask(&class_proficiencies.0);
                     stat.castable_sources =
