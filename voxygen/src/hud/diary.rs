@@ -196,6 +196,12 @@ widget_ids! {
         spell_metas[],
         spell_reqs[],
         spell_empty_txt,
+        // Xindeler: per-source mastery header. `spell_mastery_labels` holds
+        // 5 entries (Arcane first, then the 4 bar sources); the bar arrays
+        // hold 4 (Arcane is known by default and never drawn as a bar).
+        spell_mastery_labels[],
+        spell_mastery_bar_bg[],
+        spell_mastery_bar_content[],
         // Stats
         stat_names[],
         stat_values[],
@@ -244,6 +250,7 @@ pub struct Diary<'a> {
     stats: Option<&'a Stats>,
     buffs: Option<&'a Buffs>,
     character_class: Option<&'a CharacterClass>,
+    spell_mastery: Option<&'a comp::SpellMastery>,
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -298,6 +305,7 @@ impl<'a> Diary<'a> {
         stats: Option<&'a Stats>,
         buffs: Option<&'a Buffs>,
         character_class: Option<&'a CharacterClass>,
+        spell_mastery: Option<&'a comp::SpellMastery>,
     ) -> Self {
         Self {
             show,
@@ -328,6 +336,7 @@ impl<'a> Diary<'a> {
             stats,
             buffs,
             character_class,
+            spell_mastery,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -1347,13 +1356,27 @@ impl Widget for Diary<'_> {
             // weapon-only concept).
             DiarySection::Spells => {
                 use common::assets::AssetExt;
-                use comp::{ability::AbilityInput, spell::SpellCompendium};
+                use comp::{
+                    ability::{AbilityInput, MagicSource},
+                    spell::SpellCompendium,
+                };
 
-                /// How many spell rows fit on one spread. Kept separate from
-                /// `ABILITIES_PER_PAGE` so the two tabs can diverge.
-                const SPELLS_PER_PAGE: usize = 12;
+                /// Spell rows per column. Reduced from the ability tab's 6 to
+                /// leave `MASTERY_HEADER_HEIGHT` of clear space at the top of
+                /// each page for the per-source mastery header below, without
+                /// any row spilling past the book art's bottom edge.
+                const ROWS_PER_COL: usize = 5;
+                /// How many spell rows fit on one spread (two columns of
+                /// `ROWS_PER_COL`).
+                const SPELLS_PER_PAGE: usize = ROWS_PER_COL * 2;
                 /// Tint applied to a locked spell's empty slot.
                 const LOCKED_SLOT_COLOR: Color = Color::Rgba(0.35, 0.35, 0.35, 1.0);
+                /// Vertical space reserved at the top of each page for the
+                /// mastery header (labels at y=14, bars at y=34..48, leaving a
+                /// margin before the first spell row). The row loop below
+                /// folds this into `image_offsets` so it is the single place
+                /// that shifts every row's margins.
+                const MASTERY_HEADER_HEIGHT: f64 = 74.0;
 
                 // Background Art
                 Image::new(self.imgs.book_bg)
@@ -1518,6 +1541,119 @@ impl Widget for Diary<'_> {
                     return events;
                 }
 
+                let compendium = SpellCompendium::load_expect("common.spells.compendium");
+                let compendium = compendium.read();
+
+                // Per-source mastery header: Arcane is known by default and
+                // shown as a plain label; the other four sources each get a
+                // progress bar sourced from `SpellMastery::pct`. Positioned
+                // relative to `spells_art` directly (not a page-align
+                // rectangle) so it renders identically regardless of which
+                // page of the spell list is showing.
+                {
+                    const MASTERY_SOURCES: [MagicSource; 4] = [
+                        MagicSource::Divine,
+                        MagicSource::Primordial,
+                        MagicSource::Psionic,
+                        MagicSource::Ki,
+                    ];
+                    /// Width of one header column (label + bar).
+                    const COL_W: f64 = 224.0;
+                    /// Gap between header columns.
+                    const COL_GAP: f64 = 12.0;
+                    const BAR_W: f64 = 200.0;
+                    const BAR_H: f64 = 14.0;
+                    const LABEL_Y: f64 = 14.0;
+                    const BAR_Y: f64 = 34.0;
+                    const LEFT_MARGIN: f64 = 20.0;
+
+                    state.update(|s| {
+                        let id_gen = &mut ui.widget_id_generator();
+                        s.ids.spell_mastery_labels.resize(5, id_gen);
+                        s.ids
+                            .spell_mastery_bar_bg
+                            .resize(MASTERY_SOURCES.len(), id_gen);
+                        s.ids
+                            .spell_mastery_bar_content
+                            .resize(MASTERY_SOURCES.len(), id_gen);
+                    });
+
+                    let default_mastery = comp::SpellMastery::default();
+                    let mastery = self.spell_mastery.unwrap_or(&default_mastery);
+
+                    // Arcane column: always "known", never a bar (mastery
+                    // never applies to it — `SpellMastery::pct` hardcodes
+                    // 1.0 for it too).
+                    let arcane_label = format!(
+                        "{} — {}",
+                        magic_source_name(MagicSource::Arcane, self.localized_strings),
+                        self.localized_strings
+                            .get_msg("hud-diary-spells-mastery-arcane-known"),
+                    );
+                    Text::new(&arcane_label)
+                        .top_left_with_margins_on(state.ids.spells_art, LABEL_Y, LEFT_MARGIN)
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .font_size(self.fonts.cyri.scale(14))
+                        .color(TEXT_COLOR)
+                        .set(state.ids.spell_mastery_labels[0], ui);
+
+                    for (i, source) in MASTERY_SOURCES.into_iter().enumerate() {
+                        let pct = mastery.pct(source);
+                        // Whether the compendium carries any spell of this
+                        // source at all — distinct from whether the player
+                        // has UNLOCKED any of them. A source with none must
+                        // read as "nothing here yet", not a bare, unexplained
+                        // 0 % bar.
+                        let has_content = compendium.iter().any(|def| def.source == source);
+                        let x = LEFT_MARGIN + (i + 1) as f64 * (COL_W + COL_GAP);
+
+                        let label = if has_content {
+                            self.localized_strings.get_msg_ctx(
+                                "hud-diary-spells-mastery-pct",
+                                &i18n::fluent_args! {
+                                    "source" => magic_source_name(source, self.localized_strings).into_owned(),
+                                    "pct" => (pct * 100.0).round() as u32,
+                                },
+                            )
+                        } else {
+                            self.localized_strings.get_msg_ctx(
+                                "hud-diary-spells-mastery-empty-source",
+                                &i18n::fluent_args! {
+                                    "source" => magic_source_name(source, self.localized_strings).into_owned(),
+                                },
+                            )
+                        };
+                        Text::new(&label)
+                            .top_left_with_margins_on(state.ids.spells_art, LABEL_Y, x)
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .font_size(self.fonts.cyri.scale(14))
+                            .color(TEXT_COLOR)
+                            .set(state.ids.spell_mastery_labels[i + 1], ui);
+
+                        let tooltip_title = magic_source_name(source, self.localized_strings);
+                        let tooltip_body =
+                            mastery_tooltip_body(has_content, self.localized_strings);
+
+                        Rectangle::fill_with([BAR_W, BAR_H], Color::Rgba(0.0, 0.0, 0.0, 0.35))
+                            .top_left_with_margins_on(state.ids.spells_art, BAR_Y, x)
+                            .with_tooltip(
+                                self.tooltip_manager,
+                                &tooltip_title,
+                                &tooltip_body,
+                                &diary_tooltip,
+                                TEXT_COLOR,
+                            )
+                            .set(state.ids.spell_mastery_bar_bg[i], ui);
+
+                        Image::new(self.imgs.bar_content)
+                            .w_h((BAR_W * pct as f64).max(0.0), BAR_H)
+                            .top_left_with_margins_on(state.ids.spell_mastery_bar_bg[i], 0.0, 0.0)
+                            .color(Some(mastery_bar_color(source)))
+                            .graphics_for(state.ids.spell_mastery_bar_bg[i])
+                            .set(state.ids.spell_mastery_bar_content[i], ui);
+                    }
+                }
+
                 let page_indices = (spells.len().saturating_sub(1)) / SPELLS_PER_PAGE;
 
                 // Multiclassing mid-session changes the spell count, which can
@@ -1615,9 +1751,6 @@ impl Widget for Diary<'_> {
                     pulse: 0.0,
                 };
 
-                let compendium = SpellCompendium::load_expect("common.spells.compendium");
-                let compendium = compendium.read();
-
                 // A row's text column: the page width less the slot and its
                 // padding.
                 let text_width = 299.0 * 2.0 - (20.0 * 2.0 + 100.0);
@@ -1641,10 +1774,16 @@ impl Widget for Diary<'_> {
                         .map(String::as_str);
                     let spell = pool_key.and_then(|key| compendium.get(key));
 
-                    let (align_state, image_offsets) = if id_index < 6 {
-                        (state.ids.sp_page_left_align, 120.0 * id_index as f64)
+                    let (align_state, image_offsets) = if id_index < ROWS_PER_COL {
+                        (
+                            state.ids.sp_page_left_align,
+                            MASTERY_HEADER_HEIGHT + 120.0 * id_index as f64,
+                        )
                     } else {
-                        (state.ids.sp_page_right_align, 120.0 * (id_index - 6) as f64)
+                        (
+                            state.ids.sp_page_right_align,
+                            MASTERY_HEADER_HEIGHT + 120.0 * (id_index - ROWS_PER_COL) as f64,
+                        )
                     };
 
                     Image::new(self.imgs.ability_frame)
@@ -2210,6 +2349,65 @@ fn spell_meta_line(spell: &comp::spell::SpellDef, i18n: &Localization) -> String
     });
 
     parts.join(" · ")
+}
+
+/// The localized display name of a magic source, shared by the spell
+/// metadata line and the mastery header.
+fn magic_source_name(source: comp::ability::MagicSource, i18n: &Localization) -> Cow<'_, str> {
+    use comp::ability::MagicSource;
+
+    i18n.get_msg(match source {
+        MagicSource::Arcane => "hud-diary-spells-source-arcane",
+        MagicSource::Divine => "hud-diary-spells-source-divine",
+        MagicSource::Primordial => "hud-diary-spells-source-primordial",
+        MagicSource::Psionic => "hud-diary-spells-source-psionic",
+        MagicSource::Ki => "hud-diary-spells-source-ki",
+    })
+}
+
+/// A stable, source-distinguishing tint for the mastery bars. Purely
+/// cosmetic — carries no gameplay meaning beyond "which source is this".
+/// `Arcane` is included for exhaustiveness but never actually drawn as a
+/// bar (it has no mastery bar at all).
+fn mastery_bar_color(source: comp::ability::MagicSource) -> Color {
+    use comp::ability::MagicSource;
+
+    match source {
+        MagicSource::Arcane => XP_COLOR,
+        MagicSource::Divine => Color::Rgba(0.85, 0.75, 0.35, 1.0),
+        MagicSource::Primordial => Color::Rgba(0.40, 0.68, 0.35, 1.0),
+        MagicSource::Psionic => Color::Rgba(0.58, 0.38, 0.78, 1.0),
+        MagicSource::Ki => Color::Rgba(0.80, 0.35, 0.25, 1.0),
+    }
+}
+
+/// The mastery bar's hover tooltip: what each tier of a source's mastery
+/// percentage unlocks for spell transcription (the copy-into-`SpellBook`
+/// mechanic; `common::comp::spell_mastery::mastery_tier_max_level` is the
+/// authoritative curve this describes). Deliberately a DIFFERENT message
+/// from `spell_requirement`'s red "Requires <class> level N" line under a
+/// locked spell row: that one explains a `SpellGate` cast-eligibility check,
+/// this one explains a mastery-tier copy-eligibility check. The two checks
+/// are independent (a spell needs both to ever be cast), so conflating
+/// their messages would read as one gate rather than two.
+fn mastery_tooltip_body(has_content: bool, i18n: &Localization) -> String {
+    let mut lines = vec![
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-2")
+            .into_owned(),
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-4")
+            .into_owned(),
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-6")
+            .into_owned(),
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-all")
+            .into_owned(),
+    ];
+    if !has_content {
+        lines.push(
+            i18n.get_msg("hud-diary-spells-mastery-tooltip-no-content")
+                .into_owned(),
+        );
+    }
+    lines.join("\n")
 }
 
 enum SkillIcon<'a> {

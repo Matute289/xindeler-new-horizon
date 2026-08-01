@@ -50,3 +50,13 @@ hud-diary-spells-aoe-sphere = Esfera { $size } m
 hud-diary-spells-aoe-cone = Cono { $size } m
 hud-diary-spells-aoe-line = Línea { $size } m
 hud-diary-spells-aoe-cube = Cubo { $size } m
+
+## Cabecera de maestría por fuente
+hud-diary-spells-mastery-arcane-known = conocida por defecto
+hud-diary-spells-mastery-pct = { $source } — { $pct }%
+hud-diary-spells-mastery-empty-source = { $source } — sin hechizos conocidos
+hud-diary-spells-mastery-tooltip-tier-2 = 25% de maestría desbloquea copiar hechizos de nivel 2 de esta fuente
+hud-diary-spells-mastery-tooltip-tier-4 = 50% de maestría desbloquea copiar hechizos de nivel 4 de esta fuente
+hud-diary-spells-mastery-tooltip-tier-6 = 75% de maestría desbloquea copiar hechizos de nivel 6 de esta fuente
+hud-diary-spells-mastery-tooltip-tier-all = 100% de maestría desbloquea copiar cualquier nivel de esta fuente
+hud-diary-spells-mastery-tooltip-no-content = Todavía no existen hechizos de esta fuente

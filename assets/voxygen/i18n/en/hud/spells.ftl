@@ -50,3 +50,13 @@ hud-diary-spells-aoe-sphere = Sphere { $size } m
 hud-diary-spells-aoe-cone = Cone { $size } m
 hud-diary-spells-aoe-line = Line { $size } m
 hud-diary-spells-aoe-cube = Cube { $size } m
+
+## Per-source mastery header
+hud-diary-spells-mastery-arcane-known = known by default
+hud-diary-spells-mastery-pct = { $source } — { $pct }%
+hud-diary-spells-mastery-empty-source = { $source } — no spells known yet
+hud-diary-spells-mastery-tooltip-tier-2 = 25% mastery unlocks copying level 2 spells of this source
+hud-diary-spells-mastery-tooltip-tier-4 = 50% mastery unlocks copying level 4 spells of this source
+hud-diary-spells-mastery-tooltip-tier-6 = 75% mastery unlocks copying level 6 spells of this source
+hud-diary-spells-mastery-tooltip-tier-all = 100% mastery unlocks copying every level of this source
+hud-diary-spells-mastery-tooltip-no-content = No spells of this source exist yet
