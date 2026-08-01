@@ -102,13 +102,16 @@ impl Component for Attuning {
 ///
 /// **v1 scope (Matias: "defensa + habilidades").** This gate is applied to:
 /// HP-damage protection (`combat::compute_protection`), max-energy from gear
-/// (`combat::compute_max_energy_mod`), and weapon abilities
-/// (`ActiveAbilities::activate_ability`). It is intentionally **not** applied
-/// yet to: offensive stats (precision / stealth / energy-reward — scattered
-/// across ~15 `states/*`), poise resilience (`compute_poise_resilience`, to
-/// avoid the `apply_poise_reduction` ripple), and fall-damage. Those are
-/// documented follow-ups; until then an unattuned item still grants *those*
-/// effects.
+/// (`combat::compute_max_energy_mod`), weapon abilities
+/// (`ActiveAbilities::activate_ability`), and caster stat buffs granted by an
+/// item's `ItemCondition` (the per-tick evaluation in
+/// `common/systems/src/buff.rs`: an unattuned `RequiresAttunement` item's
+/// condition grants neither its `when_met` nor its `when_unmet` buffs). It is
+/// intentionally **not** applied yet to: offensive stats (precision /
+/// stealth / energy-reward — scattered across ~15 `states/*`), poise
+/// resilience (`compute_poise_resilience`, to avoid the
+/// `apply_poise_reduction` ripple), and fall-damage. Those are documented
+/// follow-ups; until then an unattuned item still grants *those* effects.
 pub fn item_effects_active(
     slot: EquipSlot,
     requires: bool,

@@ -3,9 +3,10 @@ use common::{
     assets::{AssetExt, Ron},
     combat::{self, CombatTuning, DamageContributor},
     comp::{
-        ActiveSense, Alignment, Energy, Group, Health, HealthChange, Inventory, LightEmitter, Mass,
-        ModifierKind, PhysicsState, Player, Pos, Stats,
+        ActiveSense, Alignment, AttunedItems, Energy, Ethos, Group, Health, HealthChange,
+        Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos, Stats,
         agent::{Sound, SoundKind},
+        attunement::item_effects_active,
         aura::{Auras, EnteredAuras},
         body::{Body, object},
         buff::{
@@ -14,6 +15,7 @@ use common::{
         },
         fluid_dynamics::{Fluid, LiquidKind},
         item::MaterialStatManifest,
+        item_condition_buff_data,
     },
     event::{
         BuffEvent, ChangeBodyEvent, ComboChangeEvent, CreateSpriteEvent, EmitExt,
@@ -40,6 +42,54 @@ use vek::Vec3;
 /// retune in the BL-52/BL-05 balance pass.
 const BLEED_DETONATE_MULT: f32 = 3.0;
 
+/// The net `BuffKind` add/remove diff needed to bring `bearer_buffs` in line
+/// with what every equipped item's `ItemCondition` currently says should be
+/// active on `body`. Pure and ECS-independent so it is cheaply
+/// unit-testable; `Sys::run` is a thin wrapper that turns the result into
+/// `BuffEvent`s.
+///
+/// An item whose `RequiresAttunement` flag is set but whose slot is not
+/// currently attuned contributes to neither list at all — it is fully inert,
+/// matching `item_effects_active`'s existing "an unattuned item's effects
+/// don't apply" rule.
+///
+/// A `BuffKind` already present on `bearer_buffs` is never re-added (so a
+/// held condition doesn't spam identical events every tick), and a kind that
+/// is requested `to_add` by one item always wins over another item
+/// requesting the same kind `to_remove` in the same pass.
+pub fn item_condition_buff_diff(
+    inventory: &Inventory,
+    body: &Body,
+    ethos: Option<&Ethos>,
+    attuned: Option<&AttunedItems>,
+    bearer_buffs: Option<&Buffs>,
+) -> (Vec<BuffKind>, Vec<BuffKind>) {
+    let mut to_add: Vec<BuffKind> = Vec::new();
+    let mut to_remove: Vec<BuffKind> = Vec::new();
+
+    for (slot, item) in inventory.equipped_items_with_slot() {
+        let Some(condition) = item.condition() else {
+            continue;
+        };
+        if !item_effects_active(slot, item.requires_attunement(), attuned) {
+            continue;
+        }
+        for kind in condition.active_buffs(ethos, body) {
+            if !bearer_buffs.is_some_and(|b| b.contains(*kind)) && !to_add.contains(kind) {
+                to_add.push(*kind);
+            }
+        }
+        for kind in condition.inactive_buffs(ethos, body) {
+            if bearer_buffs.is_some_and(|b| b.contains(*kind)) && !to_remove.contains(kind) {
+                to_remove.push(*kind);
+            }
+        }
+    }
+
+    to_remove.retain(|kind| !to_add.contains(kind));
+    (to_add, to_remove)
+}
+
 event_emitters! {
     struct Events[EventEmitters] {
         buff: BuffEvent,
@@ -60,7 +110,11 @@ pub struct ReadData<'a> {
     dt: Read<'a, DeltaTime>,
     events: Events<'a>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    attuned_items: ReadStorage<'a, AttunedItems>,
+    // Only fetched for an entity once it's known to have at least one
+    // equipped item declaring an `ItemCondition` (see `Sys::run`) — an
+    // entity with no such item never touches this storage.
+    ethos: ReadStorage<'a, Ethos>,
     healths: ReadStorage<'a, Health>,
     energies: ReadStorage<'a, Energy>,
     physics_states: ReadStorage<'a, PhysicsState>,
@@ -513,6 +567,48 @@ impl<'a> System<'a> for Sys {
                     if !buff.kind.is_buff() {
                         expired_buffs.push(key);
                     }
+                }
+            }
+
+            // Equipped-item `ItemCondition`s: short-circuits before touching
+            // `read_data.ethos` (or evaluating any predicate at all) unless
+            // at least one equipped item actually declares a condition —
+            // true for ~every item in the game today.
+            if let Some(inventory) = read_data.inventories.get(entity)
+                && inventory
+                    .equipped_items()
+                    .any(|item| item.condition().is_some())
+            {
+                let (to_add, to_remove) = item_condition_buff_diff(
+                    inventory,
+                    body,
+                    read_data.ethos.get(entity),
+                    read_data.attuned_items.get(entity),
+                    Some(buff_comp),
+                );
+                for kind in to_remove {
+                    emitters.emit(BuffEvent {
+                        entity,
+                        buff_change: BuffChange::RemoveByKind(kind),
+                    });
+                }
+                for kind in to_add {
+                    emitters.emit(BuffEvent {
+                        entity,
+                        buff_change: BuffChange::Add(Buff::new(
+                            kind,
+                            item_condition_buff_data(),
+                            vec![],
+                            BuffSource::Item,
+                            *read_data.time,
+                            DestInfo {
+                                stats: Some(&stat),
+                                mass,
+                            },
+                            mass,
+                            None,
+                        )),
+                    });
                 }
             }
 
@@ -1039,4 +1135,155 @@ fn execute_effect(
         // code that applies this buff, never derived from this effect.
         BuffEffect::RemoteSense { .. } => {},
     };
+}
+
+#[cfg(test)]
+mod item_condition_diff_tests {
+    use super::*;
+    use common::{
+        LoadoutBuilder,
+        comp::{
+            ConditionPredicate, ItemCondition,
+            body::humanoid,
+            inventory::item::{
+                AbilityMap, Hands, Item, ItemBase, ItemDef, ItemKind, ItemTag,
+                MaterialStatManifest, Tool, ToolKind, tool,
+            },
+            slot::EquipSlot,
+        },
+    };
+    use std::sync::Arc;
+
+    fn human_body() -> Body {
+        Body::Humanoid(humanoid::Body::random_with(
+            &mut rand::rng(),
+            &humanoid::Species::Human,
+        ))
+    }
+
+    /// A `Tome` item, optionally carrying `condition` and optionally tagged
+    /// `RequiresAttunement`.
+    fn tome_item(condition: Option<ItemCondition>, requires_attunement: bool) -> Item {
+        let mut item_def = ItemDef::create_test_itemdef_from_kind(ItemKind::Tool(Tool::new(
+            ToolKind::Tome,
+            Hands::One,
+            None,
+            tool::Stats::one(),
+        )));
+        if requires_attunement {
+            item_def.tags = vec![ItemTag::RequiresAttunement];
+        }
+        item_def.condition = condition;
+        Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(item_def)),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &MaterialStatManifest::load().read(),
+        )
+    }
+
+    fn inventory_with_mainhand(item: Item, body: Body) -> Inventory {
+        let loadout = LoadoutBuilder::empty().active_mainhand(Some(item)).build();
+        Inventory::with_loadout(loadout, body)
+    }
+
+    fn shielded_buff() -> Buff {
+        Buff::new(
+            BuffKind::Shielded,
+            item_condition_buff_data(),
+            vec![],
+            BuffSource::Item,
+            Time(0.0),
+            DestInfo {
+                stats: None,
+                mass: None,
+            },
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn no_conditioned_item_yields_no_diff() {
+        let body = human_body();
+        let inventory = inventory_with_mainhand(tome_item(None, false), body);
+        let (to_add, to_remove) = item_condition_buff_diff(&inventory, &body, None, None, None);
+        assert!(to_add.is_empty());
+        assert!(to_remove.is_empty());
+    }
+
+    #[test]
+    fn met_condition_grants_the_when_met_buff() {
+        let body = human_body();
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Human]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), false), body);
+        let (to_add, to_remove) = item_condition_buff_diff(&inventory, &body, None, None, None);
+        assert_eq!(to_add, vec![BuffKind::Shielded]);
+        assert!(to_remove.is_empty());
+    }
+
+    #[test]
+    fn a_buff_already_present_is_not_re_added() {
+        let body = human_body();
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Human]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), false), body);
+        let mut buffs = Buffs::default();
+        buffs.insert(shielded_buff(), Time(0.0));
+
+        let (to_add, _) = item_condition_buff_diff(&inventory, &body, None, None, Some(&buffs));
+        assert!(
+            to_add.is_empty(),
+            "a held condition must not spam re-add events every tick"
+        );
+    }
+
+    #[test]
+    fn a_condition_going_unmet_removes_its_previously_granted_buff() {
+        let body = human_body();
+        // Predicate never matches this bearer's species, so `when_unmet`
+        // (empty here) is what's active -> the previously-granted
+        // `when_met` buff must be removed.
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Draugr]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), false), body);
+        let mut buffs = Buffs::default();
+        buffs.insert(shielded_buff(), Time(0.0));
+
+        let (to_add, to_remove) =
+            item_condition_buff_diff(&inventory, &body, None, None, Some(&buffs));
+        assert!(to_add.is_empty());
+        assert_eq!(to_remove, vec![BuffKind::Shielded]);
+    }
+
+    #[test]
+    fn unattuned_requires_attunement_item_grants_no_buff_attuned_it_does() {
+        let body = human_body();
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Human]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), true), body);
+
+        // Unattuned: the item's condition is fully inert.
+        let (to_add, to_remove) = item_condition_buff_diff(&inventory, &body, None, None, None);
+        assert!(to_add.is_empty());
+        assert!(to_remove.is_empty());
+
+        // Attuned: the when_met buff is granted.
+        let attuned = AttunedItems(vec![EquipSlot::ActiveMainhand]);
+        let (to_add, _) = item_condition_buff_diff(&inventory, &body, None, Some(&attuned), None);
+        assert_eq!(to_add, vec![BuffKind::Shielded]);
+    }
 }
