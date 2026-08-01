@@ -1,9 +1,10 @@
 ItemDef(
-    legacy_name: "Amethyst Staff",
+    legacy_name: "Amethyst Sceptre",
     legacy_description: "Its stone is the closest thing from perfection",
     kind: Tool((
         kind: Sceptre,
         hands: Two,
+        role: Some(Caster),
         stats: (
             equip_time_secs: 0.4,
             power: 1.8,

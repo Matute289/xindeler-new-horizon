@@ -901,6 +901,9 @@
             "common.items.weapons.staff.starter_staff",
         ): "weapon-staff-firestaff_starter",
         Simple(
+            "common.items.weapons.staff.frostbound_quarterstaff",
+        ): "weapon-staff-frostbound_quarterstaff",
+        Simple(
             "common.items.weapons.tome.apprentice_tome",
         ): "weapon-tome-apprentice_tome",
         Simple(

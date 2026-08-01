@@ -1,0 +1,28 @@
+ItemDef(
+    legacy_name: "Frostbound Quarterstaff",
+    legacy_description: "A weighted length of ashwood, its tip rimed with a frost that never quite melts.",
+    kind: Tool((
+        kind: Staff,
+        hands: Two,
+        role: Some(Martial),
+        stats: (
+            equip_time_secs: 0.3,
+            power: 1.1,
+            effect_power: 1.0,
+            speed: 0.95,
+            range: 1.1,
+            energy_efficiency: 1.0,
+            buff_strength: 1.0,
+        ),
+    )),
+    quality: Moderate,
+    tags: [],
+    // Martial role: resolves the physical `staff_martial` kit, not the
+    // caster `Tool(Staff)` fire kit.
+    ability_spec: Some(Custom("staff_martial")),
+    // No `requirements:` block, deliberately: `equip_gates.ron`'s
+    // `(Staff, Martial)` row is `None` (no class whitelist at all). Anyone
+    // may equip this; a class without `Staff` proficiency in
+    // `class_proficiencies.ron` just takes the soft non-proficient penalty,
+    // same as any other off-class weapon.
+)

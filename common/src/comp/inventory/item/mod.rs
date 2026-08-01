@@ -2967,4 +2967,66 @@ mod tests {
             panic!("item i18n manifest missing fragment-id for following items {errs:#?}")
         }
     }
+
+    #[test]
+    // The shipped martial staff (Q3/Q9/Q10): `role: Martial`, no per-item
+    // `requirements:` block, and resolves the physical `staff_martial`
+    // ability kit instead of falling back to `Tool(Staff)` -- the caster
+    // fire kit that used to hand any Staff wielder a full fireball kit
+    // regardless of proficiency.
+    fn martial_staff_item_resolves_the_martial_kit_not_the_fire_kit() {
+        use crate::comp::tool::AbilityKind;
+
+        let id = "common.items.weapons.staff.frostbound_quarterstaff";
+        let item = Item::new_from_asset_expect(id);
+
+        match &*item.kind() {
+            ItemKind::Tool(tool) => {
+                assert_eq!(
+                    tool.role(),
+                    WeaponRole::Martial,
+                    "{id} must be Martial-role"
+                );
+            },
+            other => panic!("{id} is not a Tool: {other:?}"),
+        }
+
+        assert_eq!(
+            item.requirements(),
+            None,
+            "{id} must carry no equip gate at all (Q3)"
+        );
+
+        let spec = item
+            .ability_spec()
+            .unwrap_or_else(|| panic!("{id} resolved no AbilitySpec at all"));
+        assert_eq!(
+            *spec,
+            AbilitySpec::Custom("staff_martial".to_owned()),
+            "{id} must resolve the martial kit via its own ability_spec, not the tool-kind \
+             fallback (which would be the caster fire kit)"
+        );
+
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let set = ability_map
+            .get_ability_set(&spec)
+            .unwrap_or_else(|| panic!("{id}'s ability_spec {spec:?} has no manifest entry"));
+        let AbilityKind::Simple(_, primary_id) = &set.primary else {
+            panic!("staff_martial primary must be a Simple ability");
+        };
+        let AbilityKind::Simple(_, secondary_id) = &set.secondary else {
+            panic!("staff_martial secondary must be a Simple ability");
+        };
+        for ability_id in [&primary_id.id, &secondary_id.id] {
+            assert!(
+                ability_id.starts_with("common.abilities.staff_martial."),
+                "{id}'s {ability_id} does not come from the martial kit"
+            );
+            assert!(
+                !ability_id.contains("staff.fire") && !ability_id.contains("staffsimple"),
+                "{id}'s {ability_id} leaked in the caster fire kit"
+            );
+        }
+    }
 }
