@@ -3,9 +3,9 @@ use crate::TerrainPersistence;
 use crate::{EditableSettings, Settings, client::Client};
 use common::{
     comp::{
-        Admin, AdminRole, Body, CanBuild, CharacterClass, ControlEvent, Controller, ForceUpdate,
-        Health, Ori, Player, Pos, Presence, PresenceKind, RemoteSense, Scale, SkillSet,
-        SpectatingEntity, Vel,
+        Admin, AdminRole, Body, CanBuild, CharacterClass, ControlAction, ControlEvent, Controller,
+        ForceUpdate, Health, InputKind, Ori, Player, Pos, Presence, PresenceKind, RemoteSense,
+        Scale, SkillSet, SpectatingEntity, Vel,
         buff::{BuffChange, BuffKind},
     },
     event::{self, EmitExt},
@@ -137,7 +137,25 @@ impl Sys {
                 }
             },
             ClientGeneral::ControlAction(event) => {
+                // 🔴 ORIGIN GATE — the only content filter on this arm, and it
+                // exists for one reason.
+                //
+                // `InputKind::TriggerAbility(i)` is what authorises a reactive
+                // trigger slot's cast to skip the ability's own cooldown. Its
+                // only legitimate producer is the server's own trigger
+                // evaluator, writing into `Controller` directly. A modified
+                // client that could send one would get unlimited,
+                // cooldown-free casts of whatever sits in the slot — including
+                // a top-circle spell whose entire cost model is a 36-hour
+                // real-world timer.
+                //
+                // The authorisation itself is a separate server-minted,
+                // ability-bound token, so this deny is defence in depth rather
+                // than the only lock — but it is the cheapest place to stop the
+                // message, and dropping it silently matches how this arm
+                // already treats a non-controlling presence.
                 if presence.kind.controlling_char()
+                    && control_action_permitted_from_client(&event)
                     && let Some(controller) = controller
                 {
                     controller.push_action(event);
@@ -698,6 +716,34 @@ fn spectate_entity_permitted(
         || requested.is_some_and(|target| remote_sense.is_some_and(|rs| rs.anchor_uid() == target))
 }
 
+/// Whether a `ControlAction` that arrived over the wire may be pushed onto the
+/// player's `Controller`.
+///
+/// 🔴 The only content filter on that message, and it exists for one reason:
+/// `InputKind::TriggerAbility(i)` is the input a reactive trigger slot's cast
+/// travels on, and the authorisation to skip the ability's own cooldown is
+/// looked up from that input's slot. Its only legitimate producer is the
+/// server's own trigger evaluator, writing into `Controller` directly. A
+/// modified client able to send one would be asking for unlimited,
+/// cooldown-free casts of whatever sits in the slot — including a top-circle
+/// spell whose entire cost model is a thirty-six-hour real-world timer.
+///
+/// The authorisation itself is a separate server-minted, ability-bound token,
+/// so this is defence in depth rather than the only lock — but it is the
+/// cheapest place to stop the message, and dropping it silently matches how
+/// this arm already treats a non-controlling presence.
+fn control_action_permitted_from_client(event: &ControlAction) -> bool {
+    !matches!(
+        event,
+        ControlAction::StartInput {
+            input: InputKind::TriggerAbility(_),
+            ..
+        } | ControlAction::CancelInput {
+            input: InputKind::TriggerAbility(_),
+        }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,5 +792,56 @@ mod tests {
     fn non_moderator_with_a_matching_remote_sense_is_accepted() {
         let rs = remote_sense_anchored_to(uid(5));
         assert!(spectate_entity_permitted(false, Some(uid(5)), Some(&rs)));
+    }
+
+    /// A crafted packet naming a trigger slot is dropped outright, in both
+    /// directions. This is the message a modified client would send to claim a
+    /// free, cooldown-ignoring cast.
+    #[test]
+    fn a_client_may_not_start_or_cancel_a_trigger_input() {
+        for slot in 0..4u8 {
+            assert!(!control_action_permitted_from_client(
+                &ControlAction::StartInput {
+                    input: InputKind::TriggerAbility(slot),
+                    target_entity: None,
+                    select_pos: None,
+                }
+            ));
+            assert!(!control_action_permitted_from_client(
+                &ControlAction::CancelInput {
+                    input: InputKind::TriggerAbility(slot),
+                }
+            ));
+        }
+    }
+
+    /// Every other control action a client can send is untouched — this filter
+    /// must not become a general-purpose input firewall by accident.
+    #[test]
+    fn every_other_control_action_still_passes() {
+        for input in [
+            InputKind::Primary,
+            InputKind::Secondary,
+            InputKind::Block,
+            InputKind::Ability(0),
+            InputKind::Ability(4),
+            InputKind::Roll,
+            InputKind::Jump,
+            InputKind::Fly,
+            InputKind::WallJump,
+        ] {
+            assert!(control_action_permitted_from_client(
+                &ControlAction::StartInput {
+                    input,
+                    target_entity: None,
+                    select_pos: None,
+                }
+            ));
+            assert!(control_action_permitted_from_client(
+                &ControlAction::CancelInput { input }
+            ));
+        }
+        assert!(control_action_permitted_from_client(&ControlAction::Wield));
+        assert!(control_action_permitted_from_client(&ControlAction::Sit));
     }
 }

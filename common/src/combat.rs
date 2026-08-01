@@ -147,7 +147,28 @@ pub struct CombatTuning {
     /// the swung weapon is not in the wielder's proficiency set (a soft
     /// weapon-proficiency gate). 1.0 = no penalty.
     pub non_proficient_damage_mult: f32,
+    /// Trigger-slot cooldown in **real-world seconds**, indexed by the spell
+    /// circle (0 = cantrip … 9) of the ability sitting in the slot.
+    ///
+    /// Deliberately a **table, not a formula**. Circles 1–9 are the exponential
+    /// curve `1800 · 72^((C−1)/8)` — every circle multiplies the wait by ≈1.707
+    /// — rounded to values a player can read off a tooltip; the rounded values
+    /// *are* the design intent, and computing the curve at runtime would
+    /// silently un-round them. Circle 0 is an explicit floor, not a curve
+    /// output: cantrips are basic tricks and get a short, generous wait.
+    ///
+    /// Anything that is not a catalogued spell (a racial innate, a weapon
+    /// ability) has no circle and falls back to index 0. A circle past the end
+    /// of the list clamps to the last entry, so the list may be shortened or
+    /// extended without a code change.
+    pub trigger_slot_cooldown_secs: Vec<f32>,
 }
+
+/// The shipped trigger-slot cooldown ladder, in real-world seconds by spell
+/// circle. Also the fallback if the asset ever ships an empty list.
+const DEFAULT_TRIGGER_SLOT_COOLDOWNS: [f32; 10] = [
+    600.0, 1800.0, 3000.0, 5400.0, 9000.0, 15300.0, 26100.0, 44400.0, 75600.0, 129600.0,
+];
 
 impl Default for CombatTuning {
     fn default() -> Self {
@@ -176,11 +197,23 @@ impl Default for CombatTuning {
             magic_resist_legendary: 0.50,
             save_outclassed_wall: 0.30,
             non_proficient_damage_mult: 0.40,
+            trigger_slot_cooldown_secs: DEFAULT_TRIGGER_SLOT_COOLDOWNS.to_vec(),
         }
     }
 }
 
 impl CombatTuning {
+    /// The trigger-slot cooldown, in real-world seconds, for an ability of
+    /// spell circle `circle`. Circles beyond the table clamp to its last entry.
+    pub fn trigger_slot_cooldown(&self, circle: u8) -> f32 {
+        let table = if self.trigger_slot_cooldown_secs.is_empty() {
+            &DEFAULT_TRIGGER_SLOT_COOLDOWNS[..]
+        } else {
+            &self.trigger_slot_cooldown_secs[..]
+        };
+        table[usize::from(circle).min(table.len() - 1)]
+    }
+
     /// The resistance fraction a creature's innate [`MagicResistTier`] is
     /// worth. `None` is always exactly 0.0 and therefore needs no constant.
     pub fn magic_resist_tier_value(&self, tier: MagicResistTier) -> f32 {
@@ -4557,5 +4590,74 @@ mod removal_cause_tests {
     #[test]
     fn default_removal_info_is_a_kill() {
         assert_eq!(RemovalInfo::default(), RemovalInfo::killed());
+    }
+}
+
+#[cfg(test)]
+mod trigger_slot_cooldown_tests {
+    use super::CombatTuning;
+    use crate::assets::{AssetExt, Ron};
+
+    fn shipped() -> CombatTuning {
+        Ron::<CombatTuning>::load_expect("common.combat_tuning")
+            .read()
+            .0
+            .clone()
+    }
+
+    /// The two anchors the design fixed by hand: a circle-1 spell rests half an
+    /// hour, a circle-9 spell rests a day and a half.
+    #[test]
+    fn the_two_anchors_are_exact() {
+        let t = shipped();
+        assert_eq!(t.trigger_slot_cooldown(1), 1800.0);
+        assert_eq!(t.trigger_slot_cooldown(9), 129_600.0);
+    }
+
+    /// Circle 0 is an explicit floor for cantrips, not a curve output, and is
+    /// deliberately shorter than extrapolating the curve would give.
+    #[test]
+    fn circle_zero_is_an_explicit_ten_minute_floor() {
+        let t = shipped();
+        assert_eq!(t.trigger_slot_cooldown(0), 600.0);
+        assert!(t.trigger_slot_cooldown(0) < t.trigger_slot_cooldown(1));
+    }
+
+    #[test]
+    fn the_table_is_strictly_increasing() {
+        let t = shipped();
+        for c in 1..10u8 {
+            assert!(
+                t.trigger_slot_cooldown(c) > t.trigger_slot_cooldown(c - 1),
+                "circle {c} is not longer than circle {}",
+                c - 1
+            );
+        }
+    }
+
+    /// Circles 1-9 are the rounded exponential `1800 * 72^((C-1)/8)`. Rounding
+    /// for legibility is allowed; drifting off the curve is not. Circle 0 is
+    /// exempt: it is a floor, not a curve output.
+    #[test]
+    fn circles_one_to_nine_stay_on_the_exponential_curve() {
+        let t = shipped();
+        for c in 1..10u8 {
+            let exact = 1800.0_f64 * 72.0_f64.powf(f64::from(c - 1) / 8.0);
+            let shipped = f64::from(t.trigger_slot_cooldown(c));
+            let deviation = (shipped - exact).abs() / exact;
+            assert!(
+                deviation <= 0.031,
+                "circle {c}: shipped {shipped} deviates {:.2}% from the curve value {exact}",
+                deviation * 100.0
+            );
+        }
+    }
+
+    /// A circle beyond the catalogue clamps rather than panicking.
+    #[test]
+    fn an_out_of_range_circle_clamps_to_the_last_entry() {
+        let t = shipped();
+        assert_eq!(t.trigger_slot_cooldown(10), t.trigger_slot_cooldown(9));
+        assert_eq!(t.trigger_slot_cooldown(u8::MAX), t.trigger_slot_cooldown(9));
     }
 }

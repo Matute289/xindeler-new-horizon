@@ -518,6 +518,8 @@ pub enum ServerChatCommand {
     Time,
     TimeScale,
     Tp,
+    TriggerReady,
+    TriggerSlot,
     Unban,
     UnbanIp,
     Version,
@@ -1350,6 +1352,32 @@ impl ServerChatCommand {
                 Content::localized("command-multiclass-desc"),
                 Some(Admin),
             ),
+            // Configuring a trigger has no UI yet, and a slot's wait runs from
+            // ten minutes to thirty-six real-world hours -- without these two
+            // commands the feature is untestable in a single session.
+            ServerChatCommand::TriggerSlot => cmd(
+                vec![
+                    Integer("slot", 0, Required),
+                    Integer("ability pool index", 0, Required),
+                    Enum(
+                        "condition",
+                        vec![
+                            "health_below".to_owned(),
+                            "damage_taken".to_owned(),
+                            "energy_below".to_owned(),
+                        ],
+                        Required,
+                    ),
+                    Float("threshold", 0.3, Optional),
+                ],
+                Content::localized("command-trigger_slot-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::TriggerReady => cmd(
+                vec![Integer("slot", 0, Required)],
+                Content::localized("command-trigger_ready-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::SetClassLevel => cmd(
                 vec![
                     Enum(
@@ -1482,6 +1510,8 @@ impl ServerChatCommand {
             ServerChatCommand::Mount => "mount",
             ServerChatCommand::Dismount => "dismount",
             ServerChatCommand::Multiclass => "multiclass",
+            ServerChatCommand::TriggerSlot => "trigger_slot",
+            ServerChatCommand::TriggerReady => "trigger_ready",
         }
     }
 

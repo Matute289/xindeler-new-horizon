@@ -28,6 +28,7 @@ use crate::{
         character_loader::{CharacterCreationResult, CharacterDataResult, CharacterListResult},
         character_updater::PetPersistenceData,
         error::PersistenceError::DatabaseError,
+        json_models,
     },
 };
 use common::{
@@ -166,7 +167,8 @@ pub fn load_character_data(
                 c.background_custom_note,
                 c.secondary_class,
                 c.secondary_class_level,
-                c.secondary_class_future_levels
+                c.secondary_class_future_levels,
+                c.trigger_slots
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -190,6 +192,7 @@ pub fn load_character_data(
                 secondary_class: row.get(11)?,
                 secondary_class_level: row.get(12)?,
                 secondary_class_future_levels: row.get(13)?,
+                trigger_slots: row.get(14)?,
             };
 
             let body_data = Body {
@@ -369,6 +372,9 @@ pub fn load_character_data(
                 character_data.ethos_law_chaos,
             ),
             background: convert_background_from_database(character_data.background.as_deref()),
+            trigger_slots: json_models::db_string_to_trigger_slots(
+                character_data.trigger_slots.as_deref(),
+            ),
         },
         UpdateCharacterMetadata {
             skill_set_persistence_load_error,
@@ -415,6 +421,8 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 secondary_class: None,
                 secondary_class_level: 0,
                 secondary_class_future_levels: 0,
+                // Nor the trigger slots: the list view never shows them.
+                trigger_slots: None,
             })
         })?
         .map(|x| x.unwrap())
@@ -506,6 +514,9 @@ pub fn create_character(
         map_marker,
         ethos,
         background,
+        // A brand-new character has nothing configured; the column stays NULL
+        // and the first autosave that changes it writes the row.
+        trigger_slots: _,
     } = persisted_components;
 
     // Fetch new entity IDs for character, inventory, loadout, overflow items,
@@ -1205,6 +1216,7 @@ pub fn update(
     character_class: comp::CharacterClass,
     ethos: comp::Ethos,
     background: comp::Background,
+    trigger_slots: comp::TriggerSlots,
     transaction: &mut Transaction,
 ) -> Result<(), PersistenceError> {
     // Run pet persistence
@@ -1363,8 +1375,9 @@ pub fn update(
                 background_custom_note = ?6,
                 secondary_class = ?7,
                 secondary_class_level = ?8,
-                secondary_class_future_levels = ?9
-        WHERE   character_id = ?10
+                secondary_class_future_levels = ?9,
+                trigger_slots = ?10
+        WHERE   character_id = ?11
     ",
     )?;
 
@@ -1378,6 +1391,7 @@ pub fn update(
         &convert_secondary_class_to_database(character_class),
         &convert_secondary_class_level_to_database(character_class),
         &convert_future_levels_to_secondary_to_database(character_class),
+        &json_models::trigger_slots_to_db_string(&trigger_slots),
         &char_id.0,
     ])?;
 

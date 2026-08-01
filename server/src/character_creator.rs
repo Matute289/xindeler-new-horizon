@@ -180,6 +180,8 @@ pub fn create_character(
         // BL-31: the background chosen at character creation, or
         // `Background(None)` ("Uncommitted", P0 §Q1).
         background,
+        // Trigger slots are configured in-game, never at creation.
+        trigger_slots: common::comp::TriggerSlots::default(),
     });
     Ok(())
 }

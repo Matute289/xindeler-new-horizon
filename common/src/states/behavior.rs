@@ -4,7 +4,7 @@ use crate::{
         Buffs, CharacterActivity, CharacterClass, CharacterState, Combo, ControlAction, Controller,
         ControllerInputs, Density, Energy, Health, Immovable, InputAttr, InputKind, Inventory,
         InventoryAction, Mass, Melee, Ori, PhysicsState, PickupItem, Pos, PreviousPhysCache, Scale,
-        SkillSet, Stance, StateUpdate, Stats, Vel,
+        SkillSet, Stance, StateUpdate, Stats, TriggerSlots, Vel,
         body::parts::Heads,
         character_state::OutputEvents,
         item::{MaterialStatManifest, tool::AbilityMap},
@@ -178,6 +178,12 @@ pub struct JoinData<'a> {
     /// each held class's OWN level (`AbilityPool::is_unlocked`). `None` for
     /// NPCs, which have no `CharacterClass` and no spell keys in their pool.
     pub character_class: Option<&'a CharacterClass>,
+    /// The character's reactive trigger slots. Read on the activation path so
+    /// an `InputKind::TriggerAbility` resolves to the ability the slot stores,
+    /// and so the one-shot authorisation token that slot holds can be checked
+    /// against the ability actually resolved. `None` for every entity without
+    /// the component, which is nearly all of them.
+    pub trigger_slots: Option<&'a TriggerSlots>,
     pub ability_map: &'a AbilityMap,
     pub msm: &'a MaterialStatManifest,
     pub combo: Option<&'a Combo>,
@@ -232,6 +238,8 @@ pub struct JoinStruct<'a> {
     pub ability_pool: Option<&'a AbilityPool>,
     /// Xindeler: see [`JoinData::character_class`].
     pub character_class: Option<&'a CharacterClass>,
+    /// See [`JoinData::trigger_slots`].
+    pub trigger_slots: Option<&'a TriggerSlots>,
     pub combo: Option<&'a Combo>,
     pub alignment: Option<&'a comp::Alignment>,
     pub terrain: &'a TerrainGrid,
@@ -295,6 +303,7 @@ impl<'a> JoinData<'a> {
             ability_cooldowns: j.ability_cooldowns,
             ability_pool: j.ability_pool,
             character_class: j.character_class,
+            trigger_slots: j.trigger_slots,
             mount_data: j.mount_data,
             volume_mount_data: j.volume_mount_data,
             stance: j.stance,

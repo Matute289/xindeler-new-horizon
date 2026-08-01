@@ -47,6 +47,7 @@ pub mod skillset;
 pub mod spell;
 mod stats;
 pub mod teleport;
+pub mod trigger;
 pub mod visual;
 
 // Reexports
@@ -142,6 +143,10 @@ pub use self::{
     spell::{CLASS_LEVELS_PER_SPELL_LEVEL, SpellCompendium, SpellDef, spell_level_unlocked},
     stats::{ActiveSense, Stats, StatsModifier},
     teleport::Teleporting,
+    trigger::{
+        MAX_TRIGGER_SLOTS, SlotState, TRIGGER_SLOT_LEVELS, TriggerCondition, TriggerSlot,
+        TriggerSlots, unlocked_trigger_slots,
+    },
     visual::{FrontendMarker, LightAnimation, LightEmitter},
 };
 pub use common_i18n::{Content, LocalizationArg};

@@ -53,4 +53,13 @@
     // Physical damage/poise/knockback/crit multiplier when the swung weapon is
     // not in the wielder's class proficiency set. 0.40 = -60%. Retune here, no rebuild.
     non_proficient_damage_mult: 0.40,
+
+    // --- reactive trigger slots ---
+    // Slot cooldown in REAL-WORLD seconds, indexed by the spell circle (0..9) of
+    // the ability in the slot. Circles 1-9 are `1800 * 72^((C-1)/8)` rounded to
+    // readable values (every circle multiplies the wait by ~1.707); circle 0 is
+    // an explicit floor for cantrips, not a curve output. Anything without a
+    // circle (racial innate, weapon ability) uses index 0.
+    //             c0    c1     c2     c3     c4     c5      c6      c7      c8      c9
+    trigger_slot_cooldown_secs: [600.0, 1800.0, 3000.0, 5400.0, 9000.0, 15300.0, 26100.0, 44400.0, 75600.0, 129600.0],
 )

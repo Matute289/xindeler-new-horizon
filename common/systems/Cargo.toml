@@ -19,6 +19,7 @@ common-net = { package = "xindeler-common-net", path = "../net" }
 common-ecs = { package = "xindeler-common-ecs", path = "../ecs" }
 common-base = { package = "xindeler-common-base", path = "../base" }
 
+chrono = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
 tracing = { workspace = true }
@@ -39,3 +40,4 @@ specs = { workspace = true, features = [
 [dev-dependencies]
 # Setup a State
 common-state = { package = "xindeler-common-state", path = "../state" }
+hashbrown = { workspace = true }

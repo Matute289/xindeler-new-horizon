@@ -1443,12 +1443,36 @@ pub fn handle_walljump(
     true
 }
 
+/// The one-shot authorisation a firing trigger slot holds, if `input` names a
+/// slot that currently holds one.
+///
+/// The token is server-minted state living in `TriggerSlots`; nothing a client
+/// can send produces it. `InputKind::TriggerAbility(i)` says *which slot*,
+/// never *that it is permitted*.
+fn trigger_token<'a>(data: &'a JoinData<'_>, input: InputKind) -> Option<&'a str> {
+    match input {
+        InputKind::TriggerAbility(slot) => data
+            .trigger_slots
+            .and_then(|slots| slots.firing_token(usize::from(slot))),
+        _ => None,
+    }
+}
+
 fn handle_ability(
     data: &JoinData<'_>,
     update: &mut StateUpdate,
     output_events: &mut OutputEvents,
     input: InputKind,
 ) -> bool {
+    // A `TriggerAbility` input is honoured only while its slot actually holds a
+    // live authorisation token. Any other one — a stale queued input left over
+    // after the slot went back to `Ready`, or a crafted packet that somehow got
+    // past the message-boundary deny — resolves to nothing at all.
+    let token = trigger_token(data, input);
+    if matches!(input, InputKind::TriggerAbility(_)) && token.is_none() {
+        return false;
+    }
+
     if let Some(ability_input) = input.into()
         && let Some((ability, from_offhand, spec_ability)) = data
             .active_abilities
@@ -1466,6 +1490,7 @@ fn handle_ability(
                     data.buffs,
                     data.ability_pool,
                     data.character_class,
+                    data.trigger_slots,
                     data.ability_map,
                 )
             })
@@ -1481,7 +1506,11 @@ fn handle_ability(
                 (a, f, s)
             })
             .filter(|(ability, _, spec_ability)| {
-                cooldown_ready(data, ability, spec_ability)
+                // 🔴 The ONE privilege a trigger buys, and the only one:
+                // `cooldown_ready` is skipped. Everything below this line still
+                // runs, unmodified.
+                (cooldown_bypassed(data, token, spec_ability)
+                    || cooldown_ready(data, ability, spec_ability))
                     && hp_cost_affordable(
                         ability.ability_meta().hp_cost,
                         data.health.map(|h| h.current()),
@@ -1550,7 +1579,20 @@ fn handle_ability(
                     .and_then(|ia| ia.target_entity);
                 update.character = character_state;
 
-                if let Some(cooldown_secs) = ability_meta.cooldown
+                // 🔴 The bypass is symmetric — it skips the read AND the write:
+                //
+                //   A triggered cast neither reads nor writes the triggered
+                //   ability's `AbilityCooldowns` entry.
+                //
+                // It is as if, for that one cast, the ability had no cooldown at
+                // all. Writing the entry would grief the player (an automatic
+                // escape at 25 % HP would put his own manual escape on cooldown
+                // he never asked for); *clearing* it would be an outright
+                // exploit (fire the trigger, then manually recast the same spell
+                // for free). Both systems leave the other's state alone.
+                let bypassing_cooldown = cooldown_bypassed(data, token, &spec_ability_copy);
+                if !bypassing_cooldown
+                    && let Some(cooldown_secs) = ability_meta.cooldown
                     && let Some(id) = spec_ability_copy.ability_id(
                         Some(data.character),
                         data.inventory,
@@ -1562,6 +1604,13 @@ fn handle_ability(
                         ability_id: id.to_string(),
                         cooldown_secs,
                     });
+                }
+
+                // The token was spent: tell the character-behavior system to
+                // move this slot from `Firing` to `CoolingDown`. Reached only
+                // on the success path, so a refused cast costs nothing.
+                if let InputKind::TriggerAbility(slot) = input {
+                    update.triggered_slot_cast = Some(slot);
                 }
 
                 // Hemomancy "blood price" (M4 / ENG-C1): casting spends the
@@ -1652,6 +1701,34 @@ fn handle_ability(
     false
 }
 
+/// Whether this cast may skip — and must also refrain from writing —
+/// `AbilityCooldowns`.
+///
+/// 🔴 All three conditions must hold, and the third is load-bearing rather than
+/// belt-and-braces:
+///
+/// 1. the input is `InputKind::TriggerAbility(i)` (otherwise `token` is
+///    `None`);
+/// 2. slot `i` currently holds an authorisation token, i.e. it is `Firing`;
+/// 3. the ability actually resolved has **exactly** the id the token names.
+///
+/// Without (3), a player pressing Primary on the same tick a trigger armed
+/// would win the input `BTreeMap` (lowest discriminant wins), consume the
+/// outstanding bypass and get a free cooldown-ignoring Primary. With it, the
+/// token is unusable by any input other than the exact slot and the exact
+/// ability it was minted for.
+fn cooldown_bypassed(
+    data: &JoinData<'_>,
+    token: Option<&str>,
+    spec_ability: &SpecifiedAbility,
+) -> bool {
+    token.is_some_and(|token| {
+        (*spec_ability)
+            .ability_id(Some(data.character), data.inventory, data.ability_pool)
+            .is_some_and(|id| id == token)
+    })
+}
+
 /// An ability with `meta.cooldown` may only fire when `AbilityCooldowns` says
 /// it is ready. Runs on client and server; the server-side check is
 /// authoritative (the event above is server-only), the client check uses the
@@ -1694,7 +1771,8 @@ pub fn handle_input(
         | InputKind::Secondary
         | InputKind::Ability(_)
         | InputKind::Block
-        | InputKind::Roll => {
+        | InputKind::Roll
+        | InputKind::TriggerAbility(_) => {
             handle_ability(data, update, output_events, input);
         },
         InputKind::Jump => {

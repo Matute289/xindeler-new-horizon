@@ -215,6 +215,102 @@ pub fn db_string_to_background(
     })
 }
 
+/// On-disk form of one reactive trigger slot.
+///
+/// Deliberately its own type rather than `serde`-ing the component: the live
+/// component carries a transient firing state and an in-game `Time` projection
+/// that are meaningless across a restart, while the column must carry the
+/// authoritative wall-clock instant that the wire format deliberately drops.
+#[derive(Serialize, Deserialize)]
+pub struct DatabaseTriggerSlot {
+    slot: u8,
+    ability: comp::ability::AuxiliaryAbility,
+    condition: comp::TriggerCondition,
+    /// RFC-3339 UTC; absent when the slot is not cooling down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ready_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Serialise a character's trigger slots for the `character.trigger_slots`
+/// column. `None` (a SQL NULL) when nothing is configured, so a character that
+/// never used the feature costs nothing.
+///
+/// The transient firing state is never written: a slot that was mid-cast when
+/// the server saved re-derives as ready, which is the safe direction (it
+/// re-fires when its condition next holds, rather than holding an
+/// authorisation token no cast will ever claim).
+pub fn trigger_slots_to_db_string(slots: &comp::TriggerSlots) -> Option<String> {
+    let rows: Vec<DatabaseTriggerSlot> = slots
+        .slots
+        .iter()
+        .enumerate()
+        .filter_map(|(index, slot)| {
+            let slot = slot.as_ref()?;
+            Some(DatabaseTriggerSlot {
+                slot: index as u8,
+                ability: slot.ability,
+                condition: slot.condition,
+                ready_at: slot.state.ready_at(),
+            })
+        })
+        .collect();
+
+    if rows.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&rows)
+        .inspect_err(|err| {
+            tracing::error!(?err, "Failed to serialize trigger slots; dropping them");
+        })
+        .ok()
+}
+
+/// Inverse of [`trigger_slots_to_db_string`].
+///
+/// 🔴 A restored cooling slot's in-game projection is left infinite on
+/// purpose: only `TriggerSlots::reproject_cooldowns` — which reads the real
+/// clock once, at character load — may make it finite. A caller that forgets
+/// leaves the slot cooling forever instead of instantly ready, so the failure
+/// mode points away from the exploit.
+///
+/// Malformed JSON yields no slots rather than failing the load: a character
+/// must never be locked out by a bad trigger payload.
+pub fn db_string_to_trigger_slots(payload: Option<&str>) -> comp::TriggerSlots {
+    use common::{comp::trigger::SlotState, resources::Time};
+
+    let mut slots = comp::TriggerSlots::default();
+    let Some(payload) = payload else {
+        return slots;
+    };
+    let rows: Vec<DatabaseTriggerSlot> = match serde_json::from_str(payload) {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!(?err, "Unreadable trigger slots in database, ignoring them");
+            return slots;
+        },
+    };
+
+    for row in rows {
+        let Some(dest) = slots.slots.get_mut(usize::from(row.slot)) else {
+            tracing::warn!(slot = row.slot, "Trigger slot index out of range, ignoring");
+            continue;
+        };
+        let state = match row.ready_at {
+            Some(ready_at) => SlotState::CoolingDown {
+                ready_at: Some(ready_at),
+                ready_at_time: Time(f64::INFINITY),
+            },
+            None => SlotState::Ready,
+        };
+        *dest = Some(comp::TriggerSlot {
+            ability: row.ability,
+            condition: row.condition,
+            state,
+        });
+    }
+    slots
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DatabaseAbilitySet {
     mainhand: String,
@@ -760,5 +856,127 @@ pub mod tests {
             super::aux_ability_to_string(AuxiliaryAbility::Innate(7), &pool),
             "Innate:index:7"
         );
+    }
+
+    mod trigger_slots {
+        use chrono::{DateTime, TimeDelta, Utc};
+        use common::{
+            comp::{
+                SlotState, TriggerCondition, TriggerSlot, TriggerSlots, ability::AuxiliaryAbility,
+                trigger::MAX_TRIGGER_SLOTS,
+            },
+            resources::Time,
+        };
+
+        fn instant() -> DateTime<Utc> { DateTime::from_timestamp(1_700_000_000, 0).unwrap() }
+
+        #[test]
+        fn a_character_with_no_triggers_writes_no_column() {
+            assert_eq!(
+                super::super::trigger_slots_to_db_string(&TriggerSlots::default()),
+                None
+            );
+        }
+
+        #[test]
+        fn a_null_column_loads_as_nothing_configured() {
+            let loaded = super::super::db_string_to_trigger_slots(None);
+            assert!(!loaded.has_any_configured());
+        }
+
+        /// 🔴 The whole reason this column exists: a slot cooling for
+        /// thirty-six hours must still be cooling after a relog, with the
+        /// remaining wait intact.
+        #[test]
+        fn a_running_cooldown_survives_the_round_trip_with_its_remaining_wait() {
+            let ready_at = instant() + TimeDelta::hours(36);
+            let mut before = TriggerSlots::default();
+            before.slots[2] = Some(TriggerSlot {
+                ability: AuxiliaryAbility::Innate(3),
+                condition: TriggerCondition::HealthBelow(0.25),
+                state: SlotState::CoolingDown {
+                    ready_at: Some(ready_at),
+                    ready_at_time: Time(999.0),
+                },
+            });
+
+            let column = super::super::trigger_slots_to_db_string(&before).expect("a column");
+            let mut after = super::super::db_string_to_trigger_slots(Some(&column));
+
+            assert_eq!(
+                after.get(2).map(|s| s.ability),
+                Some(AuxiliaryAbility::Innate(3))
+            );
+            assert_eq!(
+                after.get(2).map(|s| s.condition),
+                Some(TriggerCondition::HealthBelow(0.25)),
+            );
+            assert_eq!(
+                after.get(2).and_then(|s| s.state.ready_at()),
+                Some(ready_at)
+            );
+            // Nothing is ready until the projection is rebuilt from the clock.
+            assert_eq!(
+                after.get(2).and_then(|s| s.state.ready_at_time()),
+                Some(Time(f64::INFINITY)),
+            );
+
+            // One hour of real time passed while logged out: 35 hours left.
+            after.reproject_cooldowns(instant() + TimeDelta::hours(1), Time(50.0));
+            assert_eq!(
+                after.get(2).and_then(|s| s.state.ready_at_time()),
+                Some(Time(50.0 + 35.0 * 3600.0)),
+            );
+        }
+
+        /// A slot that was mid-cast when the save happened comes back ready,
+        /// never holding an authorisation token no cast will ever claim.
+        #[test]
+        fn a_firing_slot_is_never_persisted_as_firing() {
+            let mut before = TriggerSlots::default();
+            before.slots[0] = Some(TriggerSlot {
+                ability: AuxiliaryAbility::Innate(0),
+                condition: TriggerCondition::DamageTaken,
+                state: SlotState::Firing {
+                    ability_id: "innate.danari".to_string(),
+                    deadline: Time(5.0),
+                },
+            });
+
+            let column = super::super::trigger_slots_to_db_string(&before).expect("a column");
+            let after = super::super::db_string_to_trigger_slots(Some(&column));
+            assert_eq!(
+                after.get(0).map(|s| s.state.clone()),
+                Some(SlotState::Ready)
+            );
+            assert_eq!(after.firing_token(0), None);
+        }
+
+        #[test]
+        fn every_slot_index_round_trips_independently() {
+            let mut before = TriggerSlots::default();
+            for index in 0..MAX_TRIGGER_SLOTS {
+                before.slots[index] = Some(TriggerSlot::new(
+                    AuxiliaryAbility::Innate(index),
+                    TriggerCondition::EnergyBelow(0.1 * index as f32),
+                ));
+            }
+            let column = super::super::trigger_slots_to_db_string(&before).expect("a column");
+            let after = super::super::db_string_to_trigger_slots(Some(&column));
+            for index in 0..MAX_TRIGGER_SLOTS {
+                assert_eq!(
+                    after.configured_ability(index),
+                    Some(AuxiliaryAbility::Innate(index)),
+                    "slot {index}"
+                );
+            }
+        }
+
+        /// A corrupt payload must never lock a character out of the game.
+        #[test]
+        fn an_unreadable_column_loads_as_nothing_configured() {
+            let loaded = super::super::db_string_to_trigger_slots(Some("{not json"));
+            assert!(!loaded.has_any_configured());
+        }
     }
 }

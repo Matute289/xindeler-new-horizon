@@ -225,6 +225,8 @@ fn do_command(
         ServerChatCommand::Ship => handle_spawn_ship,
         ServerChatCommand::Site => handle_site,
         ServerChatCommand::SkillPoint => handle_skill_point,
+        ServerChatCommand::TriggerSlot => handle_trigger_slot,
+        ServerChatCommand::TriggerReady => handle_trigger_ready,
         ServerChatCommand::SkillPreset => handle_skill_preset,
         ServerChatCommand::Spawn => handle_spawn,
         ServerChatCommand::Spot => handle_spot,
@@ -6504,6 +6506,143 @@ fn handle_multiclass(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::Plain(format!("Secondary class granted: {class:?}.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/trigger_slot <slot> <pool index> <condition> [threshold]` — configure a
+/// reactive trigger slot on the target.
+///
+/// The ability is named by its position in the target's `AbilityPool`, which is
+/// what a trigger slot ultimately stores; the pool's own ordering contract
+/// keeps those indices stable. A good first example is the Danari racial
+/// blink, which needs no target and already carries its own short cooldown, so
+/// it makes the "the trigger ignores the ability's cooldown, and does not touch
+/// it either" behaviour directly observable. A self-buff spell works equally
+/// well.
+///
+/// Setting a slot always leaves it ready: this is a test tool, and the point of
+/// it is to be able to fire the same slot repeatedly.
+fn handle_trigger_slot(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{
+        TriggerCondition, TriggerSlot, TriggerSlots, ability::AuxiliaryAbility,
+        trigger::MAX_TRIGGER_SLOTS,
+    };
+
+    let (slot, pool_index, condition_arg, threshold) = parse_cmd_args!(args, u32, u32, String, f32);
+    let (Some(slot), Some(pool_index), Some(condition_arg)) = (slot, pool_index, condition_arg)
+    else {
+        return Err(action.help_content());
+    };
+    let slot = slot as usize;
+    if slot >= MAX_TRIGGER_SLOTS {
+        return Err(Content::Plain(format!(
+            "Trigger slot must be 0-{}.",
+            MAX_TRIGGER_SLOTS - 1
+        )));
+    }
+
+    let threshold = threshold.unwrap_or(0.3);
+    if !(0.0..=1.0).contains(&threshold) {
+        return Err(Content::Plain(
+            "Threshold must be a fraction between 0 and 1.".to_string(),
+        ));
+    }
+    let condition = match condition_arg.to_lowercase().as_str() {
+        "health_below" => TriggerCondition::HealthBelow(threshold),
+        "damage_taken" => TriggerCondition::DamageTaken,
+        "energy_below" => TriggerCondition::EnergyBelow(threshold),
+        other => {
+            return Err(Content::Plain(format!(
+                "Unknown condition '{other}'. Options: health_below, damage_taken, energy_below."
+            )));
+        },
+    };
+
+    let pool_len = server
+        .state
+        .ecs()
+        .read_storage::<comp::AbilityPool>()
+        .get(target)
+        .map_or(0, |pool| pool.abilities.len());
+    if usize::try_from(pool_index).unwrap_or(usize::MAX) >= pool_len {
+        return Err(Content::Plain(format!(
+            "Ability pool index out of range (target has {pool_len} pool entries)."
+        )));
+    }
+
+    let mut trigger_slots = server.state.ecs().write_storage::<TriggerSlots>();
+    let mut entry = match trigger_slots.get_mut(target) {
+        Some(existing) => existing,
+        None => {
+            let _ = trigger_slots.insert(target, TriggerSlots::default());
+            trigger_slots
+                .get_mut(target)
+                .ok_or_else(|| Content::Plain("Target cannot hold trigger slots.".to_string()))?
+        },
+    };
+    entry.slots[slot] = Some(TriggerSlot::new(
+        AuxiliaryAbility::Innate(pool_index as usize),
+        condition,
+    ));
+    drop(trigger_slots);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Trigger slot {slot} set to pool ability {pool_index} on {condition:?}."
+            )),
+        ),
+    );
+    Ok(())
+}
+
+/// `/trigger_ready <slot>` — clear a trigger slot's real-world cooldown.
+///
+/// A slot's wait runs from ten minutes to thirty-six real-world hours, which
+/// makes every test after the first one impossible to reach in a session. This
+/// is the escape hatch; it changes nothing else about the slot.
+fn handle_trigger_ready(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{SlotState, TriggerSlots, trigger::MAX_TRIGGER_SLOTS};
+
+    let slot = parse_cmd_args!(args, u32).ok_or_else(|| action.help_content())? as usize;
+    if slot >= MAX_TRIGGER_SLOTS {
+        return Err(Content::Plain(format!(
+            "Trigger slot must be 0-{}.",
+            MAX_TRIGGER_SLOTS - 1
+        )));
+    }
+
+    let mut trigger_slots = server.state.ecs().write_storage::<TriggerSlots>();
+    let mut entry = trigger_slots
+        .get_mut(target)
+        .ok_or_else(|| Content::Plain("Target has no trigger slots.".to_string()))?;
+    let configured = entry
+        .get_mut(slot)
+        .ok_or_else(|| Content::Plain(format!("Trigger slot {slot} is not configured.")))?;
+    configured.state = SlotState::Ready;
+    drop(trigger_slots);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Trigger slot {slot} forced ready.")),
         ),
     );
     Ok(())
