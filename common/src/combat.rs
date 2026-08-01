@@ -632,7 +632,10 @@ impl Attack {
     /// their hands. `tool: None` (unarmed strikes, natural weapons, an NPC
     /// `Empty`-tool attack) is always treated as proficient, and an attacker
     /// with no `Stats` (or one whose class leaves `proficient_tools`
-    /// permissive) is unaffected.
+    /// permissive) is unaffected. Narrowed by [`WeaponRole`] exactly like
+    /// grip: a class proficient with a `Staff`'s caster role but not its
+    /// martial role (or vice versa) is non-proficient when wielding the
+    /// other role's kit, even though both share the same `ToolKind`.
     pub fn proficiency_multiplier(
         stats: Option<&Stats>,
         ability_info: Option<AbilityInfo>,
@@ -651,7 +654,8 @@ impl Attack {
             HandInfo::TwoHanded => Hands::Two,
             HandInfo::MainHand | HandInfo::OffHand => Hands::One,
         });
-        if stats.proficient_tools.allows(tool, hands) {
+        let role = ability_info.and_then(|ai| ai.role);
+        if stats.proficient_tools.allows(tool, hands, role) {
             1.0
         } else {
             stats.non_proficient_damage_mult
@@ -3976,7 +3980,9 @@ mod combat_resolution_tests {
 
 #[cfg(test)]
 mod weapon_proficiency_tests {
-    use super::{AbilityInfo, Attack, Body, CombatTuning, HandInfo, InputKind, Stats};
+    use super::{
+        AbilityInfo, Attack, Body, CombatTuning, HandInfo, InputKind, Stats, tool::WeaponRole,
+    };
     use crate::comp::{
         ability::AbilityMeta,
         class::{ClassKind, class_proficiencies},
@@ -3994,13 +4000,24 @@ mod weapon_proficiency_tests {
     }
 
     fn ability_info(tool: ToolKind, hand: HandInfo) -> AbilityInfo {
+        // `role: None` -- permissive on the role axis; only the tests that
+        // specifically exercise WeaponRole narrowing use
+        // `ability_info_with_role` below.
         AbilityInfo {
             tool: Some(tool),
             hand: Some(hand),
+            role: None,
             input: InputKind::Primary,
             input_attr: None,
             ability_meta: AbilityMeta::default(),
             ability: None,
+        }
+    }
+
+    fn ability_info_with_role(tool: ToolKind, hand: HandInfo, role: WeaponRole) -> AbilityInfo {
+        AbilityInfo {
+            role: Some(role),
+            ..ability_info(tool, hand)
         }
     }
 
@@ -4061,6 +4078,7 @@ mod weapon_proficiency_tests {
         let ai = AbilityInfo {
             tool: None,
             hand: None,
+            role: None,
             input: InputKind::Primary,
             input_attr: None,
             ability_meta: AbilityMeta::default(),
@@ -4116,6 +4134,44 @@ mod weapon_proficiency_tests {
         );
         assert!(
             (Attack::proficiency_multiplier(Some(&warrior_stats), Some(two_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    /// Mirrors `sword_grip_split_follows_the_class_manifest` for the
+    /// `WeaponRole` axis: the role travels end to end from `AbilityInfo`
+    /// through `proficiency_multiplier`, not just through the `ToolKindMask`
+    /// tested directly in `class.rs`.
+    #[test]
+    fn staff_role_split_follows_the_class_manifest() {
+        let caster_kit =
+            ability_info_with_role(ToolKind::Staff, HandInfo::TwoHanded, WeaponRole::Caster);
+        let martial_kit =
+            ability_info_with_role(ToolKind::Staff, HandInfo::TwoHanded, WeaponRole::Martial);
+
+        // Mage: caster kit only, per class_proficiencies.ron.
+        let mage_stats = stats_with_mask(class_proficiencies(ClassKind::Mage).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&mage_stats), Some(caster_kit), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&mage_stats), Some(martial_kit), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+
+        // Monk: martial kit only.
+        let monk_stats = stats_with_mask(class_proficiencies(ClassKind::Monk).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&monk_stats), Some(martial_kit), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&monk_stats), Some(caster_kit), false) - 0.40)
                 .abs()
                 < 1e-6
         );

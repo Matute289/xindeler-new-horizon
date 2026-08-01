@@ -284,6 +284,7 @@ mod tests {
             ability_info: AbilityInfo {
                 tool: None,
                 hand: None,
+                role: None,
                 input: InputKind::Ability(0),
                 input_attr: Some(InputAttr {
                     select_pos: None,

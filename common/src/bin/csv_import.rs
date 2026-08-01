@@ -361,7 +361,7 @@ fn weapon_stats() -> Result<(), Box<dyn Error>> {
                     .parse()
                     .expect(&format!("Not a f32? {:?}", item.item_definition_id()));
 
-                let tool = comp::item::tool::Tool::new(kind, hands, Stats {
+                let tool = comp::item::tool::Tool::new(kind, hands, None, Stats {
                     equip_time_secs,
                     power,
                     effect_power,

@@ -13,7 +13,7 @@ use crate::{
         controller::InventoryManip,
         crustacean, golem,
         inventory::slot::{ArmorSlot, EquipSlot, Slot},
-        item::{Hands, ItemKind, ToolKind, armor::Friction, tool},
+        item::{Hands, ItemKind, ToolKind, WeaponRole, armor::Friction, tool},
         object, quadruped_low, quadruped_medium, quadruped_small, ship,
         skills::{SKILL_MODIFIERS, Skill, SwimSkill},
         spell::spell_compendium_manifest,
@@ -1838,18 +1838,21 @@ pub fn is_strafing(data: &JoinData<'_>, update: &StateUpdate) -> bool {
     (update.character.is_aimed() || update.should_strafe) && data.body.can_strafe()
     // no strafe with music instruments equipped in ActiveMainhand
     && !matches!(unwrap_tool_data(data, EquipSlot::ActiveMainhand),
-        Some((ToolKind::Instrument, _)))
+        Some((ToolKind::Instrument, _, _)))
 }
 
-/// Returns tool and components
-pub fn unwrap_tool_data(data: &JoinData, equip_slot: EquipSlot) -> Option<(ToolKind, Hands)> {
+/// Returns tool kind, grip and [`WeaponRole`].
+pub fn unwrap_tool_data(
+    data: &JoinData,
+    equip_slot: EquipSlot,
+) -> Option<(ToolKind, Hands, WeaponRole)> {
     if let Some(ItemKind::Tool(tool)) = data
         .inventory
         .and_then(|inv| inv.equipped(equip_slot))
         .map(|i| i.kind())
         .as_deref()
     {
-        Some((tool.kind, tool.hands))
+        Some((tool.kind, tool.hands, tool.role()))
     } else {
         None
     }
@@ -2023,6 +2026,11 @@ impl MovementDirection {
 pub struct AbilityInfo {
     pub tool: Option<ToolKind>,
     pub hand: Option<HandInfo>,
+    /// The equipped tool's [`WeaponRole`], mirroring `hand`: `None` when
+    /// `tool` is `None` (unarmed/natural/`Empty`-tool attacks), `Some`
+    /// otherwise. Threaded alongside `hand` so `Attack::proficiency_multiplier`
+    /// can narrow by role exactly as it already narrows by grip.
+    pub role: Option<WeaponRole>,
     pub input: InputKind,
     pub input_attr: Option<InputAttr>,
     pub ability_meta: AbilityMeta,
@@ -2042,16 +2050,18 @@ impl AbilityInfo {
         } else {
             unwrap_tool_data(data, EquipSlot::ActiveMainhand)
         };
-        let (tool, hand) = tool_data.map_or((None, None), |(kind, hands)| {
+        let (tool, hand, role) = tool_data.map_or((None, None, None), |(kind, hands, role)| {
             (
                 Some(kind),
                 Some(HandInfo::from_main_tool(hands, from_offhand)),
+                Some(role),
             )
         });
 
         Self {
             tool,
             hand,
+            role,
             input,
             input_attr: data.controller.queued_inputs.get(&input).copied(),
             ability_meta,
@@ -2297,7 +2307,11 @@ mod cast_gate_asset_tests {
             .filter(|&class| {
                 CharacterClass::single(class)
                     .proficient_tools_mask(&manifest.0)
-                    .allows(tool, None)
+                    // `role: None` -- permissive across both roles, since
+                    // this helper asks "proficient with `tool` at all"
+                    // (either its caster or martial kit), not one role
+                    // specifically.
+                    .allows(tool, None, None)
             })
             .collect()
     }
@@ -2372,14 +2386,14 @@ mod cast_gate_asset_tests {
     /// The actual gap this catalogue closes, asserted from the exact
     /// activation-independent angle: a class NOT proficient with `Staff`/
     /// `Sceptre` at all (so it could never satisfy an equip gate on any
-    /// ItemDef, standard or hypothetically modular) must be refused by every
-    /// ability in that tool's `Tool(ToolKind)` set. Modular weapons carry no
-    /// equip gate at all (`Item::requirements()` returns `None` for
-    /// `ItemBase::Modular`), so this check — driven purely by
-    /// `SpellCompendium::allows`, which never consults item requirements —
-    /// is what actually protects a modular Staff/Sceptre, not just the
-    /// standard-item `requirements.classes` equip gate on the shipped
-    /// ItemDefs.
+    /// ItemDef, standard or modular) must be refused by every ability in
+    /// that tool's `Tool(ToolKind)` set. `Item::requirements()` now unions a
+    /// per-item `requirements:` block with the `equip_gates.ron` manifest for
+    /// modular weapons too, so a modular Staff/Sceptre also gets a real equip
+    /// gate -- but this check, driven purely by `SpellCompendium::allows`
+    /// (which never consults item requirements), is defense in depth: even a
+    /// hypothetical future item shape with no equip gate at all would still
+    /// be caught here.
     #[test]
     fn legacy_kit_refuses_a_class_with_no_staff_sceptre_proficiency_at_all() {
         let ability_map = AbilityMap::load().read();

@@ -1,0 +1,20 @@
+// Per-`(ToolKind, WeaponRole)` equip gate manifest. `Item::requirements()`
+// unions this with any per-item `requirements:` block (see
+// `common/src/comp/inventory/item/mod.rs`'s `resolve_requirements` doc
+// comment): a per-item `classes` list, when present, always wins outright;
+// this manifest only fills the gap when the item declares none of its own.
+//
+// An absent key, or an explicit `None` value, both mean "ungated" — that is
+// the default for every martial-role weapon today. Only the five caster
+// implements are listed with a real whitelist; `Staff`/`Sceptre`'s
+// `Martial` rows are spelled out explicitly (rather than left absent) so the
+// "no whitelist at all" decision reads as deliberate, not an oversight.
+{
+    (Staff, Caster): Some([Mage, Sorcerer, Warlock, Druid]),
+    (Staff, Martial): None,
+    (Sceptre, Caster): Some([Cleric, Druid]),
+    (Sceptre, Martial): None,
+    (Tome, Caster): Some([Mage]),
+    (HolySymbol, Caster): Some([Cleric, Paladin]),
+    (Focus, Caster): Some([Druid, Ranger]),
+}
