@@ -168,7 +168,8 @@ pub fn load_character_data(
                 c.secondary_class,
                 c.secondary_class_level,
                 c.secondary_class_future_levels,
-                c.trigger_slots
+                c.trigger_slots,
+                c.spell_mastery
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -193,6 +194,7 @@ pub fn load_character_data(
                 secondary_class_level: row.get(12)?,
                 secondary_class_future_levels: row.get(13)?,
                 trigger_slots: row.get(14)?,
+                spell_mastery: row.get(15)?,
             };
 
             let body_data = Body {
@@ -376,6 +378,9 @@ pub fn load_character_data(
                 character_data.trigger_slots.as_deref(),
                 &ability_pool,
             ),
+            spell_mastery: json_models::db_string_to_spell_mastery(
+                character_data.spell_mastery.as_deref(),
+            ),
         },
         UpdateCharacterMetadata {
             skill_set_persistence_load_error,
@@ -424,6 +429,8 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 secondary_class_future_levels: 0,
                 // Nor the trigger slots: the list view never shows them.
                 trigger_slots: None,
+                // Nor spell mastery: the list view never shows it either.
+                spell_mastery: None,
             })
         })?
         .map(|x| x.unwrap())
@@ -518,6 +525,8 @@ pub fn create_character(
         // A brand-new character has nothing configured; the column stays NULL
         // and the first autosave that changes it writes the row.
         trigger_slots: _,
+        // Nothing accrued yet either; same reasoning as `trigger_slots`.
+        spell_mastery: _,
     } = persisted_components;
 
     // Fetch new entity IDs for character, inventory, loadout, overflow items,
@@ -1218,6 +1227,7 @@ pub fn update(
     ethos: comp::Ethos,
     background: comp::Background,
     trigger_slots: comp::TriggerSlots,
+    spell_mastery: comp::SpellMastery,
     transaction: &mut Transaction,
 ) -> Result<(), PersistenceError> {
     // Run pet persistence
@@ -1377,8 +1387,9 @@ pub fn update(
                 secondary_class = ?7,
                 secondary_class_level = ?8,
                 secondary_class_future_levels = ?9,
-                trigger_slots = ?10
-        WHERE   character_id = ?11
+                trigger_slots = ?10,
+                spell_mastery = ?11
+        WHERE   character_id = ?12
     ",
     )?;
 
@@ -1393,6 +1404,7 @@ pub fn update(
         &convert_secondary_class_level_to_database(character_class),
         &convert_future_levels_to_secondary_to_database(character_class),
         &json_models::trigger_slots_to_db_string(&trigger_slots, &ability_pool),
+        &json_models::spell_mastery_to_db_string(&spell_mastery),
         &char_id.0,
     ])?;
 
@@ -1498,6 +1510,7 @@ mod spell_book_persistence_tests {
             ethos: comp::Ethos::default(),
             background: comp::Background::default(),
             trigger_slots: comp::TriggerSlots::default(),
+            spell_mastery: comp::SpellMastery::default(),
         }
     }
 
@@ -1543,6 +1556,7 @@ mod spell_book_persistence_tests {
             loaded.ethos,
             loaded.background,
             loaded.trigger_slots.clone(),
+            loaded.spell_mastery,
             &mut transaction,
         )
         .expect("character update");

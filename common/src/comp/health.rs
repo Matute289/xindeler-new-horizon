@@ -8,10 +8,9 @@ use specs::{Component, DerefFlaggedStorage};
 use std::{convert::TryFrom, ops::Mul};
 
 /// Number of `MagicSource` (`comp::ability::MagicSource`) variants. A local
-/// mirror rather than a constant on the enum itself, kept in sync by hand;
-/// callers that need to size or index a fixed-size per-source array use this
-/// rather than a literal.
-const MAGIC_SOURCE_COUNT: usize = 5;
+/// alias for `MagicSource::COUNT`, so every per-source fixed-size array in
+/// this module reads the same name rather than a literal.
+const MAGIC_SOURCE_COUNT: usize = MagicSource::COUNT;
 
 /// Specifies what and how much changed current health
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]

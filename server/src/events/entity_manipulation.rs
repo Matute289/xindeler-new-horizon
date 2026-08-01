@@ -29,8 +29,8 @@ use common::{
         self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterClass,
         CharacterState, Energy, Group, Hardcore, Health, HealthChange, Inventory, Object,
         PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind, ProjectileConstructor,
-        SkillSet, Stats,
-        ability::Dodgeable,
+        Skill, SkillSet, SpellMastery, Stats,
+        ability::{Dodgeable, MagicSource},
         aura::{self, EnteredAuras},
         buff,
         chat::{KillSource, KillType},
@@ -38,6 +38,8 @@ use common::{
         item::flatten_counted_items,
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_SLOW},
         projectile::{ProjectileAttack, ProjectileConstructorKind, ProjectileExplosionTarget},
+        skills::MageSkill,
+        spell_mastery::{POLYGLOT_BONUS_PER_RANK, grant_source_mastery, level_delta_weight},
     },
     consts::TELEPORTER_RADIUS,
     event::{
@@ -676,6 +678,65 @@ fn handle_exp_gain(
     });
 }
 
+/// The `Uid` of the entity that actually dealt this damage, regardless of
+/// whether it was recorded `Solo` or as part of a `Group` at the time --
+/// both variants uniquely identify one attacking entity. Used to key
+/// mastery crediting on the ATTACKER, never the group, since a group-XP
+/// award (below) can reach bystanders who dealt no damage at all.
+fn damage_contributor_uid(contributor: &DamageContributor) -> Uid {
+    match contributor {
+        DamageContributor::Solo(uid) => *uid,
+        DamageContributor::Group { entity_uid, .. } => *entity_uid,
+    }
+}
+
+/// Credits one attacker's `SpellMastery` for their own share of a kill.
+/// Called once per entry of `exp_awards` (spec §2a), i.e. only for an
+/// attacker who already cleared every existing XP-eligibility check --
+/// in-range, not the victim itself, not a PvP kill. This function takes no
+/// PvP/self-kill signal at all, because by the time it runs those cases
+/// already never call it: mastery has no separate anti-farm rule to write,
+/// it simply inherits the one XP already has.
+///
+/// `own_total_damage` / `own_damage_by_source` are THIS attacker's own
+/// entry in `Health::damage_contributors` -- never the group's summed total
+/// -- so mastery tracks personal spellcasting even when the group-XP split
+/// (spec-unrelated) divides the reward among bystanders who never cast
+/// anything. `exp_reward` is this attacker's already-computed share of the
+/// kill (post group-division), matching the currency `handle_exp_gain`
+/// itself spends.
+///
+/// A no-op if this attacker dealt no damage at all (nothing to attribute) or
+/// holds no `SpellMastery` component yet (an NPC, a pet, or any entity that
+/// predates the component).
+fn grant_kill_mastery(
+    mastery: &mut SpellMastery,
+    exp_reward: f32,
+    own_total_damage: u64,
+    own_damage_by_source: &[u64; MagicSource::COUNT],
+    target_level: u16,
+    caster_level: u16,
+    polyglot_rank: u16,
+) {
+    if own_total_damage == 0 {
+        return;
+    }
+    let delta = i32::from(target_level) - i32::from(caster_level);
+    let weight =
+        level_delta_weight(delta) * (1.0 + POLYGLOT_BONUS_PER_RANK * f32::from(polyglot_rank));
+    for source in MagicSource::ALL {
+        if matches!(source, MagicSource::Arcane) {
+            continue;
+        }
+        let source_damage = own_damage_by_source[source as usize];
+        if source_damage == 0 {
+            continue;
+        }
+        let share = source_damage as f32 / own_total_damage as f32;
+        grant_source_mastery(mastery, source, exp_reward * share, weight);
+    }
+}
+
 #[cfg(test)]
 mod handle_exp_gain_tests {
     use super::*;
@@ -811,6 +872,104 @@ mod handle_exp_gain_tests {
             earned_exp(&banished_set, SkillGroupKind::General)
                 < earned_exp(&killed_set, SkillGroupKind::General)
         );
+    }
+}
+
+#[cfg(test)]
+mod grant_kill_mastery_tests {
+    use super::*;
+
+    /// A kill done 70% Divine / 30% weapon credits Divine
+    /// `0.70 * exp_reward` (at Delta=0, W=1.0, no Polyglot) and nothing else.
+    #[test]
+    fn credits_only_the_source_actually_used_by_its_own_damage_share() {
+        let mut mastery = SpellMastery::default();
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Divine as usize] = 70;
+        // own_total_damage = 100: 70 Divine-tagged, 30 untagged (weapon).
+
+        grant_kill_mastery(&mut mastery, 1000.0, 100, &by_source, 20, 20, 0);
+
+        assert_eq!(mastery.source_xp(MagicSource::Divine), 700);
+        assert_eq!(mastery.source_xp(MagicSource::Primordial), 0);
+        assert_eq!(mastery.source_xp(MagicSource::Psionic), 0);
+        assert_eq!(mastery.source_xp(MagicSource::Ki), 0);
+        assert_eq!(mastery.source_xp(MagicSource::Arcane), 0);
+    }
+
+    /// A kill done entirely with a weapon (no magic source tagged on any of
+    /// the damage) credits zero mastery, even though `own_total_damage` is
+    /// nonzero -- there is nothing in `by_source` to attribute.
+    #[test]
+    fn a_kill_done_entirely_with_a_weapon_credits_zero_mastery() {
+        let mut mastery = SpellMastery::default();
+        let by_source = [0u64; MagicSource::COUNT];
+
+        grant_kill_mastery(&mut mastery, 1000.0, 100, &by_source, 20, 20, 0);
+
+        for source in MagicSource::ALL {
+            assert_eq!(mastery.source_xp(source), 0, "{source:?}");
+        }
+    }
+
+    /// `level_delta_weight` is actually applied: the same kill against a
+    /// target 10 levels below the caster yields 0.15x the at-level result.
+    #[test]
+    fn the_level_delta_weight_scales_the_credited_xp() {
+        let mut at_level = SpellMastery::default();
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Primordial as usize] = 100;
+        grant_kill_mastery(&mut at_level, 1000.0, 100, &by_source, 20, 20, 0);
+
+        let mut ten_below = SpellMastery::default();
+        grant_kill_mastery(&mut ten_below, 1000.0, 100, &by_source, 10, 20, 0);
+
+        assert_eq!(at_level.source_xp(MagicSource::Primordial), 1000);
+        assert_eq!(ten_below.source_xp(MagicSource::Primordial), 150);
+    }
+
+    /// A caster dealing no damage at all (present in `exp_awards` only
+    /// because a group kill split XP to a bystander) attributes nothing --
+    /// there is no own damage to derive a source share from.
+    #[test]
+    fn an_attacker_with_no_own_damage_credits_nothing() {
+        let mut mastery = SpellMastery::default();
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Divine as usize] = 0;
+
+        grant_kill_mastery(&mut mastery, 1000.0, 0, &by_source, 20, 20, 0);
+
+        for source in MagicSource::ALL {
+            assert_eq!(mastery.source_xp(source), 0, "{source:?}");
+        }
+    }
+
+    /// `Mage(Polyglot)` multiplies the credited XP: rank 3 -> x1.24.
+    #[test]
+    fn polyglot_rank_multiplies_the_credited_xp() {
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Ki as usize] = 100;
+
+        let mut no_polyglot = SpellMastery::default();
+        grant_kill_mastery(&mut no_polyglot, 1000.0, 100, &by_source, 20, 20, 0);
+
+        let mut rank_three = SpellMastery::default();
+        grant_kill_mastery(&mut rank_three, 1000.0, 100, &by_source, 20, 20, 3);
+
+        assert_eq!(no_polyglot.source_xp(MagicSource::Ki), 1000);
+        assert_eq!(rank_three.source_xp(MagicSource::Ki), 1240);
+    }
+
+    /// `polyglot_rank` above is always a value read from
+    /// `skill_set.skill_level(...)`, itself bounded by
+    /// `skill_max_levels.ron` through `Skill::max_level`. This pins the
+    /// manifest's current cap so `POLYGLOT_BONUS_PER_RANK`'s "+24% at rank
+    /// 3" doc comment stays true if the manifest is ever retuned -- the
+    /// mistake a hardcoded `3` made elsewhere in this codebase before.
+    #[test]
+    fn mage_polyglot_max_rank_is_read_from_the_manifest() {
+        use common::comp::skills::MageSkill;
+        assert_eq!(Skill::Mage(MageSkill::Polyglot).max_level(), 3);
     }
 }
 
@@ -954,6 +1113,12 @@ pub struct DestroyEventData<'a> {
     melees: WriteStorage<'a, comp::Melee>,
     beams: WriteStorage<'a, comp::Beam>,
     skill_sets: WriteStorage<'a, SkillSet>,
+    /// Read here (not written -- crediting happens through a short-lived
+    /// `get_mut` per attacker inside the exp-award loop) so an attacker with
+    /// no `SpellMastery` yet (an NPC, a pet, or any entity that predates this
+    /// component) is simply skipped rather than gating the rest of their
+    /// combat-XP award on it.
+    spell_masteries: WriteStorage<'a, SpellMastery>,
     character_classes: WriteStorage<'a, CharacterClass>,
     inventories: WriteStorage<'a, Inventory>,
     item_drops: WriteStorage<'a, comp::ItemDrops>,
@@ -1663,6 +1828,29 @@ impl ServerEvent for DestroyEvent {
                 ) * 20.0
                     * ev.removal.reward_fraction;
 
+                // Mastery's Delta = target_level - caster_level (spec §4);
+                // captured by value so the immutable borrow of
+                // `data.skill_sets` behind `entity_skill_set` ends here,
+                // before the exp-award loop below needs it mutably for each
+                // attacker in turn.
+                let target_level = entity_skill_set.character_level();
+
+                // Per-attacker (never per-group) damage totals and
+                // per-source splits, keyed by the attacking entity's own
+                // `Uid` -- mastery tracks personal casting, never the
+                // group-XP split below, which can spread the reward to
+                // bystanders who dealt no damage at all.
+                let mastery_totals: HashMap<Uid, u64> = entity_health
+                    .damage_contributions()
+                    .map(|(contributor, total)| (damage_contributor_uid(contributor), *total))
+                    .collect();
+                let mastery_by_source: HashMap<Uid, [u64; MagicSource::COUNT]> = entity_health
+                    .damage_contributions_by_source()
+                    .map(|(contributor, by_source)| {
+                        (damage_contributor_uid(contributor), *by_source)
+                    })
+                    .collect();
+
                 let mut damage_contributors = HashMap::<DamageContrib, (u64, f32)>::new();
                 for (damage_contributor, damage) in entity_health.damage_contributions() {
                     match damage_contributor {
@@ -1820,6 +2008,30 @@ impl ServerEvent for DestroyEvent {
                             attacker_uid,
                             &mut outcomes,
                         );
+
+                        // Mastery crediting piggybacks on the same
+                        // already-filtered `exp_awards` entry: self-kills and
+                        // PvP never reach this closure at all (filtered
+                        // above), so mastery inherits that exclusion rather
+                        // than re-deriving it.
+                        if let (Some(&own_total), Some(own_by_source)) = (
+                            mastery_totals.get(attacker_uid),
+                            mastery_by_source.get(attacker_uid),
+                        ) && let Some(mut mastery) = data.spell_masteries.get_mut(*attacker)
+                        {
+                            let polyglot_rank = attacker_skill_set
+                                .skill_level(Skill::Mage(MageSkill::Polyglot))
+                                .unwrap_or(0);
+                            grant_kill_mastery(
+                                &mut mastery,
+                                *exp_reward,
+                                own_total,
+                                own_by_source,
+                                target_level,
+                                attacker_skill_set.character_level(),
+                                polyglot_rank,
+                            );
+                        }
                     }
                 });
             };

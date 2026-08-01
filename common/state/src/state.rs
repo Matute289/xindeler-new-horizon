@@ -298,6 +298,7 @@ impl State {
         ecs.register::<comp::ActiveAbilities>();
         ecs.register::<comp::AbilityCooldowns>();
         ecs.register::<comp::TriggerSlots>();
+        ecs.register::<comp::SpellMastery>();
         ecs.register::<comp::AbilityPool>();
         ecs.register::<comp::AttunedItems>();
         ecs.register::<comp::Attuning>();

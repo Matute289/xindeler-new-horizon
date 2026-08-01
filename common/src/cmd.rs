@@ -504,6 +504,7 @@ pub enum ServerChatCommand {
     SetClassLevel,
     SetEthos,
     SetLevel,
+    SetMastery,
     SetMotd,
     SetWaypoint,
     Ship,
@@ -1079,6 +1080,23 @@ impl ServerChatCommand {
                 Content::localized("command-set_level-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::SetMastery => cmd(
+                vec![
+                    Enum(
+                        "source",
+                        vec![
+                            "divine".to_string(),
+                            "primordial".to_string(),
+                            "psionic".to_string(),
+                            "ki".to_string(),
+                        ],
+                        Required,
+                    ),
+                    Float("pct", 0.0, Required),
+                ],
+                Content::localized("command-set_mastery-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::SetMotd => cmd(
                 vec![Any("locale", Optional), Message(Optional)],
                 Content::localized("command-set_motd-desc"),
@@ -1471,6 +1489,7 @@ impl ServerChatCommand {
             ServerChatCommand::SetClassLevel => "set_class_level",
             ServerChatCommand::SetEthos => "set_ethos",
             ServerChatCommand::SetLevel => "set_level",
+            ServerChatCommand::SetMastery => "set_mastery",
             ServerChatCommand::SetMotd => "set_motd",
             ServerChatCommand::SetBodyType => "set_body_type",
             ServerChatCommand::Ship => "ship",

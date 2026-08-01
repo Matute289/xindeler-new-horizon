@@ -267,6 +267,7 @@ pub struct UpdateCharacterDataEvent {
         comp::Ethos,
         comp::Background,
         comp::TriggerSlots,
+        comp::SpellMastery,
     ),
     pub metadata: UpdateCharacterMetadata,
 }

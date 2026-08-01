@@ -420,6 +420,13 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .cloned()
                         .unwrap_or_default();
 
+                    let spell_mastery = state
+                        .ecs()
+                        .read_storage::<comp::SpellMastery>()
+                        .get(entity)
+                        .copied()
+                        .unwrap_or_default();
+
                     character_updater.add_pending_logout_update((
                         char_id,
                         skill_set.clone(),
@@ -433,6 +440,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         ethos,
                         background,
                         trigger_slots,
+                        spell_mastery,
                     ));
                 }
             },

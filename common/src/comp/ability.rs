@@ -4467,14 +4467,25 @@ pub enum MagicSource {
 }
 
 impl MagicSource {
-    /// Number of `MagicSource` variants — sizes
-    /// `comp::Stats::spell_power_by_source`, the per-source spell-power
-    /// multiplier channel. A hand-written const rather than adopting
-    /// `common_base::enum_iter!` (the `CreatureKind` pattern): `MagicSource`
-    /// is already widely used with its current derive list, and this is its
-    /// only consumer that needs an index, so retrofitting the macro isn't
-    /// worth the touched surface.
-    pub const NUM_SOURCES: usize = 5;
+    /// Every variant, including Arcane. Same shape as the `ClassKind::ALL`
+    /// precedent (`common/src/comp/class.rs`): persistence round-trips and
+    /// per-source arrays iterate this, so a new source added here cannot
+    /// silently fall out of any converter or leave a stale hardcoded `5`.
+    pub const ALL: [MagicSource; 5] = [
+        MagicSource::Arcane,
+        MagicSource::Divine,
+        MagicSource::Primordial,
+        MagicSource::Psionic,
+        MagicSource::Ki,
+    ];
+    /// Number of variants. Single source of truth for anything that sizes or
+    /// indexes a fixed-size per-source array — see [`Self::ALL`]'s doc
+    /// comment for why this exists rather than a literal `5` scattered
+    /// across callers.
+    pub const COUNT: usize = Self::ALL.len();
+    /// Alias for [`Self::COUNT`], kept for callers already written against
+    /// this name. Prefer `COUNT` in new code.
+    pub const NUM_SOURCES: usize = Self::COUNT;
 
     /// Stable array index for this source, matching
     /// `comp::Stats::spell_power_by_source`. Exhaustive (no `_` arm) so a
