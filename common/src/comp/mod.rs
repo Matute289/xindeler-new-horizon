@@ -84,7 +84,7 @@ pub use self::{
     chat::{
         ChatMode, ChatMsg, ChatType, Faction, SpeechBubble, SpeechBubbleType, UnresolvedChatMsg,
     },
-    class::{CharacterClass, ClassKind},
+    class::{CharacterClass, ClassKind, EquipmentGroup},
     combo::Combo,
     controller::{
         ControlAction, ControlEvent, Controller, ControllerInputs, GroupManip, InputAttr,
