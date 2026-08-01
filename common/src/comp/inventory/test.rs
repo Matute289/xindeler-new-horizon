@@ -25,6 +25,7 @@ fn push_full() {
         loadout: LoadoutBuilder::empty().build(),
         overflow_items: vec![],
         recipe_book: RecipeBook::default(),
+        spell_book: SpellBook::default(),
     };
     assert_eq!(
         inv.push(TEST_ITEMS[0].duplicate(ability_map, msm))
@@ -46,6 +47,7 @@ fn push_all_full() {
         loadout: LoadoutBuilder::empty().build(),
         overflow_items: vec![],
         recipe_book: RecipeBook::default(),
+        spell_book: SpellBook::default(),
     };
     let Error::Full(leftovers) = inv
         .push_all(
@@ -77,6 +79,7 @@ fn push_unique_all_full() {
         loadout: LoadoutBuilder::empty().build(),
         overflow_items: vec![],
         recipe_book: RecipeBook::default(),
+        spell_book: SpellBook::default(),
     };
     inv.push_all_unique(
         TEST_ITEMS
@@ -97,6 +100,7 @@ fn push_all_empty() {
         loadout: LoadoutBuilder::empty().build(),
         overflow_items: vec![],
         recipe_book: RecipeBook::default(),
+        spell_book: SpellBook::default(),
     };
     inv.push_all(
         TEST_ITEMS
@@ -117,6 +121,7 @@ fn push_all_unique_empty() {
         loadout: LoadoutBuilder::empty().build(),
         overflow_items: vec![],
         recipe_book: RecipeBook::default(),
+        spell_book: SpellBook::default(),
     };
     inv.push_all_unique(
         TEST_ITEMS

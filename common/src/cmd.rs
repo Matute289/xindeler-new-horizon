@@ -280,6 +280,16 @@ lazy_static! {
         items
     };
 
+    /// Xindeler: the subset of [`ITEM_SPECS`] that lives under
+    /// `common.items.spell_books`, for tab-completing `/learn_spells`. Filtered
+    /// by path rather than by `ItemKind` so it costs nothing to build: every
+    /// item under that directory is a `SpellGroup`, which a unit test enforces.
+    pub static ref SPELL_BOOK_SPECS: Vec<String> = ITEM_SPECS
+        .iter()
+        .filter(|spec| spec.starts_with("common.items.spell_books."))
+        .cloned()
+        .collect();
+
     /// List of all entity configs. Useful for tab completing
     pub static ref ENTITY_CONFIGS: Vec<String> = {
         try_all_entity_configs()
@@ -451,6 +461,7 @@ pub enum ServerChatCommand {
     KillNpcs,
     Kit,
     Lantern,
+    LearnSpells,
     Light,
     Lightning,
     Location,
@@ -852,6 +863,16 @@ impl ServerChatCommand {
                     Float("b", 1.0, Optional),
                 ],
                 Content::localized("command-lantern-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::LearnSpells => cmd(
+                vec![AssetPath(
+                    "spell_book",
+                    "common.items.spell_books.",
+                    SPELL_BOOK_SPECS.clone(),
+                    Required,
+                )],
+                Content::localized("command-learn_spells-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::Light => cmd(
@@ -1393,6 +1414,7 @@ impl ServerChatCommand {
             ServerChatCommand::KillNpcs => "kill_npcs",
             ServerChatCommand::Kit => "kit",
             ServerChatCommand::Lantern => "lantern",
+            ServerChatCommand::LearnSpells => "learn_spells",
             ServerChatCommand::Respawn => "respawn",
             ServerChatCommand::Light => "light",
             ServerChatCommand::MakeBlock => "make_block",

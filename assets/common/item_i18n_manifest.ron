@@ -7701,6 +7701,12 @@
         Simple("common.items.recipes.weapons.frostwood"): "recipe-weapons-frostwood",
         Simple("common.items.recipes.weapons.eldwood"): "recipe-weapons-eldwood",
         Simple("common.items.recipes.default"): "recipe-default",
+        Simple(
+            "common.items.spell_books.wanderers_primer",
+        ): "spell_book-wanderers_primer",
+        Simple(
+            "common.items.spell_books.scavenged_page",
+        ): "spell_book-scavenged_page",
     },
     // Templating support
     //

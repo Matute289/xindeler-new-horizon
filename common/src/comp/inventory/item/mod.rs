@@ -385,6 +385,15 @@ pub enum ItemKind {
     RecipeGroup {
         recipes: Vec<String>,
     },
+    /// Xindeler: a page/tome of spells, the structural sibling of
+    /// [`ItemKind::RecipeGroup`]. Each string is an `AbilitySpec::Custom(..)`
+    /// pool key — exactly the keys `AbilityPool::abilities` already stores —
+    /// so a spell learned this way needs no new casting code. Such an item
+    /// lives in the character's `spell_book` pseudo-container once learned;
+    /// held in a normal inventory slot it is merely carried, not known.
+    SpellGroup {
+        spells: Vec<String>,
+    },
     Quest,
 }
 
@@ -425,6 +434,7 @@ impl ItemKind {
             ItemKind::Ingredient { descriptor } => format!("Ingredient: {}", descriptor),
             ItemKind::TagExamples { item_ids } => format!("TagExamples: {:?}", item_ids),
             ItemKind::RecipeGroup { .. } => String::from("Recipes:"),
+            ItemKind::SpellGroup { .. } => String::from("Spells:"),
             ItemKind::Quest => String::from("Quest:"),
         }
     }
@@ -441,7 +451,8 @@ impl ItemKind {
             | ItemKind::Utility { .. }
             | ItemKind::Ingredient { .. }
             | ItemKind::TagExamples { .. }
-            | ItemKind::RecipeGroup { .. } => false,
+            | ItemKind::RecipeGroup { .. }
+            | ItemKind::SpellGroup { .. } => false,
         }
     }
 }

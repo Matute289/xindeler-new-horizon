@@ -214,6 +214,7 @@ pub fn kind_text<'a>(kind: &ItemKind, i18n: &'a Localization) -> Cow<'a, str> {
         ItemKind::Lantern { .. } => i18n.get_msg("common-kind-lantern"),
         ItemKind::TagExamples { .. } => Cow::Borrowed(""),
         ItemKind::RecipeGroup { .. } => i18n.get_msg("common-kind-recipegroup"),
+        ItemKind::SpellGroup { .. } => i18n.get_msg("common-kind-spellgroup"),
         ItemKind::Quest => i18n.get_msg("common-kind-quest"),
     }
 }

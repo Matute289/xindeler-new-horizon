@@ -190,6 +190,7 @@ fn do_command(
         ServerChatCommand::KillNpcs => handle_kill_npcs,
         ServerChatCommand::Kit => handle_kit,
         ServerChatCommand::Lantern => handle_lantern,
+        ServerChatCommand::LearnSpells => handle_learn_spells,
         ServerChatCommand::Light => handle_light,
         ServerChatCommand::MakeBlock => handle_make_block,
         ServerChatCommand::MakeNpc => handle_make_npc,
@@ -4807,6 +4808,91 @@ fn handle_group_promote(
     }
 }
 
+/// `/learn_spells <common.items.spell_books.*>` — admin-only test tool:
+/// pushes a `SpellGroup` item straight into the target's spellbook, the state a
+/// completed transcription will later produce.
+///
+/// Rebuilds the target's `AbilityPool` so the new keys are castable
+/// immediately, and re-points any `Innate` hotbar binding by key so a slot
+/// keeps its ability across that rebuild.
+fn handle_learn_spells(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::item::ItemKind;
+
+    // Defense in depth beyond `needs_role`: re-verify against the
+    // authoritative admin source (same pattern as `/give_item_quality`).
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /learn_spells.".to_string(),
+        ));
+    }
+
+    let spec = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let spec = spec.replace(['/', '\\'], ".");
+    let item = Item::new_from_asset(&spec)
+        .map_err(|error| Content::Plain(format!("Failed to load {spec}: {error:?}")))?;
+    if !matches!(&*item.kind(), ItemKind::SpellGroup { .. }) {
+        return Err(Content::Plain(format!("{spec} is not a spell group.")));
+    }
+
+    let ecs = server.state.ecs();
+    let old_pool = ecs
+        .read_storage::<comp::AbilityPool>()
+        .get(target)
+        .cloned()
+        .unwrap_or_default();
+
+    let learned = {
+        let mut inventories = ecs.write_storage::<Inventory>();
+        let Some(mut inventory) = inventories.get_mut(target) else {
+            return Err(Content::Plain("Target has no inventory.".to_string()));
+        };
+        match inventory.push_spell_group(item) {
+            Ok(()) => inventory.learned_spells().clone(),
+            Err(_) => return Err(Content::Plain(format!("{spec} is already known."))),
+        }
+    };
+
+    // The pool is derived state; rebuild it now rather than waiting for a
+    // relog, which is what `load_character_data` would do anyway.
+    let rebuilt = match (
+        ecs.read_storage::<comp::Body>().get(target).copied(),
+        ecs.read_storage::<comp::CharacterClass>()
+            .get(target)
+            .copied(),
+    ) {
+        (Some(body), Some(character_class)) => Some(comp::AbilityPool::for_character(
+            &body,
+            &character_class,
+            &learned,
+        )),
+        _ => None,
+    };
+    if let Some(pool) = rebuilt {
+        if let Some(mut active) = ecs.write_storage::<comp::ActiveAbilities>().get_mut(target) {
+            comp::ability::remap_innate_bindings(&mut active, &old_pool, &pool);
+        }
+        let _ = ecs
+            .write_storage::<comp::AbilityPool>()
+            .insert(target, pool);
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Learned the spells in {spec}.")),
+        ),
+    );
+    Ok(())
+}
+
 fn handle_reset_recipes(
     server: &mut Server,
     _client: EcsEntity,
@@ -6390,10 +6476,26 @@ fn handle_multiclass(
     // secondary's keys strictly appended after the racial innate so no
     // persisted hotbar index shifts.
     if let Some(body) = ecs.read_storage::<comp::Body>().get(target).copied() {
-        let _ = ecs.write_storage::<comp::AbilityPool>().insert(
-            target,
-            comp::AbilityPool::for_character(&body, &character_class),
-        );
+        let learned = ecs
+            .read_storage::<Inventory>()
+            .get(target)
+            .map(|inv| inv.learned_spells().clone())
+            .unwrap_or_default();
+        let old_pool = ecs
+            .read_storage::<comp::AbilityPool>()
+            .get(target)
+            .cloned()
+            .unwrap_or_default();
+        let pool = comp::AbilityPool::for_character(&body, &character_class, &learned);
+        // The live `ActiveAbilities` still holds raw indices into the OLD
+        // pool. Re-point them by key before the pool is swapped, or the next
+        // save writes each slot under whatever key now sits at its old index.
+        if let Some(mut active) = ecs.write_storage::<comp::ActiveAbilities>().get_mut(target) {
+            comp::ability::remap_innate_bindings(&mut active, &old_pool, &pool);
+        }
+        let _ = ecs
+            .write_storage::<comp::AbilityPool>()
+            .insert(target, pool);
     }
 
     server.notify_client(

@@ -753,10 +753,17 @@ impl StateExt for State {
             self.write_component_ignore_entity_dead(entity, background);
             self.write_component_ignore_entity_dead(entity, active_abilities);
             self.write_component_ignore_entity_dead(entity, comp::AbilityCooldowns::default());
-            // Grant class active-ability keys + racial innate.
+            // Grant class active-ability keys + racial innate + anything the
+            // character has learned into its spellbook. Built before the
+            // inventory is moved into its component write, since the
+            // spellbook lives on it.
             self.write_component_ignore_entity_dead(
                 entity,
-                comp::AbilityPool::for_character(&body, &character_class_copy),
+                comp::AbilityPool::for_character(
+                    &body,
+                    &character_class_copy,
+                    inventory.learned_spells(),
+                ),
             );
             self.write_component_ignore_entity_dead(entity, skill_set);
             self.write_component_ignore_entity_dead(entity, inventory);
