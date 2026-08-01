@@ -71,6 +71,10 @@ pub enum MageSkill {
     PenetratingMagic,
     WardedSkin,
     ManaEfficiency,
+    ManaRecover,
+    ManaFlow,
+    ArcaneVigor,
+    Polyglot,
     // T3
     Overcharge,    // notable
     ArcaneMastery, // ACTIVE (capstone, synergy <- FocusedMind)
@@ -672,6 +676,16 @@ pub enum ClassPassiveStat {
     MoveSpeed,
     RecoverySpeed,
     EnergyReward,
+    /// Energy *cost* reduction (a divisor, see [`ClassPassiveStat::apply`]'s
+    /// match arm below) — distinct from `EnergyReward` (energy *gained back*
+    /// on hit). Reaches `Stats::energy_efficiency_modifier`, already consumed
+    /// at `states/utils.rs` and `ability.rs`'s `*energy_cost /=
+    /// stats.energy_efficiency` sites.
+    EnergyEfficiency,
+    /// Energy regeneration *rate* multiplier. Reaches
+    /// `Stats::energy_regen_modifier`, consumed by both `Energy::regen(..)`
+    /// call sites in `common/systems/src/stats.rs`.
+    EnergyRegen,
     /// Extra damage vs targets of a given `CreatureKind` (the Cleric smite is
     /// `BonusVs(Undead)`).
     BonusVs(CreatureKind),
@@ -705,6 +719,8 @@ impl ClassPassiveStat {
             ClassPassiveStat::MoveSpeed => stats.move_speed_modifier *= 1.0 + amount,
             ClassPassiveStat::RecoverySpeed => stats.recovery_speed_modifier *= 1.0 + amount,
             ClassPassiveStat::EnergyReward => stats.energy_reward_modifier *= 1.0 + amount,
+            ClassPassiveStat::EnergyEfficiency => stats.energy_efficiency_modifier *= 1.0 + amount,
+            ClassPassiveStat::EnergyRegen => stats.energy_regen_modifier *= 1.0 + amount,
             ClassPassiveStat::BonusVs(kind) => stats.bonus_damage_vs[kind as usize] += amount,
         }
     }

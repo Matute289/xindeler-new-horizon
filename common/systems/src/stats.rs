@@ -112,13 +112,13 @@ impl<'a> System<'a> for Sys {
         });
 
         // Update energies and poises
-        let join = (&read_data.char_states, &mut energies, &mut poises).lend_join();
-        join.for_each(|(character_state, mut energy, mut poise)| {
+        let join = (&read_data.char_states, &stats, &mut energies, &mut poises).lend_join();
+        join.for_each(|(character_state, stat, mut energy, mut poise)| {
             match character_state {
                 // Sitting accelerates recharging energy the most
                 CharacterState::Sit => {
                     if energy.needs_regen() {
-                        energy.regen(SIT_ENERGY_REGEN_ACCEL, dt);
+                        energy.regen(SIT_ENERGY_REGEN_ACCEL, dt, stat.energy_regen_modifier);
                     }
                     if poise.needs_regen() {
                         poise.regen(POISE_REGEN_ACCEL, dt, *read_data.time);
@@ -135,7 +135,7 @@ impl<'a> System<'a> for Sys {
                 | CharacterState::Equipping(_)
                 | CharacterState::Boost(_) => {
                     if energy.needs_regen() {
-                        energy.regen(ENERGY_REGEN_ACCEL, dt);
+                        energy.regen(ENERGY_REGEN_ACCEL, dt, stat.energy_regen_modifier);
                     }
                     if poise.needs_regen() {
                         poise.regen(POISE_REGEN_ACCEL, dt, *read_data.time);
