@@ -28,7 +28,11 @@ use common::{
             Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT, SpellGate,
         },
         inventory::{
-            item::{ItemI18n, ItemKind, MaterialStatManifest, item_key::ItemKey, tool::ToolKind},
+            item::{
+                ItemI18n, ItemKind, MaterialStatManifest,
+                item_key::ItemKey,
+                tool::{ToolKind, WeaponRole},
+            },
             slot::EquipSlot,
         },
         skills::{
@@ -157,6 +161,7 @@ widget_ids! {
         skill_general_tree_3,
         skill_general_tree_4,
         skill_general_tree_5,
+        skill_general_tree_6,
         skill_general_climb_0,
         skill_general_climb_1,
         skill_general_climb_2,
@@ -382,6 +387,10 @@ pub enum DiarySkillTree {
     Hammer,
     Bow,
     Staff,
+    // The martial Staff's own tab, separate from `Staff` above (the caster
+    // fire tree) since the two are distinct `SkillGroupKind`s sharing a
+    // `ToolKind`.
+    StaffMartial,
     Sceptre,
     Pick,
     // BL-06 P3a: generic class skill-tree tab. The live ClassKind is
@@ -399,6 +408,7 @@ impl DiarySkillTree {
             DiarySkillTree::Hammer => "hud-skill_tree-hammer",
             DiarySkillTree::Bow => "hud-skill_tree-bow",
             DiarySkillTree::Staff => "hud-skill_tree-staff",
+            DiarySkillTree::StaffMartial => "hud-skill_tree-staff_martial",
             DiarySkillTree::Sceptre => "hud-skill_tree-sceptre",
             DiarySkillTree::Pick => "hud-skill_tree-mining",
             DiarySkillTree::Class => "hud-skill_tree-class",
@@ -413,6 +423,9 @@ impl DiarySkillTree {
             DiarySkillTree::Hammer => SkillGroupKind::Weapon(ToolKind::Hammer),
             DiarySkillTree::Bow => SkillGroupKind::Weapon(ToolKind::Bow),
             DiarySkillTree::Staff => SkillGroupKind::Weapon(ToolKind::Staff),
+            DiarySkillTree::StaffMartial => {
+                SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
+            },
             DiarySkillTree::Sceptre => SkillGroupKind::Weapon(ToolKind::Sceptre),
             DiarySkillTree::Pick => SkillGroupKind::Weapon(ToolKind::Pick),
             // For the Class variant the live group is resolved at render time via
@@ -649,6 +662,10 @@ impl Widget for Diary<'_> {
                             DiarySkillTree::Hammer => self.imgs.hammer,
                             DiarySkillTree::Bow => self.imgs.bow,
                             DiarySkillTree::Staff => self.imgs.staff,
+                            // Reuses the caster Staff tab's icon (no bespoke
+                            // martial-staff art yet); tooltip text still
+                            // disambiguates the two tabs.
+                            DiarySkillTree::StaffMartial => self.imgs.staff,
                             DiarySkillTree::Sceptre => self.imgs.sceptre,
                             DiarySkillTree::Pick => self.imgs.mining,
                             // Use the skilltree icon for the class tab (a
@@ -964,6 +981,9 @@ impl Widget for Diary<'_> {
                     },
                     SelectedSkillTree::Weapon(ToolKind::Staff) => {
                         self.handle_staff_skills_window(&diary_tooltip, state, ui, events)
+                    },
+                    SelectedSkillTree::WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => {
+                        self.handle_staff_martial_skills_window(&diary_tooltip, state, ui, events)
                     },
                     SelectedSkillTree::Weapon(ToolKind::Sceptre) => {
                         self.handle_sceptre_skills_window(&diary_tooltip, state, ui, events)
@@ -2503,7 +2523,7 @@ impl Diary<'_> {
 
         // Number of skills per rectangle per weapon, start counting at 0
         // Maximum of 9 skills/8 indices
-        let skills_top_l = 6;
+        let skills_top_l = 7;
         let skills_top_r = 0;
         let skills_bot_l = 0;
         let skills_bot_r = 5;
@@ -2584,6 +2604,12 @@ impl Diary<'_> {
                 image: self.imgs.unlock_sceptre_skill,
                 position: MidTopWithMarginOn(state.ids.skills_top_l[5], 3.0),
                 id: state.ids.skill_general_tree_5,
+            },
+            SkillIcon::Unlockable {
+                skill: Skill::UnlockGroup(WeaponRoled(Staff, WeaponRole::Martial)),
+                image: self.imgs.unlock_staff_skill0,
+                position: MidTopWithMarginOn(state.ids.skills_top_l[6], 3.0),
+                id: state.ids.skill_general_tree_6,
             },
             // Bottom right skills
             SkillIcon::Descriptive {
@@ -3542,6 +3568,71 @@ impl Diary<'_> {
         events
     }
 
+    /// The martial-role Staff's own skill tree, kept separate from
+    /// `handle_staff_skills_window` (the caster/fire tree) above — the two
+    /// share a background asset (no bespoke art authored for this tree yet)
+    /// but resolve distinct `SkillGroupKind`s and never share progress.
+    /// Layout: two T1 roots (`Sweep`, `Brace`) each with a T2 follow-up,
+    /// converging on the `Avalanche` T3 capstone.
+    fn handle_staff_martial_skills_window(
+        &mut self,
+        diary_tooltip: &Tooltip,
+        state: &mut State<DiaryState>,
+        ui: &mut UiCell,
+        mut events: Vec<Event>,
+    ) -> Vec<Event> {
+        use skills::StaffMartialSkill::*;
+
+        Image::new(self.imgs.staff_bg)
+            .wh([924.0, 619.0])
+            .mid_top_with_margin_on(state.ids.content_align, 65.0)
+            .color(Some(Color::Rgba(1.0, 1.0, 1.0, 1.0)))
+            .set(state.ids.staff_bg, ui);
+
+        use PositionSpecifier::TopLeftWithMarginsOn;
+        let skill_buttons = &[
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(Sweep),
+                ability_id: "common.abilities.staff_martial.sweep",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 460.0, 100.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(Brace),
+                ability_id: "common.abilities.staff_martial.brace",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 160.0, 100.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(WhirlingGale),
+                ability_id: "common.abilities.staff_martial.whirling_gale",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 460.0, 350.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(GlacialThrust),
+                ability_id: "common.abilities.staff_martial.glacial_thrust",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 160.0, 350.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(Avalanche),
+                ability_id: "common.abilities.staff_martial.avalanche",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 310.0, 600.0),
+            },
+        ];
+
+        state.update(|s| {
+            s.ids
+                .skills
+                .resize(skill_buttons.len(), &mut ui.widget_id_generator())
+        });
+        state.update(|s| {
+            s.ids
+                .skill_lock_imgs
+                .resize(skill_buttons.len(), &mut ui.widget_id_generator())
+        });
+
+        self.handle_skill_buttons(skill_buttons, ui, &mut events, diary_tooltip, state);
+        events
+    }
+
     fn handle_mining_skills_window(
         &mut self,
         diary_tooltip: &Tooltip,
@@ -4211,6 +4302,10 @@ fn unlock_skill_strings(group: SkillGroupKind) -> SkillStrings<'static> {
         SkillGroupKind::Weapon(ToolKind::Sceptre) => {
             SkillStrings::plain("hud-skill-unlck_sceptre_title", "hud-skill-unlck_sceptre")
         },
+        SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => SkillStrings::plain(
+            "hud-skill-unlck_staff_martial_title",
+            "hud-skill-unlck_staff_martial",
+        ),
         SkillGroupKind::General
         | SkillGroupKind::Class(_)
         | SkillGroupKind::Feats
@@ -4230,7 +4325,8 @@ fn unlock_skill_strings(group: SkillGroupKind) -> SkillStrings<'static> {
             | ToolKind::Tome
             | ToolKind::HolySymbol
             | ToolKind::Focus,
-        ) => {
+        )
+        | SkillGroupKind::WeaponRoled(_, _) => {
             tracing::warn!("Requesting title for unlocking unexpected skill group");
             SkillStrings::Empty
         },

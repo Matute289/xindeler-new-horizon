@@ -74,7 +74,11 @@ pub struct CharacterPosition {
 }
 
 pub fn skill_group_to_db_string(skill_group: comp::skillset::SkillGroupKind) -> String {
-    use comp::{class::ClassKind, item::tool::ToolKind, skillset::SkillGroupKind::*};
+    use comp::{
+        class::ClassKind,
+        item::tool::{ToolKind, WeaponRole},
+        skillset::SkillGroupKind::*,
+    };
     let skill_group_string = match skill_group {
         General => "General",
         Weapon(ToolKind::Sword) => "Weapon Sword",
@@ -84,6 +88,7 @@ pub fn skill_group_to_db_string(skill_group: comp::skillset::SkillGroupKind) -> 
         Weapon(ToolKind::Staff) => "Weapon Staff",
         Weapon(ToolKind::Sceptre) => "Weapon Sceptre",
         Weapon(ToolKind::Pick) => "Weapon Pick",
+        WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => "Weapon Staff Martial",
         Class(ClassKind::Warrior) => "Class Warrior",
         Class(ClassKind::Mage) => "Class Mage",
         Class(ClassKind::Cleric) => "Class Cleric",
@@ -122,12 +127,23 @@ pub fn skill_group_to_db_string(skill_group: comp::skillset::SkillGroupKind) -> 
             "Tried to add unsupported skill group to database: {:?}",
             skill_group
         ),
+        // Every other `(ToolKind, WeaponRole)` combination has no tree yet
+        // (only the martial Staff does). Binding the fields rather than a
+        // bare `_` keeps this arm honest about what it actually covers.
+        WeaponRoled(kind, role) => panic!(
+            "Tried to add unsupported skill group to database: WeaponRoled({:?}, {:?})",
+            kind, role
+        ),
     };
     skill_group_string.to_string()
 }
 
 pub fn db_string_to_skill_group(skill_group_string: &str) -> comp::skillset::SkillGroupKind {
-    use comp::{class::ClassKind, item::tool::ToolKind, skillset::SkillGroupKind::*};
+    use comp::{
+        class::ClassKind,
+        item::tool::{ToolKind, WeaponRole},
+        skillset::SkillGroupKind::*,
+    };
     match skill_group_string {
         "General" => General,
         "Weapon Sword" => Weapon(ToolKind::Sword),
@@ -137,6 +153,7 @@ pub fn db_string_to_skill_group(skill_group_string: &str) -> comp::skillset::Ski
         "Weapon Staff" => Weapon(ToolKind::Staff),
         "Weapon Sceptre" => Weapon(ToolKind::Sceptre),
         "Weapon Pick" => Weapon(ToolKind::Pick),
+        "Weapon Staff Martial" => WeaponRoled(ToolKind::Staff, WeaponRole::Martial),
         "Class Warrior" => Class(ClassKind::Warrior),
         "Class Mage" => Class(ClassKind::Mage),
         "Class Cleric" => Class(ClassKind::Cleric),
@@ -762,7 +779,11 @@ pub mod tests {
 
     #[test]
     fn skill_group_db_string_round_trips() {
-        use common::comp::{class::ClassKind, item::tool::ToolKind, skillset::SkillGroupKind};
+        use common::comp::{
+            class::ClassKind,
+            item::tool::{ToolKind, WeaponRole},
+            skillset::SkillGroupKind,
+        };
         let kinds = [
             SkillGroupKind::General,
             SkillGroupKind::Weapon(ToolKind::Sword),
@@ -772,6 +793,10 @@ pub mod tests {
             SkillGroupKind::Weapon(ToolKind::Staff),
             SkillGroupKind::Weapon(ToolKind::Sceptre),
             SkillGroupKind::Weapon(ToolKind::Pick),
+            // The martial Staff tree is a distinct `SkillGroupKind` variant
+            // from the caster `Weapon(Staff)` tree above; both must survive
+            // the round trip without colliding on the same db string.
+            SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial),
             SkillGroupKind::Class(ClassKind::Warrior),
             SkillGroupKind::Class(ClassKind::Mage),
             SkillGroupKind::Class(ClassKind::Cleric),
@@ -784,6 +809,36 @@ pub mod tests {
                 "round trip failed for {kind:?}"
             );
         }
+    }
+
+    /// The martial Staff tree's db string must be distinct from the caster
+    /// `Weapon(Staff)` tree's, so the two never alias to the same persisted
+    /// group (which would silently merge two characters' independent
+    /// skill-point pools on load).
+    #[test]
+    fn staff_martial_and_caster_staff_db_strings_are_distinct() {
+        use common::comp::{
+            item::tool::{ToolKind, WeaponRole},
+            skillset::SkillGroupKind,
+        };
+        assert_ne!(
+            super::skill_group_to_db_string(SkillGroupKind::Weapon(ToolKind::Staff)),
+            super::skill_group_to_db_string(SkillGroupKind::WeaponRoled(
+                ToolKind::Staff,
+                WeaponRole::Martial
+            ))
+        );
+    }
+
+    /// Unknown skill-group strings must keep panicking rather than silently
+    /// defaulting (unlike `db_string_to_class`, which degrades gracefully) —
+    /// a save referencing a group the server no longer understands is a
+    /// louder failure mode than a downgraded class, since silently dropping
+    /// it would desync a character's spent skill points.
+    #[test]
+    #[should_panic(expected = "Tried to convert an unsupported string from the database")]
+    fn db_string_to_skill_group_panics_on_unknown_string() {
+        let _ = super::db_string_to_skill_group("Weapon Staff Enchanted");
     }
 
     #[test]

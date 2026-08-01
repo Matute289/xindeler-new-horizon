@@ -14,7 +14,7 @@ use crate::{
             item::{
                 ItemDesc, ItemKind, MaterialStatManifest,
                 armor::Protection,
-                tool::{self, Hands, ToolKind},
+                tool::{self, Hands, Tool, ToolKind, WeaponRole},
             },
             slot::EquipSlot,
         },
@@ -3040,19 +3040,93 @@ fn weapon_rating<T: ItemDesc>(item: &T, _msm: &MaterialStatManifest) -> f32 {
     rating.max(0.0)
 }
 
+/// The `SkillGroupKind` whose earned points should count toward a given
+/// equipped tool. Usually just `Weapon(tool.kind)`, but a martial-role Staff
+/// has its own tree (`WeaponRoled`) kept deliberately separate from the
+/// caster `Weapon(Staff)` tree it shares a `ToolKind` with.
+fn skill_group_for_weapon(tool: &Tool) -> SkillGroupKind {
+    if tool.kind == ToolKind::Staff && tool.role() == WeaponRole::Martial {
+        SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
+    } else {
+        SkillGroupKind::Weapon(tool.kind)
+    }
+}
+
 fn weapon_skills(inventory: &Inventory, skill_set: &SkillSet) -> f32 {
-    let (mainhand, offhand) = get_weapon_kinds(inventory);
-    let mainhand_skills = if let Some(tool) = mainhand {
-        skill_set.earned_sp(SkillGroupKind::Weapon(tool)) as f32
-    } else {
-        0.0
+    let equipped_tool_group = |slot| {
+        inventory.equipped(slot).and_then(|item| {
+            if let ItemKind::Tool(tool) = &*item.kind() {
+                Some(skill_group_for_weapon(tool))
+            } else {
+                None
+            }
+        })
     };
-    let offhand_skills = if let Some(tool) = offhand {
-        skill_set.earned_sp(SkillGroupKind::Weapon(tool)) as f32
-    } else {
-        0.0
-    };
+    let mainhand_skills = equipped_tool_group(EquipSlot::ActiveMainhand)
+        .map_or(0.0, |group| skill_set.earned_sp(group) as f32);
+    let offhand_skills = equipped_tool_group(EquipSlot::ActiveOffhand)
+        .map_or(0.0, |group| skill_set.earned_sp(group) as f32);
     mainhand_skills.max(offhand_skills)
+}
+
+#[cfg(test)]
+mod skill_group_for_weapon_tests {
+    use super::*;
+
+    fn test_stats() -> tool::Stats {
+        tool::Stats {
+            equip_time_secs: 0.0,
+            power: 1.0,
+            effect_power: 1.0,
+            speed: 1.0,
+            range: 1.0,
+            energy_efficiency: 1.0,
+            buff_strength: 1.0,
+        }
+    }
+
+    /// A martial-role Staff must earn combat-rating credit from its own
+    /// tree, not the caster `Weapon(Staff)` tree it deliberately does not
+    /// share — otherwise a Monk who has spent points in the martial tree
+    /// would silently show 0 weapon-skill contribution to their combat
+    /// rating.
+    #[test]
+    fn martial_staff_resolves_its_own_group() {
+        let tool = Tool::new(
+            ToolKind::Staff,
+            Hands::Two,
+            Some(WeaponRole::Martial),
+            test_stats(),
+        );
+        assert_eq!(
+            skill_group_for_weapon(&tool),
+            SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
+        );
+    }
+
+    /// A caster-role Staff (the default for a bare `role: None`) still
+    /// resolves the original `Weapon(Staff)` tree, unaffected by the new
+    /// martial tree's existence.
+    #[test]
+    fn caster_staff_resolves_the_original_weapon_group() {
+        let tool = Tool::new(ToolKind::Staff, Hands::Two, None, test_stats());
+        assert_eq!(
+            skill_group_for_weapon(&tool),
+            SkillGroupKind::Weapon(ToolKind::Staff)
+        );
+    }
+
+    /// Roles are only meaningful for `Staff` today; every other `ToolKind`
+    /// resolves `Weapon(kind)` regardless of role, same as before this
+    /// function existed.
+    #[test]
+    fn non_staff_tools_are_unaffected_by_role() {
+        let tool = Tool::new(ToolKind::Sword, Hands::One, None, test_stats());
+        assert_eq!(
+            skill_group_for_weapon(&tool),
+            SkillGroupKind::Weapon(ToolKind::Sword)
+        );
+    }
 }
 
 fn get_weapon_rating(inventory: &Inventory, msm: &MaterialStatManifest) -> f32 {

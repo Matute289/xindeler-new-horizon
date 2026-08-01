@@ -1,0 +1,24 @@
+// Martial-staff tree T1 root: a wide horizontal sweep favoring crowd control
+// (angle, knockback) over single-target damage. No prerequisite.
+BasicMelee(
+    energy_cost: 10,
+    buildup_duration: 0.4,
+    swing_duration: 0.2,
+    hit_timing: 0.55,
+    recover_duration: 0.35,
+    melee_constructor: (
+        kind: Bash(
+            damage: 16,
+            poise: 18,
+            knockback: 10,
+            energy_regen: 8,
+        ),
+        range: 3.5,
+        angle: 70.0,
+    ),
+    ori_modifier: (
+        buildup: Some(0.6),
+        action: Some(0.5),
+        recover: Some(0.5),
+    ),
+)

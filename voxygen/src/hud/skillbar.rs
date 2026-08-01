@@ -34,7 +34,7 @@ use common::{
         is_downed,
         item::{
             ItemDesc, ItemI18n, MaterialStatManifest,
-            tool::{AbilityMap, ToolKind},
+            tool::{AbilityMap, ToolKind, WeaponRole},
         },
         skillset::SkillGroupKind,
     },
@@ -919,6 +919,9 @@ impl<'a> Skillbar<'a> {
                 SkillGroupKind::Weapon(ToolKind::Sceptre) => self.imgs.sceptre,
                 SkillGroupKind::Weapon(ToolKind::Bow) => self.imgs.bow,
                 SkillGroupKind::Weapon(ToolKind::Staff) => self.imgs.staff,
+                SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => {
+                    self.imgs.staff
+                },
                 SkillGroupKind::Weapon(ToolKind::Pick) => self.imgs.mining,
                 _ => self.imgs.nothing,
             })

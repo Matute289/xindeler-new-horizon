@@ -20,6 +20,10 @@ pub enum Skill {
     Bow(BowSkill),
     Staff(StaffSkill),
     Sceptre(SceptreSkill),
+    /// The martial-role Staff's own skill tree, kept separate from
+    /// `Staff(StaffSkill)` (the caster/fire tree) because the two trees
+    /// share a `ToolKind` but not a `WeaponRole`.
+    StaffMartial(StaffMartialSkill),
     Climb(ClimbSkill),
     Swim(SwimSkill),
     Pick(MiningSkill),
@@ -411,6 +415,20 @@ pub enum StaffSkill {
     FireDash,
     FireBreath,
     Pyroclasm,
+}
+
+/// A small, coherent starter tree for the martial (physical) Staff kit: two
+/// T1 roots (crowd-control `Sweep` vs. single-target `Brace`), each with a
+/// T2 follow-up, converging on a T3 capstone that requires both T2s. All
+/// nodes gate an active ability (see `ability_set_manifest.ron`'s
+/// `Custom("staff_martial")` entry); none carry a passive stat modifier.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+pub enum StaffMartialSkill {
+    Sweep,
+    Brace,
+    WhirlingGale,
+    GlacialThrust,
+    Avalanche,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]

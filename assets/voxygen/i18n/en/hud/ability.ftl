@@ -36,6 +36,16 @@ common-abilities-sceptre-healingaura = Healing Aura
     .desc = Heals your allies. Requires combo to activate.
 common-abilities-sceptre-wardingaura = Warding Aura
     .desc = Wards your allies against enemy attacks.
+common-abilities-staff_martial-sweep = Sweep
+    .desc = A wide horizontal sweep that knocks back multiple enemies.
+common-abilities-staff_martial-brace = Brace
+    .desc = A braced, precise thrust with a chance to freeze the target.
+common-abilities-staff_martial-whirling_gale = Whirling Gale
+    .desc = A two-hit spin that widens Sweep into a sustained area attack.
+common-abilities-staff_martial-glacial_thrust = Glacial Thrust
+    .desc = A heavier thrust with a strong chance to freeze the target.
+common-abilities-staff_martial-avalanche = Avalanche
+    .desc = A devastating slam that converges the tree's two paths, with the strongest freeze chance of any quarterstaff strike.
 
 ## Sword abilities
 veloren-core-pseudo_abilities-sword-heavy_stance = Heavy Stance
