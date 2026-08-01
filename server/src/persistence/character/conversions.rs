@@ -20,6 +20,7 @@ use common::{
             loadout_builder::LoadoutBuilder,
             recipe_book::RecipeBook,
             slot::InvSlotId,
+            spell_book::SpellBook,
         },
         item,
         skillset::{self, SkillGroupKind, SkillSet, skills::Skill},
@@ -61,6 +62,7 @@ pub fn convert_items_to_database_items(
     inventory_container_id: EntityId,
     overflow_items_container_id: EntityId,
     recipe_book_container_id: EntityId,
+    spell_book_container_id: EntityId,
     next_id: &mut i64,
 ) -> Vec<ItemModelPair> {
     let loadout = inventory
@@ -85,6 +87,20 @@ pub fn convert_items_to_database_items(
                 recipe_book_container_id,
             )
         });
+
+    // Xindeler: learned spell groups, stored exactly like recipe groups —
+    // position is the index within the book, which is stable for a given
+    // load/save cycle and re-derived on the next one.
+    let spell_book = inventory
+        .persistence_spells_iter_with_index()
+        .map(|(i, item)| {
+            (
+                serde_json::to_string(&i)
+                    .expect("failed to serialize index of spell from spell book"),
+                Some(item),
+                spell_book_container_id,
+            )
+        });
     // Inventory slots.
     let inventory = inventory.slots_with_id().map(|(pos, item)| {
         (
@@ -100,6 +116,7 @@ pub fn convert_items_to_database_items(
         .chain(loadout)
         .chain(overflow_items)
         .chain(recipe_book)
+        .chain(spell_book)
         .collect();
     let mut upserts = Vec::new();
     let mut depth = HashMap::new();
@@ -107,6 +124,7 @@ pub fn convert_items_to_database_items(
     depth.insert(loadout_container_id, 0);
     depth.insert(overflow_items_container_id, 0);
     depth.insert(recipe_book_container_id, 0);
+    depth.insert(spell_book_container_id, 0);
     while let Some((position, item, parent_container_item_id)) = bfs_queue.pop_front() {
         // Construct new items.
         if let Some(item) = item {
@@ -384,6 +402,7 @@ pub fn convert_inventory_from_database_items(
     overflow_items_container_id: i64,
     overflow_items: &[Item],
     recipe_book_items: &[Item],
+    spell_book_items: &[Item],
 ) -> Result<Inventory, PersistenceError> {
     // Loadout items must be loaded before inventory items since loadout items
     // provide inventory slots. Since items stored inside loadout items actually
@@ -397,8 +416,15 @@ pub fn convert_inventory_from_database_items(
     let (recipe_book, duplicate_recipes) =
         convert_recipe_book_from_database_items(recipe_book_items)?;
     overflow_items.extend(duplicate_recipes);
+    // Xindeler: duplicate spell groups are dropped rather than pushed to
+    // overflow. A spell page is knowledge, not stock: a second copy grants
+    // nothing, and handing the player a stray item out of their spellbook
+    // would be more confusing than silently collapsing it.
+    let spell_book = convert_spell_book_from_database_items(spell_book_items)?;
 
-    let mut inventory = Inventory::with_loadout_humanoid(loadout).with_recipe_book(recipe_book);
+    let mut inventory = Inventory::with_loadout_humanoid(loadout)
+        .with_recipe_book(recipe_book)
+        .with_spell_book(spell_book);
     let mut item_indices = HashMap::new();
 
     let mut failed_inserts = HashMap::new();
@@ -1056,6 +1082,40 @@ pub fn convert_recipe_book_from_database_items(
     let recipe_book = RecipeBook::recipe_book_from_persistence(unique_groups);
 
     Ok((recipe_book, duplicate_recipes))
+}
+
+/// Xindeler: rebuilds the `SpellBook` from the rows of the `spell_book`
+/// pseudo-container.
+///
+/// Unlike its recipe-book twin this returns no leftovers: duplicate spell
+/// groups (which only a corrupted save or a bug could produce) are dropped.
+pub fn convert_spell_book_from_database_items(
+    database_items: &[Item],
+) -> Result<SpellBook, PersistenceError> {
+    let mut spell_groups: Vec<common::comp::Item> = Vec::with_capacity(database_items.len());
+    let mut seen: hashbrown::HashSet<&str> = hashbrown::HashSet::new();
+
+    for db_item in database_items.iter() {
+        if !seen.insert(db_item.item_definition_id.as_str()) {
+            warn!(
+                "Dropping duplicate spell group {} while loading a spell book",
+                db_item.item_definition_id
+            );
+            continue;
+        }
+
+        let item = get_item_from_asset(db_item.item_definition_id.as_str())?;
+
+        // NOTE: item id is currently *unique*, so we can store the ID safely.
+        let comp = item.get_item_id_for_database();
+        comp.store(Some(NonZeroU64::try_from(db_item.item_id as u64).map_err(
+            |_| PersistenceError::ConversionError("Item with zero item_id".to_owned()),
+        )?));
+
+        spell_groups.push(item);
+    }
+
+    Ok(SpellBook::spell_book_from_persistence(spell_groups))
 }
 
 #[cfg(test)]

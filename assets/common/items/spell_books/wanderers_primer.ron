@@ -1,0 +1,15 @@
+// A transcribed page holding spells no core class grants on its own. Learning
+// it is the only way a character gets these keys, which makes it the clearest
+// demonstration that a spell book really does extend the ability pool.
+ItemDef(
+    legacy_name: "",
+    legacy_description: "",
+    kind: SpellGroup(
+        spells: [
+            "spells.transmutation.magic_stone",
+            "spells.transmutation.plant_growth",
+        ],
+    ),
+    quality: Common,
+    tags: [],
+)

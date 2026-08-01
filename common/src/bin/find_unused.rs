@@ -349,6 +349,7 @@ fn main() {
                 ItemKind::ModularComponent(_)
                     | ItemKind::TagExamples { .. }
                     | ItemKind::RecipeGroup { .. }
+                    | ItemKind::SpellGroup { .. }
             ) && !matches!(item.quality, Quality::Debug)
         })
     {

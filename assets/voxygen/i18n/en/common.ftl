@@ -138,6 +138,7 @@ common-kind-consumable = Consumable
 common-kind-utility = Utility
 common-kind-ingredient = Ingredient
 common-kind-recipegroup = Recipes
+common-kind-spellgroup = Spells
 common-kind-quest = Quest
 common-kind-lantern = Lantern
 common-hands-one = One-Handed

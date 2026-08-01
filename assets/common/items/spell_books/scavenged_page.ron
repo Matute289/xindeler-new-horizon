@@ -1,0 +1,19 @@
+// Two spells, each exercising a different path into the ability pool:
+//   - crusaders_mantle is granted by no core class, so it is appended; and it
+//     sorts before the wanderer's-primer keys, which is the adversarial case
+//     for anything that assumed learned entries never move.
+//   - time_ravage IS listed by the Mage class, but at a level band a low-level
+//     Mage cannot reach. Studying it removes that band: the key is already in
+//     the pool, so learning it clears the gate rather than adding a duplicate.
+ItemDef(
+    legacy_name: "",
+    legacy_description: "",
+    kind: SpellGroup(
+        spells: [
+            "spells.evocation.crusaders_mantle",
+            "spells.axiomancy.time_ravage",
+        ],
+    ),
+    quality: Moderate,
+    tags: [],
+)

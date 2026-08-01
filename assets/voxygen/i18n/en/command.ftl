@@ -74,6 +74,7 @@ command-kill-desc = Kill yourself
 command-kill_npcs-desc = Kill the NPCs
 command-kit-desc = Place a set of items into your inventory.
 command-lantern-desc = Change your lantern's strength and color
+command-learn_spells-desc = Add a spell book's spells to your spellbook, making them castable
 command-light-desc = Spawn entity with light
 command-lightning-desc = Lightning strike at current position
 command-location-desc = Teleport to a location

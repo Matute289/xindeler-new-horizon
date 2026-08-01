@@ -115,6 +115,7 @@ pub use self::{
         },
         recipe_book::RecipeBook,
         slot,
+        spell_book::SpellBook,
     },
     last::Last,
     location::{MapMarker, MapMarkerChange, MapMarkerUpdate, Waypoint, WaypointArea},

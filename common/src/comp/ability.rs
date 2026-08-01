@@ -37,7 +37,7 @@ use crate::{
     },
     terrain::SpriteKind,
 };
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 use std::{borrow::Cow, time::Duration};
@@ -115,17 +115,21 @@ impl Component for AbilityCooldowns {
 /// Each key's set `primary` is the granted ability; the key itself doubles as
 /// the frontend ability id (icon/i18n key), like Contextualized pseudo_ids.
 ///
-/// ORDERING CONTRACT (review M1): persisted hotbar slots store
-/// `Innate:index:N` positions into this Vec, so its order must be STABLE and
-/// append-only for a given character: producers must emit class abilities
-/// first (spec order), then racial innates, never reordering existing
-/// entries.
+/// ORDERING CONTRACT (review M1): a persisted hotbar slot names the pool
+/// *key* it is bound to (`Innate:key:<key>`), not its index, so an entry that
+/// moves no longer drags a hotbar slot with it. The legacy positional form
+/// (`Innate:index:N`) is still accepted on read for rows written before that
+/// change, and those rows DO resolve positionally — so the order must still be
+/// STABLE and append-only for a given character until every character has been
+/// saved at least once since: producers must emit class abilities first (spec
+/// order), then racial innates, never reordering existing entries.
 ///
 /// Canonical order under multiclass:
 ///
 /// ```text
 /// [primary class keys] [racial innate] [primary spells]
 ///                      [secondary class keys] [secondary spells]
+///                      [learned spellbook keys]
 /// ```
 ///
 /// Deduplicated by key, so a spell both held classes can cast appears exactly
@@ -134,10 +138,14 @@ impl Component for AbilityCooldowns {
 /// `[P keys][innate][P spells]`; granting a second class appends
 /// `[S keys][S spells]` and shifts nothing that already existed — granting a
 /// second class to an existing single-class character must never shift the
-/// racial innate's index, or every persisted `Innate:index:N` hotbar slot
+/// racial innate's index, or every legacy `Innate:index:N` hotbar slot
 /// silently re-points to something else on relog. Any future producer
 /// appending to this Vec must append after *all* of the above, in whatever
 /// order is agreed centrally — never insert into the middle.
+///
+/// The learned-spellbook keys are the last such producer: they append after
+/// everything above, sorted by key so the order is a pure function of the
+/// key set and never depends on `HashSet` iteration order.
 ///
 /// Every spell of every held class is emitted whether or not its class-level
 /// band has been reached, exactly like the always-emitted class keys above:
@@ -301,9 +309,21 @@ impl AbilityPool {
     /// nothing at use-time, and a spell's class-level band is checked through
     /// [`Self::is_unlocked`] — stable pool indices are thereby guaranteed even
     /// for locked entries.
+    ///
+    /// `learned_spells` is the character's spellbook: pool keys acquired by
+    /// study rather than granted by class or species. They are appended AFTER
+    /// everything else and sorted by key, so the pool is a pure function of
+    /// its inputs and learning a new spell never moves an existing entry.
+    /// A learned key that a held class already grants is not duplicated;
+    /// instead its [`SpellGate`] is cleared, because having studied a spell is
+    /// unconditional knowledge of it — the class-level band that would
+    /// otherwise gate it no longer applies.
+    ///
+    /// Pass [`Self::no_learned_spells`] for an entity with no spellbook.
     pub fn for_character(
         body: &crate::comp::Body,
         character_class: &crate::comp::CharacterClass,
+        learned_spells: &HashSet<String>,
     ) -> Self {
         let mut abilities: Vec<String> = Vec::new();
         let mut spell_gates: Vec<Option<SpellGate>> = Vec::new();
@@ -370,11 +390,35 @@ impl AbilityPool {
             push_spells(&mut abilities, &mut spell_gates, secondary);
         }
 
+        // 6. Learned spellbook keys, last and sorted. Sorting matters: the spellbook
+        //    hands over a `HashSet`, whose iteration order varies between processes,
+        //    and an order that varied between logins would silently re-point every
+        //    legacy positional hotbar slot.
+        let mut learned: Vec<&String> = learned_spells.iter().collect();
+        learned.sort_unstable();
+        for key in learned {
+            match abilities.iter().position(|existing| existing == key) {
+                // Already granted by a held class. Studying it removes the
+                // class-level gate rather than adding a second entry.
+                Some(existing) => spell_gates[existing] = None,
+                None => push_key(&mut abilities, &mut spell_gates, key.clone(), None),
+            }
+        }
+
         debug_assert_eq!(abilities.len(), spell_gates.len());
         Self {
             abilities,
             spell_gates,
         }
+    }
+
+    /// The empty spellbook, for callers that have no [`Inventory`] to read one
+    /// from (NPCs, character creation, tests).
+    ///
+    /// [`Inventory`]: crate::comp::Inventory
+    pub fn no_learned_spells() -> &'static HashSet<String> {
+        static NONE: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+        NONE.get_or_init(HashSet::new)
     }
 
     /// `true` if index `i` may be used right now. Non-spell entries and
@@ -456,6 +500,38 @@ pub fn may_bind_ability(
         | AuxiliaryAbility::OffWeapon(_)
         | AuxiliaryAbility::Glider(_)
         | AuxiliaryAbility::Empty => true,
+    }
+}
+
+/// Xindeler: re-point every `Innate` binding in `active` from its index in
+/// `old_pool` to the index of the SAME key in `new_pool`, emptying the slot
+/// when that key is gone.
+///
+/// Needed whenever an [`AbilityPool`] is rebuilt for a character that is
+/// already in the world — granting a second class, or learning a spell —
+/// because the bindings in [`ActiveAbilities`] hold raw indices while
+/// persistence holds keys. Without this, an in-session rebuild that reorders
+/// anything leaves the action bar pointing at the wrong ability until relog,
+/// at which point the persisted key silently wins and the bar changes again.
+pub fn remap_innate_bindings(
+    active: &mut ActiveAbilities,
+    old_pool: &AbilityPool,
+    new_pool: &AbilityPool,
+) {
+    for set in active.auxiliary_sets.values_mut() {
+        for slot in set.iter_mut() {
+            let AuxiliaryAbility::Innate(index) = *slot else {
+                continue;
+            };
+            *slot = match old_pool
+                .abilities
+                .get(index)
+                .and_then(|key| new_pool.abilities.iter().position(|k| k == key))
+            {
+                Some(new_index) => AuxiliaryAbility::Innate(new_index),
+                None => AuxiliaryAbility::Empty,
+            };
+        }
     }
 }
 
@@ -5028,6 +5104,7 @@ mod class_ability_pool_tests {
         let pool = AbilityPool::for_character(
             &body,
             &crate::comp::CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
         );
         // First two entries are the Warrior class keys (signature, capstone).
         assert_eq!(
@@ -5059,7 +5136,8 @@ mod class_ability_pool_tests {
             secondary_level: 20,
             future_levels_to_secondary: false,
         };
-        let pool = AbilityPool::for_character(&body, &character_class);
+        let pool =
+            AbilityPool::for_character(&body, &character_class, AbilityPool::no_learned_spells());
         // The Warrior has no spells, so its keys, the racial innate, and the
         // Mage's keys are still the first five entries in that exact order;
         // the Mage's spells follow.
@@ -5078,6 +5156,7 @@ mod class_ability_pool_tests {
         let single = AbilityPool::for_character(
             &body,
             &crate::comp::CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
         );
         assert_eq!(
             &pool.abilities[..single.abilities.len()],
@@ -5093,6 +5172,7 @@ mod class_ability_pool_tests {
         let pool = AbilityPool::for_character(
             &body,
             &crate::comp::CharacterClass::single(ClassKind::Adventurer),
+            AbilityPool::no_learned_spells(),
         );
         assert_eq!(pool.abilities.len(), 1);
         assert_eq!(pool.abilities[0], "innate.human");
@@ -5112,8 +5192,11 @@ mod class_ability_pool_tests {
         ];
         let body = human_body();
         for class in proof_classes {
-            let pool =
-                AbilityPool::for_character(&body, &crate::comp::CharacterClass::single(class));
+            let pool = AbilityPool::for_character(
+                &body,
+                &crate::comp::CharacterClass::single(class),
+                AbilityPool::no_learned_spells(),
+            );
             for key in &pool.abilities {
                 // Skip the trailing racial innate (already covered by innate tests).
                 if key.starts_with("innate.") {
@@ -5168,6 +5251,7 @@ mod spell_gate_tests {
         Body, CharacterClass, ClassKind, SkillSet, humanoid, item::tool::AbilityMap,
         spell::SpellCompendium,
     };
+    use hashbrown::{HashMap, HashSet};
 
     /// Build a minimal Human body for deterministic testing.
     fn human_body() -> Body {
@@ -5214,7 +5298,11 @@ mod spell_gate_tests {
     #[test]
     fn pool_appends_spells_after_the_racial_innate() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            AbilityPool::no_learned_spells(),
+        );
 
         // Class signature + capstone first, then the racial innate, then spells.
         assert_eq!(pool.abilities[0], "class.mage.arcanesurge");
@@ -5231,9 +5319,226 @@ mod spell_gate_tests {
         assert!(pool.spell_gates[3..].iter().all(Option::is_some));
     }
 
-    /// The ordering contract: persisted hotbar slots store `Innate:index:N`
-    /// positions, so granting a second class must APPEND only — every index
-    /// that already existed must still name the same key afterwards.
+    fn learned(keys: &[&str]) -> HashSet<String> { keys.iter().map(|k| (*k).to_string()).collect() }
+
+    /// Learned keys land after EVERYTHING else — after the secondary class's
+    /// spells, which are themselves last among the class-derived entries.
+    #[test]
+    fn learned_spells_append_after_every_class_derived_key() {
+        let body = human_body();
+        // Neither of these is granted by Mage or Cleric, so both are purely
+        // additive.
+        let keys = learned(&[
+            "spells.transmutation.plant_growth",
+            "spells.transmutation.magic_stone",
+        ]);
+        let without = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new());
+        let with = AbilityPool::for_character(&body, &mage_cleric(), &keys);
+
+        assert_eq!(
+            &with.abilities[..without.abilities.len()],
+            &without.abilities[..],
+            "learned keys must not disturb any class-derived index"
+        );
+        assert_eq!(with.abilities.len(), without.abilities.len() + 2);
+        assert_eq!(with.abilities.len(), with.spell_gates.len());
+        // Learned keys carry no gate: study is unconditional knowledge.
+        assert!(
+            with.spell_gates[without.abilities.len()..]
+                .iter()
+                .all(Option::is_none)
+        );
+    }
+
+    /// The appended block is sorted by key, so it is a pure function of the
+    /// key set — the same spellbook always produces the same pool, whatever
+    /// order the `HashSet` happens to iterate in this process.
+    #[test]
+    fn learned_spells_are_appended_in_sorted_order() {
+        let body = human_body();
+        let keys = [
+            "spells.transmutation.plant_growth",
+            "spells.transmutation.magic_stone",
+            "spells.evocation.crusaders_mantle",
+        ];
+        let base_len = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new())
+            .abilities
+            .len();
+
+        let pool = AbilityPool::for_character(&body, &mage_cleric(), &learned(&keys));
+        let mut expected: Vec<&str> = keys.to_vec();
+        expected.sort_unstable();
+        assert_eq!(&pool.abilities[base_len..], &expected[..]);
+
+        // Inserting in a different order changes nothing.
+        let mut reversed = keys;
+        reversed.reverse();
+        let other = AbilityPool::for_character(&body, &mage_cleric(), &learned(&reversed));
+        assert_eq!(pool.abilities, other.abilities);
+    }
+
+    /// Learning a spell the character's own class already grants must not
+    /// duplicate the entry — and must clear its class-level gate, since the
+    /// character has now studied it outright.
+    #[test]
+    fn learning_a_class_spell_clears_its_gate_without_duplicating_it() {
+        let body = human_body();
+        let plain = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            &HashSet::new(),
+        );
+        let key = plain
+            .abilities
+            .iter()
+            .enumerate()
+            .find(|(i, _)| plain.spell_gate(*i).is_some_and(|g| g.spell_level > 0))
+            .map(|(_, k)| k.clone())
+            .expect("the Mage has a gated spell");
+
+        let studied = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            &learned(&[key.as_str()]),
+        );
+        assert_eq!(
+            studied.abilities, plain.abilities,
+            "no key is added, so no index moves"
+        );
+        let index = studied
+            .abilities
+            .iter()
+            .position(|k| *k == key)
+            .expect("still present");
+        assert!(studied.spell_gate(index).is_none(), "the gate is lifted");
+        assert!(studied.is_unlocked(index, None, 1));
+    }
+
+    /// Learning MORE spells later must disturb nothing a class granted, and
+    /// must never DROP a previously learned key.
+    ///
+    /// Within the learned block itself a later, alphabetically-earlier key
+    /// does shift the ones after it — sorting is what makes the pool a pure
+    /// function of the key set, and a `HashSet` carries no insertion order to
+    /// preserve instead. That is safe because hotbar slots persist by key, and
+    /// [`super::remap_innate_bindings`] follows keys across an in-session
+    /// rebuild.
+    #[test]
+    fn learning_another_spell_disturbs_no_class_key_and_drops_nothing() {
+        let body = human_body();
+        let class_only = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new());
+        let before = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            // Sorts AFTER the key added below: the adversarial case.
+            &learned(&["spells.transmutation.plant_growth"]),
+        );
+        let after = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&[
+                "spells.transmutation.plant_growth",
+                "spells.evocation.crusaders_mantle",
+            ]),
+        );
+
+        assert_eq!(after.abilities.len(), before.abilities.len() + 1);
+        // Every class-derived index is untouched.
+        assert_eq!(
+            &after.abilities[..class_only.abilities.len()],
+            &class_only.abilities[..]
+        );
+        // Nothing already known is lost.
+        for key in before.abilities.iter() {
+            assert!(
+                after.abilities.contains(key),
+                "{key} vanished from the pool after learning another spell"
+            );
+        }
+        assert_eq!(after.abilities.len(), after.spell_gates.len());
+    }
+
+    /// Rebuilding the pool in-session and remapping by key leaves every bound
+    /// slot on the same ability, even when the new pool ordered things
+    /// differently.
+    #[test]
+    fn remapping_by_key_survives_a_reordering_rebuild() {
+        let body = human_body();
+        let before = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&["spells.transmutation.plant_growth"]),
+        );
+        let bound = before
+            .abilities
+            .iter()
+            .position(|k| k == "spells.transmutation.plant_growth")
+            .expect("the learned key is in the pool");
+
+        let after = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&[
+                "spells.transmutation.plant_growth",
+                "spells.evocation.crusaders_mantle",
+            ]),
+        );
+
+        let mut sets = HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(bound)]);
+        let mut active = ActiveAbilities::from_auxiliary(sets, None);
+        super::remap_innate_bindings(&mut active, &before, &after);
+
+        let remapped = active
+            .auxiliary_sets
+            .get(&(None, None))
+            .and_then(|set| set.first())
+            .copied()
+            .expect("the set survives");
+        let AuxiliaryAbility::Innate(index) = remapped else {
+            panic!("the binding must still be an innate slot")
+        };
+        assert_eq!(
+            after.abilities[index], "spells.transmutation.plant_growth",
+            "the slot must follow its ability, not its old index"
+        );
+    }
+
+    /// A key that leaves the pool entirely empties the slot rather than
+    /// silently pointing it at whatever now occupies that index.
+    #[test]
+    fn remapping_clears_a_binding_whose_key_left_the_pool() {
+        let body = human_body();
+        let before = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&["spells.transmutation.plant_growth"]),
+        );
+        let bound = before
+            .abilities
+            .iter()
+            .position(|k| k == "spells.transmutation.plant_growth")
+            .expect("present");
+        let after = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new());
+
+        let mut sets = HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(bound)]);
+        let mut active = ActiveAbilities::from_auxiliary(sets, None);
+        super::remap_innate_bindings(&mut active, &before, &after);
+
+        assert_eq!(
+            active
+                .auxiliary_sets
+                .get(&(None, None))
+                .map(|s| s.as_slice()),
+            Some(&[AuxiliaryAbility::Empty][..])
+        );
+    }
+
+    /// The ordering contract: legacy persisted hotbar slots store
+    /// `Innate:index:N` positions, so granting a second class must APPEND only
+    /// — every index that already existed must still name the same key
+    /// afterwards.
     ///
     /// A gate may legitimately gain a grantor class in place (a spell both
     /// held classes list), which changes no index; that is asserted here as
@@ -5241,8 +5546,13 @@ mod spell_gate_tests {
     #[test]
     fn granting_a_second_class_shifts_no_existing_index() {
         let body = human_body();
-        let before = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
-        let after = AbilityPool::for_character(&body, &mage_cleric());
+        let before = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            AbilityPool::no_learned_spells(),
+        );
+        let after =
+            AbilityPool::for_character(&body, &mage_cleric(), AbilityPool::no_learned_spells());
 
         assert!(after.abilities.len() > before.abilities.len());
         assert_eq!(
@@ -5316,7 +5626,8 @@ mod spell_gate_tests {
     #[test]
     fn a_spell_both_held_classes_grant_appears_once_and_records_both() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, &mage_cleric());
+        let pool =
+            AbilityPool::for_character(&body, &mage_cleric(), AbilityPool::no_learned_spells());
         let (key, _) = shared_mage_cleric_spell();
 
         // Emitted once, and the parallel-array invariant survives the merge.
@@ -5340,7 +5651,7 @@ mod spell_gate_tests {
     fn a_shared_spell_unlocks_off_whichever_held_class_reached_the_band() {
         let body = human_body();
         let multi = mage_cleric();
-        let pool = AbilityPool::for_character(&body, &multi);
+        let pool = AbilityPool::for_character(&body, &multi, AbilityPool::no_learned_spells());
         let (key, spell_level) = shared_mage_cleric_spell();
         let gate = gate_for(&pool, &key);
         assert_eq!(gate.spell_level, spell_level);
@@ -5385,7 +5696,11 @@ mod spell_gate_tests {
         assert_eq!(def.level, 7);
         assert!(def.classes.contains(&ClassKind::Cleric) && def.classes.contains(&ClassKind::Mage));
 
-        let pool = AbilityPool::for_character(&human_body(), &mage_cleric());
+        let pool = AbilityPool::for_character(
+            &human_body(),
+            &mage_cleric(),
+            AbilityPool::no_learned_spells(),
+        );
         let gate = gate_for(&pool, KEY);
 
         let mut mage_1_cleric_59 = mage_cleric();
@@ -5404,7 +5719,7 @@ mod spell_gate_tests {
 
         for class in [ClassKind::Mage, ClassKind::Cleric] {
             let single = CharacterClass::single(class);
-            let pool = AbilityPool::for_character(&body, &single);
+            let pool = AbilityPool::for_character(&body, &single, AbilityPool::no_learned_spells());
             let gate = gate_for(&pool, &key);
             assert_eq!(
                 gate.classes().collect::<Vec<_>>(),
@@ -5428,7 +5743,7 @@ mod spell_gate_tests {
     fn the_nearest_grantor_is_the_class_that_will_reach_the_band_first() {
         let body = human_body();
         let multi = mage_cleric();
-        let pool = AbilityPool::for_character(&body, &multi);
+        let pool = AbilityPool::for_character(&body, &multi, AbilityPool::no_learned_spells());
         let (key, spell_level) = shared_mage_cleric_spell();
         let gate = gate_for(&pool, &key);
 
@@ -5535,7 +5850,11 @@ mod spell_gate_tests {
     #[test]
     fn is_unlocked_defaults_open_for_non_spell_and_out_of_range_indices() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Warrior));
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
+        );
         assert!(
             pool.is_unlocked(0, None, 1),
             "class keys keep their old behaviour"
@@ -5561,7 +5880,11 @@ mod spell_gate_tests {
     #[test]
     fn a_spell_less_class_pool_is_unchanged() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Warrior));
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
+        );
         assert_eq!(pool.abilities, vec![
             "class.warrior.rally",
             "class.warrior.onslaught",
@@ -5573,7 +5896,11 @@ mod spell_gate_tests {
     #[test]
     fn all_available_abilities_excludes_spells() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, &CharacterClass::single(ClassKind::Mage));
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            AbilityPool::no_learned_spells(),
+        );
         let listed = ActiveAbilities::all_available_abilities(None, None, Some(&pool));
         let innate: Vec<usize> = listed
             .iter()
@@ -5589,7 +5916,7 @@ mod spell_gate_tests {
     fn all_available_spells_lists_every_spell_with_its_unlocked_flag() {
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let pool = AbilityPool::for_character(&body, &cc);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
         let spell_count = pool.spell_gates.iter().filter(|g| g.is_some()).count();
 
         // At class level 1 every spell is listed, but only the cantrips are
@@ -5648,7 +5975,7 @@ mod spell_gate_tests {
     fn activate_ability_refuses_a_locked_spell_and_allows_an_unlocked_one() {
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let pool = AbilityPool::for_character(&body, &cc);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
         let ability_map = AbilityMap::load();
         let ability_map = ability_map.read();
         let index = spell_index_of_level(&pool, 1);
@@ -5667,7 +5994,7 @@ mod spell_gate_tests {
     fn a_cantrip_activates_at_class_level_one() {
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let pool = AbilityPool::for_character(&body, &cc);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
         let ability_map = AbilityMap::load();
         let ability_map = ability_map.read();
         let index = spell_index_of_level(&pool, 0);
@@ -5681,7 +6008,7 @@ mod spell_gate_tests {
         // the pool) must be refused at every level: the gate fails closed.
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let mut pool = AbilityPool::for_character(&body, &cc);
+        let mut pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
         let index = spell_index_of_level(&pool, 0);
         pool.spell_gates[index] = Some(SpellGate::new(ClassKind::Cleric, 0));
         let ability_map = AbilityMap::load();
@@ -5711,7 +6038,7 @@ mod spell_gate_tests {
     fn may_bind_rejects_a_locked_spell_and_accepts_an_unlocked_one() {
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let pool = AbilityPool::for_character(&body, &cc);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
         let locked = spell_index_of_level(&pool, 1);
         let cantrip = spell_index_of_level(&pool, 0);
 
@@ -5739,7 +6066,7 @@ mod spell_gate_tests {
     fn may_bind_accepts_non_spell_abilities_unconditionally() {
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let pool = AbilityPool::for_character(&body, &cc);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
 
         // A class-signature key: an `Innate` index carrying no gate.
         assert!(may_bind_ability(
@@ -5786,7 +6113,7 @@ mod spell_gate_tests {
         // hole for spells, it does not become a general bounds check.
         let body = human_body();
         let cc = CharacterClass::single(ClassKind::Mage);
-        let pool = AbilityPool::for_character(&body, &cc);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
         assert!(may_bind_ability(
             Some(&pool),
             Some(&cc),
