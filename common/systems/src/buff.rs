@@ -590,6 +590,22 @@ impl<'a> System<'a> for Sys {
                 }
             }
 
+            // Gear → Stats: caster-role implements (Staff/Sceptre/Tome/
+            // HolySymbol/Focus in the Caster role) contribute their
+            // effect_power/buff_strength/energy_efficiency tool stats onto
+            // this tick's spell_power/heal_power/energy_regen_modifier.
+            // Deliberately not gated on holding a CharacterClass: gear should
+            // matter for any inventory-carrying entity (e.g. a spellcasting
+            // NPC), the same way compute_protection/compute_max_energy_mod
+            // don't require one either. Ordering relative to the class-passive
+            // block above is immaterial here — every contribution is a plain
+            // `*=`, and multiplication is commutative.
+            combat::apply_gear_caster_stats(
+                &mut stat,
+                read_data.inventories.get(entity),
+                read_data.attuned_items.get(entity),
+            );
+
             // BL-65: every body contributes a combat-stat baseline by threat
             // tier; humanoid bodies contribute 0 here (PCs/class-gated NPCs get
             // accuracy/evasion/crit from ClassAttributes above, not the body).
