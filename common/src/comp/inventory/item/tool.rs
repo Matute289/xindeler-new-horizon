@@ -67,7 +67,10 @@ pub enum ToolKind {
 /// `ToolKind::default_role` says" so the hundreds of shipped `kind: Tool((`
 /// RONs never need editing; only a deviation (e.g. a martial staff) declares
 /// an explicit `role:`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// `Ord`/`PartialOrd` are needed so `WeaponRole` can compose into a
+// `SkillGroupKind` variant's derive, the same way `ToolKind` already does for
+// `Weapon(ToolKind)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum WeaponRole {
     Martial,
     Caster,

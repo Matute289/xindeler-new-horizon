@@ -462,7 +462,16 @@
     Custom("staff_martial"): AbilitySet((
         primary: Simple(None, "common.abilities.staff_martial.quarterstaff_strikes"),
         secondary: Simple(None, "common.abilities.staff_martial.frost_strike"),
-        abilities: [],
+        // The martial staff's own skill tree (`WeaponRoled(Staff, Martial)`
+        // in `common.skill_trees.skills_skill-groups_manifest`): two T1
+        // roots, a T2 follow-up each, converging on a T3 capstone.
+        abilities: [
+            Simple(Some(StaffMartial(Sweep)), "common.abilities.staff_martial.sweep"),
+            Simple(Some(StaffMartial(Brace)), "common.abilities.staff_martial.brace"),
+            Simple(Some(StaffMartial(WhirlingGale)), "common.abilities.staff_martial.whirling_gale"),
+            Simple(Some(StaffMartial(GlacialThrust)), "common.abilities.staff_martial.glacial_thrust"),
+            Simple(Some(StaffMartial(Avalanche)), "common.abilities.staff_martial.avalanche"),
+        ],
     )),
     Custom("Bow Simple"): AbilitySet((
         primary: Simple(None, "common.abilities.bowsimple.basic"),

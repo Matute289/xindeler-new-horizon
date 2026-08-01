@@ -109,7 +109,7 @@ use common::{
         },
         item::{
             ItemDefinitionIdOwned, ItemDesc, ItemI18n, MaterialStatManifest, Quality,
-            tool::ToolKind,
+            tool::{ToolKind, WeaponRole},
         },
         loot_owner::LootOwnerKind,
         skillset::{SkillGroupKind, SkillsPersistenceError, skills::Skill},
@@ -1983,7 +1983,7 @@ impl Hud {
                         .bottom_left_with_margins_on(self.ids.player_rank_up_txt_1_bg, 2.0, 2.0)
                         .set(self.ids.player_rank_up_txt_1, ui_widgets);
                     // Variable skilltree icon
-                    use crate::hud::SkillGroupKind::{General, Weapon};
+                    use crate::hud::SkillGroupKind::{General, Weapon, WeaponRoled};
                     Image::new(match display.skill_tree {
                         General => self.imgs.swords_crossed,
                         Weapon(ToolKind::Hammer) => self.imgs.hammer,
@@ -1993,6 +1993,7 @@ impl Hud {
                         Weapon(ToolKind::Bow) => self.imgs.bow,
                         Weapon(ToolKind::Staff) => self.imgs.staff,
                         Weapon(ToolKind::Pick) => self.imgs.mining,
+                        WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => self.imgs.staff,
                         _ => self.imgs.swords_crossed,
                     })
                     .w_h(20.0, 20.0)

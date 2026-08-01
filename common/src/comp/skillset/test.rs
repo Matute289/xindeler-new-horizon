@@ -556,6 +556,112 @@ fn apply_feat_passives_raises_stats_field() {
     assert!((stats.max_health_modifiers.mult_mod - before * 1.06).abs() < 1e-5);
 }
 
+// ---- Martial-role Staff skill tree ----
+
+/// The tree's skills must actually be present in the manifest, and the
+/// group's total point cost must be non-zero (i.e. the tree isn't an empty
+/// placeholder).
+#[test]
+fn staff_martial_group_loads_its_skills() {
+    use crate::comp::skills::StaffMartialSkill;
+
+    let group = SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial);
+    let def = SKILL_GROUP_DEFS
+        .get(&group)
+        .expect("the martial Staff group must have a manifest entry");
+
+    for skill in [
+        Skill::StaffMartial(StaffMartialSkill::Sweep),
+        Skill::StaffMartial(StaffMartialSkill::Brace),
+        Skill::StaffMartial(StaffMartialSkill::WhirlingGale),
+        Skill::StaffMartial(StaffMartialSkill::GlacialThrust),
+        Skill::StaffMartial(StaffMartialSkill::Avalanche),
+    ] {
+        assert!(
+            def.skills.contains(&skill),
+            "{skill:?} must be listed under WeaponRoled(Staff, Martial) in the skill-groups \
+             manifest"
+        );
+        assert_eq!(
+            SKILL_GROUP_LOOKUP.get(&skill),
+            Some(&group),
+            "{skill:?} must reverse-lookup to its own group, not the caster Staff group"
+        );
+    }
+    assert!(
+        def.total_skill_point_cost > 0,
+        "the martial Staff tree must not be an empty placeholder"
+    );
+}
+
+/// The tree's prerequisites converge into an acyclic DAG: two independent T1
+/// roots, each gating a T2, both of which gate the shared T3 capstone.
+/// A workspace-wide cyclic-dependency test already covers the whole
+/// manifest generically; this test additionally pins the *shape* so a
+/// future edit can't silently flatten it into an unconditional unlock chain.
+#[test]
+fn staff_martial_prerequisites_form_the_expected_dag() {
+    use crate::comp::skills::StaffMartialSkill::*;
+
+    assert!(Skill::StaffMartial(Sweep).prerequisite_skills().is_none());
+    assert!(Skill::StaffMartial(Brace).prerequisite_skills().is_none());
+    assert_eq!(
+        Skill::StaffMartial(WhirlingGale).prerequisite_skills(),
+        Some(&SkillPrerequisite::All(
+            [(Skill::StaffMartial(Sweep), 1)].into_iter().collect()
+        ))
+    );
+    assert_eq!(
+        Skill::StaffMartial(GlacialThrust).prerequisite_skills(),
+        Some(&SkillPrerequisite::All(
+            [(Skill::StaffMartial(Brace), 1)].into_iter().collect()
+        ))
+    );
+    assert_eq!(
+        Skill::StaffMartial(Avalanche).prerequisite_skills(),
+        Some(&SkillPrerequisite::All(
+            [
+                (Skill::StaffMartial(WhirlingGale), 1),
+                (Skill::StaffMartial(GlacialThrust), 1),
+            ]
+            .into_iter()
+            .collect()
+        ))
+    );
+}
+
+/// Unlocking the martial-role Staff group must not touch the caster
+/// `Weapon(Staff)` group's accessibility or points, and vice versa — the two
+/// trees are independent `SkillGroupKind`s that happen to share a
+/// `ToolKind`.
+#[test]
+fn staff_martial_group_is_independent_of_caster_staff_group() {
+    let caster_group = SkillGroupKind::Weapon(ToolKind::Staff);
+    let martial_group = SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial);
+
+    let mut skill_set = SkillSet::default();
+    skill_set.unlock_skill_group(caster_group);
+    skill_set.grant_skill_point(caster_group);
+
+    assert!(skill_set.skill_group_accessible(caster_group));
+    assert!(
+        !skill_set.skill_group_accessible(martial_group),
+        "unlocking the caster Staff group must not also unlock the martial one"
+    );
+    assert_eq!(skill_set.earned_sp(martial_group), 0);
+
+    skill_set.unlock_skill_group(martial_group);
+    skill_set.grant_skill_point(martial_group);
+
+    assert!(skill_set.skill_group_accessible(martial_group));
+    assert_eq!(
+        skill_set.earned_sp(caster_group),
+        1,
+        "granting a point to the martial group must not leak into the caster group's pool"
+    );
+    assert_eq!(skill_set.earned_sp(martial_group), 1);
+}
+
 // ---- BL-06 P2b: Q5 capstone synergy ----
 
 #[cfg(test)]

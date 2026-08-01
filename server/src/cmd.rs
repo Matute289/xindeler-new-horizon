@@ -5403,7 +5403,11 @@ fn handle_skill_point(
 }
 
 fn parse_skill_tree(skill_tree: &str) -> CmdResult<comp::skillset::SkillGroupKind> {
-    use comp::{class::ClassKind, item::tool::ToolKind, skillset::SkillGroupKind};
+    use comp::{
+        class::ClassKind,
+        item::tool::{ToolKind, WeaponRole},
+        skillset::SkillGroupKind,
+    };
     match skill_tree {
         "general" => Ok(SkillGroupKind::General),
         "sword" => Ok(SkillGroupKind::Weapon(ToolKind::Sword)),
@@ -5411,6 +5415,10 @@ fn parse_skill_tree(skill_tree: &str) -> CmdResult<comp::skillset::SkillGroupKin
         "hammer" => Ok(SkillGroupKind::Weapon(ToolKind::Hammer)),
         "bow" => Ok(SkillGroupKind::Weapon(ToolKind::Bow)),
         "staff" => Ok(SkillGroupKind::Weapon(ToolKind::Staff)),
+        "staff_martial" => Ok(SkillGroupKind::WeaponRoled(
+            ToolKind::Staff,
+            WeaponRole::Martial,
+        )),
         "sceptre" => Ok(SkillGroupKind::Weapon(ToolKind::Sceptre)),
         "mining" => Ok(SkillGroupKind::Weapon(ToolKind::Pick)),
         // BL-06 class trees (proof slice) — `/skill_point <class> <n>` for testing.
