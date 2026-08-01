@@ -3938,6 +3938,76 @@ mod damage_kind_energy_migration_tests {
     }
 }
 
+/// Pins the authored RON content for the martial staff's `staff_martial` kit
+/// (the item categories per class content pass) -- loads the actual shipped
+/// assets so a future edit that drops the baked-in elemental proc, or
+/// reintroduces a class filter on a kit that must stay whitelist-free, fails
+/// here instead of shipping silently.
+#[cfg(test)]
+mod martial_staff_ron_content_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::CombatEffect,
+        comp::{ability::CharacterAbility, buff::BuffKind, melee::MeleeConstructorKind},
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// The on-hit elemental proc (Q5a) is baked directly into the strike via
+    /// `MeleeConstructor::damage_effect`, not a `BuffKind::Frigid` self-buff
+    /// (that kind is reserved for the deferred passive-buff system).
+    #[test]
+    fn frost_strike_procs_the_frozen_debuff_on_hit() {
+        let ability = load("common.abilities.staff_martial.frost_strike");
+        let CharacterAbility::BasicMelee {
+            melee_constructor, ..
+        } = &ability
+        else {
+            panic!("frost_strike is not a BasicMelee");
+        };
+        let effect = melee_constructor
+            .damage_effect
+            .as_ref()
+            .expect("frost_strike must carry a damage_effect to proc anything");
+        let CombatEffect::Buff(buff) = effect else {
+            panic!("expected a Buff combat effect, got {effect:?}");
+        };
+        assert_eq!(
+            buff.kind,
+            BuffKind::Frozen,
+            "the martial staff's proc must be the Frozen debuff, not a self-buff kind"
+        );
+        assert!(buff.chance > 0.0, "a proc with zero chance never fires");
+        // A plain Bash strike so the physical damage is Crushing, independent
+        // of the proc riding along on top of it.
+        assert!(matches!(
+            melee_constructor.kind,
+            MeleeConstructorKind::Bash { .. }
+        ));
+    }
+
+    /// The primary combo is a plain physical strike with no elemental proc
+    /// riding along -- only the secondary carries the Frozen proc.
+    #[test]
+    fn quarterstaff_strikes_primary_is_purely_physical() {
+        let ability = load("common.abilities.staff_martial.quarterstaff_strikes");
+        let CharacterAbility::ComboMelee2 { strikes, .. } = &ability else {
+            panic!("quarterstaff_strikes is not a ComboMelee2");
+        };
+        assert!(!strikes.is_empty());
+        for strike in strikes {
+            assert!(
+                strike.melee_constructor.damage_effect.is_none(),
+                "the primary combo should not itself carry the elemental proc"
+            );
+            assert!(matches!(
+                strike.melee_constructor.kind,
+                MeleeConstructorKind::Bash { .. }
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod health_tier_requirement_tests {
     use super::{CasterLevelFailChance, ClassKind, CombatRequirement, HealthTier, TierEffect};

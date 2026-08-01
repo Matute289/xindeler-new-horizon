@@ -46,6 +46,9 @@ weapon-staff-firestaff_humble_stick = Humble Stick
 weapon-staff-firestaff_starter = Gnarled Rod
     .desc = Smells like resin and magic.
 
+weapon-staff-frostbound_quarterstaff = Frostbound Quarterstaff
+    .desc = A weighted length of ashwood, its tip rimed with a frost that never quite melts.
+
 weapon-tome-apprentice_tome = Apprentice Tome
     .desc = Margins crowded with a student's frantic leyline notes.
 
@@ -70,7 +73,7 @@ weapon-sword-frost-1 = Frost Saw
 weapon-sword-starter = Damaged Greatsword
     .desc = The blade could snap at any moment, but you hope it will endure future fights.
 
-weapon-sceptre-amethyst = Amethyst Staff
+weapon-sceptre-amethyst = Amethyst Sceptre
     .desc = Its stone is the closest thing from perfection.
 
 weapon-sceptre-caduceus = Caduceus

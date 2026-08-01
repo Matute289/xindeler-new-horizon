@@ -73,11 +73,14 @@ fn valid_starter_items(class: ClassKind) -> &'static [[Option<&'static str>; 2]]
             [Some("common.items.weapons.sceptre.starter_sceptre"), None],
             [Some("common.items.weapons.focus.primordial_focus"), None],
         ],
-        // Artificer still hands out a Staff even though the Staff's own
-        // equip gate doesn't list Artificer -- a pre-existing, separately
-        // tracked mismatch (see `starter_items_pass_their_own_class_gate`'s
-        // exclusion below).
-        ClassKind::Artificer => &[[Some("common.items.weapons.staff.starter_staff"), None]],
+        // Artificer was previously lumped in with the staff-starting classes
+        // above, but `starter_staff`'s own equip gate (its `requirements:`
+        // block / `equip_gates.ron`'s `(Staff, Caster)` row) only lists
+        // Mage/Sorcerer/Warlock/Druid — never Artificer. Artificer's own
+        // `class_proficiencies.ron` entry is `Any(Hammer)`, so hand out the
+        // (ungated, martial) Hammer instead, matching every other class's
+        // own proficiency.
+        ClassKind::Artificer => &[[Some("common.items.weapons.hammer.starter_hammer"), None]],
         // The Bard starts with a musical instrument, not a mage's staff.
         // `starter_staff`'s own `requirements:` block doesn't list Bard
         // (only Mage/Sorcerer/Warlock/Druid), so handing it out here would
@@ -329,13 +332,8 @@ mod tests {
 
     /// A class's starter item must never fail that same class's own equip
     /// gate — otherwise a fresh character can spawn holding gear it could
-    /// never legally re-equip after unequipping it.
-    ///
-    /// Artificer is deliberately excluded here: it still hands out
-    /// `starter_staff` even though `starter_staff`'s gate doesn't list
-    /// Artificer either (see the comment on that arm above and on Artificer
-    /// in `class_proficiencies.ron`) — a pre-existing, separately tracked
-    /// mismatch this test does not attempt to fix.
+    /// never legally re-equip after unequipping it. Covers all 14 playable
+    /// classes with no exceptions.
     #[test]
     fn starter_items_pass_their_own_class_gate() {
         use common::comp::body::humanoid;
@@ -343,9 +341,6 @@ mod tests {
         let body = Body::Humanoid(humanoid::Body::random());
         let skill_set = SkillSet::default();
         for class in ClassKind::PLAYABLE {
-            if class == ClassKind::Artificer {
-                continue;
-            }
             let character_class = CharacterClass::single(class);
             for pair in valid_starter_items(class) {
                 for item_id in pair.iter().flatten() {

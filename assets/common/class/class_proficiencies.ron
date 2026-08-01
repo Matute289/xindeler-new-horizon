@@ -31,7 +31,7 @@
     // starter_staff. Do not add Staff here to "fix" the starter conflict.
     Bard: Only([Handed(Sword, One), Any(Dagger), Any(Bow), Any(Instrument)]),
     // Deliberately no Staff proficiency — same reasoning as Bard above;
-    // Artificer's starter weapon is being changed to a Hammer instead.
+    // Artificer's starter weapon is a Hammer instead.
     Artificer: Only([Any(Hammer), Any(Dagger), Any(Bow), Any(Shield), Any(Pick), Any(Farming)]),
     // TODO: Cleric's sword grip (1h-only) is an inferred default, not a
     // directly confirmed value — confirm before widening to Any(Sword).
