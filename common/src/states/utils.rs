@@ -1605,6 +1605,10 @@ fn handle_ability(
                         data.ability_pool,
                     )
                 {
+                    let cooldown_secs = apply_cooldown_reduction(
+                        cooldown_secs,
+                        data.stats.cooldown_reduction_modifier,
+                    );
                     output_events.emit_server(SetAbilityCooldownEvent {
                         entity: data.entity,
                         ability_id: id.to_string(),
@@ -1753,6 +1757,27 @@ fn cooldown_ready(
                     .is_none_or(|cds| cds.is_ready(id, *data.time))
             })
     })
+}
+
+/// The floor a reduced ability cooldown may never fall below: a reduction
+/// source may shrink `AbilityMeta.cooldown`, but never chase it to zero or
+/// below, which would remove the gate entirely and let the ability be spammed
+/// with no cost at all. Chosen well below the shortest cooldown any shipped
+/// ability declares today, so ordinary play (no reduction source equipped, or
+/// an identity `1.0` modifier) never comes close to it.
+pub(crate) const MIN_ABILITY_COOLDOWN_SECS: f32 = 0.05;
+
+/// Applies `Stats::cooldown_reduction_modifier` to a base `AbilityMeta`
+/// cooldown and floors the result at [`MIN_ABILITY_COOLDOWN_SECS`]. Pure and
+/// ECS-independent so the reduction/floor math is unit-testable without a
+/// full `JoinData`; `handle_ability` is a thin caller at the single call site
+/// that writes `AbilityCooldowns` (`cooldown_ready`, the read side, needs no
+/// change: it compares against whatever value was stored here, so the
+/// reduction is visible to it for free). A `reduction_modifier` of `1.0` (no
+/// source equipped) leaves any shipped cooldown untouched, since every one is
+/// well above the floor.
+fn apply_cooldown_reduction(cooldown_secs: f32, reduction_modifier: f32) -> f32 {
+    (cooldown_secs * reduction_modifier).max(MIN_ABILITY_COOLDOWN_SECS)
 }
 
 /// Whether an ability's optional HP cost (the Hemomancy "blood price", M4 /
@@ -2311,6 +2336,37 @@ impl ProjectileSpread {
             // TODO: Check if we want these to return something different
             Self::Increasing(spread) | Self::Horizontal(spread) => *spread,
         }
+    }
+}
+
+#[cfg(test)]
+mod cooldown_reduction_tests {
+    use super::{MIN_ABILITY_COOLDOWN_SECS, apply_cooldown_reduction};
+
+    #[test]
+    fn identity_modifier_leaves_cooldown_untouched() {
+        assert_eq!(apply_cooldown_reduction(30.0, 1.0), 30.0);
+        assert_eq!(apply_cooldown_reduction(6.0, 1.0), 6.0);
+    }
+
+    #[test]
+    fn a_reduction_source_shortens_the_gate() {
+        assert!((apply_cooldown_reduction(30.0, 0.5) - 15.0).abs() < 1e-5);
+        assert!((apply_cooldown_reduction(10.0, 0.8) - 8.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_result_never_falls_below_the_floor() {
+        // An extreme reduction still leaves a small, non-zero gate.
+        assert_eq!(
+            apply_cooldown_reduction(30.0, 0.0),
+            MIN_ABILITY_COOLDOWN_SECS
+        );
+        assert_eq!(
+            apply_cooldown_reduction(30.0, -1.0),
+            MIN_ABILITY_COOLDOWN_SECS
+        );
+        assert!(apply_cooldown_reduction(6.0, 0.001) >= MIN_ABILITY_COOLDOWN_SECS);
     }
 }
 

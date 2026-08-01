@@ -369,6 +369,7 @@ fn weapon_stats() -> Result<(), Box<dyn Error>> {
                     range,
                     energy_efficiency,
                     buff_strength,
+                    cooldown_reduction: 1.0,
                 });
 
                 let quality = if let Some(quality_raw) = record.get(headers["Quality"]) {

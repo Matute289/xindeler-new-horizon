@@ -5,7 +5,7 @@ use crate::{
     assets::{Asset, AssetCache, AssetExt, AssetHandle, BoxedError, Ron, SharedString},
     comp::{
         CharacterAbility, Combo, SkillSet,
-        ability::Stance,
+        ability::{MagicSource, Stance},
         buff::{BuffKind, Buffs},
         inventory::{
             Inventory,
@@ -296,7 +296,21 @@ pub struct Stats {
     pub range: f32,
     pub energy_efficiency: f32,
     pub buff_strength: f32,
+    /// Multiplier folded into `comp::Stats::cooldown_reduction_modifier` by
+    /// `combat::apply_gear_caster_stats` for a Caster-role implement. 1.0 =
+    /// no change, matching every existing item via `#[serde(default)]` — no
+    /// shipped RON declares this yet. A value below 1.0 shortens
+    /// `AbilityMeta.cooldown` for any ability this character casts while the
+    /// item is equipped (not scoped to the item's own hand, same as the
+    /// other caster channels this fold already feeds).
+    #[serde(default = "one_f32")]
+    pub cooldown_reduction: f32,
 }
+
+/// Serde default for [`Stats::cooldown_reduction`]: identity (no change), so
+/// the hundreds of shipped item RONs that predate this field keep loading
+/// unmodified.
+fn one_f32() -> f32 { 1.0 }
 
 impl Stats {
     pub fn zero() -> Stats {
@@ -308,6 +322,7 @@ impl Stats {
             range: 0.0,
             energy_efficiency: 0.0,
             buff_strength: 0.0,
+            cooldown_reduction: 0.0,
         }
     }
 
@@ -320,6 +335,7 @@ impl Stats {
             range: 1.0,
             energy_efficiency: 1.0,
             buff_strength: 1.0,
+            cooldown_reduction: 1.0,
         }
     }
 
@@ -345,6 +361,7 @@ impl Stats {
             range: self.range * less_scaled,
             energy_efficiency: self.energy_efficiency * less_scaled,
             buff_strength: self.buff_strength * dur_mult.0,
+            cooldown_reduction: self.cooldown_reduction * less_scaled,
         }
     }
 }
@@ -361,6 +378,7 @@ impl Add<Stats> for Stats {
             range: self.range + other.range,
             energy_efficiency: self.energy_efficiency + other.energy_efficiency,
             buff_strength: self.buff_strength + other.buff_strength,
+            cooldown_reduction: self.cooldown_reduction + other.cooldown_reduction,
         }
     }
 }
@@ -381,6 +399,7 @@ impl Sub<Stats> for Stats {
             range: self.range - other.range,
             energy_efficiency: self.energy_efficiency - other.energy_efficiency,
             buff_strength: self.buff_strength - other.buff_strength,
+            cooldown_reduction: self.cooldown_reduction - other.cooldown_reduction,
         }
     }
 }
@@ -397,6 +416,7 @@ impl Mul<Stats> for Stats {
             range: self.range * other.range,
             energy_efficiency: self.energy_efficiency * other.energy_efficiency,
             buff_strength: self.buff_strength * other.buff_strength,
+            cooldown_reduction: self.cooldown_reduction * other.cooldown_reduction,
         }
     }
 }
@@ -417,6 +437,7 @@ impl Div<f32> for Stats {
             range: self.range / scalar,
             energy_efficiency: self.energy_efficiency / scalar,
             buff_strength: self.buff_strength / scalar,
+            cooldown_reduction: self.cooldown_reduction / scalar,
         }
     }
 }
@@ -437,6 +458,17 @@ pub struct Tool {
     /// applies. See [`WeaponRole`].
     #[serde(default)]
     role: Option<WeaponRole>,
+    /// If set, this item's caster `effect_power` contribution (folded by
+    /// `combat::apply_gear_caster_stats`) is routed into
+    /// `comp::Stats::spell_power_by_source` for THIS `MagicSource` only,
+    /// instead of the flat, unkeyed `spell_power` channel every caster
+    /// implement contributes to by default. `None` (every shipped item
+    /// today, via `#[serde(default)]`) keeps today's exact behaviour. Read
+    /// via [`Tool::spell_power_source`]; set via
+    /// [`Tool::with_spell_power_source`] since the field is private and no
+    /// shipped item declares it yet.
+    #[serde(default)]
+    spell_power_source: Option<MagicSource>,
     stats: Stats,
     // TODO: item specific abilities
 }
@@ -449,6 +481,7 @@ impl Tool {
             kind,
             hands,
             role,
+            spell_power_source: None,
             stats,
         }
     }
@@ -458,6 +491,7 @@ impl Tool {
             kind: ToolKind::Empty,
             hands: Hands::One,
             role: None,
+            spell_power_source: None,
             stats: Stats {
                 equip_time_secs: 0.0,
                 power: 1.00,
@@ -466,6 +500,7 @@ impl Tool {
                 range: 1.0,
                 energy_efficiency: 1.0,
                 buff_strength: 1.0,
+                cooldown_reduction: 1.0,
             },
         }
     }
@@ -473,6 +508,19 @@ impl Tool {
     /// This tool's effective [`WeaponRole`]: the explicit `role:` if the RON
     /// declared one, otherwise `kind`'s default.
     pub fn role(&self) -> WeaponRole { self.role.unwrap_or(self.kind.default_role()) }
+
+    /// The `MagicSource` this item's caster contribution is keyed to, if
+    /// any. See the field's own doc comment.
+    pub fn spell_power_source(&self) -> Option<MagicSource> { self.spell_power_source }
+
+    /// Declares a `spell_power_source` on this tool. A builder rather than a
+    /// `Tool::new` parameter so the existing constructor and its call sites
+    /// stay untouched; no shipped item uses this yet.
+    #[must_use]
+    pub fn with_spell_power_source(mut self, source: MagicSource) -> Self {
+        self.spell_power_source = Some(source);
+        self
+    }
 
     pub fn stats(&self, durability_multiplier: DurabilityMultiplier) -> Stats {
         self.stats * durability_multiplier
@@ -1014,6 +1062,54 @@ mod tests {
         )
         .expect("explicit role: must parse");
         assert_eq!(explicit_role.role(), WeaponRole::Martial);
+    }
+
+    /// A `Tool` RON omitting `cooldown_reduction:` in its `stats:` block
+    /// still parses and resolves to the identity value -- the hundreds of
+    /// shipped item RONs predate this field and must keep loading
+    /// unmodified.
+    #[test]
+    fn tool_stats_ron_defaults_cooldown_reduction_to_identity() {
+        let tool: Tool = ron::de::from_str(
+            "(kind: Staff, hands: Two, stats: (equip_time_secs: 0.4, power: 1.0, effect_power: \
+             1.0, speed: 1.0, range: 1.0, energy_efficiency: 1.0, buff_strength: 1.0))",
+        )
+        .expect("cooldown_reduction: is optional");
+        assert_eq!(
+            tool.stats(DurabilityMultiplier(1.0)).cooldown_reduction,
+            1.0
+        );
+    }
+
+    /// A `Tool` RON omitting `spell_power_source:` resolves to `None`
+    /// (today's exact behaviour for every shipped item); an explicit value
+    /// parses and is readable back through the accessor.
+    #[test]
+    fn tool_spell_power_source_ron_defaults_to_none_and_can_be_set() {
+        let stats_ron = "stats: (equip_time_secs: 0.4, power: 1.0, effect_power: 1.0, speed: 1.0, \
+                         range: 1.0, energy_efficiency: 1.0, buff_strength: 1.0)";
+
+        let no_source: Tool = ron::de::from_str(&format!("(kind: Tome, hands: Two, {stats_ron})"))
+            .expect("spell_power_source: is optional");
+        assert_eq!(no_source.spell_power_source(), None);
+
+        let with_source: Tool = ron::de::from_str(&format!(
+            "(kind: Tome, hands: Two, spell_power_source: Some(Divine), {stats_ron})"
+        ))
+        .expect("explicit spell_power_source: must parse");
+        assert_eq!(with_source.spell_power_source(), Some(MagicSource::Divine));
+    }
+
+    #[test]
+    fn with_spell_power_source_builder_sets_the_field() {
+        let tool = Tool::new(
+            ToolKind::Tome,
+            Hands::Two,
+            Some(WeaponRole::Caster),
+            Stats::one(),
+        )
+        .with_spell_power_source(MagicSource::Arcane);
+        assert_eq!(tool.spell_power_source(), Some(MagicSource::Arcane));
     }
 
     /// Every catalogued spell is reachable as a `Custom(<spell id>)` ability

@@ -4483,6 +4483,23 @@ impl MagicSource {
     /// comment for why this exists rather than a literal `5` scattered
     /// across callers.
     pub const COUNT: usize = Self::ALL.len();
+    /// Alias for [`Self::COUNT`], kept for callers already written against
+    /// this name. Prefer `COUNT` in new code.
+    pub const NUM_SOURCES: usize = Self::COUNT;
+
+    /// Stable array index for this source, matching
+    /// `comp::Stats::spell_power_by_source`. Exhaustive (no `_` arm) so a
+    /// future `MagicSource` variant fails the build here instead of
+    /// silently aliasing an existing slot.
+    pub fn index(self) -> usize {
+        match self {
+            MagicSource::Arcane => 0,
+            MagicSource::Divine => 1,
+            MagicSource::Primordial => 2,
+            MagicSource::Psionic => 3,
+            MagicSource::Ki => 4,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Default)]

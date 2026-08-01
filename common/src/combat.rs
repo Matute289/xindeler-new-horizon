@@ -924,7 +924,7 @@ impl Attack {
         // `attack_damage_modifier` alone.
         let damage_modifier = attacker.and_then(|a| a.stats).map_or(1.0, |s| {
             if is_magic {
-                s.attack_damage_modifier * s.spell_power
+                s.attack_damage_modifier * s.spell_power_for(self.magic_source())
             } else {
                 s.attack_damage_modifier * proficiency_mult
             }
@@ -3221,8 +3221,16 @@ pub fn compute_max_energy_mod(
 /// would double-apply it whenever that weapon casts its own abilities.
 /// `energy_regen_modifier` has no existing tool-stat consumer, so gear's mana
 /// axis lands there instead — new, and non-overlapping with the per-ability
-/// path. The contribution here is deliberately flat/unkeyed; per-school
-/// keying and cooldown reduction are separate, later channels.
+/// path.
+///
+/// Two further channels fold in the same way: `cooldown_reduction_modifier`
+/// always takes the item's `cooldown_reduction` tool stat (identity 1.0 for
+/// every item that doesn't declare one). `spell_power` is keyed by
+/// [`tool::Tool::spell_power_source`]: an item that names no source (every
+/// shipped item today) still contributes to the flat, unkeyed `spell_power`
+/// channel exactly as before; an item that DOES name one routes its
+/// `effect_power` into that source's `spell_power_by_source` slot ONLY,
+/// instead of boosting every source.
 pub fn apply_gear_caster_stats(
     stats: &mut Stats,
     inventory: Option<&Inventory>,
@@ -3242,9 +3250,13 @@ pub fn apply_gear_caster_stats(
             continue;
         }
         let tool_stats = tool.stats(item.stats_durability_multiplier());
-        stats.spell_power *= tool_stats.effect_power;
+        match tool.spell_power_source() {
+            Some(source) => stats.spell_power_by_source[source.index()] *= tool_stats.effect_power,
+            None => stats.spell_power *= tool_stats.effect_power,
+        }
         stats.heal_power *= tool_stats.buff_strength;
         stats.energy_regen_modifier *= tool_stats.energy_efficiency;
+        stats.cooldown_reduction_modifier *= tool_stats.cooldown_reduction;
     }
 }
 
@@ -5117,7 +5129,7 @@ mod trigger_slot_cooldown_tests {
 mod gear_caster_stats_tests {
     use std::sync::Arc;
 
-    use super::{AttunedItems, Inventory, Stats, apply_gear_caster_stats, tool};
+    use super::{AttunedItems, Inventory, MagicSource, Stats, apply_gear_caster_stats, tool};
     use crate::comp::{
         Body, humanoid,
         inventory::{
@@ -5138,6 +5150,7 @@ mod gear_caster_stats_tests {
             range: 1.0,
             energy_efficiency: 1.25,
             buff_strength: 1.75,
+            cooldown_reduction: 1.0,
         }
     }
 
@@ -5344,5 +5357,88 @@ mod gear_caster_stats_tests {
         apply_gear_caster_stats(&mut stats, Some(&inv), None);
 
         assert!((stats.spell_power - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn caster_gear_cooldown_reduction_folds_into_the_cooldown_channel() {
+        let reduced_stats = tool::Stats {
+            cooldown_reduction: 0.6,
+            ..caster_staff_stats()
+        };
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            reduced_stats,
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.cooldown_reduction_modifier - 0.6).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_martial_weapon_never_reduces_cooldowns() {
+        let reduced_stats = tool::Stats {
+            cooldown_reduction: 0.2,
+            ..caster_staff_stats()
+        };
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Martial,
+            reduced_stats,
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert_eq!(stats.cooldown_reduction_modifier, 1.0);
+    }
+
+    #[test]
+    fn an_unkeyed_caster_item_still_feeds_the_flat_spell_power_channel_only() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Tome,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+        assert_eq!(stats.spell_power_by_source, [1.0; MagicSource::NUM_SOURCES]);
+    }
+
+    #[test]
+    fn a_source_keyed_caster_item_boosts_only_its_own_source() {
+        let keyed_item = Item::create_test_item_from_kind(ItemKind::Tool(
+            tool::Tool::new(
+                tool::ToolKind::Tome,
+                tool::Hands::Two,
+                Some(tool::WeaponRole::Caster),
+                caster_staff_stats(),
+            )
+            .with_spell_power_source(MagicSource::Divine),
+        ));
+        let inv = inventory_with_mainhand(keyed_item);
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        // The keyed contribution lands ONLY in the Divine slot...
+        assert!((stats.spell_power_by_source[MagicSource::Divine.index()] - 1.5).abs() < 1e-5);
+        for source in [
+            MagicSource::Arcane,
+            MagicSource::Primordial,
+            MagicSource::Psionic,
+            MagicSource::Ki,
+        ] {
+            assert_eq!(stats.spell_power_by_source[source.index()], 1.0);
+        }
+        // ...and NOT the flat channel, which stays at identity: a
+        // source-keyed item boosts that source specifically, not every
+        // magic-source spell.
+        assert_eq!(stats.spell_power, 1.0);
     }
 }
