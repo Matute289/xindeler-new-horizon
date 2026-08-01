@@ -64,7 +64,7 @@ fn main() {
             &username,
             &password,
             None,
-            |provider| provider == "https://auth.veloren.net",
+            |provider| provider == "https://auth.xindeler.com",
             &|_| {},
             |_| {},
             Default::default(),

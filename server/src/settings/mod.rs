@@ -236,7 +236,7 @@ impl Default for Settings {
                     address: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 14004)),
                 },
             ],
-            auth_server_address: Some("https://auth.veloren.net".into()),
+            auth_server_address: Some("https://auth.xindeler.com".into()),
             query_address: Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 14006))),
             world_seed: DEFAULT_WORLD_SEED,
             server_name: "Veloren Server".into(),

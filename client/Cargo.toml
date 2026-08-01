@@ -57,7 +57,8 @@ specs = { workspace = true, features = [
 ] }
 vek = { workspace = true }
 hashbrown = { workspace = true }
-authc = { git = "https://gitlab.com/veloren/auth.git", rev = "ae0e16783a9f9041951296885f082308e155db79" } # xMAC94x/current_master_till_refactored branch
+# Private repository. See the note in README.md before cloning.
+authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", branch = "main" }
 
 #TODO: put bot in a different crate
 #bot only

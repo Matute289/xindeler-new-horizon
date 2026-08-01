@@ -1306,25 +1306,25 @@ impl Client {
             Some(addr) => {
                 // Query whether this is a trusted auth server
                 if auth_trusted(addr) {
-                    let (scheme, authority) = match addr.split_once("://") {
-                        Some((s, a)) => (s, a),
-                        None => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
-                    };
-
-                    let scheme = match scheme.parse::<authc::Scheme>() {
-                        Ok(s) => s,
+                    // The client now takes the whole URL, and rejects plain
+                    // http for anything that is not loopback.
+                    let auth = match authc::AuthClient::new(addr.as_str()) {
+                        Ok(auth) => auth,
                         Err(_) => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
                     };
 
-                    let authority = match authority.parse::<authc::Authority>() {
-                        Ok(a) => a,
-                        Err(_) => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
-                    };
+                    // Signing in is blocking and expensive: it derives an
+                    // Argon2i prehash before the HTTPS round-trip. Running it
+                    // directly would stall every other task sharing this
+                    // reactor thread.
+                    let username = username.to_owned();
+                    let password = password.to_owned();
+                    let token =
+                        tokio::task::spawn_blocking(move || auth.sign_in(&username, &password))
+                            .await
+                            .map_err(|err| Error::AuthErr(err.to_string()))??;
 
-                    Ok(authc::AuthClient::new(scheme, authority)?
-                        .sign_in(username, password)
-                        .await?
-                        .serialize())
+                    Ok(token.serialize())
                 } else {
                     Err(Error::AuthServerNotTrusted)
                 }
@@ -3788,7 +3788,7 @@ mod tests {
         let runtime2 = Arc::clone(&runtime);
         let username = "Foo";
         let password = "Bar";
-        let auth_server = "auth.veloren.net";
+        let auth_server = "auth.xindeler.com";
         let xindeler_client: Result<Client, Error> = runtime.block_on(Client::new(
             ConnectionArgs::Tcp {
                 hostname: "127.0.0.1:9000".to_owned(),

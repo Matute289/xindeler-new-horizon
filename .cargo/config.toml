@@ -1,3 +1,10 @@
+[net]
+# The authc dependency lives in a private repository. libgit2, which cargo uses
+# by default, cannot use an ssh-agent identity reliably, so delegate fetching to
+# the git CLI — that picks up whatever credentials the developer or CI already
+# has configured.
+git-fetch-with-cli = true
+
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 

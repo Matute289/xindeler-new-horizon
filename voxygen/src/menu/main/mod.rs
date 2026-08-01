@@ -664,31 +664,50 @@ pub(crate) fn get_client_msg_error(
             format!("{}: {}", localization.get_msg("common-error"), e)
         },
         Error::AuthClientError(e) => match e {
-            // TODO: remove parentheses
+            // The auth server answered, and its body is a JSON envelope with a
+            // human-readable message. Surface it as-is: it is written for the
+            // player (wrong password, unverified email, rate limited).
+            client::AuthClientError::ServerError(_, e) => e,
+            // Everything below is a transport or client-side failure the player
+            // cannot act on beyond retrying, so they share one message.
             client::AuthClientError::RequestError(e) => format!(
                 "{}: {}",
                 localization.get_msg("main-login-failed_sending_request"),
                 e
             ),
-            client::AuthClientError::ResponseError(e) => format!(
+            client::AuthClientError::RequestErrorWithMessage(_, msg) => format!(
+                "{}: {}",
+                localization.get_msg("main-login-failed_sending_request"),
+                msg
+            ),
+            client::AuthClientError::InvalidUrl(e) => format!(
+                "{}: {}",
+                localization.get_msg("main-login-failed_auth_server_url_invalid"),
+                e
+            ),
+            client::AuthClientError::InvalidResponse(e) => format!(
                 "{}: {}",
                 localization.get_msg("main-login-failed_sending_request"),
                 e
             ),
-            client::AuthClientError::CertificateLoad(e) => format!(
+            client::AuthClientError::ResponseRead(e) => format!(
                 "{}: {}",
                 localization.get_msg("main-login-failed_sending_request"),
                 e
             ),
-            client::AuthClientError::JsonError(e) => format!(
-                "{}: {}",
+            client::AuthClientError::ResponseTooLarge => format!(
+                "{}: response too large",
                 localization.get_msg("main-login-failed_sending_request"),
-                e
             ),
-            client::AuthClientError::InsecureSchema => localization
+            // Only reachable on a server misconfiguration, never on a player
+            // login, but the match has to stay exhaustive.
+            client::AuthClientError::MissingServiceCredential => format!(
+                "{}: missing service credential",
+                localization.get_msg("main-login-failed_sending_request"),
+            ),
+            client::AuthClientError::InsecureUrl => localization
                 .get_msg("main-login-insecure_auth_scheme")
                 .into(),
-            client::AuthClientError::ServerError(_, e) => String::from_utf8_lossy(&e).into(),
         },
         Error::AuthServerUrlInvalid(e) => {
             format!(
