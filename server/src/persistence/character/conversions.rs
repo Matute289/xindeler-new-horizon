@@ -11,7 +11,9 @@ use common::{
     character::CharacterId,
     comp::{
         ActiveAbilities, Body as CompBody, Content, Hardcore, Inventory, MapMarker, Stats,
-        Waypoint, body,
+        Waypoint,
+        ability::AbilityPool,
+        body,
         inventory::{
             item::{Item as VelorenItem, MaterialStatManifest, tool::AbilityMap},
             loadout::{Loadout, LoadoutError},
@@ -982,18 +984,27 @@ pub fn convert_skill_groups_to_database<'a, I: Iterator<Item = &'a skillset::Ski
         .collect()
 }
 
+/// Xindeler: `ability_pool` resolves `AuxiliaryAbility::Innate` slots to and
+/// from their stable pool key rather than their position — see
+/// `json_models::INNATE_KEY_PREFIX` for why. Callers that already hold the
+/// character's live pool should pass it; the rest rebuild it from the body and
+/// class they have in hand.
 pub fn convert_active_abilities_to_database(
     entity_id: CharacterId,
     active_abilities: &ActiveAbilities,
+    ability_pool: &AbilityPool,
 ) -> AbilitySets {
-    let ability_sets = json_models::active_abilities_to_db_model(active_abilities);
+    let ability_sets = json_models::active_abilities_to_db_model(active_abilities, ability_pool);
     AbilitySets {
         entity_id: entity_id.0,
         ability_sets: serde_json::to_string(&ability_sets).unwrap_or_default(),
     }
 }
 
-pub fn convert_active_abilities_from_database(ability_sets: &AbilitySets) -> ActiveAbilities {
+pub fn convert_active_abilities_from_database(
+    ability_sets: &AbilitySets,
+    ability_pool: &AbilityPool,
+) -> ActiveAbilities {
     let ability_sets = serde_json::from_str::<Vec<DatabaseAbilitySet>>(&ability_sets.ability_sets)
         .unwrap_or_else(|err| {
             common_base::dev_panic!(format!(
@@ -1002,7 +1013,7 @@ pub fn convert_active_abilities_from_database(ability_sets: &AbilitySets) -> Act
             ));
             Vec::new()
         });
-    json_models::active_abilities_from_db_model(ability_sets)
+    json_models::active_abilities_from_db_model(ability_sets, ability_pool)
 }
 
 /// If ok, returns a tuple of the constructed `RecipeBook` and a `Vec` of

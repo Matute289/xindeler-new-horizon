@@ -313,16 +313,22 @@ pub fn load_character_data(
         convert_skill_set_from_database(&skill_group_data);
     let body = convert_body_from_database(&body_data.variant, &body_data.body_data)?;
     let hardcore = convert_hardcore_from_database(character_data.hardcore)?;
+    let character_class = convert_class_from_database(
+        &character_data.class,
+        character_data.secondary_class.as_deref(),
+        character_data.secondary_class_level,
+        character_data.secondary_class_future_levels,
+    );
+    // Xindeler: persisted `Innate` hotbar slots name pool keys, so resolving
+    // them needs the pool. Nothing here holds one yet — the component is only
+    // inserted once the character is applied to its entity — so rebuild it from
+    // the body and class we just decoded, exactly as `state_ext` will.
+    let ability_pool = comp::ability::AbilityPool::for_character(&body, &character_class);
     Ok((
         PersistedComponents {
             body,
             hardcore,
-            character_class: convert_class_from_database(
-                &character_data.class,
-                character_data.secondary_class.as_deref(),
-                character_data.secondary_class_level,
-                character_data.secondary_class_future_levels,
-            ),
+            character_class,
             stats: convert_stats_from_database(character_data.alias, body),
             skill_set,
             inventory: convert_inventory_from_database_items(
@@ -336,7 +342,10 @@ pub fn load_character_data(
             )?,
             waypoint: char_waypoint,
             pets,
-            active_abilities: convert_active_abilities_from_database(&ability_set_data),
+            active_abilities: convert_active_abilities_from_database(
+                &ability_set_data,
+                &ability_pool,
+            ),
             map_marker: char_map_marker,
             ethos: convert_ethos_from_database(
                 character_data.ethos_good_evil,
@@ -637,8 +646,14 @@ pub fn create_character(
     }
     drop(stmt);
 
-    let ability_sets =
-        convert_active_abilities_to_database(CharacterId(character_id), &active_abilities);
+    // Xindeler: character creation runs once, and no `AbilityPool` component
+    // exists for a character that has no entity yet, so rebuilding the pool
+    // here is both the only option and a negligible cost.
+    let ability_sets = convert_active_abilities_to_database(
+        CharacterId(character_id),
+        &active_abilities,
+        &comp::ability::AbilityPool::for_character(&body, &character_class),
+    );
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -1140,6 +1155,11 @@ pub fn update(
     pets: Vec<PetPersistenceData>,
     char_waypoint: Option<comp::Waypoint>,
     active_abilities: comp::ability::ActiveAbilities,
+    // Xindeler: the character's live pool, needed to persist `Innate` hotbar
+    // slots by key. Passed in rather than rebuilt: this runs on every save
+    // batch, the caller already has the component in its ECS storage, and
+    // rebuilding would also need a `Body` this function is not given.
+    ability_pool: comp::ability::AbilityPool,
     map_marker: Option<comp::MapMarker>,
     character_class: comp::CharacterClass,
     ethos: comp::Ethos,
@@ -1322,7 +1342,8 @@ pub fn update(
         )));
     }
 
-    let ability_sets = convert_active_abilities_to_database(char_id, &active_abilities);
+    let ability_sets =
+        convert_active_abilities_to_database(char_id, &active_abilities, &ability_pool);
 
     let mut stmt = transaction.prepare_cached(
         "
