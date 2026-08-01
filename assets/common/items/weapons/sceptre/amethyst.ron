@@ -17,4 +17,14 @@ ItemDef(
     quality: Epic,
     tags: [],
     ability_spec: None,
+    // Sceptre: the class whitelist below is the ONLY thing restricting who
+    // may wield it. Every legacy sceptre ability (healingaura, wardingaura,
+    // lifestealbeam) has no per-spell class filter of its own, so this is
+    // what stops e.g. a Warrior from casting healingaura with a picked-up
+    // sceptre.
+    requirements: Some((
+        classes: Some([Cleric, Druid]),
+        min_level: None,
+        races: None,
+    )),
 )
