@@ -2302,17 +2302,31 @@ mod cast_gate_asset_tests {
             .collect()
     }
 
-    /// Every ability an implement's `primary`/`secondary` resolves to (in
-    /// `ability_set_manifest.ron`) must clear the per-spell class filter for
-    /// at least one class that can actually equip that implement. A
-    /// class-gated implement whose own attack no class holding it can cast is
-    /// unusable content; this test exists to keep that caught.
+    /// Every ability an implement's `primary`/`secondary`/`abilities`
+    /// resolves to (in `ability_set_manifest.ron`) must clear the per-spell
+    /// class filter for at least one class that can actually equip that
+    /// implement. A class-gated implement whose own attack no class holding
+    /// it can cast is unusable content; this test exists to keep that
+    /// caught.
+    ///
+    /// Includes `Staff`/`Sceptre`: their `primary`/`secondary`/`abilities`
+    /// resolve to the legacy fire/warding kit, which is wired directly into
+    /// these `Tool(ToolKind)` ability sets rather than the pool, so this is
+    /// the same class-filter check `Tome`/`HolySymbol`/`Focus` already get,
+    /// just reached through a different `ability_id` keying (see
+    /// `SpellCompendium::allows`'s `by_ability` doc comment).
     #[test]
     fn implement_abilities_are_castable_by_a_class_that_can_equip_them() {
         let ability_map = AbilityMap::load().read();
         let compendium = spell_compendium_manifest();
 
-        for tool in [ToolKind::Tome, ToolKind::HolySymbol, ToolKind::Focus] {
+        for tool in [
+            ToolKind::Tome,
+            ToolKind::HolySymbol,
+            ToolKind::Focus,
+            ToolKind::Staff,
+            ToolKind::Sceptre,
+        ] {
             let proficient_classes = classes_proficient_with(tool);
             assert!(
                 !proficient_classes.is_empty(),
@@ -2325,10 +2339,19 @@ mod cast_gate_asset_tests {
                     panic!("no ability set for {tool:?} in ability_set_manifest.ron")
                 });
 
-            for (slot, kind) in [
-                ("primary", &ability_set.primary),
-                ("secondary", &ability_set.secondary),
-            ] {
+            let mut slots: Vec<(String, &AbilityKind<_>)> = vec![
+                ("primary".to_string(), &ability_set.primary),
+                ("secondary".to_string(), &ability_set.secondary),
+            ];
+            slots.extend(
+                ability_set
+                    .abilities
+                    .iter()
+                    .enumerate()
+                    .map(|(i, kind)| (format!("abilities[{i}]"), kind)),
+            );
+
+            for (slot, kind) in slots {
                 let AbilityKind::Simple(_, item) = kind else {
                     panic!("{tool:?} {slot} is Contextualized; extend this test to walk it");
                 };
@@ -2340,6 +2363,53 @@ mod cast_gate_asset_tests {
                     castable_by_some_class,
                     "{tool:?} {slot} ability {:?} is not castable by any class proficient with \
                      {tool:?} ({proficient_classes:?})",
+                    item.id,
+                );
+            }
+        }
+    }
+
+    /// The actual gap this catalogue closes, asserted from the exact
+    /// activation-independent angle: a class NOT proficient with `Staff`/
+    /// `Sceptre` at all (so it could never satisfy an equip gate on any
+    /// ItemDef, standard or hypothetically modular) must be refused by every
+    /// ability in that tool's `Tool(ToolKind)` set. Modular weapons carry no
+    /// equip gate at all (`Item::requirements()` returns `None` for
+    /// `ItemBase::Modular`), so this check — driven purely by
+    /// `SpellCompendium::allows`, which never consults item requirements —
+    /// is what actually protects a modular Staff/Sceptre, not just the
+    /// standard-item `requirements.classes` equip gate on the shipped
+    /// ItemDefs.
+    #[test]
+    fn legacy_kit_refuses_a_class_with_no_staff_sceptre_proficiency_at_all() {
+        let ability_map = AbilityMap::load().read();
+        let compendium = spell_compendium_manifest();
+
+        for tool in [ToolKind::Staff, ToolKind::Sceptre] {
+            let proficient = classes_proficient_with(tool);
+            let outsider = ClassKind::ALL
+                .into_iter()
+                .find(|class| !proficient.contains(class))
+                .unwrap_or_else(|| panic!("every class is proficient with {tool:?}?"));
+
+            let ability_set = ability_map
+                .get_ability_set(&AbilitySpec::Tool(tool))
+                .unwrap_or_else(|| {
+                    panic!("no ability set for {tool:?} in ability_set_manifest.ron")
+                });
+
+            let mut kinds: Vec<&AbilityKind<_>> =
+                vec![&ability_set.primary, &ability_set.secondary];
+            kinds.extend(ability_set.abilities.iter());
+
+            for kind in kinds {
+                let AbilityKind::Simple(_, item) = kind else {
+                    continue;
+                };
+                assert!(
+                    !compendium.allows(&item.id, Some(&CharacterClass::single(outsider))),
+                    "{outsider:?} (not proficient with {tool:?}) can still cast {:?} — the \
+                     modular-weapon gap is not closed",
                     item.id,
                 );
             }
