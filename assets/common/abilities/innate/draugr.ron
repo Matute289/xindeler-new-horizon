@@ -14,7 +14,7 @@ Shockwave(
     shockwave_duration: 0.5,
     dodgeable: Roll,
     move_efficiency: 0.1,
-    damage_kind: Energy,
+    damage_kind: Cold,
     specifier: Ice,
     damage_effect: Some(Buff((
         kind: Chilled,

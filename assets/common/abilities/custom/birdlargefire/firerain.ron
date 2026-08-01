@@ -29,7 +29,7 @@ RapidRanged(
                 strength: DamageFraction(0.7),
                 chance: 1.0,
             )),
-            damage_kind: Energy,
+            damage_kind: Fire,
         )),
     ),
     projectile_body: Object(FireRainDrop),

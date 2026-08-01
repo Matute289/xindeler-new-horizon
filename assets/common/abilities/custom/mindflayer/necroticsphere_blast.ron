@@ -11,7 +11,7 @@ BasicRanged(
         attack: Some((
             damage: 25,
             energy: Some(20),
-            damage_kind: Energy,
+            damage_kind: Necrotic,
         )),
     ),
     projectile_body: Object(FireworkPurple),
