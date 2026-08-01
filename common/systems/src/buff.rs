@@ -258,6 +258,7 @@ impl<'a> System<'a> for Sys {
                             None,
                             // Terrain effects have no associated ability for there to be a target
                             None,
+                            None,
                         )),
                     });
                 };
@@ -311,6 +312,7 @@ impl<'a> System<'a> for Sys {
                                     mass,
                                     // There is no ability being cast that would cause there to be
                                     // a target
+                                    None,
                                     None,
                                 )),
                             });
@@ -501,6 +503,7 @@ impl<'a> System<'a> for Sys {
                             // aura, we'll have to store the target entity somewhere (maybe buff,
                             // maybe aura)? Revisit if this causes issues.
                             None,
+                            buff.magic_source,
                         )),
                     });
                 }
@@ -606,6 +609,7 @@ impl<'a> System<'a> for Sys {
                                 mass,
                             },
                             mass,
+                            None,
                             None,
                         )),
                     });
@@ -1198,6 +1202,7 @@ mod item_condition_diff_tests {
                 stats: None,
                 mass: None,
             },
+            None,
             None,
             None,
         )

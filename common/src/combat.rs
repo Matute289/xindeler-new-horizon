@@ -2924,6 +2924,7 @@ impl CombatBuff {
             dest_info,
             attacker_mass,
             target_uid,
+            ability_info.and_then(|ai| ai.ability_meta.source),
         )
     }
 
@@ -2964,6 +2965,7 @@ impl CombatBuff {
             dest_info,
             entity_mass,
             target_uid,
+            ability_info.and_then(|ai| ai.ability_meta.source),
         )
     }
 }

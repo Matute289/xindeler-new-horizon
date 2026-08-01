@@ -504,6 +504,13 @@ fn apply_buff_aura(
             // Auras, after the initial creation, do not have a specific target that an
             // ability is designating
             None,
+            // Aura ticks are excluded from mastery crediting: a periodic pulse
+            // sitting on an already-in-combat ally would keep re-crediting
+            // every tick, which is a different anti-farm shape than the
+            // single-application `Attack` effect path this field otherwise
+            // feeds. Revisit as its own decision if a design wants aura
+            // healers/buffers to earn mastery too.
+            None,
         )),
     });
 }

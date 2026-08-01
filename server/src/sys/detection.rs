@@ -501,6 +501,7 @@ mod tests {
             DestInfo::default(),
             None,
             None,
+            None,
         )
     }
 

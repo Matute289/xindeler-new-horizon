@@ -6,6 +6,7 @@ use crate::{
     },
     comp::{
         FrontendMarker, Mass, Stats,
+        ability::MagicSource,
         aura::AuraKey,
         detection::SenseKind,
         projectile::{
@@ -1699,6 +1700,13 @@ pub struct Buff {
     pub start_time: Time,
     pub effects: Vec<BuffEffect>,
     pub source: BuffSource,
+    /// The magic source of the ability that caused this buff, if any —
+    /// mirrors `HealthChange.magic_source`, threaded the same way
+    /// (`combat.rs`'s `CombatBuff::to_buff`/`to_self_buff`, from
+    /// `AbilityInfo.ability_meta.source`). `None` for world/item/aura/mount/
+    /// command-sourced buffs, which have no casting ability to attribute.
+    #[serde(default)]
+    pub magic_source: Option<MagicSource>,
 }
 
 /// Information about whether buff addition or removal was requested.
@@ -1739,6 +1747,9 @@ impl Buff {
         // Note: This refers to the target of the ability that caused a new buff, which is not
         // necessarily the target of the buff
         target_uid: Option<Uid>,
+        // The magic source of the ability that caused this buff, if any. See the field doc
+        // comment on `Buff::magic_source`.
+        magic_source: Option<MagicSource>,
     ) -> Self {
         let data = kind.modify_data(data, source_mass, dest_info, source);
         let source_uid = if let BuffSource::Character { by, .. } = source {
@@ -1767,6 +1778,7 @@ impl Buff {
             end_time,
             effects,
             source,
+            magic_source,
         }
     }
 
@@ -2073,6 +2085,7 @@ pub mod tests {
             BuffSource::Unknown,
             time,
             DestInfo::default(),
+            None,
             None,
             None,
         )

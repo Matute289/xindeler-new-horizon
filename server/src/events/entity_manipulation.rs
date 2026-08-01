@@ -39,7 +39,9 @@ use common::{
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_SLOW},
         projectile::{ProjectileAttack, ProjectileConstructorKind, ProjectileExplosionTarget},
         skills::MageSkill,
-        spell_mastery::{POLYGLOT_BONUS_PER_RANK, grant_source_mastery, level_delta_weight},
+        spell_mastery::{
+            NON_DAMAGE_WEIGHT, POLYGLOT_BONUS_PER_RANK, grant_source_mastery, level_delta_weight,
+        },
     },
     consts::TELEPORTER_RADIUS,
     event::{
@@ -242,7 +244,8 @@ pub struct HealthChangeEventData<'a> {
     rtsim: WriteExpect<'a, RtSim>,
     events: HealthChangeEvents<'a>,
     time: Read<'a, Time>,
-    #[cfg(feature = "worldgen")]
+    // Needed unconditionally (not just under `worldgen`) to resolve a heal's
+    // caster `Uid` back to an entity for `SpellMastery` crediting.
     id_maps: Read<'a, IdMaps>,
     #[cfg(feature = "worldgen")]
     world: ReadExpect<'a, Arc<World>>,
@@ -257,6 +260,14 @@ pub struct HealthChangeEventData<'a> {
     agents: WriteStorage<'a, Agent>,
     healths: WriteStorage<'a, Health>,
     heads: WriteStorage<'a, Heads>,
+    // The target's own combat-relevance/combat_rating inputs for non-damage
+    // mastery crediting (see the `changed && ev.change.amount > 0.0` block
+    // below).
+    energies: ReadStorage<'a, Energy>,
+    poises: ReadStorage<'a, Poise>,
+    skill_sets: ReadStorage<'a, SkillSet>,
+    bodies: ReadStorage<'a, Body>,
+    spell_masteries: WriteStorage<'a, SpellMastery>,
 }
 
 impl ServerEvent for HealthChangeEvent {
@@ -296,6 +307,61 @@ impl ServerEvent for HealthChangeEvent {
                         buff_change: buff::BuffChange::RemoveByKind(BuffKind::Shielded),
                     });
                 }
+
+                // Non-damage mastery credit: a heal (positive amount) that
+                // actually changed the target's HP, tagged with a magic
+                // source, from a resolvable caster who holds `SpellMastery`.
+                // The heal counterpart to the buff crediting in `BuffEvent`'s
+                // handler.
+                if changed
+                    && ev.change.amount > 0.0
+                    && let Some(source) = ev.change.magic_source
+                    && let Some(contributor) = ev.change.by
+                {
+                    let healer_uid = damage_contributor_uid(&contributor);
+                    if let Some(target_uid) = uid.copied()
+                        && let Some(healer_entity) = data.id_maps.uid_entity(healer_uid)
+                        && let Some(mut mastery) = data.spell_masteries.get_mut(healer_entity)
+                        && let (
+                            Some(target_inventory),
+                            Some(target_energy),
+                            Some(target_poise),
+                            Some(target_skill_set),
+                            Some(target_body),
+                        ) = (
+                            inventory,
+                            data.energies.get(ev.entity),
+                            data.poises.get(ev.entity),
+                            data.skill_sets.get(ev.entity),
+                            data.bodies.get(ev.entity).copied(),
+                        )
+                    {
+                        let target_in_combat = health.damage_contributions().next().is_some();
+                        let target_combat_rating = combat::combat_rating(
+                            target_inventory,
+                            &health,
+                            target_energy,
+                            target_poise,
+                            target_skill_set,
+                            target_body,
+                            &data.msm,
+                        );
+                        let polyglot_rank = data.skill_sets.get(healer_entity).map_or(0, |ss| {
+                            ss.skill_level(Skill::Mage(MageSkill::Polyglot))
+                                .unwrap_or(0)
+                        });
+                        grant_non_damage_mastery(
+                            &mut mastery,
+                            source,
+                            healer_uid,
+                            target_uid,
+                            target_in_combat,
+                            target_combat_rating,
+                            polyglot_rank,
+                        );
+                    }
+                }
+
                 if let Some(mut heads) = heads {
                     // We want some hp to be left for a headless body, so we divide by (max amount
                     // of heads + 2)
@@ -737,6 +803,46 @@ fn grant_kill_mastery(
     }
 }
 
+/// Credits mastery for a spell that landed a non-damage effect (a buff or a
+/// heal) on another entity. The single decision surface both the
+/// `HealthChangeEvent` (heal) and `BuffEvent` (buff) server handlers reduce
+/// their own ECS state down to and call, so the two anti-farm rules below
+/// are asserted exactly once rather than re-derived per handler.
+///
+/// A no-op when `caster_uid == target_uid` (a self-only buff or heal earns
+/// nothing -- there is no other entity to have landed on) or when
+/// `target_in_combat` is `false` (the target's own damage-contributor ledger
+/// is empty, i.e. nobody has damaged it inside the prune window, so there is
+/// no real fight to credit against and a full-health, never-fought target is
+/// worth nothing).
+///
+/// `target_combat_rating` is what the credit scales with once the two gates
+/// above pass, mirroring `exp_reward`'s own `combat_rating(...) * 20.0` --
+/// there is no `reward_fraction` factor here since nothing died.
+/// `NON_DAMAGE_WEIGHT` and the `Mage(Polyglot)` bonus both apply the same
+/// way they do on the damage path; `level_delta_weight` deliberately does
+/// NOT -- it models a kill-specific overleveled/underleveled anti-farm
+/// curve with no natural reading for "how many levels above me is the ally
+/// I just healed", and the combat-rating scaling above already does the
+/// anti-farm job this path needs (a trivial target is worth ~nothing before
+/// this weight would even apply).
+fn grant_non_damage_mastery(
+    mastery: &mut SpellMastery,
+    source: MagicSource,
+    caster_uid: Uid,
+    target_uid: Uid,
+    target_in_combat: bool,
+    target_combat_rating: f32,
+    polyglot_rank: u16,
+) {
+    if caster_uid == target_uid || !target_in_combat {
+        return;
+    }
+    let base_xp = target_combat_rating * 20.0;
+    let weight = NON_DAMAGE_WEIGHT * (1.0 + POLYGLOT_BONUS_PER_RANK * f32::from(polyglot_rank));
+    grant_source_mastery(mastery, source, base_xp, weight);
+}
+
 #[cfg(test)]
 mod handle_exp_gain_tests {
     use super::*;
@@ -970,6 +1076,155 @@ mod grant_kill_mastery_tests {
     fn mage_polyglot_max_rank_is_read_from_the_manifest() {
         use common::comp::skills::MageSkill;
         assert_eq!(Skill::Mage(MageSkill::Polyglot).max_level(), 3);
+    }
+}
+
+#[cfg(test)]
+mod grant_non_damage_mastery_tests {
+    use super::*;
+    use core::num::NonZeroU64;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// Spec's self-only exclusion: `caster_uid == target_uid` is exactly
+    /// what a self-buff or self-heal looks like once reduced to this
+    /// function's inputs -- it credits nothing. The same call against a
+    /// distinct target (a party member) credits.
+    #[test]
+    fn a_self_only_buff_credits_nothing_but_the_same_buff_on_a_party_member_credits() {
+        let caster = uid(1);
+
+        let mut self_cast = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut self_cast,
+            MagicSource::Divine,
+            caster,
+            caster,
+            true,
+            1000.0,
+            0,
+        );
+        assert_eq!(self_cast.source_xp(MagicSource::Divine), 0);
+
+        let mut party_member = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut party_member,
+            MagicSource::Divine,
+            caster,
+            uid(2),
+            true,
+            1000.0,
+            0,
+        );
+        assert!(party_member.source_xp(MagicSource::Divine) > 0);
+    }
+
+    /// A full-health, never-damaged target (empty damage-contributor ledger,
+    /// `target_in_combat == false`) credits zero no matter how high its
+    /// combat_rating is. A mid-fight ally (`target_in_combat == true`)
+    /// credits exactly `combat_rating * 20.0 * NON_DAMAGE_WEIGHT` at rank 0 --
+    /// the non-damage path's counterpart to `exp_reward`.
+    #[test]
+    fn healing_a_never_damaged_target_credits_zero_but_a_mid_fight_ally_credits_the_non_damage_weight()
+     {
+        let caster = uid(1);
+        let target = uid(2);
+
+        let mut never_damaged = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut never_damaged,
+            MagicSource::Divine,
+            caster,
+            target,
+            false,
+            1000.0,
+            0,
+        );
+        assert_eq!(never_damaged.source_xp(MagicSource::Divine), 0);
+
+        let mut mid_fight = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut mid_fight,
+            MagicSource::Divine,
+            caster,
+            target,
+            true,
+            1000.0,
+            0,
+        );
+        assert_eq!(
+            mid_fight.source_xp(MagicSource::Divine),
+            (1000.0 * 20.0 * NON_DAMAGE_WEIGHT).round() as u32
+        );
+    }
+
+    /// `Mage(Polyglot)` multiplies the non-damage credit the same way it
+    /// does the damage path: rank 3 -> x1.24 on top of `NON_DAMAGE_WEIGHT`.
+    #[test]
+    fn polyglot_rank_multiplies_the_non_damage_credit_too() {
+        let caster = uid(1);
+        let target = uid(2);
+
+        let mut no_polyglot = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut no_polyglot,
+            MagicSource::Primordial,
+            caster,
+            target,
+            true,
+            1000.0,
+            0,
+        );
+        let mut rank_three = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut rank_three,
+            MagicSource::Primordial,
+            caster,
+            target,
+            true,
+            1000.0,
+            3,
+        );
+
+        let no_polyglot_xp = no_polyglot.source_xp(MagicSource::Primordial);
+        let rank_three_xp = rank_three.source_xp(MagicSource::Primordial);
+        assert_eq!(no_polyglot_xp, 5_000);
+        assert_eq!(rank_three_xp, 6_200);
+    }
+
+    /// Arcane is never written on the non-damage path either -- a landed
+    /// Arcane buff/heal on a genuine in-combat ally still earns zero
+    /// source-XP for it, the same invariant `grant_kill_mastery` upholds on
+    /// the damage path.
+    #[test]
+    fn arcane_is_never_written_by_the_non_damage_path_either() {
+        let mut mastery = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut mastery,
+            MagicSource::Arcane,
+            uid(1),
+            uid(2),
+            true,
+            1000.0,
+            0,
+        );
+        assert_eq!(mastery.source_xp(MagicSource::Arcane), 0);
+    }
+
+    /// The named anti-farm failure mode: standing still and casting into
+    /// the air (or at nothing at all) never earns mastery. There is no
+    /// separate "cast" signal this function -- or its callers -- ever
+    /// consumes: the server only reaches a `HealthChangeEvent`/`BuffEvent`
+    /// handler when an effect actually landed on some entity, and
+    /// `grant_source_mastery` is the only place `SpellMastery.source_xp` is
+    /// ever written. A spell with no target in range emits neither event, so
+    /// nothing here is ever called and the ledger cannot move.
+    #[test]
+    fn standing_still_casting_into_the_air_earns_no_mastery() {
+        let mastery = SpellMastery::default();
+        for source in MagicSource::ALL {
+            assert_eq!(mastery.source_xp(source), 0, "{source:?}");
+        }
     }
 }
 
@@ -3065,6 +3320,7 @@ pub fn emit_effect_events(
                     dest_info,
                     source_mass,
                     None,
+                    None,
                 )),
             });
         },
@@ -3282,6 +3538,11 @@ pub struct BuffEventData<'a> {
     agents: ReadStorage<'a, Agent>,
     msm: ReadExpect<'a, MaterialStatManifest>,
     outcomes: Read<'a, EventBus<Outcome>>,
+    // Read here (not written directly -- crediting happens through a
+    // short-lived `get_mut` per landed buff) so a caster with no
+    // `SpellMastery` yet (an NPC, a pet, or any entity that predates the
+    // component) is simply skipped.
+    spell_masteries: WriteStorage<'a, SpellMastery>,
 }
 
 impl ServerEvent for BuffEvent {
@@ -3306,6 +3567,7 @@ impl ServerEvent for BuffEvent {
             agents,
             msm,
             outcomes,
+            mut spell_masteries,
         } = data;
         let mut outcomes_emitter = outcomes.emitter();
         let mut rng = rand::rng();
@@ -3471,6 +3733,7 @@ impl ServerEvent for BuffEvent {
                                     None,
                                     // There is no target entity
                                     None,
+                                    None,
                                 );
                                 buffs.insert(resilience_buff, *time);
                             }
@@ -3527,6 +3790,61 @@ impl ServerEvent for BuffEvent {
                                     vec![BuffCategory::WeaponCoating],
                                     Vec::new(),
                                     Vec::new(),
+                                );
+                            }
+
+                            // Non-damage mastery credit: `new_buff` is about to
+                            // land on `ev.entity` for real (past the immunity
+                            // and resist checks above), so if it carries a
+                            // magic source and its caster is resolvable and
+                            // holds `SpellMastery`, credit it -- the buff
+                            // counterpart to `grant_kill_mastery`'s handling of
+                            // damage.
+                            if let buff::BuffSource::Character { by: caster_uid, .. } =
+                                new_buff.source
+                                && let Some(source) = new_buff.magic_source
+                                && let Some(target_uid) = uids.get(ev.entity).copied()
+                                && let Some(caster_entity) = id_maps.uid_entity(caster_uid)
+                                && let Some(mut mastery) = spell_masteries.get_mut(caster_entity)
+                                && let (
+                                    Some(target_inventory),
+                                    Some(target_health),
+                                    Some(target_energy),
+                                    Some(target_poise),
+                                    Some(target_skill_set),
+                                    Some(target_body),
+                                ) = (
+                                    inventories.get(ev.entity),
+                                    healths.get(ev.entity),
+                                    energies.get(ev.entity),
+                                    poises.get(ev.entity),
+                                    skill_sets.get(ev.entity),
+                                    bodies.get(ev.entity).copied(),
+                                )
+                            {
+                                let target_in_combat =
+                                    target_health.damage_contributions().next().is_some();
+                                let target_combat_rating = combat::combat_rating(
+                                    target_inventory,
+                                    target_health,
+                                    target_energy,
+                                    target_poise,
+                                    target_skill_set,
+                                    target_body,
+                                    &msm,
+                                );
+                                let polyglot_rank = skill_sets.get(caster_entity).map_or(0, |ss| {
+                                    ss.skill_level(Skill::Mage(MageSkill::Polyglot))
+                                        .unwrap_or(0)
+                                });
+                                grant_non_damage_mastery(
+                                    &mut mastery,
+                                    source,
+                                    caster_uid,
+                                    target_uid,
+                                    target_in_combat,
+                                    target_combat_rating,
+                                    polyglot_rank,
                                 );
                             }
 
@@ -3710,6 +4028,7 @@ impl ServerEvent for ParryHookEvent {
                     dest_info,
                     masses.get(ev.defender),
                     ev.attacker.and_then(|a| uids.get(a).copied()),
+                    None,
                 );
                 buff_emitter.emit(BuffEvent {
                     entity: attacker,

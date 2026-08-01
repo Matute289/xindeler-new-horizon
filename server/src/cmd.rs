@@ -7376,6 +7376,7 @@ fn cast_buff(buffkind: BuffKind, data: BuffData, server: &mut Server, target: Ec
                 dest_info,
                 None,
                 None,
+                None,
             ),
             *time,
         );
