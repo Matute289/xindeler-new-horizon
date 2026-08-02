@@ -394,6 +394,17 @@ impl State {
         ecs.register::<comp::ConcealedUnlessTrueSight>();
         // Deliberately not net-synced — see `comp::Banished`'s doc comment.
         ecs.register::<comp::Banished>();
+        // Derived locally on both sides from components that are already
+        // synced, so deliberately not net-synced either.
+        ecs.register::<comp::DerivedStats>();
+
+        // The four `ReaderId`s that invalidate `comp::DerivedStats`. MUST be
+        // built after the register block above: `register_reader` needs
+        // `Inventory`, `AttunedItems`, `SkillSet` and `Body` to already exist
+        // as storages. It lives in a resource rather than in the rebuild system
+        // because `common_ecs::System` has no `setup()` hook to lazily register
+        // a reader from.
+        ecs.insert(comp::DerivedStatsTrackers::new(&ecs));
 
         // Register synced resources used by the ECS.
         ecs.insert(TimeOfDay(0.0));
