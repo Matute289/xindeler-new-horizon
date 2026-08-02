@@ -496,6 +496,11 @@ pub struct Item {
     /// - Modular components should agree with the tool kind
     /// - There should be exactly one damage component and exactly one held
     ///   component for modular weapons
+    /// - A `ItemBase::Simple` item (e.g. a Tome) may also carry non-modular
+    ///   "upgrade" components pushed via [`Item::add_upgrade`]. These don't
+    ///   need to agree with a tool kind (there is none to agree with) and fold
+    ///   into `quality()`/the item's `Compound` [`ItemDefinitionId`] exactly
+    ///   like any other component.
     components: Vec<Item>,
     /// amount is hidden because it needs to maintain the invariant that only
     /// stackable items can have > 1 amounts.
@@ -1435,6 +1440,41 @@ impl Item {
 
     pub fn persistence_access_mutable_component(&mut self, index: usize) -> Option<&mut Self> {
         self.components.get_mut(index)
+    }
+
+    /// Attaches `upgrade` to this specific item instance, gameplay-side.
+    ///
+    /// This reuses the same `components` substrate modular weapons already
+    /// persist through: `server/src/persistence/character/conversions.rs`
+    /// walks every item's `components()` generically and stores each as a
+    /// child database row keyed to *this item's own* database id, not to the
+    /// shared, `Arc`'d [`ItemDef`]. So an upgrade pushed here stays with this
+    /// exact instance across a save/load round trip; a different item loaded
+    /// from the same asset (or the same item after being replaced) starts
+    /// with none of it.
+    ///
+    /// `quality()` folds every component's own quality into the item's
+    /// (`item_def.quality.max(components.max)`), so an upgrade carrying a
+    /// higher [`Quality`] tier than the base item immediately raises the
+    /// whole item's effective quality — which
+    /// [`crate::comp::inventory::trade_pricing::TradePricing::get_materials`]
+    /// also prices compositionally for the resulting `Compound`
+    /// [`ItemDefinitionId`] (base price plus each component's own).
+    ///
+    /// Distinct from [`Self::persistence_access_add_component`], which exists
+    /// purely for the database loader reconstructing an item's already-saved
+    /// components without a live `AbilityMap`/`MaterialStatManifest` on
+    /// hand; this is the gameplay-facing entry point, and immediately
+    /// refreshes `item_config` and the cached hash rather than waiting for
+    /// the next reload.
+    pub fn add_upgrade(
+        &mut self,
+        upgrade: Item,
+        ability_map: &AbilityMap,
+        msm: &MaterialStatManifest,
+    ) {
+        self.components.push(upgrade);
+        self.update_item_state(ability_map, msm);
     }
 
     /// Updates state of an item (important for creation of new items,
@@ -2578,6 +2618,60 @@ mod tests {
     fn spell_pages_is_none_for_an_item_that_declares_no_pages() {
         let sword = Item::new_from_asset_expect("common.items.weapons.sword.starter");
         assert!(sword.spell_pages().is_none());
+    }
+
+    #[test]
+    fn add_upgrade_raises_quality_and_only_on_the_upgraded_instance() {
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        // apprentice_tome.ron declares Quality::Low; binding_sigil.ron
+        // declares Quality::Moderate, so attaching it must raise the whole
+        // item's effective quality (`quality()` takes the max over its
+        // components).
+        let mut upgraded = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        assert_eq!(upgraded.quality(), Quality::Low);
+        upgraded.add_upgrade(
+            Item::new_from_asset_expect("common.items.crafting_ing.binding_sigil"),
+            &ability_map,
+            &msm,
+        );
+        assert_eq!(upgraded.quality(), Quality::Moderate);
+
+        // A separate instance loaded from the very same asset is unaffected
+        // -- the upgrade lives on this one `Item`, not on the shared
+        // `ItemDef` the two instances both point at.
+        let sibling = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        assert_eq!(sibling.quality(), Quality::Low);
+    }
+
+    #[test]
+    fn add_upgrade_survives_a_definition_id_round_trip() {
+        // The database loader reconstructs an item purely from its
+        // `ItemDefinitionId` (`Item::new_from_item_definition_id`), so an
+        // upgrade must still be there after exactly that round trip -- the
+        // same mechanism `server/src/persistence/character/conversions.rs`
+        // relies on for modular-weapon components, applied here to a Tome.
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        let mut upgraded = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        upgraded.add_upgrade(
+            Item::new_from_asset_expect("common.items.crafting_ing.binding_sigil"),
+            &ability_map,
+            &msm,
+        );
+
+        let def_id = upgraded.item_definition_id().to_owned();
+        assert!(
+            matches!(def_id, ItemDefinitionIdOwned::Compound { .. }),
+            "a Tome carrying an upgrade component must serialize as a Compound id, not Simple"
+        );
+
+        let reloaded =
+            Item::new_from_item_definition_id(def_id.as_ref(), &ability_map, &msm).unwrap();
+        assert_eq!(reloaded.quality(), Quality::Moderate);
+        assert_eq!(reloaded.components().len(), 1);
     }
 
     #[test]

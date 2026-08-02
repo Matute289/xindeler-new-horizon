@@ -1,0 +1,40 @@
+// The Dark Log (docs/design/lore/55-tomes/the-dark-log.md): a malevolent
+// grimoire bound in the flayed hide of a slain Horror of the Void. Its aura
+// alone -- no reading required -- draws creatures of evil bent toward it
+// like iron to a lodestone, and strikes everyone else with the dread of
+// hunted prey. Bidirectional buff+debuff via `ItemCondition`, no attunement
+// required (the aura works on anyone within reach, not just an attuned
+// bearer).
+ItemDef(
+    legacy_name: "The Dark Log",
+    legacy_description: "Bound in flayed void-hide, quilted with cold-iron diamonds around a single golden eye. It wants to be read by the wicked, and dreads every other hand.",
+    kind: Tool((
+        kind: Tome,
+        hands: Two,
+        stats: (
+            equip_time_secs: 0.4,
+            power: 0.55,
+            effect_power: 1.15,
+            speed: 0.75,
+            range: 1.0,
+            energy_efficiency: 0.85,
+            buff_strength: 0.85,
+        ),
+    )),
+    quality: High,
+    tags: [],
+    // Tome is Mage-only: no other class's kit uses this implement.
+    requirements: Some((
+        classes: Some([Mage]),
+        min_level: None,
+        races: None,
+    )),
+    condition: Some((
+        predicate: MoralAtMost(Evil),
+        when_met: [Fortitude],
+        when_unmet: [Terrified],
+    )),
+    spell_pages: Some([
+        "common.items.spell_books.the_dark_log_page",
+    ]),
+)

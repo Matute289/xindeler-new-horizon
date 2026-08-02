@@ -1,0 +1,15 @@
+// A rune-etched clasp, worked into a tome's binding one sitting at a time.
+// The Tome upgrade material: attached to a specific Tome instance via
+// `Item::add_upgrade`, it never leaves that instance, and (being a higher
+// quality tier than the tomes it upgrades) raises that instance's own
+// effective quality above its shared definition's baseline.
+ItemDef(
+    legacy_name: "Binding Sigil",
+    legacy_description: "A rune-etched clasp, ready to be worked into a spellbook's binding to deepen the leyline it channels.",
+    kind: Ingredient(
+        // Descriptor not needed
+        descriptor: "",
+    ),
+    quality: Moderate,
+    tags: [],
+)

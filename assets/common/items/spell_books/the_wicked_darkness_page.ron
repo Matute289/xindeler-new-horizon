@@ -1,0 +1,14 @@
+// A page from The Wicked Darkness -- part of the evil tradition every owner
+// is free to add to, so long as what they write extends it.
+ItemDef(
+    legacy_name: "",
+    legacy_description: "",
+    kind: SpellGroup(
+        spells: [
+            "spells.necromancy.bestow_curse",
+            "spells.necromancy.ray_of_enfeeblement",
+        ],
+    ),
+    quality: Legendary,
+    tags: [],
+)

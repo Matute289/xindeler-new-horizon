@@ -3084,6 +3084,7 @@ mod skill_group_for_weapon_tests {
             range: 1.0,
             energy_efficiency: 1.0,
             buff_strength: 1.0,
+            cooldown_reduction: 1.0,
         }
     }
 

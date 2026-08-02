@@ -1,0 +1,40 @@
+// The Wicked Darkness (docs/design/lore/55-tomes/the-wicked-darkness.md,
+// also called "The Infamous Darkness"): the campaign's vile grimoire of true
+// evil. It opens on two spoken words that "simply appear in the bearer's
+// mind" only after attunement -- the in-fiction precedent for gating it on
+// `RequiresAttunement`. Buff-only (no debuff for an unattuned or non-evil
+// bearer -- they simply get nothing, matching "even attuned, a reader must
+// spend long days ... before its contents yield their benefits").
+ItemDef(
+    legacy_name: "The Wicked Darkness",
+    legacy_description: "A chained, warded black book that corrupts whoever lays hands on it and grows only more terrible with every owner who adds to it.",
+    kind: Tool((
+        kind: Tome,
+        hands: Two,
+        stats: (
+            equip_time_secs: 0.4,
+            power: 0.55,
+            effect_power: 1.3,
+            speed: 0.75,
+            range: 1.0,
+            energy_efficiency: 0.9,
+            buff_strength: 0.9,
+        ),
+    )),
+    quality: Legendary,
+    tags: [RequiresAttunement],
+    // Tome is Mage-only: no other class's kit uses this implement.
+    requirements: Some((
+        classes: Some([Mage]),
+        min_level: None,
+        races: None,
+    )),
+    condition: Some((
+        predicate: MoralAtMost(Evil),
+        when_met: [Reckless],
+        when_unmet: [],
+    )),
+    spell_pages: Some([
+        "common.items.spell_books.the_wicked_darkness_page",
+    ]),
+)

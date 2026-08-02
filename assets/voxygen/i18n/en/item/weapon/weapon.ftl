@@ -52,6 +52,12 @@ weapon-staff-frostbound_quarterstaff = Frostbound Quarterstaff
 weapon-tome-apprentice_tome = Apprentice Tome
     .desc = Margins crowded with a student's frantic leyline notes.
 
+weapon-tome-the_dark_log = The Dark Log
+    .desc = Bound in flayed void-hide, quilted with cold-iron diamonds around a single golden eye. It wants to be read by the wicked, and dreads every other hand.
+
+weapon-tome-the_wicked_darkness = The Wicked Darkness
+    .desc = A chained, warded black book that corrupts whoever lays hands on it and grows only more terrible with every owner who adds to it.
+
 weapon-holy_symbol-initiate_symbol = Initiate's Symbol
     .desc = A carved wooden pendant blessed at a roadside shrine.
 
