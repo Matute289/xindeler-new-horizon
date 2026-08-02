@@ -294,6 +294,20 @@ impl Health {
             .map(|(damage_contrib, entry)| (damage_contrib, &entry.by_source))
     }
 
+    /// Whether any contributor has damaged this entity within `window_secs`
+    /// of `now`. Deliberately distinct from the 600s
+    /// `DAMAGE_CONTRIB_PRUNE_SECS` window `damage_contributors` itself is
+    /// pruned on -- that longer window exists so a kill's XP still credits
+    /// whoever tapped a target minutes ago, which is the wrong question for
+    /// "is this entity currently, actively fighting" (e.g. the non-damage
+    /// mastery-credit gate). A caller wanting the latter should use this,
+    /// not `damage_contributions().next().is_some()`.
+    pub fn damaged_recently(&self, now: Time, window_secs: f64) -> bool {
+        self.damage_contributors
+            .values()
+            .any(|entry| (now.0 - entry.last.0) < window_secs)
+    }
+
     pub fn recent_damagers(&self) -> impl Iterator<Item = (Uid, Time)> + '_ {
         self.damage_contributors
             .iter()
@@ -410,6 +424,35 @@ mod tests {
             entry.total
         );
         assert_eq!(health_change.time, entry.last);
+    }
+
+    /// `damaged_recently` uses its own caller-supplied window, distinct from
+    /// `damage_contributors`' own 600s prune window -- a hit 30s ago must
+    /// read as "not recent" under a 20s window even though the entry is
+    /// still fully present in the map (won't be pruned for another 570s).
+    #[test]
+    fn damaged_recently_uses_the_callers_window_not_the_600s_prune_window() {
+        let mut health = Health::empty();
+        health.current = 100 * Health::SCALING_FACTOR_INT;
+        health.maximum = health.current;
+
+        let damage_contrib = DamageContributor::Solo(Uid(NonZeroU64::new(1).unwrap()));
+        health.change_by(HealthChange {
+            amount: -5.0,
+            time: Time(1000.0),
+            by: Some(damage_contrib),
+            cause: None,
+            magic_source: None,
+            precise: false,
+            instance: rand::random(),
+        });
+
+        // Still present in the ledger (well inside the 600s prune window),
+        // but 30s later reads as "not recent" under a 20s window.
+        assert!(health.damaged_recently(Time(1000.0), 20.0));
+        assert!(health.damaged_recently(Time(1015.0), 20.0));
+        assert!(!health.damaged_recently(Time(1030.0), 20.0));
+        assert!(health.damage_contributors.contains_key(&damage_contrib));
     }
 
     #[test]

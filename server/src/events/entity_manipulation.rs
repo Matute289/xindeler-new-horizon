@@ -337,7 +337,8 @@ impl ServerEvent for HealthChangeEvent {
                             data.bodies.get(ev.entity).copied(),
                         )
                     {
-                        let target_in_combat = health.damage_contributions().next().is_some();
+                        let target_in_combat = health
+                            .damaged_recently(ev.change.time, MASTERY_RECENT_COMBAT_WINDOW_SECS);
                         let target_combat_rating = combat::combat_rating(
                             target_inventory,
                             &health,
@@ -357,6 +358,11 @@ impl ServerEvent for HealthChangeEvent {
                             healer_uid,
                             target_uid,
                             target_in_combat,
+                            // Every actual HP change is its own real event
+                            // (there is no "refresh" concept for a heal the
+                            // way there is for a buff instance), so this is
+                            // always a fresh grant.
+                            true,
                             target_combat_rating,
                             polyglot_rank,
                         );
@@ -652,16 +658,18 @@ fn handle_exp_gain(
     // Closure to add xp pool corresponding to weapon type equipped in a particular
     // EquipSlot
     let mut add_tool_from_slot = |equip_slot| {
-        let tool_kind = inventory
+        let skill_group = inventory
             .equipped(equip_slot)
             .and_then(|i| match &*i.kind() {
-                ItemKind::Tool(tool) if tool.kind.gains_combat_xp() => Some(tool.kind),
+                ItemKind::Tool(tool) if tool.kind.gains_combat_xp() => {
+                    Some(combat::skill_group_for_weapon(tool))
+                },
                 _ => None,
             });
-        if let Some(weapon) = tool_kind {
+        if let Some(skill_group) = skill_group {
             // Only adds to xp pools if entity has that skill group available
-            if skill_set.skill_group_accessible(SkillGroupKind::Weapon(weapon)) {
-                xp_pools.insert(SkillGroupKind::Weapon(weapon));
+            if skill_set.skill_group_accessible(skill_group) {
+                xp_pools.insert(skill_group);
             }
         }
     };
@@ -810,14 +818,27 @@ fn grant_kill_mastery(
 /// their own ECS state down to and call, so the two anti-farm rules below
 /// are asserted exactly once rather than re-derived per handler.
 ///
+/// How recently a target must have taken damage, relative to the moment a
+/// heal/buff lands on it, for that landing to be considered a real support
+/// moment rather than free credit. Deliberately much shorter than
+/// `Health`'s own 600s `damage_contributors` prune window -- that longer
+/// window exists to still award kill XP to whoever tapped a target minutes
+/// ago, which is the wrong question here: "is this target actively, still
+/// fighting right now." A single stray hit taken 9 minutes ago must not
+/// leave a 10-minute-wide farmable window for unthrottled non-damage
+/// mastery credit on that target.
+const MASTERY_RECENT_COMBAT_WINDOW_SECS: f64 = 20.0;
+
 /// A no-op when `caster_uid == target_uid` (a self-only buff or heal earns
-/// nothing -- there is no other entity to have landed on) or when
-/// `target_in_combat` is `false` (the target's own damage-contributor ledger
-/// is empty, i.e. nobody has damaged it inside the prune window, so there is
-/// no real fight to credit against and a full-health, never-fought target is
-/// worth nothing).
+/// nothing -- there is no other entity to have landed on), when
+/// `target_in_combat` is `false` (nobody has damaged the target within
+/// [`MASTERY_RECENT_COMBAT_WINDOW_SECS`], so there is no real fight to
+/// credit against and a full-health, never-fought target is worth nothing),
+/// or when `is_fresh_grant` is `false` (the buff path only: re-casting an
+/// already-active matching buff on the same target is a refresh, not a new
+/// landed effect, and must not credit again every recast).
 ///
-/// `target_combat_rating` is what the credit scales with once the two gates
+/// `target_combat_rating` is what the credit scales with once the gates
 /// above pass, mirroring `exp_reward`'s own `combat_rating(...) * 20.0` --
 /// there is no `reward_fraction` factor here since nothing died.
 /// `NON_DAMAGE_WEIGHT` and the `Mage(Polyglot)` bonus both apply the same
@@ -833,10 +854,11 @@ fn grant_non_damage_mastery(
     caster_uid: Uid,
     target_uid: Uid,
     target_in_combat: bool,
+    is_fresh_grant: bool,
     target_combat_rating: f32,
     polyglot_rank: u16,
 ) {
-    if caster_uid == target_uid || !target_in_combat {
+    if caster_uid == target_uid || !target_in_combat || !is_fresh_grant {
         return;
     }
     let base_xp = target_combat_rating * 20.0;
@@ -848,7 +870,7 @@ fn grant_non_damage_mastery(
 mod handle_exp_gain_tests {
     use super::*;
     use common::{
-        comp::{class::ClassKind, inventory::Inventory},
+        comp::{Item, class::ClassKind, inventory::Inventory},
         event::EventBus,
     };
     use core::num::NonZeroU64;
@@ -980,6 +1002,69 @@ mod handle_exp_gain_tests {
                 < earned_exp(&killed_set, SkillGroupKind::General)
         );
     }
+
+    /// A martial-role Staff must route combat XP to its own `WeaponRoled`
+    /// skill group, not the caster `Weapon(Staff)` tree it shares a
+    /// `ToolKind` with -- otherwise a character who invested points in the
+    /// martial tree earns zero weapon-XP from every kill while wielding it,
+    /// and the `WeaponRoled` tree becomes permanently unpurchasable through
+    /// live play. Mirrors `combat::skill_group_for_weapon`'s own contract.
+    #[test]
+    fn martial_staff_routes_combat_xp_to_its_own_skill_group() {
+        use common::{comp::inventory::slot::EquipSlot, resources::Time};
+
+        let mut skill_set = SkillSet::default();
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        skill_set.unlock_skill_group(SkillGroupKind::WeaponRoled(
+            common::comp::inventory::item::tool::ToolKind::Staff,
+            common::comp::inventory::item::tool::WeaponRole::Martial,
+        ));
+
+        let mut inventory = Inventory::with_empty();
+        inventory.replace_loadout_item(
+            EquipSlot::ActiveMainhand,
+            Some(Item::new_from_asset_expect(
+                "common.items.weapons.staff.frostbound_quarterstaff",
+            )),
+            Time(0.0),
+        );
+
+        let bus = EventBus::<Outcome>::default();
+        let mut emitter = bus.emitter();
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        handle_exp_gain(
+            100.0,
+            &inventory,
+            &mut skill_set,
+            Some(&mut character_class),
+            &uid(),
+            &mut emitter,
+        );
+        let xp_pools = emitter
+            .events
+            .iter()
+            .find_map(|o| match o {
+                Outcome::ExpChange { xp_pools, .. } => Some(xp_pools.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert!(
+            xp_pools.contains(&SkillGroupKind::WeaponRoled(
+                common::comp::inventory::item::tool::ToolKind::Staff,
+                common::comp::inventory::item::tool::WeaponRole::Martial,
+            )),
+            "expected the martial-staff kill XP to land in WeaponRoled(Staff, Martial), got \
+             {xp_pools:?}"
+        );
+        assert!(
+            !xp_pools.contains(&SkillGroupKind::Weapon(
+                common::comp::inventory::item::tool::ToolKind::Staff
+            )),
+            "martial-staff kill XP must not be misrouted to the caster Weapon(Staff) tree, got \
+             {xp_pools:?}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1102,6 +1187,7 @@ mod grant_non_damage_mastery_tests {
             caster,
             caster,
             true,
+            true, // is_fresh_grant
             1000.0,
             0,
         );
@@ -1114,6 +1200,7 @@ mod grant_non_damage_mastery_tests {
             caster,
             uid(2),
             true,
+            true, // is_fresh_grant
             1000.0,
             0,
         );
@@ -1138,6 +1225,7 @@ mod grant_non_damage_mastery_tests {
             caster,
             target,
             false,
+            true, // is_fresh_grant
             1000.0,
             0,
         );
@@ -1150,6 +1238,7 @@ mod grant_non_damage_mastery_tests {
             caster,
             target,
             true,
+            true, // is_fresh_grant
             1000.0,
             0,
         );
@@ -1173,6 +1262,7 @@ mod grant_non_damage_mastery_tests {
             caster,
             target,
             true,
+            true, // is_fresh_grant
             1000.0,
             0,
         );
@@ -1183,6 +1273,7 @@ mod grant_non_damage_mastery_tests {
             caster,
             target,
             true,
+            true, // is_fresh_grant
             1000.0,
             3,
         );
@@ -1206,6 +1297,7 @@ mod grant_non_damage_mastery_tests {
             uid(1),
             uid(2),
             true,
+            true, // is_fresh_grant
             1000.0,
             0,
         );
@@ -1226,6 +1318,42 @@ mod grant_non_damage_mastery_tests {
         for source in MagicSource::ALL {
             assert_eq!(mastery.source_xp(source), 0, "{source:?}");
         }
+    }
+
+    /// Re-casting an already-active matching buff on the same target (the
+    /// buff-spam farming vector this function's `is_fresh_grant` gate
+    /// closes) credits nothing, even though every other gate (distinct
+    /// target, in-combat) passes.
+    #[test]
+    fn a_refreshed_buff_credits_nothing_but_a_fresh_one_credits() {
+        let caster = uid(1);
+        let target = uid(2);
+
+        let mut refreshed = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut refreshed,
+            MagicSource::Divine,
+            caster,
+            target,
+            true,
+            false, // is_fresh_grant: a recast of an already-active buff
+            1000.0,
+            0,
+        );
+        assert_eq!(refreshed.source_xp(MagicSource::Divine), 0);
+
+        let mut fresh = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut fresh,
+            MagicSource::Divine,
+            caster,
+            target,
+            true,
+            true,
+            1000.0,
+            0,
+        );
+        assert!(fresh.source_xp(MagicSource::Divine) > 0);
     }
 }
 
@@ -3823,8 +3951,29 @@ impl ServerEvent for BuffEvent {
                                     bodies.get(ev.entity).copied(),
                                 )
                             {
-                                let target_in_combat =
-                                    target_health.damage_contributions().next().is_some();
+                                let target_in_combat = target_health
+                                    .damaged_recently(*time, MASTERY_RECENT_COMBAT_WINDOW_SECS);
+                                // A re-cast of an already-active matching buff
+                                // from the same caster is a refresh, not a
+                                // fresh landed effect -- spamming the same
+                                // short buff on an already-buffed target must
+                                // not credit mastery every recast. Computed
+                                // before `buffs.insert` below, against the
+                                // target's buff state as it stood before this
+                                // application.
+                                let is_fresh_grant = !buffs.kinds[new_buff.kind]
+                                    .as_ref()
+                                    .is_some_and(|(keys, _)| {
+                                        keys.iter().any(|key| {
+                                            buffs.buffs.get(*key).is_some_and(|existing| {
+                                                matches!(
+                                                    existing.source,
+                                                    buff::BuffSource::Character { by, .. }
+                                                        if by == caster_uid
+                                                )
+                                            })
+                                        })
+                                    });
                                 let target_combat_rating = combat::combat_rating(
                                     target_inventory,
                                     target_health,
@@ -3844,6 +3993,7 @@ impl ServerEvent for BuffEvent {
                                     caster_uid,
                                     target_uid,
                                     target_in_combat,
+                                    is_fresh_grant,
                                     target_combat_rating,
                                     polyglot_rank,
                                 );
