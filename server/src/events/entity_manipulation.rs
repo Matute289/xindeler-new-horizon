@@ -3787,6 +3787,17 @@ pub struct BuffEventData<'a> {
     /// non-damage mastery credit read, instead of re-folding the target's
     /// loadout, skillset and body per buff application.
     derived_stats: ReadStorage<'a, comp::DerivedStats>,
+    /// Presence-only, for the mind-altering saving throw's eligibility guard:
+    /// the pre-cache code required `Energy`/`Poise`/`Inventory` (the last
+    /// implied here by `derived_stats` -- see the rebuild system, which only
+    /// ever builds a cache for an `Inventory`-having entity) before a target
+    /// was even eligible to roll a save. Without this, a target missing any
+    /// of them would go from "no cache, so `combat_rating` is `0.0`" to
+    /// "guaranteed unresisted" silently swapping to "actually rolls a save
+    /// with near-zero evasion" -- a real behavior change, not just a
+    /// computation-location swap.
+    energies: ReadStorage<'a, Energy>,
+    poises: ReadStorage<'a, Poise>,
     skill_sets: ReadStorage<'a, SkillSet>,
     groups: ReadStorage<'a, Group>,
     agents: ReadStorage<'a, Agent>,
@@ -3813,6 +3824,8 @@ impl ServerEvent for BuffEvent {
             uids,
             positions,
             derived_stats,
+            energies,
+            poises,
             skill_sets,
             groups,
             agents,
@@ -3873,11 +3886,24 @@ impl ServerEvent for BuffEvent {
                                 let Some(caster_stats) = stats.get(caster) else {
                                     break 'resist false;
                                 };
-                                let (Some(target_uid), Some(target_body), Some(target_health)) = (
+                                let (
+                                    Some(target_uid),
+                                    Some(target_body),
+                                    Some(target_health),
+                                    Some(derived),
+                                    Some(_target_energy),
+                                    Some(_target_poise),
+                                    Some(_target_skill_set),
+                                ) = (
                                     uids.get(ev.entity).copied(),
                                     bodies.get(ev.entity).copied(),
                                     healths.get(ev.entity),
-                                ) else {
+                                    derived_stats.get(ev.entity),
+                                    energies.get(ev.entity),
+                                    poises.get(ev.entity),
+                                    skill_sets.get(ev.entity),
+                                )
+                                else {
                                     break 'resist false;
                                 };
 
@@ -3885,11 +3911,7 @@ impl ServerEvent for BuffEvent {
                                     "common.combat_tuning",
                                 )
                                 .read();
-                                // No cache means no `Inventory`, hence
-                                // `DerivedStats::default()`'s rating, 0.0.
-                                let combat_rating = derived_stats
-                                    .get(ev.entity)
-                                    .map_or(0.0, |derived| derived.combat_rating);
+                                let combat_rating = derived.combat_rating;
                                 let target_stats = stats.get(ev.entity);
 
                                 let caster_info = combat::SaveCasterInfo {
