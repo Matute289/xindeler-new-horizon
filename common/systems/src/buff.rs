@@ -591,13 +591,20 @@ impl<'a> System<'a> for Sys {
             }
 
             // Equipped-item `ItemCondition`s: short-circuits before touching
-            // `read_data.ethos` (or evaluating any predicate at all) unless
-            // at least one equipped item actually declares a condition —
-            // true for ~every item in the game today.
-            if let Some(inventory) = read_data.inventories.get(entity)
-                && inventory
-                    .equipped_items()
-                    .any(|item| item.condition().is_some())
+            // `read_data.ethos`, re-fetching the inventory, or evaluating any
+            // predicate at all, unless the cached `DerivedStats::has_item_condition`
+            // flag says at least one equipped item actually declares a
+            // condition. That flag is recomputed only when `Inventory`
+            // changes (same trigger as every other `DerivedStats` field), so
+            // this no longer costs an `equipped_items()` scan every tick for
+            // every entity — no item in the game declares a condition yet
+            // (see `common/src/comp/item_condition.rs`'s module doc), so this
+            // check almost always short-circuits.
+            if read_data
+                .derived_stats
+                .get(entity)
+                .is_some_and(|derived| derived.has_item_condition)
+                && let Some(inventory) = read_data.inventories.get(entity)
             {
                 let (to_add, to_remove) = item_condition_buff_diff(
                     inventory,
