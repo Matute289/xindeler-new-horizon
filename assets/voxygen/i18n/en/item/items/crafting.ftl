@@ -25,6 +25,9 @@ sprite-crafting_ing-abyssal_heart = Abyssal Heart
 sprite-crafting_ing-arcane_ink = High-Grade Arcane Ink
     .desc = Leyline-charged ink, spent one measure per spell transcribed.
 
+sprite-crafting_ing-binding_sigil = Binding Sigil
+    .desc = A rune-etched clasp, ready to be worked into a spellbook's binding to deepen the leyline it channels.
+
 sprite-crafting_ing-bowl = Bowl
     .desc = A simple bowl for preparing meals.
 

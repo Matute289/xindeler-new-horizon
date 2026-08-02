@@ -1027,7 +1027,34 @@ impl TradePricing {
     }
 
     fn get_materials_impl(&self, item: &ItemDefinitionId<'_>) -> Option<MaterialUse> {
-        self.price_lookup(&item.to_owned()).cloned()
+        match item {
+            // A `Compound` id (a `Simple` base plus per-instance components,
+            // e.g. an upgraded Tome — see `Item::add_upgrade`) is never
+            // itself a recipe/loot-table output, so it never has its own
+            // entry in the static price table `price_lookup` searches. Price
+            // it compositionally instead: the base item's own price plus
+            // each component's own price (recursing through this same
+            // function, so a component that is itself Modular/Compound is
+            // still handled). A part with no price entry of its own
+            // contributes nothing rather than making the whole item
+            // unsellable — this is what makes an upgraded item price
+            // strictly higher than the same item bare, without requiring
+            // every upgrade material to also be independently priced.
+            ItemDefinitionId::Compound {
+                simple_base,
+                components,
+            } => {
+                let base =
+                    self.price_lookup(&ItemDefinitionIdOwned::Simple((*simple_base).to_owned()));
+                let total = base
+                    .cloned()
+                    .into_iter()
+                    .chain(components.iter().filter_map(|c| self.get_materials_impl(c)))
+                    .sum::<MaterialUse>();
+                (!total.is_empty()).then_some(total)
+            },
+            _ => self.price_lookup(&item.to_owned()).cloned(),
+        }
     }
 
     #[must_use]
@@ -1166,6 +1193,8 @@ mod tests {
                 ItemDefinitionIdOwned,
                 trade_pricing::{MaterialUse, TradePricing},
             },
+            item::MaterialStatManifest,
+            tool::AbilityMap,
         },
         generation::{EntityConfig, try_all_entity_configs},
         lottery::{LootSpec, Lottery},
@@ -1300,6 +1329,42 @@ mod tests {
             items,
             "please add these items to assets/common/trading/"
         );
+    }
+
+    #[test]
+    fn an_upgraded_tome_prices_higher_than_the_same_tome_bare() {
+        // A `Compound` item id (a plain Tome plus an `Item::add_upgrade`
+        // component) has no recipe/loot-table entry of its own, so pricing
+        // it must fall back to composing the base item's price with each
+        // component's — see `get_materials_impl`. `binding_sigil` carries a
+        // real price entry (`common.trading.sellable_materials`); a bare
+        // Tome has none, so this also exercises the "missing base price
+        // doesn't zero out the whole item" fallback.
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        let plain = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        let mut upgraded = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        upgraded.add_upgrade(
+            Item::new_from_asset_expect("common.items.crafting_ing.binding_sigil"),
+            &ability_map,
+            &msm,
+        );
+
+        let price_of = |item: &Item| {
+            TradePricing::get_materials(&item.item_definition_id())
+                .map(|mat| mat.iter().map(|(amount, _good)| *amount).sum::<f32>())
+        };
+
+        let plain_price = price_of(&plain);
+        let upgraded_price = price_of(&upgraded);
+        assert!(
+            upgraded_price > plain_price,
+            "upgraded ({upgraded_price:?}) must price higher than bare ({plain_price:?})"
+        );
+        // The upgrade component itself is priced, so the upgraded instance
+        // isn't merely "priced at all" (Some > None) but priced positively.
+        assert!(upgraded_price.unwrap_or(0.0) > 0.0);
     }
 
     #[test]

@@ -1,0 +1,14 @@
+// A page torn from The Dark Log: the dread and malice it radiates, distilled
+// into two spells a bearer can copy for themselves.
+ItemDef(
+    legacy_name: "",
+    legacy_description: "",
+    kind: SpellGroup(
+        spells: [
+            "spells.necromancy.cause_fear",
+            "spells.necromancy.dread_whisper",
+        ],
+    ),
+    quality: High,
+    tags: [],
+)

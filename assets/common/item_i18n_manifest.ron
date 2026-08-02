@@ -925,6 +925,12 @@
             "common.items.weapons.tome.apprentice_tome",
         ): "weapon-tome-apprentice_tome",
         Simple(
+            "common.items.weapons.tome.the_dark_log",
+        ): "weapon-tome-the_dark_log",
+        Simple(
+            "common.items.weapons.tome.the_wicked_darkness",
+        ): "weapon-tome-the_wicked_darkness",
+        Simple(
             "common.items.weapons.holy_symbol.initiate_symbol",
         ): "weapon-holy_symbol-initiate_symbol",
         Simple(
@@ -3534,6 +3540,9 @@
         Simple(
             "common.items.crafting_ing.arcane_ink",
         ): "sprite-crafting_ing-arcane_ink",
+        Simple(
+            "common.items.crafting_ing.binding_sigil",
+        ): "sprite-crafting_ing-binding_sigil",
         Simple(
             "common.items.crafting_ing.bowl",
         ): "sprite-crafting_ing-bowl",
@@ -7731,6 +7740,12 @@
         Simple(
             "common.items.spell_books.scavenged_page",
         ): "spell_book-scavenged_page",
+        Simple(
+            "common.items.spell_books.the_dark_log_page",
+        ): "spell_book-the_dark_log_page",
+        Simple(
+            "common.items.spell_books.the_wicked_darkness_page",
+        ): "spell_book-the_wicked_darkness_page",
     },
     // Templating support
     //

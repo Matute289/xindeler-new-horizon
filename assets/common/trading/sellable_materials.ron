@@ -14,6 +14,9 @@
     (1.5, Item("common.items.mineral.ore.veloritefrag")),
     (4.0, Item("common.items.crafting_ing.stones")),
 
+    // Tome upgrade material
+    (0.3, Item("common.items.crafting_ing.binding_sigil")),
+
     // Ores
     (1.5, Item("common.items.mineral.ore.copper")),
     (1.5, Item("common.items.mineral.ore.tin")),
