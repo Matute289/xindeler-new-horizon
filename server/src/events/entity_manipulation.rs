@@ -240,7 +240,6 @@ impl ServerEvent for PoiseChangeEvent {
 #[derive(SystemData)]
 pub struct HealthChangeEventData<'a> {
     entities: Entities<'a>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     #[cfg(feature = "worldgen")]
     rtsim: WriteExpect<'a, RtSim>,
     events: HealthChangeEvents<'a>,
@@ -256,20 +255,16 @@ pub struct HealthChangeEventData<'a> {
     uids: ReadStorage<'a, Uid>,
     #[cfg(feature = "worldgen")]
     rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
-    inventories: ReadStorage<'a, Inventory>,
-    /// The cached gear aggregates the invincibility check reads, instead of
-    /// re-walking the target's loadout per health change.
+    /// The cached gear aggregates the invincibility check and the non-damage
+    /// mastery credit both read, instead of re-walking the target's loadout
+    /// per health change.
     derived_stats: ReadStorage<'a, comp::DerivedStats>,
     agents: WriteStorage<'a, Agent>,
     healths: WriteStorage<'a, Health>,
     heads: WriteStorage<'a, Heads>,
-    // The target's own combat-relevance/combat_rating inputs for non-damage
-    // mastery crediting (see the `changed && ev.change.amount > 0.0` block
-    // below).
-    energies: ReadStorage<'a, Energy>,
-    poises: ReadStorage<'a, Poise>,
+    /// The healer's Polyglot rank for non-damage mastery crediting (see the
+    /// `changed && ev.change.amount > 0.0` block below).
     skill_sets: ReadStorage<'a, SkillSet>,
-    bodies: ReadStorage<'a, Body>,
     spell_masteries: WriteStorage<'a, SpellMastery>,
 }
 
@@ -280,9 +275,8 @@ impl ServerEvent for HealthChangeEvent {
         let mut emitters = data.events.get_emitters();
         let mut rng = rand::rng();
         for ev in events {
-            if let Some((mut health, inventory, pos, uid, heads)) = (
+            if let Some((mut health, pos, uid, heads)) = (
                 &mut data.healths,
-                data.inventories.maybe(),
                 data.positions.maybe(),
                 data.uids.maybe(),
                 (&mut data.heads).maybe(),
@@ -328,31 +322,17 @@ impl ServerEvent for HealthChangeEvent {
                     if let Some(target_uid) = uid.copied()
                         && let Some(healer_entity) = data.id_maps.uid_entity(healer_uid)
                         && let Some(mut mastery) = data.spell_masteries.get_mut(healer_entity)
-                        && let (
-                            Some(target_inventory),
-                            Some(target_energy),
-                            Some(target_poise),
-                            Some(target_skill_set),
-                            Some(target_body),
-                        ) = (
-                            inventory,
-                            data.energies.get(ev.entity),
-                            data.poises.get(ev.entity),
-                            data.skill_sets.get(ev.entity),
-                            data.bodies.get(ev.entity).copied(),
-                        )
                     {
                         let target_in_combat = health
                             .damaged_recently(ev.change.time, MASTERY_RECENT_COMBAT_WINDOW_SECS);
-                        let target_combat_rating = combat::combat_rating(
-                            target_inventory,
-                            &health,
-                            target_energy,
-                            target_poise,
-                            target_skill_set,
-                            target_body,
-                            &data.msm,
-                        );
+                        // Finding B: the target's gear/skill/body five-tuple
+                        // existed only to re-fold this one number per landed
+                        // heal. No cache means no `Inventory`, hence
+                        // `DerivedStats::default()`'s rating, 0.0.
+                        let target_combat_rating = data
+                            .derived_stats
+                            .get(ev.entity)
+                            .map_or(0.0, |derived| derived.combat_rating);
                         let polyglot_rank = data.skill_sets.get(healer_entity).map_or(0, |ss| {
                             ss.skill_level(Skill::Mage(MageSkill::Polyglot))
                                 .unwrap_or(0)
@@ -1362,6 +1342,174 @@ mod grant_non_damage_mastery_tests {
     }
 }
 
+/// The heal path's `target_combat_rating` now comes off the `DerivedStats`
+/// cache instead of being re-folded from the target's `(inventory, energy,
+/// poise, skill_set, body)` at every landed heal. This pins that the swap is
+/// value-preserving end to end: the rating the cache holds for a really-geared
+/// entity, run through the same `grant_non_damage_mastery` the handler calls,
+/// must credit the identical XP the direct-compute path credits.
+#[cfg(test)]
+mod non_damage_mastery_reads_the_cache_tests {
+    use super::*;
+    use common::{
+        comp::{
+            DerivedStats,
+            inventory::{
+                item::{
+                    Item, ItemBase, ItemDef, ItemKind,
+                    armor::{self, Armor, ArmorKind, Protection},
+                },
+                loadout_builder::LoadoutBuilder,
+            },
+        },
+        resources::GameMode,
+        shared_server_config::ServerConstants,
+        skillset_builder::SkillSetBuilder,
+        terrain::{MapSizeLg, TerrainChunk},
+    };
+    use core::num::NonZeroU64;
+    use specs::{Builder, WorldExt};
+    use std::{sync::Arc, time::Duration};
+    use vek::Vec2;
+
+    const WORLD_CHUNKS_LG: MapSizeLg =
+        if let Ok(map_size_lg) = MapSizeLg::new(Vec2 { x: 10, y: 10 }) {
+            map_size_lg
+        } else {
+            panic!("Default world chunk size does not satisfy required invariants.");
+        };
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    fn setup() -> common_state::State {
+        let pools = common_state::State::pools(GameMode::Server);
+        let mut state = common_state::State::new(
+            GameMode::Server,
+            pools,
+            WORLD_CHUNKS_LG,
+            Arc::new(TerrainChunk::water(0)),
+            |dispatch_builder| {
+                common_systems::add_local_systems(dispatch_builder);
+            },
+            #[cfg(feature = "plugins")]
+            common_state::plugin::PluginMgr::default(),
+        );
+        state
+            .ecs_mut()
+            .insert(MaterialStatManifest::load().cloned());
+        state.ecs_mut().insert(AbilityMap::load().cloned());
+        state
+    }
+
+    /// A chest piece with real, non-degenerate stats on every channel the
+    /// rating folds, so a cache read that silently returned the default would
+    /// visibly differ from the direct computation.
+    fn geared_loadout() -> Inventory {
+        let item = Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(ItemDef::create_test_itemdef_from_kind(
+                ItemKind::Armor(Armor::new(
+                    ArmorKind::Chest,
+                    armor::StatsSource::Direct(armor::Stats {
+                        protection: Some(Protection::Normal(12.5)),
+                        poise_resilience: Some(Protection::Normal(7.25)),
+                        energy_max: Some(13.0),
+                        energy_reward: Some(0.35),
+                        precision_power: Some(0.17),
+                        stealth: Some(0.9),
+                        ground_contact: Default::default(),
+                    }),
+                )),
+            ))),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &MaterialStatManifest::load().read(),
+        );
+        Inventory::with_loadout_humanoid(LoadoutBuilder::empty().chest(Some(item)).build())
+    }
+
+    #[test]
+    fn a_heal_on_a_geared_ally_credits_the_same_xp_from_the_cache_as_from_a_direct_computation() {
+        let mut state = setup();
+        let body = Body::Humanoid(common::comp::humanoid::Body::random());
+        let inventory = geared_loadout();
+        let mut skill_set = SkillSetBuilder::default().build();
+        skill_set.grant_skill_point(SkillGroupKind::General);
+
+        let ally = state
+            .ecs_mut()
+            .create_entity_synced()
+            .with(body)
+            .with(Health::new(body))
+            .with(Energy::new(body))
+            .with(Poise::new(body))
+            .with(Stats::empty(body))
+            .with(skill_set)
+            .with(inventory)
+            .build();
+
+        state.tick(
+            Duration::from_millis(16),
+            false,
+            None,
+            &ServerConstants {
+                day_cycle_coefficient: 24.0,
+                oracle_live: false,
+            },
+            |_, _| {},
+        );
+
+        let ecs = state.ecs();
+        let cached_rating = ecs
+            .read_storage::<DerivedStats>()
+            .get(ally)
+            .expect("a geared entity has a cache after one tick")
+            .combat_rating;
+        assert!(cached_rating > 0.0, "the fixture must be non-degenerate");
+
+        // The direct-compute path, with exactly the arguments the deleted
+        // `combat::combat_rating` free function used to pass: attunement-blind,
+        // and the three base maxima taken off the live components.
+        let healths = ecs.read_storage::<Health>();
+        let energies = ecs.read_storage::<Energy>();
+        let poises = ecs.read_storage::<Poise>();
+        let inventories = ecs.read_storage::<Inventory>();
+        let skill_sets = ecs.read_storage::<SkillSet>();
+        let direct_rating = DerivedStats::compute(
+            inventories.get(ally),
+            None,
+            skill_sets.get(ally),
+            Some(body),
+            healths.get(ally).map(|h| h.base_max()),
+            energies.get(ally).map(|e| e.base_max()),
+            poises.get(ally).map(|p| p.base_max()),
+            &ecs.read_resource::<MaterialStatManifest>(),
+        )
+        .combat_rating;
+        assert_eq!(cached_rating, direct_rating);
+
+        // …and the XP the healer actually banks is identical either way.
+        let credit = |rating| {
+            let mut mastery = SpellMastery::default();
+            grant_non_damage_mastery(
+                &mut mastery,
+                MagicSource::Divine,
+                uid(1),
+                uid(2),
+                true,
+                true,
+                rating,
+                0,
+            );
+            mastery.source_xp(MagicSource::Divine)
+        };
+        assert_eq!(credit(cached_rating), credit(direct_rating));
+        assert!(
+            credit(cached_rating) > 0,
+            "a real heal on a geared, mid-fight ally must credit something"
+        );
+    }
+}
+
 #[cfg(test)]
 mod death_supersedes_banishment_tests {
     use super::*;
@@ -1525,7 +1673,6 @@ pub struct DestroyEventData<'a> {
     positions: ReadStorage<'a, Pos>,
     healths: WriteStorage<'a, Health>,
     bodies: ReadStorage<'a, Body>,
-    poises: ReadStorage<'a, Poise>,
     groups: ReadStorage<'a, Group>,
     alignments: ReadStorage<'a, Alignment>,
     ethos: WriteStorage<'a, comp::Ethos>,
@@ -2181,25 +2328,10 @@ impl ServerEvent for DestroyEvent {
             // NOTE: Debug logging is disabled by default for this module - to enable it add
             // xindeler_server::events::entity_manipulation=debug to RUST_LOG
             'xp: {
-                let Some((
-                    entity_skill_set,
-                    entity_health,
-                    entity_energy,
-                    entity_inventory,
-                    entity_body,
-                    entity_poise,
-                    entity_pos,
-                )) = (
-                    &data.skill_sets,
-                    &data.healths,
-                    &data.energies,
-                    &data.inventories,
-                    &data.bodies,
-                    &data.poises,
-                    &data.positions,
-                )
-                    .lend_join()
-                    .get(ev.entity, &data.entities)
+                let Some((entity_skill_set, entity_health, entity_pos)) =
+                    (&data.skill_sets, &data.healths, &data.positions)
+                        .lend_join()
+                        .get(ev.entity, &data.entities)
                 else {
                     break 'xp;
                 };
@@ -2207,16 +2339,13 @@ impl ServerEvent for DestroyEvent {
                 // Calculate the total EXP award for the removal. A banishment
                 // pays `RemovalInfo::reward_fraction` of a kill's XP (spec §6)
                 // — the same generic `combat_rating`-derived number, scaled,
-                // never a separate reward table.
-                let exp_reward = combat::combat_rating(
-                    entity_inventory,
-                    entity_health,
-                    entity_energy,
-                    entity_poise,
-                    entity_skill_set,
-                    *entity_body,
-                    &data.msm,
-                ) * 20.0
+                // never a separate reward table. No cache means no
+                // `Inventory`, hence `DerivedStats::default()`'s rating, 0.0.
+                let exp_reward = data
+                    .derived_stats
+                    .get(ev.entity)
+                    .map_or(0.0, |derived| derived.combat_rating)
+                    * 20.0
                     * ev.removal.reward_fraction;
 
                 // Mastery's Delta = target_level - caster_level (spec §4);
@@ -3654,13 +3783,24 @@ pub struct BuffEventData<'a> {
     id_maps: Read<'a, IdMaps>,
     uids: ReadStorage<'a, Uid>,
     positions: ReadStorage<'a, Pos>,
-    inventories: ReadStorage<'a, Inventory>,
+    /// The cached `combat_rating` both the mind-altering saving throw and the
+    /// non-damage mastery credit read, instead of re-folding the target's
+    /// loadout, skillset and body per buff application.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
+    /// Presence-only, for the mind-altering saving throw's eligibility guard:
+    /// the pre-cache code required `Energy`/`Poise`/`Inventory` (the last
+    /// implied here by `derived_stats` -- see the rebuild system, which only
+    /// ever builds a cache for an `Inventory`-having entity) before a target
+    /// was even eligible to roll a save. Without this, a target missing any
+    /// of them would go from "no cache, so `combat_rating` is `0.0`" to
+    /// "guaranteed unresisted" silently swapping to "actually rolls a save
+    /// with near-zero evasion" -- a real behavior change, not just a
+    /// computation-location swap.
     energies: ReadStorage<'a, Energy>,
     poises: ReadStorage<'a, Poise>,
     skill_sets: ReadStorage<'a, SkillSet>,
     groups: ReadStorage<'a, Group>,
     agents: ReadStorage<'a, Agent>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     outcomes: Read<'a, EventBus<Outcome>>,
     // Read here (not written directly -- crediting happens through a
     // short-lived `get_mut` per landed buff) so a caster with no
@@ -3683,13 +3823,12 @@ impl ServerEvent for BuffEvent {
             id_maps,
             uids,
             positions,
-            inventories,
+            derived_stats,
             energies,
             poises,
             skill_sets,
             groups,
             agents,
-            msm,
             outcomes,
             mut spell_masteries,
         } = data;
@@ -3750,16 +3889,16 @@ impl ServerEvent for BuffEvent {
                                 let (
                                     Some(target_uid),
                                     Some(target_body),
-                                    Some(target_inventory),
                                     Some(target_health),
-                                    Some(target_energy),
-                                    Some(target_poise),
-                                    Some(target_skill_set),
+                                    Some(derived),
+                                    Some(_target_energy),
+                                    Some(_target_poise),
+                                    Some(_target_skill_set),
                                 ) = (
                                     uids.get(ev.entity).copied(),
                                     bodies.get(ev.entity).copied(),
-                                    inventories.get(ev.entity),
                                     healths.get(ev.entity),
+                                    derived_stats.get(ev.entity),
                                     energies.get(ev.entity),
                                     poises.get(ev.entity),
                                     skill_sets.get(ev.entity),
@@ -3772,15 +3911,7 @@ impl ServerEvent for BuffEvent {
                                     "common.combat_tuning",
                                 )
                                 .read();
-                                let combat_rating = combat::combat_rating(
-                                    target_inventory,
-                                    target_health,
-                                    target_energy,
-                                    target_poise,
-                                    target_skill_set,
-                                    target_body,
-                                    &msm,
-                                );
+                                let combat_rating = derived.combat_rating;
                                 let target_stats = stats.get(ev.entity);
 
                                 let caster_info = combat::SaveCasterInfo {
@@ -3930,21 +4061,7 @@ impl ServerEvent for BuffEvent {
                                 && let Some(target_uid) = uids.get(ev.entity).copied()
                                 && let Some(caster_entity) = id_maps.uid_entity(caster_uid)
                                 && let Some(mut mastery) = spell_masteries.get_mut(caster_entity)
-                                && let (
-                                    Some(target_inventory),
-                                    Some(target_health),
-                                    Some(target_energy),
-                                    Some(target_poise),
-                                    Some(target_skill_set),
-                                    Some(target_body),
-                                ) = (
-                                    inventories.get(ev.entity),
-                                    healths.get(ev.entity),
-                                    energies.get(ev.entity),
-                                    poises.get(ev.entity),
-                                    skill_sets.get(ev.entity),
-                                    bodies.get(ev.entity).copied(),
-                                )
+                                && let Some(target_health) = healths.get(ev.entity)
                             {
                                 let target_in_combat = target_health
                                     .damaged_recently(*time, MASTERY_RECENT_COMBAT_WINDOW_SECS);
@@ -3969,15 +4086,14 @@ impl ServerEvent for BuffEvent {
                                             })
                                         })
                                     });
-                                let target_combat_rating = combat::combat_rating(
-                                    target_inventory,
-                                    target_health,
-                                    target_energy,
-                                    target_poise,
-                                    target_skill_set,
-                                    target_body,
-                                    &msm,
-                                );
+                                // Finding B: the target's gear/skill/body
+                                // five-tuple existed only to re-fold this one
+                                // number per landed buff. No cache means no
+                                // `Inventory`, hence
+                                // `DerivedStats::default()`'s rating, 0.0.
+                                let target_combat_rating = derived_stats
+                                    .get(ev.entity)
+                                    .map_or(0.0, |derived| derived.combat_rating);
                                 let polyglot_rank = skill_sets.get(caster_entity).map_or(0, |ss| {
                                     ss.skill_level(Skill::Mage(MageSkill::Polyglot))
                                         .unwrap_or(0)

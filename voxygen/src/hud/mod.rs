@@ -96,7 +96,6 @@ use crate::{
 };
 use client::{Client, UserNotification};
 use common::{
-    combat,
     comp::{
         self, AbilityCooldowns, BuffData, BuffKind, Content, Detected, Health, Item,
         MapMarkerChange, PickupItem, PresenceKind, SenseKind,
@@ -1552,11 +1551,14 @@ impl Hud {
             let scales = ecs.read_storage::<comp::Scale>();
             let bodies = ecs.read_storage::<comp::Body>();
             let items = ecs.read_storage::<PickupItem>();
-            let inventories = ecs.read_storage::<comp::Inventory>();
-            let msm = ecs.read_resource::<MaterialStatManifest>();
+            // The nameplate loop below is the single heaviest `combat_rating`
+            // consumer in the codebase — one read per nearby entity, per frame.
+            // It is joined (not `.get()`-ed per entity) so the rating is a plain
+            // field access on the joined tuple and no loadout is ever walked
+            // here.
+            let derived_stats = ecs.read_storage::<comp::DerivedStats>();
             let entities = ecs.entities();
             let me = info.viewpoint_entity;
-            let poises = ecs.read_storage::<comp::Poise>();
             let is_mounts = ecs.read_storage::<Is<Mount>>();
             let is_riders = ecs.read_storage::<Is<Rider>>();
             let stances = ecs.read_storage::<comp::Stance>();
@@ -2471,9 +2473,8 @@ impl Hud {
                 &bodies,
                 &mut hp_floater_lists,
                 &uids,
-                &inventories,
+                &derived_stats,
                 char_activities.maybe(),
-                poises.maybe(),
                 (is_mounts.maybe(), is_riders.maybe(), stances.maybe()),
             )
                 .join()
@@ -2495,9 +2496,8 @@ impl Hud {
                         body,
                         hpfl,
                         uid,
-                        inventory,
+                        derived,
                         character_activity,
-                        poise,
                         (is_mount, is_rider, stance),
                     )| {
                         // Use interpolated position if available
@@ -2545,15 +2545,10 @@ impl Hud {
                             health,
                             buffs: Some(buffs),
                             energy,
-                            combat_rating: if let (Some(health), Some(energy), Some(poise)) =
-                                (health, energy, poise)
-                            {
-                                Some(combat::combat_rating(
-                                    inventory, health, energy, poise, skill_set, *body, &msm,
-                                ))
-                            } else {
-                                None
-                            },
+                            // A plain field read off the tuple this loop is
+                            // already joining — no storage fetch, no loadout
+                            // walk, per entity per frame.
+                            combat_rating: Some(derived.combat_rating),
                             hardcore: hardcore.contains(entity),
                             stance,
                             marked: is_marked,
@@ -3273,7 +3268,6 @@ impl Hud {
             self.pulse,
             global_state,
             tooltip_manager,
-            &msm,
             &time,
         )
         .set(self.ids.group_window, ui_widgets)
@@ -3636,20 +3630,10 @@ impl Hud {
 
         // Bag contents
         if self.show.bag
-            && let (
-                Some(player_stats),
-                Some(skill_set),
-                Some(health),
-                Some(energy),
-                Some(body),
-                Some(poise),
-            ) = (
+            && let (Some(player_stats), Some(health), Some(energy)) = (
                 stats.get(info.viewpoint_entity),
-                skill_sets.get(info.viewpoint_entity),
                 healths.get(entity),
                 energies.get(entity),
-                bodies.get(entity),
-                poises.get(entity),
             )
         {
             for event in Bag::new(
@@ -3667,14 +3651,11 @@ impl Hud {
                 i18n,
                 &self.item_i18n,
                 player_stats,
-                skill_set,
                 health,
                 energy,
                 &self.show,
-                body,
                 &msm,
                 &rbm,
-                poise,
                 &self.menu_events,
             )
             .set(self.ids.bag, ui_widgets)
@@ -4032,7 +4013,6 @@ impl Hud {
                 Some(char_state),
                 Some(health),
                 Some(energy),
-                Some(body),
                 Some(poise),
                 Some(uid),
             ) = (
@@ -4041,7 +4021,6 @@ impl Hud {
                 char_states.get(entity),
                 healths.get(entity),
                 energies.get(entity),
-                bodies.get(entity),
                 poises.get(entity),
                 uids.get(entity),
             ) {
@@ -4057,9 +4036,7 @@ impl Hud {
                     health,
                     energy,
                     poise,
-                    body,
                     uid,
-                    &msm,
                     &self.imgs,
                     &self.item_imgs,
                     &self.fonts,

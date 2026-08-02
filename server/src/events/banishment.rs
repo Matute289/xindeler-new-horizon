@@ -26,8 +26,8 @@ use common::{
     assets::{AssetExt, Ron},
     combat::{self, RemovalInfo},
     comp::{
-        self, Alignment, Banished, Body, Energy, Group, Health, Inventory, Poise, Pos, Scale,
-        SkillSet, Stats, agent::Agent, inventory::item::MaterialStatManifest,
+        self, Alignment, Banished, Body, DerivedStats, Energy, Group, Health, Poise, Pos, Scale,
+        SkillSet, Stats, agent::Agent,
     },
     event::{DestroyEvent, EventBus},
     outcome::Outcome,
@@ -82,7 +82,6 @@ pub struct BanishEventData<'a> {
     /// costs no throughput.
     rtsim: ReadExpect<'a, crate::rtsim::RtSim>,
     id_maps: Read<'a, IdMaps>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     time: Read<'a, Time>,
     outcomes: Read<'a, EventBus<Outcome>>,
     destroys: Read<'a, EventBus<DestroyEvent>>,
@@ -94,9 +93,21 @@ pub struct BanishEventData<'a> {
     alignments: ReadStorage<'a, Alignment>,
     stats: ReadStorage<'a, Stats>,
     healths: ReadStorage<'a, Health>,
+    /// The saving throw's difficulty axis is the target's `combat_rating`,
+    /// read straight off the cache instead of re-folding its whole loadout,
+    /// skillset and body per banish attempt.
+    derived_stats: ReadStorage<'a, DerivedStats>,
+    /// Presence-only: the pre-cache code required `Energy`/`Poise`/`SkillSet`
+    /// (plus `Inventory`, implied by `derived_stats` — see the rebuild
+    /// system, which only ever builds a cache for an `Inventory`-having
+    /// entity) before a target was even eligible for banishment. `DerivedStats`
+    /// itself doesn't preserve that distinction (it defaults `combat_rating`
+    /// to `0.0` for a target missing any of these, same as "no inventory"),
+    /// so these three storages are read again here to keep gearless-but-alive
+    /// entities (no `Energy`/`Poise`/`SkillSet`) genuinely un-banishable
+    /// rather than silently rollable with a `combat_rating` of `0.0`.
     energies: ReadStorage<'a, Energy>,
     poises: ReadStorage<'a, Poise>,
-    inventories: ReadStorage<'a, Inventory>,
     skill_sets: ReadStorage<'a, SkillSet>,
     groups: ReadStorage<'a, Group>,
     agents: ReadStorage<'a, Agent>,
@@ -127,18 +138,18 @@ impl ServerEvent for BanishEvent {
                 Some(target_pos),
                 Some(target_body),
                 Some(target_health),
-                Some(target_energy),
-                Some(target_poise),
-                Some(target_inventory),
-                Some(target_skill_set),
+                Some(derived),
+                Some(_target_energy),
+                Some(_target_poise),
+                Some(_target_skill_set),
             ) = (
                 data.uids.get(ev.entity).copied(),
                 data.positions.get(ev.entity).copied(),
                 data.bodies.get(ev.entity).copied(),
                 data.healths.get(ev.entity),
+                data.derived_stats.get(ev.entity),
                 data.energies.get(ev.entity),
                 data.poises.get(ev.entity),
-                data.inventories.get(ev.entity),
                 data.skill_sets.get(ev.entity),
             )
             else {
@@ -154,15 +165,7 @@ impl ServerEvent for BanishEvent {
 
             // --- the saving throw (spec §4) -------------------------------
             let tuning = Ron::<combat::CombatTuning>::load_expect("common.combat_tuning").read();
-            let combat_rating = combat::combat_rating(
-                target_inventory,
-                target_health,
-                target_energy,
-                target_poise,
-                target_skill_set,
-                target_body,
-                &data.msm,
-            );
+            let combat_rating = derived.combat_rating;
             let target_stats = data.stats.get(ev.entity);
             let target_info = combat::SaveTargetInfo {
                 stats_magic_evasion: target_stats.map_or(0.0, |s| s.magic_evasion),

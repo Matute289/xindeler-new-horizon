@@ -22,14 +22,14 @@ use client::{self, Client};
 use common::{
     combat,
     comp::{
-        self, Body, Buffs, CharacterClass, CharacterState, ClassKind, Combo, DerivedStats, Energy,
+        self, Buffs, CharacterClass, CharacterState, ClassKind, Combo, DerivedStats, Energy,
         Health, Inventory, Poise, Stance, Stats,
         ability::{
             Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT, SpellGate,
         },
         inventory::{
             item::{
-                ItemI18n, ItemKind, MaterialStatManifest,
+                ItemI18n, ItemKind,
                 item_key::ItemKey,
                 tool::{ToolKind, WeaponRole},
             },
@@ -238,9 +238,7 @@ pub struct Diary<'a> {
     health: &'a Health,
     energy: &'a Energy,
     poise: &'a Poise,
-    body: &'a Body,
     uid: &'a Uid,
-    msm: &'a MaterialStatManifest,
     imgs: &'a Imgs,
     item_imgs: &'a ItemImgs,
     fonts: &'a Fonts,
@@ -293,9 +291,7 @@ impl<'a> Diary<'a> {
         health: &'a Health,
         energy: &'a Energy,
         poise: &'a Poise,
-        body: &'a Body,
         uid: &'a Uid,
-        msm: &'a MaterialStatManifest,
         imgs: &'a Imgs,
         item_imgs: &'a ItemImgs,
         fonts: &'a Fonts,
@@ -324,9 +320,7 @@ impl<'a> Diary<'a> {
             health,
             energy,
             poise,
-            body,
             uid,
-            msm,
             imgs,
             item_imgs,
             fonts,
@@ -2023,15 +2017,7 @@ impl Widget for Diary<'_> {
                         CharacterStat::Energy => format!("{}", self.energy.maximum() as u32),
                         CharacterStat::Poise => format!("{}", self.poise.maximum() as u32),
                         CharacterStat::CombatRating => {
-                            let cr = combat::combat_rating(
-                                self.inventory,
-                                self.health,
-                                self.energy,
-                                self.poise,
-                                self.skill_set,
-                                *self.body,
-                                self.msm,
-                            );
+                            let cr = derived.map_or(0.0, |d| d.combat_rating);
                             format!("{:.2}", cr * 10.0)
                         },
                         CharacterStat::Protection => {
