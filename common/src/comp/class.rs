@@ -1211,4 +1211,65 @@ mod tests {
             );
         }
     }
+
+    /// `EquipmentGroup` and `assets/common/equip_gates.ron` are two
+    /// independent data sources describing the same reality — the manifest
+    /// is what actually gates equipping, `equipment_group()` is a coarser
+    /// classification for display/reasoning. Nothing forces them to stay in
+    /// sync. This test is that consumer: every class an implement's
+    /// whitelist names must be explainable either by that implement's
+    /// "home" `EquipmentGroup` or by one of the small set of documented
+    /// per-group secondary-access exceptions (Paladin+HolySymbol,
+    /// Ranger+Focus, Druid+Staff, Druid+Sceptre — see each `EquipmentGroup`
+    /// variant's own doc comment).
+    /// A future manifest edit that grants some class access to a caster
+    /// implement without also updating either the mapping or this exception
+    /// list fails here instead of silently drifting unnoticed.
+    #[test]
+    fn equipment_group_and_the_equip_gates_manifest_agree_on_who_gets_which_caster_implement() {
+        use crate::comp::inventory::item::{ToolKind, WeaponRole, equip_gates_manifest};
+
+        // (implement, its "home" EquipmentGroup, extra classes documented as
+        // a per-group secondary-access exception on top of the home group)
+        let implements = [
+            (ToolKind::Staff, EquipmentGroup::ArcaneCaster, vec![
+                ClassKind::Druid,
+            ]),
+            (ToolKind::Sceptre, EquipmentGroup::DivineCaster, vec![
+                ClassKind::Druid,
+            ]),
+            (ToolKind::Tome, EquipmentGroup::ArcaneCaster, vec![]),
+            (ToolKind::HolySymbol, EquipmentGroup::DivineCaster, vec![
+                ClassKind::Paladin,
+            ]),
+            (ToolKind::Focus, EquipmentGroup::PrimordialCaster, vec![
+                ClassKind::Ranger,
+            ]),
+        ];
+
+        let manifest = equip_gates_manifest();
+        for (tool_kind, home_group, exceptions) in implements {
+            let Some(whitelist) = manifest
+                .0
+                .get(&(tool_kind, WeaponRole::Caster))
+                .cloned()
+                .flatten()
+            else {
+                // No whitelist at all (or an absent key) means ungated --
+                // nothing to cross-check for this implement.
+                continue;
+            };
+            for class in whitelist {
+                let in_home_group = class.equipment_group() == Some(home_group);
+                let is_documented_exception = exceptions.contains(&class);
+                assert!(
+                    in_home_group || is_documented_exception,
+                    "{tool_kind:?}'s equip_gates.ron whitelist grants {class:?} access, but \
+                     {class:?} is neither in {home_group:?} (its expected home group) nor a \
+                     documented exception for {tool_kind:?} -- update either the manifest, \
+                     equipment_group(), or this test's exception list"
+                );
+            }
+        }
+    }
 }
