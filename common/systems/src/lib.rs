@@ -29,10 +29,16 @@ pub fn add_local_systems(dispatch_builder: &mut DispatcherBuilder) {
     dispatch::<tether::Sys>(dispatch_builder, &[]);
     dispatch::<mount::Sys>(dispatch_builder, &[]);
     dispatch::<controller::Sys>(dispatch_builder, &[&mount::Sys::sys_name()]);
-    dispatch::<character_behavior::Sys>(dispatch_builder, &[&controller::Sys::sys_name()]);
-    // Rebuilds the `DerivedStats` cache before its two per-tick consumers read
-    // it, so a gear/skill/body change lands on the same tick it happened.
+    // Rebuilds the `DerivedStats` cache before ANY of its per-tick consumers
+    // read it, so a gear/skill/body change lands on the same tick it
+    // happened. Must be registered before `character_behavior::Sys` (which
+    // depends on it below) -- specs requires a dependency's `dispatch` call
+    // to have already run before it can be named as a dependency.
     dispatch::<derived_stats::Sys>(dispatch_builder, &[]);
+    dispatch::<character_behavior::Sys>(dispatch_builder, &[
+        &controller::Sys::sys_name(),
+        &derived_stats::Sys::sys_name(),
+    ]);
     dispatch::<buff::Sys>(dispatch_builder, &[&derived_stats::Sys::sys_name()]);
     dispatch::<stats::Sys>(dispatch_builder, &[
         &buff::Sys::sys_name(),
