@@ -15,9 +15,8 @@
 //! primitive `Throw` uses to deal real damage on hit.
 
 use crate::{
-    combat,
     comp::{
-        CharacterState, StateUpdate, Vel, character_state::OutputEvents,
+        CharacterState, DerivedStats, StateUpdate, Vel, character_state::OutputEvents,
         projectile::ProjectileConstructor,
     },
     link::{Is, LinkHandle},
@@ -233,8 +232,9 @@ impl CharacterBehavior for Data {
                             let vel = *data.inputs.look_dir * speed + data.vel.0;
                             data.updater.insert(item_entity, Vel(vel));
 
-                            let precision_mult =
-                                combat::compute_precision_mult(data.inventory, data.msm);
+                            let precision_mult = data
+                                .derived
+                                .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                             let (projectile, _marker) =
                                 self.static_data.projectile.clone().create_projectile(
                                     Some(*data.uid),

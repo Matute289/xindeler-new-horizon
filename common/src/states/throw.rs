@@ -1,7 +1,7 @@
 use crate::{
-    combat::{self, CombatEffect},
+    combat::CombatEffect,
     comp::{
-        CharacterState, LightEmitter, Pos, ProjectileConstructor, StateUpdate,
+        CharacterState, DerivedStats, LightEmitter, Pos, ProjectileConstructor, StateUpdate,
         character_state::OutputEvents, item::ToolKind, slot::EquipSlot,
     },
     event::ThrowEvent,
@@ -129,7 +129,9 @@ impl CharacterBehavior for Data {
                         },
                     };
 
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let projectile = {
                         let projectile = self.static_data.projectile.clone();
                         if self.static_data.projectile.scaled.is_some() {

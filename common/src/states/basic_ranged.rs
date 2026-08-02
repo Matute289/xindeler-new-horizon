@@ -1,7 +1,6 @@
 use crate::{
-    combat,
     comp::{
-        Body, CharacterState, FrontendMarker, LightEmitter, Pos, StateUpdate,
+        Body, CharacterState, DerivedStats, FrontendMarker, LightEmitter, Pos, StateUpdate,
         ability::Amount,
         character_state::OutputEvents,
         object::Body::{FireRing, GrenadeClay, LaserBeam, LaserBeamSmall},
@@ -135,7 +134,9 @@ impl CharacterBehavior for Data {
             StageSection::Recover => {
                 if !self.exhausted {
                     // Fire
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let (projectile, marker) =
                         self.static_data.projectile.clone().create_projectile(
                             Some(*data.uid),

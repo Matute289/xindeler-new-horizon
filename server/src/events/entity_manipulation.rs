@@ -257,7 +257,9 @@ pub struct HealthChangeEventData<'a> {
     #[cfg(feature = "worldgen")]
     rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, comp::AttunedItems>,
+    /// The cached gear aggregates the invincibility check reads, instead of
+    /// re-walking the target's loadout per health change.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     agents: WriteStorage<'a, Agent>,
     healths: WriteStorage<'a, Health>,
     heads: WriteStorage<'a, Heads>,
@@ -288,11 +290,14 @@ impl ServerEvent for HealthChangeEvent {
                 .lend_join()
                 .get(ev.entity, &data.entities)
             {
-                // Skip damage if invincible.
-                if ev.change.amount < 0.0 &&
-                    // None indicates invincibility.
-                    combat::compute_protection(inventory, data.attuned_items.get(ev.entity), &data.msm)
-                        .is_none()
+                // Skip damage if invincible. `None` protection indicates
+                // invincibility; no cache at all means no `Inventory`, hence
+                // no armour, hence never invincible.
+                if ev.change.amount < 0.0
+                    && data
+                        .derived_stats
+                        .get(ev.entity)
+                        .is_some_and(|derived| derived.protection.is_none())
                 {
                     continue;
                 }
@@ -1505,6 +1510,9 @@ pub struct DestroyEventData<'a> {
     spell_masteries: WriteStorage<'a, SpellMastery>,
     character_classes: WriteStorage<'a, CharacterClass>,
     inventories: WriteStorage<'a, Inventory>,
+    /// The cached gear aggregates the death-effect energy/poise formulas read,
+    /// instead of re-walking the affected entity's loadout per effect.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     item_drops: WriteStorage<'a, comp::ItemDrops>,
     velocities: WriteStorage<'a, comp::Vel>,
     force_updates: WriteStorage<'a, comp::ForceUpdate>,
@@ -1892,10 +1900,10 @@ impl ServerEvent for DestroyEvent {
                                 emitters.emit(EnergyChangeEvent {
                                     entity: effect_target,
                                     change: ec
-                                        * combat::compute_energy_reward_mod(
-                                            data.inventories.get(effect_target),
-                                            &data.msm,
-                                        )
+                                        * data
+                                            .derived_stats
+                                            .get(effect_target)
+                                            .map_or(1.0, |d| d.energy_reward_mod)
                                         * strength_modifier
                                         * data
                                             .stats
@@ -1945,8 +1953,7 @@ impl ServerEvent for DestroyEvent {
                             CombatEffect::Poise(p) => {
                                 let change = -Poise::apply_poise_reduction(
                                     *p,
-                                    data.inventories.get(effect_target),
-                                    &data.msm,
+                                    data.derived_stats.get(effect_target),
                                     data.character_states.get(effect_target),
                                     data.stats.get(effect_target),
                                 ) * strength_modifier
@@ -2629,13 +2636,12 @@ impl ServerEvent for DestroyEvent {
 impl ServerEvent for LandOnGroundEvent {
     type SystemData<'a> = (
         Read<'a, Time>,
-        ReadExpect<'a, MaterialStatManifest>,
         Read<'a, EventBus<HealthChangeEvent>>,
         Read<'a, EventBus<PoiseChangeEvent>>,
         ReadStorage<'a, PhysicsState>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, comp::Mass>,
-        ReadStorage<'a, Inventory>,
+        ReadStorage<'a, comp::DerivedStats>,
         ReadStorage<'a, Stats>,
     );
 
@@ -2643,13 +2649,12 @@ impl ServerEvent for LandOnGroundEvent {
         events: impl ExactSizeIterator<Item = Self>,
         (
             time,
-            msm,
             health_change_events,
             poise_change_events,
             physic_states,
             character_states,
             masses,
-            inventories,
+            derived_stats,
             stats,
         ): Self::SystemData<'_>,
     ) {
@@ -2696,11 +2701,8 @@ impl ServerEvent for LandOnGroundEvent {
                 };
                 let damage_reduction = Damage::compute_damage_reduction(
                     Some(damage),
-                    inventories.get(ev.entity),
-                    // TODO(ENG-D2c): fall-damage protection is not attunement-gated yet.
-                    None,
+                    derived_stats.get(ev.entity),
                     stats.get(ev.entity),
-                    &msm,
                 );
                 let change = damage.calculate_health_change(
                     damage_reduction,
@@ -2724,8 +2726,7 @@ impl ServerEvent for LandOnGroundEvent {
                 let poise_damage = -(mass.0 * reduced_vel.powi(2) / 1500.0);
                 let poise_change = Poise::apply_poise_reduction(
                     poise_damage,
-                    inventories.get(ev.entity),
-                    &msm,
+                    derived_stats.get(ev.entity),
                     character_states.get(ev.entity),
                     stats.get(ev.entity),
                 );
@@ -2807,7 +2808,6 @@ pub struct ExplosionData<'a> {
     id_maps: Read<'a, IdMaps>,
     spatial_grid: Read<'a, CachedSpatialGrid>,
     terrain: ReadExpect<'a, TerrainGrid>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     event_busses: ReadExplosionEvents<'a>,
     outcomes: Read<'a, EventBus<Outcome>>,
     groups: ReadStorage<'a, Group>,
@@ -2817,7 +2817,9 @@ pub struct ExplosionData<'a> {
     energies: ReadStorage<'a, Energy>,
     combos: ReadStorage<'a, comp::Combo>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, comp::AttunedItems>,
+    /// The cached gear aggregates every damage/poise/evasion formula reads,
+    /// instead of re-walking the loadout once per damage instance.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     alignments: ReadStorage<'a, Alignment>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
     buffs: ReadStorage<'a, comp::Buffs>,
@@ -3217,7 +3219,7 @@ impl ServerEvent for ExplosionEvent {
                                             group: data.groups.get(entity),
                                             energy: data.energies.get(entity),
                                             combo: data.combos.get(entity),
-                                            inventory: data.inventories.get(entity),
+                                            derived: data.derived_stats.get(entity),
                                             stats: data.stats.get(entity),
                                             mass: data.masses.get(entity),
                                             pos: data.positions.get(entity).map(|p| p.0),
@@ -3230,7 +3232,7 @@ impl ServerEvent for ExplosionEvent {
                                     entity: entity_b,
                                     uid: *uid_b,
                                     inventory: data.inventories.get(entity_b),
-                                    attuned: data.attuned_items.get(entity_b),
+                                    derived: data.derived_stats.get(entity_b),
                                     stats: data.stats.get(entity_b),
                                     health: Some(health_b),
                                     pos: pos_b.0,
@@ -3350,9 +3352,7 @@ impl ServerEvent for ExplosionEvent {
                                                         .copied(),
                                                 )
                                             }),
-                                            data.inventories.get(entity_b),
-                                            data.attuned_items.get(entity_b),
-                                            &data.msm,
+                                            data.derived_stats.get(entity_b),
                                             data.character_states.get(entity_b),
                                             data.stats.get(entity_b),
                                             data.masses.get(entity_b),
@@ -3384,9 +3384,10 @@ pub fn emit_effect_events(
     entity: EcsEntity,
     effect: common::effect::Effect,
     source: Option<(Uid, Option<Group>)>,
-    inventory: Option<&Inventory>,
-    attuned: Option<&comp::AttunedItems>,
-    msm: &MaterialStatManifest,
+    // The affected entity's cached gear aggregates, supplying the armour
+    // protection and poise resilience this effect is mitigated by. `None`
+    // means the entity has no `Inventory`, i.e. no mitigation at all.
+    derived: Option<&comp::DerivedStats>,
     char_state: Option<&CharacterState>,
     stats: Option<&Stats>,
     tgt_mass: Option<&comp::Mass>,
@@ -3400,7 +3401,7 @@ pub fn emit_effect_events(
             emitters.emit(HealthChangeEvent { entity, change })
         },
         common::effect::Effect::Poise(amount) => {
-            let amount = Poise::apply_poise_reduction(amount, inventory, msm, char_state, stats);
+            let amount = Poise::apply_poise_reduction(amount, derived, char_state, stats);
             emitters.emit(PoiseChangeEvent {
                 entity,
                 change: comp::PoiseChange {
@@ -3414,13 +3415,7 @@ pub fn emit_effect_events(
         },
         common::effect::Effect::Damage(damage) => {
             let change = damage.calculate_health_change(
-                combat::Damage::compute_damage_reduction(
-                    Some(damage),
-                    inventory,
-                    attuned,
-                    stats,
-                    msm,
-                ),
+                combat::Damage::compute_damage_reduction(Some(damage), derived, stats),
                 0.0,
                 damage_contributor,
                 None,
@@ -4101,7 +4096,7 @@ impl ServerEvent for ParryHookEvent {
         ReadStorage<'a, Uid>,
         ReadStorage<'a, Stats>,
         ReadStorage<'a, comp::Mass>,
-        ReadStorage<'a, Inventory>,
+        ReadStorage<'a, comp::DerivedStats>,
     );
 
     fn handle(
@@ -4115,7 +4110,7 @@ impl ServerEvent for ParryHookEvent {
             uids,
             stats,
             masses,
-            inventories,
+            derived_stats,
         ): Self::SystemData<'_>,
     ) {
         let mut energy_change_emitter = energy_change_events.emitter();
@@ -4188,8 +4183,7 @@ impl ServerEvent for ParryHookEvent {
 
                 let attacker_poise_change = Poise::apply_poise_reduction(
                     ev.poise_multiplier.clamp(1.0, 2.0) * BASE_PARRIED_POISE_PUNISHMENT,
-                    inventories.get(attacker),
-                    &MaterialStatManifest::load().read(),
+                    derived_stats.get(attacker),
                     character_states.get(attacker),
                     stats.get(attacker),
                 );
@@ -4273,10 +4267,11 @@ pub struct EntityAttackedHookData<'a> {
     clients: ReadStorage<'a, Client>,
     stats: ReadStorage<'a, Stats>,
     healths: ReadStorage<'a, Health>,
-    inventories: ReadStorage<'a, Inventory>,
+    /// The cached gear aggregates the attacked-hook energy/poise formulas
+    /// read, instead of re-walking the affected entity's loadout per effect.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     buffs: ReadStorage<'a, comp::Buffs>,
     players: ReadStorage<'a, Player>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     masses: ReadStorage<'a, comp::Mass>,
     groups: ReadStorage<'a, Group>,
     orientations: ReadStorage<'a, comp::Ori>,
@@ -4464,10 +4459,10 @@ impl ServerEvent for EntityAttackedHookEvent {
                                 emitters.emit(EnergyChangeEvent {
                                     entity: effect_target,
                                     change: ec
-                                        * combat::compute_energy_reward_mod(
-                                            data.inventories.get(effect_target),
-                                            &data.msm,
-                                        )
+                                        * data
+                                            .derived_stats
+                                            .get(effect_target)
+                                            .map_or(1.0, |d| d.energy_reward_mod)
                                         * strength_modifier
                                         * data
                                             .stats
@@ -4517,8 +4512,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                             CombatEffect::Poise(p) => {
                                 let change = -Poise::apply_poise_reduction(
                                     *p,
-                                    data.inventories.get(effect_target),
-                                    &data.msm,
+                                    data.derived_stats.get(effect_target),
                                     data.character_states.get(effect_target),
                                     data.stats.get(effect_target),
                                 ) * strength_modifier

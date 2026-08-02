@@ -459,6 +459,9 @@ pub struct ReadData<'a> {
     pub healths: ReadStorage<'a, Health>,
     pub heads: ReadStorage<'a, Heads>,
     pub inventories: ReadStorage<'a, Inventory>,
+    /// The observed entity's cached gear aggregates, so a perception check
+    /// reads its armour stealth as a field instead of walking its loadout.
+    pub derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     pub stats: ReadStorage<'a, Stats>,
     pub skill_set: ReadStorage<'a, SkillSet>,
     pub physics_states: ReadStorage<'a, PhysicsState>,

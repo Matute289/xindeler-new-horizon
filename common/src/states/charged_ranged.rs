@@ -1,8 +1,7 @@
 use crate::{
-    combat,
     comp::{
-        Body, CharacterState, FrontendMarker, LightEmitter, Pos, StateUpdate, ability::Amount,
-        character_state::OutputEvents, projectile::ProjectileConstructor,
+        Body, CharacterState, DerivedStats, FrontendMarker, LightEmitter, Pos, StateUpdate,
+        ability::Amount, character_state::OutputEvents, projectile::ProjectileConstructor,
     },
     event::ShootEvent,
     states::{
@@ -97,7 +96,9 @@ impl CharacterBehavior for Data {
                 {
                     let charge_frac = self.charge_frac();
                     // Fire
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     // Gets offsets
                     let body_offsets = data
                         .body

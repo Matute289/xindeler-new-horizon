@@ -258,6 +258,9 @@ pub struct InventoryManipData<'a> {
     msm: ReadExpect<'a, MaterialStatManifest>,
     rbm: ReadExpect<'a, RecipeBookManifest>,
     inventories: WriteStorage<'a, comp::Inventory>,
+    /// The consumer's cached gear aggregates, supplying the mitigation a
+    /// consumable's own effect is reduced by.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     items: WriteStorage<'a, comp::PickupItem>,
     inventory_update_buffers: WriteStorage<'a, comp::InventoryUpdateBuffer>,
     light_emitters: WriteStorage<'a, comp::LightEmitter>,
@@ -881,10 +884,7 @@ impl ServerEvent for InventoryManipEvent {
                                         entity,
                                         effect,
                                         None,
-                                        data.inventories.get(entity),
-                                        None, /* consumable self-effect: not attunement-gated
-                                               * (ENG-D2c) */
-                                        &data.msm,
+                                        data.derived_stats.get(entity),
                                         data.character_states.get(entity),
                                         data.stats.get(entity),
                                         data.masses.get(entity),
@@ -902,10 +902,7 @@ impl ServerEvent for InventoryManipEvent {
                                         entity,
                                         effect,
                                         None,
-                                        data.inventories.get(entity),
-                                        None, /* consumable self-effect: not attunement-gated
-                                               * (ENG-D2c) */
-                                        &data.msm,
+                                        data.derived_stats.get(entity),
                                         data.character_states.get(entity),
                                         data.stats.get(entity),
                                         data.masses.get(entity),
@@ -922,9 +919,7 @@ impl ServerEvent for InventoryManipEvent {
                                     entity,
                                     effect,
                                     None,
-                                    data.inventories.get(entity),
-                                    None, // consumable self-effect: not attunement-gated (ENG-D2c)
-                                    &data.msm,
+                                    data.derived_stats.get(entity),
                                     data.character_states.get(entity),
                                     data.stats.get(entity),
                                     data.masses.get(entity),

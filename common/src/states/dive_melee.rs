@@ -1,6 +1,7 @@
 use crate::{
-    combat,
-    comp::{CharacterState, MeleeConstructor, StateUpdate, character_state::OutputEvents},
+    comp::{
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, character_state::OutputEvents,
+    },
     states::{
         behavior::{CharacterBehavior, JoinData},
         utils::{StageSection, *},
@@ -95,7 +96,9 @@ impl CharacterBehavior for Data {
             StageSection::Action => {
                 if !self.exhausted {
                     // Attack
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let tool_stats = get_tool_stats(data, self.static_data.ability_info);
                     let scaling = self.max_vertical_speed / self.static_data.vertical_speed;
                     let scaling = scaling.min(self.static_data.max_scaling);

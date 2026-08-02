@@ -2373,10 +2373,10 @@ impl AgentData<'_> {
         read_data: &ReadData,
     ) -> bool {
         let other_stealth_multiplier = {
-            let other_inventory = read_data.inventories.get(other);
+            let other_derived = read_data.derived_stats.get(other);
             let other_char_state = read_data.char_states.get(other);
 
-            perception_dist_multiplier_from_stealth(other_inventory, other_char_state, self.msm)
+            perception_dist_multiplier_from_stealth(other_derived, other_char_state)
         };
 
         let within_sight_dist = {

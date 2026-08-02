@@ -1,12 +1,12 @@
 use crate::{
     Explosion, RadiusEffect,
     combat::{
-        self, Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, Damage,
-        DamageKind, GroupTarget, Knockback,
+        Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, Damage, DamageKind,
+        GroupTarget, Knockback,
     },
     comp::{
-        CharacterState, StateUpdate, ability::Dodgeable, character_state::OutputEvents,
-        item::Reagent, shockwave,
+        CharacterState, DerivedStats, StateUpdate, ability::Dodgeable,
+        character_state::OutputEvents, item::Reagent, shockwave,
     },
     event::{ExplosionEvent, ShockwaveEvent},
     explosion::{ColorPreset, TerrainReplacementPreset},
@@ -237,7 +237,9 @@ impl CharacterBehavior for Data {
                     if let Some(effect) = &self.static_data.shockwave_damage_effect {
                         shockwave_damage = shockwave_damage.with_effect(effect.clone());
                     }
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let shockwave_attack = Attack::new(Some(self.static_data.ability_info))
                         .with_damage(shockwave_damage)
                         .with_precision(
