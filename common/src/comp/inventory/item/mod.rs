@@ -894,9 +894,14 @@ pub fn equip_gates_manifest() -> assets::AssetReadGuard<
 /// Unions a per-item `requirements:` block with the [`equip_gates_manifest`]
 /// gate for `kind`'s `(ToolKind, WeaponRole)`, if any. Shared by every
 /// `ItemDesc::requirements` implementor so `ItemBase::Simple` and
-/// `ItemBase::Modular` items are gated identically — this is what closes the
-/// bypass where a modular (crafted) weapon skipped every equip gate
-/// (`classes`, `min_level`, `races`) outright.
+/// `ItemBase::Modular` items are gated identically for `classes` — this is
+/// what closes the bypass where a modular (crafted) weapon skipped its
+/// `classes` equip gate outright. `equip_gates_manifest` only ever carries a
+/// `classes` list; a modular item still has no data source for `min_level`
+/// or `races` (no shipped Staff/Sceptre — the only modular-craftable
+/// implements today — declares either), so those two remain unenforced on
+/// modular items. Extend the manifest's value type before shipping a
+/// level-gated or race-gated modular-craftable implement.
 fn resolve_requirements<'a>(
     per_item: Option<&'a ItemRequirements>,
     kind: &ItemKind,
@@ -1690,8 +1695,11 @@ impl Item {
     /// Equip gates for this item: its own `requirements:` block (if any),
     /// unioned with the [`equip_gates_manifest`] gate for its
     /// `(ToolKind, WeaponRole)` (if any) — see [`resolve_requirements`].
-    /// Applies identically to `ItemBase::Simple` and `ItemBase::Modular`
-    /// (crafted) weapons; a modular weapon is no longer exempt.
+    /// Applies to `ItemBase::Simple` and `ItemBase::Modular` (crafted)
+    /// weapons alike for the `classes` gate — a modular weapon is no longer
+    /// exempt from *that* check specifically. `min_level`/`races` still have
+    /// no data source on a modular item (see `resolve_requirements`'s own
+    /// doc comment) and remain unenforced there.
     pub fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> {
         let per_item = match &self.item_base {
             ItemBase::Simple(item_def) => item_def.requirements.as_ref(),

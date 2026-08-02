@@ -3046,7 +3046,14 @@ fn weapon_rating<T: ItemDesc>(item: &T, _msm: &MaterialStatManifest) -> f32 {
 /// equipped tool. Usually just `Weapon(tool.kind)`, but a martial-role Staff
 /// has its own tree (`WeaponRoled`) kept deliberately separate from the
 /// caster `Weapon(Staff)` tree it shares a `ToolKind` with.
-fn skill_group_for_weapon(tool: &Tool) -> SkillGroupKind {
+///
+/// Every consumer of "which skill group does this equipped tool belong to"
+/// must go through this function, not a bare
+/// `SkillGroupKind::Weapon(tool.kind)` -- combat-rating display and combat-XP
+/// grant both need the same answer, and having only one of them special-case
+/// the martial/caster Staff split silently strands XP or points in the wrong
+/// pool.
+pub fn skill_group_for_weapon(tool: &Tool) -> SkillGroupKind {
     if tool.kind == ToolKind::Staff && tool.role() == WeaponRole::Martial {
         SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
     } else {
