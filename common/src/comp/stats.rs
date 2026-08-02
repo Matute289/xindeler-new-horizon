@@ -424,13 +424,77 @@ impl Stats {
         self.spell_power * keyed
     }
 
-    /// Resets temporary modifiers to default values
+    /// Resets temporary modifiers to default values.
+    ///
+    /// Runs for every entity, every tick, so this resets fields in place
+    /// rather than reconstructing via `*self = Self::new(...)`: scalars are
+    /// overwritten directly and `Vec` fields are `.clear()`ed instead of
+    /// dropped and reallocated, which keeps their allocated capacity across
+    /// ticks. `name` and `original_body` are untouched since they are not
+    /// temporary.
+    ///
+    /// ⚠️ Must stay in lockstep, field for field, with `Self::new`. The old
+    /// `*self = Self::new(...)` idiom made that automatic; now it is only
+    /// guaranteed by
+    /// `reset_restores_every_field_from_a_fully_dirtied_stats` below — keep
+    /// that test in sync with any new field added to `Stats`.
     pub fn reset_temp_modifiers(&mut self) {
-        // "consume" name and body and re-create from scratch
-        let name = std::mem::replace(&mut self.name, Content::dummy());
-        let body = self.original_body;
-
-        *self = Self::new(name, body);
+        self.creature_kind = self.original_body.creature_kind();
+        self.damage_reduction = StatsSplit::default();
+        self.poise_reduction = StatsSplit::default();
+        self.max_health_modifiers = StatsModifier::default();
+        self.move_speed_modifier = 1.0;
+        self.charge_move_speed_modifier = 1.0;
+        self.buildup_move_speed_modifier = 1.0;
+        self.jump_modifier = 1.0;
+        self.attack_speed_modifier = 1.0;
+        self.charge_speed_modifier = 1.0;
+        self.buildup_speed_modifier = 1.0;
+        self.recovery_speed_modifier = 1.0;
+        self.friction_modifier = 1.0;
+        self.max_energy_modifiers = StatsModifier::default();
+        self.poise_damage_modifier = 1.0;
+        self.attack_damage_modifier = 1.0;
+        self.conditional_precision_modifiers.clear();
+        self.precision_vulnerability_multiplier_override = None;
+        self.swim_speed_modifier = 1.0;
+        self.effects_on_attack.clear();
+        self.mitigations_penetration = 0.0;
+        self.energy_reward_modifier = 1.0;
+        self.energy_efficiency_modifier = 1.0;
+        self.energy_regen_modifier = 1.0;
+        self.effects_on_damaged.clear();
+        self.effects_on_death.clear();
+        self.disable_auxiliary_abilities = false;
+        self.disable_magic = false;
+        self.disable_teleport = false;
+        self.accuracy = 0.0;
+        self.evasion = 0.0;
+        self.magic_accuracy = 0.0;
+        self.magic_evasion = 0.0;
+        self.crit_chance = 0.0;
+        self.character_level = 0;
+        self.resist_fire = 0.0;
+        self.resist_frost = 0.0;
+        self.resist_poison = 0.0;
+        self.resist_magic = 0.0;
+        self.crowd_control_resistance = 0.0;
+        self.magic_resistance = 0.0;
+        self.item_effect_reduction = 1.0;
+        self.attacked_modifications.clear();
+        self.precision_power_mult = 1.0;
+        self.knockback_mult = 1.0;
+        self.spell_power = 1.0;
+        self.heal_power = 1.0;
+        self.spell_power_by_source = [1.0; MagicSource::NUM_SOURCES];
+        self.cooldown_reduction_modifier = 1.0;
+        self.bonus_damage_vs = [0.0; CreatureKind::NUM_KINDS];
+        self.projectile_speed_mult = 1.0;
+        self.projectile_constructor_effects.clear();
+        self.marked_entities.clear();
+        self.senses.clear();
+        self.proficient_tools = ToolKindMask::all();
+        self.non_proficient_damage_mult = 1.0;
     }
 }
 
@@ -441,6 +505,10 @@ impl Component for Stats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        combat::{AttackedModifier, CombatEffect, StatEffectTarget},
+        comp::projectile::ProjectileConstructorEffectKind,
+    };
 
     fn test_body() -> Body { Body::Humanoid(crate::comp::humanoid::Body::random()) }
 
@@ -506,6 +574,271 @@ mod tests {
 
         assert_eq!(stats.cooldown_reduction_modifier, 1.0);
         assert_eq!(stats.spell_power_by_source, [1.0; MagicSource::NUM_SOURCES]);
+    }
+
+    /// Guards against the exact drift the old `*self = Self::new(...)`
+    /// idiom protected against for free: sets literally every field on
+    /// `Stats` to a non-default value, calls `reset_temp_modifiers`, and
+    /// asserts every field matches a freshly-constructed `Stats::new(...)`.
+    /// If a new field is ever added to `Stats` without updating both
+    /// `Self::new` and `reset_temp_modifiers`, this test is the thing that
+    /// is supposed to catch it — keep it in sync.
+    #[test]
+    fn reset_restores_every_field_from_a_fully_dirtied_stats() {
+        let body = test_body();
+        let name = Content::Plain("dirtied-stats-test".to_owned());
+        let mut stats = Stats::new(name.clone(), body);
+
+        // Dirty every temporary field to a value `Self::new` would never
+        // produce.
+        stats.creature_kind = Some(CreatureKind::Fiend);
+        stats.damage_reduction = StatsSplit {
+            pos_mod: 0.3,
+            neg_mod: -0.1,
+        };
+        stats.poise_reduction = StatsSplit {
+            pos_mod: 0.2,
+            neg_mod: -0.2,
+        };
+        stats.max_health_modifiers = StatsModifier {
+            add_mod: 10.0,
+            mult_mod: 2.0,
+        };
+        stats.move_speed_modifier = 2.0;
+        stats.charge_move_speed_modifier = 2.0;
+        stats.buildup_move_speed_modifier = 2.0;
+        stats.jump_modifier = 2.0;
+        stats.attack_speed_modifier = 2.0;
+        stats.charge_speed_modifier = 2.0;
+        stats.buildup_speed_modifier = 2.0;
+        stats.recovery_speed_modifier = 2.0;
+        stats.friction_modifier = 2.0;
+        stats.max_energy_modifiers = StatsModifier {
+            add_mod: 5.0,
+            mult_mod: 3.0,
+        };
+        stats.poise_damage_modifier = 2.0;
+        stats.attack_damage_modifier = 2.0;
+        stats
+            .conditional_precision_modifiers
+            .push((None, 1.0, true));
+        stats.precision_vulnerability_multiplier_override = Some(1.5);
+        stats.swim_speed_modifier = 2.0;
+        stats
+            .effects_on_attack
+            .push(AttackEffect::new(None, CombatEffect::Heal(1.0)));
+        stats.mitigations_penetration = 0.5;
+        stats.energy_reward_modifier = 2.0;
+        stats.energy_efficiency_modifier = 2.0;
+        stats.energy_regen_modifier = 2.0;
+        stats.effects_on_damaged.push(StatEffect::new(
+            StatEffectTarget::Target,
+            CombatEffect::Heal(1.0),
+        ));
+        stats.effects_on_death.push(StatEffect::new(
+            StatEffectTarget::Attacker,
+            CombatEffect::Heal(1.0),
+        ));
+        stats.disable_auxiliary_abilities = true;
+        stats.disable_magic = true;
+        stats.disable_teleport = true;
+        stats.accuracy = 0.5;
+        stats.evasion = 0.5;
+        stats.magic_accuracy = 0.5;
+        stats.magic_evasion = 0.5;
+        stats.crit_chance = 0.5;
+        stats.character_level = 42;
+        stats.resist_fire = 0.5;
+        stats.resist_frost = 0.5;
+        stats.resist_poison = 0.5;
+        stats.resist_magic = 0.5;
+        stats.crowd_control_resistance = 0.5;
+        stats.magic_resistance = 0.5;
+        stats.item_effect_reduction = 0.5;
+        stats.attacked_modifications.push(AttackedModification::new(
+            AttackedModifier::EnergyReward(1.0),
+        ));
+        stats.precision_power_mult = 2.0;
+        stats.knockback_mult = 2.0;
+        stats.spell_power = 2.0;
+        stats.heal_power = 2.0;
+        stats.spell_power_by_source = [2.0; MagicSource::NUM_SOURCES];
+        stats.cooldown_reduction_modifier = 0.5;
+        stats.bonus_damage_vs = [1.0; CreatureKind::NUM_KINDS];
+        stats.projectile_speed_mult = 2.0;
+        stats
+            .projectile_constructor_effects
+            .push(ProjectileConstructorEffect {
+                kind: ProjectileConstructorEffectKind::AttackEffect(AttackEffect::new(
+                    None,
+                    CombatEffect::Heal(1.0),
+                )),
+                tool_filter: None,
+            });
+        stats
+            .marked_entities
+            .push(Uid(std::num::NonZeroU64::new(1).unwrap()));
+        stats.senses.push(ActiveSense {
+            kind: SenseKind::Magic,
+            radius: 10.0,
+            mode: SenseMode::Snapshot,
+        });
+        stats.proficient_tools = ToolKindMask::empty();
+        stats.non_proficient_damage_mult = 0.4;
+
+        stats.reset_temp_modifiers();
+
+        let expected = Stats::new(name, body);
+        assert_eq!(stats.name, expected.name);
+        assert_eq!(stats.original_body, expected.original_body);
+        assert_eq!(stats.creature_kind, expected.creature_kind);
+        assert_eq!(
+            stats.damage_reduction.pos_mod,
+            expected.damage_reduction.pos_mod
+        );
+        assert_eq!(
+            stats.damage_reduction.neg_mod,
+            expected.damage_reduction.neg_mod
+        );
+        assert_eq!(
+            stats.poise_reduction.pos_mod,
+            expected.poise_reduction.pos_mod
+        );
+        assert_eq!(
+            stats.poise_reduction.neg_mod,
+            expected.poise_reduction.neg_mod
+        );
+        assert_eq!(
+            stats.max_health_modifiers.add_mod,
+            expected.max_health_modifiers.add_mod
+        );
+        assert_eq!(
+            stats.max_health_modifiers.mult_mod,
+            expected.max_health_modifiers.mult_mod
+        );
+        assert_eq!(stats.move_speed_modifier, expected.move_speed_modifier);
+        assert_eq!(
+            stats.charge_move_speed_modifier,
+            expected.charge_move_speed_modifier
+        );
+        assert_eq!(
+            stats.buildup_move_speed_modifier,
+            expected.buildup_move_speed_modifier
+        );
+        assert_eq!(stats.jump_modifier, expected.jump_modifier);
+        assert_eq!(stats.attack_speed_modifier, expected.attack_speed_modifier);
+        assert_eq!(stats.charge_speed_modifier, expected.charge_speed_modifier);
+        assert_eq!(
+            stats.buildup_speed_modifier,
+            expected.buildup_speed_modifier
+        );
+        assert_eq!(
+            stats.recovery_speed_modifier,
+            expected.recovery_speed_modifier
+        );
+        assert_eq!(stats.friction_modifier, expected.friction_modifier);
+        assert_eq!(
+            stats.max_energy_modifiers.add_mod,
+            expected.max_energy_modifiers.add_mod
+        );
+        assert_eq!(
+            stats.max_energy_modifiers.mult_mod,
+            expected.max_energy_modifiers.mult_mod
+        );
+        assert_eq!(stats.poise_damage_modifier, expected.poise_damage_modifier);
+        assert_eq!(
+            stats.attack_damage_modifier,
+            expected.attack_damage_modifier
+        );
+        assert_eq!(
+            stats.conditional_precision_modifiers,
+            expected.conditional_precision_modifiers
+        );
+        assert_eq!(
+            stats.precision_vulnerability_multiplier_override,
+            expected.precision_vulnerability_multiplier_override
+        );
+        assert_eq!(stats.swim_speed_modifier, expected.swim_speed_modifier);
+        assert_eq!(
+            stats.effects_on_attack.len(),
+            expected.effects_on_attack.len()
+        );
+        assert!(stats.effects_on_attack.is_empty());
+        assert_eq!(
+            stats.mitigations_penetration,
+            expected.mitigations_penetration
+        );
+        assert_eq!(
+            stats.energy_reward_modifier,
+            expected.energy_reward_modifier
+        );
+        assert_eq!(
+            stats.energy_efficiency_modifier,
+            expected.energy_efficiency_modifier
+        );
+        assert_eq!(stats.energy_regen_modifier, expected.energy_regen_modifier);
+        assert!(stats.effects_on_damaged.is_empty());
+        assert_eq!(
+            stats.effects_on_damaged.len(),
+            expected.effects_on_damaged.len()
+        );
+        assert!(stats.effects_on_death.is_empty());
+        assert_eq!(
+            stats.effects_on_death.len(),
+            expected.effects_on_death.len()
+        );
+        assert_eq!(
+            stats.disable_auxiliary_abilities,
+            expected.disable_auxiliary_abilities
+        );
+        assert_eq!(stats.disable_magic, expected.disable_magic);
+        assert_eq!(stats.disable_teleport, expected.disable_teleport);
+        assert_eq!(stats.accuracy, expected.accuracy);
+        assert_eq!(stats.evasion, expected.evasion);
+        assert_eq!(stats.magic_accuracy, expected.magic_accuracy);
+        assert_eq!(stats.magic_evasion, expected.magic_evasion);
+        assert_eq!(stats.crit_chance, expected.crit_chance);
+        assert_eq!(stats.character_level, expected.character_level);
+        assert_eq!(stats.resist_fire, expected.resist_fire);
+        assert_eq!(stats.resist_frost, expected.resist_frost);
+        assert_eq!(stats.resist_poison, expected.resist_poison);
+        assert_eq!(stats.resist_magic, expected.resist_magic);
+        assert_eq!(
+            stats.crowd_control_resistance,
+            expected.crowd_control_resistance
+        );
+        assert_eq!(stats.magic_resistance, expected.magic_resistance);
+        assert_eq!(stats.item_effect_reduction, expected.item_effect_reduction);
+        assert!(stats.attacked_modifications.is_empty());
+        assert_eq!(
+            stats.attacked_modifications.len(),
+            expected.attacked_modifications.len()
+        );
+        assert_eq!(stats.precision_power_mult, expected.precision_power_mult);
+        assert_eq!(stats.knockback_mult, expected.knockback_mult);
+        assert_eq!(stats.spell_power, expected.spell_power);
+        assert_eq!(stats.heal_power, expected.heal_power);
+        assert_eq!(stats.spell_power_by_source, expected.spell_power_by_source);
+        assert_eq!(
+            stats.cooldown_reduction_modifier,
+            expected.cooldown_reduction_modifier
+        );
+        assert_eq!(stats.bonus_damage_vs, expected.bonus_damage_vs);
+        assert_eq!(stats.projectile_speed_mult, expected.projectile_speed_mult);
+        assert!(stats.projectile_constructor_effects.is_empty());
+        assert_eq!(
+            stats.projectile_constructor_effects.len(),
+            expected.projectile_constructor_effects.len()
+        );
+        assert!(stats.marked_entities.is_empty());
+        assert_eq!(stats.marked_entities.len(), expected.marked_entities.len());
+        assert!(stats.senses.is_empty());
+        assert_eq!(stats.senses.len(), expected.senses.len());
+        assert_eq!(stats.proficient_tools, expected.proficient_tools);
+        assert_eq!(
+            stats.non_proficient_damage_mult,
+            expected.non_proficient_damage_mult
+        );
     }
 
     #[test]
