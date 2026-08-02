@@ -1343,4 +1343,83 @@ mod tests {
             stats.cooldown_reduction_modifier
         );
     }
+
+    /// Applying the fold onto a `Stats` must land on exactly what walking the
+    /// loadout onto that same `Stats` produces — that is the substitution
+    /// `buff::Sys` performs, so it has to hold field for field.
+    #[test]
+    fn applying_the_fold_equals_walking_the_loadout_onto_stats() {
+        use crate::comp::Stats;
+
+        // Two caster implements, so the fold has to *compose* contributions
+        // rather than merely pass one through.
+        let inv = Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty()
+                .active_mainhand(Some(tool_item(
+                    tool::ToolKind::Staff,
+                    tool::WeaponRole::Caster,
+                    caster_staff_stats(),
+                )))
+                .active_offhand(Some(item_from_kind(ItemKind::Tool(tool::Tool::new(
+                    tool::ToolKind::Focus,
+                    tool::Hands::One,
+                    Some(tool::WeaponRole::Caster),
+                    tool::Stats {
+                        effect_power: 1.2,
+                        buff_strength: 1.3,
+                        energy_efficiency: 1.4,
+                        cooldown_reduction: 0.8,
+                        ..caster_staff_stats()
+                    },
+                )))))
+                .build(),
+        );
+
+        let body = test_body();
+        let mut walked = Stats::empty(body);
+        combat::apply_gear_caster_stats(&mut walked, Some(&inv), None);
+
+        let mut folded = Stats::empty(body);
+        combat::apply_caster_gear_fold(&mut folded, &compute_for(Some(&inv), None).caster);
+
+        assert_eq!(folded.spell_power, walked.spell_power);
+        assert_eq!(folded.spell_power_by_source, walked.spell_power_by_source);
+        assert_eq!(folded.heal_power, walked.heal_power);
+        assert_eq!(folded.energy_regen_modifier, walked.energy_regen_modifier);
+        assert_eq!(
+            folded.cooldown_reduction_modifier,
+            walked.cooldown_reduction_modifier
+        );
+        assert_ne!(
+            folded.spell_power, 1.0,
+            "the fixture must actually move the channels"
+        );
+    }
+
+    /// The identity case: an entity with no cached fold must be
+    /// indistinguishable from one whose fold is the default.
+    #[test]
+    fn applying_the_default_fold_changes_nothing() {
+        use crate::comp::Stats;
+
+        let body = test_body();
+        let untouched = Stats::empty(body);
+        let mut folded = Stats::empty(body);
+        combat::apply_caster_gear_fold(&mut folded, &CasterGearFold::default());
+
+        assert_eq!(folded.spell_power, untouched.spell_power);
+        assert_eq!(
+            folded.spell_power_by_source,
+            untouched.spell_power_by_source
+        );
+        assert_eq!(folded.heal_power, untouched.heal_power);
+        assert_eq!(
+            folded.energy_regen_modifier,
+            untouched.energy_regen_modifier
+        );
+        assert_eq!(
+            folded.cooldown_reduction_modifier,
+            untouched.cooldown_reduction_modifier
+        );
+    }
 }

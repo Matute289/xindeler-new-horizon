@@ -1,9 +1,9 @@
 use crate::{
     assets::{AssetExt, Ron},
     comp::{
-        Alignment, AttunedItems, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group,
-        Health, HealthChange, InputKind, Inventory, MagicSource, Mass, Ori, Player, Poise,
-        PoiseChange, SkillSet, Stats,
+        Alignment, AttunedItems, Body, Buffs, CasterGearFold, CharacterClass, CharacterState,
+        Combo, Energy, Group, Health, HealthChange, InputKind, Inventory, MagicSource, Mass, Ori,
+        Player, Poise, PoiseChange, SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -3342,6 +3342,28 @@ pub fn apply_gear_caster_stats(
         stats.energy_regen_modifier *= tool_stats.energy_efficiency;
         stats.cooldown_reduction_modifier *= tool_stats.cooldown_reduction;
     }
+}
+
+/// Applies an already-folded [`CasterGearFold`] onto `stats`.
+///
+/// Same channels, same multiplicative composition and same identities as
+/// [`apply_gear_caster_stats`], except that the per-item products have already
+/// been accumulated once (at cache-rebuild time) instead of being recomputed by
+/// walking the loadout on every tick. An entity with no cached fold is
+/// indistinguishable from one with the default fold: every channel's identity
+/// is `1.0`, so applying it is a no-op.
+pub fn apply_caster_gear_fold(stats: &mut Stats, fold: &CasterGearFold) {
+    stats.spell_power *= fold.spell_power;
+    for (channel, factor) in stats
+        .spell_power_by_source
+        .iter_mut()
+        .zip(fold.spell_power_by_source.iter())
+    {
+        *channel *= factor;
+    }
+    stats.heal_power *= fold.heal_power;
+    stats.energy_regen_modifier *= fold.energy_regen_modifier;
+    stats.cooldown_reduction_modifier *= fold.cooldown_reduction_modifier;
 }
 
 /// Returns a value to be included as a multiplicative factor in perception

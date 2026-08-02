@@ -1,15 +1,14 @@
 use common::{
     combat,
     comp::{
-        self, CharacterState, Combo, Energy, Health, Inventory, Poise, Stats, StatsModifier,
-        item::MaterialStatManifest,
+        self, CharacterState, Combo, DerivedStats, Energy, Health, Poise, Stats, StatsModifier,
     },
     event::{ChangeStanceEvent, DestroyEvent, DownedEvent, EmitExt},
     event_emitters,
     resources::{DeltaTime, Time},
 };
 use common_ecs::{Job, Origin, Phase, System};
-use specs::{Entities, LendJoin, Read, ReadExpect, ReadStorage, SystemData, WriteStorage, shred};
+use specs::{Entities, LendJoin, Read, ReadStorage, SystemData, WriteStorage, shred};
 
 const ENERGY_REGEN_ACCEL: f32 = 1.0;
 const SIT_ENERGY_REGEN_ACCEL: f32 = 2.5;
@@ -30,9 +29,9 @@ pub struct ReadData<'a> {
     time: Read<'a, Time>,
     events: Events<'a>,
     char_states: ReadStorage<'a, CharacterState>,
-    inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
+    /// The gear-derived aggregates this system reads, rebuilt only when the
+    /// entity's gear/skills/body actually changed.
+    derived_stats: ReadStorage<'a, DerivedStats>,
 }
 
 /// This system kills players, levels them up, and regenerates energy.
@@ -65,10 +64,10 @@ impl<'a> System<'a> for Sys {
             &stats,
             &mut healths,
             &mut energies,
-            read_data.inventories.maybe(),
+            read_data.derived_stats.maybe(),
         )
             .lend_join();
-        join.for_each(|(entity, stats, mut health, mut energy, inventory)| {
+        join.for_each(|(entity, stats, mut health, mut energy, derived)| {
             let set_dead = { health.should_die() && !health.is_dead };
 
             if set_dead {
@@ -90,17 +89,19 @@ impl<'a> System<'a> for Sys {
                 health.update_internal_integer_maximum(new_max);
             }
 
-            // Calculates energy scaling from stats and inventory. BL-36: an
+            // Energy scaling from gear, read off the cached aggregate. An
             // antimagic field makes attuned magic-item effects mundane, so the
-            // attunement-gated energy bonus is dropped while `disable_magic`.
-            let attuned = if stat.disable_magic {
-                None
-            } else {
-                read_data.attuned_items.get(entity)
-            };
+            // attunement-blind variant is selected while `disable_magic` is
+            // set. No cache means no inventory, whose contribution is 0.0.
+            let gear_energy_mod = derived.map_or(0.0, |derived| {
+                if stat.disable_magic {
+                    derived.max_energy_mod_unattuned
+                } else {
+                    derived.max_energy_mod
+                }
+            });
             let energy_mods = StatsModifier {
-                add_mod: stat.max_energy_modifiers.add_mod
-                    + combat::compute_max_energy_mod(inventory, attuned, &read_data.msm),
+                add_mod: stat.max_energy_modifiers.add_mod + gear_energy_mod,
                 mult_mod: stat.max_energy_modifiers.mult_mod,
             };
 

@@ -1,10 +1,11 @@
 use common::{
-    Damage, DamageSource,
+    DamageSource,
     assets::{AssetExt, Ron},
     combat::{self, CombatTuning, DamageContributor},
     comp::{
-        ActiveSense, Alignment, AttunedItems, Energy, Ethos, Group, Health, HealthChange,
-        Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos, Stats,
+        ActiveSense, Alignment, AttunedItems, DerivedStats, Energy, Ethos, Group, Health,
+        HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos,
+        Stats,
         agent::{Sound, SoundKind},
         attunement::item_effects_active,
         aura::{Auras, EnteredAuras},
@@ -14,7 +15,6 @@ use common::{
             Buffs, DestInfo,
         },
         fluid_dynamics::{Fluid, LiquidKind},
-        item::MaterialStatManifest,
         item_condition_buff_data,
     },
     event::{
@@ -32,8 +32,7 @@ use common_ecs::{Job, Origin, ParMode, Phase, System};
 use rand::RngExt;
 use rayon::iter::ParallelIterator;
 use specs::{
-    Entities, Entity, LendJoin, ParJoin, Read, ReadExpect, ReadStorage, SystemData, WriteStorage,
-    shred,
+    Entities, Entity, LendJoin, ParJoin, Read, ReadStorage, SystemData, WriteStorage, shred,
 };
 use vek::Vec3;
 
@@ -111,6 +110,9 @@ pub struct ReadData<'a> {
     events: Events<'a>,
     inventories: ReadStorage<'a, Inventory>,
     attuned_items: ReadStorage<'a, AttunedItems>,
+    /// Every gear-derived aggregate this system needs, rebuilt only when the
+    /// entity's gear/skills/body actually changed.
+    derived_stats: ReadStorage<'a, DerivedStats>,
     // Only fetched for an entity once it's known to have at least one
     // equipped item declaring an `ItemCondition` (see `Sys::run`) — an
     // entity with no such item never touches this storage.
@@ -121,7 +123,6 @@ pub struct ReadData<'a> {
     groups: ReadStorage<'a, Group>,
     id_maps: Read<'a, IdMaps>,
     time: Read<'a, Time>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     buffs: ReadStorage<'a, Buffs>,
     auras: ReadStorage<'a, Auras>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
@@ -556,15 +557,31 @@ impl<'a> System<'a> for Sys {
                 }
             });
 
-            let infinite_damage_reduction = (Damage::compute_damage_reduction(
-                None,
-                read_data.inventories.get(entity),
-                read_data.attuned_items.get(entity),
-                Some(&stat),
-                &read_data.msm,
-            ) - 1.0)
-                .abs()
-                < f32::EPSILON;
+            // Total damage immunity, read straight off the cached gear
+            // aggregate instead of re-deriving it through the damage formula.
+            // The two sources are exactly the ones the formula caps at 100%:
+            // armour whose protection is `None` (invincible), and a 100%
+            // damage-reduction modifier (admin tabard, safezone buff).
+            //
+            // An antimagic field makes attuned magic-item effects mundane, so
+            // the attunement-blind protection is selected while
+            // `disable_magic` is set. Both the flag and the modifier are read
+            // from the pre-`reset_temp_modifiers` `Stats`, i.e. what the
+            // previous tick accumulated — the same values the formula saw.
+            // No cache means no inventory, which is `Some(0.0)` — never
+            // invincible — exactly as `DerivedStats::default()` records.
+            let protection = read_data
+                .derived_stats
+                .get(entity)
+                .map_or(Some(0.0), |derived| {
+                    if stat.disable_magic {
+                        derived.protection_unattuned
+                    } else {
+                        derived.protection
+                    }
+                });
+            let infinite_damage_reduction =
+                protection.is_none() || stat.damage_reduction.modifier() >= 1.0;
             if infinite_damage_reduction {
                 for (key, buff) in buff_comp.buffs.iter() {
                     if !buff.kind.is_buff() {
@@ -693,18 +710,18 @@ impl<'a> System<'a> for Sys {
             // Gear → Stats: caster-role implements (Staff/Sceptre/Tome/
             // HolySymbol/Focus in the Caster role) contribute their
             // effect_power/buff_strength/energy_efficiency tool stats onto
-            // this tick's spell_power/heal_power/energy_regen_modifier.
+            // this tick's spell_power/heal_power/energy_regen_modifier. The
+            // per-item products are already folded in `DerivedStats`, so this
+            // is a handful of multiplications rather than a loadout walk.
             // Deliberately not gated on holding a CharacterClass: gear should
             // matter for any inventory-carrying entity (e.g. a spellcasting
-            // NPC), the same way compute_protection/compute_max_energy_mod
-            // don't require one either. Ordering relative to the class-passive
-            // block above is immaterial here — every contribution is a plain
-            // `*=`, and multiplication is commutative.
-            combat::apply_gear_caster_stats(
-                &mut stat,
-                read_data.inventories.get(entity),
-                read_data.attuned_items.get(entity),
-            );
+            // NPC), the same way the armour-derived aggregates don't require
+            // one either. Ordering relative to the class-passive block above
+            // is immaterial here — every contribution is a plain `*=`, and
+            // multiplication is commutative.
+            if let Some(derived) = read_data.derived_stats.get(entity) {
+                combat::apply_caster_gear_fold(&mut stat, &derived.caster);
+            }
 
             // BL-65: every body contributes a combat-stat baseline by threat
             // tier; humanoid bodies contribute 0 here (PCs/class-gated NPCs get
