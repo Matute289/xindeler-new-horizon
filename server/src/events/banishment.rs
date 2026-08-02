@@ -26,8 +26,8 @@ use common::{
     assets::{AssetExt, Ron},
     combat::{self, RemovalInfo},
     comp::{
-        self, Alignment, Banished, Body, Energy, Group, Health, Inventory, Poise, Pos, Scale,
-        SkillSet, Stats, agent::Agent, inventory::item::MaterialStatManifest,
+        self, Alignment, Banished, Body, DerivedStats, Group, Health, Pos, Scale, Stats,
+        agent::Agent,
     },
     event::{DestroyEvent, EventBus},
     outcome::Outcome,
@@ -82,7 +82,6 @@ pub struct BanishEventData<'a> {
     /// costs no throughput.
     rtsim: ReadExpect<'a, crate::rtsim::RtSim>,
     id_maps: Read<'a, IdMaps>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     time: Read<'a, Time>,
     outcomes: Read<'a, EventBus<Outcome>>,
     destroys: Read<'a, EventBus<DestroyEvent>>,
@@ -94,10 +93,10 @@ pub struct BanishEventData<'a> {
     alignments: ReadStorage<'a, Alignment>,
     stats: ReadStorage<'a, Stats>,
     healths: ReadStorage<'a, Health>,
-    energies: ReadStorage<'a, Energy>,
-    poises: ReadStorage<'a, Poise>,
-    inventories: ReadStorage<'a, Inventory>,
-    skill_sets: ReadStorage<'a, SkillSet>,
+    /// The saving throw's difficulty axis is the target's `combat_rating`,
+    /// read straight off the cache instead of re-folding its whole loadout,
+    /// skillset and body per banish attempt.
+    derived_stats: ReadStorage<'a, DerivedStats>,
     groups: ReadStorage<'a, Group>,
     agents: ReadStorage<'a, Agent>,
     rtsim_actors: ReadStorage<'a, common::rtsim::ActorId>,
@@ -122,26 +121,12 @@ impl ServerEvent for BanishEvent {
             let Some(caster_stats) = data.stats.get(caster) else {
                 continue;
             };
-            let (
-                Some(target_uid),
-                Some(target_pos),
-                Some(target_body),
-                Some(target_health),
-                Some(target_energy),
-                Some(target_poise),
-                Some(target_inventory),
-                Some(target_skill_set),
-            ) = (
+            let (Some(target_uid), Some(target_pos), Some(target_body), Some(target_health)) = (
                 data.uids.get(ev.entity).copied(),
                 data.positions.get(ev.entity).copied(),
                 data.bodies.get(ev.entity).copied(),
                 data.healths.get(ev.entity),
-                data.energies.get(ev.entity),
-                data.poises.get(ev.entity),
-                data.inventories.get(ev.entity),
-                data.skill_sets.get(ev.entity),
-            )
-            else {
+            ) else {
                 continue;
             };
             // A creature that is dead — or that reached zero HP this tick and
@@ -154,15 +139,12 @@ impl ServerEvent for BanishEvent {
 
             // --- the saving throw (spec §4) -------------------------------
             let tuning = Ron::<combat::CombatTuning>::load_expect("common.combat_tuning").read();
-            let combat_rating = combat::combat_rating(
-                target_inventory,
-                target_health,
-                target_energy,
-                target_poise,
-                target_skill_set,
-                target_body,
-                &data.msm,
-            );
+            // No cache means no `Inventory`, hence no gear, skill or body
+            // contribution to fold — `DerivedStats::default()`'s rating, 0.0.
+            let combat_rating = data
+                .derived_stats
+                .get(ev.entity)
+                .map_or(0.0, |derived| derived.combat_rating);
             let target_stats = data.stats.get(ev.entity);
             let target_info = combat::SaveTargetInfo {
                 stats_magic_evasion: target_stats.map_or(0.0, |s| s.magic_evasion),

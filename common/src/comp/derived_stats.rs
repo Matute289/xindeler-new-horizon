@@ -1025,11 +1025,14 @@ mod tests {
         );
     }
 
-    /// `combat::combat_rating` is a thin delegation to this field, so this
-    /// pins the delegation rather than the formula — the formula itself is
-    /// pinned by the `Default`/aggregate tests its terms are built from.
+    /// [`DerivedStats::compute`] is the one and only implementation of the
+    /// combat rating. The golden number below is the value the standalone
+    /// `combat::combat_rating` free function produced for this exact fixture
+    /// before it was deleted, so it pins the rating against accidental drift:
+    /// if it ever moves, that is a balance change and must be deliberate.
     #[test]
-    fn compute_equals_legacy_combat_rating() {
+    fn combat_rating_still_matches_the_pre_refactor_value() {
+        const GOLDEN_COMBAT_RATING: f32 = 1.5929667;
         let msm = msm();
         let inv = geared_inventory();
         let body = test_body();
@@ -1051,10 +1054,7 @@ mod tests {
             &msm,
         );
 
-        assert_eq!(
-            derived.combat_rating,
-            combat::combat_rating(&inv, &health, &energy, &poise, &skill_set, body, &msm)
-        );
+        assert_eq!(derived.combat_rating, GOLDEN_COMBAT_RATING);
         assert!(
             derived.combat_rating > 0.0,
             "fixture must be non-degenerate"

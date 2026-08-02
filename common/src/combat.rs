@@ -1,9 +1,9 @@
 use crate::{
     assets::{AssetExt, Ron},
     comp::{
-        Alignment, AttunedItems, Body, Buffs, CasterGearFold, CharacterClass, CharacterState,
-        Combo, DerivedStats, Energy, Group, Health, HealthChange, InputKind, Inventory,
-        MagicSource, Mass, Ori, Player, Poise, PoiseChange, SkillSet, Stats,
+        Alignment, AttunedItems, Buffs, CasterGearFold, CharacterClass, CharacterState, Combo,
+        DerivedStats, Energy, Group, Health, HealthChange, InputKind, Inventory, MagicSource, Mass,
+        Ori, Player, Poise, PoiseChange, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -12,7 +12,7 @@ use crate::{
         class::ClassKind,
         inventory::{
             item::{
-                ItemKind, MaterialStatManifest,
+                ItemKind,
                 tool::{self, Hands, Tool, ToolKind, WeaponRole},
             },
             slot::EquipSlot,
@@ -3081,38 +3081,6 @@ mod skill_group_for_weapon_tests {
     }
 }
 
-/// The finished combat rating for an entity whose cache is not at hand.
-///
-/// The formula itself lives in [`DerivedStats::compute`], which folds it once
-/// per gear/skill/body change; this is the on-demand shape for the remaining
-/// call sites that still hold the raw components rather than the cached
-/// component. It is deliberately a thin delegation — there is exactly one
-/// implementation of the rating, and it is the cached one.
-pub fn combat_rating(
-    inventory: &Inventory,
-    health: &Health,
-    energy: &Energy,
-    poise: &Poise,
-    skill_set: &SkillSet,
-    body: Body,
-    msm: &MaterialStatManifest,
-) -> f32 {
-    DerivedStats::compute(
-        Some(inventory),
-        // Attunement-blind on purpose: the rating is a "what is this entity
-        // worth" number, not a live defensive read, so it must not move when
-        // an item is attuned or unattuned.
-        None,
-        Some(skill_set),
-        Some(body),
-        Some(health.base_max()),
-        Some(energy.base_max()),
-        Some(poise.base_max()),
-        msm,
-    )
-    .combat_rating
-}
-
 /// The gear → `comp::Stats` fold for the caster role. Every equipped `Tool`
 /// item whose [`tool::WeaponRole`] resolves to `Caster` — this covers not
 /// just `Staff`/`Sceptre` but every dedicated caster implement (`Tome`,
@@ -4203,10 +4171,9 @@ mod combat_resolution_tests {
 
 #[cfg(test)]
 mod weapon_proficiency_tests {
-    use super::{
-        AbilityInfo, Attack, Body, CombatTuning, HandInfo, InputKind, Stats, tool::WeaponRole,
-    };
+    use super::{AbilityInfo, Attack, CombatTuning, HandInfo, InputKind, Stats, tool::WeaponRole};
     use crate::comp::{
+        Body,
         ability::AbilityMeta,
         class::{ClassKind, class_proficiencies},
         humanoid,
@@ -5034,7 +5001,7 @@ mod gear_caster_stats_tests {
             ItemBase::Simple(Arc::new(item_def)),
             Vec::new(),
             &AbilityMap::load().read(),
-            &super::MaterialStatManifest::load().read(),
+            &crate::comp::inventory::item::MaterialStatManifest::load().read(),
         )
     }
 
@@ -5301,12 +5268,11 @@ mod gear_caster_stats_tests {
 #[cfg(test)]
 mod attack_loadout_walk_tests {
     use super::{
-        Body, CombatTuning, Damage, DamageKind, DerivedStats, Inventory, Poise,
-        compute_armor_evasion,
+        CombatTuning, Damage, DamageKind, DerivedStats, Inventory, Poise, compute_armor_evasion,
     };
     use crate::{
         comp::{
-            Energy, Health, humanoid,
+            Body, Energy, Health, humanoid,
             inventory::{
                 item::{
                     Item, ItemKind,
@@ -5355,7 +5321,7 @@ mod attack_loadout_walk_tests {
         let inventory = armoured_inventory();
         let body = Body::Humanoid(humanoid::Body::random());
         let skill_set = SkillSetBuilder::default().build();
-        let msm = super::MaterialStatManifest::load().cloned();
+        let msm = crate::comp::inventory::item::MaterialStatManifest::load().cloned();
         let tuning = CombatTuning::default();
 
         // Building the cache is where the loadout is walked -- the "once" in

@@ -25,7 +25,7 @@ use crate::{
 };
 use client::Client;
 use common::{
-    combat::{combat_rating, perception_dist_multiplier_from_stealth},
+    combat::perception_dist_multiplier_from_stealth,
     comp::{
         Body, CharacterClass, DerivedStats, Energy, Health, Inventory, Item, Poise, SkillSet,
         Stats,
@@ -625,14 +625,11 @@ pub struct Bag<'a> {
     localized_strings: &'a Localization,
     item_i18n: &'a ItemI18n,
     stats: &'a Stats,
-    skill_set: &'a SkillSet,
     health: &'a Health,
     energy: &'a Energy,
     show: &'a Show,
-    body: &'a Body,
     msm: &'a MaterialStatManifest,
     rbm: &'a RecipeBookManifest,
-    poise: &'a Poise,
     menu_events: &'a Vec<MenuInput>,
 }
 
@@ -653,14 +650,11 @@ impl<'a> Bag<'a> {
         localized_strings: &'a Localization,
         item_i18n: &'a ItemI18n,
         stats: &'a Stats,
-        skill_set: &'a SkillSet,
         health: &'a Health,
         energy: &'a Energy,
         show: &'a Show,
-        body: &'a Body,
         msm: &'a MaterialStatManifest,
         rbm: &'a RecipeBookManifest,
-        poise: &'a Poise,
         menu_events: &'a Vec<MenuInput>,
     ) -> Self {
         Self {
@@ -679,14 +673,11 @@ impl<'a> Bag<'a> {
             localized_strings,
             item_i18n,
             stats,
-            skill_set,
             energy,
             health,
             show,
-            body,
             msm,
             rbm,
-            poise,
             menu_events,
         }
     }
@@ -1323,16 +1314,7 @@ impl Widget for Bag<'_> {
                 // value, without this widget walking the loadout per frame.
                 let derived_stats = self.client.state().ecs().read_storage::<DerivedStats>();
                 let derived = derived_stats.get(self.info.viewpoint_entity);
-                let combat_rating = combat_rating(
-                    inventory,
-                    self.health,
-                    self.energy,
-                    self.poise,
-                    self.skill_set,
-                    *self.body,
-                    self.msm,
-                )
-                .min(999.9);
+                let combat_rating = derived.map_or(0.0, |d| d.combat_rating).min(999.9);
                 let indicator_col = cr_color(combat_rating);
                 for i in STATS.iter().copied().enumerate() {
                     let btn = Button::image(match i.1 {
