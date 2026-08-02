@@ -58,7 +58,9 @@ pub struct ReadData<'a> {
     bodies: ReadStorage<'a, Body>,
     healths: ReadStorage<'a, Health>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    /// The target's cached gear aggregates, read instead of re-walking
+    /// its loadout once per damage instance.
+    derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     groups: ReadStorage<'a, Group>,
     energies: ReadStorage<'a, Energy>,
     stats: ReadStorage<'a, Stats>,
@@ -243,7 +245,7 @@ impl<'a> System<'a> for Sys {
                                 group: read_data.groups.get(entity),
                                 energy: read_data.energies.get(entity),
                                 combo: read_data.combos.get(entity),
-                                inventory: read_data.inventories.get(entity),
+                                derived: read_data.derived_stats.get(entity),
                                 stats: read_data.stats.get(entity),
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pos.0),
@@ -255,7 +257,7 @@ impl<'a> System<'a> for Sys {
                                 entity: target,
                                 uid: *uid_b,
                                 inventory: read_data.inventories.get(target),
-                                attuned: read_data.attuned_items.get(target),
+                                derived: read_data.derived_stats.get(target),
                                 stats: read_data.stats.get(target),
                                 health: read_data.healths.get(target),
                                 pos: pos_b.0,

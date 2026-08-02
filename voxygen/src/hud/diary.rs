@@ -22,7 +22,7 @@ use client::{self, Client};
 use common::{
     combat,
     comp::{
-        self, AttunedItems, Body, Buffs, CharacterClass, CharacterState, ClassKind, Combo, Energy,
+        self, Body, Buffs, CharacterClass, CharacterState, ClassKind, Combo, DerivedStats, Energy,
         Health, Inventory, Poise, Stance, Stats,
         ability::{
             Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT, SpellGate,
@@ -1928,6 +1928,12 @@ impl Widget for Diary<'_> {
                     });
                 }
 
+                // The viewer's own cached gear aggregates, fetched once for the
+                // whole sheet. Attunement gating (ENG-D2c) is already folded
+                // into `protection`.
+                let derived_stats = self.client.state().ecs().read_storage::<DerivedStats>();
+                let derived = derived_stats.get(self.client.entity());
+
                 for (i, stat) in CharacterStat::iter().enumerate() {
                     // Stat names
                     let localized_name = stat.localized_str(self.localized_strings);
@@ -2029,43 +2035,28 @@ impl Widget for Diary<'_> {
                             format!("{:.2}", cr * 10.0)
                         },
                         CharacterStat::Protection => {
-                            // Player's attuned set, so Protection reflects gating (ENG-D2c).
-                            let attuned_items =
-                                self.client.state().ecs().read_storage::<AttunedItems>();
-                            let attuned = attuned_items.get(self.client.entity());
-                            let protection =
-                                combat::compute_protection(Some(self.inventory), attuned, self.msm);
-                            match protection {
+                            match derived.map_or(Some(0.0), |d| d.protection) {
                                 Some(prot) => format!("{}", prot),
                                 None => String::from("Invincible"),
                             }
                         },
                         CharacterStat::StunResistance => {
-                            let stun_res = Poise::compute_poise_damage_reduction(
-                                Some(self.inventory),
-                                self.msm,
-                                None,
-                                self.stats,
-                            );
+                            let stun_res =
+                                Poise::compute_poise_damage_reduction(derived, None, self.stats);
                             format!("{:.2}%", stun_res * 100.0)
                         },
                         CharacterStat::PrecisionPower => {
-                            let precision_power =
-                                combat::compute_precision_mult(Some(self.inventory), self.msm);
+                            let precision_power = derived
+                                .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                             format!("x{:.2}", precision_power)
                         },
                         CharacterStat::EnergyReward => {
-                            let energy_rew =
-                                combat::compute_energy_reward_mod(Some(self.inventory), self.msm);
+                            let energy_rew = derived.map_or(1.0, |d| d.energy_reward_mod);
                             format!("{:+.0}%", (energy_rew - 1.0) * 100.0)
                         },
                         CharacterStat::Stealth => {
                             let stealth_perception_multiplier =
-                                combat::perception_dist_multiplier_from_stealth(
-                                    Some(self.inventory),
-                                    None,
-                                    self.msm,
-                                );
+                                combat::perception_dist_multiplier_from_stealth(derived, None);
                             let txt =
                                 format!("{:+.1}%", (1.0 - stealth_perception_multiplier) * 100.0);
 

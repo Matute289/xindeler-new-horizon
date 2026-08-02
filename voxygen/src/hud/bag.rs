@@ -25,9 +25,9 @@ use crate::{
 };
 use client::Client;
 use common::{
-    combat::{combat_rating, compute_protection, perception_dist_multiplier_from_stealth},
+    combat::{combat_rating, perception_dist_multiplier_from_stealth},
     comp::{
-        AttunedItems, Body, CharacterClass, Energy, Health, Inventory, Item, Poise, SkillSet,
+        Body, CharacterClass, DerivedStats, Energy, Health, Inventory, Item, Poise, SkillSet,
         Stats,
         inventory::{InventorySortOrder, slot::Slot},
         item::{ItemDesc, ItemI18n, MaterialStatManifest},
@@ -1317,10 +1317,12 @@ impl Widget for Bag<'_> {
                         .resize(STATS.len(), &mut ui.widget_id_generator())
                 });
                 // Stats
-                // Player's attuned set, so the Protection display reflects
-                // attunement gating (ENG-D2c) rather than the raw armor value.
-                let attuned_items = self.client.state().ecs().read_storage::<AttunedItems>();
-                let attuned = attuned_items.get(self.info.viewpoint_entity);
+                // The viewpoint entity's cached gear aggregates. Attunement
+                // gating (ENG-D2c) is already folded into `protection`, so the
+                // Protection display reflects it rather than the raw armor
+                // value, without this widget walking the loadout per frame.
+                let derived_stats = self.client.state().ecs().read_storage::<DerivedStats>();
+                let derived = derived_stats.get(self.info.viewpoint_entity);
                 let combat_rating = combat_rating(
                     inventory,
                     self.health,
@@ -1348,11 +1350,10 @@ impl Widget for Bag<'_> {
                     } else {
                         TEXT_COLOR
                     });
-                    let protection_txt =
-                        match compute_protection(Some(inventory), attuned, self.msm) {
-                            Some(p) => format!("{:.0}", p),
-                            None => "\u{221e}".to_string(),
-                        };
+                    let protection_txt = match derived.map_or(Some(0.0), |d| d.protection) {
+                        Some(p) => format!("{:.0}", p),
+                        None => "\u{221e}".to_string(),
+                    };
                     let health_txt = format!("{}", self.health.maximum().round() as usize);
                     let energy_txt = format!("{}", self.energy.maximum().round() as usize);
                     let combat_rating_txt = format!("{}", (combat_rating * 10.0) as usize);
@@ -1360,21 +1361,14 @@ impl Widget for Bag<'_> {
                         "{}",
                         (100.0
                             * Poise::compute_poise_damage_reduction(
-                                Some(inventory),
-                                self.msm,
+                                derived,
                                 None,
                                 Some(self.stats),
                             )) as i32
                     );
                     let stealth_txt = format!(
                         "{:.1}%",
-                        ((1.0
-                            - perception_dist_multiplier_from_stealth(
-                                Some(inventory),
-                                None,
-                                self.msm
-                            ))
-                            * 100.0)
+                        ((1.0 - perception_dist_multiplier_from_stealth(derived, None)) * 100.0)
                     );
                     let btn = if i.0 == 0 {
                         btn.top_left_with_margins_on(state.bg_ids.bg_frame, 55.0, 10.0)

@@ -91,14 +91,25 @@ pub struct DerivedStats {
     pub combat_rating: f32,
 }
 
+impl DerivedStats {
+    /// The precision multiplier of an entity with no `Inventory` — `1.0 +
+    /// 0.1`, written as the sum rather than as the literal `1.1` so the
+    /// provenance of the value stays visible.
+    ///
+    /// Exposed as a constant because every `CharacterState` needs it as the
+    /// fallback for an entity that has no cache at all, and a bare `1.1`
+    /// scattered across twenty-odd files is a silent-nerf waiting to happen.
+    pub const DEFAULT_PRECISION_MULT: f32 = 1.0 + 0.1;
+}
+
 impl Default for DerivedStats {
     /// ⚠️ **Load-bearing.** Every field here MUST equal what the corresponding
     /// `combat::compute_*` free function returns for `inventory: None`,
     /// because an entity with no `DerivedStats` falls back to exactly these
     /// values at every read site. In particular:
     ///
-    /// - `precision_mult` is **1.1**, not 1.0 (`compute_precision_mult` is `1.0
-    ///   + inventory.map_or(0.1, …)`).
+    /// - `precision_mult` is **1.1**, not 1.0 — the sum starts at `0.1` even
+    ///   with no inventory at all.
     /// - `protection` / `poise_resilience` are **`Some(0.0)`**, not `None` —
     ///   `None` specifically means *invincible*.
     ///
@@ -111,10 +122,8 @@ impl Default for DerivedStats {
             protection_unattuned: Some(0.0),
             max_energy_mod_unattuned: 0.0,
             poise_resilience: Some(0.0),
-            // `1.0 + 0.1_f32.max(0.0)`, constant-folded. Written as the sum
-            // rather than as the literal `1.1` so the provenance of the value
-            // stays visible.
-            precision_mult: 1.0 + 0.1,
+            // `1.0 + 0.1_f32.max(0.0)`, constant-folded.
+            precision_mult: Self::DEFAULT_PRECISION_MULT,
             energy_reward_mod: 1.0,
             stealth: 0.0,
             weapon_rating: 0.0,
@@ -230,7 +239,8 @@ impl DerivedStats {
 // the loadout is walked once, at rebuild time, instead of once per read site.
 // ---------------------------------------------------------------------------
 
-/// Verbatim `combat::compute_protection`.
+/// Total protection provided by worn armour. `None` means the equipped
+/// armour makes the entity invulnerable.
 fn protection_from(
     inventory: Option<&Inventory>,
     attuned: Option<&AttunedItems>,
@@ -256,7 +266,7 @@ fn protection_from(
     })
 }
 
-/// Verbatim `combat::compute_max_energy_mod`.
+/// The additive modifier worn armour applies to max energy.
 fn max_energy_mod_from(
     inventory: Option<&Inventory>,
     attuned: Option<&AttunedItems>,
@@ -278,7 +288,12 @@ fn max_energy_mod_from(
     })
 }
 
-/// Verbatim `combat::compute_poise_resilience`.
+/// Total poise resilience provided by worn armour, used to reduce
+/// incoming poise damage. `None` means poise-invulnerable.
+///
+/// Deliberately NOT attunement-gated: it is a secondary (stagger)
+/// defense, and gating it would ripple through every
+/// `apply_poise_reduction` caller.
 fn poise_resilience_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> Option<f32> {
     inventory.map_or(Some(0.0), |inv| {
         inv.equipped_items()
@@ -299,7 +314,9 @@ fn poise_resilience_from(inventory: Option<&Inventory>, msm: &MaterialStatManife
     })
 }
 
-/// Verbatim `combat::compute_precision_mult`.
+/// The precision (crit) multiplier from worn armour. Starts the sum at
+/// `0.1`, and at `0.1` flat with no inventory at all, so the result
+/// never drops below `1.0`.
 fn precision_mult_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
     // Starts with a value of 0.1 when summing the stats from each armor piece, and
     // defaults to a value of 0.1 if no inventory is equipped. Precision multiplier
@@ -321,7 +338,8 @@ fn precision_mult_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest
         .max(0.0)
 }
 
-/// Verbatim `combat::compute_energy_reward_mod`.
+/// The energy-reward modifier from worn armour — an additive sum onto a
+/// multiplicative identity of `1.0`.
 fn energy_reward_mod_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
     // Starts with a value of 1.0 when summing the stats from each armor piece, and
     // defaults to a value of 1.0 if no inventory is present
@@ -340,7 +358,9 @@ fn energy_reward_mod_from(inventory: Option<&Inventory>, msm: &MaterialStatManif
     })
 }
 
-/// Verbatim `combat::compute_stealth`.
+/// The summed stealth stat of worn armour, which
+/// [`crate::combat::stealth_multiplier`] turns into a perception-distance
+/// factor.
 fn stealth_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
     inventory.map_or(0.0, |inv| {
         inv.equipped_items()
@@ -355,7 +375,7 @@ fn stealth_from(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f3
     })
 }
 
-/// Verbatim `combat::get_weapon_kinds`.
+/// The `ToolKind` in each active hand, if any.
 fn weapon_kinds_from(inv: &Inventory) -> (Option<tool::ToolKind>, Option<tool::ToolKind>) {
     (
         inv.equipped(EquipSlot::ActiveMainhand).and_then(|i| {
@@ -375,7 +395,7 @@ fn weapon_kinds_from(inv: &Inventory) -> (Option<tool::ToolKind>, Option<tool::T
     )
 }
 
-/// The gear half of `combat::weapon_skills` — which `SkillGroupKind` each
+/// Which `SkillGroupKind` each
 /// active hand's equipped tool feeds. The `SkillSet` lookup itself stays live
 /// (it is folded into `combat_rating` below), because it is a cheap map read
 /// and not a loadout walk.
@@ -395,8 +415,9 @@ fn weapon_skill_groups_from(inv: &Inventory) -> (Option<SkillGroupKind>, Option<
     )
 }
 
-/// Verbatim `combat::weapon_rating`, specialised to `&Item` (its generic
-/// `ItemDesc` parameter only ever had one caller shape).
+/// How good one equipped weapon is, as a weighted sum of its tool stats.
+/// Clamped at `0.0` so a strictly-worse-than-baseline weapon never scores
+/// negative.
 fn item_weapon_rating(item: &Item) -> f32 {
     const POWER_WEIGHT: f32 = 2.0;
     const SPEED_WEIGHT: f32 = 3.0;
@@ -430,7 +451,7 @@ fn item_weapon_rating(item: &Item) -> f32 {
     rating.max(0.0)
 }
 
-/// Verbatim `combat::get_weapon_rating`.
+/// The better of the two active hands' weapon ratings.
 fn weapon_rating_from(inventory: &Inventory, _msm: &MaterialStatManifest) -> f32 {
     let mainhand_rating = if let Some(item) = inventory.equipped(EquipSlot::ActiveMainhand) {
         item_weapon_rating(item)
@@ -447,7 +468,7 @@ fn weapon_rating_from(inventory: &Inventory, _msm: &MaterialStatManifest) -> f32
     mainhand_rating.max(offhand_rating)
 }
 
-/// Verbatim `combat::apply_gear_caster_stats`, folding onto a fresh
+/// The caster-role gear fold, accumulated onto a fresh
 /// `CasterGearFold` (whose identities are the same `1.0`s `comp::Stats` starts
 /// those channels at) instead of mutating a `Stats` in place.
 fn caster_fold_from(
@@ -481,7 +502,7 @@ fn caster_fold_from(
 }
 
 /// The `(damage: None, attuned: None, stats: None)` shape of
-/// `Damage::compute_damage_reduction` that `combat::combat_rating` calls.
+/// `Damage::compute_damage_reduction` the combat rating needs.
 ///
 /// Three branches of the original are constant-folded here, each bit-exactly:
 /// `damage: None` ⇒ `penetration = 0.0` and `protection.map(|p| p - 0.0)` is
@@ -509,7 +530,7 @@ fn combat_rating_damage_reduction(protection: Option<f32>) -> f32 {
 }
 
 /// The `(char_state: None, stats: None)` shape of
-/// `Poise::compute_poise_damage_reduction` that `combat::combat_rating` calls.
+/// `Poise::compute_poise_damage_reduction` the combat rating needs.
 /// `from_char` and `from_stats` are both `0.0` under those arguments, so their
 /// `(1.0 - x)` factors are multiplications by exactly `1.0`. The
 /// `1.0 - (1.0 - from_inventory)` round trip is preserved for the same reason
@@ -539,8 +560,8 @@ struct CombatRatingTerms<'a> {
     weapon_rating: f32,
 }
 
-/// Verbatim `combat::combat_rating`, with each of its six loadout walks
-/// replaced by the already-computed value it used to recompute.
+/// The whole combat rating, built from the already-folded aggregates
+/// above rather than from six separate loadout walks.
 fn combat_rating_from(terms: CombatRatingTerms<'_>) -> f32 {
     const WEAPON_WEIGHT: f32 = 1.0;
     const HEALTH_WEIGHT: f32 = 1.5;
@@ -581,9 +602,9 @@ fn combat_rating_from(terms: CombatRatingTerms<'_>) -> f32 {
     // Normalized with a standard precision multiplier of 1.2
     let precision_rating = precision_mult / 1.2;
 
-    // The live half of `combat::weapon_skills`: which group each hand feeds is
-    // gear-derived (and cached in `weapon_skill_groups`); how many points have
-    // been earned in it is a cheap `SkillSet` map read.
+    // Which group each hand feeds is gear-derived (and cached in
+    // `weapon_skill_groups`); how many points have been earned in it is a
+    // cheap `SkillSet` map read, so it stays live.
     let mainhand_skills = weapon_skill_groups
         .0
         .map_or(0.0, |group| skill_set.earned_sp(group) as f32);
@@ -868,50 +889,39 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // `Default` — every field must equal the no-inventory result of the
-    // corresponding free function.
+    // `Default` — every field must equal what the arithmetic below it
+    // produces for an entity with no `Inventory`, because a missing
+    // `DerivedStats` component falls back to exactly these values at every
+    // read site.
     // -----------------------------------------------------------------
 
     #[test]
     fn default_matches_the_no_inventory_results() {
-        let msm = msm();
         let d = DerivedStats::default();
 
-        assert_eq!(d.protection, combat::compute_protection(None, None, &msm));
-        assert_eq!(
-            d.protection_unattuned,
-            combat::compute_protection(None, None, &msm)
-        );
-        assert_eq!(
-            d.max_energy_mod,
-            combat::compute_max_energy_mod(None, None, &msm)
-        );
-        assert_eq!(
-            d.max_energy_mod_unattuned,
-            combat::compute_max_energy_mod(None, None, &msm)
-        );
-        assert_eq!(
-            d.poise_resilience,
-            combat::compute_poise_resilience(None, &msm)
-        );
-        assert_eq!(d.precision_mult, combat::compute_precision_mult(None, &msm));
-        assert_eq!(
-            d.energy_reward_mod,
-            combat::compute_energy_reward_mod(None, &msm)
-        );
-        assert_eq!(d.stealth, combat::compute_stealth(None, &msm));
+        // No armour to protect, resist poise damage, carry energy or hide with.
+        assert_eq!(d.protection, Some(0.0));
+        assert_eq!(d.protection_unattuned, Some(0.0));
+        assert_eq!(d.max_energy_mod, 0.0);
+        assert_eq!(d.max_energy_mod_unattuned, 0.0);
+        assert_eq!(d.poise_resilience, Some(0.0));
+        assert_eq!(d.stealth, 0.0);
+        // Multiplicative channels sit at their identity, not at zero.
+        assert_eq!(d.energy_reward_mod, 1.0);
+        assert_eq!(d.caster, CasterGearFold::default());
+        // No weapon.
         assert_eq!(d.weapon_rating, 0.0);
         assert_eq!(d.weapon_kinds, (None, None));
         assert_eq!(d.weapon_skill_groups, (None, None));
         assert_eq!(d.combat_rating, 0.0);
-        assert_eq!(d.caster, CasterGearFold::default());
 
-        // The two easy-to-get-wrong ones, pinned explicitly as well as by
-        // equivalence: `None` would mean *invincible*, and `1.0` would be a
-        // silent nerf to every precision roll.
+        // The two easy-to-get-wrong ones, pinned explicitly: `None` would mean
+        // *invincible*, and a `precision_mult` of `1.0` would be a silent nerf
+        // to every precision roll (the no-inventory value is `1.0 + 0.1`).
         assert_eq!(d.protection, Some(0.0));
         assert_eq!(d.poise_resilience, Some(0.0));
         assert_eq!(d.precision_mult, 1.1);
+        assert_eq!(d.precision_mult, DerivedStats::DEFAULT_PRECISION_MULT);
     }
 
     /// `compute` with no inputs at all must land on exactly `Default` — that
@@ -927,34 +937,27 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Equivalence with the free functions — EXACT `f32` equality.
+    // Every aggregate, pinned against the fixture's own declared stats with
+    // EXACT `f32` equality — same operations, same order, so a reordered or
+    // "cleaned up" fold shows up immediately.
     // -----------------------------------------------------------------
 
     #[test]
     fn compute_equals_legacy_protection() {
-        let msm = msm();
         let inv = geared_inventory();
-        assert_eq!(
-            compute_for(Some(&inv), None).protection,
-            combat::compute_protection(Some(&inv), None, &msm)
-        );
+        // The only protective piece is the fixture's chest armour.
+        assert_eq!(compute_for(Some(&inv), None).protection, Some(12.5));
 
-        // ...and with an attunement-gated piece, in both directions.
+        // ...and with an attunement-gated piece, in both directions: unattuned
+        // it contributes nothing, attuned it contributes in full.
         let gated = attunement_gated_inventory();
         let attuned = attuned_chest();
-        assert_eq!(
-            compute_for(Some(&gated), None).protection,
-            combat::compute_protection(Some(&gated), None, &msm)
-        );
+        assert_eq!(compute_for(Some(&gated), None).protection, Some(0.0));
         let attuned_derived = compute_for(Some(&gated), Some(&attuned));
-        assert_eq!(
-            attuned_derived.protection,
-            combat::compute_protection(Some(&gated), Some(&attuned), &msm)
-        );
-        assert_eq!(
-            attuned_derived.protection_unattuned,
-            combat::compute_protection(Some(&gated), None, &msm)
-        );
+        assert_eq!(attuned_derived.protection, Some(12.5));
+        // `protection_unattuned` is the attunement-blind variant, so attuning
+        // must not move it.
+        assert_eq!(attuned_derived.protection_unattuned, Some(0.0));
         assert_ne!(
             attuned_derived.protection, attuned_derived.protection_unattuned,
             "the fixture must actually exercise the attunement gate"
@@ -963,49 +966,40 @@ mod tests {
 
     #[test]
     fn compute_equals_legacy_precision_mult() {
-        let msm = msm();
         let inv = geared_inventory();
+        // `1.0 + fold(0.1, +)` over the one armour piece's `precision_power`.
         assert_eq!(
             compute_for(Some(&inv), None).precision_mult,
-            combat::compute_precision_mult(Some(&inv), &msm)
+            1.0 + (0.1_f32 + 0.17)
         );
+        // No armour at all still starts the fold at `0.1`.
         let empty = empty_inventory();
         assert_eq!(
             compute_for(Some(&empty), None).precision_mult,
-            combat::compute_precision_mult(Some(&empty), &msm)
+            DerivedStats::DEFAULT_PRECISION_MULT
         );
     }
 
     #[test]
     fn compute_equals_legacy_energy_reward() {
-        let msm = msm();
         let inv = geared_inventory();
+        // `fold(1.0, +)` — an additive bonus onto a multiplicative identity.
         assert_eq!(
             compute_for(Some(&inv), None).energy_reward_mod,
-            combat::compute_energy_reward_mod(Some(&inv), &msm)
+            1.0_f32 + 0.35
         );
     }
 
     #[test]
     fn compute_equals_legacy_max_energy() {
-        let msm = msm();
         let inv = geared_inventory();
-        assert_eq!(
-            compute_for(Some(&inv), None).max_energy_mod,
-            combat::compute_max_energy_mod(Some(&inv), None, &msm)
-        );
+        assert_eq!(compute_for(Some(&inv), None).max_energy_mod, 13.0);
 
         let gated = attunement_gated_inventory();
         let attuned = attuned_chest();
         let derived = compute_for(Some(&gated), Some(&attuned));
-        assert_eq!(
-            derived.max_energy_mod,
-            combat::compute_max_energy_mod(Some(&gated), Some(&attuned), &msm)
-        );
-        assert_eq!(
-            derived.max_energy_mod_unattuned,
-            combat::compute_max_energy_mod(Some(&gated), None, &msm)
-        );
+        assert_eq!(derived.max_energy_mod, 13.0);
+        assert_eq!(derived.max_energy_mod_unattuned, 0.0);
         assert_ne!(
             derived.max_energy_mod, derived.max_energy_mod_unattuned,
             "the fixture must actually exercise the attunement gate"
@@ -1014,24 +1008,26 @@ mod tests {
 
     #[test]
     fn compute_equals_legacy_stealth() {
-        let msm = msm();
         let inv = geared_inventory();
-        assert_eq!(
-            compute_for(Some(&inv), None).stealth,
-            combat::compute_stealth(Some(&inv), &msm)
-        );
+        assert_eq!(compute_for(Some(&inv), None).stealth, 0.9);
     }
 
     #[test]
     fn compute_equals_legacy_poise_resilience() {
-        let msm = msm();
         let inv = geared_inventory();
+        // Deliberately NOT attunement-gated — a secondary (stagger) defense.
+        assert_eq!(compute_for(Some(&inv), None).poise_resilience, Some(7.25));
+        let gated = attunement_gated_inventory();
         assert_eq!(
-            compute_for(Some(&inv), None).poise_resilience,
-            combat::compute_poise_resilience(Some(&inv), &msm)
+            compute_for(Some(&gated), None).poise_resilience,
+            Some(7.25),
+            "poise resilience is not attunement-gated"
         );
     }
 
+    /// `combat::combat_rating` is a thin delegation to this field, so this
+    /// pins the delegation rather than the formula — the formula itself is
+    /// pinned by the `Default`/aggregate tests its terms are built from.
     #[test]
     fn compute_equals_legacy_combat_rating() {
         let msm = msm();
@@ -1080,7 +1076,6 @@ mod tests {
     /// rather than collapsing to a number.
     #[test]
     fn invincible_armour_still_reads_as_none() {
-        let msm = msm();
         let inv = Inventory::with_loadout_humanoid(
             LoadoutBuilder::empty()
                 .chest(Some(item_from_kind(chest_armor(armor::Stats {
@@ -1092,15 +1087,8 @@ mod tests {
         );
         let derived = compute_for(Some(&inv), None);
         assert_eq!(derived.protection, None);
+        assert_eq!(derived.protection_unattuned, None);
         assert_eq!(derived.poise_resilience, None);
-        assert_eq!(
-            derived.protection,
-            combat::compute_protection(Some(&inv), None, &msm)
-        );
-        assert_eq!(
-            derived.poise_resilience,
-            combat::compute_poise_resilience(Some(&inv), &msm)
-        );
     }
 
     // -----------------------------------------------------------------

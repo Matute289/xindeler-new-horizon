@@ -4553,11 +4553,13 @@ impl StatAdj {
         let mut stats = Stats::one();
         let add = match self.context {
             StatContext::PoiseResilience(base) => {
-                let poise_res = combat::compute_poise_resilience(data.inventory, data.msm);
+                // `None` resilience means poise-invulnerable armour, which
+                // contributes no *scaling* term — same as the no-gear case.
+                let poise_res = data.derived.and_then(|d| d.poise_resilience);
                 poise_res.unwrap_or(0.0) / base.max(0.1)
             },
             StatContext::Stealth(base) => {
-                let stealth = combat::compute_stealth(data.inventory, data.msm);
+                let stealth = data.derived.map_or(0.0, |d| d.stealth);
                 stealth / base.max(0.1)
             },
         };

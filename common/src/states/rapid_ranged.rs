@@ -1,7 +1,6 @@
 use crate::{
-    combat,
     comp::{
-        Body, CharacterState, LightEmitter, Pos, ProjectileConstructor, StateUpdate,
+        Body, CharacterState, DerivedStats, LightEmitter, Pos, ProjectileConstructor, StateUpdate,
         character_state::OutputEvents,
     },
     event::{EnergyChangeEvent, LocalEvent, ShootEvent},
@@ -136,7 +135,9 @@ impl CharacterBehavior for Data {
                         .is_none_or(|max| self.projectiles_fired < max)
                 {
                     // Fire if input is pressed still
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     // Gets offsets
                     let (pos, direction): (Pos, Dir) =
                         if let Some(offset) = self.static_data.options.offset {

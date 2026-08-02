@@ -75,7 +75,9 @@ pub struct ReadData<'a> {
     alignments: ReadStorage<'a, Alignment>,
     physics_states: ReadStorage<'a, PhysicsState>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    /// The target's cached gear aggregates, read instead of re-walking
+    /// its loadout once per damage instance.
+    derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     groups: ReadStorage<'a, Group>,
     energies: ReadStorage<'a, Energy>,
     stats: ReadStorage<'a, Stats>,
@@ -606,7 +608,7 @@ fn dispatch_hit(
                         group: read_data.groups.get(entity),
                         energy: read_data.energies.get(entity),
                         combo: read_data.combos.get(entity),
-                        inventory: read_data.inventories.get(entity),
+                        derived: read_data.derived_stats.get(entity),
                         stats: read_data.stats.get(entity),
                         mass: read_data.masses.get(entity),
                         pos: read_data.positions.get(entity).map(|p| p.0),
@@ -618,7 +620,7 @@ fn dispatch_hit(
                 entity: target,
                 uid: target_uid,
                 inventory: read_data.inventories.get(target),
-                attuned: read_data.attuned_items.get(target),
+                derived: read_data.derived_stats.get(target),
                 stats: read_data.stats.get(target),
                 health: read_data.healths.get(target),
                 pos: target_pos,

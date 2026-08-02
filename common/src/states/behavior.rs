@@ -2,9 +2,9 @@ use crate::{
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, Alignment, AttunedItems, Beam, Body,
         Buffs, CharacterActivity, CharacterClass, CharacterState, Combo, ControlAction, Controller,
-        ControllerInputs, Density, Energy, Health, Immovable, InputAttr, InputKind, Inventory,
-        InventoryAction, Mass, Melee, Ori, PhysicsState, PickupItem, Pos, PreviousPhysCache, Scale,
-        SkillSet, Stance, StateUpdate, Stats, TriggerSlots, Vel,
+        ControllerInputs, Density, DerivedStats, Energy, Health, Immovable, InputAttr, InputKind,
+        Inventory, InventoryAction, Mass, Melee, Ori, PhysicsState, PickupItem, Pos,
+        PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats, TriggerSlots, Vel,
         body::parts::Heads,
         character_state::OutputEvents,
         item::{MaterialStatManifest, tool::AbilityMap},
@@ -165,6 +165,11 @@ pub struct JoinData<'a> {
     /// The wearer's attuned-item set, so unattuned gear grants no abilities
     /// (ENG-D2c). `None` is treated as "nothing attuned".
     pub attuned: Option<&'a AttunedItems>,
+    /// The wearer's cached gear/skill/body aggregates. `None` means the entity
+    /// has no `Inventory`, and every read site falls back to
+    /// [`DerivedStats::default()`] — exactly the no-inventory result of the
+    /// arithmetic this cache replaced.
+    pub derived: Option<&'a DerivedStats>,
     pub body: &'a Body,
     pub physics: &'a PhysicsState,
     pub melee_attack: Option<&'a Melee>,
@@ -223,6 +228,8 @@ pub struct JoinStruct<'a> {
     pub energy: FlaggedAccessMut<'a, &'a mut Energy, Energy>,
     pub inventory: Option<&'a Inventory>,
     pub attuned: Option<&'a AttunedItems>,
+    /// See [`JoinData::derived`].
+    pub derived: Option<&'a DerivedStats>,
     pub controller: &'a mut Controller,
     pub health: Option<&'a Health>,
     pub hardcore: bool,
@@ -280,6 +287,7 @@ impl<'a> JoinData<'a> {
             energy: &j.energy,
             inventory: j.inventory,
             attuned: j.attuned,
+            derived: j.derived,
             controller: j.controller,
             inputs: &j.controller.inputs,
             health: j.health,

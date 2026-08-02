@@ -45,6 +45,40 @@ pub mod trade_pricing;
 pub type InvSlot = Option<Item>;
 const DEFAULT_INVENTORY_SLOTS: usize = 36;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only tally of how many loadout walks this thread has started —
+    /// one per [`Inventory::equipped_items`] / [`Inventory::equipped_items_with_slot`]
+    /// call.
+    ///
+    /// Thread-local rather than a global, so the count is naturally isolated:
+    /// the test harness gives every `#[test]` its own thread, and a shared
+    /// counter would be raced by every other test walking a loadout in
+    /// parallel.
+    ///
+    /// It exists so a test can assert that a code path performs **zero** walks
+    /// — the property the `DerivedStats` cache is for. Compiled out entirely
+    /// outside `cfg(test)`: `note_loadout_walk` is an empty function there, so
+    /// there is no cost on any real path.
+    static LOADOUT_WALKS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_loadout_walk() { LOADOUT_WALKS.with(|walks| walks.set(walks.get() + 1)); }
+
+#[cfg(not(test))]
+#[inline(always)]
+fn note_loadout_walk() {}
+
+/// How many loadout walks this thread has performed since the last
+/// [`reset_loadout_walks`].
+#[cfg(test)]
+pub fn loadout_walks() -> usize { LOADOUT_WALKS.with(core::cell::Cell::get) }
+
+/// Zeroes this thread's loadout-walk tally.
+#[cfg(test)]
+pub fn reset_loadout_walks() { LOADOUT_WALKS.with(|walks| walks.set(0)); }
+
 /// NOTE: Do not add a PartialEq instance for Inventory; that's broken!
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Inventory {
@@ -862,9 +896,13 @@ impl Inventory {
         }
     }
 
-    pub fn equipped_items(&self) -> impl Iterator<Item = &Item> { self.loadout.items() }
+    pub fn equipped_items(&self) -> impl Iterator<Item = &Item> {
+        note_loadout_walk();
+        self.loadout.items()
+    }
 
     pub fn equipped_items_with_slot(&self) -> impl Iterator<Item = (EquipSlot, &Item)> {
+        note_loadout_walk();
         self.loadout.items_with_slot()
     }
 

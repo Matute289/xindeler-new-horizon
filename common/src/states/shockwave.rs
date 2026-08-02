@@ -1,10 +1,11 @@
 use crate::{
     combat::{
-        self, Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, Damage,
-        DamageKind, GroupTarget, Knockback,
+        Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, Damage, DamageKind,
+        GroupTarget, Knockback,
     },
     comp::{
-        CharacterState, StateUpdate, ability::Dodgeable, character_state::OutputEvents, shockwave,
+        CharacterState, DerivedStats, StateUpdate, ability::Dodgeable,
+        character_state::OutputEvents, shockwave,
     },
     event::{LocalEvent, ShockwaveEvent},
     outcome::Outcome,
@@ -225,7 +226,9 @@ impl Data {
         if let Some(effect) = &self.static_data.damage_effect {
             damage = damage.with_effect(effect.clone());
         }
-        let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+        let precision_mult = data
+            .derived
+            .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
         let attack = Attack::new(Some(self.static_data.ability_info))
             .with_damage(damage)
             .with_precision(

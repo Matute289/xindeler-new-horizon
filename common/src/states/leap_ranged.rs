@@ -1,8 +1,7 @@
 use crate::{
-    combat,
     comp::{
-        Body, CharacterState, LightEmitter, MeleeConstructor, Pos, ProjectileConstructor,
-        StateUpdate, character_state::OutputEvents,
+        Body, CharacterState, DerivedStats, LightEmitter, MeleeConstructor, Pos,
+        ProjectileConstructor, StateUpdate, character_state::OutputEvents,
     },
     event::ShootEvent,
     states::{
@@ -61,8 +60,9 @@ impl CharacterBehavior for Data {
                         && !self.melee_done
                         && frac > self.static_data.buildup_melee_timing
                     {
-                        let precision_mult =
-                            combat::compute_precision_mult(data.inventory, data.msm);
+                        let precision_mult = data
+                            .derived
+                            .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                         let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                         if let Some(melee) = &self.static_data.melee {
@@ -115,8 +115,9 @@ impl CharacterBehavior for Data {
                     });
 
                     if !self.ranged_done && frac > self.static_data.movement_ranged_timing {
-                        let precision_mult =
-                            combat::compute_precision_mult(data.inventory, data.msm);
+                        let precision_mult = data
+                            .derived
+                            .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
 
                         let (projectile, marker) =
                             self.static_data.projectile.clone().create_projectile(

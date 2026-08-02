@@ -2,8 +2,8 @@ use crate::{
     assets::{AssetExt, Ron},
     comp::{
         Alignment, AttunedItems, Body, Buffs, CasterGearFold, CharacterClass, CharacterState,
-        Combo, Energy, Group, Health, HealthChange, InputKind, Inventory, MagicSource, Mass, Ori,
-        Player, Poise, PoiseChange, SkillSet, Stats,
+        Combo, DerivedStats, Energy, Group, Health, HealthChange, InputKind, Inventory,
+        MagicSource, Mass, Ori, Player, Poise, PoiseChange, SkillSet, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
@@ -12,8 +12,7 @@ use crate::{
         class::ClassKind,
         inventory::{
             item::{
-                ItemDesc, ItemKind, MaterialStatManifest,
-                armor::Protection,
+                ItemKind, MaterialStatManifest,
                 tool::{self, Hands, Tool, ToolKind, WeaponRole},
             },
             slot::EquipSlot,
@@ -420,7 +419,11 @@ pub struct AttackerInfo<'a> {
     pub group: Option<&'a Group>,
     pub energy: Option<&'a Energy>,
     pub combo: Option<&'a Combo>,
-    pub inventory: Option<&'a Inventory>,
+    /// The attacker's cached gear/skill/body aggregates. `None` means the
+    /// entity has no `Inventory`, and every read site falls back to
+    /// [`DerivedStats::default()`] — which is exactly the no-inventory result
+    /// of the arithmetic this cache replaced.
+    pub derived: Option<&'a DerivedStats>,
     pub stats: Option<&'a Stats>,
     pub mass: Option<&'a Mass>,
     pub pos: Option<Vec3<f32>>,
@@ -435,10 +438,13 @@ pub struct AttackerInfo<'a> {
 pub struct TargetInfo<'a> {
     pub entity: EcsEntity,
     pub uid: Uid,
+    /// Still needed for the block/parry strength read, which is a shield
+    /// lookup rather than one of the cached aggregates.
     pub inventory: Option<&'a Inventory>,
-    /// The target's attuned-item set, so unattuned gear grants no defense
-    /// (ENG-D2c). `None` is treated as "nothing attuned".
-    pub attuned: Option<&'a AttunedItems>,
+    /// The target's cached gear/skill/body aggregates — see
+    /// [`AttackerInfo::derived`]. Attunement gating (ENG-D2c) is already
+    /// folded into them, so no separate attuned-item set is threaded here.
+    pub derived: Option<&'a DerivedStats>,
     pub stats: Option<&'a Stats>,
     pub health: Option<&'a Health>,
     pub pos: Vec3<f32>,
@@ -539,7 +545,6 @@ impl Attack {
         source: AttackSource,
         dir: Dir,
         damage: Damage,
-        msm: &MaterialStatManifest,
         time: Time,
         emitters: &mut (impl EmitExt<ParryHookEvent> + EmitExt<PoiseChangeEvent>),
         mut emit_outcome: impl FnMut(Outcome),
@@ -572,8 +577,7 @@ impl Attack {
 
                     let poise_change = Poise::apply_poise_reduction(
                         poise_cost,
-                        target.inventory,
-                        msm,
+                        target.derived,
                         target.char_state,
                         target.stats,
                     );
@@ -610,20 +614,14 @@ impl Attack {
         attacker: Option<&AttackerInfo>,
         target: &TargetInfo,
         damage: Damage,
-        msm: &MaterialStatManifest,
     ) -> f32 {
         if damage.value > 0.0 {
             let attacker_penetration = attacker
                 .and_then(|a| a.stats)
                 .map_or(0.0, |s| s.mitigations_penetration)
                 .clamp(0.0, 1.0);
-            let raw_damage_reduction = Damage::compute_damage_reduction(
-                Some(damage),
-                target.inventory,
-                target.attuned,
-                target.stats,
-                msm,
-            );
+            let raw_damage_reduction =
+                Damage::compute_damage_reduction(Some(damage), target.derived, target.stats);
 
             if raw_damage_reduction >= 1.0 {
                 raw_damage_reduction
@@ -697,10 +695,11 @@ impl Attack {
         rng: &mut rand::rngs::ThreadRng,
         damage_instance_offset: u64,
     ) -> bool {
-        // TODO: Maybe move this higher and pass it as argument into this function?
-        let msm = &MaterialStatManifest::load().read();
-        // BL-52 combat-resolution tuning — one cached read per attack (mirrors
-        // `msm` above), reused by the to-hit and crit rolls below.
+        // Combat-resolution tuning — one cached asset read per attack, reused
+        // by the to-hit and crit rolls below. The `MaterialStatManifest` this
+        // function used to load alongside it is gone: every gear-derived
+        // number it fed is now read off the attacker's/target's cache, which
+        // is where the manifest is consulted instead.
         let combat_tuning = &Ron::<CombatTuning>::load_expect("common.combat_tuning")
             .read()
             .0;
@@ -759,13 +758,11 @@ impl Attack {
             } else {
                 // BL-52 P5: physical evasion = class/level + buffs (on `Stats`)
                 // plus the gear contribution derived from armor weight/shield.
-                let armor_evasion = compute_armor_evasion(
-                    target.inventory,
-                    target.attuned,
-                    target.stats,
-                    msm,
-                    combat_tuning,
-                );
+                // No cache means no `Inventory`, i.e. no gear to evade with —
+                // the same `0.0` the no-inventory early return used to give.
+                let armor_evasion = target.derived.map_or(0.0, |derived| {
+                    compute_armor_evasion(derived, target.stats, combat_tuning)
+                });
                 (
                     attacker.and_then(|a| a.stats).map_or(0.0, |s| s.accuracy),
                     target.stats.map_or(0.0, |s| s.evasion) + armor_evasion,
@@ -965,7 +962,7 @@ impl Attack {
             is_applied = true;
 
             let damage_reduction =
-                Attack::compute_damage_reduction(attacker.as_ref(), target, damage.damage, msm);
+                Attack::compute_damage_reduction(attacker.as_ref(), target, damage.damage);
 
             // BL-52 P3: AoE damage is mitigated passively by the target's typed
             // elemental resistance — the AoE counterpart to single-target evasion
@@ -996,7 +993,6 @@ impl Attack {
                 attack_source,
                 dir,
                 damage.damage,
-                msm,
                 time,
                 emitters,
                 &mut emit_outcome,
@@ -1072,8 +1068,7 @@ impl Attack {
                             * proficiency_mult;
                         let change = -Poise::apply_poise_reduction(
                             poise,
-                            target.inventory,
-                            msm,
+                            target.derived,
                             target.char_state,
                             target.stats,
                         );
@@ -1149,7 +1144,7 @@ impl Attack {
                                 emitters.emit(EnergyChangeEvent {
                                     entity: attacker.entity,
                                     change: *ec
-                                        * compute_energy_reward_mod(attacker.inventory, msm)
+                                        * attacker.derived.map_or(1.0, |d| d.energy_reward_mod)
                                         * strength_modifier
                                         * attacker.stats.map_or(1.0, |s| s.energy_reward_modifier)
                                         * attacked_modifiers.energy_reward,
@@ -1194,8 +1189,7 @@ impl Attack {
                         CombatEffect::Poise(p) => {
                             let change = -Poise::apply_poise_reduction(
                                 *p,
-                                target.inventory,
-                                msm,
+                                target.derived,
                                 target.char_state,
                                 target.stats,
                             ) * strength_modifier
@@ -1426,7 +1420,7 @@ impl Attack {
                             emitters.emit(EnergyChangeEvent {
                                 entity: attacker.entity,
                                 change: ec
-                                    * compute_energy_reward_mod(attacker.inventory, msm)
+                                    * attacker.derived.map_or(1.0, |d| d.energy_reward_mod)
                                     * strength_modifier
                                     * attacker.stats.map_or(1.0, |s| s.energy_reward_modifier)
                                     * attacked_modifiers.energy_reward,
@@ -1471,8 +1465,7 @@ impl Attack {
                     CombatEffect::Poise(p) => {
                         let change = -Poise::apply_poise_reduction(
                             *p,
-                            target.inventory,
-                            msm,
+                            target.derived,
                             target.char_state,
                             target.stats,
                         ) * strength_modifier
@@ -2662,26 +2655,30 @@ pub struct Damage {
 }
 
 impl Damage {
-    /// Returns the total damage reduction provided by all equipped items
+    /// Returns the total damage reduction provided by all equipped items.
+    ///
+    /// Reads the target's cached armour protection rather than walking its
+    /// loadout: `derived: None` means the entity has no `Inventory`, which is
+    /// `Some(0.0)` — never invincible — exactly as
+    /// [`DerivedStats::default()`] records.
     pub fn compute_damage_reduction(
         damage: Option<Self>,
-        inventory: Option<&Inventory>,
-        attuned: Option<&AttunedItems>,
+        derived: Option<&DerivedStats>,
         stats: Option<&Stats>,
-        msm: &MaterialStatManifest,
     ) -> f32 {
-        // BL-36: an antimagic field makes attuned magic-item effects mundane, so
-        // attuned protection is dropped while the target has `disable_magic`.
-        // This covers every damage path (all callers route here); the standalone
-        // `compute_protection` invincibility check is a rare attuned combo left to
-        // a follow-up. The 3rd attunement-gated path (item-granted abilities) is
-        // already covered — those are magic, so the cast gate blocks them.
-        let attuned = if stats.is_some_and(|s| s.disable_magic) {
-            None
-        } else {
-            attuned
-        };
-        let protection = compute_protection(inventory, attuned, msm);
+        // An antimagic field makes attuned magic-item effects mundane, so the
+        // attunement-blind protection is selected while the target has
+        // `disable_magic` — a pick between the two cached variants rather than
+        // a second loadout walk. This covers every damage path (all callers
+        // route here). The 3rd attunement-gated path (item-granted abilities)
+        // is already covered — those are magic, so the cast gate blocks them.
+        let protection = derived.map_or(Some(0.0), |derived| {
+            if stats.is_some_and(|s| s.disable_magic) {
+                derived.protection_unattuned
+            } else {
+                derived.protection
+            }
+        });
 
         let penetration = if let Some(damage) = damage {
             if let DamageKind::Piercing = damage.kind {
@@ -3004,44 +3001,6 @@ pub fn get_weapon_kinds(inv: &Inventory) -> (Option<ToolKind>, Option<ToolKind>)
     )
 }
 
-// TODO: Either remove msm or use it as argument in fn kind
-fn weapon_rating<T: ItemDesc>(item: &T, _msm: &MaterialStatManifest) -> f32 {
-    const POWER_WEIGHT: f32 = 2.0;
-    const SPEED_WEIGHT: f32 = 3.0;
-    const RANGE_WEIGHT: f32 = 0.8;
-    const EFFECT_WEIGHT: f32 = 1.5;
-    const EQUIP_TIME_WEIGHT: f32 = 0.0;
-    const ENERGY_EFFICIENCY_WEIGHT: f32 = 1.5;
-    const BUFF_STRENGTH_WEIGHT: f32 = 1.5;
-
-    let rating = if let ItemKind::Tool(tool) = &*item.kind() {
-        let stats = tool.stats(item.stats_durability_multiplier());
-
-        // TODO: Look into changing the 0.5 to reflect armor later maybe?
-        // Since it is only for weapon though, it probably makes sense to leave
-        // independent for now
-
-        let power_rating = stats.power;
-        let speed_rating = stats.speed - 1.0;
-        let range_rating = stats.range - 1.0;
-        let effect_rating = stats.effect_power - 1.0;
-        let equip_time_rating = 0.5 - stats.equip_time_secs;
-        let energy_efficiency_rating = stats.energy_efficiency - 1.0;
-        let buff_strength_rating = stats.buff_strength - 1.0;
-
-        power_rating * POWER_WEIGHT
-            + speed_rating * SPEED_WEIGHT
-            + range_rating * RANGE_WEIGHT
-            + effect_rating * EFFECT_WEIGHT
-            + equip_time_rating * EQUIP_TIME_WEIGHT
-            + energy_efficiency_rating * ENERGY_EFFICIENCY_WEIGHT
-            + buff_strength_rating * BUFF_STRENGTH_WEIGHT
-    } else {
-        0.0
-    };
-    rating.max(0.0)
-}
-
 /// The `SkillGroupKind` whose earned points should count toward a given
 /// equipped tool. Usually just `Weapon(tool.kind)`, but a martial-role Staff
 /// has its own tree (`WeaponRoled`) kept deliberately separate from the
@@ -3059,23 +3018,6 @@ pub fn skill_group_for_weapon(tool: &Tool) -> SkillGroupKind {
     } else {
         SkillGroupKind::Weapon(tool.kind)
     }
-}
-
-fn weapon_skills(inventory: &Inventory, skill_set: &SkillSet) -> f32 {
-    let equipped_tool_group = |slot| {
-        inventory.equipped(slot).and_then(|item| {
-            if let ItemKind::Tool(tool) = &*item.kind() {
-                Some(skill_group_for_weapon(tool))
-            } else {
-                None
-            }
-        })
-    };
-    let mainhand_skills = equipped_tool_group(EquipSlot::ActiveMainhand)
-        .map_or(0.0, |group| skill_set.earned_sp(group) as f32);
-    let offhand_skills = equipped_tool_group(EquipSlot::ActiveOffhand)
-        .map_or(0.0, |group| skill_set.earned_sp(group) as f32);
-    mainhand_skills.max(offhand_skills)
 }
 
 #[cfg(test)]
@@ -3139,22 +3081,13 @@ mod skill_group_for_weapon_tests {
     }
 }
 
-fn get_weapon_rating(inventory: &Inventory, msm: &MaterialStatManifest) -> f32 {
-    let mainhand_rating = if let Some(item) = inventory.equipped(EquipSlot::ActiveMainhand) {
-        weapon_rating(item, msm)
-    } else {
-        0.0
-    };
-
-    let offhand_rating = if let Some(item) = inventory.equipped(EquipSlot::ActiveOffhand) {
-        weapon_rating(item, msm)
-    } else {
-        0.0
-    };
-
-    mainhand_rating.max(offhand_rating)
-}
-
+/// The finished combat rating for an entity whose cache is not at hand.
+///
+/// The formula itself lives in [`DerivedStats::compute`], which folds it once
+/// per gear/skill/body change; this is the on-demand shape for the remaining
+/// call sites that still hold the raw components rather than the cached
+/// component. It is deliberately a thin delegation — there is exactly one
+/// implementation of the rating, and it is the cached one.
 pub fn combat_rating(
     inventory: &Inventory,
     health: &Health,
@@ -3164,121 +3097,20 @@ pub fn combat_rating(
     body: Body,
     msm: &MaterialStatManifest,
 ) -> f32 {
-    const WEAPON_WEIGHT: f32 = 1.0;
-    const HEALTH_WEIGHT: f32 = 1.5;
-    const ENERGY_WEIGHT: f32 = 0.5;
-    const SKILLS_WEIGHT: f32 = 1.0;
-    const POISE_WEIGHT: f32 = 0.5;
-    const PRECISION_WEIGHT: f32 = 0.5;
-    // Normalized with a standard max health of 100
-    let health_rating = health.base_max()
-        / 100.0
-        / (1.0 - Damage::compute_damage_reduction(None, Some(inventory), None, None, msm))
-            .max(0.00001);
-
-    // Normalized with a standard max energy of 100 and energy reward multiplier of
-    // x1
-    let energy_rating = (energy.base_max() + compute_max_energy_mod(Some(inventory), None, msm))
-        / 100.0
-        * compute_energy_reward_mod(Some(inventory), msm);
-
-    // Normalized with a standard max poise of 100
-    let poise_rating = poise.base_max()
-        / 100.0
-        / (1.0 - Poise::compute_poise_damage_reduction(Some(inventory), msm, None, None))
-            .max(0.00001);
-
-    // Normalized with a standard precision multiplier of 1.2
-    let precision_rating = compute_precision_mult(Some(inventory), msm) / 1.2;
-
-    // Assumes a standard person has earned 20 skill points in the general skill
-    // tree and 10 skill points for the weapon skill tree
-    let skills_rating = (skill_set.earned_sp(SkillGroupKind::General) as f32 / 20.0
-        + weapon_skills(inventory, skill_set) / 10.0)
-        / 2.0;
-
-    let weapon_rating = get_weapon_rating(inventory, msm);
-
-    let combined_rating = (health_rating * HEALTH_WEIGHT
-        + energy_rating * ENERGY_WEIGHT
-        + poise_rating * POISE_WEIGHT
-        + precision_rating * PRECISION_WEIGHT
-        + skills_rating * SKILLS_WEIGHT
-        + weapon_rating * WEAPON_WEIGHT)
-        / (HEALTH_WEIGHT
-            + ENERGY_WEIGHT
-            + POISE_WEIGHT
-            + PRECISION_WEIGHT
-            + SKILLS_WEIGHT
-            + WEAPON_WEIGHT);
-
-    // Body multiplier meant to account for an enemy being harder than equipment and
-    // skills would account for. It should only not be 1.0 for non-humanoids
-    combined_rating * body.combat_multiplier()
-}
-
-pub fn compute_precision_mult(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    // Starts with a value of 0.1 when summing the stats from each armor piece, and
-    // defaults to a value of 0.1 if no inventory is equipped. Precision multiplier
-    // cannot go below 1
-    1.0 + inventory
-        .map_or(0.1, |inv| {
-            inv.equipped_items()
-                .filter_map(|item| {
-                    if let ItemKind::Armor(armor) = &*item.kind() {
-                        armor
-                            .stats(msm, item.stats_durability_multiplier())
-                            .precision_power
-                    } else {
-                        None
-                    }
-                })
-                .fold(0.1, |a, b| a + b)
-        })
-        .max(0.0)
-}
-
-/// Computes the energy reward modifier from worn armor
-pub fn compute_energy_reward_mod(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    // Starts with a value of 1.0 when summing the stats from each armor piece, and
-    // defaults to a value of 1.0 if no inventory is present
-    inventory.map_or(1.0, |inv| {
-        inv.equipped_items()
-            .filter_map(|item| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .energy_reward
-                } else {
-                    None
-                }
-            })
-            .fold(1.0, |a, b| a + b)
-    })
-}
-
-/// Computes the additive modifier that should be applied to max energy from the
-/// currently equipped items
-pub fn compute_max_energy_mod(
-    inventory: Option<&Inventory>,
-    attuned: Option<&AttunedItems>,
-    msm: &MaterialStatManifest,
-) -> f32 {
-    // Defaults to a value of 0 if no inventory is present
-    inventory.map_or(0.0, |inv| {
-        inv.equipped_items_with_slot()
-            .filter(|(slot, item)| item_effects_active(*slot, item.requires_attunement(), attuned))
-            .filter_map(|(_, item)| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .energy_max
-                } else {
-                    None
-                }
-            })
-            .sum()
-    })
+    DerivedStats::compute(
+        Some(inventory),
+        // Attunement-blind on purpose: the rating is a "what is this entity
+        // worth" number, not a live defensive read, so it must not move when
+        // an item is attuned or unattuned.
+        None,
+        Some(skill_set),
+        Some(body),
+        Some(health.base_max()),
+        Some(energy.base_max()),
+        Some(poise.base_max()),
+        msm,
+    )
+    .combat_rating
 }
 
 /// The gear → `comp::Stats` fold for the caster role. Every equipped `Tool`
@@ -3369,13 +3201,12 @@ pub fn apply_caster_gear_fold(stats: &mut Stats, fold: &CasterGearFold) {
 /// Returns a value to be included as a multiplicative factor in perception
 /// distance checks.
 pub fn perception_dist_multiplier_from_stealth(
-    inventory: Option<&Inventory>,
+    derived: Option<&DerivedStats>,
     character_state: Option<&CharacterState>,
-    msm: &MaterialStatManifest,
 ) -> f32 {
     const SNEAK_MULTIPLIER: f32 = 0.7;
 
-    let item_stealth_multiplier = stealth_multiplier_from_items(inventory, msm);
+    let item_stealth_multiplier = stealth_multiplier(derived.map_or(0.0, |d| d.stealth));
     let is_sneaking = character_state.is_some_and(|state| state.is_stealthy());
 
     let multiplier = item_stealth_multiplier * if is_sneaking { SNEAK_MULTIPLIER } else { 1.0 };
@@ -3383,127 +3214,45 @@ pub fn perception_dist_multiplier_from_stealth(
     multiplier.clamp(0.0, 1.0)
 }
 
-pub fn compute_stealth(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    inventory.map_or(0.0, |inv| {
-        inv.equipped_items()
-            .filter_map(|item| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor.stats(msm, item.stats_durability_multiplier()).stealth
-                } else {
-                    None
-                }
-            })
-            .sum()
-    })
-}
-
-pub fn stealth_multiplier_from_items(
-    inventory: Option<&Inventory>,
-    msm: &MaterialStatManifest,
-) -> f32 {
-    let stealth_sum = compute_stealth(inventory, msm);
-
-    (1.0 / (1.0 + stealth_sum)).clamp(0.0, 1.0)
-}
-
-/// Computes the total protection provided from armor. Is used to determine the
-/// damage reduction applied to damage received by an entity None indicates that
-/// the armor equipped makes the entity invulnerable
-pub fn compute_protection(
-    inventory: Option<&Inventory>,
-    attuned: Option<&AttunedItems>,
-    msm: &MaterialStatManifest,
-) -> Option<f32> {
-    inventory.map_or(Some(0.0), |inv| {
-        inv.equipped_items_with_slot()
-            .filter(|(slot, item)| item_effects_active(*slot, item.requires_attunement(), attuned))
-            .filter_map(|(_, item)| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .protection
-                } else {
-                    None
-                }
-            })
-            .map(|protection| match protection {
-                Protection::Normal(protection) => Some(protection),
-                Protection::Invincible => None,
-            })
-            .sum::<Option<f32>>()
-    })
-}
+/// Turns an entity's summed armour stealth stat into the multiplicative factor
+/// applied to perception distances. `0.0` (the no-gear sum) is the identity.
+pub fn stealth_multiplier(stealth_sum: f32) -> f32 { (1.0 / (1.0 + stealth_sum)).clamp(0.0, 1.0) }
 
 /// Combat resolution (BL-52 P5): the physical evasion contributed by worn gear.
 /// Weight is **derived from total armor protection** (Matías 2026-06-25):
 /// heavier (more protective) armor lowers evasion, an unarmored entity gets the
 /// `gear_evasion_cap`. A shield adds a flat penalty (it pays off via block, not
 /// dodge). Result is clamped to `[gear_evasion_floor, gear_evasion_cap]`.
-/// Computed at attack time (like
-/// `compute_protection`/`compute_precision_mult`), and applied only to the
-/// **physical** to-hit roll — magic uses `magic_evasion`.
+/// Read from the target's cached gear aggregates (protection and weapon
+/// kinds), and applied only to the **physical** to-hit roll — magic uses
+/// `magic_evasion`. Callers with no cache (an entity with no `Inventory`) skip
+/// this entirely and contribute `0.0`.
 pub fn compute_armor_evasion(
-    inventory: Option<&Inventory>,
-    attuned: Option<&AttunedItems>,
+    derived: &DerivedStats,
     stats: Option<&Stats>,
-    msm: &MaterialStatManifest,
     tuning: &CombatTuning,
 ) -> f32 {
-    let Some(inventory) = inventory else {
-        return 0.0;
-    };
-    // BL-36: under an antimagic field attuned protection is mundane, so it counts
-    // toward neither DR (`compute_damage_reduction`) nor weight/evasion — keeps an
-    // attuned item's two defense layers coherent.
-    // TODO(perf): `compute_damage_reduction` also scans the target's gear (per
-    // damage instance); compute protection once per attack and thread it to both.
-    let attuned = if stats.is_some_and(|s| s.disable_magic) {
-        None
+    // Under an antimagic field attuned protection is mundane, so it counts
+    // toward neither DR (`compute_damage_reduction`) nor weight/evasion — keeps
+    // an attuned item's two defense layers coherent. Both layers now read the
+    // same cached pair, so the target's gear is walked once per gear change
+    // instead of once per damage instance.
+    let protection = if stats.is_some_and(|s| s.disable_magic) {
+        derived.protection_unattuned
     } else {
-        attuned
-    };
+        derived.protection
+    }
     // Invincible armor (admin) reads as infinitely heavy → floored evasion.
-    let protection = compute_protection(Some(inventory), attuned, msm).unwrap_or(f32::INFINITY);
+    .unwrap_or(f32::INFINITY);
     let from_protection =
         tuning.gear_evasion_cap - protection * tuning.armor_evasion_per_protection;
-    let (mainhand, offhand) = get_weapon_kinds(inventory);
+    let (mainhand, offhand) = derived.weapon_kinds;
     let shield = if mainhand == Some(ToolKind::Shield) || offhand == Some(ToolKind::Shield) {
         tuning.shield_evasion_penalty
     } else {
         0.0
     };
     (from_protection - shield).clamp(tuning.gear_evasion_floor, tuning.gear_evasion_cap)
-}
-
-/// Computes the total resilience provided from armor. Is used to determine the
-/// reduction applied to poise damage received by an entity. None indicates that
-/// the armor equipped makes the entity invulnerable to poise damage.
-// NOTE (ENG-D2c): poise resilience is intentionally NOT attunement-gated in v1.
-// It's a secondary (stagger) defense and gating it would ripple through
-// `Poise::compute_poise_damage_reduction` → `apply_poise_reduction` and all
-// their callers. HP-damage protection (`compute_protection`), max-energy and
-// weapon abilities ARE gated; poise gating is a possible follow-up.
-pub fn compute_poise_resilience(
-    inventory: Option<&Inventory>,
-    msm: &MaterialStatManifest,
-) -> Option<f32> {
-    inventory.map_or(Some(0.0), |inv| {
-        inv.equipped_items()
-            .filter_map(|item| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .poise_resilience
-                } else {
-                    None
-                }
-            })
-            .map(|protection| match protection {
-                Protection::Normal(protection) => Some(protection),
-                Protection::Invincible => None,
-            })
-            .sum::<Option<f32>>()
-    })
 }
 
 /// Used to compute the precision multiplier achieved by flanking a target
@@ -5546,5 +5295,113 @@ mod gear_caster_stats_tests {
         // source-keyed item boosts that source specifically, not every
         // magic-source spell.
         assert_eq!(stats.spell_power, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod attack_loadout_walk_tests {
+    use super::{
+        Body, CombatTuning, Damage, DamageKind, DerivedStats, Inventory, Poise,
+        compute_armor_evasion,
+    };
+    use crate::{
+        comp::{
+            Energy, Health, humanoid,
+            inventory::{
+                item::{
+                    Item, ItemKind,
+                    armor::{self, Armor, ArmorKind, Protection},
+                },
+                loadout_builder::LoadoutBuilder,
+                loadout_walks, reset_loadout_walks,
+            },
+        },
+        skillset_builder::SkillSetBuilder,
+    };
+
+    fn armoured_inventory() -> Inventory {
+        Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty()
+                .chest(Some(Item::create_test_item_from_kind(ItemKind::Armor(
+                    Armor::new(
+                        ArmorKind::Chest,
+                        armor::StatsSource::Direct(armor::Stats {
+                            protection: Some(Protection::Normal(12.5)),
+                            poise_resilience: Some(Protection::Normal(7.25)),
+                            energy_max: Some(13.0),
+                            energy_reward: Some(0.35),
+                            precision_power: Some(0.17),
+                            stealth: Some(0.9),
+                            ground_contact: Default::default(),
+                        }),
+                    ),
+                ))))
+                .build(),
+        )
+    }
+
+    /// Resolving a single-target attack against a geared target must walk that
+    /// target's loadout **zero** times: every gear-derived number the
+    /// resolution path needs (armour protection for damage reduction, armour
+    /// weight and shield for evasion, armour resilience for poise, the
+    /// precision multiplier) is read off `DerivedStats`, which was folded once
+    /// when the gear last changed.
+    ///
+    /// Before the cache these were three independent loadout walks per damage
+    /// instance — the double walk the evasion path used to call out explicitly
+    /// in a perf TODO, plus the poise one.
+    #[test]
+    fn single_attack_reads_target_gear_once() {
+        let inventory = armoured_inventory();
+        let body = Body::Humanoid(humanoid::Body::random());
+        let skill_set = SkillSetBuilder::default().build();
+        let msm = super::MaterialStatManifest::load().cloned();
+        let tuning = CombatTuning::default();
+
+        // Building the cache is where the loadout is walked -- the "once" in
+        // the name. It happens on gear change, not per attack.
+        reset_loadout_walks();
+        let derived = DerivedStats::compute(
+            Some(&inventory),
+            None,
+            Some(&skill_set),
+            Some(body),
+            Some(Health::new(body).base_max()),
+            Some(Energy::new(body).base_max()),
+            Some(Poise::new(body).base_max()),
+            &msm,
+        );
+        let walks_to_build = loadout_walks();
+        assert!(
+            walks_to_build >= 3,
+            "the rebuild is where the gear is read: expected at least the three walks the \
+             resolution path used to do itself, got {walks_to_build}"
+        );
+
+        // Now resolve an attack against that cached target. Nothing here may
+        // touch the loadout again.
+        reset_loadout_walks();
+
+        let damage = Damage {
+            kind: DamageKind::Slashing,
+            value: 40.0,
+        };
+        let damage_reduction = Damage::compute_damage_reduction(Some(damage), Some(&derived), None);
+        let armor_evasion = compute_armor_evasion(&derived, None, &tuning);
+        let poise_damage = Poise::apply_poise_reduction(25.0, Some(&derived), None, None);
+        let precision_mult = derived.precision_mult;
+
+        assert_eq!(
+            loadout_walks(),
+            0,
+            "resolving an attack must read the cache, never the loadout"
+        );
+
+        // ...and it must still be reading real numbers, not silently
+        // defaulting: an armoured target mitigates, evades and resists.
+        assert!(damage_reduction > 0.0);
+        assert!(armor_evasion < tuning.gear_evasion_cap);
+        assert!(poise_damage < 25.0);
+        assert!(precision_mult > DerivedStats::DEFAULT_PRECISION_MULT);
     }
 }

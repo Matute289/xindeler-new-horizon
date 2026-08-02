@@ -9,10 +9,10 @@ use common::{
     combat::CombatTuning,
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, AttunedItems, Beam, Body, Buffs,
-        CharacterActivity, CharacterState, Combo, Controller, Density, Energy, Hardcore, Health,
-        Immovable, Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState, PickupItem, Poise,
-        Pos, PreviousPhysCache, Scale, SkillSet, SlotState, Stance, StateUpdate, Stats,
-        TriggerSlots, Vel,
+        CharacterActivity, CharacterState, Combo, Controller, Density, DerivedStats, Energy,
+        Hardcore, Health, Immovable, Inventory, InventoryManip, Mass, Melee, Ori, PhysicsState,
+        PickupItem, Poise, Pos, PreviousPhysCache, Scale, SkillSet, SlotState, Stance, StateUpdate,
+        Stats, TriggerSlots, Vel,
         ability::{Ability, AuxiliaryAbility, SpecifiedAbility},
         character_state::{CharacterStateEvents, OutputEvents},
         controller::{ControlAction, InputKind},
@@ -73,6 +73,10 @@ pub struct ReadData<'a> {
     terrain: ReadExpect<'a, TerrainGrid>,
     inventories: ReadStorage<'a, Inventory>,
     attuned_items: ReadStorage<'a, AttunedItems>,
+    /// The gear/skill/body aggregates every `CharacterState` reads instead of
+    /// re-walking the loadout (precision multiplier, poise resilience,
+    /// stealth). Rebuilt only when the gear actually changed.
+    derived_stats: ReadStorage<'a, DerivedStats>,
     stances: ReadStorage<'a, Stance>,
     prev_phys_caches: ReadStorage<'a, PreviousPhysCache>,
     buffs: ReadStorage<'a, Buffs>,
@@ -286,6 +290,7 @@ impl<'a> System<'a> for Sys {
                 energy,
                 inventory,
                 attuned: read_data.attuned_items.get(entity),
+                derived: read_data.derived_stats.get(entity),
                 controller,
                 health,
                 hardcore: read_data.hardcores.get(entity).is_some(),

@@ -1,7 +1,6 @@
 use crate::{
-    combat,
     comp::{
-        CharacterState, MeleeConstructor, StateUpdate, character_state::OutputEvents,
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, character_state::OutputEvents,
         melee::CustomCombo,
     },
     event::LocalEvent,
@@ -92,8 +91,9 @@ impl CharacterBehavior for Data {
                             c.timer = tick_attack_or_default(data, self.timer, None);
                         }
                     } else {
-                        let precision_mult =
-                            combat::compute_precision_mult(data.inventory, data.msm);
+                        let precision_mult = data
+                            .derived
+                            .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                         let tool_stats = get_tool_stats(data, self.static_data.ability_info);
                         data.updater.insert(
                             data.entity,
@@ -167,7 +167,9 @@ impl CharacterBehavior for Data {
                         c.exhausted = true;
                     }
 
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let tool_stats = get_tool_stats(data, self.static_data.ability_info);
                     let custom_combo = CustomCombo {
                         base: self
