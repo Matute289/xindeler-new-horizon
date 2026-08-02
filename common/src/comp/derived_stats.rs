@@ -89,6 +89,14 @@ pub struct DerivedStats {
     /// `Health`/`Energy`/`Poise` inputs are `base_max()` reads, which are
     /// fixed for an entity's lifetime.
     pub combat_rating: f32,
+
+    /// Whether at least one currently-equipped item declares an
+    /// [`crate::comp::item_condition::ItemCondition`].
+    /// `common/systems/src/buff.rs` reads this instead of scanning
+    /// `equipped_items()` itself every tick — the scan only ever needs to
+    /// happen again when `Inventory` changes, which is exactly this cache's
+    /// existing invalidation trigger.
+    pub has_item_condition: bool,
 }
 
 impl DerivedStats {
@@ -131,6 +139,7 @@ impl Default for DerivedStats {
             weapon_skill_groups: (None, None),
             caster: CasterGearFold::default(),
             combat_rating: 0.0,
+            has_item_condition: false,
         }
     }
 }
@@ -177,6 +186,7 @@ impl DerivedStats {
         let weapon_kinds = inventory.map_or((None, None), weapon_kinds_from);
         let weapon_skill_groups = inventory.map_or((None, None), weapon_skill_groups_from);
         let caster = caster_fold_from(inventory, attuned);
+        let has_item_condition = has_item_condition_from(inventory);
 
         // `combat_rating` is deliberately attunement-BLIND: `combat_rating`
         // passes `None` for `attuned` at every internal call site, so it reads
@@ -227,6 +237,7 @@ impl DerivedStats {
             weapon_skill_groups,
             caster,
             combat_rating,
+            has_item_condition,
         }
     }
 }
@@ -466,6 +477,13 @@ fn weapon_rating_from(inventory: &Inventory, _msm: &MaterialStatManifest) -> f32
     };
 
     mainhand_rating.max(offhand_rating)
+}
+
+/// Whether at least one equipped item declares an `ItemCondition` — mirrors
+/// exactly the short-circuit `common/systems/src/buff.rs` used to run inline
+/// every tick before this was cached.
+fn has_item_condition_from(inventory: Option<&Inventory>) -> bool {
+    inventory.is_some_and(|inv| inv.equipped_items().any(|item| item.condition().is_some()))
 }
 
 /// The caster-role gear fold, accumulated onto a fresh
@@ -914,6 +932,7 @@ mod tests {
         assert_eq!(d.weapon_kinds, (None, None));
         assert_eq!(d.weapon_skill_groups, (None, None));
         assert_eq!(d.combat_rating, 0.0);
+        assert!(!d.has_item_condition);
 
         // The two easy-to-get-wrong ones, pinned explicitly: `None` would mean
         // *invincible*, and a `precision_mult` of `1.0` would be a silent nerf
@@ -1089,6 +1108,49 @@ mod tests {
         assert_eq!(derived.protection, None);
         assert_eq!(derived.protection_unattuned, None);
         assert_eq!(derived.poise_resilience, None);
+    }
+
+    // -----------------------------------------------------------------
+    // `has_item_condition` — the flag `buff::Sys` reads instead of scanning
+    // `equipped_items()` itself every tick.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn no_inventory_has_no_item_condition() {
+        assert!(!compute_for(None, None).has_item_condition);
+    }
+
+    #[test]
+    fn a_geared_but_conditionless_inventory_has_no_item_condition() {
+        let inv = geared_inventory();
+        assert!(!compute_for(Some(&inv), None).has_item_condition);
+    }
+
+    #[test]
+    fn an_item_with_a_condition_sets_the_flag() {
+        use crate::comp::{buff::BuffKind, ethos::Moral, item_condition::ConditionPredicate};
+
+        let mut item_def = ItemDef::create_test_itemdef_from_kind(chest_armor(armor_stats()));
+        item_def.condition = Some(crate::comp::item_condition::ItemCondition {
+            predicate: ConditionPredicate::MoralAtLeast(Moral::Good),
+            when_met: vec![BuffKind::Regeneration],
+            when_unmet: vec![],
+        });
+        let item = Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(item_def)),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &MaterialStatManifest::load().read(),
+        );
+        let inv =
+            Inventory::with_loadout_humanoid(LoadoutBuilder::empty().chest(Some(item)).build());
+
+        assert!(compute_for(Some(&inv), None).has_item_condition);
+
+        // Unequipping it must clear the flag on the next rebuild, same as
+        // every other gear-derived field.
+        let empty = empty_inventory();
+        assert!(!compute_for(Some(&empty), None).has_item_condition);
     }
 
     // -----------------------------------------------------------------
