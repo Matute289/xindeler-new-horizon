@@ -6,6 +6,7 @@ mod beam;
 mod buff;
 pub mod character_behavior;
 pub mod controller;
+mod derived_stats;
 mod interpolation;
 pub mod melee;
 mod mount;
@@ -29,8 +30,14 @@ pub fn add_local_systems(dispatch_builder: &mut DispatcherBuilder) {
     dispatch::<mount::Sys>(dispatch_builder, &[]);
     dispatch::<controller::Sys>(dispatch_builder, &[&mount::Sys::sys_name()]);
     dispatch::<character_behavior::Sys>(dispatch_builder, &[&controller::Sys::sys_name()]);
-    dispatch::<buff::Sys>(dispatch_builder, &[]);
-    dispatch::<stats::Sys>(dispatch_builder, &[&buff::Sys::sys_name()]);
+    // Rebuilds the `DerivedStats` cache before its two per-tick consumers read
+    // it, so a gear/skill/body change lands on the same tick it happened.
+    dispatch::<derived_stats::Sys>(dispatch_builder, &[]);
+    dispatch::<buff::Sys>(dispatch_builder, &[&derived_stats::Sys::sys_name()]);
+    dispatch::<stats::Sys>(dispatch_builder, &[
+        &buff::Sys::sys_name(),
+        &derived_stats::Sys::sys_name(),
+    ]);
     dispatch::<phys::Sys>(dispatch_builder, &[
         &interpolation::Sys::sys_name(),
         &controller::Sys::sys_name(),

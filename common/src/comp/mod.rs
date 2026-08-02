@@ -17,6 +17,7 @@ pub mod combo;
 pub mod compass;
 pub mod controller;
 pub mod creature_type;
+pub mod derived_stats;
 pub mod detection;
 mod energy;
 pub mod ethos;
@@ -99,6 +100,7 @@ pub use self::{
         GiantSubtype, HumanoidSubtype, MonstrositySubtype, OozeSubtype, PlantSubtype,
         UndeadSubtype,
     },
+    derived_stats::{CasterGearFold, DerivedStats, DerivedStatsTrackers},
     detection::{
         ConcealedUnlessTrueSight, DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind,
         observer_pierces_concealment,
