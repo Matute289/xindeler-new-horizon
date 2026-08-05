@@ -42,6 +42,7 @@ mod inventory_manip;
 mod invite;
 mod mounting;
 mod player;
+mod remote_sense;
 mod trade;
 mod transcription;
 

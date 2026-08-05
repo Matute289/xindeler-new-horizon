@@ -41,6 +41,19 @@ event_emitters! {
     }
 }
 
+/// The honest range ceiling for any remote-sensing link: a caster with no
+/// `Presence` (and so no `entity_view_distance`) can never validate one
+/// unless the anchor shares its exact position. Shared by this system's
+/// per-tick re-validation and by the cast-time resolve handler
+/// (`server/src/events/remote_sense.rs`) so the two never drift apart into a
+/// second range constant.
+pub(crate) fn max_sense_range(presence: Option<&Presence>) -> f32 {
+    presence.map_or(0.0, |presence| {
+        presence.entity_view_distance.current() as f32
+            * TerrainChunkSize::RECT_SIZE.reduce_max() as f32
+    })
+}
+
 #[derive(Default)]
 pub struct Sys;
 
@@ -92,17 +105,11 @@ impl<'a> System<'a> for Sys {
                     .is_some_and(|b| b.contains(BuffKind::RemoteSensing))
                 && anchor_entity.is_some_and(|anchor_entity| {
                     positions.get(anchor_entity).is_some_and(|anchor_pos| {
-                        // A caster with no `Presence` component gets
-                        // `max_range == 0.0` and so can never validate
-                        // unless the anchor shares its exact position --
-                        // correct as long as only entities with a
+                        // Correct as long as only entities with a
                         // `Presence` (i.e. players) ever hold a
                         // `RemoteSense`; revisit this if a non-player
                         // caster is ever introduced.
-                        let max_range = presences.get(caster).map_or(0.0, |presence| {
-                            presence.entity_view_distance.current() as f32
-                                * TerrainChunkSize::RECT_SIZE.reduce_max() as f32
-                        });
+                        let max_range = max_sense_range(presences.get(caster));
                         anchor_pos.0.distance_squared(caster_pos.0) <= max_range * max_range
                     })
                 });

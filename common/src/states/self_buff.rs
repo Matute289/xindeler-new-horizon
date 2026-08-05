@@ -2,10 +2,12 @@ use crate::{
     combat::ScalingKind,
     comp::{
         CharacterState, StateUpdate,
-        buff::{Buff, BuffCategory, BuffChange, BuffData, BuffKind, BuffSource, DestInfo},
+        buff::{
+            Buff, BuffCategory, BuffChange, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData,
+        },
         character_state::OutputEvents,
     },
-    event::{BuffEvent, ComboChangeEvent, LocalEvent},
+    event::{BuffEvent, ComboChangeEvent, LocalEvent, ResolveRemoteSenseEvent},
     outcome::Outcome,
     states::{
         behavior::{CharacterBehavior, JoinData},
@@ -156,6 +158,38 @@ impl CharacterBehavior for Data {
                             entity: data.entity,
                             buff_change: BuffChange::Add(buff),
                         });
+
+                        // A remote-sensing buff declares the shape of its
+                        // link (anchor kind, free look, piloted) but
+                        // deliberately carries no target identity (see
+                        // `MiscBuffData::RemoteSense`'s doc comment) -- the
+                        // cast's target/position is only ever available here,
+                        // at cast time, so it must be forwarded now or it is
+                        // lost.
+                        if buff_desc.kind == BuffKind::RemoteSensing
+                            && let Some(MiscBuffData::RemoteSense {
+                                anchor_kind,
+                                free_look,
+                                piloted,
+                            }) = buff_data.misc_data
+                        {
+                            output_events.emit_server(ResolveRemoteSenseEvent {
+                                entity: data.entity,
+                                target_entity: self
+                                    .static_data
+                                    .ability_info
+                                    .input_attr
+                                    .and_then(|ia| ia.target_entity),
+                                target_pos: self
+                                    .static_data
+                                    .ability_info
+                                    .input_attr
+                                    .and_then(|ia| ia.select_pos),
+                                anchor_kind,
+                                free_look,
+                                piloted,
+                            });
+                        }
                     }
                     // Build up
                     if let CharacterState::SelfBuff(c) = &mut update.character {

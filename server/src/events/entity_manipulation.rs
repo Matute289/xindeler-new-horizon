@@ -51,9 +51,9 @@ use common::{
         EnergyChangeEvent, EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent,
         HelpDownedEvent, KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent,
         ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
-        RemoveLightEmitterEvent, RespawnEvent, SetAbilityCooldownEvent, ShootEvent, SoundEvent,
-        StartInteractionEvent, StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent,
-        TranscribeSpellEvent, TransformEvent, UpdateMapMarkerEvent,
+        RemoveLightEmitterEvent, ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent,
+        ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent, TeleportToEvent,
+        TeleportToPositionEvent, TranscribeSpellEvent, TransformEvent, UpdateMapMarkerEvent,
     },
     event_emitters,
     explosion::{ColorPreset, TerrainReplacementPreset},
@@ -147,6 +147,7 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<StartTeleportingEvent>(builder, &[]);
     event_dispatch::<RegrowHeadEvent>(builder, &[]);
     event_dispatch::<TranscribeSpellEvent>(builder, &[]);
+    event_dispatch::<ResolveRemoteSenseEvent>(builder, &[]);
 }
 
 event_emitters! {
