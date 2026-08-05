@@ -13,6 +13,7 @@ pub mod rope;
 pub mod shadow;
 pub mod skybox;
 pub mod sprite;
+pub mod ssao;
 pub mod terrain;
 pub mod trail;
 pub mod ui;

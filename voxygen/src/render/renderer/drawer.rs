@@ -530,6 +530,72 @@ impl<'frame> Drawer<'frame> {
         });
     }
 
+    /// To be ran between `first_pass` and `volumetric_pass`.
+    /// Does nothing if the ingame pipelines are not yet ready.
+    ///
+    /// The AO-generation shader currently always writes `1.0` (fully lit) and
+    /// the blur shader is a plain passthrough, so running this is a no-op for
+    /// every pixel a later pass reads -- nothing samples `tgt_ao` /
+    /// `tgt_ao_blur` yet. The two-pass structure (rather than a single
+    /// combined pass) is wired now so only the shader bodies need to change
+    /// once the AO math and depth-aware blur are implemented.
+    pub fn ssao_passes(&mut self) {
+        let Some(pipelines) = self.borrow.pipelines.all() else {
+            return;
+        };
+        let locals = &self.borrow.locals;
+        let views = &self.borrow.views;
+
+        {
+            let mut render_pass =
+                self.encoder
+                    .scoped_render_pass("ssao", wgpu::RenderPassDescriptor {
+                        label: Some("ssao pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &views.tgt_ao,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+            render_pass.set_pipeline(&pipelines.ssao.ssao);
+            render_pass.set_bind_group(0, &self.globals.bind_group, &[]);
+            render_pass.set_bind_group(1, &locals.ssao_bind.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut render_pass =
+                self.encoder
+                    .scoped_render_pass("ssao blur", wgpu::RenderPassDescriptor {
+                        label: Some("ssao blur pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &views.tgt_ao_blur,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+            render_pass.set_pipeline(&pipelines.ssao.blur);
+            render_pass.set_bind_group(0, &locals.ssao_blur_bind.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+    }
+
     /// Runs render passes with alpha premultiplication pipeline to complete any
     /// pending uploads.
     fn run_ui_premultiply_passes(&mut self) {
