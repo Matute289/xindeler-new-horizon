@@ -1,0 +1,30 @@
+// A screening ward woven over the caster so scrying and far-seeing magic
+// slide harmlessly past them. Self-only: the sheet's `range: Touch` has no
+// touch-a-willing-ally targeting mechanism to hook into for a SelfBuff-shaped
+// spell (no such mechanism exists anywhere in this compendium yet -- see
+// disguise_self.ron/seeming.ron's own Touch-range SelfBuff precedent), so
+// this wards the caster themselves, same narrowing every other Touch-range
+// SelfBuff spell in this compendium already makes.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(
+            kind: Nondetection,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(28800.0),
+            ),
+        ),
+    ],
+    energy_cost: 60,
+    enforced_limit: false,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Arcane),
+        // level 3 spell -> min_level 18, same level*6 convention seeming.ron
+        // documents (Bard/Ranger/Mage all list nondetection).
+        requirements: (min_level: Some(18)),
+    ),
+)

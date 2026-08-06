@@ -5956,6 +5956,15 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // already drawn) until dedicated aura-buff art ships with these
         // spells.
         BuffKind::PassWithoutTrace | BuffKind::Mooncloak => imgs.stealth_rating_ico,
+        // Anti-divination: reuse the same perception-themed icon
+        // RemoteSensing/TrueSight/SeeInvisible already reuse above -- these
+        // are the opposite pole of the same detection theme -- until
+        // dedicated art ships with these spells.
+        BuffKind::Nondetection | BuffKind::MagicAura => imgs.buff_eagle_eye,
+        // Combines Nondetection with a large stealth contribution; reuse the
+        // same concealment icon PassWithoutTrace/Mooncloak use above for the
+        // same reason.
+        BuffKind::Sequester => imgs.stealth_rating_ico,
         BuffKind::Wet => imgs.debuff_wet,
         BuffKind::Winded => imgs.debuff_winded,
     }

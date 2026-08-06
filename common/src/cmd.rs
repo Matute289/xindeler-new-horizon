@@ -231,6 +231,9 @@ lazy_static! {
             BuffKind::Disguised => "disguised",
             BuffKind::PassWithoutTrace => "pass_without_trace",
             BuffKind::Mooncloak => "mooncloak",
+            BuffKind::Nondetection => "nondetection",
+            BuffKind::MagicAura => "magic_aura",
+            BuffKind::Sequester => "sequester",
         };
         let mut buff_parser = HashMap::new();
         for kind in BuffKind::iter() {

@@ -17,3 +17,5 @@ spell-telekinesis = Telekinesis
 spell-telekinesis-desc = You reach out with your mind and seize a loose object well beyond arm's reach, holding it suspended in the air or hurling it with bruising force at whatever you choose.
 spell-catapult = Catapult
 spell-catapult-desc = You hurl a small loose object at a target with a sudden burst of force, no throwing arm required.
+spell-sequester = Sequester
+spell-sequester-desc = You wrap yourself in a veil of stillness, turning yourself unseen and shielding yourself from every form of remote sensing.

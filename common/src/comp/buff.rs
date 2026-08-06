@@ -497,6 +497,30 @@ pub enum BuffKind {
     /// Same `BuffCategory::Concentration` reasoning as `PassWithoutTrace`
     /// above applies here too.
     Mooncloak,
+    // =================
+    //  ANTI-DIVINATION
+    // =================
+    /// A screening ward woven over the buffed entity so scrying and
+    /// far-seeing magic slide harmlessly past it. Sets `Stats.nondetection`
+    /// unconditionally, no other effect. Self-cast: this is a `SelfBuff`
+    /// (see `nondetection.ron`), not an aura, so unlike `PassWithoutTrace`/
+    /// `Mooncloak` above it has no target-selection story of its own.
+    Nondetection,
+    /// A false reading fed to whoever probes the buffed entity with
+    /// detection magic: it registers as matching the authored `SenseKind`
+    /// regardless of its real nature. The `SenseKind` to lie about is
+    /// authored via `misc_data` (see `MiscBuffData::FalseAura`), the same
+    /// "authored rider, not derived from `strength`" idiom `Mooncloak`'s
+    /// `ResistMagic` rider above uses, since which sense to fake can't be
+    /// derived from a single strength dial.
+    MagicAura,
+    /// Combines both of this game's anti-perception primitives on one
+    /// target: unconditional anti-divination (`Nondetection`, see above)
+    /// plus a very large `Stealth` contribution meant to drive
+    /// `combat::perception_dist_multiplier_from_stealth` toward zero --
+    /// "functionally invisible", not a render-hide. See `sequester.ron`'s
+    /// own comment for the chosen strength and the resulting multiplier.
+    Sequester,
 }
 
 /// Tells a little more about the buff kind than simple buff/debuff
@@ -580,7 +604,10 @@ impl BuffKind {
             | BuffKind::TrueSight
             | BuffKind::RemoteSensing
             | BuffKind::PassWithoutTrace
-            | BuffKind::Mooncloak => BuffDescriptor::SimplePositive,
+            | BuffKind::Mooncloak
+            | BuffKind::Nondetection
+            | BuffKind::MagicAura
+            | BuffKind::Sequester => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
             | BuffKind::Bane
@@ -1369,6 +1396,28 @@ impl BuffKind {
                 }
                 effects
             },
+            // Anti-divination flag, no other effect. `strength`/`duration`
+            // govern nothing here beyond the buff's own lifetime.
+            BuffKind::Nondetection => vec![BuffEffect::Nondetection],
+            // `magic_aura`'s lie: reports a match for exactly the authored
+            // `SenseKind`, or no effect at all if the RON forgot to author
+            // one (same "omit rather than silently derive" guard
+            // `Mooncloak` uses for its own optional rider above).
+            BuffKind::MagicAura => {
+                let mut effects = Vec::new();
+                if let Some(MiscBuffData::FalseAura(kind)) = data.misc_data {
+                    effects.push(BuffEffect::FalseAura(kind));
+                }
+                effects
+            },
+            // Both anti-perception primitives at once: unconditional
+            // anti-divination plus a large stealth contribution meant to
+            // push the target's detection multiplier near zero. See
+            // `sequester.ron` for the chosen strength and its resulting
+            // multiplier.
+            BuffKind::Sequester => {
+                vec![BuffEffect::Nondetection, BuffEffect::Stealth(data.strength)]
+            },
         }
     }
 
@@ -1523,6 +1572,14 @@ pub enum MiscBuffData {
     /// rider measure unrelated things (detection avoidance vs. AoE spell
     /// mitigation) and should not be coupled to a single dial.
     ResistMagic(f32),
+    /// The `SenseKind` a `BuffKind::MagicAura` should lie about, authored
+    /// independently of `strength` for the same reason `ResistMagic` above
+    /// is: which sense to fake isn't a magnitude on any existing dial. The
+    /// mechanism itself (`BuffEffect::FalseAura`) is general over every
+    /// `SenseKind`; RON content authors `Magic` for `magic_aura`'s own
+    /// flavor (feeding false readings to a `detect magic`-style query), but
+    /// nothing in code hardcodes that choice.
+    FalseAura(SenseKind),
 }
 
 /// `arcane_eye`'s own shipped spawn range
@@ -2641,5 +2698,52 @@ pub mod tests {
         let effects = BuffKind::Mooncloak.effects(&BuffData::new(1.5, None), None, None);
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], BuffEffect::Stealth(s) if (s - 1.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn nondetection_grants_only_the_flag() {
+        let effects = BuffKind::Nondetection.effects(&BuffData::new(0.0, None), None, None);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], BuffEffect::Nondetection));
+        assert!(BuffKind::Nondetection.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn magic_aura_grants_the_authored_false_aura() {
+        let data =
+            BuffData::new(0.0, None).with_misc_data(MiscBuffData::FalseAura(SenseKind::Magic));
+        let effects = BuffKind::MagicAura.effects(&data, None, None);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            BuffEffect::FalseAura(SenseKind::Magic)
+        ));
+        assert!(BuffKind::MagicAura.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn magic_aura_grants_nothing_when_misc_data_is_absent() {
+        // Regression guard: without an authored SenseKind, the buff must not
+        // silently fall back to a default -- it should just omit the effect
+        // entirely, same as Mooncloak's own ResistMagic guard above.
+        let effects = BuffKind::MagicAura.effects(&BuffData::new(0.0, None), None, None);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn sequester_grants_nondetection_and_a_large_stealth_contribution() {
+        let effects = BuffKind::Sequester.effects(&BuffData::new(20.0, None), None, None);
+        assert_eq!(effects.len(), 2);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::Nondetection))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::Stealth(s) if (*s - 20.0).abs() < 1e-6))
+        );
+        assert!(BuffKind::Sequester.is_buff(), "should be a buff");
     }
 }

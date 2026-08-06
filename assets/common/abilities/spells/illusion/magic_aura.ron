@@ -1,0 +1,35 @@
+// Nysvane's Magic Aura: cloaks the caster in a subtle veil that feeds false
+// readings to anyone probing them with detection magic, masking their true
+// nature or inventing one that was never there. The sheet's `duration:
+// Instant` describes the cast time only (an instantaneous application), not
+// the ward's own lifetime -- the buff itself lingers, the same "Instant to
+// cast, long-lived buff" idiom seeming.ron/sequester.ron use. Self-only, same
+// Touch-range-SelfBuff narrowing nondetection.ron documents.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: MagicAura,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(86400.0),
+                // Authors the spell's own flavor (feeding a false reading to
+                // a detect-magic-style query); the mechanism itself
+                // (BuffEffect::FalseAura) is general over every SenseKind,
+                // this is just this content's choice.
+                misc_data: Some(FalseAura(Magic)),
+            ),
+        ),
+    ],
+    energy_cost: 40,
+    enforced_limit: false,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same level*6 convention
+        // seeming.ron documents.
+        requirements: (min_level: Some(12)),
+    ),
+)
