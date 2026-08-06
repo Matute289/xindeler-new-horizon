@@ -366,6 +366,9 @@ impl PlayState for CharSelectionState {
                 .render(&mut first_pass, client.get_tick(), humanoid_body, loadout);
         }
 
+        // SSAO (does nothing visible yet -- see `Drawer::ssao_passes` docs)
+        drawer.ssao_passes();
+
         if let Some(mut volumetric_pass) = drawer.volumetric_pass() {
             // Clouds
             volumetric_pass.draw_clouds();

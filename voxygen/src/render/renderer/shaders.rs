@@ -86,6 +86,8 @@ impl Asset for Shaders {
             "dual-downsample-filtered-frag",
             "dual-downsample-frag",
             "dual-upsample-frag",
+            "ssao-frag",
+            "ssao-blur-frag",
             "postprocess-vert",
             "postprocess-frag",
             "blit-vert",

@@ -2501,6 +2501,11 @@ impl PlayState for SessionState {
             &scene_data,
         );
 
+        // SSAO (does nothing visible yet -- see `Drawer::ssao_passes` docs)
+        {
+            prof_span!("ssao");
+            drawer.ssao_passes();
+        }
         if let Some(mut volumetric_pass) = drawer.volumetric_pass() {
             // Clouds
             prof_span!("clouds");
