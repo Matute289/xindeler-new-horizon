@@ -548,6 +548,10 @@ common-abilities-spells-divination-clairvoyance = Clairvoyance
 # file's own comment on the same coupling.
 common-abilities-spells-divination-arcane_eye = Arcane Eye
     .desc = Conjure an invisible eye within 9 meters that hovers and drifts at your command; see and hear through it while your body stays behind, rooted and blind.
+common-abilities-spells-illusion-disguise_self = Disguise Self
+    .desc = The caster wraps themselves in a shimmer of woven glamour, changing how their face, build, and garments appear to onlookers. The disguise holds until dismissed or the magic fades, though a careful touch reveals the truth.
+common-abilities-spells-illusion-seeming = Seeming
+    .desc = The caster drapes any number of willing creatures within reach in a woven veil of false form, reshaping how each one appears to onlookers.
 common-abilities-spells-divine-dawnmote = Dawnmote
     .desc = A mote of dawnlight that sears what it touches.
 common-abilities-spells-illusion-minor_illusion_image = Minor Illusion

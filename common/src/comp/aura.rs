@@ -2,7 +2,7 @@ use crate::{
     combat::{GroupTarget, HealthTier},
     comp::{
         CharacterClass,
-        buff::{BuffCategory, BuffData, BuffKind, BuffSource},
+        buff::{BuffCategory, BuffData, BuffKind, BuffSource, MiscBuffData},
         class::ClassKind,
         creature_type::CreatureKind,
         skillset::MAX_CHARACTER_LEVEL,
@@ -326,6 +326,26 @@ pub struct AuraBuffConstructor {
     pub category: Option<BuffCategory>,
     #[serde(default)]
     pub pool_split: Option<PoolSplit>,
+    /// Extra payload some `BuffKind`s need beyond strength/duration — e.g.
+    /// `BuffKind::Disguised` requires a `MiscBuffData::Body` to know which
+    /// apparent body to render for observers. `#[serde(default)]` so every
+    /// existing shipped aura RON (`crusaders_mantle`, `bless`, `wardingaura`,
+    /// `healingaura`, etc.) stays byte-unchanged and continues to parse with
+    /// `misc_data: None`, the same additive pattern `pool_split` above
+    /// already established.
+    ///
+    /// 🔴 **Sync scope warning for future authors.** This rides on `Auras`
+    /// (`SyncFrom::AnyEntity`), so while the aura exists on the caster,
+    /// `misc_data` is visible to every nearby client, not just whoever the
+    /// aura ends up buffing — the same class of leak
+    /// `MiscBuffData::RemoteSense`'s own doc comment already warns about,
+    /// and for the same reason that type deliberately carries no
+    /// identity/position fields. Harmless for today's only consumer
+    /// (`seeming`'s disguise body is a fixed, public template, not a
+    /// secret), but a *future* aura-delivered buff whose payload must stay
+    /// hidden from bystanders must not go through this field unmodified.
+    #[serde(default)]
+    pub misc_data: Option<MiscBuffData>,
 }
 
 impl AuraBuffConstructor {
@@ -338,9 +358,13 @@ impl AuraBuffConstructor {
         time: Time,
         frontend_specifier: Option<Specifier>,
     ) -> Aura {
+        let mut data = BuffData::new(self.strength, self.duration);
+        if let Some(misc_data) = self.misc_data {
+            data = data.with_misc_data(misc_data);
+        }
         let aura_kind = AuraKind::Buff {
             kind: self.kind,
-            data: BuffData::new(self.strength, self.duration),
+            data,
             category: self.category.clone(),
             source: BuffSource::Character {
                 by: *entity_info.0,
@@ -622,5 +646,79 @@ mod tests {
         assert!((banishment.min_return_hours - 24.0).abs() < f64::EPSILON);
         assert!((banishment.max_return_hours - 168.0).abs() < f64::EPSILON);
         assert!((banishment.reward_fraction - 0.25).abs() < f32::EPSILON);
+    }
+
+    /// Regression guard for adding `AuraBuffConstructor::misc_data`: every
+    /// aura RON shipped before that field existed must still parse
+    /// byte-identically and come back with `misc_data: None`, proving the
+    /// `#[serde(default)]` on the new field is doing its job rather than
+    /// just being assumed to.
+    #[test]
+    fn pre_existing_aura_rons_still_parse_with_no_misc_data() {
+        use crate::{
+            assets::{AssetExt, Ron},
+            comp::ability::CharacterAbility,
+        };
+
+        for asset in [
+            "common.abilities.spells.gravesong.crusaders_mantle",
+            "common.abilities.spells.gravesong.bless",
+            "common.abilities.sceptre.wardingaura",
+            "common.abilities.sceptre.healingaura",
+        ] {
+            let ability: CharacterAbility = Ron::load_expect_cloned(asset).into_inner();
+            let CharacterAbility::BasicAura { auras, .. } = &ability else {
+                panic!("{asset} is not a BasicAura");
+            };
+            for aura in auras {
+                assert_eq!(
+                    aura.misc_data, None,
+                    "{asset}'s aura must still carry no misc_data after the field was added"
+                );
+            }
+        }
+    }
+
+    /// Pins `seeming.ron`'s use of the new `misc_data` field: it must carry
+    /// the `Disguised` buff's required `MiscBuffData::Body` payload all the
+    /// way through `AuraBuffConstructor`, proving the field threads through
+    /// rather than only compiling.
+    #[test]
+    fn seeming_ron_carries_a_disguise_body_via_misc_data() {
+        use crate::{
+            assets::{AssetExt, Ron},
+            comp::{
+                ability::CharacterAbility,
+                body::{Body, humanoid},
+                buff::{BuffKind, MiscBuffData},
+            },
+        };
+
+        let ability: CharacterAbility =
+            Ron::load_expect_cloned("common.abilities.spells.illusion.seeming").into_inner();
+        let CharacterAbility::BasicAura {
+            auras,
+            aura_duration,
+            ..
+        } = &ability
+        else {
+            panic!("seeming is not a BasicAura");
+        };
+        // Instant compendium duration -> a single brief pulse, same idiom
+        // power_word_fortify.ron/power_word_divine_word.ron use.
+        assert_eq!(*aura_duration, Some(Secs(0.5)));
+
+        let disguise = auras
+            .iter()
+            .find(|a| a.kind == BuffKind::Disguised)
+            .expect("seeming must author a Disguised aura");
+        // The long, non-concentration fixed duration the sheet calls for.
+        assert_eq!(disguise.duration, Some(Secs(3600.0)));
+        match disguise.misc_data {
+            Some(MiscBuffData::Body(Body::Humanoid(humanoid::Body { species, .. }))) => {
+                assert_eq!(species, humanoid::Species::Human);
+            },
+            other => panic!("seeming's Disguised aura must carry a humanoid Body, got {other:?}"),
+        }
     }
 }
