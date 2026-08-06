@@ -139,6 +139,7 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         death_effects,
         rider_effects,
         rider,
+        incorporeal,
     } = ev.npc;
     let entity = server
         .state
@@ -148,6 +149,14 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         .maybe_with(heads)
         .maybe_with(death_effects)
         .maybe_with(rider_effects);
+    // Overrides the `body.collider()` `create_npc` already inserted --
+    // `WriteStorage::insert` replaces rather than panics on a second `.with`
+    // for the same component, the same pattern `alignment` below relies on.
+    let entity = if incorporeal {
+        entity.with(Collider::Point)
+    } else {
+        entity
+    };
 
     if let Some(agent) = &mut agent
         && let Alignment::Owned(_) = &alignment

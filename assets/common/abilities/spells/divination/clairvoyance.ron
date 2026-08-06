@@ -1,0 +1,22 @@
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: RemoteSensing,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(RemoteSense(anchor_kind: Sensor, free_look: true, piloted: false)),
+            ),
+        ),
+    ],
+    energy_cost: 20,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        requirements: (min_level: Some(3)),
+    ),
+)

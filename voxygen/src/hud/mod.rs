@@ -1564,6 +1564,16 @@ impl Hud {
             let is_riders = ecs.read_storage::<Is<Rider>>();
             let stances = ecs.read_storage::<comp::Stance>();
             let char_activities = ecs.read_storage::<comp::CharacterActivity>();
+            let concealed = ecs.read_storage::<comp::ConcealedUnlessTrueSight>();
+            // The actual player's own True Sight, not the current viewpoint's
+            // (`me`/`info.viewpoint_entity`) -- a remote-sensing spell's
+            // sensor/eye anchor carries no `Stats` of its own to hold the
+            // sense. Same split `voxygen/src/scene/figure/mod.rs`'s render
+            // gate and `voxygen/src/session/target.rs`'s target-acquisition
+            // gate both make.
+            let pierces_concealment = stats
+                .get(client.entity())
+                .is_some_and(comp::observer_pierces_concealment);
             let time = ecs.read_resource::<Time>();
             let id_maps = ecs.read_resource::<common::uid::IdMaps>();
             let terrain = ecs.read_resource::<common::terrain::TerrainGrid>();
@@ -2482,6 +2492,7 @@ impl Hud {
                     stances.maybe(),
                     disguises.maybe(),
                 ),
+                concealed.maybe(),
             )
                 .join()
                 .filter(|t| {
@@ -2505,6 +2516,7 @@ impl Hud {
                         derived,
                         character_activity,
                         (is_mount, is_rider, stance, disguise),
+                        is_concealed,
                     )| {
                         // Use interpolated position if available
                         let pos = interpolated.map_or(pos.0, |i| i.pos);
@@ -2515,6 +2527,14 @@ impl Hud {
                         let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid))
                             || info.revealed_entities.contains_key(&entity);
 
+                        // An entity invisible to normal perception (e.g. a
+                        // remote-sensing spell's sensor) gets no nameplate,
+                        // healthbar, or speech bubble for an observer without
+                        // True Sight -- otherwise a floating healthbar with
+                        // no body under it would give it away regardless of
+                        // whether the 3-D model itself is drawn.
+                        let visible_to_me = is_concealed.is_none() || pierces_concealment;
+
                         // Determine whether to display nametag and healthbar based on whether the
                         // entity is mounted, has been damaged, is targeted/selected, or is in your
                         // group
@@ -2522,6 +2542,7 @@ impl Hud {
                         // be hidden in some cases if it is at maximum
                         let has_active_buffs = buffs.iter_active().next().is_some();
                         let display_overhead_info = !is_me
+                            && visible_to_me
                             && (is_mount.is_none()
                                 || health.is_none_or(overhead::should_show_healthbar))
                             && is_rider
@@ -2570,8 +2591,9 @@ impl Hud {
                             creature_kind: stats.creature_kind,
                         });
                         // Only render bubble if nearby or if its me and setting is on
-                        let bubble = if (dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
-                            || (is_me && global_state.settings.interface.speech_bubble_self)
+                        let bubble = if visible_to_me
+                            && ((dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
+                                || (is_me && global_state.settings.interface.speech_bubble_self))
                         {
                             speech_bubbles.get(uid)
                         } else {

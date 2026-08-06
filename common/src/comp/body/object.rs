@@ -90,6 +90,11 @@ enum_iter! {
         NapalmShot = 73,
         NapalmPool = 74,
         ThornStake = 75,
+        /// A static sensor spawned by a remote-sensing spell at a validated
+        /// world point. `ConcealedUnlessTrueSight`-gated on the render path:
+        /// invisible on the normal path, drawn plainly for a True-Sight
+        /// holder (`common/src/comp/detection.rs`).
+        RemoteSensor = 76,
     }
 }
 
@@ -185,6 +190,7 @@ impl Body {
             Body::NapalmShot => "napalm_shot",
             Body::NapalmPool => "napalm_pool",
             Body::ThornStake => "thorn_stake",
+            Body::RemoteSensor => "remote_sensor",
         }
     }
 
@@ -216,7 +222,7 @@ impl Body {
             Body::TrainingDummy => 2000.0,
             Body::Snowball => 0.9 * WATER_DENSITY,
             Body::Pebble => 1000.0,
-            Body::Crux | Body::FireRing | Body::PyroclasmBolt => AIR_DENSITY,
+            Body::Crux | Body::FireRing | Body::PyroclasmBolt | Body::RemoteSensor => AIR_DENSITY,
             // let them sink
             _ => 1.1 * WATER_DENSITY,
         };
@@ -294,6 +300,7 @@ impl Body {
             Body::LightningBolt | Body::SpearIcicle => 20000.0,
             Body::Portal | Body::PortalActive => 10.0, // I dont know really
             Body::Crux => 100.0,
+            Body::RemoteSensor => 1.0,
         };
 
         Mass(m)

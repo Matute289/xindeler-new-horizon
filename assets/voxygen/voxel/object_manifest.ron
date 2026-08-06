@@ -718,6 +718,21 @@
             central: ("armor.empty"),
         )
     ),
+    // Placeholder art: reuses the Crux orb model. Invisibility is enforced by
+    // the render path skipping the draw call entirely for observers without
+    // True Sight (see `ConcealedUnlessTrueSight`), not by this manifest
+    // entry, so a distinct sensor/eye voxel model is a follow-up art pass,
+    // not a functional gap.
+    RemoteSensor: (
+        bone0: (
+            offset: (-10.5, -10.5, 0.0),
+            central: ("object.crux"),
+        ),
+        bone1: (
+            offset: (0.0, 0.0, 0.0),
+            central: ("armor.empty"),
+        )
+    ),
         FireRing: (
         bone0: (
             offset: (0.0, 0.0, 0.0),
