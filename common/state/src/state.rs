@@ -392,6 +392,7 @@ impl State {
         ecs.register::<comp::SpectatingEntity>();
         ecs.register::<comp::RemoteSense>();
         ecs.register::<comp::ConcealedUnlessTrueSight>();
+        ecs.register::<comp::Disguise>();
         // Deliberately not net-synced — see `comp::Banished`'s doc comment.
         ecs.register::<comp::Banished>();
         // Derived locally on both sides from components that are already

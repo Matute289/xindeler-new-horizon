@@ -163,6 +163,11 @@ buff-reckless = Temerario
 buff-polymorphed = Polimorfismo
     .desc = La forma de tu cuerpo ha cambiado.
 
+## Disguised (cadenas provisorias; los hechizos de contenido llegan por separado)
+
+buff-disguised = Disfrazado
+    .desc = Aparentás ser otra cosa. Tu cuerpo, tu movimiento y tu alcance no cambian.
+
 ## Util
 
 buff-remove = Haz click para eliminar

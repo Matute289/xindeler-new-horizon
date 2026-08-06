@@ -439,6 +439,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Parried
         | BuffKind::PotionSickness
         | BuffKind::Polymorphed
+        | BuffKind::Disguised
         | BuffKind::Heatstroke
         | BuffKind::Rooted
         | BuffKind::Winded

@@ -61,6 +61,11 @@ macro_rules! synced_components {
             // A property of the entity itself (like `Body`/`Pos`), not a
             // secret about who is observing it — see its own doc comment.
             concealed_unless_true_sight: ConcealedUnlessTrueSight,
+            // A cast disguise's cosmetic lie about which `Body`/name an
+            // entity appears to have. Visible to everyone nearby on purpose
+            // — a disguise being *seen* (as a disguise) is the entire point
+            // of casting one, unlike the owner-private components below.
+            disguise: Disguise,
             // TODO: change this to `SyncFrom::ClientEntity` and sync the bare minimum
             // from other entities (e.g. just keys needed to show appearance
             // based on their loadout). Also, it looks like this actually has
@@ -337,6 +342,13 @@ impl NetSync for Arcing {
 }
 
 impl NetSync for ConcealedUnlessTrueSight {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+// A disguise's whole purpose is to be seen (as a disguise) by everyone
+// nearby — unlike `RemoteSense`/`Detected` below, there is no "who is
+// watching what" leak to protect against here.
+impl NetSync for Disguise {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 

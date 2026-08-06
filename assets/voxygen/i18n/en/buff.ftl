@@ -280,6 +280,9 @@ buff-truesight = True Sight
 ## Remote Sensing (placeholder strings; content spells land separately)
 buff-remotesensing = Remote Sensing
     .desc = Your senses are anchored elsewhere; your own body stands unattended.
+## Disguised (placeholder strings; content spells land separately)
+buff-disguised = Disguised
+    .desc = You appear as something else. Your body, movement and reach are unchanged.
 ## Smites (self-buff, next weapon hit gains a rider)
 buff-blindingsmite = Blinding Smite
     .desc = Your next weapon strike sears with radiant light, dealing extra damage and blinding your foe.
