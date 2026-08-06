@@ -118,6 +118,9 @@ impl CharacterBehavior for Data {
                                 has_health,
                                 use_npc_name,
                                 duration,
+                                alignment,
+                                with_agent,
+                                incorporeal,
                             } => {
                                 let loadout = {
                                     let loadout_builder =
@@ -231,20 +234,21 @@ impl CharacterBehavior for Data {
                                     npc: NpcBuilder::new(
                                         stats,
                                         *body,
-                                        comp::Alignment::Owned(*data.uid),
+                                        (*alignment).unwrap_or(comp::Alignment::Owned(*data.uid)),
                                     )
                                     .with_skill_set(skill_set)
                                     .with_health(health)
                                     .with_inventory(comp::Inventory::with_loadout(loadout, *body))
-                                    .with_agent(
+                                    .with_agent((*with_agent).then(|| {
                                         comp::Agent::from_body(body)
                                             .with_behavior(Behavior::from(
                                                 BehaviorCapability::SPEAK,
                                             ))
-                                            .with_no_flee_if(true),
-                                    )
+                                            .with_no_flee_if(true)
+                                    }))
                                     .with_scale(scale.unwrap_or(comp::Scale(1.0)))
-                                    .with_projectile(projectile),
+                                    .with_projectile(projectile)
+                                    .with_incorporeal(*incorporeal),
                                 });
 
                                 // Send local event used for frontend shenanigans
@@ -467,6 +471,18 @@ pub enum SummonInfo {
         loadout_config: Option<loadout_builder::Preset>,
         skillset_config: Option<skillset_builder::Preset>,
         duration: Option<Duration>,
+        /// Overrides the default `Alignment::Owned(caster)`. `None` keeps the
+        /// shipped behaviour.
+        #[serde(default)]
+        alignment: Option<comp::Alignment>,
+        /// Whether the summon gets an `Agent` (AI). Defaults to `true` so
+        /// every existing summon RON keeps its shipped behaviour unchanged.
+        #[serde(default = "default_with_agent")]
+        with_agent: bool,
+        /// If true, the summon's `Collider` is forced to `Collider::Point`
+        /// regardless of body shape -- see `NpcBuilder::incorporeal`.
+        #[serde(default)]
+        incorporeal: bool,
     },
     BeamPillar {
         buildup_duration: f32,
@@ -556,3 +572,5 @@ impl SummonInfo {
 pub enum BeamPillarIndicatorSpecifier {
     FirePillar,
 }
+
+fn default_with_agent() -> bool { true }

@@ -153,6 +153,7 @@ mod tests {
             humanoid,
             remote_sense::SenseAnchor,
         },
+        event::EventBus,
         resources::Time,
         uid::Uid,
     };
@@ -316,5 +317,68 @@ mod tests {
                 .is_none()
         );
         assert!(world.read_storage::<RemoteSense>().get(caster).is_none());
+    }
+
+    /// A `Sensor` anchor (unlike `Existing`) owns the entity it points at:
+    /// ending the link -- here via a dead caster, the same trigger as the
+    /// test above -- must also reap the sensor itself via `DeleteEvent`, not
+    /// just clear `SpectatingEntity`/`RemoteSense`. This is the belt half of
+    /// the sensor's destroy-on-health-loss story: whichever direction ends
+    /// the link, the sensor never lingers as an orphan entity.
+    #[test]
+    fn a_spawned_sensor_anchor_is_reaped_when_its_link_ends() {
+        let mut world = setup_world();
+        world.insert(EventBus::<DeleteEvent>::default());
+
+        let caster_uid = uid(1);
+        let sensor_uid = uid(2);
+        let sensor = world.create_entity().with(Pos(Vec3::zero())).build();
+        let body = Body::Humanoid(humanoid::Body::random());
+        let caster = world
+            .create_entity()
+            .with(Pos(Vec3::zero()))
+            .with(Health::new(body))
+            .build();
+
+        {
+            let mut id_maps = world.write_resource::<IdMaps>();
+            id_maps.add_entity(caster_uid, caster);
+            id_maps.add_entity(sensor_uid, sensor);
+        }
+
+        let mut buffs = Buffs::default();
+        buffs.insert(remote_sensing_buff(), Time(0.0));
+        world
+            .write_storage::<Buffs>()
+            .insert(caster, buffs)
+            .unwrap();
+        world
+            .write_storage::<RemoteSense>()
+            .insert(caster, RemoteSense {
+                anchor: SenseAnchor::Sensor(sensor_uid),
+                free_look: true,
+                piloted: false,
+                caster: caster_uid,
+            })
+            .unwrap();
+        world
+            .write_storage::<Health>()
+            .get_mut(caster)
+            .unwrap()
+            .is_dead = true;
+
+        common_ecs::run_now::<Sys>(&world);
+
+        assert!(world.read_storage::<RemoteSense>().get(caster).is_none());
+        let deleted: Vec<_> = world
+            .read_resource::<EventBus<DeleteEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            deleted.len(),
+            1,
+            "exactly one DeleteEvent, for the sensor entity"
+        );
+        assert_eq!(deleted[0].0, sensor);
     }
 }

@@ -73,6 +73,14 @@ pub struct NpcBuilder {
     pub death_effects: Option<DeathEffects>,
     pub rider_effects: Option<RiderEffects>,
     pub rider: Option<Box<Self>>,
+    /// If true, `handle_create_npc` overrides `body.collider()` with
+    /// `Collider::Point` regardless of body shape. For a summon that must
+    /// exist as a real, positioned, server-authoritative entity (so world
+    /// data streams correctly around it) without ever being a physical
+    /// obstacle — e.g. a remote-sensing spell's sensor, or an illusory
+    /// double. Never an absent `Collider`: that drops `PhysicsState`
+    /// entirely, which silently drops the entity from the figure renderer.
+    pub incorporeal: bool,
 }
 
 impl NpcBuilder {
@@ -97,6 +105,7 @@ impl NpcBuilder {
             death_effects: None,
             rider_effects: None,
             rider: None,
+            incorporeal: false,
         }
     }
 
@@ -178,6 +187,11 @@ impl NpcBuilder {
 
     pub fn with_rider_effects(mut self, rider_effects: Option<RiderEffects>) -> Self {
         self.rider_effects = rider_effects;
+        self
+    }
+
+    pub fn with_incorporeal(mut self, incorporeal: bool) -> Self {
+        self.incorporeal = incorporeal;
         self
     }
 }

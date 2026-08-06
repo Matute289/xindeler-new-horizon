@@ -1560,6 +1560,7 @@ impl Scene {
             self.figure_mgr.render(
                 &mut first_pass.draw_figures(),
                 state,
+                scene_data.client.entity(),
                 viewpoint_entity,
                 tick,
                 camera_data,

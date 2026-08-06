@@ -21,6 +21,7 @@ default = ["worldgen", "plugins", "persistent_world", "simd"]
 [dependencies]
 common = { package = "xindeler-common", path = "../common" }
 common-base = { package = "xindeler-common-base", path = "../common/base" }
+common-i18n = { package = "xindeler-common-i18n", path = "../common/i18n" }
 xindeler-query-server = { package = "xindeler-query-server", path = "../common/query_server", default-features = false, features = [
     "server",
 ] }

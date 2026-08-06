@@ -7150,6 +7150,7 @@ impl FigureMgr {
         &'a self,
         drawer: &mut FigureDrawer<'_, 'a>,
         state: &State,
+        player_entity: EcsEntity,
         viewpoint_entity: EcsEntity,
         tick: u64,
         (camera, figure_lod_render_distance): CameraData,
@@ -7162,7 +7163,17 @@ impl FigureMgr {
         let character_state = character_state_storage.get(viewpoint_entity);
         let items = ecs.read_storage::<PickupItem>();
         let thrown_items = ecs.read_storage::<ThrownItem>();
-        for (entity, pos, real_body, _, inventory, scale, collider, _, disguise) in (
+        // Whether the player themselves (not the current viewpoint, which may
+        // be a remote-sensing anchor with no `Stats` of its own) currently
+        // pierces concealment -- mirrors `voxygen/src/session/target.rs`'s
+        // own target-acquisition gate, the other half of the same True-Sight
+        // reveal.
+        let pierces_concealment = ecs
+            .read_storage::<comp::Stats>()
+            .get(player_entity)
+            .is_some_and(comp::observer_pierces_concealment);
+        let concealed = ecs.read_storage::<comp::ConcealedUnlessTrueSight>();
+        for (entity, pos, real_body, _, inventory, scale, collider, _, disguise, _) in (
             &ecs.entities(),
             &ecs.read_storage::<Pos>(),
             &ecs.read_storage::<Body>(),
@@ -7172,14 +7183,19 @@ impl FigureMgr {
             ecs.read_storage::<Collider>().maybe(),
             ecs.read_storage::<Object>().maybe(),
             ecs.read_storage::<Disguise>().maybe(),
+            concealed.maybe(),
         )
             .join()
         // Don't render dead entities
-        .filter(|(_, _, _, health, _, _, _, _, _)| health.is_none_or(|h| !h.is_dead))
+        .filter(|(_, _, _, health, _, _, _, _, _, _)| health.is_none_or(|h| !h.is_dead))
         // Don't render player
-        .filter(|(entity, _, _, _, _, _, _, _, _)| *entity != viewpoint_entity)
-        .filter(|(_, _, _, _, _, _, _, obj, _)| !self.should_flicker(*time, *obj))
-        {
+        .filter(|(entity, _, _, _, _, _, _, _, _, _)| *entity != viewpoint_entity)
+        .filter(|(_, _, _, _, _, _, _, obj, _, _)| !self.should_flicker(*time, *obj))
+        // An entity invisible to normal perception (e.g. a remote-sensing
+        // spell's sensor) is never drawn for an observer without True Sight.
+        .filter(|(_, _, _, _, _, _, _, _, _, is_concealed)| {
+            is_concealed.is_none() || pierces_concealment
+        }) {
             // The apparent body while disguised, otherwise the real one —
             // see `Disguise::render_body`'s doc comment. `real_body` stays
             // available above for anything that must not be fooled (nothing

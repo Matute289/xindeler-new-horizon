@@ -1380,6 +1380,10 @@ impl Body {
                 object::Body::GnarlingTotemGreen => 15,
                 object::Body::GnarlingTotemRed | object::Body::GnarlingTotemWhite => 15,
                 object::Body::Crux => 350,
+                // A one-shot destructible prop, not a creature: a solid hit
+                // or two from a True-Sight holder ends it, matching the
+                // 30 HP pool the spells that spawn it declare.
+                object::Body::RemoteSensor => 30,
                 _ => 1000,
             },
             Body::Item(_) => 1000,

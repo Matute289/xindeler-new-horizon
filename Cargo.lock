@@ -11210,6 +11210,7 @@ dependencies = [
  "xindeler-common",
  "xindeler-common-base",
  "xindeler-common-ecs",
+ "xindeler-common-i18n",
  "xindeler-common-net",
  "xindeler-common-oracle",
  "xindeler-common-state",
