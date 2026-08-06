@@ -1,9 +1,9 @@
 use crate::util::*;
 use common::{
     comp::{
-        ActiveAbilities, Alignment, Body, CharacterState, Combo, Energy, Health, Inventory,
-        LightEmitter, LootOwner, Ori, PhysicsState, Poise, Pos, Presence, Scale, SkillSet, Stance,
-        Stats, Vel,
+        ActiveAbilities, Alignment, Body, CharacterState, Combo, Disguise, Energy, Health,
+        Inventory, LightEmitter, LootOwner, Ori, PhysicsState, Poise, Pos, Presence, Scale,
+        SkillSet, Stance, Stats, Vel,
         ability::{Amount, BASE_ABILITY_LIMIT, CharacterAbility},
         body::parts::Heads,
         buff::{BuffKind, Buffs},
@@ -471,6 +471,9 @@ pub struct ReadData<'a> {
     pub terrain: ReadExpect<'a, TerrainGrid>,
     pub alignments: ReadStorage<'a, Alignment>,
     pub bodies: ReadStorage<'a, Body>,
+    /// The cosmetic disguise (if any) an observed entity is wearing. Read by
+    /// the disguise suspicion-roll gate in `AgentData::choose_target`.
+    pub disguises: ReadStorage<'a, Disguise>,
     pub is_mounts: ReadStorage<'a, Is<Mount>>,
     pub is_riders: ReadStorage<'a, Is<Rider>>,
     pub is_volume_riders: ReadStorage<'a, Is<VolumeRider>>,

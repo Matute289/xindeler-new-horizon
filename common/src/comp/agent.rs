@@ -642,6 +642,19 @@ pub struct Agent {
     pub timer: Timer,
     pub bearing: Vec2<f32>,
     pub sounds_heard: Vec<Sound>,
+    /// Uids of disguised entities this agent has *permanently* seen through
+    /// (the suspicion-roll latch): once added, that entity is never re-rolled
+    /// again for the rest of its current disguise. Lives on the observer's
+    /// own `Agent`, never as a map on the disguised entity, so a despawned
+    /// observer needs no cleanup and a disguised entity carries no
+    /// per-observer state.
+    pub seen_through_disguises: Vec<Uid>,
+    /// Uids of disguised entities this agent has already spent its one
+    /// close-inspection suspicion roll on. Fires at most once per (observer,
+    /// disguise) pair — not once per proximity entry/exit — so standing next
+    /// to a disguised entity for a long time does not grant repeated close-up
+    /// rolls beyond the first.
+    pub close_inspected_disguises: Vec<Uid>,
     pub multi_pid_controllers: Option<PidControllers<16>>,
     /// Position from which to flee. Intended to be the agent's position plus a
     /// random position offset, to be used when a random flee direction is
@@ -759,6 +772,8 @@ impl Agent {
             timer: Timer::default(),
             bearing: Vec2::zero(),
             sounds_heard: Vec::new(),
+            seen_through_disguises: Vec::new(),
+            close_inspected_disguises: Vec::new(),
             multi_pid_controllers: None,
             flee_from_pos: None,
             stay_pos: None,
