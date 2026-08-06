@@ -550,6 +550,16 @@ common-abilities-spells-divination-arcane_eye = Arcane Eye
     .desc = Conjure an invisible eye within 9 meters that hovers and drifts at your command; see and hear through it while your body stays behind, rooted and blind.
 common-abilities-spells-divine-dawnmote = Dawnmote
     .desc = A mote of dawnlight that sears what it touches.
+common-abilities-spells-illusion-minor_illusion_image = Minor Illusion
+    .desc = Weave the shape of a small object into a spot nearby. The trickery holds until it fades or you conjure another in its place.
+common-abilities-spells-illusion-minor_illusion_sound = Minor Illusion
+    .desc = Weave a fleeting phantom sound into a spot nearby, then let the trickery fade.
+common-abilities-spells-illusion-silent_image = Silent Image
+    .desc = Conjure a purely visual mirage of an object, creature, or scene. It makes no sound, smell, or sensation, and a careful look reveals the trick.
+common-abilities-spells-illusion-major_image = Major Image
+    .desc = Conjure a vivid, lifelike phantom of an object, creature, or scene up to a large cube.
+common-abilities-spells-illusion-project_image = Project Image
+    .desc = Conjure a stationary illusory double of yourself nearby.
 common-abilities-spells-primordial-thornspit = Thornspit
     .desc = A hurled spine of hardened bramble.
 # Racial innates (magic-abilities Task 14) — keys derive from the AbilityPool set key.

@@ -1,0 +1,43 @@
+// Major Image. L3: a vivid, lifelike phantom of an object, creature, or
+// scene up to a large cube.
+//
+// Scope note (sound): the source spell also carries sound as part of its
+// "fully sensory" illusion. Investigated whether that is reachable
+// data-only, the same way minor_illusion_sound.ron's comment documents:
+// `SoundEvent`/`SoundKind` is an AI-stimulus system, only reachable through
+// a `BehaviorTree` node reading an `Agent` -- not available to a phantasm,
+// which is `with_agent: false` by design. The other client-audible hook that
+// exists, `Outcome::SummonedCreature`'s per-`Body` match in
+// `voxygen/src/audio/sfx/mod.rs`, is hardcoded Rust covering a fixed list of
+// specific existing monster/summon bodies, not a RON-selectable field --
+// picking one of those bodies here just to piggyback its unrelated cue (a
+// lantern hiss, a tornado swoosh) would fit the sound to the body rather
+// than the body to the spell's own description, so that was rejected too. No
+// data-only path (one-shot or looping) exists to attach real audio to an
+// arbitrary phantasm body without new Rust. This RON ships the visual half
+// only; the sound half is scoped out, same as minor_illusion_sound.ron.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.3,
+    recover_duration: 0.5,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: Object(TerracottaStatue),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        // Matches the compendium entry's Concentration(60) cap.
+        duration: Some((
+            secs: 60,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

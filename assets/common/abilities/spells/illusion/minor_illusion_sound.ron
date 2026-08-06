@@ -1,0 +1,45 @@
+// Minor Illusion, sound mode. Companion to minor_illusion_image.ron --
+// authored so the school's data is complete, but NOT wired into
+// compendium.ron (that entry's `ability` field points at the image RON
+// instead; see that file's own comment for why only one specifier can win).
+//
+// Scope note: this mode is supposed to conjure a fleeting sound at the
+// target point rather than an image. The engine's only sound-emission path,
+// `SoundEvent`/`SoundKind` (`server/src/events/interaction.rs`), is an
+// AI-stimulus system consumed by a `BehaviorTree` node reading an `Agent` --
+// it is not a player-audible SFX trigger. Phantasms are `with_agent: false`
+// by design (see `common/src/comp/phantom_illusion.rs`: giving one an
+// `Agent` to make it "hearable" would reintroduce the AI surface the
+// mechanism exists to avoid), so that path is not reachable here without new
+// Rust. No data-only field exists on `SummonInfo::Npc` (or anywhere else) to
+// emit a `SoundEvent`/audible cue from a spell cast. This RON therefore ships
+// the same phantasm shape as the image mode -- an unkillable, un-AI'd,
+// short-lived decoy point -- without literal audio; wiring in real sound
+// would need a small new field on `SummonInfo::Npc` plus a system to act on
+// it, deliberately left for a future pass rather than invented here.
+BasicSummon(
+    buildup_duration: 0.3,
+    cast_duration: 0.1,
+    recover_duration: 0.3,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: Object(Coconut),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        // Much shorter than the image mode: this represents a single brief
+        // sound (a snap, a bark, footsteps), not a sustained decoy.
+        duration: Some((
+            secs: 10,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

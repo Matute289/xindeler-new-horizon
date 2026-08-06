@@ -565,6 +565,71 @@
         description_i18n: "spell-antimagic_field-desc",
         ability: "common.abilities.spells.abjuration.antimagic_field",
     ),
+    // --- Illusion (shared-illusion phantasm spells). Wizard -> Mage per the
+    // standard class-name mapping every other entry in this file already
+    // uses. minor_illusion has two authored ability RONs (image + sound) but
+    // only one compendium entry -- see
+    // abilities/spells/illusion/minor_illusion_image.ron's own comment for
+    // why the `ability` field below points only at the image mode.
+    // project_image is COPY-ONLY: a stationary illusory double, not the
+    // remote-viewpoint half of the source spell -- see
+    // abilities/spells/illusion/project_image.ron's comment.
+    (
+        id: "spells.illusion.minor_illusion",
+        name_i18n: "spell-minor_illusion",
+        level: 0,
+        school: Some(Illusion),
+        source: Arcane,
+        classes: [Bard, Sorcerer, Warlock, Mage],
+        cast_time: Action,
+        duration: Instant,
+        range: Meters(9.0),
+        aoe: None,
+        description_i18n: "spell-minor_illusion-desc",
+        ability: "common.abilities.spells.illusion.minor_illusion_image",
+    ),
+    (
+        id: "spells.illusion.silent_image",
+        name_i18n: "spell-silent_image",
+        level: 1,
+        school: Some(Illusion),
+        source: Arcane,
+        classes: [Bard, Sorcerer, Mage],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        range: Meters(18.0),
+        aoe: None,
+        description_i18n: "spell-silent_image-desc",
+        ability: "common.abilities.spells.illusion.silent_image",
+    ),
+    (
+        id: "spells.illusion.major_image",
+        name_i18n: "spell-major_image",
+        level: 3,
+        school: Some(Illusion),
+        source: Arcane,
+        classes: [Bard, Sorcerer, Warlock, Mage],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        range: Meters(37.0),
+        aoe: None,
+        description_i18n: "spell-major_image-desc",
+        ability: "common.abilities.spells.illusion.major_image",
+    ),
+    (
+        id: "spells.illusion.project_image",
+        name_i18n: "spell-project_image",
+        level: 7,
+        school: Some(Illusion),
+        source: Arcane,
+        classes: [Bard, Mage],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        range: SelfOnly,
+        aoe: None,
+        description_i18n: "spell-project_image-desc",
+        ability: "common.abilities.spells.illusion.project_image",
+    ),
     // --- Transmutation ---
     (
         id: "spells.transmutation.magic_stone",
