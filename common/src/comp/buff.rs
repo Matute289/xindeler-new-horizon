@@ -475,6 +475,28 @@ pub enum BuffKind {
     /// wearer attacks is a content/RON decision, not something this variant
     /// enforces in code.
     Disguised,
+    // =================
+    //    CONCEALMENT
+    // =================
+    /// A hush-of-shadow ward granted to allies caught in the caster's aura:
+    /// contributes `data.strength` to `Stats.stealth`, the same additive
+    /// channel item-based stealth feeds (see
+    /// `combat::perception_dist_multiplier_from_stealth`). No other effect.
+    /// Not tagged `BuffCategory::Concentration`: this buff lives on the
+    /// allies the aura reaches, not on the caster, and its lifetime is
+    /// already fully governed by the granting `BasicAura`'s own
+    /// `aura_duration` (the `FromActiveAura` category the aura system adds
+    /// removes the buff the instant a target leaves radius or the aura
+    /// itself expires) -- there is no separate concentration-break-on-hit
+    /// concept for aura-sourced buffs to opt into today.
+    PassWithoutTrace,
+    /// A moonlit concealment ward granted to allies caught in the caster's
+    /// aura: contributes `data.strength` to `Stats.stealth` exactly like
+    /// `PassWithoutTrace`, plus a smaller derived `ResistKind::Magic`
+    /// resistance (see `effects()` for the fixed ratio between the two).
+    /// Same `BuffCategory::Concentration` reasoning as `PassWithoutTrace`
+    /// above applies here too.
+    Mooncloak,
 }
 
 /// Tells a little more about the buff kind than simple buff/debuff
@@ -556,7 +578,9 @@ impl BuffKind {
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
             | BuffKind::TrueSight
-            | BuffKind::RemoteSensing => BuffDescriptor::SimplePositive,
+            | BuffKind::RemoteSensing
+            | BuffKind::PassWithoutTrace
+            | BuffKind::Mooncloak => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
             | BuffKind::Bane
@@ -646,6 +670,9 @@ impl BuffKind {
         target_entity: Option<Uid>,
         source_entity: Option<Uid>,
     ) -> Vec<BuffEffect> {
+        // `Mooncloak`'s fixed ratio of its derived magic-resistance rider to
+        // its authored stealth strength (see the effects() match arm below).
+        const MOONCLOAK_RESIST_RATIO: f32 = 1.0 / 6.0;
         // Normalized nonlinear scaling
         // TODO: Do we want to make denominator term parameterized. Come back to if we
         // add nn_scaling3.
@@ -1329,6 +1356,19 @@ impl BuffKind {
                 }
                 effects
             },
+            // Concealment aura target buff: just contributes to the shared
+            // stealth channel, no misc_data needed.
+            BuffKind::PassWithoutTrace => vec![BuffEffect::Stealth(data.strength)],
+            // Concealment aura target buff with a secondary magic-resistance
+            // rider. The resistance is derived from the same authored
+            // `strength` rather than an independently authored value, the
+            // same idiom `Frenzied` and `Fortitude` use for their own
+            // multi-effect derivations above -- keeps a single RON dial for
+            // spell authors instead of two that could drift apart.
+            BuffKind::Mooncloak => vec![
+                BuffEffect::Stealth(data.strength),
+                BuffEffect::Resistance(ResistKind::Magic, data.strength * MOONCLOAK_RESIST_RATIO),
+            ],
         }
     }
 
@@ -2560,5 +2600,30 @@ pub mod tests {
     fn concentration_is_a_buff_category() {
         let cat: BuffCategory = ron::from_str("Concentration").expect("Concentration must parse");
         assert_eq!(cat, BuffCategory::Concentration);
+    }
+
+    #[test]
+    fn pass_without_trace_grants_only_stealth() {
+        let effects = BuffKind::PassWithoutTrace.effects(&BuffData::new(1.0, None), None, None);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], BuffEffect::Stealth(s) if (s - 1.0).abs() < 1e-6));
+        assert!(BuffKind::PassWithoutTrace.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn mooncloak_grants_stealth_and_a_derived_magic_resistance() {
+        let effects = BuffKind::Mooncloak.effects(&BuffData::new(1.5, None), None, None);
+        assert_eq!(effects.len(), 2);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::Stealth(s) if (*s - 1.5).abs() < 1e-6))
+        );
+        // 1.5 * (1.0 / 6.0) == 0.25
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            BuffEffect::Resistance(ResistKind::Magic, r) if (*r - 0.25).abs() < 1e-6
+        )));
+        assert!(BuffKind::Mooncloak.is_buff(), "should be a buff");
     }
 }

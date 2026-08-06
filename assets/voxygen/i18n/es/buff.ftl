@@ -249,3 +249,7 @@ buff-ardenthunted = Cazado con Fervor
     .desc = Un arquero ferviente te ha marcado como objetivo.
 buff-septicshot = Disparo séptico
     .desc = Tu próximo disparo provocará una infección en el objetivo, lo que aumentará su letalidad si este tiene alguna otra condición.
+buff-passwithouttrace = Rastro Esquivo
+    .desc = Una bruma de sombra oculta tus pasos y tu aroma, haciendo que sea mucho más difícil que te noten.
+buff-mooncloak = Manto Lunar
+    .desc = Una penumbra plateada y cambiante oculta tus movimientos y debilita la magia hostil contra vos.

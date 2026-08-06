@@ -5952,6 +5952,10 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // until dedicated disguise art ships with the spells that grant this
         // buff.
         BuffKind::Disguised => imgs.debuff_polymorphed,
+        // Reuse the bag-panel stealth-rating icon (same concealment concept,
+        // already drawn) until dedicated aura-buff art ships with these
+        // spells.
+        BuffKind::PassWithoutTrace | BuffKind::Mooncloak => imgs.stealth_rating_ico,
         BuffKind::Wet => imgs.debuff_wet,
         BuffKind::Winded => imgs.debuff_winded,
     }

@@ -13,3 +13,7 @@ spell-dispel_magic = Dispel Magic
 spell-dispel_magic-desc = Unravels the magical effects afflicting a target at range, snuffing out whatever hostile enchantment holds them.
 spell-dispel_evil_and_good = Dispel Evil and Good
 spell-dispel_evil_and_good-desc = Radiant warding light wraps around the caster, dulling the blows of otherworldly and undead foes that draw near.
+spell-pass_without_trace = Pass without Trace
+spell-pass_without_trace-desc = A hush of drifting shadow spreads from the caster, swallowing footsteps and scent so nearby allies move unseen and unheard.
+spell-mooncloak = Mooncloak
+spell-mooncloak-desc = Pale moonlight wells up around the caster, draping nearby allies in shifting silver dimness that veils their movements and dulls harmful magic against them.

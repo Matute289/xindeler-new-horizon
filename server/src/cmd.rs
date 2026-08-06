@@ -7391,7 +7391,9 @@ fn build_buff(
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
             | BuffKind::TrueSight
-            | BuffKind::RemoteSensing => {
+            | BuffKind::RemoteSensing
+            | BuffKind::PassWithoutTrace
+            | BuffKind::Mooncloak => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {
