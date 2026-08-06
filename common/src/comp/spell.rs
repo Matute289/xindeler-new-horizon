@@ -451,6 +451,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn true_sight_spells_resolve_to_self_buff_with_the_matching_buff_kind() {
+        use crate::comp::{
+            buff::{BuffKind, MiscBuffData, SenseMode},
+            detection::SenseKind,
+        };
+
+        let book = SpellCompendium::load_expect_cloned();
+
+        let see_invisibility = book
+            .get("spells.divination.see_invisibility")
+            .expect("see_invisibility missing from compendium");
+        match Ron::<CharacterAbility>::load_expect(&see_invisibility.ability)
+            .read()
+            .0
+            .clone()
+        {
+            CharacterAbility::SelfBuff { buffs, .. } => {
+                assert!(
+                    buffs
+                        .iter()
+                        .any(|b| b.kind == BuffKind::SeeInvisible && b.data.misc_data.is_none()),
+                    "see_invisibility must grant SeeInvisible with no misc_data -- it is not a \
+                     reveal-set spell"
+                );
+            },
+            other => panic!("see_invisibility should resolve to SelfBuff, got {other:?}"),
+        }
+
+        let true_seeing = book
+            .get("spells.divination.true_seeing")
+            .expect("true_seeing missing from compendium");
+        match Ron::<CharacterAbility>::load_expect(&true_seeing.ability)
+            .read()
+            .0
+            .clone()
+        {
+            CharacterAbility::SelfBuff { buffs, .. } => {
+                assert!(
+                    buffs.iter().any(|b| b.kind == BuffKind::TrueSight
+                        && matches!(
+                            b.data.misc_data,
+                            Some(MiscBuffData::Sense(
+                                SenseKind::True,
+                                _,
+                                SenseMode::Continuous
+                            ))
+                        )),
+                    "true_seeing must grant TrueSight with a Continuous True sense"
+                );
+            },
+            other => panic!("true_seeing should resolve to SelfBuff, got {other:?}"),
+        }
+    }
+
     fn test_spell(id: &str, ability: &str, classes: &[ClassKind]) -> SpellDef {
         SpellDef {
             id: id.to_string(),

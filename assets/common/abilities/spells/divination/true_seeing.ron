@@ -1,0 +1,33 @@
+// True Seeing: the one unified True Sight mechanism -- an always-active,
+// continuously re-evaluated true sense that pierces concealment, illusion
+// and darkness unconditionally for as long as it lasts. The sheet's
+// `range: Touch` has no touch-a-willing-target mechanism to hook into for a
+// SelfBuff-shaped spell (no such mechanism exists anywhere in this
+// compendium yet -- see disguise_self.ron/nondetection.ron's own
+// Touch-range SelfBuff narrowing), so this grants the caster their own true
+// sight rather than a willing ally's.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: TrueSight,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(3600.0),
+                misc_data: Some(Sense(True, 30.0, Continuous)),
+            ),
+        ),
+    ],
+    energy_cost: 60,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, same `level * 6` convention
+        // seeming.ron/disguise_self.ron derive from every other shipped
+        // spell that sets this field.
+        requirements: (min_level: Some(36)),
+    ),
+)

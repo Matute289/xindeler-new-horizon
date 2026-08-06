@@ -259,3 +259,7 @@ buff-magicaura = Aura Mágica
     .desc = Un velo sutil hace que quien te examine con magia de detección reciba lecturas falsas.
 buff-sequester = Secuestro
     .desc = Un velo de quietud te vuelve invisible y te protege de cualquier forma de detección a distancia.
+buff-seeinvisible = Ver lo Invisible
+    .desc = Podés percibir criaturas ocultas e invisibles.
+buff-truesight = Visión Verdadera
+    .desc = Ves a través de la ilusión, la invisibilidad y la oscuridad.

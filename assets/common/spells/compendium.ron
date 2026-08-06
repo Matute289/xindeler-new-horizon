@@ -1574,4 +1574,35 @@
         description_i18n: "spell-magic_aura-desc",
         ability: "common.abilities.spells.illusion.magic_aura",
     ),
+    // --- Divination ---
+    (
+        id: "spells.divination.see_invisibility",
+        name_i18n: "spell-see_invisibility",
+        level: 2,
+        school: Some(Divination),
+        source: Arcane,
+        classes: [Artificer, Bard, Sorcerer, Mage],
+        cast_time: Action,
+        duration: Secs(3600.0),
+        range: SelfOnly,
+        aoe: None,
+        description_i18n: "spell-see_invisibility-desc",
+        ability: "common.abilities.spells.divination.see_invisibility",
+    ),
+    (
+        id: "spells.divination.true_seeing",
+        name_i18n: "spell-true_seeing",
+        level: 6,
+        school: Some(Divination),
+        source: Arcane,
+        classes: [Bard, Cleric, Sorcerer, Warlock, Mage],
+        cast_time: Action,
+        duration: Secs(3600.0),
+        // Sheet range is Touch; narrowed to self-only -- see true_seeing.ron's
+        // own comment for why.
+        range: SelfOnly,
+        aoe: None,
+        description_i18n: "spell-true_seeing-desc",
+        ability: "common.abilities.spells.divination.true_seeing",
+    ),
 ]

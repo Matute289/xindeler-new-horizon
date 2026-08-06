@@ -548,6 +548,10 @@ common-abilities-spells-divination-clairvoyance = Clairvoyance
 # file's own comment on the same coupling.
 common-abilities-spells-divination-arcane_eye = Arcane Eye
     .desc = Conjure an invisible eye within 9 meters that hovers and drifts at your command; see and hear through it while your body stays behind, rooted and blind.
+common-abilities-spells-divination-see_invisibility = See Invisibility
+    .desc = Your eyes attune to wavelengths beyond ordinary sight, exposing creatures and objects cloaked from view as plain shapes.
+common-abilities-spells-divination-true_seeing = True Seeing
+    .desc = Piercing sight that strips away every illusion and disguise, revealing things in their true form. You perceive in darkness, spot magically concealed passages, and see clearly across the boundaries between worlds.
 common-abilities-spells-illusion-disguise_self = Disguise Self
     .desc = The caster wraps themselves in a shimmer of woven glamour, changing how their face, build, and garments appear to onlookers. The disguise holds until dismissed or the magic fades, though a careful touch reveals the truth.
 common-abilities-spells-illusion-seeming = Seeming

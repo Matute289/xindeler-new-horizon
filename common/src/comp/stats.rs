@@ -165,6 +165,16 @@ pub struct Stats {
     /// `combat::perception_dist_multiplier_from_stealth`, same boolean shape
     /// as `disable_magic` above. Set by `BuffEffect::PierceConcealment`.
     pub pierce_concealment: bool,
+    /// Whether this entity currently sees through illusions and disguises
+    /// unconditionally, regardless of the target's own suspicion/reveal
+    /// state — read as the **observer** side, same boolean shape as
+    /// `pierce_concealment` above. Set by `BuffEffect::PierceIllusion`.
+    pub pierce_illusion: bool,
+    /// Whether this entity currently sees through mundane and magical
+    /// darkness. A flag only in this row — its lighting-override consumer is
+    /// a separate future addition, not built here. Same boolean shape as
+    /// `pierce_concealment` above. Set by `BuffEffect::PierceDarkness`.
+    pub pierce_darkness: bool,
     /// Anti-divination (`nondetection` spell): when set, this entity is
     /// skipped entirely by `server/src/sys/detection.rs`'s per-`SenseKind`
     /// predicate — "can't be targeted by divination," unconditionally,
@@ -368,6 +378,8 @@ impl Stats {
             disable_teleport: false,
             stealth: 0.0,
             pierce_concealment: false,
+            pierce_illusion: false,
+            pierce_darkness: false,
             nondetection: false,
             false_aura: None,
             accuracy: 0.0,
@@ -502,6 +514,8 @@ impl Stats {
         self.disable_teleport = false;
         self.stealth = 0.0;
         self.pierce_concealment = false;
+        self.pierce_illusion = false;
+        self.pierce_darkness = false;
         self.nondetection = false;
         self.false_aura = None;
         self.accuracy = 0.0;
@@ -680,6 +694,8 @@ mod tests {
         stats.disable_teleport = true;
         stats.stealth = 5.0;
         stats.pierce_concealment = true;
+        stats.pierce_illusion = true;
+        stats.pierce_darkness = true;
         stats.nondetection = true;
         stats.false_aura = Some(SenseKind::Magic);
         stats.accuracy = 0.5;
@@ -835,6 +851,8 @@ mod tests {
         assert_eq!(stats.disable_teleport, expected.disable_teleport);
         assert_eq!(stats.stealth, expected.stealth);
         assert_eq!(stats.pierce_concealment, expected.pierce_concealment);
+        assert_eq!(stats.pierce_illusion, expected.pierce_illusion);
+        assert_eq!(stats.pierce_darkness, expected.pierce_darkness);
         assert_eq!(stats.nondetection, expected.nondetection);
         assert_eq!(stats.false_aura, expected.false_aura);
         assert_eq!(stats.accuracy, expected.accuracy);

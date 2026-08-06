@@ -36,7 +36,11 @@
 //! result is indistinguishable from "not computed yet"), so the set of
 //! currently-frozen sense kinds per observer is tracked in the
 //! [`DetectionSnapshots`] resource. `SenseMode::Continuous` senses are
-//! re-evaluated on every run.
+//! re-evaluated on a throttle (every [`CONTINUOUS_THROTTLE_RUNS`] runs)
+//! rather than every single run — an implementation detail only, never a
+//! player-visible pulse: a throttled-skip run carries the previous run's
+//! membership forward verbatim, the same way a frozen snapshot does, so
+//! membership never flickers or drops between real re-queries.
 //!
 //! Whatever the mode, the component is rewritten **wholesale**: frozen entries
 //! are carried over from the previous value and recomputed entries are appended
@@ -61,17 +65,31 @@ use vek::Vec3;
 /// Buff kinds that count as a poison/disease-family affliction.
 const AFFLICTION_BUFFS: &[BuffKind] = &[BuffKind::Poisoned, BuffKind::Cursed, BuffKind::Burning];
 
-/// Per-observer bookkeeping for `SenseMode::Snapshot` freezing.
+/// How many detection-system runs pass between two real spatial re-queries of
+/// one `SenseMode::Continuous` sense kind. The server tick runs at roughly
+/// 30 Hz, so this is a cadence of about 0.13 s. On a run that isn't due, the
+/// previous run's membership for that kind is carried over into `Detected`
+/// verbatim (the same carry-forward the `Snapshot` freeze logic already does)
+/// rather than left empty, so a throttled-skip run never flickers or drops
+/// membership — only the underlying query cadence is coarser than every
+/// tick, never the player-visible reveal set.
+const CONTINUOUS_THROTTLE_RUNS: u64 = 4;
+
+/// Per-observer bookkeeping for `SenseMode::Snapshot` freezing and
+/// `SenseMode::Continuous` throttling.
 ///
-/// Holds only the *kinds* that are currently frozen — the frozen membership
-/// itself is carried over from the observer's own `Detected`. Entries are
-/// pruned every run, so an observer that stops sensing (or is deleted) leaves
-/// nothing behind, and a re-cast of the same sense a tick later is correctly
-/// treated as a fresh snapshot.
+/// Holds only the *kinds* that are currently frozen, or the run at which a
+/// continuous kind was last actually re-queried — never the membership
+/// itself, which is carried over from the observer's own `Detected`. Entries
+/// are pruned every run, so an observer that stops sensing (or is deleted)
+/// leaves nothing behind, and a re-cast of the same sense a tick later is
+/// correctly treated as fresh (a new snapshot, or an immediate first
+/// continuous evaluation).
 #[derive(Default)]
 pub struct DetectionSnapshots {
     /// Monotonic run counter used to prune entries that were not refreshed by
-    /// the current run.
+    /// the current run, and to decide whether a continuous kind is due for
+    /// re-evaluation.
     run: u64,
     per_observer: HashMap<Entity, ObserverSnapshots>,
 }
@@ -80,24 +98,24 @@ pub struct DetectionSnapshots {
 struct ObserverSnapshots {
     last_run: u64,
     frozen: Vec<SenseKind>,
+    /// The run counter value at which each currently-declared
+    /// `SenseMode::Continuous` sense kind was last actually re-queried
+    /// against the spatial grid.
+    continuous_last_eval: HashMap<SenseKind, u64>,
 }
 
 impl DetectionSnapshots {
     fn begin_run(&mut self) { self.run = self.run.wrapping_add(1); }
 
-    /// Take this observer's previously-frozen kinds out of the map, so the
-    /// caller owns them while it decides what stays frozen.
-    fn take(&mut self, observer: Entity) -> Vec<SenseKind> {
-        self.per_observer
-            .remove(&observer)
-            .map(|entry| entry.frozen)
-            .unwrap_or_default()
+    /// Take this observer's previous bookkeeping out of the map, so the
+    /// caller owns it while it decides what carries forward.
+    fn take(&mut self, observer: Entity) -> ObserverSnapshots {
+        self.per_observer.remove(&observer).unwrap_or_default()
     }
 
-    fn store(&mut self, observer: Entity, frozen: Vec<SenseKind>) {
-        let last_run = self.run;
-        self.per_observer
-            .insert(observer, ObserverSnapshots { last_run, frozen });
+    fn store(&mut self, observer: Entity, mut entry: ObserverSnapshots) {
+        entry.last_run = self.run;
+        self.per_observer.insert(observer, entry);
     }
 
     /// Drop every observer that this run did not touch.
@@ -137,6 +155,7 @@ impl<'a> System<'a> for Sys {
 
     fn run(_job: &mut Job<Self>, (read_data, mut detecteds, mut snapshots): Self::SystemData) {
         snapshots.begin_run();
+        let run = snapshots.run;
 
         for (observer, observer_pos, observer_stats) in
             (&read_data.entities, &read_data.positions, &read_data.stats).join()
@@ -152,7 +171,8 @@ impl<'a> System<'a> for Sys {
             }
 
             let senses = merged_senses(&observer_stats.senses);
-            let previously_frozen = snapshots.take(observer);
+            let mut bookkeeping = snapshots.take(observer);
+            let previously_frozen = std::mem::take(&mut bookkeeping.frozen);
             let previous = detecteds.get(observer);
 
             let mut entities = Vec::new();
@@ -160,15 +180,63 @@ impl<'a> System<'a> for Sys {
             let mut frozen = Vec::new();
 
             for sense in &senses {
-                let is_snapshot = sense.mode == SenseMode::Snapshot;
-                if is_snapshot {
-                    frozen.push(sense.kind);
+                match sense.mode {
+                    SenseMode::Snapshot => {
+                        frozen.push(sense.kind);
 
-                    if previously_frozen.contains(&sense.kind) {
-                        // Already computed on an earlier tick: membership is
-                        // frozen, so carry the previous result over verbatim
-                        // rather than re-querying the world.
-                        if let Some(previous) = previous {
+                        if previously_frozen.contains(&sense.kind) {
+                            // Already computed on an earlier tick: membership
+                            // is frozen, so carry the previous result over
+                            // verbatim rather than re-querying the world.
+                            if let Some(previous) = previous {
+                                entities.extend(
+                                    previous
+                                        .entities
+                                        .iter()
+                                        .filter(|entry| entry.sense == sense.kind)
+                                        .copied(),
+                                );
+                                points.extend(
+                                    previous
+                                        .points
+                                        .iter()
+                                        .filter(|point| point.sense == sense.kind)
+                                        .copied(),
+                                );
+                            }
+                            continue;
+                        }
+
+                        evaluate_sense(
+                            &read_data,
+                            observer,
+                            observer_pos,
+                            *sense,
+                            &mut entities,
+                            &mut points,
+                        );
+                    },
+                    SenseMode::Continuous => {
+                        let last_eval = bookkeeping.continuous_last_eval.get(&sense.kind).copied();
+                        let due = last_eval
+                            .is_none_or(|last| run.wrapping_sub(last) >= CONTINUOUS_THROTTLE_RUNS);
+
+                        if due {
+                            evaluate_sense(
+                                &read_data,
+                                observer,
+                                observer_pos,
+                                *sense,
+                                &mut entities,
+                                &mut points,
+                            );
+                            bookkeeping.continuous_last_eval.insert(sense.kind, run);
+                        } else if let Some(previous) = previous {
+                            // Not due this run: reuse the previous run's
+                            // membership for this kind verbatim, exactly the
+                            // same carry-forward the snapshot branch above
+                            // uses, so a throttled-skip run never flickers or
+                            // drops membership.
                             entities.extend(
                                 previous
                                     .entities
@@ -184,21 +252,21 @@ impl<'a> System<'a> for Sys {
                                     .copied(),
                             );
                         }
-                        continue;
-                    }
+                    },
                 }
-
-                evaluate_sense(
-                    &read_data,
-                    observer,
-                    observer_pos,
-                    *sense,
-                    &mut entities,
-                    &mut points,
-                );
             }
 
-            snapshots.store(observer, frozen);
+            // Drop bookkeeping for continuous kinds no longer declared, so a
+            // kind that disappears and later reappears is treated as a fresh
+            // first evaluation rather than reading a stale, possibly-recent
+            // timestamp.
+            bookkeeping.continuous_last_eval.retain(|kind, _| {
+                senses
+                    .iter()
+                    .any(|sense| sense.mode == SenseMode::Continuous && sense.kind == *kind)
+            });
+            bookkeeping.frozen = frozen;
+            snapshots.store(observer, bookkeeping);
 
             if entities.is_empty() && points.is_empty() {
                 if detecteds.contains(observer) {
@@ -811,6 +879,9 @@ mod tests {
         let observer = spawn_observer(&mut world, SenseKind::Creature, SenseMode::Continuous);
         spawn_target(&mut world, 2, 5.0).with(beast_body()).build();
 
+        // The very first run always evaluates immediately -- there is no
+        // previous timestamp to throttle against, so a freshly-cast
+        // continuous sense is never delayed by up to a full throttle window.
         rebuild_spatial_grid(&world);
         common_ecs::run_now::<Sys>(&world);
         assert_eq!(detected_uids(&world, observer), vec![uid(2)]);
@@ -818,10 +889,66 @@ mod tests {
         spawn_target(&mut world, 3, 6.0).with(beast_body()).build();
         world.maintain();
         rebuild_spatial_grid(&world);
+
+        // The throttle window (`CONTINUOUS_THROTTLE_RUNS`) hasn't elapsed
+        // yet, so this run reuses the previous membership verbatim -- the
+        // new target is not dropped from view, but it also isn't picked up
+        // yet.
         common_ecs::run_now::<Sys>(&world);
+        assert_eq!(
+            detected_uids(&world, observer),
+            vec![uid(2)],
+            "a throttled-skip run must not flicker or drop existing membership"
+        );
+
+        // Advance far enough into the throttle window for a real re-query to
+        // become due again.
+        for _ in 0..CONTINUOUS_THROTTLE_RUNS {
+            common_ecs::run_now::<Sys>(&world);
+        }
         let mut revealed = detected_uids(&world, observer);
         revealed.sort_by_key(|uid| uid.0);
-        assert_eq!(revealed, vec![uid(2), uid(3)]);
+        assert_eq!(
+            revealed,
+            vec![uid(2), uid(3)],
+            "once the throttle is due again, the reveal set catches up to the world"
+        );
+    }
+
+    #[test]
+    fn a_continuous_sense_does_not_flicker_when_a_member_leaves_range_mid_window() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::Creature, SenseMode::Continuous);
+        let target = spawn_target(&mut world, 2, 5.0).with(beast_body()).build();
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+        assert_eq!(detected_uids(&world, observer), vec![uid(2)]);
+
+        // Move the target out of range before the throttle window elapses
+        // again.
+        world.write_storage::<Pos>().get_mut(target).unwrap().0 = Vec3::new(RADIUS + 5.0, 0.0, 0.0);
+        rebuild_spatial_grid(&world);
+
+        // Every run inside the throttle window must keep showing the stale
+        // (but not yet re-queried) membership -- no flicker, no premature
+        // drop, even though the real world has already changed underneath.
+        for _ in 0..(CONTINUOUS_THROTTLE_RUNS - 1) {
+            common_ecs::run_now::<Sys>(&world);
+            assert_eq!(
+                detected_uids(&world, observer),
+                vec![uid(2)],
+                "membership must not drop before the throttle is due"
+            );
+        }
+
+        // The throttle is now due: the re-query reflects the target having
+        // actually left range.
+        common_ecs::run_now::<Sys>(&world);
+        assert!(
+            detected_uids(&world, observer).is_empty(),
+            "once due, the re-query must reflect the target's real position"
+        );
     }
 
     #[test]

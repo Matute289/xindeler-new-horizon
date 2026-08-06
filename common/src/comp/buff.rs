@@ -452,8 +452,8 @@ pub enum BuffKind {
     /// perception-piercing flag; produces no reveal set of its own.
     SeeInvisible,
     /// An always-active, continuously re-evaluated true sense: pierces
-    /// concealment and illusion for as long as it lasts, and reveals
-    /// illusory entities as they come into range.
+    /// concealment, illusion and darkness for as long as it lasts, and
+    /// reveals concealed/illusory entities as they come into range.
     TrueSight,
     // =================
     //   REMOTE SENSE
@@ -1307,21 +1307,29 @@ impl BuffKind {
                 }
                 effects
             },
-            // Concealment-piercing only; produces no reveal set of its own
-            // (the perception-piercing flag is set elsewhere).
-            BuffKind::SeeInvisible => {
-                let mut effects = Vec::new();
-                if let Some(MiscBuffData::Sense(kind, radius, mode)) = data.misc_data {
-                    effects.push(BuffEffect::Sense { kind, radius, mode });
-                }
-                effects
-            },
-            // Always-active, continuously re-evaluated (`SenseMode::Continuous`).
+            // Concealment-piercing only; produces no reveal set of its own.
+            // Unlike `Detecting`/`TrueSight`, this never reads `misc_data` --
+            // there is nothing for it to carry, since `see_invisibility` is
+            // not a reveal-set spell at all (its entire job is ignoring the
+            // concealment modifier on the observer side).
+            BuffKind::SeeInvisible => vec![BuffEffect::PierceConcealment],
+            // Always-active, continuously re-evaluated (`SenseMode::Continuous`)
+            // true sense, unconditionally piercing concealment, illusion and
+            // darkness for as long as it lasts -- the one unified True Sight
+            // mechanism. The reveal-set `Sense` effect is still conditional
+            // on `misc_data` being present (same "omit rather than guess"
+            // pattern every other sense-carrying `BuffKind` uses), but the
+            // three pierce flags are unconditional: they are this buff's
+            // defining behaviour, not something a caller could opt out of by
+            // omitting `misc_data`.
             BuffKind::TrueSight => {
                 let mut effects = Vec::new();
                 if let Some(MiscBuffData::Sense(kind, radius, mode)) = data.misc_data {
                     effects.push(BuffEffect::Sense { kind, radius, mode });
                 }
+                effects.push(BuffEffect::PierceConcealment);
+                effects.push(BuffEffect::PierceIllusion);
+                effects.push(BuffEffect::PierceDarkness);
                 effects
             },
             // Declares the shape of a remote-sensing link (which kind of
@@ -1819,6 +1827,14 @@ pub enum BuffEffect {
     /// value. Sets `Stats.pierce_concealment`, read on the observer's side
     /// by `combat::perception_dist_multiplier_from_stealth`.
     PierceConcealment,
+    /// Grants the buffed entity the ability to see through illusions and
+    /// disguises unconditionally. Sets `Stats.pierce_illusion`, read on the
+    /// observer's side by whatever illusion/disguise check it gates.
+    PierceIllusion,
+    /// Grants the buffed entity the ability to see through mundane and
+    /// magical darkness. Sets `Stats.pierce_darkness` — a flag only, its
+    /// lighting-override consumer is a separate future addition.
+    PierceDarkness,
     /// Anti-divination (`nondetection`): the buffed entity can't be targeted
     /// by any divination sense, unconditionally. Sets `Stats.nondetection`,
     /// read by `server/src/sys/detection.rs`'s per-`SenseKind` predicate as
@@ -2745,5 +2761,93 @@ pub mod tests {
                 .any(|e| matches!(e, BuffEffect::Stealth(s) if (*s - 20.0).abs() < 1e-6))
         );
         assert!(BuffKind::Sequester.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn see_invisible_grants_only_pierce_concealment_and_never_a_sense() {
+        // Regression guard for the bug this row fixes: SeeInvisible must
+        // never emit a `Sense` effect, even if a caller mistakenly supplies
+        // `misc_data` -- its entire job is the concealment-piercing flag.
+        let data = BuffData::new(0.0, None).with_misc_data(MiscBuffData::Sense(
+            SenseKind::Magic,
+            20.0,
+            SenseMode::Snapshot,
+        ));
+        let effects = BuffKind::SeeInvisible.effects(&data, None, None);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], BuffEffect::PierceConcealment));
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::Sense { .. })),
+            "SeeInvisible must never produce a reveal-set Sense effect"
+        );
+        assert!(BuffKind::SeeInvisible.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn true_sight_grants_all_four_effects_when_misc_data_is_present() {
+        let data = BuffData::new(0.0, None).with_misc_data(MiscBuffData::Sense(
+            SenseKind::True,
+            30.0,
+            SenseMode::Continuous,
+        ));
+        let effects = BuffKind::TrueSight.effects(&data, None, None);
+        assert_eq!(effects.len(), 4);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            BuffEffect::Sense {
+                kind: SenseKind::True,
+                radius,
+                mode: SenseMode::Continuous,
+            } if (*radius - 30.0).abs() < 1e-6
+        )));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::PierceConcealment))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::PierceIllusion))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::PierceDarkness))
+        );
+        assert!(BuffKind::TrueSight.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn true_sight_grants_only_the_three_pierce_flags_when_misc_data_is_absent() {
+        // Same "omit rather than guess" pattern as Mooncloak's own regression
+        // guard: without an authored Sense, the buff must not invent one --
+        // it should just omit the reveal-set effect, keeping only the
+        // unconditional pierce flags.
+        let effects = BuffKind::TrueSight.effects(&BuffData::new(0.0, None), None, None);
+        assert_eq!(effects.len(), 3);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::Sense { .. })),
+            "no misc_data means no reveal-set Sense effect"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::PierceConcealment))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::PierceIllusion))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::PierceDarkness))
+        );
     }
 }
