@@ -682,6 +682,25 @@ mod tests {
                 Dir::from_unnormalized(Vec3::new(1.0, 0.0, 0.0)).unwrap();
         }
 
+        // The shared combat pipeline (`Attack::apply_attack` in
+        // `common/src/combat.rs`) rolls a genuinely random per-attack to-hit
+        // check for single-target attacks: `hit_chance = clamp(base_hit +
+        // (accuracy - evasion) * hit_k, hit_floor, hit_ceil)`, using an
+        // unseeded RNG. At the `Stats::empty` default both `create_caster`
+        // and `create_creature` start from (accuracy == evasion == 0),
+        // `hit_chance` sits at `base_hit` rather than 1.0, so a single throw
+        // has a real chance to whiff. This test throws exactly once and only
+        // means to verify that `TelekineticGrip`'s release-as-throw wires the
+        // item into that real collision/combat pipeline — not to re-exercise
+        // the to-hit roll itself (which has its own dedicated coverage) — so
+        // give the caster enough accuracy over the target's evasion that
+        // `hit_chance` clamps to `hit_ceil` (1.0) and the throw
+        // deterministically lands.
+        {
+            let mut stats = state.ecs().write_storage::<Stats>();
+            stats.get_mut(caster).unwrap().accuracy = 100.0;
+        }
+
         // Hold well past `place_threshold` so this reads as a throw, not a place
         // (mirrors `release_as_throw`).
         let hold_ticks: u32 = 30;
