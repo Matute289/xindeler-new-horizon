@@ -297,7 +297,7 @@ pub fn spell_compendium_manifest() -> AssetReadGuard<SpellCompendium> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{assets::AssetExt, comp::ability::CharacterAbility};
+    use crate::{assets::AssetExt, comp::ability::CharacterAbility, resources::Secs};
 
     /// Every boundary row of the spell-level unlock table.
     #[test]
@@ -408,6 +408,46 @@ mod tests {
         assert!(!book.is_empty(), "compendium is empty");
         for spell in book.iter() {
             Ron::<CharacterAbility>::load_expect(&spell.ability).read();
+        }
+    }
+
+    #[test]
+    fn concealment_aura_spells_resolve_to_basic_aura_with_the_matching_buff_kind() {
+        use crate::comp::buff::BuffKind;
+
+        let book = SpellCompendium::load_expect_cloned();
+        for (id, expected_kind) in [
+            (
+                "spells.abjuration.pass_without_trace",
+                BuffKind::PassWithoutTrace,
+            ),
+            ("spells.abjuration.mooncloak", BuffKind::Mooncloak),
+        ] {
+            let spell = book
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} missing from compendium"));
+            let ability = Ron::<CharacterAbility>::load_expect(&spell.ability)
+                .read()
+                .0
+                .clone();
+            match ability {
+                CharacterAbility::BasicAura {
+                    auras,
+                    aura_duration,
+                    ..
+                } => {
+                    assert!(
+                        auras.iter().any(|aura| aura.kind == expected_kind),
+                        "{id}'s ability RON does not grant a {expected_kind:?} aura"
+                    );
+                    assert_eq!(
+                        aura_duration,
+                        Some(Secs(60.0)),
+                        "{id} should be a genuinely lingering 60s aura, not a brief pulse"
+                    );
+                },
+                other => panic!("{id} should resolve to BasicAura, got {other:?}"),
+            }
         }
     }
 

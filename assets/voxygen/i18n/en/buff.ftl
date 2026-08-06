@@ -283,6 +283,12 @@ buff-remotesensing = Remote Sensing
 ## Disguised (placeholder strings; content spells land separately)
 buff-disguised = Disguised
     .desc = You appear as something else. Your body, movement and reach are unchanged.
+## Pass without Trace
+buff-passwithouttrace = Pass without Trace
+    .desc = A hush of shadow cloaks your footsteps and scent, making you far harder to notice.
+## Mooncloak
+buff-mooncloak = Mooncloak
+    .desc = Shifting silver dimness veils your movements and dulls harmful magic against you.
 ## Smites (self-buff, next weapon hit gains a rider)
 buff-blindingsmite = Blinding Smite
     .desc = Your next weapon strike sears with radiant light, dealing extra damage and blinding your foe.
