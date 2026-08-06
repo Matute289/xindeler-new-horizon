@@ -7873,119 +7873,129 @@ impl FigureMgr {
     }
 
     pub fn viewpoint_offset(&self, scene_data: &SceneData, entity: EcsEntity) -> Vec3<f32> {
-        scene_data
-            .state
-            .ecs()
-            .read_storage::<Body>()
-            .get(entity)
-            .and_then(|b| match b {
-                Body::Humanoid(_) => self
-                    .states
-                    .character_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 4.0, 1.0)).xyz()),
-                Body::QuadrupedSmall(_) => self
-                    .states
-                    .quadruped_small_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
-                Body::QuadrupedMedium(b) => self
-                    .states
-                    .quadruped_medium_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * quadruped_medium::viewpoint(b)).xyz()),
-                Body::BirdMedium(b) => self
-                    .states
-                    .bird_medium_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * bird_medium::viewpoint(b)).xyz()),
-                Body::FishMedium(_) => self
-                    .states
-                    .fish_medium_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 5.0, 0.0, 1.0)).xyz()),
-                Body::Dragon(_) => self
-                    .states
-                    .dragon_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head_upper * Vec4::new(0.0, 8.0, 0.0, 1.0)).xyz()),
-                Body::BirdLarge(_) => self
-                    .states
-                    .bird_large_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 6.0, 1.0)).xyz()),
-                Body::FishSmall(_) => self
-                    .states
-                    .fish_small_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
-                Body::BipedLarge(_) => self
-                    .states
-                    .biped_large_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.jaw * Vec4::new(0.0, 4.0, 0.0, 1.0)).xyz()),
-                Body::BipedSmall(_) => self
-                    .states
-                    .biped_small_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz()),
-                Body::Golem(_) => self
-                    .states
-                    .golem_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 5.0, 1.0)).xyz()),
-                Body::Theropod(_) => self
-                    .states
-                    .theropod_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 2.0, 0.0, 1.0)).xyz()),
-                Body::QuadrupedLow(_) => self
-                    .states
-                    .quadruped_low_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head_c_upper * Vec4::new(0.0, 4.0, 1.0, 1.0)).xyz()),
-                Body::Arthropod(_) => self
-                    .states
-                    .arthropod_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
-                Body::Object(_) => None,
-                Body::Ship(_) => None,
-                Body::Item(_) => None,
-                Body::Crustacean(_) => self
-                    .states
-                    .crustacean_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
-                Body::Plugin(_) => {
-                    #[cfg(not(feature = "plugins"))]
-                    unreachable!("Plugins require feature");
-                    #[cfg(feature = "plugins")]
-                    {
-                        self.states
-                            .plugin_states
-                            .get(&entity)
-                            .map(|state| &state.computed_skeleton)
-                            .map(|skeleton| (skeleton.bone0 * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz())
-                    }
-                },
-            })
-            .unwrap_or_else(Vec3::zero)
+        let ecs = scene_data.state.ecs();
+        // The apparent body while disguised, otherwise the real one -- see
+        // `Disguise::render_body`'s doc comment. This entity's `FigureState`
+        // lives under whichever body category `maintain_entity` last
+        // dispatched it into, which is always the apparent one when
+        // disguised, so the state-map lookups below must key off the same
+        // body `maintain_entity` used or they silently miss and this whole
+        // function falls through to `Vec3::zero()` -- collapsing the camera
+        // for a moderator spectating, or a future remote-sensing caster
+        // viewing through, a cross-category-disguised entity.
+        let Some(real_body) = ecs.read_storage::<Body>().get(entity).copied() else {
+            return Vec3::zero();
+        };
+        let disguise = ecs.read_storage::<Disguise>();
+        let body = Disguise::render_body(disguise.get(entity), real_body);
+        match &body {
+            Body::Humanoid(_) => self
+                .states
+                .character_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 4.0, 1.0)).xyz()),
+            Body::QuadrupedSmall(_) => self
+                .states
+                .quadruped_small_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
+            Body::QuadrupedMedium(b) => self
+                .states
+                .quadruped_medium_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * quadruped_medium::viewpoint(b)).xyz()),
+            Body::BirdMedium(b) => self
+                .states
+                .bird_medium_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * bird_medium::viewpoint(b)).xyz()),
+            Body::FishMedium(_) => self
+                .states
+                .fish_medium_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 5.0, 0.0, 1.0)).xyz()),
+            Body::Dragon(_) => self
+                .states
+                .dragon_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head_upper * Vec4::new(0.0, 8.0, 0.0, 1.0)).xyz()),
+            Body::BirdLarge(_) => self
+                .states
+                .bird_large_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 6.0, 1.0)).xyz()),
+            Body::FishSmall(_) => self
+                .states
+                .fish_small_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
+            Body::BipedLarge(_) => self
+                .states
+                .biped_large_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.jaw * Vec4::new(0.0, 4.0, 0.0, 1.0)).xyz()),
+            Body::BipedSmall(_) => self
+                .states
+                .biped_small_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz()),
+            Body::Golem(_) => self
+                .states
+                .golem_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 5.0, 1.0)).xyz()),
+            Body::Theropod(_) => self
+                .states
+                .theropod_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 2.0, 0.0, 1.0)).xyz()),
+            Body::QuadrupedLow(_) => self
+                .states
+                .quadruped_low_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head_c_upper * Vec4::new(0.0, 4.0, 1.0, 1.0)).xyz()),
+            Body::Arthropod(_) => self
+                .states
+                .arthropod_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
+            Body::Object(_) => None,
+            Body::Ship(_) => None,
+            Body::Item(_) => None,
+            Body::Crustacean(_) => self
+                .states
+                .crustacean_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
+            Body::Plugin(_) => {
+                #[cfg(not(feature = "plugins"))]
+                unreachable!("Plugins require feature");
+                #[cfg(feature = "plugins")]
+                {
+                    self.states
+                        .plugin_states
+                        .get(&entity)
+                        .map(|state| &state.computed_skeleton)
+                        .map(|skeleton| (skeleton.bone0 * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz())
+                }
+            },
+        }
+        .unwrap_or_else(Vec3::zero)
     }
 
     pub fn lantern_mat(&self, entity: EcsEntity) -> Option<Mat4<f32>> {
@@ -8000,90 +8010,97 @@ impl FigureMgr {
         scene_data: &SceneData,
         entity: EcsEntity,
     ) -> Option<Transform<f32, f32, f32>> {
-        scene_data
-            .state
-            .ecs()
-            .read_storage::<Body>()
-            .get(entity)
-            .and_then(|body| match body {
-                Body::Humanoid(_) => self.states.character_states.get(&entity).map(|state| {
+        let ecs = scene_data.state.ecs();
+        // See `viewpoint_offset`'s identical comment: `entity`'s `FigureState`
+        // is keyed by its apparent body when disguised, so this lookup must
+        // resolve through `Disguise::render_body` too, or a disguised mount's
+        // rider silently gets no attachment transform.
+        let real_body = ecs.read_storage::<Body>().get(entity).copied()?;
+        let disguise = ecs.read_storage::<Disguise>();
+        let body = Disguise::render_body(disguise.get(entity), real_body);
+        match &body {
+            Body::Humanoid(_) => {
+                self.states.character_states.get(&entity).map(|state| {
                     character::mount_transform(&state.computed_skeleton, &state.skeleton)
-                }),
-                Body::QuadrupedSmall(b) => {
-                    self.states
-                        .quadruped_small_states
-                        .get(&entity)
-                        .map(|state| {
-                            quadruped_small::mount_transform(
-                                b,
-                                &state.computed_skeleton,
-                                &state.skeleton,
-                            )
-                        })
-                },
-                Body::QuadrupedMedium(b) => {
-                    self.states
-                        .quadruped_medium_states
-                        .get(&entity)
-                        .map(|state| {
-                            quadruped_medium::mount_transform(
-                                b,
-                                &state.computed_skeleton,
-                                &state.skeleton,
-                            )
-                        })
-                },
-                Body::BirdMedium(b) => self.states.bird_medium_states.get(&entity).map(|state| {
-                    bird_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::FishMedium(b) => self.states.fish_medium_states.get(&entity).map(|state| {
-                    fish_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Dragon(b) => self.states.dragon_states.get(&entity).map(|state| {
+                })
+            },
+            Body::QuadrupedSmall(b) => {
+                self.states
+                    .quadruped_small_states
+                    .get(&entity)
+                    .map(|state| {
+                        quadruped_small::mount_transform(
+                            b,
+                            &state.computed_skeleton,
+                            &state.skeleton,
+                        )
+                    })
+            },
+            Body::QuadrupedMedium(b) => {
+                self.states
+                    .quadruped_medium_states
+                    .get(&entity)
+                    .map(|state| {
+                        quadruped_medium::mount_transform(
+                            b,
+                            &state.computed_skeleton,
+                            &state.skeleton,
+                        )
+                    })
+            },
+            Body::BirdMedium(b) => self.states.bird_medium_states.get(&entity).map(|state| {
+                bird_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::FishMedium(b) => self.states.fish_medium_states.get(&entity).map(|state| {
+                fish_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Dragon(b) => {
+                self.states.dragon_states.get(&entity).map(|state| {
                     dragon::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::BirdLarge(b) => self.states.bird_large_states.get(&entity).map(|state| {
-                    bird_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::FishSmall(b) => self.states.fish_small_states.get(&entity).map(|state| {
-                    fish_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::BipedLarge(b) => self.states.biped_large_states.get(&entity).map(|state| {
-                    biped_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::BipedSmall(b) => self.states.biped_small_states.get(&entity).map(|state| {
-                    biped_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Golem(b) => self.states.golem_states.get(&entity).map(|state| {
+                })
+            },
+            Body::BirdLarge(b) => self.states.bird_large_states.get(&entity).map(|state| {
+                bird_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::FishSmall(b) => self.states.fish_small_states.get(&entity).map(|state| {
+                fish_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::BipedLarge(b) => self.states.biped_large_states.get(&entity).map(|state| {
+                biped_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::BipedSmall(b) => self.states.biped_small_states.get(&entity).map(|state| {
+                biped_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Golem(b) => {
+                self.states.golem_states.get(&entity).map(|state| {
                     golem::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Theropod(b) => self.states.theropod_states.get(&entity).map(|state| {
-                    theropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::QuadrupedLow(b) => {
-                    self.states.quadruped_low_states.get(&entity).map(|state| {
-                        quadruped_low::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                    })
-                },
-                Body::Arthropod(b) => self.states.arthropod_states.get(&entity).map(|state| {
-                    arthropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Object(_) => None,
-                Body::Ship(_) => None,
-                Body::Item(_) => None,
-                Body::Crustacean(b) => self.states.crustacean_states.get(&entity).map(|state| {
-                    crustacean::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Plugin(_) => {
-                    #[cfg(not(feature = "plugins"))]
-                    unreachable!("Plugins require feature");
-                    #[cfg(feature = "plugins")]
-                    Some(Transform {
-                        position: body.mount_offset().into_tuple().into(),
-                        ..Default::default()
-                    })
-                },
-            })
+                })
+            },
+            Body::Theropod(b) => self.states.theropod_states.get(&entity).map(|state| {
+                theropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::QuadrupedLow(b) => self.states.quadruped_low_states.get(&entity).map(|state| {
+                quadruped_low::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Arthropod(b) => self.states.arthropod_states.get(&entity).map(|state| {
+                arthropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Object(_) => None,
+            Body::Ship(_) => None,
+            Body::Item(_) => None,
+            Body::Crustacean(b) => self.states.crustacean_states.get(&entity).map(|state| {
+                crustacean::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Plugin(_) => {
+                #[cfg(not(feature = "plugins"))]
+                unreachable!("Plugins require feature");
+                #[cfg(feature = "plugins")]
+                Some(Transform {
+                    position: body.mount_offset().into_tuple().into(),
+                    ..Default::default()
+                })
+            },
+        }
     }
 
     fn trail_points(

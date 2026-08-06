@@ -23,7 +23,7 @@
 use crate::{comp::body::Body, uid::Uid};
 use common_i18n::Content;
 use serde::{Deserialize, Serialize};
-use specs::{Component, DerefFlaggedStorage, VecStorage};
+use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
 
 /// An active disguise: what observers see instead of the wearer's real
 /// `Body`/name.
@@ -80,7 +80,12 @@ impl Disguise {
 }
 
 impl Component for Disguise {
-    type Storage = DerefFlaggedStorage<Self, VecStorage<Self>>;
+    // `DenseVecStorage`, not `VecStorage`: rare (most entities are never
+    // disguised), matching the choice `RemoteSense`/`Detected` already made
+    // for this exact class of component -- a plain `VecStorage` reserves a
+    // slot per entity index up to the server's max, the wrong tradeoff for
+    // something this uncommon.
+    type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
 }
 
 #[cfg(test)]
