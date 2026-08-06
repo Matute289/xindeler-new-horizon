@@ -38,6 +38,9 @@ SelfBuff(
     meta: (
         school: Some(Illusion),
         source: Some(Arcane),
-        requirements: (min_level: Some(1)),
+        // level 1 spell -> min_level 6, same `level * 6` convention seeming.ron
+        // (this PR's sibling spell) derives from every other shipped spell
+        // that sets this field.
+        requirements: (min_level: Some(6)),
     ),
 )

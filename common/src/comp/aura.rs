@@ -333,6 +333,17 @@ pub struct AuraBuffConstructor {
     /// `healingaura`, etc.) stays byte-unchanged and continues to parse with
     /// `misc_data: None`, the same additive pattern `pool_split` above
     /// already established.
+    ///
+    /// 🔴 **Sync scope warning for future authors.** This rides on `Auras`
+    /// (`SyncFrom::AnyEntity`), so while the aura exists on the caster,
+    /// `misc_data` is visible to every nearby client, not just whoever the
+    /// aura ends up buffing — the same class of leak
+    /// `MiscBuffData::RemoteSense`'s own doc comment already warns about,
+    /// and for the same reason that type deliberately carries no
+    /// identity/position fields. Harmless for today's only consumer
+    /// (`seeming`'s disguise body is a fixed, public template, not a
+    /// secret), but a *future* aura-delivered buff whose payload must stay
+    /// hidden from bystanders must not go through this field unmodified.
     #[serde(default)]
     pub misc_data: Option<MiscBuffData>,
 }
@@ -652,6 +663,8 @@ mod tests {
         for asset in [
             "common.abilities.spells.gravesong.crusaders_mantle",
             "common.abilities.spells.gravesong.bless",
+            "common.abilities.sceptre.wardingaura",
+            "common.abilities.sceptre.healingaura",
         ] {
             let ability: CharacterAbility = Ron::load_expect_cloned(asset).into_inner();
             let CharacterAbility::BasicAura { auras, .. } = &ability else {
