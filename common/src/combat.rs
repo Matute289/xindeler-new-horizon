@@ -150,6 +150,12 @@ pub struct CombatTuning {
     /// predating this field still loads and gets the tuned disguise numbers
     /// from [`CombatTuning::default`], not zeroes.
     pub disguise: MagicEffectTuning,
+    /// How often, in real seconds, an observer that has not yet seen through
+    /// a disguise gets another periodic suspicion roll against it (the
+    /// disguise-roll's own "T1" trigger). A genuine gameplay-balance cadence,
+    /// not an engine constant, so it lives here rather than as a Rust
+    /// literal in `server/agent/src/action_nodes.rs`.
+    pub disguise_suspicion_reroll_secs: f32,
     /// Multiplier applied to physical damage, poise/knockback and crit when
     /// the swung weapon is not in the wielder's proficiency set (a soft
     /// weapon-proficiency gate). 1.0 = no penalty.
@@ -210,8 +216,9 @@ impl Default for CombatTuning {
                 mr_soft_cap: 0.75,
                 cr_to_evasion: 2.0,
                 situational_penalty: 0.25,
-                outclassed_wall: MagicEffectTuning::NO_OUTCLASSED_WALL,
+                outclassed_wall: None,
             },
+            disguise_suspicion_reroll_secs: 8.0,
             non_proficient_damage_mult: 0.40,
             trigger_slot_cooldown_secs: DEFAULT_TRIGGER_SLOT_COOLDOWNS.to_vec(),
         }
@@ -254,7 +261,7 @@ impl CombatTuning {
             mr_soft_cap: self.save_mr_soft_cap,
             cr_to_evasion: self.save_cr_to_evasion,
             situational_penalty: self.save_in_combat_penalty,
-            outclassed_wall: self.save_outclassed_wall,
+            outclassed_wall: Some(self.save_outclassed_wall),
         }
     }
 }
@@ -268,8 +275,18 @@ impl CombatTuning {
 /// its own `disguise:` section in `assets/common/combat_tuning.ron`).
 /// A future resisted-perception effect adds a third instance here, never a
 /// third formula.
+///
+/// 🔴 Deliberately **not** `#[serde(default)]`: unlike `CombatTuning` (whose
+/// flat fields are never renamed and are additive-only), a `disguise:`
+/// section that only specifies *some* of these fields would silently pull
+/// the rest from [`MagicEffectTuning::default`] — reintroducing, for this
+/// struct specifically, the exact "partial edit silently reverts other
+/// numbers" footgun
+/// `saving_throw_tests::partial_asset_falls_back_to_tuned_defaults`
+/// documents as the reason the original `save_*` fields were kept flat. A
+/// `disguise:` (or any future instance's) section must specify every field
+/// or fail to deserialize.
 #[derive(Copy, Clone, Debug, Deserialize)]
-#[serde(default)]
 pub struct MagicEffectTuning {
     /// Landing chance when the caster's magic accuracy exactly equals the
     /// target's effective magic evasion.
@@ -293,29 +310,24 @@ pub struct MagicEffectTuning {
     pub situational_penalty: f32,
     /// Hard wall on the level term (post-`hit_k` units): a caster whose
     /// accuracy deficit reaches this magnitude always fails outright,
-    /// bypassing `hit_floor` entirely. Charm/save keeps its shipped `0.30`
-    /// wall unchanged. Disguise sets this to
-    /// [`MagicEffectTuning::NO_OUTCLASSED_WALL`] — per the calibration
-    /// table, a badly outclassed disguise caster still lands the floor
-    /// chance rather than failing unconditionally; nobody's disguise should
-    /// be *certain* to be seen through purely from a level gap, unlike an
-    /// overpowering target shrugging off a charm attempt entirely.
-    pub outclassed_wall: f32,
-}
-
-impl MagicEffectTuning {
-    /// An `outclassed_wall` value no realistic level term reaches (`hit_k`
-    /// is `0.015`, so even a 1000-point accuracy/evasion gap only produces a
-    /// magnitude of `15.0`), used by tuning instances that want every
-    /// mismatch to rest on `hit_floor` instead of ever hard-failing.
-    pub const NO_OUTCLASSED_WALL: f32 = 1000.0;
+    /// bypassing `hit_floor` entirely. `Some(0.30)` for charm/save
+    /// (unchanged). `None` for disguise: per the calibration table, a badly
+    /// outclassed disguise caster still lands the floor chance rather than
+    /// failing unconditionally — nobody's disguise should be *certain* to be
+    /// seen through purely from a level gap, unlike an overpowering target
+    /// shrugging off a charm attempt entirely. `None` encodes "no wall" as a
+    /// structural fact, independent of `hit_k` ever being retuned.
+    pub outclassed_wall: Option<f32>,
 }
 
 impl Default for MagicEffectTuning {
     fn default() -> Self {
-        // The charm/save family's shipped numbers -- the conservative
-        // fallback for any tuning instance (or individual field within one)
-        // that doesn't specify its own.
+        // The charm/save family's shipped numbers. Only consulted when a
+        // `MagicEffectTuning` value is built directly in Rust without going
+        // through RON at all (every RON-sourced instance today,
+        // `CombatTuning::disguise` included, is fully specified — see this
+        // struct's own doc comment on why partial RON sections are rejected
+        // rather than defaulted).
         Self {
             base_hit: 0.70,
             hit_floor: 0.05,
@@ -323,7 +335,7 @@ impl Default for MagicEffectTuning {
             mr_soft_cap: 0.75,
             cr_to_evasion: 2.0,
             situational_penalty: 0.20,
-            outclassed_wall: 0.30,
+            outclassed_wall: Some(0.30),
         }
     }
 }
@@ -409,11 +421,11 @@ pub fn saving_throw_chance(
 /// disguise up close" for disguise.
 ///
 /// A caster far enough below the target's effective magic evasion returns
-/// exactly `0.0` when `t.outclassed_wall` is reached — the wall is checked
-/// *before* the clamp, which is what distinguishes it from one more
-/// subtracted term and is why it can produce a result below `t.hit_floor`.
-/// A tuning instance that never wants this hard failure sets
-/// `outclassed_wall` to [`MagicEffectTuning::NO_OUTCLASSED_WALL`].
+/// exactly `0.0` when `t.outclassed_wall` is `Some` and reached — the wall is
+/// checked *before* the clamp, which is what distinguishes it from one more
+/// subtracted term and is why it can produce a result below `t.hit_floor`. A
+/// tuning instance with `outclassed_wall: None` never hard-fails this way,
+/// however outclassed the caster is.
 pub fn magic_effect_success_chance(
     caster: &SaveCasterInfo,
     target: &SaveTargetInfo,
@@ -424,7 +436,9 @@ pub fn magic_effect_success_chance(
     let effective_evasion = target.stats_magic_evasion + target.combat_rating * t.cr_to_evasion;
     let level_term = (caster.magic_accuracy - effective_evasion) * tuning.hit_k;
 
-    if level_term <= -t.outclassed_wall {
+    if let Some(wall) = t.outclassed_wall
+        && level_term <= -wall
+    {
         return 0.0;
     }
 
@@ -5158,10 +5172,7 @@ mod saving_throw_tests {
 /// below is the real shipped formula, not hand arithmetic.
 #[cfg(test)]
 mod disguise_suspicion_formula_tests {
-    use super::{
-        CombatTuning, MagicEffectTuning, SaveCasterInfo, SaveTargetInfo,
-        magic_effect_success_chance,
-    };
+    use super::{CombatTuning, SaveCasterInfo, SaveTargetInfo, magic_effect_success_chance};
     use crate::{assets::AssetExt, comp::body::MagicResistTier};
 
     const EPS: f32 = 1e-3;
@@ -5208,10 +5219,27 @@ mod disguise_suspicion_formula_tests {
         assert!((t.disguise.mr_soft_cap - 0.75).abs() < 1e-6);
         assert!((t.disguise.cr_to_evasion - 2.0).abs() < 1e-6);
         assert!((t.disguise.situational_penalty - 0.25).abs() < 1e-6);
-        assert!(t.disguise.outclassed_wall >= MagicEffectTuning::NO_OUTCLASSED_WALL);
+        assert_eq!(t.disguise.outclassed_wall, None);
         // Same evasion-per-combat_rating curve as charm/save, by design: a
         // boss that resists charm also sees through disguises.
         assert!((t.disguise.cr_to_evasion - t.save_cr_to_evasion).abs() < 1e-6);
+    }
+
+    /// A `disguise:` section that only specifies *some* of
+    /// `MagicEffectTuning`'s fields must fail to deserialize rather than
+    /// silently pulling the rest from `MagicEffectTuning::default()` --
+    /// `MagicEffectTuning` is deliberately not `#[serde(default)]` for
+    /// exactly this reason (see its own doc comment). Confirms the fix is
+    /// real, not just a comment: without it, this would silently produce a
+    /// `disguise.outclassed_wall` of `Some(0.30)` -- reintroducing the hard
+    /// wall this whole feature exists to not have -- with no warning.
+    #[test]
+    fn a_partially_specified_disguise_section_fails_to_deserialize() {
+        let result: Result<CombatTuning, _> = ron::from_str("(disguise: (base_hit: 0.99))");
+        assert!(
+            result.is_err(),
+            "a disguise: section missing fields must be rejected, not silently defaulted"
+        );
     }
 
     /// Loading `common.combat_tuning` (not just `CombatTuning::default()`)

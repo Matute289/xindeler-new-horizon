@@ -2415,6 +2415,14 @@ impl AgentData<'_> {
             return false;
         };
 
+        // Loaded once per disguised-and-not-yet-latched candidate (still the
+        // rare path: `read_data.disguises.get` above already filtered out
+        // every non-disguised entity for free). T1's own trigger condition
+        // needs `disguise_suspicion_reroll_secs` from this asset, so unlike
+        // the formula inputs below it can't be deferred behind "a trigger
+        // already fired".
+        let tuning = Ron::<combat::CombatTuning>::load_expect("common.combat_tuning").read();
+
         // T2's trigger condition: close enough, and hasn't already spent its
         // one-time close-inspection roll on this pair.
         let t2_fires = other_pos.0.distance_squared(self.pos.0) < CLOSE_INSPECT_DIST_M.powi(2)
@@ -2425,16 +2433,15 @@ impl AgentData<'_> {
         // `choose_target` itself is only called intermittently
         // (random-chance and retarget-threshold gated), so accumulating
         // `dt` only on the ticks this function happens to run would stretch
-        // "every 8 real seconds" out far longer than intended.
+        // "every N real seconds" out far longer than intended.
         let last_roll = f64::from(agent.behavior_state.timers[DISGUISE_SUSPICION_TIMER]);
         let t1_fires = other_pos.0.distance_squared(self.pos.0) < agent.psyche.sight_dist.powi(2)
-            && read_data.time.0 - last_roll >= DISGUISE_SUSPICION_REROLL_SECS;
+            && read_data.time.0 - last_roll >= f64::from(tuning.0.disguise_suspicion_reroll_secs);
 
-        // Only build the roll inputs and draw the dice for a trigger that
-        // actually fires this call -- the common case (neither trigger due)
-        // pays for none of this.
+        // Only draw the dice for a trigger that actually fires this call --
+        // the common case (neither trigger due) pays for neither RNG draw
+        // nor the formula's own field reads.
         let (t2_sees_through, t1_sees_through) = if t2_fires || t1_fires {
-            let tuning = Ron::<combat::CombatTuning>::load_expect("common.combat_tuning").read();
             let observer_info = combat::SaveTargetInfo {
                 stats_magic_evasion: self_stats.magic_evasion,
                 crowd_control_resistance: self_stats.crowd_control_resistance,
@@ -2760,18 +2767,16 @@ fn sense_radius_from_stealth_multiplier(stealth_multiplier: f32) -> f32 {
 /// concealment, so it has no stealth value of its own to scale this by.
 const CLOSE_INSPECT_DIST_M: f32 = NEAR_SENSE_RADIUS_M;
 
-/// How often, in real seconds, a still-fooled observer gets another crack at
-/// seeing through a disguise it can currently sense (trigger T1). See
-/// [`AgentData::passes_disguise_gate`]'s doc comment for why this is one
-/// shared per-observer cooldown, not a true per-(observer, disguise) timer.
-const DISGUISE_SUSPICION_REROLL_SECS: f64 = 8.0;
-
 /// The [`comp::agent::ActionState`] timer slot [`AgentData::choose_target`]
-/// reserves for the disguise suspicion roll's
-/// [`DISGUISE_SUSPICION_REROLL_SECS`] cooldown. Index `0` in that same array is
-/// `choose_target`'s own `TimerChooseTarget`, reset at the top of every call;
-/// this index must stay clear of that reset so the cooldown persists across
-/// calls.
+/// reserves for the disguise suspicion roll's periodic-reroll cooldown
+/// (trigger T1, cadence tuned by `CombatTuning::disguise_suspicion_reroll_secs`
+/// — a gameplay-balance number, so it lives in
+/// `assets/common/combat_tuning.ron` rather than as a Rust constant here; see
+/// [`AgentData::passes_disguise_gate`]'s doc comment for why this is one
+/// shared per-observer cooldown, not a true per-(observer, disguise) timer).
+/// Index `0` in that same array is `choose_target`'s own `TimerChooseTarget`,
+/// reset at the top of every call; this index must stay clear of that reset
+/// so the cooldown persists across calls.
 const DISGUISE_SUSPICION_TIMER: usize = 1;
 
 /// Pure decision core of [`AgentData::passes_disguise_gate`], factored out so
