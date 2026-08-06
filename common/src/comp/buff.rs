@@ -1828,8 +1828,9 @@ pub enum BuffEffect {
     /// by `combat::perception_dist_multiplier_from_stealth`.
     PierceConcealment,
     /// Grants the buffed entity the ability to see through illusions and
-    /// disguises unconditionally. Sets `Stats.pierce_illusion`, read on the
-    /// observer's side by whatever illusion/disguise check it gates.
+    /// disguises unconditionally. Sets `Stats.pierce_illusion` — a flag
+    /// only, same as `PierceDarkness` below; its consumer (skipping the
+    /// disguise suspicion roll) is a separate future addition.
     PierceIllusion,
     /// Grants the buffed entity the ability to see through mundane and
     /// magical darkness. Sets `Stats.pierce_darkness` — a flag only, its

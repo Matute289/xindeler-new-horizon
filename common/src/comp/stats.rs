@@ -168,7 +168,10 @@ pub struct Stats {
     /// Whether this entity currently sees through illusions and disguises
     /// unconditionally, regardless of the target's own suspicion/reveal
     /// state — read as the **observer** side, same boolean shape as
-    /// `pierce_concealment` above. Set by `BuffEffect::PierceIllusion`.
+    /// `pierce_concealment` above. Set by `BuffEffect::PierceIllusion`. A
+    /// flag only in this row, same as `pierce_darkness` below — its
+    /// consumer (skipping the disguise suspicion roll) is a separate future
+    /// addition, not built here.
     pub pierce_illusion: bool,
     /// Whether this entity currently sees through mundane and magical
     /// darkness. A flag only in this row — its lighting-override consumer is
