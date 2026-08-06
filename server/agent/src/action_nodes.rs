@@ -2363,6 +2363,27 @@ impl AgentData<'_> {
         }
     }
 
+    /// The stealth multiplier `other` presents to this agent — shared by
+    /// [`Self::can_see_entity`] and [`Self::can_sense_directly_near`] so
+    /// [`Self::detects_other`] can compute it once instead of twice for the
+    /// same `(self, other)` pair on every failed near-check.
+    fn stealth_multiplier_against(&self, other: EcsEntity, read_data: &ReadData) -> f32 {
+        let other_derived = read_data.derived_stats.get(other);
+        let other_char_state = read_data.char_states.get(other);
+        // `other`'s Stats carries their buff-sourced stealth (the target
+        // being concealed); `self.stats` is *this* agent's own Stats, read
+        // for `pierce_concealment` (the observer doing the looking) — do not
+        // swap the two, they are different entities.
+        let other_stats = read_data.stats.get(other);
+
+        perception_dist_multiplier_from_stealth(
+            other_derived,
+            other_char_state,
+            other_stats,
+            self.stats,
+        )
+    }
+
     pub fn can_see_entity(
         &self,
         agent: &Agent,
@@ -2372,23 +2393,28 @@ impl AgentData<'_> {
         other_scale: Option<&Scale>,
         read_data: &ReadData,
     ) -> bool {
-        let other_stealth_multiplier = {
-            let other_derived = read_data.derived_stats.get(other);
-            let other_char_state = read_data.char_states.get(other);
-            // `other`'s Stats carries their buff-sourced stealth (the target
-            // being concealed); `self.stats` is *this* agent's own Stats,
-            // read for `pierce_concealment` (the observer doing the
-            // looking) — do not swap the two, they are different entities.
-            let other_stats = read_data.stats.get(other);
+        let other_stealth_multiplier = self.stealth_multiplier_against(other, read_data);
+        self.can_see_entity_with_multiplier(
+            other_stealth_multiplier,
+            agent,
+            controller,
+            other,
+            other_pos,
+            other_scale,
+            read_data,
+        )
+    }
 
-            perception_dist_multiplier_from_stealth(
-                other_derived,
-                other_char_state,
-                other_stats,
-                self.stats,
-            )
-        };
-
+    fn can_see_entity_with_multiplier(
+        &self,
+        other_stealth_multiplier: f32,
+        agent: &Agent,
+        controller: &Controller,
+        other: EcsEntity,
+        other_pos: &Pos,
+        other_scale: Option<&Scale>,
+        read_data: &ReadData,
+    ) -> bool {
         let within_sight_dist = {
             let sight_dist = agent.psyche.sight_dist * other_stealth_multiplier;
             let dist_sqrd = other_pos.0.distance_squared(self.pos.0);
@@ -2415,6 +2441,11 @@ impl AgentData<'_> {
             )
     }
 
+    /// Combines [`Self::can_sense_directly_near`] and [`Self::can_see_entity`].
+    /// Computes the shared stealth multiplier once rather than once per
+    /// sub-check — `can_sense_directly_near` fails for most candidates (they're
+    /// outside its 5m radius), so without this, every one of those failures
+    /// still paid `can_see_entity`'s own identical multiplier lookup again.
     pub fn detects_other(
         &self,
         agent: &Agent,
@@ -2424,8 +2455,17 @@ impl AgentData<'_> {
         other_scale: Option<&Scale>,
         read_data: &ReadData,
     ) -> bool {
-        self.can_sense_directly_near(*other, other_pos, read_data)
-            || self.can_see_entity(agent, controller, *other, other_pos, other_scale, read_data)
+        let stealth_multiplier = self.stealth_multiplier_against(*other, read_data);
+        self.can_sense_directly_near_with_multiplier(stealth_multiplier, other_pos)
+            || self.can_see_entity_with_multiplier(
+                stealth_multiplier,
+                agent,
+                controller,
+                *other,
+                other_pos,
+                other_scale,
+                read_data,
+            )
     }
 
     /// A close-range perception check independent of line of sight or field
@@ -2440,17 +2480,16 @@ impl AgentData<'_> {
         e_pos: &Pos,
         read_data: &ReadData,
     ) -> bool {
-        let chance = rng().random_bool(0.3);
+        let stealth_multiplier = self.stealth_multiplier_against(other, read_data);
+        self.can_sense_directly_near_with_multiplier(stealth_multiplier, e_pos)
+    }
 
-        let other_derived = read_data.derived_stats.get(other);
-        let other_char_state = read_data.char_states.get(other);
-        let other_stats = read_data.stats.get(other);
-        let stealth_multiplier = perception_dist_multiplier_from_stealth(
-            other_derived,
-            other_char_state,
-            other_stats,
-            self.stats,
-        );
+    fn can_sense_directly_near_with_multiplier(
+        &self,
+        stealth_multiplier: f32,
+        e_pos: &Pos,
+    ) -> bool {
+        let chance = rng().random_bool(0.3);
         let radius = 5.0 * stealth_multiplier;
 
         e_pos.0.distance_squared(self.pos.0) < radius.powi(2) && chance
