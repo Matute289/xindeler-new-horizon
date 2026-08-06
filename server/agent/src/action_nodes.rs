@@ -2363,6 +2363,27 @@ impl AgentData<'_> {
         }
     }
 
+    /// The stealth multiplier `other` presents to this agent — shared by
+    /// [`Self::can_see_entity`] and [`Self::can_sense_directly_near`] so
+    /// [`Self::detects_other`] can compute it once instead of twice for the
+    /// same `(self, other)` pair on every failed near-check.
+    fn stealth_multiplier_against(&self, other: EcsEntity, read_data: &ReadData) -> f32 {
+        let other_derived = read_data.derived_stats.get(other);
+        let other_char_state = read_data.char_states.get(other);
+        // `other`'s Stats carries their buff-sourced stealth (the target
+        // being concealed); `self.stats` is *this* agent's own Stats, read
+        // for `pierce_concealment` (the observer doing the looking) — do not
+        // swap the two, they are different entities.
+        let other_stats = read_data.stats.get(other);
+
+        perception_dist_multiplier_from_stealth(
+            other_derived,
+            other_char_state,
+            other_stats,
+            self.stats,
+        )
+    }
+
     pub fn can_see_entity(
         &self,
         agent: &Agent,
@@ -2372,23 +2393,28 @@ impl AgentData<'_> {
         other_scale: Option<&Scale>,
         read_data: &ReadData,
     ) -> bool {
-        let other_stealth_multiplier = {
-            let other_derived = read_data.derived_stats.get(other);
-            let other_char_state = read_data.char_states.get(other);
-            // `other`'s Stats carries their buff-sourced stealth (the target
-            // being concealed); `self.stats` is *this* agent's own Stats,
-            // read for `pierce_concealment` (the observer doing the
-            // looking) — do not swap the two, they are different entities.
-            let other_stats = read_data.stats.get(other);
+        let other_stealth_multiplier = self.stealth_multiplier_against(other, read_data);
+        self.can_see_entity_with_multiplier(
+            other_stealth_multiplier,
+            agent,
+            controller,
+            other,
+            other_pos,
+            other_scale,
+            read_data,
+        )
+    }
 
-            perception_dist_multiplier_from_stealth(
-                other_derived,
-                other_char_state,
-                other_stats,
-                self.stats,
-            )
-        };
-
+    fn can_see_entity_with_multiplier(
+        &self,
+        other_stealth_multiplier: f32,
+        agent: &Agent,
+        controller: &Controller,
+        other: EcsEntity,
+        other_pos: &Pos,
+        other_scale: Option<&Scale>,
+        read_data: &ReadData,
+    ) -> bool {
         let within_sight_dist = {
             let sight_dist = agent.psyche.sight_dist * other_stealth_multiplier;
             let dist_sqrd = other_pos.0.distance_squared(self.pos.0);
@@ -2415,6 +2441,11 @@ impl AgentData<'_> {
             )
     }
 
+    /// Combines [`Self::can_sense_directly_near`] and [`Self::can_see_entity`].
+    /// Computes the shared stealth multiplier once rather than once per
+    /// sub-check — `can_sense_directly_near` fails for most candidates (they're
+    /// outside its 5m radius), so without this, every one of those failures
+    /// still paid `can_see_entity`'s own identical multiplier lookup again.
     pub fn detects_other(
         &self,
         agent: &Agent,
@@ -2424,8 +2455,17 @@ impl AgentData<'_> {
         other_scale: Option<&Scale>,
         read_data: &ReadData,
     ) -> bool {
-        self.can_sense_directly_near(*other, other_pos, read_data)
-            || self.can_see_entity(agent, controller, *other, other_pos, other_scale, read_data)
+        let stealth_multiplier = self.stealth_multiplier_against(*other, read_data);
+        self.can_sense_directly_near_with_multiplier(stealth_multiplier, other_pos)
+            || self.can_see_entity_with_multiplier(
+                stealth_multiplier,
+                agent,
+                controller,
+                *other,
+                other_pos,
+                other_scale,
+                read_data,
+            )
     }
 
     /// A close-range perception check independent of line of sight or field
@@ -2440,18 +2480,17 @@ impl AgentData<'_> {
         e_pos: &Pos,
         read_data: &ReadData,
     ) -> bool {
-        let chance = rng().random_bool(0.3);
+        let stealth_multiplier = self.stealth_multiplier_against(other, read_data);
+        self.can_sense_directly_near_with_multiplier(stealth_multiplier, e_pos)
+    }
 
-        let other_derived = read_data.derived_stats.get(other);
-        let other_char_state = read_data.char_states.get(other);
-        let other_stats = read_data.stats.get(other);
-        let stealth_multiplier = perception_dist_multiplier_from_stealth(
-            other_derived,
-            other_char_state,
-            other_stats,
-            self.stats,
-        );
-        let radius = 5.0 * stealth_multiplier;
+    fn can_sense_directly_near_with_multiplier(
+        &self,
+        stealth_multiplier: f32,
+        e_pos: &Pos,
+    ) -> bool {
+        let chance = rng().random_bool(0.3);
+        let radius = sense_radius_from_stealth_multiplier(stealth_multiplier);
 
         e_pos.0.distance_squared(self.pos.0) < radius.powi(2) && chance
     }
@@ -2573,5 +2612,51 @@ impl AgentData<'_> {
         {
             controller.push_event(ControlEvent::Unmount);
         }
+    }
+}
+
+/// [`AgentData::can_sense_directly_near`]'s radius, floored at the shipped
+/// melee reach (3.0-4.0 m, `assets/common/abilities/sword/*.ron`) rather than
+/// left to shrink to `stealth_multiplier`'s unbounded `0.0`: a large enough
+/// stealth sum (a future high-strength `BuffEffect::Stealth`, not reachable by
+/// any gear shipped today) would otherwise collapse this radius toward zero,
+/// recreating the exact "invisible in melee range" gap this wire was built to
+/// close. `game-balance-designer` post-merge review, 2026-08-06
+/// (`docs/design/balance/2026-08-05-nh41-close-range-perception-stealth-radius-
+/// review.md`) -- a no-op today, since no shipped stealth combination reaches
+/// the sum where this floor would bind.
+fn sense_radius_from_stealth_multiplier(stealth_multiplier: f32) -> f32 {
+    (5.0 * stealth_multiplier).max(3.0)
+}
+
+#[cfg(test)]
+mod sense_radius_tests {
+    use super::*;
+
+    #[test]
+    fn unconcealed_radius_is_unchanged_at_5m() {
+        assert_eq!(sense_radius_from_stealth_multiplier(1.0), 5.0);
+    }
+
+    #[test]
+    fn the_floor_does_not_bind_for_any_stealth_combination_shipped_today() {
+        // Best shipped gear (head-slot stealth 0.15) + sneaking per the
+        // game-balance-designer review: multiplier ~0.608, radius ~3.04 m -- above the
+        // floor, so it is the raw formula that applies, not the floor.
+        let today_worst_case_multiplier = 0.608;
+        let radius = sense_radius_from_stealth_multiplier(today_worst_case_multiplier);
+        assert!(
+            radius > 3.0,
+            "no shipped stealth combination should reach the floor yet, got {radius}"
+        );
+    }
+
+    #[test]
+    fn a_future_large_stealth_buff_is_caught_by_the_floor() {
+        // A hypothetical high-strength BuffEffect::Stealth (no shipped RON grants one
+        // today) pushing the multiplier toward 0 must still leave a real,
+        // non-collapsing sense radius.
+        assert_eq!(sense_radius_from_stealth_multiplier(0.0), 3.0);
+        assert_eq!(sense_radius_from_stealth_multiplier(0.1), 3.0);
     }
 }
