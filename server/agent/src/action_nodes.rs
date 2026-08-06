@@ -2490,7 +2490,7 @@ impl AgentData<'_> {
         e_pos: &Pos,
     ) -> bool {
         let chance = rng().random_bool(0.3);
-        let radius = 5.0 * stealth_multiplier;
+        let radius = sense_radius_from_stealth_multiplier(stealth_multiplier);
 
         e_pos.0.distance_squared(self.pos.0) < radius.powi(2) && chance
     }
@@ -2612,5 +2612,51 @@ impl AgentData<'_> {
         {
             controller.push_event(ControlEvent::Unmount);
         }
+    }
+}
+
+/// [`AgentData::can_sense_directly_near`]'s radius, floored at the shipped
+/// melee reach (3.0-4.0 m, `assets/common/abilities/sword/*.ron`) rather than
+/// left to shrink to `stealth_multiplier`'s unbounded `0.0`: a large enough
+/// stealth sum (a future high-strength `BuffEffect::Stealth`, not reachable by
+/// any gear shipped today) would otherwise collapse this radius toward zero,
+/// recreating the exact "invisible in melee range" gap this wire was built to
+/// close. `game-balance-designer` post-merge review, 2026-08-06
+/// (`docs/design/balance/2026-08-05-nh41-close-range-perception-stealth-radius-
+/// review.md`) -- a no-op today, since no shipped stealth combination reaches
+/// the sum where this floor would bind.
+fn sense_radius_from_stealth_multiplier(stealth_multiplier: f32) -> f32 {
+    (5.0 * stealth_multiplier).max(3.0)
+}
+
+#[cfg(test)]
+mod sense_radius_tests {
+    use super::*;
+
+    #[test]
+    fn unconcealed_radius_is_unchanged_at_5m() {
+        assert_eq!(sense_radius_from_stealth_multiplier(1.0), 5.0);
+    }
+
+    #[test]
+    fn the_floor_does_not_bind_for_any_stealth_combination_shipped_today() {
+        // Best shipped gear (head-slot stealth 0.15) + sneaking per the
+        // game-balance-designer review: multiplier ~0.608, radius ~3.04 m -- above the
+        // floor, so it is the raw formula that applies, not the floor.
+        let today_worst_case_multiplier = 0.608;
+        let radius = sense_radius_from_stealth_multiplier(today_worst_case_multiplier);
+        assert!(
+            radius > 3.0,
+            "no shipped stealth combination should reach the floor yet, got {radius}"
+        );
+    }
+
+    #[test]
+    fn a_future_large_stealth_buff_is_caught_by_the_floor() {
+        // A hypothetical high-strength BuffEffect::Stealth (no shipped RON grants one
+        // today) pushing the multiplier toward 0 must still leave a real,
+        // non-collapsing sense radius.
+        assert_eq!(sense_radius_from_stealth_multiplier(0.0), 3.0);
+        assert_eq!(sense_radius_from_stealth_multiplier(0.1), 3.0);
     }
 }
