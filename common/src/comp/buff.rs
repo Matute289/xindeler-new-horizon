@@ -670,9 +670,6 @@ impl BuffKind {
         target_entity: Option<Uid>,
         source_entity: Option<Uid>,
     ) -> Vec<BuffEffect> {
-        // `Mooncloak`'s fixed ratio of its derived magic-resistance rider to
-        // its authored stealth strength (see the effects() match arm below).
-        const MOONCLOAK_RESIST_RATIO: f32 = 1.0 / 6.0;
         // Normalized nonlinear scaling
         // TODO: Do we want to make denominator term parameterized. Come back to if we
         // add nn_scaling3.
@@ -1360,15 +1357,18 @@ impl BuffKind {
             // stealth channel, no misc_data needed.
             BuffKind::PassWithoutTrace => vec![BuffEffect::Stealth(data.strength)],
             // Concealment aura target buff with a secondary magic-resistance
-            // rider. The resistance is derived from the same authored
-            // `strength` rather than an independently authored value, the
-            // same idiom `Frenzied` and `Fortitude` use for their own
-            // multi-effect derivations above -- keeps a single RON dial for
-            // spell authors instead of two that could drift apart.
-            BuffKind::Mooncloak => vec![
-                BuffEffect::Stealth(data.strength),
-                BuffEffect::Resistance(ResistKind::Magic, data.strength * MOONCLOAK_RESIST_RATIO),
-            ],
+            // rider. Unlike `Frenzied`/`Fortitude`'s single-dial derivations
+            // above, `strength` (stealth, a detection-avoidance stat) and the
+            // resistance rider (AoE spell mitigation) measure unrelated
+            // things, so the rider is its own authored value via
+            // `misc_data` rather than a fixed ratio of `strength`.
+            BuffKind::Mooncloak => {
+                let mut effects = vec![BuffEffect::Stealth(data.strength)];
+                if let Some(MiscBuffData::ResistMagic(resist)) = data.misc_data {
+                    effects.push(BuffEffect::Resistance(ResistKind::Magic, resist));
+                }
+                effects
+            },
         }
     }
 
@@ -1517,6 +1517,12 @@ pub enum MiscBuffData {
         #[serde(default = "default_piloted_flight_speed")]
         flight_speed: f32,
     },
+    /// A secondary `BuffEffect::Resistance(ResistKind::Magic, ..)` magnitude,
+    /// authored independently of a buff's primary `strength` field. Used by
+    /// `BuffKind::Mooncloak`, whose stealth strength and magic-resistance
+    /// rider measure unrelated things (detection avoidance vs. AoE spell
+    /// mitigation) and should not be coupled to a single dial.
+    ResistMagic(f32),
 }
 
 /// `arcane_eye`'s own shipped spawn range
@@ -2611,19 +2617,29 @@ pub mod tests {
     }
 
     #[test]
-    fn mooncloak_grants_stealth_and_a_derived_magic_resistance() {
-        let effects = BuffKind::Mooncloak.effects(&BuffData::new(1.5, None), None, None);
+    fn mooncloak_grants_stealth_and_an_authored_magic_resistance() {
+        let data = BuffData::new(1.5, None).with_misc_data(MiscBuffData::ResistMagic(0.10));
+        let effects = BuffKind::Mooncloak.effects(&data, None, None);
         assert_eq!(effects.len(), 2);
         assert!(
             effects
                 .iter()
                 .any(|e| matches!(e, BuffEffect::Stealth(s) if (*s - 1.5).abs() < 1e-6))
         );
-        // 1.5 * (1.0 / 6.0) == 0.25
         assert!(effects.iter().any(|e| matches!(
             e,
-            BuffEffect::Resistance(ResistKind::Magic, r) if (*r - 0.25).abs() < 1e-6
+            BuffEffect::Resistance(ResistKind::Magic, r) if (*r - 0.10).abs() < 1e-6
         )));
         assert!(BuffKind::Mooncloak.is_buff(), "should be a buff");
+    }
+
+    #[test]
+    fn mooncloak_grants_only_stealth_when_misc_data_is_absent() {
+        // Regression guard: without an authored ResistMagic, the buff must
+        // not silently fall back to a derived value -- it should just omit
+        // the resistance effect entirely.
+        let effects = BuffKind::Mooncloak.effects(&BuffData::new(1.5, None), None, None);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], BuffEffect::Stealth(s) if (s - 1.5).abs() < 1e-6));
     }
 }

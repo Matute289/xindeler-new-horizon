@@ -13,6 +13,7 @@ BasicAura(
             strength: 1.5,
             duration: Some(60.0),
             category: Some(Magical),
+            misc_data: Some(ResistMagic(0.10)),
         ),
     ],
     aura_duration: Some(60.0),
