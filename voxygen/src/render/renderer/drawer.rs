@@ -533,12 +533,12 @@ impl<'frame> Drawer<'frame> {
     /// To be ran between `first_pass` and `volumetric_pass`.
     /// Does nothing if the ingame pipelines are not yet ready.
     ///
-    /// The AO-generation shader currently always writes `1.0` (fully lit) and
-    /// the blur shader is a plain passthrough, so running this is a no-op for
-    /// every pixel a later pass reads -- nothing samples `tgt_ao` /
-    /// `tgt_ao_blur` yet. The two-pass structure (rather than a single
-    /// combined pass) is wired now so only the shader bodies need to change
-    /// once the AO math and depth-aware blur are implemented.
+    /// Writes real occlusion into `tgt_ao` (AO-generation pass) and a
+    /// depth-aware blurred copy into `tgt_ao_blur` (blur pass). Nothing
+    /// samples either target for visible output yet -- that wiring lives in
+    /// the volumetric (clouds) pass, gated behind `SSAO_ENABLED`, which is
+    /// separate follow-up work -- so this remains visually a no-op even
+    /// though the math it computes is now real.
     pub fn ssao_passes(&mut self) {
         let Some(pipelines) = self.borrow.pipelines.all() else {
             return;

@@ -196,6 +196,7 @@ impl ShaderModules {
 #define REFLECTION_MODE {}
 #define LIGHTING_ALGORITHM {}
 #define SHADOW_MODE {}
+#define SSAO_QUALITY {}
 
 "#,
             constants.0.as_str(),
@@ -229,6 +230,11 @@ impl ShaderModules {
                 ShadowMode::Map(_) if has_shadow_views => "SHADOW_MODE_MAP",
                 ShadowMode::Cheap | ShadowMode::Map(_) => "SHADOW_MODE_CHEAP",
             },
+            // Not yet driven by `PipelineModes` -- there is no user-facing
+            // SSAO setting to read a tier from until that lands. Fixed at
+            // Medium so the three `SSAO_QUALITY_*` tap-count tiers compile
+            // and are exercised by every build in the meantime.
+            "SSAO_QUALITY_MEDIUM",
         );
 
         if pipeline_modes.point_glow > f32::EPSILON {

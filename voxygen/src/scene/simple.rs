@@ -7,7 +7,7 @@ use crate::{
         pipelines::terrain::BoundLocals as BoundTerrainLocals,
     },
     scene::{
-        CloudsLocals, CullingMode, Lod, PostProcessLocals,
+        CloudsLocals, CullingMode, Lod, PostProcessLocals, SsaoLocals,
         camera::{self, Camera, CameraMode},
         figure::{FigureAtlas, FigureModelCache, FigureState, FigureUpdateCommonParameters},
         terrain::{SpriteRenderContext, SpriteRenderState},
@@ -293,6 +293,7 @@ impl Scene {
         )]);
         renderer.update_clouds_locals(CloudsLocals::new(proj_mat_inv, view_mat_inv));
         renderer.update_postprocess_locals(PostProcessLocals::new(proj_mat_inv, view_mat_inv));
+        renderer.update_ssao_locals(SsaoLocals::new(proj_mat_inv, view_mat_inv));
 
         self.char_model_cache
             .clean(&mut self.figure_atlas, scene_data.tick);

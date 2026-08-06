@@ -84,7 +84,10 @@ impl Locals {
             depth_sampler,
             &ssao_locals,
         );
-        let ssao_blur_bind = layouts.ssao_blur.bind(device, tgt_ao_view, sampler);
+        let ssao_blur_bind =
+            layouts
+                .ssao_blur
+                .bind(device, tgt_ao_view, sampler, tgt_depth_view, depth_sampler);
 
         Self {
             clouds: clouds_locals,
@@ -144,6 +147,9 @@ impl Locals {
             depth_sampler,
             &self.ssao,
         );
-        self.ssao_blur_bind = layouts.ssao_blur.bind(device, tgt_ao_view, sampler);
+        self.ssao_blur_bind =
+            layouts
+                .ssao_blur
+                .bind(device, tgt_ao_view, sampler, tgt_depth_view, depth_sampler);
     }
 }
