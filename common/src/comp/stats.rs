@@ -165,6 +165,22 @@ pub struct Stats {
     /// `combat::perception_dist_multiplier_from_stealth`, same boolean shape
     /// as `disable_magic` above. Set by `BuffEffect::PierceConcealment`.
     pub pierce_concealment: bool,
+    /// Anti-divination (`nondetection` spell): when set, this entity is
+    /// skipped entirely by `server/src/sys/detection.rs`'s per-`SenseKind`
+    /// predicate — "can't be targeted by divination," unconditionally,
+    /// regardless of which sense is queried or what `false_aura` below
+    /// claims. Same boolean shape as `disable_magic` above. Set by
+    /// `BuffEffect::Nondetection`.
+    pub nondetection: bool,
+    /// `magic_aura`'s lie: when set, `server/src/sys/detection.rs`'s
+    /// predicate reports this entity as revealed by the given `SenseKind`
+    /// regardless of whether it actually matches that sense's real
+    /// predicate (e.g. registering as magical while carrying no magic
+    /// effect, or vice versa — the spell's own choice of which lie to tell).
+    /// Overridden by `nondetection` above when both are set: "can't be
+    /// targeted by divination" is the stronger, unconditional claim. Set by
+    /// `BuffEffect::FalseAura`.
+    pub false_aura: Option<SenseKind>,
     /// Combat resolution (BL-52) — per-tick to-hit/crit modifiers (not
     /// persisted), sourced from class+level (`ClassAttributes`), gear and
     /// buffs. Consumed in `Attack::apply_attack`. `accuracy`/`evasion` drive
@@ -352,6 +368,8 @@ impl Stats {
             disable_teleport: false,
             stealth: 0.0,
             pierce_concealment: false,
+            nondetection: false,
+            false_aura: None,
             accuracy: 0.0,
             evasion: 0.0,
             magic_accuracy: 0.0,
@@ -484,6 +502,8 @@ impl Stats {
         self.disable_teleport = false;
         self.stealth = 0.0;
         self.pierce_concealment = false;
+        self.nondetection = false;
+        self.false_aura = None;
         self.accuracy = 0.0;
         self.evasion = 0.0;
         self.magic_accuracy = 0.0;
@@ -660,6 +680,8 @@ mod tests {
         stats.disable_teleport = true;
         stats.stealth = 5.0;
         stats.pierce_concealment = true;
+        stats.nondetection = true;
+        stats.false_aura = Some(SenseKind::Magic);
         stats.accuracy = 0.5;
         stats.evasion = 0.5;
         stats.magic_accuracy = 0.5;
@@ -813,6 +835,8 @@ mod tests {
         assert_eq!(stats.disable_teleport, expected.disable_teleport);
         assert_eq!(stats.stealth, expected.stealth);
         assert_eq!(stats.pierce_concealment, expected.pierce_concealment);
+        assert_eq!(stats.nondetection, expected.nondetection);
+        assert_eq!(stats.false_aura, expected.false_aura);
         assert_eq!(stats.accuracy, expected.accuracy);
         assert_eq!(stats.evasion, expected.evasion);
         assert_eq!(stats.magic_accuracy, expected.magic_accuracy);

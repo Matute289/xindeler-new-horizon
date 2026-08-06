@@ -1147,6 +1147,8 @@ fn execute_effect(
         BuffEffect::DisableMagic => stat.disable_magic = true,
         BuffEffect::DisableTeleport => stat.disable_teleport = true,
         BuffEffect::PierceConcealment => stat.pierce_concealment = true,
+        BuffEffect::Nondetection => stat.nondetection = true,
+        BuffEffect::FalseAura(kind) => stat.false_aura = Some(*kind),
         BuffEffect::Accuracy(acc) => stat.accuracy += *acc,
         BuffEffect::Evasion(eva) => stat.evasion += *eva,
         BuffEffect::Stealth(s) => stat.stealth += *s,

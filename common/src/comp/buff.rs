@@ -1716,6 +1716,16 @@ pub enum BuffEffect {
     /// value. Sets `Stats.pierce_concealment`, read on the observer's side
     /// by `combat::perception_dist_multiplier_from_stealth`.
     PierceConcealment,
+    /// Anti-divination (`nondetection`): the buffed entity can't be targeted
+    /// by any divination sense, unconditionally. Sets `Stats.nondetection`,
+    /// read by `server/src/sys/detection.rs`'s per-`SenseKind` predicate as
+    /// an early-out.
+    Nondetection,
+    /// `magic_aura`'s lie: the buffed entity registers as revealed by the
+    /// given `SenseKind` regardless of whether it actually matches that
+    /// sense's real predicate. Sets `Stats.false_aura`, read by the same
+    /// predicate `Nondetection` above short-circuits.
+    FalseAura(SenseKind),
     /// Combat resolution (BL-52): flat additive modifier to the buffed entity's
     /// physical to-hit accuracy (negative = harder to land, e.g. Fear). Sets
     /// `Stats.accuracy`.
