@@ -33,7 +33,14 @@ pub fn add_local_systems(dispatch_builder: &mut DispatcherBuilder) {
     // (`server/src/sys/remote_sense.rs`'s own doc comment) -- see
     // `pilot::Sys`'s module doc for why it is safe here, alongside
     // `mount::Sys`, for the same reason.
-    dispatch::<pilot::Sys>(dispatch_builder, &[]);
+    // Depends on `mount::Sys` (rather than `&[]`) so `phys::Sys`'s existing
+    // dependency on `controller::Sys` transitively guarantees the eye's
+    // pilot-forwarded `Vel`/`Ori` land before `phys::Sys` integrates
+    // position the same tick -- the "moves same tick" client-prediction
+    // requirement `pilot::Sys`'s module doc describes. `mount::Sys` and
+    // `pilot::Sys` already write-conflict on `Controller`/`Vel`/`Ori`
+    // regardless of a declared edge, so this costs no real parallelism.
+    dispatch::<pilot::Sys>(dispatch_builder, &[&mount::Sys::sys_name()]);
     dispatch::<controller::Sys>(dispatch_builder, &[
         &mount::Sys::sys_name(),
         &pilot::Sys::sys_name(),
