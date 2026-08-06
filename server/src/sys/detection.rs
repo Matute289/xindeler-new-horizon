@@ -323,6 +323,21 @@ fn evaluate_sense(
 
 /// The per-`SenseKind` predicate: does this sense reveal this target?
 fn reveals(read_data: &ReadData, target: Entity, kind: SenseKind) -> bool {
+    // Anti-divination early-out. `Stats.nondetection` is the stronger,
+    // unconditional claim ("can't be targeted by divination" regardless of
+    // which sense is queried or what `false_aura` below says), so it is
+    // checked first and short-circuits every other sense. `Stats.false_aura`
+    // is a narrower lie: this target registers as revealed by exactly one
+    // chosen `SenseKind`, regardless of whether it actually matches that
+    // sense's real predicate below.
+    if let Some(stats) = read_data.stats.get(target) {
+        if stats.nondetection {
+            return false;
+        }
+        if stats.false_aura == Some(kind) {
+            return true;
+        }
+    }
     match kind {
         SenseKind::Magic => is_magical(read_data, target),
         SenseKind::Affliction => read_data
@@ -896,5 +911,69 @@ mod tests {
         rebuild_spatial_grid(&world);
         common_ecs::run_now::<Sys>(&world);
         assert_eq!(detected_uids(&world, observer), vec![uid(2)]);
+    }
+
+    #[test]
+    fn nondetection_hides_a_target_from_a_sense_that_would_otherwise_reveal_it() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::Creature, SenseMode::Snapshot);
+
+        // An ordinary creature: the sense's own predicate would reveal it.
+        spawn_target(&mut world, 2, 5.0).with(beast_body()).build();
+
+        // Same predicate match, but flagged nondetection -- must be skipped
+        // regardless of the sense queried.
+        let mut hidden_stats = Stats::empty(beast_body());
+        hidden_stats.nondetection = true;
+        spawn_target(&mut world, 3, 6.0)
+            .with(beast_body())
+            .with(hidden_stats)
+            .build();
+
+        assert_reveals_only(&world, observer, uid(2), uid(3));
+    }
+
+    #[test]
+    fn false_aura_reveals_a_target_the_real_predicate_would_have_missed() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::Magic, SenseMode::Snapshot);
+
+        // Not magically buffed at all -- the real Magic predicate misses it.
+        // A false_aura for the queried kind must reveal it anyway.
+        let mut lying_stats = Stats::empty(beast_body());
+        lying_stats.false_aura = Some(SenseKind::Magic);
+        spawn_target(&mut world, 2, 5.0)
+            .with(beast_body())
+            .with(lying_stats)
+            .build();
+
+        // Same non-magical target, no false_aura -- must stay unrevealed.
+        spawn_target(&mut world, 3, 6.0).with(beast_body()).build();
+
+        assert_reveals_only(&world, observer, uid(2), uid(3));
+    }
+
+    #[test]
+    fn nondetection_overrides_a_false_aura_claiming_the_same_sense() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::Magic, SenseMode::Snapshot);
+
+        // Both flags set: nondetection is the stronger, unconditional claim
+        // and must win even though false_aura alone would reveal this target
+        // for the exact same sense.
+        let mut stats = Stats::empty(beast_body());
+        stats.nondetection = true;
+        stats.false_aura = Some(SenseKind::Magic);
+        spawn_target(&mut world, 2, 5.0)
+            .with(beast_body())
+            .with(stats)
+            .build();
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+        assert!(
+            !detected_uids(&world, observer).contains(&uid(2)),
+            "nondetection must win over a same-sense false_aura"
+        );
     }
 }
