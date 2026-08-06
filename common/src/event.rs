@@ -540,6 +540,26 @@ pub struct BuffEvent {
     pub buff_change: comp::BuffChange,
 }
 
+/// Intent to resolve a `BuffKind::RemoteSensing` cast into a written
+/// `RemoteSense` link. Emitted once, at cast time, by `self_buff.rs`'s
+/// cast-fire branch when the buff being applied is `RemoteSensing`.
+/// `Buff`/`BuffData` never carry a `Uid` (broadcasting "who is watching
+/// what" over `SyncFrom::AnyEntity` would leak it to every nearby player), so
+/// the cast's target has nowhere else to survive until the server-side
+/// handler can validate it and write the owner-private `RemoteSense`
+/// component. Carries the raw, unvalidated cast-time target/position; the
+/// per-anchor-kind predicate (is it a beast, is it owned/charmed, is it
+/// alive, is it in range, ...) is authoritative only in the server-side
+/// handler, never here.
+pub struct ResolveRemoteSenseEvent {
+    pub entity: EcsEntity,
+    pub target_entity: Option<Uid>,
+    pub target_pos: Option<Vec3<f32>>,
+    pub anchor_kind: comp::buff::SenseAnchorKind,
+    pub free_look: bool,
+    pub piloted: bool,
+}
+
 pub struct EnergyChangeEvent {
     pub entity: EcsEntity,
     pub change: f32,

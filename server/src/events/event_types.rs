@@ -10,11 +10,12 @@ pub use common::event::{
     InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
     LandOnGroundEvent, MakeAdminEvent, MineBlockEvent, MountEvent, NpcInteractEvent,
     ParryHookEvent, PoiseChangeEvent, PossessEvent, ProcessTradeActionEvent, RegrowHeadEvent,
-    RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, RespawnEvent,
-    SetAbilityCooldownEvent, SetBattleModeEvent, SetLanternEvent, SetPetStayEvent, ShockwaveEvent,
-    ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent,
-    TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent,
-    TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
+    RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, ResolveRemoteSenseEvent,
+    RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent, SetLanternEvent, SetPetStayEvent,
+    ShockwaveEvent, ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent,
+    SummonBeamPillarsEvent, TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent,
+    ToggleSpriteLightEvent, TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent,
+    UpdateMapMarkerEvent,
 };
 
 #[cfg(feature = "plugins")]
@@ -100,6 +101,7 @@ macro_rules! server_events {
             ArcingEvent
             CreatePoolEvent
             TranscribeSpellEvent
+            ResolveRemoteSenseEvent
         }
 
         #[cfg(feature = "plugins")]
