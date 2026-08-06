@@ -3168,16 +3168,40 @@ pub fn apply_caster_gear_fold(stats: &mut Stats, fold: &CasterGearFold) {
 
 /// Returns a value to be included as a multiplicative factor in perception
 /// distance checks.
+///
+/// Folds the **target's** buff-sourced `Stats.stealth` (set by
+/// `BuffEffect::Stealth`, e.g. a concealment spell) into the exact same
+/// `1/(1+sum)` curve [`stealth_multiplier`] already applies to item-based
+/// stealth (`derived.stealth`) — one curve, not two multipliers stacked on
+/// top of each other, so gear and spells read as one coherent concealment
+/// value.
+///
+/// `pierce_concealment` is read off the **observer** — the entity doing the
+/// looking, never the target — because it is granted to whoever should be
+/// able to see through any amount of concealment regardless of how well
+/// hidden the target is. `target_stats` and `observer_stats` are both
+/// `Option<&Stats>`, the same type for two different entities; getting them
+/// backwards silently breaks concealment both ways, so callers must resolve
+/// each from the correct entity (the target's `Stats` vs. the observing
+/// entity's own `Stats`), never the same lookup twice.
 pub fn perception_dist_multiplier_from_stealth(
     derived: Option<&DerivedStats>,
     character_state: Option<&CharacterState>,
+    target_stats: Option<&Stats>,
+    observer_stats: Option<&Stats>,
 ) -> f32 {
+    if observer_stats.is_some_and(|stats| stats.pierce_concealment) {
+        return 1.0;
+    }
+
     const SNEAK_MULTIPLIER: f32 = 0.7;
 
-    let item_stealth_multiplier = stealth_multiplier(derived.map_or(0.0, |d| d.stealth));
+    let item_stealth = derived.map_or(0.0, |d| d.stealth);
+    let buff_stealth = target_stats.map_or(0.0, |s| s.stealth);
+    let combined_stealth_multiplier = stealth_multiplier(item_stealth + buff_stealth);
     let is_sneaking = character_state.is_some_and(|state| state.is_stealthy());
 
-    let multiplier = item_stealth_multiplier * if is_sneaking { SNEAK_MULTIPLIER } else { 1.0 };
+    let multiplier = combined_stealth_multiplier * if is_sneaking { SNEAK_MULTIPLIER } else { 1.0 };
 
     multiplier.clamp(0.0, 1.0)
 }
@@ -3185,6 +3209,98 @@ pub fn perception_dist_multiplier_from_stealth(
 /// Turns an entity's summed armour stealth stat into the multiplicative factor
 /// applied to perception distances. `0.0` (the no-gear sum) is the identity.
 pub fn stealth_multiplier(stealth_sum: f32) -> f32 { (1.0 / (1.0 + stealth_sum)).clamp(0.0, 1.0) }
+
+#[cfg(test)]
+mod concealment_wire_tests {
+    use super::{DerivedStats, Stats, perception_dist_multiplier_from_stealth, stealth_multiplier};
+    use crate::comp::{Body, humanoid};
+
+    fn test_body() -> Body { Body::Humanoid(humanoid::Body::random()) }
+
+    fn stats_with(stealth: f32, pierce_concealment: bool) -> Stats {
+        let mut stats = Stats::empty(test_body());
+        stats.stealth = stealth;
+        stats.pierce_concealment = pierce_concealment;
+        stats
+    }
+
+    fn derived_with_item_stealth(stealth: f32) -> DerivedStats {
+        DerivedStats {
+            stealth,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn buff_only_stealth_reduces_the_multiplier() {
+        let target_stats = stats_with(0.5, false);
+
+        let mult = perception_dist_multiplier_from_stealth(None, None, Some(&target_stats), None);
+
+        assert_eq!(mult, stealth_multiplier(0.5));
+        assert!(mult < 1.0);
+    }
+
+    #[test]
+    fn item_and_buff_stealth_stack_on_the_same_curve() {
+        let derived = derived_with_item_stealth(0.5);
+        let target_stats = stats_with(0.3, false);
+
+        let mult = perception_dist_multiplier_from_stealth(
+            Some(&derived),
+            None,
+            Some(&target_stats),
+            None,
+        );
+
+        // One curve over the summed total, not two multipliers stacked: if
+        // this regresses to two separately-applied multipliers, the result
+        // changes (and would no longer equal `stealth_multiplier(0.8)`).
+        assert_eq!(mult, stealth_multiplier(0.8));
+        assert_ne!(mult, stealth_multiplier(0.5) * stealth_multiplier(0.3));
+    }
+
+    #[test]
+    fn observer_pierce_concealment_restores_full_multiplier_regardless_of_target_stealth() {
+        let derived = derived_with_item_stealth(5.0);
+        let target_stats = stats_with(5.0, false);
+        let observer_stats = stats_with(0.0, true);
+
+        let mult = perception_dist_multiplier_from_stealth(
+            Some(&derived),
+            None,
+            Some(&target_stats),
+            Some(&observer_stats),
+        );
+
+        assert_eq!(mult, 1.0);
+    }
+
+    #[test]
+    fn zero_buff_stealth_is_bit_identical_to_item_only_stealth() {
+        // Regression guard: every shipped armor piece only ever sets item
+        // stealth (`DerivedStats::stealth`), never `Stats.stealth`. This
+        // pins the wire's output, at zero buff stealth, to exactly the
+        // pre-wire item-only formula, `1.0 / (1.0 + item_stealth)`, with
+        // bit-for-bit `f32` equality rather than an epsilon.
+        for item_stealth in [0.0_f32, 0.04, 0.15, 0.5, 1.2] {
+            let derived = derived_with_item_stealth(item_stealth);
+            let legacy = (1.0_f32 / (1.0 + item_stealth)).clamp(0.0, 1.0);
+
+            let with_no_stats =
+                perception_dist_multiplier_from_stealth(Some(&derived), None, None, None);
+            let with_zero_buff_stats = perception_dist_multiplier_from_stealth(
+                Some(&derived),
+                None,
+                Some(&stats_with(0.0, false)),
+                None,
+            );
+
+            assert_eq!(with_no_stats, legacy);
+            assert_eq!(with_zero_buff_stats, legacy);
+        }
+    }
+}
 
 /// Combat resolution (BL-52 P5): the physical evasion contributed by worn gear.
 /// Weight is **derived from total armor protection** (Matías 2026-06-25):

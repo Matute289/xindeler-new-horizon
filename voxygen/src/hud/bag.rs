@@ -1350,7 +1350,18 @@ impl Widget for Bag<'_> {
                     );
                     let stealth_txt = format!(
                         "{:.1}%",
-                        ((1.0 - perception_dist_multiplier_from_stealth(derived, None)) * 100.0)
+                        ((1.0
+                            - perception_dist_multiplier_from_stealth(
+                                derived,
+                                None,
+                                Some(self.stats),
+                                // This is the player's own readout of their own
+                                // concealment, not an observer looking at them, so
+                                // there is no observer-side pierce-concealment to
+                                // apply.
+                                None,
+                            ))
+                            * 100.0)
                     );
                     let btn = if i.0 == 0 {
                         btn.top_left_with_margins_on(state.bg_ids.bg_frame, 55.0, 10.0)

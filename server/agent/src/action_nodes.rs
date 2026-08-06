@@ -2375,8 +2375,18 @@ impl AgentData<'_> {
         let other_stealth_multiplier = {
             let other_derived = read_data.derived_stats.get(other);
             let other_char_state = read_data.char_states.get(other);
+            // `other`'s Stats carries their buff-sourced stealth (the target
+            // being concealed); `self.stats` is *this* agent's own Stats,
+            // read for `pierce_concealment` (the observer doing the
+            // looking) — do not swap the two, they are different entities.
+            let other_stats = read_data.stats.get(other);
 
-            perception_dist_multiplier_from_stealth(other_derived, other_char_state)
+            perception_dist_multiplier_from_stealth(
+                other_derived,
+                other_char_state,
+                other_stats,
+                self.stats,
+            )
         };
 
         let within_sight_dist = {

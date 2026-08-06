@@ -1628,6 +1628,11 @@ pub enum BuffEffect {
     /// Dimensional anchor (BL-05): prevents teleport/blink. Sets
     /// `Stats.disable_teleport`.
     DisableTeleport,
+    /// Grants the buffed entity the ability to see through any amount of
+    /// another entity's concealment, regardless of that entity's stealth
+    /// value. Sets `Stats.pierce_concealment`, read on the observer's side
+    /// by `combat::perception_dist_multiplier_from_stealth`.
+    PierceConcealment,
     /// Combat resolution (BL-52): flat additive modifier to the buffed entity's
     /// physical to-hit accuracy (negative = harder to land, e.g. Fear). Sets
     /// `Stats.accuracy`.
@@ -1635,6 +1640,11 @@ pub enum BuffEffect {
     /// Combat resolution (BL-52): flat additive modifier to the buffed entity's
     /// evasion (harder to be hit). Sets `Stats.evasion`.
     Evasion(f32),
+    /// Additive contribution to the buffed entity's stealth, summed with
+    /// item-based stealth in the same `1/(1+sum)` curve by
+    /// `combat::perception_dist_multiplier_from_stealth`. Sets
+    /// `Stats.stealth`.
+    Stealth(f32),
     /// Combat resolution (BL-52): flat additive modifier to the buffed entity's
     /// critical-hit chance. Sets `Stats.crit_chance`.
     CritChance(f32),

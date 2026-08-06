@@ -153,6 +153,18 @@ pub struct Stats {
     /// Dimensional anchor (BL-05): when set, teleport/blink abilities can't
     /// resolve. Set each tick by `BuffEffect::DisableTeleport`.
     pub disable_teleport: bool,
+    /// The concealment wire: buff-sourced addition to this entity's stealth,
+    /// summed with item-based stealth (`DerivedStats::stealth`) in the same
+    /// `1/(1+sum)` curve by
+    /// `combat::perception_dist_multiplier_from_stealth`. Per-tick, not
+    /// persisted. Set by `BuffEffect::Stealth`.
+    pub stealth: f32,
+    /// Whether this entity currently sees through any amount of another
+    /// entity's concealment, regardless of that entity's `stealth` value —
+    /// read as the **observer** side of
+    /// `combat::perception_dist_multiplier_from_stealth`, same boolean shape
+    /// as `disable_magic` above. Set by `BuffEffect::PierceConcealment`.
+    pub pierce_concealment: bool,
     /// Combat resolution (BL-52) — per-tick to-hit/crit modifiers (not
     /// persisted), sourced from class+level (`ClassAttributes`), gear and
     /// buffs. Consumed in `Attack::apply_attack`. `accuracy`/`evasion` drive
@@ -338,6 +350,8 @@ impl Stats {
             disable_auxiliary_abilities: false,
             disable_magic: false,
             disable_teleport: false,
+            stealth: 0.0,
+            pierce_concealment: false,
             accuracy: 0.0,
             evasion: 0.0,
             magic_accuracy: 0.0,
@@ -468,6 +482,8 @@ impl Stats {
         self.disable_auxiliary_abilities = false;
         self.disable_magic = false;
         self.disable_teleport = false;
+        self.stealth = 0.0;
+        self.pierce_concealment = false;
         self.accuracy = 0.0;
         self.evasion = 0.0;
         self.magic_accuracy = 0.0;
@@ -642,6 +658,8 @@ mod tests {
         stats.disable_auxiliary_abilities = true;
         stats.disable_magic = true;
         stats.disable_teleport = true;
+        stats.stealth = 5.0;
+        stats.pierce_concealment = true;
         stats.accuracy = 0.5;
         stats.evasion = 0.5;
         stats.magic_accuracy = 0.5;
@@ -793,6 +811,8 @@ mod tests {
         );
         assert_eq!(stats.disable_magic, expected.disable_magic);
         assert_eq!(stats.disable_teleport, expected.disable_teleport);
+        assert_eq!(stats.stealth, expected.stealth);
+        assert_eq!(stats.pierce_concealment, expected.pierce_concealment);
         assert_eq!(stats.accuracy, expected.accuracy);
         assert_eq!(stats.evasion, expected.evasion);
         assert_eq!(stats.magic_accuracy, expected.magic_accuracy);
