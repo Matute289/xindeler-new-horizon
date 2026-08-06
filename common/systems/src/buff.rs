@@ -1119,8 +1119,10 @@ fn execute_effect(
         BuffEffect::DisableAuxiliaryAbilities => stat.disable_auxiliary_abilities = true,
         BuffEffect::DisableMagic => stat.disable_magic = true,
         BuffEffect::DisableTeleport => stat.disable_teleport = true,
+        BuffEffect::PierceConcealment => stat.pierce_concealment = true,
         BuffEffect::Accuracy(acc) => stat.accuracy += *acc,
         BuffEffect::Evasion(eva) => stat.evasion += *eva,
+        BuffEffect::Stealth(s) => stat.stealth += *s,
         BuffEffect::CritChance(cc) => stat.crit_chance += *cc,
         BuffEffect::Resistance(kind, amount) => stat.add_resistance(*kind, *amount),
         BuffEffect::CrowdControlResistance(ccr) => {

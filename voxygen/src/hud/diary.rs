@@ -2041,8 +2041,13 @@ impl Widget for Diary<'_> {
                             format!("{:+.0}%", (energy_rew - 1.0) * 100.0)
                         },
                         CharacterStat::Stealth => {
+                            // The player's own readout of their own concealment,
+                            // not an observer looking at them, so there is no
+                            // observer-side pierce-concealment to apply.
                             let stealth_perception_multiplier =
-                                combat::perception_dist_multiplier_from_stealth(derived, None);
+                                combat::perception_dist_multiplier_from_stealth(
+                                    derived, None, self.stats, None,
+                                );
                             let txt =
                                 format!("{:+.1}%", (1.0 - stealth_perception_multiplier) * 100.0);
 
