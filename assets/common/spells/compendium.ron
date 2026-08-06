@@ -574,6 +574,17 @@
     // project_image is COPY-ONLY: a stationary illusory double, not the
     // remote-viewpoint half of the source spell -- see
     // abilities/spells/illusion/project_image.ron's comment.
+    //
+    // `BasicSummon`'s `summon_distance` is a caster-relative placement fan,
+    // not an aimed/targeted point the way e.g. clairvoyance's
+    // server-validated `select_pos` is -- there is no range/LOS-checked
+    // "cast at a distant point" path for this ability type today. The
+    // three phantasm RONs below all use a tight `summon_distance: (1.0,
+    // 2.0)`, so `range` here is set to match what the ability actually
+    // does (Meters(2.0)) rather than a level-scaled distance that would
+    // only be honest if a validated aimed-placement mechanism existed for
+    // BasicSummon. A future addition of one (mirroring clairvoyance's
+    // `select_pos` validation) could restore level-scaled range.
     (
         id: "spells.illusion.minor_illusion",
         name_i18n: "spell-minor_illusion",
@@ -582,8 +593,10 @@
         source: Arcane,
         classes: [Bard, Sorcerer, Warlock, Mage],
         cast_time: Action,
-        duration: Instant,
-        range: Meters(9.0),
+        // Persists 180s (see minor_illusion_image.ron) -- not a one-shot
+        // effect.
+        duration: Secs(180.0),
+        range: Meters(2.0),
         aoe: None,
         description_i18n: "spell-minor_illusion-desc",
         ability: "common.abilities.spells.illusion.minor_illusion_image",
@@ -597,7 +610,7 @@
         classes: [Bard, Sorcerer, Mage],
         cast_time: Action,
         duration: Concentration(60.0),
-        range: Meters(18.0),
+        range: Meters(2.0),
         aoe: None,
         description_i18n: "spell-silent_image-desc",
         ability: "common.abilities.spells.illusion.silent_image",
@@ -611,7 +624,7 @@
         classes: [Bard, Sorcerer, Warlock, Mage],
         cast_time: Action,
         duration: Concentration(60.0),
-        range: Meters(37.0),
+        range: Meters(2.0),
         aoe: None,
         description_i18n: "spell-major_image-desc",
         ability: "common.abilities.spells.illusion.major_image",

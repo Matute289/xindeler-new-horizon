@@ -17,9 +17,11 @@ BasicSummon(
     recover_duration: 0.3,
     summon_info: Npc(
         summoned_amount: 1,
-        // Tight radius: SummonInfo::Npc's clockwise-placement fan is
-        // irrelevant at summoned_amount: 1, this just keeps the illusion
-        // spawning essentially where aimed.
+        // SummonInfo::Npc has no aimed/targeted placement -- summon_distance
+        // is a caster-relative fan, not a point the player selects. Kept
+        // tight so the illusion spawns right next to the caster rather than
+        // at a random bearing several meters off; the compendium's `range`
+        // field is set to match this actual placement radius.
         summon_distance: (1.0, 2.0),
         body: Object(Pebble),
         scale: None,
