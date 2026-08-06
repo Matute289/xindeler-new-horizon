@@ -13,6 +13,7 @@ use common::{
     link::Is,
     mounting::{Mount, Rider, VolumeRider, VolumeRiders},
     outcome::Outcome,
+    piloting,
     resources::{
         DeltaTime, EntitiesDiedLastTick, GameMode, OracleLive, PlayerEntity, PlayerPhysicsSettings,
         ProgramTime, Time, TimeOfDay, TimeScale,
@@ -320,6 +321,8 @@ impl State {
         ecs.register::<Is<VolumeRider>>();
         ecs.register::<Is<tether::Leader>>();
         ecs.register::<Is<tether::Follower>>();
+        ecs.register::<Is<piloting::Pilot>>();
+        ecs.register::<Is<piloting::Piloted>>();
         ecs.register::<Is<interaction::Interactor>>();
         ecs.register::<interaction::Interactors>();
         ecs.register::<comp::Mass>();

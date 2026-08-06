@@ -44,6 +44,8 @@ macro_rules! synced_components {
             volume_riders: VolumeRiders,
             is_leader: IsLeader,
             is_follower: IsFollower,
+            is_pilot: IsPilot,
+            is_piloted: IsPiloted,
             mass: Mass,
             density: Density,
             collider: Collider,
@@ -127,6 +129,7 @@ macro_rules! reexport_comps {
                 mounting::{Mount, Rider, VolumeRider},
                 tether::{Leader, Follower},
                 interaction::{Interactor},
+                piloting::{Pilot, Piloted},
             };
 
             // We alias these because the identifier used for the
@@ -141,6 +144,8 @@ macro_rules! reexport_comps {
             pub type IsLeader = Is<Leader>;
             pub type IsFollower = Is<Follower>;
             pub type IsInteractor = Is<Interactor>;
+            pub type IsPilot = Is<Pilot>;
+            pub type IsPiloted = Is<Piloted>;
         }
 
         // Re-export all the component types. So that uses of `synced_components!` outside this
@@ -274,6 +279,18 @@ impl NetSync for IsLeader {
 }
 
 impl NetSync for IsFollower {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+// A property of the pilot/eye relationship itself (like `IsMount`/`IsRider`),
+// not a secret about who is observing what -- the eye entity's own existence
+// and position are already `SyncFrom::AnyEntity` (`ConcealedUnlessTrueSight`
+// only hides it client-side), so this reveals nothing further.
+impl NetSync for IsPilot {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for IsPiloted {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 

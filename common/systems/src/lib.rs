@@ -12,6 +12,7 @@ pub mod melee;
 mod mount;
 pub mod phys;
 mod phys_events;
+mod pilot;
 mod pool;
 pub mod projectile;
 mod shockwave;
@@ -28,7 +29,15 @@ pub fn add_local_systems(dispatch_builder: &mut DispatcherBuilder) {
     dispatch::<interpolation::Sys>(dispatch_builder, &[]);
     dispatch::<tether::Sys>(dispatch_builder, &[]);
     dispatch::<mount::Sys>(dispatch_builder, &[]);
-    dispatch::<controller::Sys>(dispatch_builder, &[&mount::Sys::sys_name()]);
+    // The one deliberate exception to server-only remote-sensing systems
+    // (`server/src/sys/remote_sense.rs`'s own doc comment) -- see
+    // `pilot::Sys`'s module doc for why it is safe here, alongside
+    // `mount::Sys`, for the same reason.
+    dispatch::<pilot::Sys>(dispatch_builder, &[]);
+    dispatch::<controller::Sys>(dispatch_builder, &[
+        &mount::Sys::sys_name(),
+        &pilot::Sys::sys_name(),
+    ]);
     // Rebuilds the `DerivedStats` cache before ANY of its per-tick consumers
     // read it, so a gear/skill/body change lands on the same tick it
     // happened. Must be registered before `character_behavior::Sys` (which

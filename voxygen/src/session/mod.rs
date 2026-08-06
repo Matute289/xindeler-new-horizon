@@ -152,6 +152,16 @@ pub struct SessionState {
     /// spectate toggle and a remote-sensing spell's enter/leave transition
     /// never stomp each other.
     viewpoint_source: Option<ViewpointSource>,
+    /// Whether the current `ViewpointSource::Spell` viewpoint is `arcane_eye`
+    /// specifically (`RemoteSense.piloted`, mirrored here at the same
+    /// transition that sets `viewpoint_source`). `viewpoint_entity()`'s own
+    /// `mutable_viewpoint` flag means "can the client freely reposition this
+    /// viewpoint locally" (false here -- the eye's `Pos`/`Ori` are server
+    /// truth), which is a different question from "should the player's own
+    /// WASD/mouse still produce a `move_dir`/`look_dir` input to send" (true
+    /// here -- that input is what `pilot::Sys` forwards to the eye). This
+    /// flag disambiguates the two in the movement-input block below.
+    viewpoint_piloted: bool,
     interactables: interactable::Interactables,
     /// The local player's own reveal set, resolved from the owner-private
     /// `Detected` component's `Uid`s into local `specs::Entity` handles once
@@ -233,6 +243,7 @@ impl SessionState {
             selected_entity: None,
             viewpoint_entity: None,
             viewpoint_source: None,
+            viewpoint_piloted: false,
             interactables: Default::default(),
             revealed_entities: HashMap::new(),
             #[cfg(not(target_os = "macos"))]
@@ -1484,6 +1495,7 @@ impl PlayState for SessionState {
                     clear_stale_spectator_components(&client, viewpoint_entity);
                 }
                 self.viewpoint_entity = None;
+                self.viewpoint_piloted = false;
                 // A spell-owned viewpoint returns the player to third-person
                 // (matching every other end-of-link path below); a
                 // moderator's manual debug toggle keeps its existing
@@ -1535,6 +1547,7 @@ impl PlayState for SessionState {
                             client.start_spectate_entity(anchor_entity);
                             self.viewpoint_entity = Some(anchor_entity);
                             self.viewpoint_source = Some(ViewpointSource::Spell);
+                            self.viewpoint_piloted = remote_sense.piloted;
                             self.scene.camera_mut().set_mode(if remote_sense.free_look {
                                 CameraMode::Freefly
                             } else {
@@ -1553,6 +1566,7 @@ impl PlayState for SessionState {
                         }
                         self.viewpoint_entity = None;
                         self.viewpoint_source = None;
+                        self.viewpoint_piloted = false;
                         self.scene.camera_mut().set_mode(CameraMode::ThirdPerson);
                         let mut ori = self.scene.camera().get_orientation();
                         ori.z = 0.0;
@@ -1728,14 +1742,34 @@ impl PlayState for SessionState {
 
                 self.inputs.move_z =
                     self.key_state.swim_up as i32 as f32 - self.key_state.swim_down as i32 as f32;
+            } else if self.viewpoint_piloted {
+                // Piloting an eye: `mutable_viewpoint` is false (its Pos/Ori
+                // are server truth, not locally editable), but WASD/mouse
+                // must still produce a move_dir/look_dir input -- otherwise
+                // it would stay permanently at whatever stale value it last
+                // had, and the eye would never move despite pilot::Sys
+                // faithfully forwarding whatever it receives. None of the
+                // `mutable_viewpoint` block above applies: the eye holds no
+                // weapon to aim (no ranged-aim raycasting), and its camera
+                // orientation already comes straight from the eye's own Ori
+                // (`scene/mod.rs`'s `viewpoint_look_ori`), fed back from the
+                // server each tick -- so a plain camera-relative basis and a
+                // plain look_dir suffice.
+                self.walk_forward_dir = self.scene.camera().forward_xy();
+                self.walk_right_dir = self.scene.camera().right_xy();
+                self.inputs.look_dir = Dir::from_unnormalized(cam_dir).unwrap_or_default();
+                self.inputs.strafing = false;
+                self.inputs.move_z =
+                    self.key_state.swim_up as i32 as f32 - self.key_state.swim_down as i32 as f32;
             }
 
             match self.scene.camera().get_mode() {
                 CameraMode::FirstPerson | CameraMode::ThirdPerson => {
-                    if mutable_viewpoint {
-                        // Move the player character based on their walking direction.
-                        // This could be different from the camera direction if free look is
-                        // enabled.
+                    if mutable_viewpoint || self.viewpoint_piloted {
+                        // Move the player character (or, while piloting, the
+                        // eye) based on their walking direction. This could
+                        // be different from the camera direction if free
+                        // look is enabled.
                         self.inputs.move_dir =
                             self.walk_right_dir * axis_right + self.walk_forward_dir * axis_up;
                     }

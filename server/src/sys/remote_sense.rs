@@ -24,9 +24,12 @@ use common::{
     comp::{
         Buffs, Health, Pos, Presence, RemoteSense, SpectatingEntity,
         buff::{BuffChange, BuffKind},
+        remote_sense::SenseAnchor,
     },
     event::{BuffEvent, DeleteEvent, EmitExt},
     event_emitters,
+    link::Is,
+    piloting::Pilot,
     terrain::TerrainChunkSize,
     uid::IdMaps,
     vol::RectVolSize,
@@ -68,6 +71,7 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, Presence>,
         WriteStorage<'a, RemoteSense>,
         WriteStorage<'a, SpectatingEntity>,
+        WriteStorage<'a, Is<Pilot>>,
     );
 
     const NAME: &'static str = "remote_sense";
@@ -86,6 +90,7 @@ impl<'a> System<'a> for Sys {
             presences,
             mut remote_senses,
             mut spectating_entities,
+            mut is_pilots,
         ): Self::SystemData,
     ) {
         let mut emitters = events.get_emitters();
@@ -128,11 +133,25 @@ impl<'a> System<'a> for Sys {
         for caster in to_end {
             spectating_entities.remove(caster);
 
-            if let Some(remote_sense) = remote_senses.remove(caster)
-                && remote_sense.anchor.is_spawned_sensor()
-                && let Some(anchor_entity) = id_maps.uid_entity(remote_sense.anchor_uid())
-            {
-                emitters.emit(DeleteEvent(anchor_entity));
+            if let Some(remote_sense) = remote_senses.remove(caster) {
+                // A `Piloted` anchor also carries a `Piloting` link, wired by
+                // hand (not via `StateExt::link()`, see
+                // `common/src/piloting.rs`'s own doc comment) -- so it must be
+                // torn down by hand too, the same way
+                // `common/src/states/telekinetic_grip.rs` explicitly removes
+                // `Is<Leader>`/`Is<Follower>` when its own hand-wired
+                // `Tethered` link ends. The eye's own `Is<Piloted>` needs no
+                // matching removal: it is cleared automatically when the
+                // `DeleteEvent` below removes the entity outright.
+                if matches!(remote_sense.anchor, SenseAnchor::Piloted(_)) {
+                    is_pilots.remove(caster);
+                }
+
+                if remote_sense.anchor.is_spawned_sensor()
+                    && let Some(anchor_entity) = id_maps.uid_entity(remote_sense.anchor_uid())
+                {
+                    emitters.emit(DeleteEvent(anchor_entity));
+                }
             }
 
             emitters.emit(BuffEvent {
@@ -185,6 +204,7 @@ mod tests {
         world.register::<Presence>();
         world.register::<RemoteSense>();
         world.register::<SpectatingEntity>();
+        world.register::<Is<Pilot>>();
         world.insert(IdMaps::default());
         // `common_ecs::run_now`'s `Job<T>` wrapper records CPU-time metrics
         // per system and expects this resource to already exist.
@@ -380,5 +400,75 @@ mod tests {
             "exactly one DeleteEvent, for the sensor entity"
         );
         assert_eq!(deleted[0].0, sensor);
+    }
+
+    /// A `Piloted` anchor (the `arcane_eye` eye) also carries an `Is<Pilot>`
+    /// on the caster, wired by hand alongside the link
+    /// (`server/src/events/remote_sense.rs`'s `resolve_piloted`) rather than
+    /// through the generic `Link` bookkeeping. Ending the link -- here via
+    /// the eye's own destruction, which is exactly what a True-Sight holder
+    /// destroying the eye's 30 HP looks like from this system's point of
+    /// view (the anchor `Uid` no longer resolves) -- must reap `Is<Pilot>`
+    /// too, or the caster is left permanently forwarding inputs into a
+    /// `pilot::Sys` join that no longer has a target.
+    #[test]
+    fn destroying_the_eye_ends_the_link_and_clears_is_pilot() {
+        let mut world = setup_world();
+        world.insert(EventBus::<DeleteEvent>::default());
+
+        let caster_uid = uid(1);
+        let eye_uid = uid(2);
+        let body = Body::Humanoid(humanoid::Body::random());
+        let caster = world
+            .create_entity()
+            .with(Pos(Vec3::zero()))
+            .with(Health::new(body))
+            .build();
+
+        {
+            let mut id_maps = world.write_resource::<IdMaps>();
+            id_maps.add_entity(caster_uid, caster);
+            // The eye itself is already gone (its own Health hit 0 and the
+            // destroy pipeline reaped it) -- its `Uid` no longer resolves to
+            // a live entity, exactly like a dead sensor.
+        }
+
+        let mut buffs = Buffs::default();
+        buffs.insert(remote_sensing_buff(), Time(0.0));
+        world
+            .write_storage::<Buffs>()
+            .insert(caster, buffs)
+            .unwrap();
+        world
+            .write_storage::<RemoteSense>()
+            .insert(caster, RemoteSense {
+                anchor: SenseAnchor::Piloted(eye_uid),
+                free_look: false,
+                piloted: true,
+                caster: caster_uid,
+            })
+            .unwrap();
+        world
+            .write_storage::<Is<Pilot>>()
+            .insert(
+                caster,
+                common::link::LinkHandle::from_link(common::piloting::Piloting {
+                    pilot: caster_uid,
+                    piloted: eye_uid,
+                })
+                .make_role(),
+            )
+            .unwrap();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        assert!(
+            world.read_storage::<RemoteSense>().get(caster).is_none(),
+            "an anchor whose Uid no longer resolves must end the link"
+        );
+        assert!(
+            world.read_storage::<Is<Pilot>>().get(caster).is_none(),
+            "ending a Piloted link must also clear the caster's Is<Pilot>"
+        );
     }
 }
