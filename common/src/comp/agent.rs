@@ -643,18 +643,46 @@ pub struct Agent {
     pub bearing: Vec2<f32>,
     pub sounds_heard: Vec<Sound>,
     /// Uids of disguised entities this agent has *permanently* seen through
-    /// (the suspicion-roll latch): once added, that entity is never re-rolled
-    /// again for the rest of its current disguise. Lives on the observer's
-    /// own `Agent`, never as a map on the disguised entity, so a despawned
-    /// observer needs no cleanup and a disguised entity carries no
-    /// per-observer state.
+    /// (the suspicion-roll latch): once added, `passes_disguise_gate` never
+    /// rolls against that Uid again. Lives on the observer's own `Agent`,
+    /// never as a map on the disguised entity, so a despawned observer needs
+    /// no cleanup and a disguised entity carries no per-observer state.
+    ///
+    /// 🔴 Keyed on the disguised entity's `Uid` alone, **not** on the
+    /// specific `Disguise` it wore when recognised — there is no per-cast
+    /// nonce on that component. Consequence: if entity X's disguise expires
+    /// and a different one is cast on X later (by the same or a different
+    /// caster), an observer that already burned X's Uid here treats the new
+    /// disguise as already-seen-through too, with no fresh roll. This is a
+    /// deliberate reading of "recognises that individual, regardless of
+    /// costume" rather than "recognises that specific lie" — recorded here
+    /// so it isn't mistaken for a bug if surfaced in playtest.
     pub seen_through_disguises: Vec<Uid>,
     /// Uids of disguised entities this agent has already spent its one
     /// close-inspection suspicion roll on. Fires at most once per (observer,
     /// disguise) pair — not once per proximity entry/exit — so standing next
     /// to a disguised entity for a long time does not grant repeated close-up
-    /// rolls beyond the first.
+    /// rolls beyond the first. Same Uid-not-cast-instance caveat as
+    /// `seen_through_disguises` above.
+    ///
+    /// Neither this nor `seen_through_disguises` is pruned the way
+    /// `sounds_heard` above is (`Agent::forget_old_sounds`) -- unlike a
+    /// sound, an entry here isn't meant to age out: recognising a disguise
+    /// is meant to stick. `Agent` is not persisted (no DB row, no rtsim
+    /// save), so both vectors reset for free on despawn/respawn, and
+    /// cardinality is bounded by how many distinct disguised entities one
+    /// loaded NPC actually meets, which is expected to stay small.
     pub close_inspected_disguises: Vec<Uid>,
+    /// `Time` (server-uptime seconds) at which this agent's disguise
+    /// suspicion roll last fired its periodic re-roll (trigger T1). A
+    /// dedicated `f64` field rather than a slot in `behavior_state`'s
+    /// fixed-size `ActionState.timers` (which are `f32`, dt-accumulated, and
+    /// implicitly shared/reset across whichever action node last claimed a
+    /// given index) — mirrors this same file's `Target::selected_at`'s
+    /// existing absolute-timestamp-in-an-`f64`-field shape, since this value
+    /// is compared the same way (`now - last_roll >= cooldown`) and needs
+    /// the same precision over a long-running server.
+    pub disguise_suspicion_last_roll: f64,
     pub multi_pid_controllers: Option<PidControllers<16>>,
     /// Position from which to flee. Intended to be the agent's position plus a
     /// random position offset, to be used when a random flee direction is
@@ -774,6 +802,7 @@ impl Agent {
             sounds_heard: Vec::new(),
             seen_through_disguises: Vec::new(),
             close_inspected_disguises: Vec::new(),
+            disguise_suspicion_last_roll: 0.0,
             multi_pid_controllers: None,
             flee_from_pos: None,
             stay_pos: None,

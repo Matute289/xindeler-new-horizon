@@ -374,12 +374,27 @@ impl SaveTargetInfo {
     }
 }
 
+/// The shared arithmetic behind [`effective_magic_evasion`] (charm/save's own
+/// `tuning.save_cr_to_evasion`) and [`magic_effect_success_chance`] (every
+/// tuning instance's own `t.cr_to_evasion`), so the two can never silently
+/// diverge into two different evasion formulas.
+fn evasion_with_cr_scaling(target: &SaveTargetInfo, cr_to_evasion: f32) -> f32 {
+    target.stats_magic_evasion + target.combat_rating * cr_to_evasion
+}
+
 /// The evasion a resisted magical roll is made against: the target's
 /// class/level magic evasion plus a contribution derived from its
 /// `combat_rating`, which is the only difficulty signal a creature without
 /// class attributes has.
+///
+/// Kept as its own function, with this exact signature, for
+/// `saving_throw_tests` (which call it directly against a `CombatTuning`);
+/// [`magic_effect_success_chance`] does not call this — it can't, since it
+/// takes a `&MagicEffectTuning`'s `cr_to_evasion` rather than `tuning`'s own
+/// `save_cr_to_evasion` — but both route through
+/// [`evasion_with_cr_scaling`] so there is exactly one evasion formula.
 pub fn effective_magic_evasion(target: &SaveTargetInfo, tuning: &CombatTuning) -> f32 {
-    target.stats_magic_evasion + target.combat_rating * tuning.save_cr_to_evasion
+    evasion_with_cr_scaling(target, tuning.save_cr_to_evasion)
 }
 
 /// Probability in `0.0..=1.0` that a resisted magical effect lands on
@@ -433,7 +448,7 @@ pub fn magic_effect_success_chance(
     t: &MagicEffectTuning,
     tuning: &CombatTuning,
 ) -> f32 {
-    let effective_evasion = target.stats_magic_evasion + target.combat_rating * t.cr_to_evasion;
+    let effective_evasion = evasion_with_cr_scaling(target, t.cr_to_evasion);
     let level_term = (caster.magic_accuracy - effective_evasion) * tuning.hit_k;
 
     if let Some(wall) = t.outclassed_wall

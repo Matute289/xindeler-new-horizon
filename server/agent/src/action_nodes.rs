@@ -2429,14 +2429,24 @@ impl AgentData<'_> {
             && !agent.close_inspected_disguises.contains(&other_uid);
         // T1's trigger condition: within sight range, and the shared
         // per-observer cooldown has elapsed. An absolute-timestamp
-        // comparison is used instead of a `dt`-accumulator because
-        // `choose_target` itself is only called intermittently
+        // comparison (`agent.disguise_suspicion_last_roll`, an `f64` field --
+        // see its own doc comment) is used instead of a `dt`-accumulator
+        // because `choose_target` itself is only called intermittently
         // (random-chance and retarget-threshold gated), so accumulating
         // `dt` only on the ticks this function happens to run would stretch
         // "every N real seconds" out far longer than intended.
-        let last_roll = f64::from(agent.behavior_state.timers[DISGUISE_SUSPICION_TIMER]);
+        //
+        // 🟡 Sharing one cooldown per observer (not one per (observer,
+        // disguise) pair -- see this method's own doc comment for why) means
+        // that if two disguised entities are both in range in the same
+        // `choose_target` call, whichever `entities_nearby` visits first
+        // claims this call's T1 roll and the other gets none until the
+        // cooldown elapses again. A deliberate trade-off given how rare
+        // multiple simultaneous disguises near one observer is expected to
+        // be, not an oversight.
         let t1_fires = other_pos.0.distance_squared(self.pos.0) < agent.psyche.sight_dist.powi(2)
-            && read_data.time.0 - last_roll >= f64::from(tuning.0.disguise_suspicion_reroll_secs);
+            && read_data.time.0 - agent.disguise_suspicion_last_roll
+                >= f64::from(tuning.0.disguise_suspicion_reroll_secs);
 
         // Only draw the dice for a trigger that actually fires this call --
         // the common case (neither trigger due) pays for neither RNG draw
@@ -2473,7 +2483,7 @@ impl AgentData<'_> {
         };
 
         if t1_fires {
-            agent.behavior_state.timers[DISGUISE_SUSPICION_TIMER] = read_data.time.0 as f32;
+            agent.disguise_suspicion_last_roll = read_data.time.0;
         }
 
         resolve_disguise_gate(
@@ -2766,18 +2776,6 @@ fn sense_radius_from_stealth_multiplier(stealth_multiplier: f32) -> f32 {
 /// stealth multiplier -- a disguise is an appearance override, not
 /// concealment, so it has no stealth value of its own to scale this by.
 const CLOSE_INSPECT_DIST_M: f32 = NEAR_SENSE_RADIUS_M;
-
-/// The [`comp::agent::ActionState`] timer slot [`AgentData::choose_target`]
-/// reserves for the disguise suspicion roll's periodic-reroll cooldown
-/// (trigger T1, cadence tuned by `CombatTuning::disguise_suspicion_reroll_secs`
-/// — a gameplay-balance number, so it lives in
-/// `assets/common/combat_tuning.ron` rather than as a Rust constant here; see
-/// [`AgentData::passes_disguise_gate`]'s doc comment for why this is one
-/// shared per-observer cooldown, not a true per-(observer, disguise) timer).
-/// Index `0` in that same array is `choose_target`'s own `TimerChooseTarget`,
-/// reset at the top of every call; this index must stay clear of that reset
-/// so the cooldown persists across calls.
-const DISGUISE_SUSPICION_TIMER: usize = 1;
 
 /// Pure decision core of [`AgentData::passes_disguise_gate`], factored out so
 /// the latch/cooldown bookkeeping is unit-testable without an ECS `World`,
