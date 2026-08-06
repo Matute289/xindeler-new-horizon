@@ -85,6 +85,13 @@ pub enum Outcome {
         pos: Vec3<f32>,
         body: comp::Body,
     },
+    /// A `comp::PhantomIllusion` was dispelled (the first single-target
+    /// hostile attack resolved against it) and despawned. Drives the
+    /// "the illusion dissipates" VFX at its last known position/body.
+    PhantasmDissipated {
+        pos: Vec3<f32>,
+        body: comp::Body,
+    },
     HealthChange {
         pos: Vec3<f32>,
         info: HealthChangeInfo,
@@ -238,6 +245,7 @@ impl Outcome {
             | Outcome::ProjectileHit { pos, .. }
             | Outcome::Beam { pos, .. }
             | Outcome::SummonedCreature { pos, .. }
+            | Outcome::PhantasmDissipated { pos, .. }
             | Outcome::HealthChange { pos, .. }
             | Outcome::Death { pos, .. }
             | Outcome::Block { pos, .. }

@@ -118,6 +118,9 @@ pub fn handle_loaded_character_data(server: &mut Server, ev: UpdateCharacterData
 }
 
 pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
+    // Read before `create_npc` below takes an exclusive borrow of the ecs
+    // `World` for the rest of the builder chain.
+    let time = *server.state.ecs().read_resource::<Time>();
     // Destruct the builder to ensure all fields are exhaustive
     let NpcBuilder {
         stats,
@@ -140,6 +143,8 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         rider_effects,
         rider,
         incorporeal,
+        phantom_illusion,
+        delete_after,
     } = ev.npc;
     let entity = server
         .state
@@ -157,6 +162,17 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
     } else {
         entity
     };
+
+    let entity = if phantom_illusion {
+        entity.with(comp::PhantomIllusion)
+    } else {
+        entity
+    };
+
+    let entity = entity.maybe_with(delete_after.map(|timeout| Object::DeleteAfter {
+        spawned_at: time,
+        timeout,
+    }));
 
     if let Some(agent) = &mut agent
         && let Alignment::Owned(_) = &alignment

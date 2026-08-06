@@ -3,11 +3,11 @@ use common::{
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
         Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
-        Inventory, Mass, Ori, PhysicsState, Player, Pos, Scale, Stats, ability::Dodgeable,
-        aura::EnteredAuras, pool::Pool,
+        Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Pos, Scale, Stats,
+        ability::Dodgeable, aura::EnteredAuras, pool::Pool,
     },
     event::{
-        BuffEvent, ComboChangeEvent, DeleteEvent, EmitExt, EnergyChangeEvent,
+        BuffEvent, ComboChangeEvent, DeleteEvent, DispelIllusionEvent, EmitExt, EnergyChangeEvent,
         EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
         PoiseChangeEvent, TransformEvent,
     },
@@ -37,6 +37,7 @@ event_emitters! {
         combo_change: ComboChangeEvent,
         entity_attack_hook: EntityAttackedHookEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 }
 
@@ -71,6 +72,7 @@ pub struct ReadData<'a> {
     outcomes: Read<'a, EventBus<Outcome>>,
     physics_states: ReadStorage<'a, PhysicsState>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 #[derive(Default)]
@@ -192,6 +194,7 @@ impl<'a> System<'a> for Sys {
                         buffs: read_data.buffs.get(target),
                         mass: read_data.masses.get(target),
                         player: read_data.players.get(target),
+                        phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                     };
 
                     //TODO: Consider making pool hardcoded jump dodgeable only (like ground

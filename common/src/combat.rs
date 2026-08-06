@@ -21,8 +21,9 @@ use crate::{
     },
     effect::BuffEffect,
     event::{
-        BuffEvent, ComboChangeEvent, EmitExt, EnergyChangeEvent, EntityAttackedHookEvent,
-        HealthChangeEvent, KnockbackEvent, ParryHookEvent, PoiseChangeEvent, TransformEvent,
+        BuffEvent, ComboChangeEvent, DispelIllusionEvent, EmitExt, EnergyChangeEvent,
+        EntityAttackedHookEvent, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
+        PoiseChangeEvent, TransformEvent,
     },
     generation::{EntityConfig, EntityInfo},
     outcome::Outcome,
@@ -618,6 +619,12 @@ pub struct TargetInfo<'a> {
     pub buffs: Option<&'a Buffs>,
     pub mass: Option<&'a Mass>,
     pub player: Option<&'a Player>,
+    /// Whether the target carries `comp::PhantomIllusion` (a shared-illusion
+    /// decoy). Cheap to populate at every call site -- a single `.get(target)`
+    /// storage lookup, not a scan -- and read unconditionally by
+    /// `Attack::apply_attack`'s dispel gate, which itself only acts on it
+    /// when `is_single_target`.
+    pub phantom_illusion: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -854,6 +861,7 @@ impl Attack {
                  + EmitExt<ComboChangeEvent>
                  + EmitExt<EntityAttackedHookEvent>
                  + EmitExt<TransformEvent>
+                 + EmitExt<DispelIllusionEvent>
              ),
         mut emit_outcome: impl FnMut(Outcome),
         rng: &mut rand::rngs::ThreadRng,
@@ -893,7 +901,27 @@ impl Attack {
             attack_source,
             AttackSource::Melee | AttackSource::Projectile
         );
-        // BL-52 P3: a magic ability (one carrying an `AbilityMeta` `source`, the
+        // A phantasm (`comp::PhantomIllusion`) has no `Health`, so there is no
+        // `HealthChangeEvent` for the rest of this function to ever produce
+        // against it -- attacking one is instead a dedicated reveal trigger:
+        // dispel outright, skipping the to-hit roll, damage and every other
+        // effect below. Gated on `is_single_target` (mirrors the
+        // `charmed_by_target` gate a little further down) so the AoE path
+        // (Explosion/Beam/Shockwave/Pool/Arc) never acts on the flag, and on
+        // `target_group == OutOfGroup` so a friendly/in-group effect that
+        // happens to route through a single-target attack (e.g. an ally heal)
+        // cannot dispel a phantasm it was never meant to harm. `target.
+        // phantom_illusion` is a plain bool the caller already resolved via
+        // one `.get(target)` storage lookup -- reading it here is O(1), not a
+        // scan.
+        if is_single_target
+            && matches!(target_group, GroupTarget::OutOfGroup)
+            && target.phantom_illusion
+        {
+            emitters.emit(DispelIllusionEvent(target.entity));
+            return false;
+        }
+        // A magic ability (one carrying an `AbilityMeta` `source`, the
         // same signal the BL-36 antimagic gate uses) rolls the caster's *magic*
         // accuracy against the target's *magic* evasion; physical attacks use the
         // physical pair. A missed single-target spell fizzles — the same no-op as
@@ -5873,5 +5901,284 @@ mod attack_loadout_walk_tests {
         assert!(armor_evasion < tuning.gear_evasion_cap);
         assert!(poise_damage < 25.0);
         assert!(precision_mult > DerivedStats::DEFAULT_PRECISION_MULT);
+    }
+}
+
+#[cfg(test)]
+mod phantom_illusion_dispel_tests {
+    use super::{
+        Attack, AttackDamage, AttackOptions, AttackSource, Damage, DamageKind, GroupTarget,
+        TargetInfo,
+    };
+    use crate::{
+        event::{
+            BuffEvent, ComboChangeEvent, DispelIllusionEvent, EnergyChangeEvent,
+            EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
+            PoiseChangeEvent, TransformEvent,
+        },
+        event_emitters,
+        resources::Time,
+        uid::Uid,
+    };
+    use specs::{Builder, Entity as EcsEntity, SystemData, WorldExt};
+    use std::num::NonZeroU64;
+    use vek::Vec3;
+
+    event_emitters! {
+        struct ReadEvents[Emitters] {
+            health_change: HealthChangeEvent,
+            energy_change: EnergyChangeEvent,
+            parry_hook: ParryHookEvent,
+            knockback: KnockbackEvent,
+            buff: BuffEvent,
+            poise_change: PoiseChangeEvent,
+            combo_change: ComboChangeEvent,
+            entity_attack_hook: EntityAttackedHookEvent,
+            transform: TransformEvent,
+            dispel_illusion: DispelIllusionEvent,
+        }
+    }
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// Registers every event bus `apply_attack`'s emitters bound can write
+    /// to -- mirroring `server/src/sys/remote_sense.rs`'s `setup_world` idiom.
+    fn setup_world() -> specs::World {
+        let mut world = specs::World::new();
+        world.insert(EventBus::<HealthChangeEvent>::default());
+        world.insert(EventBus::<EnergyChangeEvent>::default());
+        world.insert(EventBus::<ParryHookEvent>::default());
+        world.insert(EventBus::<KnockbackEvent>::default());
+        world.insert(EventBus::<BuffEvent>::default());
+        world.insert(EventBus::<PoiseChangeEvent>::default());
+        world.insert(EventBus::<ComboChangeEvent>::default());
+        world.insert(EventBus::<EntityAttackedHookEvent>::default());
+        world.insert(EventBus::<TransformEvent>::default());
+        world.insert(EventBus::<DispelIllusionEvent>::default());
+        world
+    }
+
+    fn target_info(entity: EcsEntity, phantom_illusion: bool) -> TargetInfo<'static> {
+        TargetInfo {
+            entity,
+            uid: uid(2),
+            inventory: None,
+            derived: None,
+            stats: None,
+            health: None,
+            pos: Vec3::zero(),
+            ori: None,
+            char_state: None,
+            energy: None,
+            buffs: None,
+            mass: None,
+            player: None,
+            phantom_illusion,
+        }
+    }
+
+    fn attack_options(target_group: GroupTarget) -> AttackOptions {
+        AttackOptions {
+            target_dodging: false,
+            permit_pvp: true,
+            target_group,
+            allow_friendly_fire: false,
+            precision_mult: None,
+        }
+    }
+
+    fn some_damage() -> Attack {
+        Attack::new(None).with_damage(AttackDamage::new(
+            Damage {
+                kind: DamageKind::Slashing,
+                value: 10.0,
+            },
+            Some(GroupTarget::OutOfGroup),
+            0,
+        ))
+    }
+
+    /// The core reveal trigger: a single-target hostile attack (melee or
+    /// projectile) resolved against a `PhantomIllusion`-tagged target -- here
+    /// one with no `Health`, exactly like the real entity -- must not produce
+    /// any `HealthChangeEvent` (there would be nothing to write anyway), and
+    /// must instead emit exactly one `DispelIllusionEvent` naming the target.
+    #[test]
+    fn single_target_hostile_attack_on_phantom_illusion_dispels_instead_of_damaging() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, true);
+        let options = attack_options(GroupTarget::OutOfGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        let applied = attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Melee,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        assert!(
+            !applied,
+            "a dispelled phantasm attack must report nothing was applied"
+        );
+
+        let health_changes: Vec<_> = world
+            .read_resource::<EventBus<HealthChangeEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            health_changes.is_empty(),
+            "a phantasm has no Health -- no HealthChangeEvent must ever be produced for it"
+        );
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            dispels.len(),
+            1,
+            "exactly one DispelIllusionEvent must be emitted"
+        );
+        assert_eq!(dispels[0].0, target_entity);
+    }
+
+    /// Regression: a single-target hostile attack against an ordinary (non-
+    /// phantasm) target must resolve damage exactly as before -- the new gate
+    /// must not fire for anyone who doesn't carry `PhantomIllusion`.
+    #[test]
+    fn single_target_attack_on_a_non_phantasm_is_unaffected() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, false);
+        let options = attack_options(GroupTarget::OutOfGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Melee,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            dispels.is_empty(),
+            "an ordinary target must never produce a DispelIllusionEvent"
+        );
+    }
+
+    /// The AoE-safety invariant: an `Explosion` (or any other multi-target
+    /// source) attack against a `PhantomIllusion` target must not scan for or
+    /// dispel it -- the gate is `is_single_target`-only, exactly like the
+    /// `charmed_by_target` gate it mirrors.
+    #[test]
+    fn aoe_attack_on_phantom_illusion_does_not_dispel() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, true);
+        let options = attack_options(GroupTarget::OutOfGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Explosion,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            dispels.is_empty(),
+            "an AoE source must never read `phantom_illusion`, let alone dispel from it"
+        );
+    }
+
+    /// The hostile-only half of the gate: a single-target *in-group* effect
+    /// (e.g. an ally heal that happens to be routed through a single-target
+    /// attack) must not dispel a phantasm either -- only an out-of-group
+    /// (hostile) single-target attack does.
+    #[test]
+    fn in_group_single_target_effect_on_phantom_illusion_does_not_dispel() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, true);
+        let options = attack_options(GroupTarget::InGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Melee,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            dispels.is_empty(),
+            "an in-group single-target effect must never dispel a phantasm"
+        );
     }
 }

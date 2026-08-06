@@ -5,7 +5,7 @@ use common::{
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
         Alignment, Beam, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
-        Inventory, Mass, Ori, PhysicsState, Player, Pos, Scale, Stats,
+        Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Pos, Scale, Stats,
         ability::Dodgeable,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
@@ -38,6 +38,7 @@ event_emitters! {
         combo_change: event::ComboChangeEvent,
         buff: event::BuffEvent,
         transform: event::TransformEvent,
+        dispel_illusion: event::DispelIllusionEvent,
     }
 }
 
@@ -73,6 +74,7 @@ pub struct ReadData<'a> {
     events: ReadAttackEvents<'a>,
     masses: ReadStorage<'a, Mass>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for handling beams that heal or do damage
@@ -267,6 +269,7 @@ impl<'a> System<'a> for Sys {
                                 buffs: read_data.buffs.get(target),
                                 mass: read_data.masses.get(target),
                                 player: read_data.players.get(target),
+                                phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                             };
 
                             let target_dodging = match beam.dodgeable {
