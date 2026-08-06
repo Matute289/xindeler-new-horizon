@@ -21,6 +21,10 @@
 #define CLOUD_MODE_HIGH 4
 #define CLOUD_MODE_ULTRA 5
 
+#define SSAO_QUALITY_LOW 0
+#define SSAO_QUALITY_MEDIUM 1
+#define SSAO_QUALITY_HIGH 2
+
 #define LIGHTING_ALGORITHM_LAMBERTIAN 0
 #define LIGHTING_ALGORITHM_BLINN_PHONG 1
 #define LIGHTING_ALGORITHM_ASHIKHMIN 2
@@ -75,6 +79,7 @@
 #define CLOUD_MODE <mode>
 #define LIGHTING_ALGORITHM <algorithm>
 #define SHADOW_MODE <mode>
+#define SSAO_QUALITY <quality>
 */
 
 /* Constants possibly defined automatically by configuration: */

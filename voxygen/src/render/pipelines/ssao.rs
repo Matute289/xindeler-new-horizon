@@ -1,9 +1,9 @@
-//! Screen-space ambient occlusion pipeline plumbing. `SsaoLayout`'s bindings
-//! (depth + material G-buffer + locals) match what a real AO pass needs to
-//! reconstruct world-space position and surface normals, but the shipping
-//! fragment shader (`ssao-frag.glsl`) currently ignores all of them and
-//! always writes a constant `1.0` (no occlusion) -- the AO math itself has
-//! not been implemented yet.
+//! Screen-space ambient occlusion pipeline plumbing. `SsaoLayout` binds
+//! depth + the material G-buffer + locals, which `ssao-frag.glsl` uses to
+//! reconstruct world-space position and surface normals and compute real
+//! hemisphere-sampled occlusion. `SsaoBlurLayout` additionally binds depth
+//! so the blur pass can weight its taps by depth similarity (cross-bilateral
+//! blur) instead of blurring across depth discontinuities / object edges.
 
 use super::{super::Consts, GlobalsLayouts};
 use bytemuck::{Pod, Zeroable};
@@ -129,9 +129,9 @@ impl SsaoLayout {
     }
 }
 
-/// Input for the blur pass: just the AO-generation pass's output texture. A
-/// depth-aware blur would also need a depth binding here; kept to the
-/// minimum a plain passthrough needs for now.
+/// Input for the blur pass: the AO-generation pass's output texture, plus
+/// depth so the blur can weight taps by depth similarity (cross-bilateral
+/// blur, so it doesn't blur across depth discontinuities / object edges).
 pub struct SsaoBlurLayout {
     pub layout: wgpu::BindGroupLayout,
 }
@@ -158,6 +158,25 @@ impl SsaoBlurLayout {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // Depth source, for the cross-bilateral weight. Same
+                    // sample-type shape as `SsaoLayout`'s own depth binding
+                    // above.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
                 ],
             }),
         }
@@ -168,6 +187,8 @@ impl SsaoBlurLayout {
         device: &wgpu::Device,
         src_ao: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        src_depth: &wgpu::TextureView,
+        depth_sampler: &wgpu::Sampler,
     ) -> BindGroup {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -180,6 +201,14 @@ impl SsaoBlurLayout {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(src_depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(depth_sampler),
                 },
             ],
         });

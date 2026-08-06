@@ -33,7 +33,7 @@ use crate::{
     render::{
         CloudsLocals, Consts, CullingMode, Drawer, GlobalModel, Globals, GlobalsBindGroup, Light,
         Model, PointLightMatrix, PostProcessLocals, RainOcclusionLocals, Renderer, Shadow,
-        ShadowLocals, SkyboxVertex, create_skybox_mesh,
+        ShadowLocals, SkyboxVertex, SsaoLocals, create_skybox_mesh,
     },
     session::PlayerDebugLines,
     settings::Settings,
@@ -1017,6 +1017,7 @@ impl Scene {
         )]);
         renderer.update_clouds_locals(CloudsLocals::new(proj_mat_inv, view_mat_inv));
         renderer.update_postprocess_locals(PostProcessLocals::new(proj_mat_inv, view_mat_inv));
+        renderer.update_ssao_locals(SsaoLocals::new(proj_mat_inv, view_mat_inv));
 
         // Maintain LoD.
         self.lod.maintain(renderer, client, focus_pos, &self.camera);

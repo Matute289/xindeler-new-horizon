@@ -1430,6 +1430,10 @@ impl Renderer {
         self.locals.postprocess.update(&self.queue, &[new_val], 0)
     }
 
+    pub fn update_ssao_locals(&mut self, new_val: ssao::Locals) {
+        self.locals.ssao.update(&self.queue, &[new_val], 0)
+    }
+
     /// Create a new set of instances with the provided values.
     pub fn create_instances<T: Copy + bytemuck::Pod>(&mut self, vals: &[T]) -> Instances<T> {
         let mut instances = Instances::new(&self.device, vals.len());
