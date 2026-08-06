@@ -28,8 +28,8 @@ use common::{
     comp::{
         self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterClass,
         CharacterState, Energy, Group, Hardcore, Health, HealthChange, Inventory, Object,
-        PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind, ProjectileConstructor,
-        Skill, SkillSet, SpellMastery, Stats,
+        PhantomIllusion, PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind,
+        ProjectileConstructor, Skill, SkillSet, SpellMastery, Stats,
         ability::{Dodgeable, MagicSource},
         aura::{self, EnteredAuras},
         buff,
@@ -47,10 +47,10 @@ use common::{
     event::{
         AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
         ChangeStanceEvent, ChatEvent, ComboChangeEvent, CreateItemDropEvent, CreateNpcEvent,
-        CreateObjectEvent, DeleteEvent, DestroyEvent, DownedEvent, EmitExt, Emitter,
-        EnergyChangeEvent, EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent,
-        HelpDownedEvent, KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent,
-        ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
+        CreateObjectEvent, DeleteEvent, DestroyEvent, DispelIllusionEvent, DownedEvent, EmitExt,
+        Emitter, EnergyChangeEvent, EntityAttackedHookEvent, EventBus, ExplosionEvent,
+        HealthChangeEvent, HelpDownedEvent, KillEvent, KnockbackEvent, LandOnGroundEvent,
+        MakeAdminEvent, ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
         RemoveLightEmitterEvent, ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent,
         ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent, TeleportToEvent,
         TeleportToPositionEvent, TranscribeSpellEvent, TransformEvent, UpdateMapMarkerEvent,
@@ -182,6 +182,7 @@ event_emitters! {
         outcome: Outcome,
         stance: ChangeStanceEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 
     struct ReadEntityAttackedHookEvents[EntityAttackedHookEmitters] {
@@ -2984,6 +2985,7 @@ pub struct ExplosionData<'a> {
     uids: ReadStorage<'a, Uid>,
     masses: ReadStorage<'a, comp::Mass>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 impl ServerEvent for ExplosionEvent {
@@ -3394,6 +3396,10 @@ impl ServerEvent for ExplosionEvent {
                                     buffs: data.buffs.get(entity_b),
                                     mass: data.masses.get(entity_b),
                                     player: data.players.get(entity_b),
+                                    phantom_illusion: data
+                                        .phantom_illusions
+                                        .get(entity_b)
+                                        .is_some(),
                                 };
 
                                 // Check if entity is dodging

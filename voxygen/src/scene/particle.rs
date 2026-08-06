@@ -708,9 +708,12 @@ impl ParticleMgr {
             | Outcome::PortalActivated { .. }
             | Outcome::FromTheAshes { .. }
             | Outcome::LaserBeam { .. }
-            // BL-52 P4: miss feedback is a HUD floater, no particle.
+            // A miss/save-resist is a HUD floater, no particle.
             | Outcome::Miss { .. }
-            | Outcome::Resisted { .. } => {},
+            | Outcome::Resisted { .. }
+            // No dedicated dissipate VFX authored yet -- the entity mechanism
+            // only ships here.
+            | Outcome::PhantasmDissipated { .. } => {},
         }
     }
 

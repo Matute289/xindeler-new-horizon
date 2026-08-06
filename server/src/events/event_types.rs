@@ -4,7 +4,7 @@ pub use common::event::{
     ComboChangeEvent, CommandEvent, CreateAuraEntityEvent, CreateFloatingDiskEvent,
     CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent,
     CreateShipEvent, CreateSpecialEntityEvent, CreateSpriteEvent, DeleteCharacterEvent,
-    DeleteEvent, DestroyEvent, DialogueEvent, DownedEvent, EnergyChangeEvent,
+    DeleteEvent, DestroyEvent, DialogueEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
     EntityAttackedHookEvent, EventBus, ExitIngameEvent, ExplosionEvent, GroupManipEvent,
     HealthChangeEvent, HelpDownedEvent, InitializeCharacterEvent, InitializeSpectatorEvent,
     InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
@@ -102,6 +102,7 @@ macro_rules! server_events {
             CreatePoolEvent
             TranscribeSpellEvent
             ResolveRemoteSenseEvent
+            DispelIllusionEvent
         }
 
         #[cfg(feature = "plugins")]

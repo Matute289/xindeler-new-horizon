@@ -3,7 +3,8 @@ use common::{
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
         Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Content, Energy, Group,
-        Health, Inventory, Mass, Ori, PhysicsState, Player, Poise, Pos, Projectile, Stats, Vel,
+        Health, Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Poise, Pos,
+        Projectile, Stats, Vel,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
         object,
@@ -12,9 +13,10 @@ use common::{
     effect,
     event::{
         ArcingEvent, BonkEvent, BuffEvent, ComboChangeEvent, CreateNpcEvent, CreatePoolEvent,
-        DeleteEvent, EmitExt, Emitter, EnergyChangeEvent, EntityAttackedHookEvent, EventBus,
-        ExplosionEvent, HealthChangeEvent, KnockbackEvent, NpcBuilder, ParryHookEvent,
-        PoiseChangeEvent, PossessEvent, ShootEvent, SoundEvent, TransformEvent,
+        DeleteEvent, DispelIllusionEvent, EmitExt, Emitter, EnergyChangeEvent,
+        EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent, KnockbackEvent,
+        NpcBuilder, ParryHookEvent, PoiseChangeEvent, PossessEvent, ShootEvent, SoundEvent,
+        TransformEvent,
     },
     event_emitters,
     outcome::Outcome,
@@ -59,6 +61,7 @@ event_emitters! {
         arc: ArcingEvent,
         create_pool: CreatePoolEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 }
 
@@ -90,6 +93,7 @@ pub struct ReadData<'a> {
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for handling projectile effect triggers
@@ -630,6 +634,7 @@ fn dispatch_hit(
                 buffs: read_data.buffs.get(target),
                 mass: read_data.masses.get(target),
                 player: read_data.players.get(target),
+                phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
             };
 
             // TODO: Is it possible to have projectile without body??

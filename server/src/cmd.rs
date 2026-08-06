@@ -4112,6 +4112,10 @@ fn handle_outcome(
             pos: pos_arg!(),
             body: body_arg!()?,
         },
+        "PhantasmDissipated" => Outcome::PhantasmDissipated {
+            pos: pos_arg!(),
+            body: body_arg!()?,
+        },
         "HealthChange" => Outcome::HealthChange {
             pos: pos_arg!(),
             info: common::outcome::HealthChangeInfo {

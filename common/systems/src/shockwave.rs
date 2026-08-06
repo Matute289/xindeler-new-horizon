@@ -3,14 +3,14 @@ use common::{
     combat::{self, AttackOptions, AttackerInfo, TargetInfo},
     comp::{
         Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
-        Inventory, Mass, Ori, PhysicsState, Player, Pos, Scale, Shockwave, ShockwaveHitEntities,
-        Stats,
+        Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Pos, Scale, Shockwave,
+        ShockwaveHitEntities, Stats,
         ability::Dodgeable,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
     },
     event::{
-        BuffEvent, ComboChangeEvent, DeleteEvent, EmitExt, EnergyChangeEvent,
+        BuffEvent, ComboChangeEvent, DeleteEvent, DispelIllusionEvent, EmitExt, EnergyChangeEvent,
         EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, MineBlockEvent,
         ParryHookEvent, PoiseChangeEvent, SoundEvent, TransformEvent,
     },
@@ -39,6 +39,7 @@ event_emitters! {
         buff: BuffEvent,
         delete: DeleteEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 }
 
@@ -71,6 +72,7 @@ pub struct ReadData<'a> {
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for handling accepted inputs like moving or
@@ -256,6 +258,7 @@ impl<'a> System<'a> for Sys {
                         buffs: read_data.buffs.get(target),
                         mass: read_data.masses.get(target),
                         player: read_data.players.get(target),
+                        phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                     };
 
                     let target_dodging = read_data

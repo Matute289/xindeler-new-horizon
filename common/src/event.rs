@@ -81,6 +81,22 @@ pub struct NpcBuilder {
     /// double. Never an absent `Collider`: that drops `PhysicsState`
     /// entirely, which silently drops the entity from the figure renderer.
     pub incorporeal: bool,
+    /// If true, `handle_create_npc` inserts `comp::PhantomIllusion` — a
+    /// shared-illusion decoy that the attack path (`combat::apply_attack`)
+    /// dispels on the first single-target hostile hit instead of resolving
+    /// normal damage against it.
+    pub phantom_illusion: bool,
+    /// Overrides the shipped `duration`-driven `Projectile` expiry timer
+    /// (built from `SummonInfo::Npc::duration` above `create_npc`'s call
+    /// site) with a `comp::Object::DeleteAfter { spawned_at: <server Time>,
+    /// timeout: <this> }` instead -- `handle_create_npc` reads the server's
+    /// authoritative `Time` itself rather than accepting a caller-supplied
+    /// `Object`, so this field can only ever express `DeleteAfter`. Needs
+    /// neither `Collider` nor `PhysicsState` (unlike the `Projectile` timer)
+    /// and, on the client, blinks the entity out over its final 10s for free
+    /// (`voxygen`'s `should_flicker`) — the "the illusion is fading" tell a
+    /// phantasm wants and a plain `Projectile` timer does not give.
+    pub delete_after: Option<Duration>,
 }
 
 impl NpcBuilder {
@@ -106,6 +122,8 @@ impl NpcBuilder {
             rider_effects: None,
             rider: None,
             incorporeal: false,
+            phantom_illusion: false,
+            delete_after: None,
         }
     }
 
@@ -192,6 +210,16 @@ impl NpcBuilder {
 
     pub fn with_incorporeal(mut self, incorporeal: bool) -> Self {
         self.incorporeal = incorporeal;
+        self
+    }
+
+    pub fn with_phantom_illusion(mut self, phantom_illusion: bool) -> Self {
+        self.phantom_illusion = phantom_illusion;
+        self
+    }
+
+    pub fn with_delete_after(mut self, delete_after: impl Into<Option<Duration>>) -> Self {
+        self.delete_after = delete_after.into();
         self
     }
 }
@@ -413,6 +441,13 @@ pub struct PoiseChangeEvent {
 }
 
 pub struct DeleteEvent(pub EcsEntity);
+
+/// A single-target hostile attack resolved against a `comp::PhantomIllusion`
+/// entity. Raised by `combat::Attack::apply_attack` instead of any damage or
+/// other combat effect (a phantasm has no `Health`, so no `HealthChangeEvent`
+/// would otherwise exist to react to). `server/src/sys/phantasm.rs` consumes
+/// this to despawn the entity and announce the dissipate VFX.
+pub struct DispelIllusionEvent(pub EcsEntity);
 
 pub struct DestroyEvent {
     pub entity: EcsEntity,

@@ -68,6 +68,10 @@ macro_rules! synced_components {
             // — a disguise being *seen* (as a disguise) is the entire point
             // of casting one, unlike the owner-private components below.
             disguise: Disguise,
+            // A phantasm (shared-illusion decoy) is a real entity everyone
+            // sees — same "no per-observer secret" reasoning as `Disguise`
+            // just above.
+            phantom_illusion: PhantomIllusion,
             // TODO: change this to `SyncFrom::ClientEntity` and sync the bare minimum
             // from other entities (e.g. just keys needed to show appearance
             // based on their loadout). Also, it looks like this actually has
@@ -366,6 +370,12 @@ impl NetSync for ConcealedUnlessTrueSight {
 // nearby — unlike `RemoteSense`/`Detected` below, there is no "who is
 // watching what" leak to protect against here.
 impl NetSync for Disguise {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+// A phantasm's whole purpose is to be seen by everyone nearby — same
+// reasoning as `Disguise` immediately above.
+impl NetSync for PhantomIllusion {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 

@@ -3,10 +3,11 @@ use common::{
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
         Alignment, Arcing, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group,
-        Health, Inventory, Mass, Ori, Player, Pos, Scale, Stats, aura::EnteredAuras,
+        Health, Inventory, Mass, Ori, PhantomIllusion, Player, Pos, Scale, Stats,
+        aura::EnteredAuras,
     },
     event::{
-        BuffEvent, ComboChangeEvent, DeleteEvent, EmitExt, EnergyChangeEvent,
+        BuffEvent, ComboChangeEvent, DeleteEvent, DispelIllusionEvent, EmitExt, EnergyChangeEvent,
         EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
         PoiseChangeEvent, TransformEvent,
     },
@@ -31,6 +32,7 @@ event_emitters! {
         combo_change: ComboChangeEvent,
         entity_attack_hook: EntityAttackedHookEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 }
 
@@ -60,6 +62,7 @@ pub struct ReadData<'a> {
     alignments: ReadStorage<'a, Alignment>,
     players: ReadStorage<'a, Player>,
     character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for hit detection of arcing attacks. Arcing
@@ -234,6 +237,7 @@ impl<'a> System<'a> for Sys {
                             buffs: read_data.buffs.get(target),
                             mass: read_data.masses.get(target),
                             player: read_data.players.get(target),
+                            phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                         };
 
                         let target_dodging = read_data

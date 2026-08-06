@@ -121,6 +121,8 @@ impl CharacterBehavior for Data {
                                 alignment,
                                 with_agent,
                                 incorporeal,
+                                phantom_illusion,
+                                delete_after_expiry,
                             } => {
                                 let loadout = {
                                     let loadout_builder =
@@ -207,24 +209,32 @@ impl CharacterBehavior for Data {
                                     .cast()
                                     .0;
 
-                                // If a duration is specified, create a projectile component for the
-                                // npc
-                                let projectile = duration.map(|duration| Projectile {
-                                    hit_solid: Vec::new(),
-                                    hit_entity: Vec::new(),
-                                    timeout: Vec::new(),
-                                    time_left: duration,
-                                    init_time: Secs(duration.as_secs_f64()),
-                                    owner: Some(*data.uid),
-                                    ignore_group: true,
-                                    is_sticky: false,
-                                    is_point: false,
-                                    homing: None,
-                                    pierce_entities: false,
-                                    hit_entities: Vec::new(),
-                                    limit_per_ability: false,
-                                    override_collider: None,
-                                });
+                                // If a duration is specified, create a projectile component for
+                                // the npc -- unless `delete_after_expiry` opts into
+                                // `Object::DeleteAfter` instead (see
+                                // `NpcBuilder::delete_after`'s doc comment for why).
+                                let projectile = (!*delete_after_expiry)
+                                    .then(|| {
+                                        duration.map(|duration| Projectile {
+                                            hit_solid: Vec::new(),
+                                            hit_entity: Vec::new(),
+                                            timeout: Vec::new(),
+                                            time_left: duration,
+                                            init_time: Secs(duration.as_secs_f64()),
+                                            owner: Some(*data.uid),
+                                            ignore_group: true,
+                                            is_sticky: false,
+                                            is_point: false,
+                                            homing: None,
+                                            pierce_entities: false,
+                                            hit_entities: Vec::new(),
+                                            limit_per_ability: false,
+                                            override_collider: None,
+                                        })
+                                    })
+                                    .flatten();
+
+                                let delete_after = delete_after_expiry.then(|| *duration).flatten();
 
                                 let mut rng = rand::rng();
                                 // Send server event to create npc
@@ -248,7 +258,9 @@ impl CharacterBehavior for Data {
                                     }))
                                     .with_scale(scale.unwrap_or(comp::Scale(1.0)))
                                     .with_projectile(projectile)
-                                    .with_incorporeal(*incorporeal),
+                                    .with_incorporeal(*incorporeal)
+                                    .with_phantom_illusion(*phantom_illusion)
+                                    .with_delete_after(delete_after),
                                 });
 
                                 // Send local event used for frontend shenanigans
@@ -483,6 +495,23 @@ pub enum SummonInfo {
         /// regardless of body shape -- see `NpcBuilder::incorporeal`.
         #[serde(default)]
         incorporeal: bool,
+        /// If true, the summon gets `comp::PhantomIllusion`, so the attack
+        /// path dispels it on the first single-target hostile hit instead of
+        /// dealing damage. See `NpcBuilder::phantom_illusion`. Independent of
+        /// `delete_after_expiry` below -- an undying phantasm (no `duration`)
+        /// or a `delete_after_expiry` summon that isn't a phantasm are both
+        /// legal combinations.
+        #[serde(default)]
+        phantom_illusion: bool,
+        /// If true and `duration` is set, expiry is driven by a
+        /// `comp::Object::DeleteAfter` instead of this enum's usual
+        /// `Projectile`-based timer. See `NpcBuilder::delete_after`'s doc
+        /// comment for why (no `Collider`/`PhysicsState` requirement, and the
+        /// client's shipped final-10s flicker). `#[serde(default)]` so every
+        /// existing summon RON keeps its shipped `Projectile`-timer
+        /// behaviour unchanged.
+        #[serde(default)]
+        delete_after_expiry: bool,
     },
     BeamPillar {
         buildup_duration: f32,

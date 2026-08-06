@@ -38,6 +38,7 @@ pub mod melee;
 pub mod misc;
 pub mod ori;
 pub mod pet;
+pub mod phantom_illusion;
 mod phys;
 mod player;
 pub mod poise;
@@ -133,6 +134,7 @@ pub use self::{
     misc::Object,
     ori::Ori,
     pet::Pet,
+    phantom_illusion::PhantomIllusion,
     phys::{
         CapsulePrism, Collider, Density, ForceUpdate, Immovable, Mass, PhysicsState, Pos,
         PosVelOriDefer, PreviousPhysCache, Scale, Sticky, Vel,
