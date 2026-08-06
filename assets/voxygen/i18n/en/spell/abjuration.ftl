@@ -17,3 +17,5 @@ spell-pass_without_trace = Pass without Trace
 spell-pass_without_trace-desc = A hush of drifting shadow spreads from the caster, swallowing footsteps and scent so nearby allies move unseen and unheard.
 spell-mooncloak = Mooncloak
 spell-mooncloak-desc = Pale moonlight wells up around the caster, draping nearby allies in shifting silver dimness that veils their movements and dulls harmful magic against them.
+spell-nondetection = Nondetection
+spell-nondetection-desc = You weave a screening ward over a willing creature, object, or small space so that scrying and far-seeing magic slide harmlessly past it. For the duration the shielded target cannot be located or perceived by divinatory means.

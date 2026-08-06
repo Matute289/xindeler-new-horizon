@@ -289,6 +289,15 @@ buff-passwithouttrace = Pass without Trace
 ## Mooncloak
 buff-mooncloak = Mooncloak
     .desc = Shifting silver dimness veils your movements and dulls harmful magic against you.
+## Nondetection
+buff-nondetection = Nondetection
+    .desc = A screening ward makes you immune to scrying and divination magic.
+## Magic Aura
+buff-magicaura = Magic Aura
+    .desc = A subtle veil feeds false readings to anyone probing you with detection magic.
+## Sequester
+buff-sequester = Sequester
+    .desc = A veil of stillness renders you unseen and shielded from every form of remote sensing.
 ## Smites (self-buff, next weapon hit gains a rider)
 buff-blindingsmite = Blinding Smite
     .desc = Your next weapon strike sears with radiant light, dealing extra damage and blinding your foe.

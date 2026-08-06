@@ -7393,7 +7393,10 @@ fn build_buff(
             | BuffKind::TrueSight
             | BuffKind::RemoteSensing
             | BuffKind::PassWithoutTrace
-            | BuffKind::Mooncloak => {
+            | BuffKind::Mooncloak
+            | BuffKind::Nondetection
+            | BuffKind::MagicAura
+            | BuffKind::Sequester => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {

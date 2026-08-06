@@ -11,3 +11,5 @@ spell-disguise_self = Disguise Self
 spell-disguise_self-desc = The caster wraps themselves in a shimmer of woven glamour, changing how their face, build, and garments appear to onlookers. The disguise holds until dismissed or the magic fades, though a careful touch reveals the truth.
 spell-seeming = Seeming
 spell-seeming-desc = The caster drapes any number of willing creatures within reach in a woven veil of false form, reshaping how each one appears to onlookers.
+spell-magic_aura = Magic Aura
+spell-magic_aura-desc = By cloaking a creature or object in a subtle veil, the caster feeds false readings to those who probe it with detection magic. The deception masks the target's true nature or invents one that was never there.

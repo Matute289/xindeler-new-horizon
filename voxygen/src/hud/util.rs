@@ -343,6 +343,9 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Disguised => "buff-disguised",
         BuffKind::PassWithoutTrace => "buff-passwithouttrace",
         BuffKind::Mooncloak => "buff-mooncloak",
+        BuffKind::Nondetection => "buff-nondetection",
+        BuffKind::MagicAura => "buff-magicaura",
+        BuffKind::Sequester => "buff-sequester",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
         BuffKind::BleedingMark => "buff-bleeding_mark",
@@ -567,7 +570,10 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::RemoteSensing
                         | BuffKind::Disguised
                         | BuffKind::PassWithoutTrace
-                        | BuffKind::Mooncloak => Cow::Borrowed(""),
+                        | BuffKind::Mooncloak
+                        | BuffKind::Nondetection
+                        | BuffKind::MagicAura
+                        | BuffKind::Sequester => Cow::Borrowed(""),
                     };
 
                     write!(&mut description, "{}", buff_desc).unwrap();
