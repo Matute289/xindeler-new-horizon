@@ -572,6 +572,18 @@ pub struct ResolveRemoteSenseEvent {
     pub anchor_kind: comp::buff::SenseAnchorKind,
     pub free_look: bool,
     pub piloted: bool,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::spawn_range`
+    /// (RON-authored, per-ability) -- see that field's own doc comment.
+    /// Consumed only by `server/src/events/remote_sense.rs`'s
+    /// `resolve_piloted`; meaningless for the `Existing`/`Sensor` anchor
+    /// kinds.
+    pub spawn_range: f32,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::flight_speed`.
+    /// Written onto `comp::RemoteSense::flight_speed` by every `resolve_*`
+    /// handler so `common/systems/src/pilot.rs` can read it back every tick
+    /// off the caster's own component; meaningless for the
+    /// `Existing`/`Sensor` anchor kinds.
+    pub flight_speed: f32,
 }
 
 pub struct EnergyChangeEvent {

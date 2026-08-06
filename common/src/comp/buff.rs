@@ -1290,8 +1290,15 @@ impl BuffKind {
                     anchor_kind,
                     free_look,
                     piloted,
+                    ..
                 }) = data.misc_data
                 {
+                    // `spawn_range`/`flight_speed` are deliberately not
+                    // forwarded onto `BuffEffect::RemoteSense` -- that effect
+                    // is a declared-but-inert marker
+                    // (`common/systems/src/buff.rs` matches it as a no-op);
+                    // the actual anchor mechanics read those two fields
+                    // straight from `data.misc_data` below, at cast time.
                     effects.push(BuffEffect::RemoteSense {
                         anchor_kind,
                         free_look,
@@ -1450,8 +1457,39 @@ pub enum MiscBuffData {
         anchor_kind: SenseAnchorKind,
         free_look: bool,
         piloted: bool,
+        /// How far in front of the caster's own facing a `Piloted` anchor
+        /// spawns, in blocks (`server/src/events/remote_sense.rs`'s
+        /// `resolve_piloted`). Meaningless for `Existing`/`Sensor` anchors,
+        /// which never compute a caster-relative spawn point at all --
+        /// `Sensor` spawns at the cast's own target point, and `Existing`
+        /// doesn't spawn anything. Defaults to `arcane_eye`'s own shipped
+        /// value so `clairvoyance.ron`/`beast_sense.ron` (neither of which
+        /// uses a `Piloted` anchor) don't need updating.
+        #[serde(default = "default_piloted_spawn_range")]
+        spawn_range: f32,
+        /// Horizontal/vertical cruise speed of a `Piloted` anchor, in blocks
+        /// per second, read every tick by `common/systems/src/pilot.rs` off
+        /// the caster's own `RemoteSense` component (which carries this
+        /// value forward from cast time -- see
+        /// `common/src/comp/remote_sense.rs`). Meaningless for
+        /// `Existing`/`Sensor` anchors, same defaulting rationale as
+        /// `spawn_range` above.
+        #[serde(default = "default_piloted_flight_speed")]
+        flight_speed: f32,
     },
 }
+
+/// `arcane_eye`'s own shipped spawn range
+/// (`server/src/events/remote_sense.rs`'s old `EYE_SPAWN_RANGE` const, before
+/// this became a RON-authored field), kept as the serde default so every other
+/// `MiscBuffData::RemoteSense`-using RON file doesn't need to opt in
+/// explicitly.
+fn default_piloted_spawn_range() -> f32 { 9.0 }
+
+/// `arcane_eye`'s own shipped flight speed (`common/systems/src/pilot.rs`'s
+/// old `EYE_FLIGHT_SPEED` const, before this became a RON-authored field),
+/// same defaulting rationale as `default_piloted_spawn_range` above.
+fn default_piloted_flight_speed() -> f32 { 6.0 }
 
 /// Which kind of `SenseAnchor` a `RemoteSensing` buff declares, without the
 /// anchor's identity (see `MiscBuffData::RemoteSense`'s doc comment for why
@@ -2301,6 +2339,8 @@ pub mod tests {
                 anchor_kind: SenseAnchorKind::Piloted,
                 free_look: false,
                 piloted: true,
+                spawn_range: default_piloted_spawn_range(),
+                flight_speed: default_piloted_flight_speed(),
             }),
             ..BuffData::new(0.0, Some(Secs(60.0)))
         };

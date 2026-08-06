@@ -40,7 +40,22 @@ pub fn add_local_systems(dispatch_builder: &mut DispatcherBuilder) {
     // requirement `pilot::Sys`'s module doc describes. `mount::Sys` and
     // `pilot::Sys` already write-conflict on `Controller`/`Vel`/`Ori`
     // regardless of a declared edge, so this costs no real parallelism.
-    dispatch::<pilot::Sys>(dispatch_builder, &[&mount::Sys::sys_name()]);
+    // Also depends on `interpolation::Sys` for the same reason `phys::Sys`
+    // (a few lines below) does: `interpolation::Sys` writes `Pos`/`Vel`/`Ori`
+    // for every entity carrying `InterpData` -- every synced remote entity on
+    // a client, which includes the piloted eye (its only exclusion is the
+    // *local player's own* entity, not the eye) -- and `pilot::Sys` also
+    // writes the eye's `Vel`/`Ori`. Without a declared edge, which of the two
+    // "wins" on a given tick is only an insertion-order tie-break (both
+    // conflict on `Vel`/`Ori`, so specs serialises them either way, but not
+    // to a documented order) -- a future reordering of this function could
+    // silently flip the eye from responsive local prediction to laggy
+    // interpolated movement with nothing to catch it, the same class of bug
+    // `phys::Sys`'s own explicit dependency guards against.
+    dispatch::<pilot::Sys>(dispatch_builder, &[
+        &mount::Sys::sys_name(),
+        &interpolation::Sys::sys_name(),
+    ]);
     dispatch::<controller::Sys>(dispatch_builder, &[
         &mount::Sys::sys_name(),
         &pilot::Sys::sys_name(),

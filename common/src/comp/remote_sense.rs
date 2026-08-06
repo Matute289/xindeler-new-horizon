@@ -40,6 +40,14 @@ pub struct RemoteSense {
     /// iterating sensor entities can find the link that governs them without
     /// a second lookup.
     pub caster: Uid,
+    /// Horizontal/vertical cruise speed of a `SenseAnchor::Piloted` anchor,
+    /// in blocks per second -- forwarded here from the cast-time ability RON
+    /// (`comp::buff::MiscBuffData::RemoteSense::flight_speed`) so
+    /// `common/systems/src/pilot.rs` can read it back every tick off the
+    /// caster's own (already-synced) component, without needing to touch
+    /// `Buffs` at all. Meaningless for `SenseAnchor::Existing`/`Sensor`,
+    /// which are never driven.
+    pub flight_speed: f32,
 }
 
 impl RemoteSense {
@@ -111,6 +119,7 @@ mod tests {
             free_look: true,
             piloted: false,
             caster: uid(1),
+            flight_speed: 0.0,
         };
         assert_eq!(rs.anchor_uid(), uid(42));
     }

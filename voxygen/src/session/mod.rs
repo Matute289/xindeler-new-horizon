@@ -1383,6 +1383,7 @@ impl PlayState for SessionState {
                                     clear_stale_spectator_components(&client, spectated_entity);
                                     self.viewpoint_entity = None;
                                     self.viewpoint_source = None;
+                                    self.viewpoint_piloted = false;
                                     self.scene.camera_mut().set_mode(CameraMode::Freefly);
                                     let mut ori = self.scene.camera().get_orientation();
                                     // Remove any roll that could have possibly been set to the
