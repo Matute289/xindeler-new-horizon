@@ -1,0 +1,43 @@
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Disguised,
+            data: BuffData(
+                // 0.0 is a placeholder, not a bug: common/src/states/self_buff.rs
+                // special-cases BuffKind::Disguised and overwrites this with the
+                // caster's live magic_accuracy at cast time, the same way
+                // RemoteSensing's own cast-time data is snapshotted there.
+                strength: 0.0,
+                duration: Some(3600.0),
+                // No player-facing "which body" picker exists in this engine
+                // (see the precedent in assets/common/items/consumable/potion_curious.ron,
+                // which hardcodes one fixed body per effect entry). v1 scope:
+                // disguise_self always renders the caster as this one fixed,
+                // plausible "generic commoner" human -- a deliberate known
+                // limitation, not a bug, see the PR body.
+                misc_data: Some(Body(Humanoid((
+                    species: Human,
+                    body_type: Male,
+                    hair_style: 0,
+                    beard: 0,
+                    eyes: 0,
+                    accessory: 0,
+                    hair_color: 0,
+                    skin: 0,
+                    eye_color: 0,
+                    height_scale: 128,
+                )))),
+            ),
+        ),
+    ],
+    energy_cost: 15,
+    enforced_limit: false,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        requirements: (min_level: Some(1)),
+    ),
+)

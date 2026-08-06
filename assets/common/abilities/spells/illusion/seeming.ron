@@ -1,0 +1,65 @@
+// Seeming: a non-concentration, long-fixed-duration multi-target disguise
+// (sheet note). Targets willing allies in InGroup -- the 5e "unwilling
+// creature resists" clause is deliberately dropped: this codebase has no
+// cast-time resistance-contest mechanism independent of the already-shipped
+// passive suspicion roll, and inventing a second, undocumented resist
+// formula would violate that mechanism's own invariants. See the PR body
+// for the full design note.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.6,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Disguised,
+            // Fixed, level-appropriate value, not a live snapshot: BasicAura
+            // has no per-caster stat hook the way SelfBuff's self_buff.rs
+            // gives disguise_self (that special case is SelfBuff-only). 20.0
+            // approximates the average magic_accuracy a Bard/Sorcerer/Mage
+            // (this spell's classes; Mage = engine's Wizard) has at level 30,
+            // this spell's own min_level (Bard ~15.6, Sorcerer/Mage ~22.0 at
+            // L30 per assets/common/class/class_attributes.ron's
+            // level_scaled curve) -- see the PR body's "seeming strength"
+            // note for the full reasoning and the smaller-scope tradeoff.
+            strength: 20.0,
+            duration: Some(3600.0),
+            category: Some(Magical),
+            // Every target caught by this aura's single pulse (see
+            // aura_duration below) is disguised as the same fixed body --
+            // the same known v1 scope choice disguise_self.ron makes, for
+            // the same reason (no player-facing body picker exists yet).
+            misc_data: Some(Body(Humanoid((
+                species: Human,
+                body_type: Male,
+                hair_style: 0,
+                beard: 0,
+                eyes: 0,
+                accessory: 0,
+                hair_color: 0,
+                skin: 0,
+                eye_color: 0,
+                height_scale: 128,
+            )))),
+        ),
+    ],
+    // Instant, not a lingering aura: a brief pulse that catches everyone
+    // currently in range once, matching the same "Instant duration via a
+    // short BasicAura pulse" idiom power_word_fortify.ron/
+    // power_word_divine_word.ron already use for their own Instant-duration
+    // multi-target buffs.
+    aura_duration: Some(0.5),
+    range: 9.0,
+    energy_cost: 120.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30: verified against the shipped
+        // level*6 convention (hold_person lvl2->12, hold_monster lvl5->30,
+        // irresistible_dance lvl6->36, power_word_pain/fortify lvl7->42,
+        // power_word_stun lvl8->48, power_word_kill lvl9->54), not guessed.
+        requirements: (min_level: Some(30)),
+    ),
+)

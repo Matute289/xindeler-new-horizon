@@ -517,3 +517,7 @@ common-abilities-spells-illusion-major_image = Imagen Mayor
     .desc = Conjurá un fantasma vívido y realista de un objeto, criatura o escena de hasta un gran cubo de tamaño.
 common-abilities-spells-illusion-project_image = Imagen Proyectada
     .desc = Conjurá un doble ilusorio estacionario de vos mismo cerca tuyo.
+common-abilities-spells-illusion-disguise_self = Disfrazarse
+    .desc = El lanzador se envuelve en un destello de glamour tejido, cambiando cómo su rostro, complexión y ropas aparecen ante los observadores. El disfraz se mantiene hasta que se disipa o la magia se desvanece, aunque un toque atento revela la verdad.
+common-abilities-spells-illusion-seeming = Apariencia
+    .desc = El lanzador envuelve a cualquier cantidad de criaturas dispuestas a su alcance en un velo tejido de falsa forma, dando a cada una una apariencia distinta ante los observadores.

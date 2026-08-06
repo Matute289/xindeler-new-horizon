@@ -2687,6 +2687,7 @@ impl CharacterAbility {
                          duration: _,
                          category: _,
                          pool_split,
+                         misc_data: _,
                      }| {
                         *strength *= stats.diminished_buff_strength();
                         if let Some(split) = pool_split {
@@ -2720,6 +2721,7 @@ impl CharacterAbility {
                          duration: _,
                          category: _,
                          pool_split,
+                         misc_data: _,
                      }| {
                         *strength *= stats.diminished_buff_strength();
                         if let Some(split) = pool_split {
