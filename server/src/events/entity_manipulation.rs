@@ -2140,6 +2140,12 @@ impl ServerEvent for DestroyEvent {
                                     });
                                 }
                             },
+                            CombatEffect::RemoveBuff(buff_change) => {
+                                emitters.emit(BuffEvent {
+                                    entity: effect_target,
+                                    buff_change: buff_change.clone(),
+                                });
+                            },
                             CombatEffect::Combo(c) => {
                                 emitters.emit(ComboChangeEvent {
                                     entity: effect_target,
@@ -4667,6 +4673,12 @@ impl ServerEvent for EntityAttackedHookEvent {
                                         change,
                                     });
                                 }
+                            },
+                            CombatEffect::RemoveBuff(buff_change) => {
+                                emitters.emit(BuffEvent {
+                                    entity: effect_target,
+                                    buff_change: buff_change.clone(),
+                                });
                             },
                             CombatEffect::Combo(c) => {
                                 emitters.emit(ComboChangeEvent {

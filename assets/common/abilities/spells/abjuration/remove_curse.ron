@@ -1,0 +1,21 @@
+// Same touch-cleanse shape as lesser_restoration/greater_restoration, also
+// targeting Cursed -- the third spell/item wanting this exact rider, confirming
+// Cursed is the right single-debuff analogue rather than a coincidence.
+BasicMelee(
+    energy_cost: 60.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            RemoveBuff(RemoveByKind(Cursed)),
+            TargetHasBuff(Cursed),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

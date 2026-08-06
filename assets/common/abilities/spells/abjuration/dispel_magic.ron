@@ -1,0 +1,29 @@
+// Strips every Magical-tagged buff from an enemy in one cast. There is no
+// opposed-check layer in this engine (the same limitation counterspell hits), so
+// this is an unconditional dispel rather than the source spell's "ability-check
+// contest for higher-level effects" -- the AnyDamage gate just requires the bolt
+// to land on a living target, it does not roll against effect strength.
+BasicRanged(
+    energy_cost: 60.0,
+    buildup_duration: 0.5,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 3,
+            attack_effect: Some((
+                RemoveBuff(RemoveByCategory(
+                    all_required: [Magical],
+                    any_required: [],
+                    none_required: [],
+                )),
+                AnyDamage,
+            )),
+            damage_kind: Force,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

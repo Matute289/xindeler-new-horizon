@@ -823,6 +823,7 @@ pub mod tests {
                     }
                 },
                 CombatEffect::Heal(_)
+                | CombatEffect::RemoveBuff(_)
                 | CombatEffect::Buff(_)
                 | CombatEffect::Knockback(_)
                 | CombatEffect::EnergyReward(_)

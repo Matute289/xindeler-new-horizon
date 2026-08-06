@@ -7361,6 +7361,7 @@ fn build_buff(
             | BuffKind::Blessed
             | BuffKind::CrusadersMantle
             | BuffKind::RestfulSleep
+            | BuffKind::OtherworldlyWard
             | BuffKind::Bane
             | BuffKind::FaerieFire
             | BuffKind::Enfeebled

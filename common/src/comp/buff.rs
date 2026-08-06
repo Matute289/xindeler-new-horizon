@@ -270,6 +270,14 @@ pub enum BuffKind {
     /// but classified as a positive buff rather than a debuff, since it is
     /// cast on consenting allies rather than inflicted on foes.
     RestfulSleep,
+    /// A defensive ward against otherworldly creatures. Mechanically a flat
+    /// `DamageReduction` identical to `ProtectingWard` (there is no
+    /// creature-kind-conditional resistance primitive to gate it on the
+    /// attacker's `CreatureKind`, so v1 reduces all incoming damage while
+    /// the ward holds rather than only damage from
+    /// Celestial/Elemental/Fey/Fiend/Undead attackers). Strength scales the
+    /// damage reduction non-linearly, same curve as `ProtectingWard`.
+    OtherworldlyWard,
     // =================
     //      DEBUFFS
     // =================
@@ -532,6 +540,7 @@ impl BuffKind {
             | BuffKind::Blessed
             | BuffKind::CrusadersMantle
             | BuffKind::RestfulSleep
+            | BuffKind::OtherworldlyWard
             | BuffKind::FreedomOfMovement
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
@@ -727,6 +736,9 @@ impl BuffKind {
                 // strength. 0.5 also still provides 50% damage reduction.
                 nn_scaling(data.strength),
             )],
+            BuffKind::OtherworldlyWard => {
+                vec![BuffEffect::DamageReduction(nn_scaling(data.strength))]
+            },
             BuffKind::Burning => vec![
                 BuffEffect::HealthChangeOverTime {
                     rate: -data.strength,
@@ -1721,7 +1733,7 @@ pub struct Buff {
 
 /// Information about whether buff addition or removal was requested.
 /// This to implement "on_add" and "on_remove" hooks for constant buffs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum BuffChange {
     /// Adds this buff.
     Add(Buff),

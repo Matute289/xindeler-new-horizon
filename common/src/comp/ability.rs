@@ -1982,6 +1982,7 @@ impl Default for CharacterAbility {
                 multi_target: None,
                 damage_effect: None,
                 attack_effect: None,
+                attack_effect_target: None,
                 simultaneous_hits: 1,
                 custom_combo: CustomCombo {
                     base: None,

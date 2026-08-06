@@ -1228,6 +1228,12 @@ impl Attack {
                                 });
                             }
                         },
+                        CombatEffect::RemoveBuff(buff_change) => {
+                            emitters.emit(BuffEvent {
+                                entity: target.entity,
+                                buff_change: buff_change.clone(),
+                            });
+                        },
                         CombatEffect::Combo(c) => {
                             if let Some(attacker_entity) = attacker.map(|a| a.entity) {
                                 emitters.emit(ComboChangeEvent {
@@ -1503,6 +1509,12 @@ impl Attack {
                                 change,
                             });
                         }
+                    },
+                    CombatEffect::RemoveBuff(buff_change) => {
+                        emitters.emit(BuffEvent {
+                            entity: target.entity,
+                            buff_change: buff_change.clone(),
+                        });
                     },
                     CombatEffect::Combo(c) => {
                         if let Some(attacker_entity) = attacker.map(|a| a.entity) {
@@ -1836,6 +1848,13 @@ impl StatEffect {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum CombatEffect {
     Heal(f32),
+    /// Removes a buff from the entity this effect resolves against — the
+    /// `RemoveBuff` sibling of `Heal`: same shape, same resolution sites, but
+    /// carries a `BuffChange` instead of a magnitude, so it has no
+    /// `mult`/`stats.effect_power` scaling (see `apply_multiplier`/
+    /// `adjusted_by_stats` below, both straight passthroughs for this
+    /// variant).
+    RemoveBuff(BuffChange),
     Buff(CombatBuff),
     Knockback(Knockback),
     EnergyReward(f32),
@@ -1963,6 +1982,7 @@ impl CombatEffect {
     pub fn apply_multiplier(self, mult: f32) -> Self {
         match self {
             CombatEffect::Heal(h) => CombatEffect::Heal(h * mult),
+            effect @ CombatEffect::RemoveBuff(_) => effect,
             CombatEffect::Buff(CombatBuff {
                 kind,
                 dur_secs,
@@ -2017,6 +2037,7 @@ impl CombatEffect {
     pub fn adjusted_by_stats(self, stats: tool::Stats) -> Self {
         match self {
             CombatEffect::Heal(h) => CombatEffect::Heal(h * stats.effect_power),
+            effect @ CombatEffect::RemoveBuff(_) => effect,
             CombatEffect::Buff(CombatBuff {
                 kind,
                 dur_secs,
@@ -2068,6 +2089,44 @@ impl CombatEffect {
                 filter_weapon,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod remove_buff_effect_tests {
+    use super::*;
+    use crate::comp::buff::BuffCategory;
+
+    fn stab_stats() -> tool::Stats {
+        tool::Stats {
+            equip_time_secs: 0.0,
+            power: 2.0,
+            effect_power: 2.0,
+            speed: 1.0,
+            range: 1.0,
+            energy_efficiency: 1.0,
+            buff_strength: 2.0,
+            cooldown_reduction: 1.0,
+        }
+    }
+
+    /// Unlike `Heal`, `RemoveBuff` carries no magnitude -- `apply_multiplier`
+    /// must pass it through unchanged rather than scaling anything.
+    #[test]
+    fn apply_multiplier_is_a_passthrough() {
+        let effect = CombatEffect::RemoveBuff(BuffChange::RemoveByKind(BuffKind::Poisoned));
+        assert_eq!(effect.clone().apply_multiplier(3.5), effect);
+    }
+
+    /// Same passthrough guarantee for the tool-stats scaling path.
+    #[test]
+    fn adjusted_by_stats_is_a_passthrough() {
+        let effect = CombatEffect::RemoveBuff(BuffChange::RemoveByCategory {
+            all_required: vec![BuffCategory::Magical],
+            any_required: vec![],
+            none_required: vec![],
+        });
+        assert_eq!(effect.clone().adjusted_by_stats(stab_stats()), effect);
     }
 }
 
