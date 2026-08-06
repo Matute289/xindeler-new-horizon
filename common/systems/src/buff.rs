@@ -3,7 +3,7 @@ use common::{
     assets::{AssetExt, Ron},
     combat::{self, CombatTuning, DamageContributor},
     comp::{
-        ActiveSense, Alignment, AttunedItems, DerivedStats, Energy, Ethos, Group, Health,
+        ActiveSense, Alignment, AttunedItems, DerivedStats, Disguise, Energy, Ethos, Group, Health,
         HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos,
         Stats,
         agent::{Sound, SoundKind},
@@ -140,13 +140,17 @@ pub struct ReadData<'a> {
 #[derive(Default)]
 pub struct Sys;
 impl<'a> System<'a> for Sys {
-    type SystemData = (ReadData<'a>, WriteStorage<'a, Stats>);
+    type SystemData = (
+        ReadData<'a>,
+        WriteStorage<'a, Stats>,
+        WriteStorage<'a, Disguise>,
+    );
 
     const NAME: &'static str = "buff";
     const ORIGIN: Origin = Origin::Common;
     const PHASE: Phase = Phase::Create;
 
-    fn run(job: &mut Job<Self>, (read_data, mut stats): Self::SystemData) {
+    fn run(job: &mut Job<Self>, (read_data, mut stats, mut disguises): Self::SystemData) {
         let mut emitters = read_data.events.get_emitters();
         let dt = read_data.dt.0;
         // Set to false to avoid spamming server
@@ -740,6 +744,7 @@ impl<'a> System<'a> for Sys {
             stat.crit_chance += npc_crit;
 
             let mut body_override = None;
+            let mut disguise_override = None;
 
             // Iterator over the lists of buffs by kind
             let mut buff_kinds = buff_comp
@@ -786,6 +791,7 @@ impl<'a> System<'a> for Sys {
                                 &mut stat,
                                 body,
                                 &mut body_override,
+                                &mut disguise_override,
                                 health,
                                 energy,
                                 entity,
@@ -809,6 +815,26 @@ impl<'a> System<'a> for Sys {
                     new_body,
                     permanent_change: None,
                 });
+            }
+
+            // Update disguise if needed. Mirrors the body-override block
+            // above (same "only write when it actually changed" guard, for
+            // the same reason: `Disguise` is `Tracked` for net sync, so an
+            // unconditional `insert` every tick — even with an unchanged
+            // value — would mark it dirty and resync it to every nearby
+            // client every tick for no reason, exactly the thrash this
+            // component was split out of `Stats` to avoid).
+            match &disguise_override {
+                Some(disguise) => {
+                    if disguises.get(entity) != Some(disguise) {
+                        let _ = disguises.insert(entity, disguise.clone());
+                    }
+                },
+                None => {
+                    if disguises.contains(entity) {
+                        disguises.remove(entity);
+                    }
+                },
             }
 
             // Remove buffs that expire
@@ -847,6 +873,7 @@ fn execute_effect(
     stat: &mut Stats,
     current_body: &Body,
     body_override: &mut Option<Body>,
+    disguise_override: &mut Option<Disguise>,
     health: &Health,
     energy: &Energy,
     entity: Entity,
@@ -1164,6 +1191,22 @@ fn execute_effect(
         // component is written directly by the server-only cast-resolution
         // code that applies this buff, never derived from this effect.
         BuffEffect::RemoteSense { .. } => {},
+        // Same accumulate-then-apply-once-per-entity shape as `BodyChange`
+        // above, deliberately kept on its own local var rather than folded
+        // into it: this must never reach `body_override` /
+        // `ChangeBodyEvent`, only the separate `Disguise` component.
+        BuffEffect::Disguise {
+            apparent_body,
+            caster,
+            cast_accuracy,
+        } => {
+            *disguise_override = Some(Disguise {
+                apparent_body: *apparent_body,
+                apparent_name: None,
+                caster: *caster,
+                cast_accuracy: *cast_accuracy,
+            });
+        },
     };
 }
 

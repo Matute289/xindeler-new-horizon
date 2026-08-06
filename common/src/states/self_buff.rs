@@ -137,6 +137,20 @@ impl CharacterBehavior for Data {
                         let mut buff_data = buff_desc.data;
                         buff_data.strength *= scaling_factor;
 
+                        // A disguise's suspicion-roll accuracy must be the
+                        // caster's live `magic_accuracy` at the moment of
+                        // casting, snapshotted here (the only place this
+                        // state has the caster's own `Stats` in scope)
+                        // rather than re-derived later from a `Uid` lookup
+                        // that could point at a caster who has since left
+                        // the region or changed gear. Overrides rather than
+                        // scales: `strength` carries no authored meaning for
+                        // this buff kind, unlike every other user of this
+                        // loop.
+                        if buff_desc.kind == BuffKind::Disguised {
+                            buff_data.strength = data.stats.magic_accuracy;
+                        }
+
                         let buff = Buff::new(
                             buff_desc.kind,
                             buff_data,

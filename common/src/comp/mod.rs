@@ -19,6 +19,7 @@ pub mod controller;
 pub mod creature_type;
 pub mod derived_stats;
 pub mod detection;
+pub mod disguise;
 mod energy;
 pub mod ethos;
 pub mod fluid_dynamics;
@@ -105,6 +106,7 @@ pub use self::{
         ConcealedUnlessTrueSight, DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind,
         observer_pierces_concealment,
     },
+    disguise::Disguise,
     energy::Energy,
     ethos::{Ethos, Moral, Order},
     fluid_dynamics::Fluid,

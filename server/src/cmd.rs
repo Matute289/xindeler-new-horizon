@@ -7285,7 +7285,12 @@ fn build_buff(
 
         // Explicit match to remember that this function exists
         let misc_data = match buff_kind {
-            BuffKind::Polymorphed => {
+            // Disguise reuses Polymorphed's exact body-spec parser: the RON
+            // authoring shape (and this admin-command shape) is identical —
+            // only the effect the buff produces differs (a `Disguise`
+            // component update instead of `ChangeBodyEvent`; see
+            // `common/src/comp/disguise.rs`).
+            BuffKind::Polymorphed | BuffKind::Disguised => {
                 let Ok(npc::NpcBody(_id, mut body)) = spec.parse() else {
                     return Err(Content::localized_with_args("command-buff-body-unknown", [
                         ("spec", spec.clone()),

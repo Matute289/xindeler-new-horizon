@@ -464,6 +464,17 @@ pub enum BuffKind {
     /// `extend_cat_ids`) — a solid hit ends the link the same way it ends any
     /// other concentration effect, and only one such link is held at a time.
     RemoteSensing,
+    // =================
+    //     DISGUISE
+    // =================
+    /// A cast disguise: cosmetic-only, unlike `Polymorphed` above. Declares
+    /// the shape of the bearer's `Disguise` component (see its own doc
+    /// comment) without touching `Body`, `Mass`, `Density`, `Collider` or any
+    /// combat stat. Authors should tag the granting buff/ability
+    /// `BuffCategory::RemoveOnAttack` — a disguise breaking the instant its
+    /// wearer attacks is a content/RON decision, not something this variant
+    /// enforces in code.
+    Disguised,
 }
 
 /// Tells a little more about the buff kind than simple buff/debuff
@@ -580,7 +591,7 @@ impl BuffKind {
             | BuffKind::Blinded
             | BuffKind::Slowed
             | BuffKind::Agonized => BuffDescriptor::SimpleNegative,
-            BuffKind::Polymorphed => BuffDescriptor::Complex,
+            BuffKind::Polymorphed | BuffKind::Disguised => BuffDescriptor::Complex,
         }
     }
 
@@ -1289,6 +1300,28 @@ impl BuffKind {
                 }
                 effects
             },
+            // Cosmetic-only disguise — see `BuffEffect::Disguise`'s doc
+            // comment for why this must never become a `BodyChange`.
+            // `cast_accuracy` is carried in `data.strength`: the caster's
+            // live `magic_accuracy` is only available at cast time (in the
+            // character-state code that builds this buff's `BuffData`, which
+            // has the caster's own `Stats` in scope), not here, so it is
+            // snapshotted into `strength` there the same way `RemoteSensing`
+            // above snapshots cast-time-only data it can't derive from
+            // `MiscBuffData` alone.
+            BuffKind::Disguised => {
+                let mut effects = Vec::new();
+                if let Some(MiscBuffData::Body(apparent_body)) = data.misc_data
+                    && let Some(caster) = source_entity
+                {
+                    effects.push(BuffEffect::Disguise {
+                        apparent_body,
+                        caster,
+                        cast_accuracy: data.strength,
+                    });
+                }
+                effects
+            },
         }
     }
 
@@ -1700,6 +1733,18 @@ pub enum BuffEffect {
         anchor_kind: SenseAnchorKind,
         free_look: bool,
         piloted: bool,
+    },
+    /// Declares a cosmetic-only disguise: the `Body` observers should be
+    /// shown instead of the bearer's real one, who cast it, and a snapshot
+    /// of the caster's `magic_accuracy` at cast time. 🔴 Deliberately does
+    /// **not** change the bearer's actual `Body`/`Mass`/`Density`/`Collider`
+    /// — contrast `BodyChange` above, which does. Sets/updates the
+    /// `Disguise` component (`common/src/comp/disguise.rs`), never
+    /// `ChangeBodyEvent`.
+    Disguise {
+        apparent_body: Body,
+        caster: Uid,
+        cast_accuracy: f32,
     },
 }
 

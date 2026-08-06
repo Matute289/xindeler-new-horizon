@@ -52,9 +52,9 @@ use anim::{
 };
 use common::{
     comp::{
-        self, Body, CharacterActivity, CharacterState, Collider, Controller, Health, Inventory,
-        ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhysicsState, PickupItem,
-        PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
+        self, Body, CharacterActivity, CharacterState, Collider, Controller, Disguise, Health,
+        Inventory, ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhysicsState,
+        PickupItem, PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
         body::{self, parts::HeadState},
         inventory::slot::EquipSlot,
         item::{Hands, ItemKind, ToolKind, armor::ArmorKind},
@@ -596,6 +596,11 @@ struct FigureReadData<'a> {
     volume_riders: ReadStorage<'a, VolumeRiders>,
     colliders: ReadStorage<'a, Collider>,
     heads: ReadStorage<'a, Heads>,
+    // The cast-disguise override. `Body` above stays a hard-required join
+    // member for physics/LOS elsewhere in the engine; this file's own
+    // model/skeleton/nameplate selection prefers this when present — see
+    // `Disguise::render_body`.
+    disguises: ReadStorage<'a, Disguise>,
 }
 
 struct FigureUpdateData<'a, CSS, COR> {
@@ -645,6 +650,7 @@ impl FigureReadData<'_> {
             volume_riders: self.volume_riders.get(entity),
             collider: self.colliders.get(entity),
             heads: self.heads.get(entity),
+            disguise: self.disguises.get(entity),
         })
     }
 
@@ -673,6 +679,7 @@ impl FigureReadData<'_> {
                 self.volume_riders.maybe(),
                 self.colliders.maybe(),
                 self.heads.maybe(),
+                self.disguises.maybe(),
             ),
         )
             .join()
@@ -701,6 +708,7 @@ impl FigureReadData<'_> {
                         volume_riders,
                         collider,
                         heads,
+                        disguise,
                     ),
                 )| FigureUpdateParams {
                     entity,
@@ -725,6 +733,7 @@ impl FigureReadData<'_> {
                     volume_riders,
                     collider,
                     heads,
+                    disguise,
                 },
             )
     }
@@ -753,6 +762,7 @@ struct FigureUpdateParams<'a> {
     volume_riders: Option<&'a VolumeRiders>,
     collider: Option<&'a Collider>,
     heads: Option<&'a Heads>,
+    disguise: Option<&'a Disguise>,
 }
 
 pub struct FigureMgr {
@@ -1249,7 +1259,19 @@ impl FigureMgr {
             volume_riders: _,
             collider,
             heads,
+            disguise,
         } = *entity_data;
+
+        // Everything below this point that selects a model/skeleton/state-map
+        // entry must see the *apparent* body while disguised — `body` is
+        // shadowed here on purpose so every one of this function's many
+        // downstream body-driven dispatch sites (state lookup, skeleton
+        // selection, model choice) gets it for free from a single seam,
+        // rather than each site having to remember to check `disguise`
+        // itself. The real `Body` this entity actually has (still available
+        // via `entity_data.body`/`read_data.bodies`) is untouched by this —
+        // nothing about physics or line-of-sight is computed in this file.
+        let body = &Disguise::render_body(disguise, *body);
 
         let renderer = &mut *data.renderer;
         let tick = data.tick;
@@ -7140,7 +7162,7 @@ impl FigureMgr {
         let character_state = character_state_storage.get(viewpoint_entity);
         let items = ecs.read_storage::<PickupItem>();
         let thrown_items = ecs.read_storage::<ThrownItem>();
-        for (entity, pos, body, _, inventory, scale, collider, _) in (
+        for (entity, pos, real_body, _, inventory, scale, collider, _, disguise) in (
             &ecs.entities(),
             &ecs.read_storage::<Pos>(),
             &ecs.read_storage::<Body>(),
@@ -7149,14 +7171,21 @@ impl FigureMgr {
             ecs.read_storage::<Scale>().maybe(),
             ecs.read_storage::<Collider>().maybe(),
             ecs.read_storage::<Object>().maybe(),
+            ecs.read_storage::<Disguise>().maybe(),
         )
             .join()
         // Don't render dead entities
-        .filter(|(_, _, _, health, _, _, _, _)| health.is_none_or(|h| !h.is_dead))
+        .filter(|(_, _, _, health, _, _, _, _, _)| health.is_none_or(|h| !h.is_dead))
         // Don't render player
-        .filter(|(entity, _, _, _, _, _, _, _)| *entity != viewpoint_entity)
-        .filter(|(_, _, _, _, _, _, _, obj)| !self.should_flicker(*time, *obj))
+        .filter(|(entity, _, _, _, _, _, _, _, _)| *entity != viewpoint_entity)
+        .filter(|(_, _, _, _, _, _, _, obj, _)| !self.should_flicker(*time, *obj))
         {
+            // The apparent body while disguised, otherwise the real one —
+            // see `Disguise::render_body`'s doc comment. `real_body` stays
+            // available above for anything that must not be fooled (nothing
+            // in this render pass needs that, but keeping the name distinct
+            // avoids an accidental future misuse).
+            let body = &Disguise::render_body(disguise, *real_body);
             if let Some((bound, model, atlas)) = self.get_model_for_render(
                 tick,
                 camera,
@@ -7204,7 +7233,7 @@ impl FigureMgr {
         let items = ecs.read_storage::<PickupItem>();
         let thrown_items = ecs.read_storage::<ThrownItem>();
 
-        if let (Some(pos), Some(body), scale) = (
+        if let (Some(pos), Some(real_body), scale) = (
             ecs.read_storage::<Pos>().get(viewpoint_entity),
             ecs.read_storage::<Body>().get(viewpoint_entity),
             ecs.read_storage::<Scale>().get(viewpoint_entity),
@@ -7217,6 +7246,10 @@ impl FigureMgr {
 
             let inventory_storage = ecs.read_storage::<Inventory>();
             let inventory = inventory_storage.get(viewpoint_entity);
+            // See `render`'s own comment: apparent body while disguised.
+            let disguise_storage = ecs.read_storage::<Disguise>();
+            let disguise = disguise_storage.get(viewpoint_entity);
+            let body = &Disguise::render_body(disguise, *real_body);
 
             if let Some((bound, model, atlas)) = self.get_model_for_render(
                 tick,

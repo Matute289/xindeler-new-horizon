@@ -1550,6 +1550,7 @@ impl Hud {
             let interpolated = ecs.read_storage::<vcomp::Interpolated>();
             let scales = ecs.read_storage::<comp::Scale>();
             let bodies = ecs.read_storage::<comp::Body>();
+            let disguises = ecs.read_storage::<comp::Disguise>();
             let items = ecs.read_storage::<PickupItem>();
             // The nameplate loop below is the single heaviest `combat_rating`
             // consumer in the codebase — one read per nearby entity, per frame.
@@ -2475,7 +2476,12 @@ impl Hud {
                 &uids,
                 &derived_stats,
                 char_activities.maybe(),
-                (is_mounts.maybe(), is_riders.maybe(), stances.maybe()),
+                (
+                    is_mounts.maybe(),
+                    is_riders.maybe(),
+                    stances.maybe(),
+                    disguises.maybe(),
+                ),
             )
                 .join()
                 .filter(|t| {
@@ -2498,7 +2504,7 @@ impl Hud {
                         uid,
                         derived,
                         character_activity,
-                        (is_mount, is_rider, stance),
+                        (is_mount, is_rider, stance, disguise),
                     )| {
                         // Use interpolated position if available
                         let pos = interpolated.map_or(pos.0, |i| i.pos);
@@ -2539,8 +2545,17 @@ impl Hud {
                                 })
                                 .powi(2);
 
+                        // A disguise's apparent name, when it declares one,
+                        // wins over the real `Stats.name` — this is the
+                        // client-side counterpart of the model/skeleton
+                        // override in the figure-rendering path. `None`
+                        // (no apparent name authored yet) falls back to the
+                        // real name, same as an undisguised entity.
+                        let display_name = disguise
+                            .and_then(|d| d.apparent_name.as_ref())
+                            .unwrap_or(&stats.name);
                         let info = display_overhead_info.then(|| overhead::Info {
-                            name: Some(i18n.get_content(&stats.name)),
+                            name: Some(i18n.get_content(display_name)),
                             level: Some(skill_set.character_level()),
                             health,
                             buffs: Some(buffs),
@@ -5911,6 +5926,10 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // Reuse the perception-themed icon until dedicated art ships with the
         // spells that grant this buff.
         BuffKind::RemoteSensing => imgs.buff_eagle_eye,
+        // Reuse the polymorph icon (both are "your appearance has changed")
+        // until dedicated disguise art ships with the spells that grant this
+        // buff.
+        BuffKind::Disguised => imgs.debuff_polymorphed,
         BuffKind::Wet => imgs.debuff_wet,
         BuffKind::Winded => imgs.debuff_winded,
     }
