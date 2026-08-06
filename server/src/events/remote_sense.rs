@@ -13,8 +13,8 @@ use common::{
     comp::{
         Alignment, Body, Buffs, Collider, ConcealedUnlessTrueSight, Controller, Density, Energy,
         Health, Immovable, Inventory, Mass, Object, Ori, Poise, Pos, Presence, RemoteSense,
-        SkillSet, Stats, Vel, buff::SenseAnchorKind, object::Body as ObjectBody, pet::is_tameable,
-        projectile::ProjectileHitEntities, remote_sense::SenseAnchor,
+        SkillSet, SpectatingEntity, Stats, Vel, buff::SenseAnchorKind, object::Body as ObjectBody,
+        pet::is_tameable, projectile::ProjectileHitEntities, remote_sense::SenseAnchor,
     },
     event::{DeleteEvent, EventBus, ResolveRemoteSenseEvent},
     link::{Is, LinkHandle},
@@ -76,6 +76,7 @@ pub struct ResolveRemoteSenseEventData<'a> {
     controllers: WriteStorage<'a, Controller>,
     is_pilots: WriteStorage<'a, Is<Pilot>>,
     is_piloteds: WriteStorage<'a, Is<Piloted>>,
+    spectating_entities: WriteStorage<'a, SpectatingEntity>,
     delete_events: Read<'a, EventBus<DeleteEvent>>,
 }
 
@@ -160,6 +161,18 @@ fn teardown_existing_anchor(data: &mut ResolveRemoteSenseEventData, caster: Enti
     if matches!(existing.anchor, SenseAnchor::Piloted(_)) {
         data.is_pilots.remove(caster);
     }
+
+    // `remote_sense::Sys` (the per-tick re-validator, `server/src/sys/
+    // remote_sense.rs`) runs earlier in the same tick's `state.tick()` pass,
+    // before this cast's own event is even processed here in
+    // `handle_events()` -- so it will already have reasserted
+    // `SpectatingEntity` at the *old* anchor once more this tick. Clearing
+    // it here (rather than leaving it to self-heal on `remote_sense::Sys`'s
+    // next run) avoids a one-tick window where a deleted entity's `Uid`
+    // would otherwise sit in `SpectatingEntity`, and keeps this function's
+    // teardown a true mirror of the per-tick `to_end` cleanup it's already
+    // documented above as mirroring.
+    data.spectating_entities.remove(caster);
 
     if existing.anchor.is_spawned_sensor()
         && let Some(old_anchor_entity) = data.id_maps.uid_entity(existing.anchor.uid())
@@ -450,6 +463,7 @@ mod tests {
         world.register::<Controller>();
         world.register::<Is<Pilot>>();
         world.register::<Is<Piloted>>();
+        world.register::<SpectatingEntity>();
         world.insert(IdMaps::default());
         world.insert(Time(0.0));
         world.insert(empty_terrain());
@@ -930,6 +944,22 @@ mod tests {
     /// one live anchor must exist, and the old one must be torn down: its
     /// `Is<Pilot>` replaced (never doubled up), and a `DeleteEvent` queued
     /// for its spawned entity (mirroring the per-tick `to_end` reaper).
+    ///
+    /// 🟡 **Scope note**: this only proves the ECS-teardown mechanics in
+    /// isolation -- it calls `ResolveRemoteSenseEvent`'s handler directly,
+    /// with no `Buffs` ever populated and `EventHandler<BuffEvent>` never
+    /// run, so it does **not** exercise the same-tick buff-ordering claim
+    /// `teardown_existing_anchor`'s own doc comment leans on (that
+    /// `EventHandler<BuffEvent>` has already applied this tick's own
+    /// `BuffEvent::Add` by the time this handler runs, via the
+    /// `event_dispatch::<ResolveRemoteSenseEvent>` → `BuffEvent` edge in
+    /// `server/src/events/entity_manipulation.rs`). That ordering was
+    /// verified by hand against the real dispatcher wiring during review,
+    /// not by an automated test -- a real integration test would need to
+    /// build and run the actual `BuffEvent`+`ResolveRemoteSenseEvent`
+    /// two-system dispatcher pair together and assert a same-spell recast
+    /// leaves exactly one live `RemoteSensing` buff entry. Left as a
+    /// follow-up rather than blocking this fix on writing that harness.
     #[test]
     fn recasting_piloted_while_already_piloting_tears_down_the_old_eye() {
         let mut world = setup_world();
@@ -965,6 +995,14 @@ mod tests {
             world.entities().is_alive(first_eye),
             "the first eye must be alive right after the first cast"
         );
+
+        // Simulates what `remote_sense::Sys`'s per-tick re-validation would
+        // have written by the time a recast reaches this handler: the
+        // caster's `SpectatingEntity` pointing at the first (still-live) eye.
+        world
+            .write_storage::<SpectatingEntity>()
+            .insert(caster, SpectatingEntity(first_eye))
+            .unwrap();
 
         let entities_before_recast = world.entities().join().count();
 
@@ -1037,6 +1075,18 @@ mod tests {
                 .get(second_eye)
                 .is_some(),
             "the new eye must be wired as the Piloted half of the Piloting link"
+        );
+
+        // The stale `SpectatingEntity` pointing at the now-deleted first eye
+        // must not survive the recast -- left alone it would name a dead
+        // entity for one tick until `remote_sense::Sys` next self-heals it.
+        assert!(
+            world
+                .read_storage::<SpectatingEntity>()
+                .get(caster)
+                .is_none(),
+            "teardown_existing_anchor must clear the stale SpectatingEntity, not leave it \
+             pointing at the deleted first eye"
         );
     }
 }
