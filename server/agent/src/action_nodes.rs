@@ -11,7 +11,8 @@ use crate::{
     },
 };
 use common::{
-    combat::perception_dist_multiplier_from_stealth,
+    assets::{AssetExt, Ron},
+    combat::{self, perception_dist_multiplier_from_stealth},
     comp::{
         self, Agent, Alignment, Body, CharacterState, Content, ControlAction, ControlEvent,
         Controller, HealthChange, InputKind, InventoryAction, Pos, PresenceKind, Scale,
@@ -616,6 +617,7 @@ impl AgentData<'_> {
                             controller,
                             read_data,
                             AgentData::is_hunting_animal,
+                            rng,
                         );
                     }
                 },
@@ -1036,6 +1038,7 @@ impl AgentData<'_> {
         controller: &mut Controller,
         read_data: &ReadData,
         is_enemy: fn(&Self, EcsEntity, &ReadData) -> bool,
+        rng: &mut impl RngExt,
     ) {
         enum ActionStateTimers {
             TimerChooseTarget = 0,
@@ -1075,6 +1078,15 @@ impl AgentData<'_> {
                 Some((entity, false))
             }
         };
+        // Hoisted out of `is_valid_target` below: `allowed_to_speak` depends
+        // only on `agent.behavior`, never on the candidate entity, so
+        // reading it once here (rather than once per candidate inside the
+        // closure) is a pure micro-optimisation with identical behaviour --
+        // and, now that `is_detected` below needs a *mutable* borrow of
+        // `agent` for the disguise suspicion roll, it is also what keeps
+        // `is_valid_target` from needing to borrow `agent` at all, avoiding
+        // a shared/unique borrow conflict between the two closures.
+        let allowed_to_speak = agent.allowed_to_speak();
         let is_valid_target = |entity: EcsEntity| match read_data.bodies.get(entity) {
             Some(Body::Item(item)) => {
                 if !matches!(item, body::item::Body::Thrown(_)) {
@@ -1142,7 +1154,7 @@ impl AgentData<'_> {
                         (Some(Alignment::Npc), Some(Alignment::Npc)) => true,
                         (Some(Alignment::Enemy), Some(Alignment::Enemy)) => true,
                         _ => false,
-                    } && agent.allowed_to_speak()
+                    } && allowed_to_speak
                         // Check that anyone else isn't already saving them.
                         && read_data
                             .interactors
@@ -1158,8 +1170,9 @@ impl AgentData<'_> {
             },
         };
 
-        let is_detected = |entity: &EcsEntity, e_pos: &Pos, e_scale: Option<&Scale>| {
-            self.detects_other(agent, controller, entity, e_pos, e_scale, read_data)
+        let mut is_detected = |entity: &EcsEntity, e_pos: &Pos, e_scale: Option<&Scale>| {
+            self.passes_disguise_gate(agent, *entity, e_pos, read_data, rng)
+                && self.detects_other(agent, controller, entity, e_pos, e_scale, read_data)
         };
 
         let target = entities_nearby
@@ -2363,6 +2376,126 @@ impl AgentData<'_> {
         }
     }
 
+    /// Whether `other`'s disguise (if it has one) still fools `self` well
+    /// enough that it must not be acquired as a hostile target. Called from
+    /// [`Self::choose_target`]'s `is_detected` closure — the single call site
+    /// a disguise suspicion roll is allowed to live at; it must never be
+    /// duplicated into a spell implementation.
+    ///
+    /// Returns `true` (detection may proceed) when `other` has no `Disguise`
+    /// at all, or when `self` has already permanently seen through it (the
+    /// latch, `Agent::seen_through_disguises`). Returns `false` (the
+    /// disguise holds; `is_detected` must short-circuit to "not detected"
+    /// before it ever reaches the sight/hearing check) otherwise, possibly
+    /// after spending one or both of the two suspicion rolls below and
+    /// updating `agent`'s latch/cooldown state.
+    fn passes_disguise_gate(
+        &self,
+        agent: &mut Agent,
+        other: EcsEntity,
+        other_pos: &Pos,
+        read_data: &ReadData,
+        rng: &mut impl RngExt,
+    ) -> bool {
+        let Some(disguise) = read_data.disguises.get(other) else {
+            return true;
+        };
+        let Some(other_uid) = read_data.uids.get(other).copied() else {
+            // Can't identify the candidate at all -- fail open to whatever
+            // the pre-existing sight/hearing check decides.
+            return true;
+        };
+        if agent.seen_through_disguises.contains(&other_uid) {
+            return true;
+        }
+        let Some(self_stats) = self.stats else {
+            // An observer with no Stats (should not happen for anything that
+            // reaches target acquisition) cannot roll -- fail closed, the
+            // illusion holds.
+            return false;
+        };
+
+        // Loaded once per disguised-and-not-yet-latched candidate (still the
+        // rare path: `read_data.disguises.get` above already filtered out
+        // every non-disguised entity for free). T1's own trigger condition
+        // needs `disguise_suspicion_reroll_secs` from this asset, so unlike
+        // the formula inputs below it can't be deferred behind "a trigger
+        // already fired".
+        let tuning = Ron::<combat::CombatTuning>::load_expect("common.combat_tuning").read();
+
+        // T2's trigger condition: close enough, and hasn't already spent its
+        // one-time close-inspection roll on this pair.
+        let t2_fires = other_pos.0.distance_squared(self.pos.0) < CLOSE_INSPECT_DIST_M.powi(2)
+            && !agent.close_inspected_disguises.contains(&other_uid);
+        // T1's trigger condition: within sight range, and the shared
+        // per-observer cooldown has elapsed. An absolute-timestamp
+        // comparison (`agent.disguise_suspicion_last_roll`, an `f64` field --
+        // see its own doc comment) is used instead of a `dt`-accumulator
+        // because `choose_target` itself is only called intermittently
+        // (random-chance and retarget-threshold gated), so accumulating
+        // `dt` only on the ticks this function happens to run would stretch
+        // "every N real seconds" out far longer than intended.
+        //
+        // 🟡 Sharing one cooldown per observer (not one per (observer,
+        // disguise) pair -- see this method's own doc comment for why) means
+        // that if two disguised entities are both in range in the same
+        // `choose_target` call, whichever `entities_nearby` visits first
+        // claims this call's T1 roll and the other gets none until the
+        // cooldown elapses again. A deliberate trade-off given how rare
+        // multiple simultaneous disguises near one observer is expected to
+        // be, not an oversight.
+        let t1_fires = other_pos.0.distance_squared(self.pos.0) < agent.psyche.sight_dist.powi(2)
+            && read_data.time.0 - agent.disguise_suspicion_last_roll
+                >= f64::from(tuning.0.disguise_suspicion_reroll_secs);
+
+        // Only draw the dice for a trigger that actually fires this call --
+        // the common case (neither trigger due) pays for neither RNG draw
+        // nor the formula's own field reads.
+        let (t2_sees_through, t1_sees_through) = if t2_fires || t1_fires {
+            let observer_info = combat::SaveTargetInfo {
+                stats_magic_evasion: self_stats.magic_evasion,
+                crowd_control_resistance: self_stats.crowd_control_resistance,
+                stats_magic_resistance: self_stats.magic_resistance,
+                magic_resist_tier: self
+                    .body
+                    .map_or(body::MagicResistTier::None, Body::magic_resist_tier),
+                combat_rating: read_data
+                    .derived_stats
+                    .get(*self.entity)
+                    .map_or(0.0, |d| d.combat_rating),
+            };
+            let caster_info = combat::SaveCasterInfo {
+                magic_accuracy: disguise.cast_accuracy,
+            };
+            let mut roll = |situational: bool| {
+                let illusion_holds = combat::magic_effect_success_chance(
+                    &caster_info,
+                    &observer_info,
+                    situational,
+                    &tuning.0.disguise,
+                    &tuning.0,
+                );
+                rng.random::<f32>() >= illusion_holds
+            };
+            (t2_fires && roll(true), t1_fires && roll(false))
+        } else {
+            (false, false)
+        };
+
+        if t1_fires {
+            agent.disguise_suspicion_last_roll = read_data.time.0;
+        }
+
+        resolve_disguise_gate(
+            agent,
+            other_uid,
+            t2_fires,
+            t2_sees_through,
+            t1_fires,
+            t1_sees_through,
+        )
+    }
+
     /// The stealth multiplier `other` presents to this agent — shared by
     /// [`Self::can_see_entity`] and [`Self::can_sense_directly_near`] so
     /// [`Self::detects_other`] can compute it once instead of twice for the
@@ -2615,6 +2748,15 @@ impl AgentData<'_> {
     }
 }
 
+/// [`AgentData::can_sense_directly_near`]'s un-scaled radius before the
+/// stealth-multiplier and melee-reach floor apply. The single source of the
+/// "close range" distance for this file — [`AgentData::passes_disguise_gate`]
+/// reuses it as `CLOSE_INSPECT_DIST_M` rather than authoring a second
+/// proximity concept: standing next to a disguised entity is the same
+/// "the observer got close enough to look properly" idea
+/// `can_sense_directly_near` already expresses.
+const NEAR_SENSE_RADIUS_M: f32 = 5.0;
+
 /// [`AgentData::can_sense_directly_near`]'s radius, floored at the shipped
 /// melee reach (3.0-4.0 m, `assets/common/abilities/sword/*.ron`) rather than
 /// left to shrink to `stealth_multiplier`'s unbounded `0.0`: a large enough
@@ -2626,7 +2768,166 @@ impl AgentData<'_> {
 /// review.md`) -- a no-op today, since no shipped stealth combination reaches
 /// the sum where this floor would bind.
 fn sense_radius_from_stealth_multiplier(stealth_multiplier: f32) -> f32 {
-    (5.0 * stealth_multiplier).max(3.0)
+    (NEAR_SENSE_RADIUS_M * stealth_multiplier).max(3.0)
+}
+
+/// The disguise suspicion roll's own close-inspection distance (plan trigger
+/// T2): the same literal [`NEAR_SENSE_RADIUS_M`] uses, un-scaled by any
+/// stealth multiplier -- a disguise is an appearance override, not
+/// concealment, so it has no stealth value of its own to scale this by.
+const CLOSE_INSPECT_DIST_M: f32 = NEAR_SENSE_RADIUS_M;
+
+/// Pure decision core of [`AgentData::passes_disguise_gate`], factored out so
+/// the latch/cooldown bookkeeping is unit-testable without an ECS `World`,
+/// `ReadData` or a real RNG draw.
+///
+/// `other_uid` is already known to be disguised and not yet latched.
+/// `t2_fires`/`t1_fires` are this call's trigger *conditions* (close-inspect
+/// entry not yet spent / periodic cooldown elapsed); `t2_sees_through`/
+/// `t1_sees_through` are that trigger's already-rolled dice result, and are
+/// only consulted when the matching `_fires` flag is `true` -- a trigger
+/// that does not fire never touches its `_sees_through` argument (T1 is
+/// additionally skipped outright once T2 alone has already resolved the
+/// call, matching plan §3.3's "the observer sees through, full stop" once
+/// any roll succeeds). Mutates `agent`'s close-inspection and latch
+/// bookkeeping and returns whether `other_uid` should now be treated as
+/// detected.
+fn resolve_disguise_gate(
+    agent: &mut Agent,
+    other_uid: Uid,
+    t2_fires: bool,
+    t2_sees_through: bool,
+    t1_fires: bool,
+    t1_sees_through: bool,
+) -> bool {
+    if agent.seen_through_disguises.contains(&other_uid) {
+        return true;
+    }
+
+    let mut seen_through = false;
+    if t2_fires {
+        agent.close_inspected_disguises.push(other_uid);
+        seen_through |= t2_sees_through;
+    }
+    if !seen_through && t1_fires {
+        seen_through |= t1_sees_through;
+    }
+
+    if seen_through {
+        agent.seen_through_disguises.push(other_uid);
+    }
+    seen_through
+}
+
+#[cfg(test)]
+mod disguise_gate_tests {
+    use super::*;
+    use common::comp::body::humanoid;
+    use std::num::NonZeroU64;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    fn agent() -> Agent { Agent::from_body(&Body::Humanoid(humanoid::Body::random())) }
+
+    /// A roll that fails to see through the disguise leaves it un-latched,
+    /// and detection does not proceed this call.
+    #[test]
+    fn a_failed_roll_does_not_latch_and_does_not_detect() {
+        let mut a = agent();
+        let detected = resolve_disguise_gate(&mut a, uid(1), false, false, true, false);
+        assert!(!detected);
+        assert!(!a.seen_through_disguises.contains(&uid(1)));
+    }
+
+    /// A roll that succeeds latches the disguise as permanently seen
+    /// through *and* lets detection proceed immediately, the same call the
+    /// roll succeeded on.
+    #[test]
+    fn a_successful_roll_latches_and_detects_immediately() {
+        let mut a = agent();
+        let detected = resolve_disguise_gate(&mut a, uid(1), false, false, true, true);
+        assert!(detected);
+        assert!(a.seen_through_disguises.contains(&uid(1)));
+    }
+
+    /// The latch half: once seen through, further calls return `true`
+    /// unconditionally and never revert, even if every subsequent roll this
+    /// call would have made "fails" (a fresh disguise re-recognised).
+    #[test]
+    fn latch_never_reverts_once_set() {
+        let mut a = agent();
+        assert!(resolve_disguise_gate(
+            &mut a,
+            uid(1),
+            false,
+            false,
+            true,
+            true
+        ));
+        assert!(a.seen_through_disguises.contains(&uid(1)));
+
+        // Further calls: even with both triggers firing and both rolls
+        // "failing" (sees_through: false), the entity stays detected,
+        // because the early latch check short-circuits before either roll
+        // result is ever consulted.
+        for _ in 0..5 {
+            let still_detected = resolve_disguise_gate(&mut a, uid(1), true, false, true, false);
+            assert!(still_detected, "a latched disguise must never revert");
+        }
+        assert_eq!(
+            a.seen_through_disguises
+                .iter()
+                .filter(|&&u| u == uid(1))
+                .count(),
+            1,
+            "the latch must not accumulate duplicate entries on repeated calls"
+        );
+    }
+
+    /// T1's periodic re-roll: a NOT-yet-seen-through observer keeps getting
+    /// chances on every call where `t1_fires` -- it does not need a
+    /// successful T2 first.
+    #[test]
+    fn t1_rerolls_repeatedly_for_a_not_yet_seen_through_observer() {
+        let mut a = agent();
+        // Three consecutive "T1 fires, but the roll still fails" calls: the
+        // observer must remain un-latched and un-detected every time, not
+        // just the first.
+        for _ in 0..3 {
+            let detected = resolve_disguise_gate(&mut a, uid(1), false, false, true, false);
+            assert!(!detected);
+            assert!(!a.seen_through_disguises.contains(&uid(1)));
+        }
+        // The next T1 roll succeeds: now, and only now, it latches.
+        let detected = resolve_disguise_gate(&mut a, uid(1), false, false, true, true);
+        assert!(detected);
+        assert!(a.seen_through_disguises.contains(&uid(1)));
+    }
+
+    /// T1 does not fire (cooldown not elapsed / out of sight range) is
+    /// expressed by the caller passing `t1_fires: false` -- confirms that
+    /// case alone, with no T2 either, leaves the observer exactly as before:
+    /// neither latched nor detected, and no close-inspection entry spent.
+    #[test]
+    fn neither_trigger_firing_changes_nothing() {
+        let mut a = agent();
+        let detected = resolve_disguise_gate(&mut a, uid(1), false, false, false, false);
+        assert!(!detected);
+        assert!(a.seen_through_disguises.is_empty());
+        assert!(a.close_inspected_disguises.is_empty());
+    }
+
+    /// T2 spends its one-shot close-inspection slot exactly once, regardless
+    /// of the roll's outcome -- the caller is expected to pass `t2_fires:
+    /// false` on a later call once the entry exists, but this proves the
+    /// bookkeeping side of "at most once" that the caller relies on.
+    #[test]
+    fn t2_marks_close_inspected_even_on_a_failed_roll() {
+        let mut a = agent();
+        resolve_disguise_gate(&mut a, uid(1), true, false, false, false);
+        assert!(a.close_inspected_disguises.contains(&uid(1)));
+        assert!(!a.seen_through_disguises.contains(&uid(1)));
+    }
 }
 
 #[cfg(test)]

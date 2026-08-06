@@ -710,6 +710,7 @@ fn handle_timed_events(bdata: &mut BehaviorData) -> bool {
                     bdata.controller,
                     bdata.read_data,
                     AgentData::is_enemy,
+                    bdata.rng,
                 );
             } else {
                 bdata.agent_data.handle_sounds_heard(
@@ -981,7 +982,13 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                     read_data.time.0 - selected_at > RETARGETING_THRESHOLD_SECONDS;
 
                 if (!agent.psyche.should_stop_pursuing || !in_aggro_range) && is_time_to_retarget {
-                    agent_data.choose_target(agent, controller, read_data, AgentData::is_enemy);
+                    agent_data.choose_target(
+                        agent,
+                        controller,
+                        read_data,
+                        AgentData::is_enemy,
+                        rng,
+                    );
                 }
 
                 let target_data = TargetData::new(tgt_pos, target, read_data);

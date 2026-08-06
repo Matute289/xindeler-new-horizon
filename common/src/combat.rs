@@ -142,6 +142,20 @@ pub struct CombatTuning {
     /// `save_hit_floor` entirely: being sufficiently outclassed removes the
     /// rescue roll, while a merely unfavourable matchup keeps it.
     pub save_outclassed_wall: f32,
+    /// The disguise-suspicion roll's own tuning instance for the same shared
+    /// formula ([`magic_effect_success_chance`]) the `save_*` fields above
+    /// feed via [`CombatTuning::save_tuning`]. A second named instance of
+    /// [`MagicEffectTuning`], not a second formula — see that type's doc
+    /// comment. `#[serde(default)]` (struct-level, above) means an asset
+    /// predating this field still loads and gets the tuned disguise numbers
+    /// from [`CombatTuning::default`], not zeroes.
+    pub disguise: MagicEffectTuning,
+    /// How often, in real seconds, an observer that has not yet seen through
+    /// a disguise gets another periodic suspicion roll against it (the
+    /// disguise-roll's own "T1" trigger). A genuine gameplay-balance cadence,
+    /// not an engine constant, so it lives here rather than as a Rust
+    /// literal in `server/agent/src/action_nodes.rs`.
+    pub disguise_suspicion_reroll_secs: f32,
     /// Multiplier applied to physical damage, poise/knockback and crit when
     /// the swung weapon is not in the wielder's proficiency set (a soft
     /// weapon-proficiency gate). 1.0 = no penalty.
@@ -195,6 +209,16 @@ impl Default for CombatTuning {
             magic_resist_major: 0.30,
             magic_resist_legendary: 0.50,
             save_outclassed_wall: 0.30,
+            disguise: MagicEffectTuning {
+                base_hit: 0.85,
+                hit_floor: 0.05,
+                hit_ceil: 0.95,
+                mr_soft_cap: 0.75,
+                cr_to_evasion: 2.0,
+                situational_penalty: 0.25,
+                outclassed_wall: None,
+            },
+            disguise_suspicion_reroll_secs: 8.0,
             non_proficient_damage_mult: 0.40,
             trigger_slot_cooldown_secs: DEFAULT_TRIGGER_SLOT_COOLDOWNS.to_vec(),
         }
@@ -221,6 +245,97 @@ impl CombatTuning {
             MagicResistTier::Minor => self.magic_resist_minor,
             MagicResistTier::Major => self.magic_resist_major,
             MagicResistTier::Legendary => self.magic_resist_legendary,
+        }
+    }
+
+    /// Packages the flat `save_*` fields above into a [`MagicEffectTuning`]
+    /// slice, so [`saving_throw_chance`] can be implemented in terms of the
+    /// same shared formula ([`magic_effect_success_chance`]) every other
+    /// resisted-magic-effect consumer uses, without changing its own public
+    /// signature, its RON keys, or a single byte of its callers' behaviour.
+    fn save_tuning(&self) -> MagicEffectTuning {
+        MagicEffectTuning {
+            base_hit: self.save_base_hit,
+            hit_floor: self.save_hit_floor,
+            hit_ceil: self.save_hit_ceil,
+            mr_soft_cap: self.save_mr_soft_cap,
+            cr_to_evasion: self.save_cr_to_evasion,
+            situational_penalty: self.save_in_combat_penalty,
+            outclassed_wall: Some(self.save_outclassed_wall),
+        }
+    }
+}
+
+/// Balance numbers for one "does a mind/perception effect land?" family — a
+/// resisted magical roll evaluated by the shared
+/// [`magic_effect_success_chance`] formula. Two instances exist today: the
+/// charm/domination/banishment family (built from [`CombatTuning`]'s flat
+/// `save_*` fields via [`CombatTuning::save_tuning`], so its RON shape is
+/// unchanged) and the disguise-suspicion family (`CombatTuning::disguise`,
+/// its own `disguise:` section in `assets/common/combat_tuning.ron`).
+/// A future resisted-perception effect adds a third instance here, never a
+/// third formula.
+///
+/// 🔴 Deliberately **not** `#[serde(default)]`: unlike `CombatTuning` (whose
+/// flat fields are never renamed and are additive-only), a `disguise:`
+/// section that only specifies *some* of these fields would silently pull
+/// the rest from [`MagicEffectTuning::default`] — reintroducing, for this
+/// struct specifically, the exact "partial edit silently reverts other
+/// numbers" footgun
+/// `saving_throw_tests::partial_asset_falls_back_to_tuned_defaults`
+/// documents as the reason the original `save_*` fields were kept flat. A
+/// `disguise:` (or any future instance's) section must specify every field
+/// or fail to deserialize.
+#[derive(Copy, Clone, Debug, Deserialize)]
+pub struct MagicEffectTuning {
+    /// Landing chance when the caster's magic accuracy exactly equals the
+    /// target's effective magic evasion.
+    pub base_hit: f32,
+    /// Minimum landing chance for a caster merely at a disadvantage, rather
+    /// than hard-walled by `outclassed_wall`.
+    pub hit_floor: f32,
+    /// Maximum landing chance. Deliberately below `1.0`: unlike raw damage,
+    /// a resisted effect never becomes a guaranteed hit.
+    pub hit_ceil: f32,
+    /// Hard cap on the combined magic-resistance + crowd-control-resistance
+    /// subtraction. Stacked resistances can never reach immunity.
+    pub mr_soft_cap: f32,
+    /// Points of effective magic evasion granted per point of the target's
+    /// `combat_rating`, so a creature with no class attributes still scales
+    /// in difficulty with how tough it otherwise is.
+    pub cr_to_evasion: f32,
+    /// Flat penalty subtracted when the roll's situational condition holds —
+    /// "already fighting the caster" for charm/domination, "inspecting the
+    /// disguise up close" for disguise.
+    pub situational_penalty: f32,
+    /// Hard wall on the level term (post-`hit_k` units): a caster whose
+    /// accuracy deficit reaches this magnitude always fails outright,
+    /// bypassing `hit_floor` entirely. `Some(0.30)` for charm/save
+    /// (unchanged). `None` for disguise: per the calibration table, a badly
+    /// outclassed disguise caster still lands the floor chance rather than
+    /// failing unconditionally — nobody's disguise should be *certain* to be
+    /// seen through purely from a level gap, unlike an overpowering target
+    /// shrugging off a charm attempt entirely. `None` encodes "no wall" as a
+    /// structural fact, independent of `hit_k` ever being retuned.
+    pub outclassed_wall: Option<f32>,
+}
+
+impl Default for MagicEffectTuning {
+    fn default() -> Self {
+        // The charm/save family's shipped numbers. Only consulted when a
+        // `MagicEffectTuning` value is built directly in Rust without going
+        // through RON at all (every RON-sourced instance today,
+        // `CombatTuning::disguise` included, is fully specified — see this
+        // struct's own doc comment on why partial RON sections are rejected
+        // rather than defaulted).
+        Self {
+            base_hit: 0.70,
+            hit_floor: 0.05,
+            hit_ceil: 0.95,
+            mr_soft_cap: 0.75,
+            cr_to_evasion: 2.0,
+            situational_penalty: 0.20,
+            outclassed_wall: Some(0.30),
         }
     }
 }
@@ -259,48 +374,97 @@ impl SaveTargetInfo {
     }
 }
 
+/// The shared arithmetic behind [`effective_magic_evasion`] (charm/save's own
+/// `tuning.save_cr_to_evasion`) and [`magic_effect_success_chance`] (every
+/// tuning instance's own `t.cr_to_evasion`), so the two can never silently
+/// diverge into two different evasion formulas.
+fn evasion_with_cr_scaling(target: &SaveTargetInfo, cr_to_evasion: f32) -> f32 {
+    target.stats_magic_evasion + target.combat_rating * cr_to_evasion
+}
+
 /// The evasion a resisted magical roll is made against: the target's
 /// class/level magic evasion plus a contribution derived from its
 /// `combat_rating`, which is the only difficulty signal a creature without
 /// class attributes has.
+///
+/// Kept as its own function, with this exact signature, for
+/// `saving_throw_tests` (which call it directly against a `CombatTuning`);
+/// [`magic_effect_success_chance`] does not call this — it can't, since it
+/// takes a `&MagicEffectTuning`'s `cr_to_evasion` rather than `tuning`'s own
+/// `save_cr_to_evasion` — but both route through
+/// [`evasion_with_cr_scaling`] so there is exactly one evasion formula.
 pub fn effective_magic_evasion(target: &SaveTargetInfo, tuning: &CombatTuning) -> f32 {
-    target.stats_magic_evasion + target.combat_rating * tuning.save_cr_to_evasion
+    evasion_with_cr_scaling(target, tuning.save_cr_to_evasion)
 }
 
 /// Probability in `0.0..=1.0` that a resisted magical effect lands on
 /// `target` — the engine's single saving-throw roll, shared by charm /
 /// domination and by `power_word_divine_word`'s banishment. Any future
-/// resisted effect uses this rather than inventing a second curve.
+/// resisted effect uses [`magic_effect_success_chance`] (of which this is now
+/// one named instance) rather than inventing a second curve.
 ///
 /// `fighting_caster` is the [`is_fighting_caster`] predicate: a target already
 /// in a fight with the caster (or the caster's group) is harder to affect.
 ///
-/// A caster far enough below the target's effective magic evasion returns
-/// exactly `0.0` — the outclassed wall is checked *before* the clamp, which is
-/// what distinguishes it from one more subtracted term and is why it can
-/// produce a result below `save_hit_floor`.
+/// A thin wrapper around [`magic_effect_success_chance`] with the
+/// charm/save tuning slice ([`CombatTuning::save_tuning`]) — its public
+/// signature, its RON keys and its numeric behaviour are all unchanged from
+/// before that formula was generalized to serve a second consumer.
 pub fn saving_throw_chance(
     caster: &SaveCasterInfo,
     target: &SaveTargetInfo,
     fighting_caster: bool,
     tuning: &CombatTuning,
 ) -> f32 {
-    let level_term =
-        (caster.magic_accuracy - effective_magic_evasion(target, tuning)) * tuning.hit_k;
+    magic_effect_success_chance(
+        caster,
+        target,
+        fighting_caster,
+        &tuning.save_tuning(),
+        tuning,
+    )
+}
 
-    if level_term <= -tuning.save_outclassed_wall {
+/// Probability in `0.0..=1.0` that a resisted "mind or perception" magical
+/// effect lands on `target` — the engine's single shared roll for every such
+/// effect. `saving_throw_chance` (charm / domination / banishment) and the
+/// disguise suspicion roll both call this with their own [`MagicEffectTuning`]
+/// slice `t`; neither authors an independent formula.
+///
+/// `situational` is the roll's one context-dependent penalty:
+/// [`is_fighting_caster`] for charm/save, "the observer is inspecting the
+/// disguise up close" for disguise.
+///
+/// A caster far enough below the target's effective magic evasion returns
+/// exactly `0.0` when `t.outclassed_wall` is `Some` and reached — the wall is
+/// checked *before* the clamp, which is what distinguishes it from one more
+/// subtracted term and is why it can produce a result below `t.hit_floor`. A
+/// tuning instance with `outclassed_wall: None` never hard-fails this way,
+/// however outclassed the caster is.
+pub fn magic_effect_success_chance(
+    caster: &SaveCasterInfo,
+    target: &SaveTargetInfo,
+    situational: bool,
+    t: &MagicEffectTuning,
+    tuning: &CombatTuning,
+) -> f32 {
+    let effective_evasion = evasion_with_cr_scaling(target, t.cr_to_evasion);
+    let level_term = (caster.magic_accuracy - effective_evasion) * tuning.hit_k;
+
+    if let Some(wall) = t.outclassed_wall
+        && level_term <= -wall
+    {
         return 0.0;
     }
 
     let resist = (target.magic_resistance(tuning) + target.crowd_control_resistance)
-        .clamp(0.0, tuning.save_mr_soft_cap);
-    let in_combat = if fighting_caster {
-        tuning.save_in_combat_penalty
+        .clamp(0.0, t.mr_soft_cap);
+    let situational_penalty = if situational {
+        t.situational_penalty
     } else {
         0.0
     };
-    (tuning.save_base_hit + level_term - resist - in_combat)
-        .clamp(tuning.save_hit_floor, tuning.save_hit_ceil)
+    (t.base_hit + level_term - resist - situational_penalty).clamp(t.hit_floor, t.hit_ceil)
 }
 
 /// How recent a hostile health change must be to still count as "currently
@@ -5014,6 +5178,171 @@ mod saving_throw_tests {
         // 0.70 base + (40 - 20)*0.015 - 0.50 legendary resist = 0.50
         assert!((chance - 0.50).abs() < 1e-5, "got {chance}");
         assert!(chance >= t.save_hit_floor && chance <= t.save_hit_ceil);
+    }
+}
+
+/// The disguise suspicion roll's own tuning instance, exercised through the
+/// same [`magic_effect_success_chance`] formula `saving_throw_tests` proves
+/// is unchanged for charm/save. This is the acceptance artefact: every row
+/// below is the real shipped formula, not hand arithmetic.
+#[cfg(test)]
+mod disguise_suspicion_formula_tests {
+    use super::{CombatTuning, SaveCasterInfo, SaveTargetInfo, magic_effect_success_chance};
+    use crate::{assets::AssetExt, comp::body::MagicResistTier};
+
+    const EPS: f32 = 1e-3;
+
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: tier,
+            combat_rating,
+        }
+    }
+
+    fn player(magic_evasion: f32) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: magic_evasion,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: MagicResistTier::None,
+            combat_rating: 0.0,
+        }
+    }
+
+    fn holds(t: &CombatTuning, accuracy: f32, target: &SaveTargetInfo, situational: bool) -> f32 {
+        magic_effect_success_chance(
+            &SaveCasterInfo {
+                magic_accuracy: accuracy,
+            },
+            target,
+            situational,
+            &t.disguise,
+            t,
+        )
+    }
+
+    /// The shipped asset's `disguise:` section carries the intended numbers.
+    #[test]
+    fn asset_carries_the_disguise_tuning() {
+        let t = CombatTuning::default();
+        assert!((t.disguise.base_hit - 0.85).abs() < 1e-6);
+        assert!((t.disguise.hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.disguise.hit_ceil - 0.95).abs() < 1e-6);
+        assert!((t.disguise.mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.disguise.cr_to_evasion - 2.0).abs() < 1e-6);
+        assert!((t.disguise.situational_penalty - 0.25).abs() < 1e-6);
+        assert_eq!(t.disguise.outclassed_wall, None);
+        // Same evasion-per-combat_rating curve as charm/save, by design: a
+        // boss that resists charm also sees through disguises.
+        assert!((t.disguise.cr_to_evasion - t.save_cr_to_evasion).abs() < 1e-6);
+    }
+
+    /// A `disguise:` section that only specifies *some* of
+    /// `MagicEffectTuning`'s fields must fail to deserialize rather than
+    /// silently pulling the rest from `MagicEffectTuning::default()` --
+    /// `MagicEffectTuning` is deliberately not `#[serde(default)]` for
+    /// exactly this reason (see its own doc comment). Confirms the fix is
+    /// real, not just a comment: without it, this would silently produce a
+    /// `disguise.outclassed_wall` of `Some(0.30)` -- reintroducing the hard
+    /// wall this whole feature exists to not have -- with no warning.
+    #[test]
+    fn a_partially_specified_disguise_section_fails_to_deserialize() {
+        let result: Result<CombatTuning, _> = ron::from_str("(disguise: (base_hit: 0.99))");
+        assert!(
+            result.is_err(),
+            "a disguise: section missing fields must be rejected, not silently defaulted"
+        );
+    }
+
+    /// Loading `common.combat_tuning` (not just `CombatTuning::default()`)
+    /// proves the RON asset itself parses the new `disguise:` section.
+    #[test]
+    fn combat_tuning_ron_carries_the_disguise_section() {
+        let tuning = crate::assets::Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let t = &tuning.read().0;
+        assert!((t.disguise.base_hit - 0.85).abs() < 1e-6);
+        assert!((t.disguise.situational_penalty - 0.25).abs() < 1e-6);
+    }
+
+    /// An asset predating the `disguise:` section still parses and picks up
+    /// the tuned disguise numbers from `CombatTuning::default()`, not
+    /// charm/save's numbers and not zeroes.
+    #[test]
+    fn partial_asset_falls_back_to_the_tuned_disguise_defaults() {
+        let t: CombatTuning = ron::from_str("(base_hit: 0.85, hit_k: 0.015)").unwrap();
+        let d = CombatTuning::default();
+        assert!((t.disguise.base_hit - d.disguise.base_hit).abs() < 1e-6);
+        assert!((t.disguise.situational_penalty - d.disguise.situational_penalty).abs() < 1e-6);
+        assert!((t.disguise.base_hit - 0.85).abs() < 1e-6);
+    }
+
+    /// Disguise's tuning has no outclassed wall: even a badly outclassed
+    /// caster's illusion rests on `hit_floor`, never a hard `0.0`. Charm's
+    /// own wall (`saving_throw_tests::outclassed_wall_bypasses_the_floor`)
+    /// is unaffected -- the two tuning instances are independent.
+    #[test]
+    fn disguise_has_no_outclassed_wall() {
+        let t = CombatTuning::default();
+        // A deficit that would hard-fail charm/save (level term far past
+        // -0.30) still lands the disguise floor.
+        let boss_observer = creature(60.0, MagicResistTier::Legendary);
+        let chance = holds(&t, 0.0, &boss_observer, false);
+        assert!(
+            (chance - t.disguise.hit_floor).abs() < EPS,
+            "expected the floor, got {chance}"
+        );
+        assert!(
+            chance > 0.0,
+            "disguise must never hard-fail from a level gap alone"
+        );
+    }
+
+    /// Every row of plan §3.5's calibration table, recomputed by the real
+    /// shipped formula and the real shipped `disguise:` tuning -- the
+    /// acceptance artefact for the shared-formula generalization.
+    #[test]
+    fn calibration_table() {
+        let t = CombatTuning::default();
+
+        // Row 1: L10 caster (acc 12) vs a CR 1 creature observer, at range.
+        // 0.85 + (12 - 2)*0.015 - 0 - 0 = 1.00, clamped to the 0.95 ceiling.
+        assert!((holds(&t, 12.0, &creature(1.0, MagicResistTier::None), false) - 0.95).abs() < EPS);
+
+        // Row 2: same pair, but the observer is inspecting up close.
+        // 0.85 + 0.15 - 0 - 0.25 = 0.75.
+        assert!((holds(&t, 12.0, &creature(1.0, MagicResistTier::None), true) - 0.75).abs() < EPS);
+
+        // Row 3: L10 caster vs a CR 3.5 creature observer with Minor magic
+        // resistance, at range. 0.85 + (12-7)*0.015 - 0.15 - 0 = 0.775.
+        assert!(
+            (holds(&t, 12.0, &creature(3.5, MagicResistTier::Minor), false) - 0.775).abs() < EPS
+        );
+
+        // Row 4: same pair, close inspection. 0.775 - 0.25 = 0.525.
+        assert!(
+            (holds(&t, 12.0, &creature(3.5, MagicResistTier::Minor), true) - 0.525).abs() < EPS
+        );
+
+        // Row 5: L40 caster (acc 42) vs a CR 36 Legendary observer (a
+        // Mindflayer-tier boss), at range. Level term (42-72)*0.015 = -0.45,
+        // well past charm's -0.30 wall, but disguise has none: 0.85 - 0.45 -
+        // 0.50 = -0.10, clamped up to the 0.05 floor.
+        assert!(
+            (holds(&t, 42.0, &creature(36.0, MagicResistTier::Legendary), false)
+                - t.disguise.hit_floor)
+                .abs()
+                < EPS
+        );
+
+        // Row 6: L5 caster (acc 7) vs an L40 guard (magic_evasion 30), at
+        // range. 0.85 + (7-30)*0.015 - 0 - 0 = 0.505.
+        assert!((holds(&t, 7.0, &player(30.0), false) - 0.505).abs() < EPS);
+
+        // Row 7: same pair, close inspection. 0.505 - 0.25 = 0.255.
+        assert!((holds(&t, 7.0, &player(30.0), true) - 0.255).abs() < EPS);
     }
 }
 

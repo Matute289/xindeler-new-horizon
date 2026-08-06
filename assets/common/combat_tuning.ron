@@ -49,6 +49,28 @@
     magic_resist_major:     0.30, // the magic-resistance trait
     magic_resist_legendary: 0.50, // magic resistance + legendary-resistance analogue
 
+    // --- disguise suspicion roll ---
+    // Second named instance of the same shared resisted-magic-effect formula
+    // the save_* block above feeds (see MagicEffectTuning in combat.rs) — the
+    // observer is the "target", the disguise's caster the "caster", and
+    // "situational" means the observer is inspecting the disguise up close.
+    // 🔴 MagicEffectTuning is NOT #[serde(default)] -- every field below must
+    // stay present, or the whole `disguise:` section fails to load rather
+    // than silently reverting a missing field to a different instance's
+    // number (see MagicEffectTuning's own doc comment in combat.rs).
+    disguise: (
+        base_hit: 0.85, // a disguise should usually pass a casual glance
+        hit_floor: 0.05, // even a hopelessly outclassed caster fools someone occasionally
+        hit_ceil: 0.95, // below 1.0 on purpose: no disguise is ever perfect
+        mr_soft_cap: 0.75, // mirrors save_mr_soft_cap
+        cr_to_evasion: 2.0, // identical to save_cr_to_evasion: a boss that resists charm also sees through disguises
+        situational_penalty: 0.25, // close inspection is a stronger tell than trading blows at range
+        outclassed_wall: None, // no hard wall: an outclassed disguise still rests on hit_floor, never hard-fails
+    ),
+    // How often, in real seconds, a still-fooled observer gets another
+    // periodic suspicion roll against a disguise it can currently sense.
+    disguise_suspicion_reroll_secs: 8.0,
+
     // --- weapon proficiency ---
     // Physical damage/poise/knockback/crit multiplier when the swung weapon is
     // not in the wielder's class proficiency set. 0.40 = -60%. Retune here, no rebuild.
