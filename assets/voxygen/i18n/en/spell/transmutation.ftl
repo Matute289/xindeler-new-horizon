@@ -18,4 +18,4 @@ spell-telekinesis-desc = You reach out with your mind and seize a loose object w
 spell-catapult = Catapult
 spell-catapult-desc = You hurl a small loose object at a target with a sudden burst of force, no throwing arm required.
 spell-sequester = Sequester
-spell-sequester-desc = By touch, the caster wraps a willing creature or object in a veil of stillness, turning it unseen and shielding it from every form of remote sensing.
+spell-sequester-desc = You wrap yourself in a veil of stillness, turning yourself unseen and shielding yourself from every form of remote sensing.

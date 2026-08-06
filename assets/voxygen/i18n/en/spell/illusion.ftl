@@ -12,4 +12,4 @@ spell-disguise_self-desc = The caster wraps themselves in a shimmer of woven gla
 spell-seeming = Seeming
 spell-seeming-desc = The caster drapes any number of willing creatures within reach in a woven veil of false form, reshaping how each one appears to onlookers.
 spell-magic_aura = Magic Aura
-spell-magic_aura-desc = By cloaking a creature or object in a subtle veil, the caster feeds false readings to those who probe it with detection magic. The deception masks the target's true nature or invents one that was never there.
+spell-magic_aura-desc = By cloaking yourself in a subtle veil, you feed false readings to those who probe you with detection magic. The deception masks your true nature or invents one that was never there.
