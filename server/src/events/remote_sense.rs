@@ -11,12 +11,14 @@
 
 use common::{
     comp::{
-        Alignment, Body, Buffs, Collider, Density, Energy, Health, Immovable, Inventory, Mass,
-        Object, Ori, Poise, Pos, Presence, RemoteSense, SkillSet, Stats, Vel,
-        buff::SenseAnchorKind, object::Body as ObjectBody, pet::is_tameable,
+        Alignment, Body, Buffs, Collider, ConcealedUnlessTrueSight, Controller, Density, Energy,
+        Health, Immovable, Inventory, Mass, Object, Ori, Poise, Pos, Presence, RemoteSense,
+        SkillSet, Stats, Vel, buff::SenseAnchorKind, object::Body as ObjectBody, pet::is_tameable,
         projectile::ProjectileHitEntities, remote_sense::SenseAnchor,
     },
     event::ResolveRemoteSenseEvent,
+    link::{Is, LinkHandle},
+    piloting::{Pilot, Piloted, Piloting},
     resources::Time,
     terrain::{TerrainGrid, positions_have_line_of_sight},
     uid::{IdMaps, Uid},
@@ -31,6 +33,13 @@ use vek::Vec3;
 use crate::sys::remote_sense::max_sense_range;
 
 use super::ServerEvent;
+
+/// How far in front of the caster's own facing `arcane_eye` conjures its eye.
+/// The caster never aims this point themselves the way `clairvoyance`'s
+/// `select_pos` does -- the eye is piloted immediately after spawning, so
+/// letting the player choose an exact spawn point would be redundant
+/// complexity. It always spawns along the caster's own look direction.
+const EYE_SPAWN_RANGE: f32 = 9.0;
 
 /// Outer bound on how long a spawned sensor can exist before its
 /// belt-and-braces `Object::DeleteAfter` claims it, independent of the
@@ -70,6 +79,10 @@ pub struct ResolveRemoteSenseEventData<'a> {
     objects: WriteStorage<'a, Object>,
     presences: ReadStorage<'a, Presence>,
     remote_senses: WriteStorage<'a, RemoteSense>,
+    concealed: WriteStorage<'a, ConcealedUnlessTrueSight>,
+    controllers: WriteStorage<'a, Controller>,
+    is_pilots: WriteStorage<'a, Is<Pilot>>,
+    is_piloteds: WriteStorage<'a, Is<Piloted>>,
 }
 
 impl ServerEvent for ResolveRemoteSenseEvent {
@@ -94,13 +107,9 @@ impl ServerEvent for ResolveRemoteSenseEvent {
                 SenseAnchorKind::Sensor => {
                     resolve_sensor(&mut data, &ev, ev.entity, caster_uid, caster_pos);
                 },
-                // A piloted eye spawns the same kind of sensor entity plus a
-                // pilot link this event does not build -- left unimplemented
-                // here rather than guessed at ahead of the spell that first
-                // needs it (`arcane_eye`). Matched explicitly (not `_`) so
-                // adding a future `SenseAnchorKind` variant fails to compile
-                // here instead of silently falling through.
-                SenseAnchorKind::Piloted => {},
+                SenseAnchorKind::Piloted => {
+                    resolve_piloted(&mut data, &ev, ev.entity, caster_uid, caster_pos);
+                },
             }
         }
     }
@@ -156,6 +165,72 @@ fn resolve_existing(
     }
 }
 
+/// Builds the "invisible, 30 HP, destructible, `Alignment::Passive` prop"
+/// shape shared by every remote-sensing sensor entity -- `resolve_sensor`'s
+/// `Sensor` anchor and `resolve_piloted`'s `Piloted` anchor alike: `Uid`,
+/// `Pos`, `Vel`, `Ori`, `Mass`/`Density` (from `body`), `Collider::Point`
+/// (never an absent `Collider` -- an absent one drops `PhysicsState`
+/// entirely, which silently drops the entity from the figure renderer),
+/// `Body`, `Alignment::Passive`, `ConcealedUnlessTrueSight` (the
+/// True-Sight-gated visibility/targetability marker consumed by
+/// `voxygen/src/session/target.rs`, `voxygen/src/scene/figure/mod.rs`, and
+/// `voxygen/src/hud/mod.rs`), `Health`/`Stats`/`Energy`/`Poise`/`SkillSet`/
+/// `Buffs`/`Inventory`/`Immovable`/`ProjectileHitEntities`, and the
+/// belt-and-braces `Object::DeleteAfter`. Callers add whatever is specific to
+/// their own anchor kind on top (`resolve_piloted` additionally inserts
+/// `Controller` and the `Piloting` link).
+fn spawn_sensor_base(
+    data: &mut ResolveRemoteSenseEventData,
+    body: Body,
+    pos: Vec3<f32>,
+    name_key: &str,
+) -> (Entity, Uid) {
+    let sensor = data.entities.create();
+    let sensor_uid = data.id_maps.allocate(sensor);
+
+    let _ = data.uids.insert(sensor, sensor_uid);
+    let _ = data.positions.insert(sensor, Pos(pos));
+    let _ = data.velocities.insert(sensor, Vel(Vec3::zero()));
+    let _ = data.orientations.insert(sensor, Ori::default());
+    let _ = data.masses.insert(sensor, body.mass());
+    let _ = data.densities.insert(sensor, body.density());
+    let _ = data.colliders.insert(sensor, Collider::Point);
+    let _ = data.bodies.insert(sensor, body);
+    // Never hostile, never AI-targeted -- and invisible/untargetable to any
+    // observer without True Sight regardless, via `ConcealedUnlessTrueSight`
+    // below.
+    let _ = data.alignments.insert(sensor, Alignment::Passive);
+    let _ = data.concealed.insert(sensor, ConcealedUnlessTrueSight);
+    // A one-shot destructible prop, not a creature: 30 HP, no regen buff ever
+    // applied. Reaching 0 runs the entity through the standard destroy/delete
+    // pipeline, which then invalidates this link on the very next tick of
+    // `server/src/sys/remote_sense.rs` (the anchor `Uid` no longer resolves)
+    // -- the same duration-expiry/concentration-break teardown, not a second
+    // "spell ends" path.
+    let _ = data.healths.insert(sensor, Health::new(body));
+    let _ = data.stats.insert(
+        sensor,
+        Stats::new(Content::Key(String::from(name_key)), body),
+    );
+    let _ = data.energies.insert(sensor, Energy::new(body));
+    let _ = data.poises.insert(sensor, Poise::new(body));
+    let _ = data.skill_sets.insert(sensor, SkillSet::default());
+    let _ = data.buffs.insert(sensor, Buffs::default());
+    let _ = data.inventories.insert(sensor, Inventory::with_empty());
+    let _ = data.immovables.insert(sensor, Immovable);
+    let _ = data
+        .projectile_hit_entities
+        .insert(sensor, ProjectileHitEntities::default());
+    // Belt-and-braces reaper alongside the buff-end teardown -- see
+    // `SENSOR_MAX_LIFETIME`'s own doc comment.
+    let _ = data.objects.insert(sensor, Object::DeleteAfter {
+        spawned_at: *data.time,
+        timeout: SENSOR_MAX_LIFETIME,
+    });
+
+    (sensor, sensor_uid)
+}
+
 /// The `SenseAnchorKind::Sensor` predicate and spawn: the cast's target point
 /// must be within the caster's own sense range *and* have an unobstructed
 /// line of sight from the caster's position. `common/src/states/blink.rs`'s
@@ -164,14 +239,6 @@ fn resolve_existing(
 /// both checks. On any failure this simply does not spawn a sensor or write
 /// `RemoteSense`, the same "no remote view granted" shape as
 /// `resolve_existing`.
-///
-/// The spawned entity mirrors `Object::Crux`'s shape (the shipped precedent
-/// for a small, `Health`-bearing, attackable object prop) rather than
-/// `NpcBuilder`/`CreateNpcEvent`: that path defers entity creation to a later
-/// serial event and only returns the new `Uid` once it runs, but this
-/// `SenseAnchor::Sensor(uid)` must be known and written into `RemoteSense`
-/// synchronously, in this same call. Built with the entities/storages this
-/// `SystemData` already borrows instead.
 fn resolve_sensor(
     data: &mut ResolveRemoteSenseEventData,
     ev: &ResolveRemoteSenseEvent,
@@ -190,53 +257,63 @@ fn resolve_sensor(
         return;
     }
 
-    let sensor = data.entities.create();
-    let sensor_uid = data.id_maps.allocate(sensor);
     let body = Body::Object(ObjectBody::RemoteSensor);
-
-    let _ = data.uids.insert(sensor, sensor_uid);
-    let _ = data.positions.insert(sensor, Pos(target_pos));
-    let _ = data.velocities.insert(sensor, Vel(Vec3::zero()));
-    let _ = data.orientations.insert(sensor, Ori::default());
-    let _ = data.masses.insert(sensor, body.mass());
-    let _ = data.densities.insert(sensor, body.density());
-    // Never an absent `Collider`: that drops `PhysicsState` entirely, which
-    // silently drops the entity from the figure renderer.
-    let _ = data.colliders.insert(sensor, Collider::Point);
-    let _ = data.bodies.insert(sensor, body);
-    // Never hostile, never AI-targeted -- see `ConcealedUnlessTrueSight` on
-    // the entity's own concealment for why it stays safe from a player
-    // without True Sight regardless.
-    let _ = data.alignments.insert(sensor, Alignment::Passive);
-    // A one-shot destructible prop, not a creature: 30 HP, no regen buff ever
-    // applied. Reaching 0 runs the entity through the standard destroy/delete
-    // pipeline, which then invalidates this link on the very next tick of
-    // `server/src/sys/remote_sense.rs` (the anchor `Uid` no longer resolves)
-    // -- the same duration-expiry/concentration-break teardown, not a second
-    // "spell ends" path.
-    let _ = data.healths.insert(sensor, Health::new(body));
-    let _ = data.stats.insert(
-        sensor,
-        Stats::new(Content::Key(String::from("name-remote-sensor")), body),
-    );
-    let _ = data.energies.insert(sensor, Energy::new(body));
-    let _ = data.poises.insert(sensor, Poise::new(body));
-    let _ = data.skill_sets.insert(sensor, SkillSet::default());
-    let _ = data.buffs.insert(sensor, Buffs::default());
-    let _ = data.inventories.insert(sensor, Inventory::with_empty());
-    let _ = data.immovables.insert(sensor, Immovable);
-    let _ = data
-        .projectile_hit_entities
-        .insert(sensor, ProjectileHitEntities::default());
-    // Belt-and-braces reaper alongside the buff-end teardown -- see
-    // `SENSOR_MAX_LIFETIME`'s own doc comment.
-    let _ = data.objects.insert(sensor, Object::DeleteAfter {
-        spawned_at: *data.time,
-        timeout: SENSOR_MAX_LIFETIME,
-    });
+    let (_sensor, sensor_uid) = spawn_sensor_base(data, body, target_pos, "name-remote-sensor");
 
     let _ = data.remote_senses.insert(caster, RemoteSense {
         anchor: SenseAnchor::Sensor(sensor_uid),
+        free_look: ev.free_look,
+        piloted: ev.piloted,
+        caster: caster_uid,
+    });
+}
+
+/// The `SenseAnchorKind::Piloted` spawn: `arcane_eye`. Unlike `resolve_sensor`
+/// this has no client-supplied point at all -- the caster doesn't aim the
+/// eye's spawn point, only where it flies afterward. The spawn point is
+/// computed here, a fixed `EYE_SPAWN_RANGE` in front of the caster's own
+/// facing, and still server-validated for line of sight so the eye never
+/// spawns inside a wall (the same fail-closed shape as `resolve_sensor`: any
+/// failure simply grants no link).
+fn resolve_piloted(
+    data: &mut ResolveRemoteSenseEventData,
+    ev: &ResolveRemoteSenseEvent,
+    caster: Entity,
+    caster_uid: Uid,
+    caster_pos: Pos,
+) {
+    let caster_look = data
+        .orientations
+        .get(caster)
+        .map_or(Vec3::unit_y(), |ori| ori.look_dir().to_vec());
+    let candidate_pos = caster_pos.0 + caster_look * EYE_SPAWN_RANGE;
+
+    if !positions_have_line_of_sight(&data.terrain, caster_pos.0, candidate_pos) {
+        return;
+    }
+
+    let body = Body::Object(ObjectBody::ArcaneEye);
+    let (sensor, sensor_uid) = spawn_sensor_base(data, body, candidate_pos, "name-arcane-eye");
+    // Drivable, unlike the static `Sensor` anchor: `common/systems/src/pilot.rs`
+    // reads/writes this every tick once the `Piloting` link below exists.
+    let _ = data.controllers.insert(sensor, Controller::default());
+
+    // Wire the `Piloting` link by hand: this handler only ever gets
+    // `specs::SystemData`, never `&mut State`, so `StateExt::link()` isn't
+    // reachable here -- this mirrors
+    // `common/src/states/telekinetic_grip.rs`'s identical bypass for
+    // `Tethered`. Only ever created here, server-side.
+    let handle = LinkHandle::from_link(Piloting {
+        pilot: caster_uid,
+        piloted: sensor_uid,
+    });
+    let _ = data.is_pilots.insert(caster, handle.make_role::<Pilot>());
+    let _ = data
+        .is_piloteds
+        .insert(sensor, handle.make_role::<Piloted>());
+
+    let _ = data.remote_senses.insert(caster, RemoteSense {
+        anchor: SenseAnchor::Piloted(sensor_uid),
         free_look: ev.free_look,
         piloted: ev.piloted,
         caster: caster_uid,
@@ -300,6 +377,10 @@ mod tests {
         world.register::<Presence>();
         world.register::<Uid>();
         world.register::<RemoteSense>();
+        world.register::<ConcealedUnlessTrueSight>();
+        world.register::<Controller>();
+        world.register::<Is<Pilot>>();
+        world.register::<Is<Piloted>>();
         world.insert(IdMaps::default());
         world.insert(Time(0.0));
         world.insert(empty_terrain());
@@ -624,6 +705,137 @@ mod tests {
             world.read_storage::<Body>().get(sensor),
             Some(&Body::Object(ObjectBody::RemoteSensor)),
             "the sensor's own dedicated object body variant"
+        );
+        assert!(
+            world
+                .read_storage::<ConcealedUnlessTrueSight>()
+                .get(sensor)
+                .is_some(),
+            "the sensor must be marked ConcealedUnlessTrueSight, or it renders for everyone"
+        );
+    }
+
+    fn piloted_event(caster: Entity) -> ResolveRemoteSenseEvent {
+        ResolveRemoteSenseEvent {
+            entity: caster,
+            target_entity: None,
+            target_pos: None,
+            anchor_kind: SenseAnchorKind::Piloted,
+            free_look: false,
+            piloted: true,
+        }
+    }
+
+    #[test]
+    fn piloted_blocked_line_of_sight_grants_no_link_and_spawns_nothing() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let caster = world
+            .create_entity()
+            .with(Pos(Vec3::new(4.0, 4.0, 5.0)))
+            .with(Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap())
+            .with(Uid(NonZeroU64::new(1).unwrap()))
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(caster_uid, caster);
+
+        // A solid block directly between the caster and where the eye would
+        // spawn (9 blocks along its own look direction, +x).
+        world
+            .write_resource::<TerrainGrid>()
+            .set(
+                Vec3::new(9, 4, 5),
+                Block::new(BlockKind::Rock, Rgb::new(128, 128, 128)),
+            )
+            .unwrap();
+
+        let entities_before = world.entities().join().count();
+
+        dispatch(&world, piloted_event(caster));
+
+        assert!(
+            world.read_storage::<RemoteSense>().get(caster).is_none(),
+            "a blocked spawn point must not grant a link"
+        );
+        assert!(
+            world.read_storage::<Is<Pilot>>().get(caster).is_none(),
+            "a blocked spawn point must not wire the Piloting link either"
+        );
+        assert_eq!(
+            world.entities().join().count(),
+            entities_before,
+            "a blocked spawn point must not spawn an eye entity"
+        );
+    }
+
+    #[test]
+    fn piloted_clear_los_spawns_a_drivable_eye_and_wires_the_piloting_link() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let caster_pos = Pos(Vec3::new(4.0, 4.0, 5.0));
+        let caster = world
+            .create_entity()
+            .with(caster_pos)
+            .with(Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap())
+            .with(Uid(NonZeroU64::new(1).unwrap()))
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(caster_uid, caster);
+
+        dispatch(&world, piloted_event(caster));
+
+        let remote_sense = world
+            .read_storage::<RemoteSense>()
+            .get(caster)
+            .copied()
+            .expect("an unobstructed spawn point must grant a link");
+        let SenseAnchor::Piloted(eye_uid) = remote_sense.anchor else {
+            panic!("expected a Piloted anchor, got {:?}", remote_sense.anchor);
+        };
+        assert!(!remote_sense.free_look, "arcane_eye is not free-look");
+
+        let eye = world
+            .read_resource::<IdMaps>()
+            .uid_entity(eye_uid)
+            .expect("the eye's Uid must resolve to a live entity");
+
+        assert_eq!(
+            world.read_storage::<Pos>().get(eye).map(|p| p.0),
+            Some(caster_pos.0 + Vec3::new(EYE_SPAWN_RANGE, 0.0, 0.0)),
+            "the eye spawns EYE_SPAWN_RANGE along the caster's own look direction"
+        );
+        assert!(
+            matches!(
+                world.read_storage::<Collider>().get(eye),
+                Some(Collider::Point)
+            ),
+            "never an absent Collider"
+        );
+        assert_eq!(
+            world.read_storage::<Body>().get(eye),
+            Some(&Body::Object(ObjectBody::ArcaneEye)),
+            "the eye's own dedicated object body variant"
+        );
+        assert!(
+            world
+                .read_storage::<ConcealedUnlessTrueSight>()
+                .get(eye)
+                .is_some(),
+            "the eye must be True-Sight-gated, same as the static sensor"
+        );
+        assert!(
+            world.read_storage::<Controller>().get(eye).is_some(),
+            "the eye must carry a Controller -- it is drivable, unlike the static sensor"
+        );
+        assert!(
+            world.read_storage::<Is<Pilot>>().get(caster).is_some(),
+            "the caster must be wired as the Pilot half of the Piloting link"
+        );
+        assert!(
+            world.read_storage::<Is<Piloted>>().get(eye).is_some(),
+            "the eye must be wired as the Piloted half of the Piloting link"
         );
     }
 }

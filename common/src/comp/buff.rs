@@ -2288,6 +2288,41 @@ pub mod tests {
     }
 
     #[test]
+    fn remote_sensing_roots_the_caster_even_while_piloting() {
+        // A caster piloting an `arcane_eye` still has their own
+        // ControllerInputs read by `pilot::Sys` and forwarded to the eye
+        // (common/systems/src/pilot.rs) -- the caster's own body must stay
+        // rooted (MovementSpeed 0.0) regardless, exactly as it is for every
+        // other remote-sensing anchor kind. No damage immunity, no aggro
+        // suppression accompanies this -- the body stays a fully normal,
+        // hittable target; only movement is locked.
+        let data = BuffData {
+            misc_data: Some(MiscBuffData::RemoteSense {
+                anchor_kind: SenseAnchorKind::Piloted,
+                free_look: false,
+                piloted: true,
+            }),
+            ..BuffData::new(0.0, Some(Secs(60.0)))
+        };
+        let effects = BuffKind::RemoteSensing.effects(&data, None, None);
+
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BuffEffect::MovementSpeed(s) if *s == 0.0)),
+            "the caster's body must be fully rooted while remote-sensing, piloted or not"
+        );
+        assert!(
+            effects.iter().any(|e| matches!(e, BuffEffect::RemoteSense {
+                anchor_kind: SenseAnchorKind::Piloted,
+                free_look: false,
+                piloted: true,
+            })),
+            "the anchor shape must reach the effect unchanged"
+        );
+    }
+
+    #[test]
     fn terrified_slows_and_lowers_accuracy() {
         // BL-05 Fear rider on the BL-52 engine: slows AND lowers accuracy
         // (fights at a disadvantage — more misses, same damage); flee behaviour

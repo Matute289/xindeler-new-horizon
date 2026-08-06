@@ -1384,6 +1384,9 @@ impl Body {
                 // or two from a True-Sight holder ends it, matching the
                 // 30 HP pool the spells that spawn it declare.
                 object::Body::RemoteSensor => 30,
+                // Same one-shot 30 HP pool as `RemoteSensor` -- see that
+                // arm's own comment.
+                object::Body::ArcaneEye => 30,
                 _ => 1000,
             },
             Body::Item(_) => 1000,

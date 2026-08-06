@@ -4955,6 +4955,24 @@ mod ground_aoe_tests {
             crate::assets::Ron::<CharacterAbility>::load_expect(id).read();
         }
     }
+
+    #[test]
+    fn remote_sensing_spells_deserialize() {
+        for id in [
+            "common.abilities.spells.divination.beast_sense",
+            "common.abilities.spells.divination.clairvoyance",
+            "common.abilities.spells.divination.arcane_eye",
+        ] {
+            let ability = crate::assets::Ron::<CharacterAbility>::load_expect(id)
+                .read()
+                .0
+                .clone();
+            assert!(
+                matches!(ability, CharacterAbility::SelfBuff { .. }),
+                "{id} must cast via SelfBuff, the shape every remote-sensing spell shares"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

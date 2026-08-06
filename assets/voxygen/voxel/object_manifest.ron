@@ -733,6 +733,18 @@
             central: ("armor.empty"),
         )
     ),
+    // Same placeholder-art trade-off as RemoteSensor above: a distinct
+    // arcane_eye voxel model is a follow-up art pass, not a functional gap.
+    ArcaneEye: (
+        bone0: (
+            offset: (-10.5, -10.5, 0.0),
+            central: ("object.crux"),
+        ),
+        bone1: (
+            offset: (0.0, 0.0, 0.0),
+            central: ("armor.empty"),
+        )
+    ),
         FireRing: (
         bone0: (
             offset: (0.0, 0.0, 0.0),

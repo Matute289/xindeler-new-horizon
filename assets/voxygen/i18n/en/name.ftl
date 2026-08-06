@@ -6,6 +6,7 @@
 ## Misc
 name-misc-with-alias-template = { $alias } ({ $old_name })
 name-remote-sensor = Sensing Mote
+name-arcane-eye = Arcane Eye
 
 ## Used for template EntityConfig
 name-custom-template-paddy =

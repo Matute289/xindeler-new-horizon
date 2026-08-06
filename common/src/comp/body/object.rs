@@ -95,6 +95,12 @@ enum_iter! {
         /// invisible on the normal path, drawn plainly for a True-Sight
         /// holder (`common/src/comp/detection.rs`).
         RemoteSensor = 76,
+        /// `arcane_eye`'s piloted sensor: the same `ConcealedUnlessTrueSight`
+        /// gating and 30 HP pool as `RemoteSensor`, plus a `Controller` so
+        /// its caster can fly it. A distinct variant (not a reuse of
+        /// `RemoteSensor`) because it carries `Vel`/`Ori`/`Controller` and is
+        /// driven by `common/systems/src/pilot.rs`, unlike the static sensor.
+        ArcaneEye = 77,
     }
 }
 
@@ -191,6 +197,7 @@ impl Body {
             Body::NapalmPool => "napalm_pool",
             Body::ThornStake => "thorn_stake",
             Body::RemoteSensor => "remote_sensor",
+            Body::ArcaneEye => "arcane_eye",
         }
     }
 
@@ -222,7 +229,11 @@ impl Body {
             Body::TrainingDummy => 2000.0,
             Body::Snowball => 0.9 * WATER_DENSITY,
             Body::Pebble => 1000.0,
-            Body::Crux | Body::FireRing | Body::PyroclasmBolt | Body::RemoteSensor => AIR_DENSITY,
+            Body::Crux
+            | Body::FireRing
+            | Body::PyroclasmBolt
+            | Body::RemoteSensor
+            | Body::ArcaneEye => AIR_DENSITY,
             // let them sink
             _ => 1.1 * WATER_DENSITY,
         };
@@ -301,6 +312,7 @@ impl Body {
             Body::Portal | Body::PortalActive => 10.0, // I dont know really
             Body::Crux => 100.0,
             Body::RemoteSensor => 1.0,
+            Body::ArcaneEye => 1.0,
         };
 
         Mass(m)
