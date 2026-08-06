@@ -811,7 +811,7 @@ fn update_target_awareness(bdata: &mut BehaviorData) -> bool {
     if let (Some(target), Some(tgt_pos)) = (target, tgt_pos) {
         if agent_data.can_see_entity(agent, controller, target, tgt_pos, tgt_scale, read_data) {
             agent.awareness.change_by(1.75 * read_data.dt.0);
-        } else if agent_data.can_sense_directly_near(tgt_pos) {
+        } else if agent_data.can_sense_directly_near(target, tgt_pos, read_data) {
             agent.awareness.change_by(0.25);
         } else {
             agent

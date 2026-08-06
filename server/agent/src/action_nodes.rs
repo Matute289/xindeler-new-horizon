@@ -2424,13 +2424,36 @@ impl AgentData<'_> {
         other_scale: Option<&Scale>,
         read_data: &ReadData,
     ) -> bool {
-        self.can_sense_directly_near(other_pos)
+        self.can_sense_directly_near(*other, other_pos, read_data)
             || self.can_see_entity(agent, controller, *other, other_pos, other_scale, read_data)
     }
 
-    pub fn can_sense_directly_near(&self, e_pos: &Pos) -> bool {
+    /// A close-range perception check independent of line of sight or field
+    /// of view — a target can be sensed this way even directly behind the
+    /// observer. The radius is scaled by the same concealment multiplier
+    /// [`Self::can_see_entity`] applies to sight distance, so a
+    /// well-concealed target shrinks the radius it can be sensed within at
+    /// close range rather than being unconditionally sensed inside it.
+    pub fn can_sense_directly_near(
+        &self,
+        other: EcsEntity,
+        e_pos: &Pos,
+        read_data: &ReadData,
+    ) -> bool {
         let chance = rng().random_bool(0.3);
-        e_pos.0.distance_squared(self.pos.0) < 5_f32.powi(2) && chance
+
+        let other_derived = read_data.derived_stats.get(other);
+        let other_char_state = read_data.char_states.get(other);
+        let other_stats = read_data.stats.get(other);
+        let stealth_multiplier = perception_dist_multiplier_from_stealth(
+            other_derived,
+            other_char_state,
+            other_stats,
+            self.stats,
+        );
+        let radius = 5.0 * stealth_multiplier;
+
+        e_pos.0.distance_squared(self.pos.0) < radius.powi(2) && chance
     }
 
     pub fn menacing(
