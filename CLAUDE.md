@@ -178,6 +178,16 @@ In dev builds, `voxygen-anim` and `server-agent` are compiled as `cdylib` crates
 - `.superpowers/` (brainstorm scratch) and `graphify-out/` are local-only and gitignored; never commit them anywhere. Brainstorm conclusions belong as a spec/plan in `docs/design/`.
 - The `gitlab` remote is the fetch-only upstream (push disabled); never push to it.
 
+**Always `git pull` inside `docs/design/` immediately before reading OR writing anything there —
+every time, not just at session start.** Matías works in `docs/design/` heavily and often
+concurrently with agent sessions in this repo: another session may have pushed new commits, left a
+branch with an open PR, or be mid-edit on an uncommitted change. Before reading a spec/plan/task
+board to inform a decision, and before every `cd docs/design && git ...` write, run `git status` +
+`git pull` first (on whatever branch you're on — check `git branch --show-current`, don't assume
+`main`). If `git status` shows uncommitted changes or a branch that isn't yours, treat it as another
+session's in-progress work per the general git-safety rules — do not discard, stash, or commit over
+it; read around it or ask if it's genuinely blocking.
+
 **Branch protection (public repo `Matute289/xindeler-new-horizon`):**
 - `main` and `development` require a PR + 1 approval, block force-pushes and deletion — but **`enforce_admins` is OFF**: Matias (as repo admin) can merge or push directly when he chooses to, unlike the sibling Bevy-port repo where even admins are hard-blocked. This is deliberate for this project.
 - AI agents must still NEVER merge or approve PRs, push to `main`/`development`, or touch branch-protection settings themselves — the admin-bypass exists for Matias, not for the agent. Workflow: branch off `development` → commit → push branch → open PR with base `development` → stop and report. Only Matias reviews and merges (or bypasses, at his own discretion).
