@@ -58,6 +58,20 @@ pub enum PilotingError {
     NotPilotable,
 }
 
+/// 🔴 **Never registered with `maintain_links`** (see
+/// `server/src/state_ext.rs`'s `maintain_links()`, which lists
+/// `Mounting`/`VolumeMounting`/`Tethered`/`Interaction` but deliberately not
+/// `Piloting`) and never invoked via `StateExt::link()`/`StateExt::unlink()`
+/// either. Teardown of a live `Piloting` link is handled entirely,
+/// authoritatively, by `server/src/sys/remote_sense.rs`'s per-tick
+/// `to_end` cleanup and `server/src/events/remote_sense.rs`'s cast-time
+/// recast teardown -- both of which do more than this trait's generic
+/// `persist`/`delete` could (buff/range/LOS revalidation alongside the link
+/// itself), so consolidating onto the generic `Link` machinery here would be
+/// a bigger, riskier change than this module warrants. The `create`/
+/// `persist`/`delete` bodies below exist only for API-shape parity with
+/// `Mounting`/`Tethered` and this module's own tests -- production code
+/// never calls them.
 impl Link for Piloting {
     type CreateData<'a> = (
         Read<'a, IdMaps>,

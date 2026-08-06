@@ -13,10 +13,10 @@ use common::{
     comp::{
         Alignment, Body, Buffs, Collider, ConcealedUnlessTrueSight, Controller, Density, Energy,
         Health, Immovable, Inventory, Mass, Object, Ori, Poise, Pos, Presence, RemoteSense,
-        SkillSet, Stats, Vel, buff::SenseAnchorKind, object::Body as ObjectBody, pet::is_tameable,
-        projectile::ProjectileHitEntities, remote_sense::SenseAnchor,
+        SkillSet, SpectatingEntity, Stats, Vel, buff::SenseAnchorKind, object::Body as ObjectBody,
+        pet::is_tameable, projectile::ProjectileHitEntities, remote_sense::SenseAnchor,
     },
-    event::ResolveRemoteSenseEvent,
+    event::{DeleteEvent, EventBus, ResolveRemoteSenseEvent},
     link::{Is, LinkHandle},
     piloting::{Pilot, Piloted, Piloting},
     resources::Time,
@@ -33,13 +33,6 @@ use vek::Vec3;
 use crate::sys::remote_sense::max_sense_range;
 
 use super::ServerEvent;
-
-/// How far in front of the caster's own facing `arcane_eye` conjures its eye.
-/// The caster never aims this point themselves the way `clairvoyance`'s
-/// `select_pos` does -- the eye is piloted immediately after spawning, so
-/// letting the player choose an exact spawn point would be redundant
-/// complexity. It always spawns along the caster's own look direction.
-const EYE_SPAWN_RANGE: f32 = 9.0;
 
 /// Outer bound on how long a spawned sensor can exist before its
 /// belt-and-braces `Object::DeleteAfter` claims it, independent of the
@@ -83,6 +76,8 @@ pub struct ResolveRemoteSenseEventData<'a> {
     controllers: WriteStorage<'a, Controller>,
     is_pilots: WriteStorage<'a, Is<Pilot>>,
     is_piloteds: WriteStorage<'a, Is<Piloted>>,
+    spectating_entities: WriteStorage<'a, SpectatingEntity>,
+    delete_events: Read<'a, EventBus<DeleteEvent>>,
 }
 
 impl ServerEvent for ResolveRemoteSenseEvent {
@@ -112,6 +107,77 @@ impl ServerEvent for ResolveRemoteSenseEvent {
                 },
             }
         }
+    }
+}
+
+/// If `caster` already holds an active `RemoteSense` link, synchronously
+/// tears it down so a new one can be wired over it without orphaning the
+/// old one. Recasting `arcane_eye` (or any of the row's other 3
+/// remote-sensing spells) while already piloting/sensing through a prior
+/// anchor must not leave that anchor's spawned entity -- and the caster's
+/// `Is<Pilot>` link, if it was `Piloted` -- lingering, driven by nothing
+/// that can ever revalidate it, until `SENSOR_MAX_LIFETIME` finally reaps it.
+///
+/// Mirrors `server/src/sys/remote_sense.rs`'s own per-tick `to_end` teardown
+/// (remove the link, remove `Is<Pilot>` for a `Piloted` anchor, reap a
+/// spawned sensor/eye) -- with one deliberate omission: the sustaining
+/// `BuffKind::RemoteSensing` buff is *not* force-removed here.
+///
+/// The new cast that triggered this teardown already emitted its own
+/// `BuffEvent::Add` for the very same buff kind, in the same tick, from
+/// `common/src/states/self_buff.rs`. For a same-spell recast, `Buffs::insert`
+/// dedupes on identical `data`/`cat_ids`/`source` and refreshes that buff in
+/// place -- no leak. For the rarer cross-spell case (e.g. `beast_sense` then
+/// `arcane_eye`), the two buffs' `data` differ, so `Buffs::insert` leaves a
+/// second, harmless, inert entry that expires on its own key-scoped timer
+/// (`common/systems/src/buff.rs`'s expiry pass removes only the specific
+/// expired buff's key, never the whole kind) -- it grants no anchor of its
+/// own (that lives on the single-valued `RemoteSense` component, which this
+/// function does clear/rewrite) and contributes nothing beyond a redundant,
+/// already-present `MovementSpeed(0.0)`.
+///
+/// Explicitly emitting `BuffChange::RemoveByKind(BuffKind::RemoteSensing)`
+/// here instead would be actively wrong, not just redundant:
+/// `event_dispatch::<ResolveRemoteSenseEvent>`'s registration in
+/// `server/src/events/entity_manipulation.rs` explicitly depends on
+/// `event_sys_name::<BuffEvent>()`, so `EventHandler<BuffEvent>` has
+/// *already drained and applied* this tick's buff events (including the new
+/// cast's own `Add`) by the time this handler runs -- a compiler-checked
+/// constraint, not an insertion-order coincidence (see that dependency's own
+/// comment for why it had to become an explicit edge). A `RemoveByKind`
+/// emitted from here would sit in the queue and only apply *next* tick --
+/// by which point it would delete the brand new buff, not the stale one,
+/// silently killing the very link this teardown is meant to make room for.
+///
+/// Callers must invoke this only *after* the new anchor's own validation has
+/// succeeded, and *before* writing any of the new anchor's own components or
+/// links -- otherwise, in the double-`Piloted` case, this would remove the
+/// caster's brand new `Is<Pilot>` moments after it was wired.
+fn teardown_existing_anchor(data: &mut ResolveRemoteSenseEventData, caster: Entity) {
+    let Some(existing) = data.remote_senses.remove(caster) else {
+        return;
+    };
+
+    if matches!(existing.anchor, SenseAnchor::Piloted(_)) {
+        data.is_pilots.remove(caster);
+    }
+
+    // `remote_sense::Sys` (the per-tick re-validator, `server/src/sys/
+    // remote_sense.rs`) runs earlier in the same tick's `state.tick()` pass,
+    // before this cast's own event is even processed here in
+    // `handle_events()` -- so it will already have reasserted
+    // `SpectatingEntity` at the *old* anchor once more this tick. Clearing
+    // it here (rather than leaving it to self-heal on `remote_sense::Sys`'s
+    // next run) avoids a one-tick window where a deleted entity's `Uid`
+    // would otherwise sit in `SpectatingEntity`, and keeps this function's
+    // teardown a true mirror of the per-tick `to_end` cleanup it's already
+    // documented above as mirroring.
+    data.spectating_entities.remove(caster);
+
+    if existing.anchor.is_spawned_sensor()
+        && let Some(old_anchor_entity) = data.id_maps.uid_entity(existing.anchor.uid())
+    {
+        data.delete_events.emit_now(DeleteEvent(old_anchor_entity));
     }
 }
 
@@ -156,11 +222,16 @@ fn resolve_existing(
     let is_in_range = target_pos.0.distance_squared(caster_pos.0) <= max_range * max_range;
 
     if is_beast && is_owned_or_charmed && is_alive && is_in_range {
+        teardown_existing_anchor(data, caster);
         let _ = data.remote_senses.insert(caster, RemoteSense {
             anchor: SenseAnchor::Existing(target_uid),
             free_look: ev.free_look,
             piloted: ev.piloted,
             caster: caster_uid,
+            // Meaningless for `Existing` (never driven), forwarded anyway
+            // for a single uniform `RemoteSense` construction shape across
+            // all three `resolve_*` functions.
+            flight_speed: ev.flight_speed,
         });
     }
 }
@@ -257,6 +328,8 @@ fn resolve_sensor(
         return;
     }
 
+    teardown_existing_anchor(data, caster);
+
     let body = Body::Object(ObjectBody::RemoteSensor);
     let (_sensor, sensor_uid) = spawn_sensor_base(data, body, target_pos, "name-remote-sensor");
 
@@ -265,16 +338,20 @@ fn resolve_sensor(
         free_look: ev.free_look,
         piloted: ev.piloted,
         caster: caster_uid,
+        // Meaningless for `Sensor` (never driven), same uniform-shape
+        // rationale as `resolve_existing`.
+        flight_speed: ev.flight_speed,
     });
 }
 
 /// The `SenseAnchorKind::Piloted` spawn: `arcane_eye`. Unlike `resolve_sensor`
 /// this has no client-supplied point at all -- the caster doesn't aim the
 /// eye's spawn point, only where it flies afterward. The spawn point is
-/// computed here, a fixed `EYE_SPAWN_RANGE` in front of the caster's own
-/// facing, and still server-validated for line of sight so the eye never
-/// spawns inside a wall (the same fail-closed shape as `resolve_sensor`: any
-/// failure simply grants no link).
+/// computed here, a fixed `ev.spawn_range` (RON-authored, see
+/// `comp::buff::MiscBuffData::RemoteSense::spawn_range`) in front of the
+/// caster's own facing, and still server-validated for line of sight so the
+/// eye never spawns inside a wall (the same fail-closed shape as
+/// `resolve_sensor`: any failure simply grants no link).
 fn resolve_piloted(
     data: &mut ResolveRemoteSenseEventData,
     ev: &ResolveRemoteSenseEvent,
@@ -286,11 +363,13 @@ fn resolve_piloted(
         .orientations
         .get(caster)
         .map_or(Vec3::unit_y(), |ori| ori.look_dir().to_vec());
-    let candidate_pos = caster_pos.0 + caster_look * EYE_SPAWN_RANGE;
+    let candidate_pos = caster_pos.0 + caster_look * ev.spawn_range;
 
     if !positions_have_line_of_sight(&data.terrain, caster_pos.0, candidate_pos) {
         return;
     }
+
+    teardown_existing_anchor(data, caster);
 
     let body = Body::Object(ObjectBody::ArcaneEye);
     let (sensor, sensor_uid) = spawn_sensor_base(data, body, candidate_pos, "name-arcane-eye");
@@ -317,6 +396,9 @@ fn resolve_piloted(
         free_look: ev.free_look,
         piloted: ev.piloted,
         caster: caster_uid,
+        // The one anchor kind this actually matters for -- read every tick
+        // by `common/systems/src/pilot.rs`.
+        flight_speed: ev.flight_speed,
     });
 }
 
@@ -381,9 +463,11 @@ mod tests {
         world.register::<Controller>();
         world.register::<Is<Pilot>>();
         world.register::<Is<Piloted>>();
+        world.register::<SpectatingEntity>();
         world.insert(IdMaps::default());
         world.insert(Time(0.0));
         world.insert(empty_terrain());
+        world.insert(EventBus::<DeleteEvent>::default());
         world
     }
 
@@ -397,6 +481,14 @@ mod tests {
         })
     }
 
+    /// `arcane_eye`'s own shipped values (the old `EYE_SPAWN_RANGE`/
+    /// `EYE_FLIGHT_SPEED` consts, before Fix 6 moved them into
+    /// `MiscBuffData::RemoteSense`'s RON-authored fields) -- kept here so
+    /// every test event below carries a realistic, non-zero value without
+    /// each one re-deriving it.
+    const TEST_SPAWN_RANGE: f32 = 9.0;
+    const TEST_FLIGHT_SPEED: f32 = 6.0;
+
     fn event(caster: Entity, target: Uid) -> ResolveRemoteSenseEvent {
         ResolveRemoteSenseEvent {
             entity: caster,
@@ -405,6 +497,8 @@ mod tests {
             anchor_kind: SenseAnchorKind::Existing,
             free_look: false,
             piloted: false,
+            spawn_range: TEST_SPAWN_RANGE,
+            flight_speed: TEST_FLIGHT_SPEED,
         }
     }
 
@@ -558,6 +652,8 @@ mod tests {
             anchor_kind: SenseAnchorKind::Sensor,
             free_look: true,
             piloted: false,
+            spawn_range: TEST_SPAWN_RANGE,
+            flight_speed: TEST_FLIGHT_SPEED,
         }
     }
 
@@ -723,6 +819,8 @@ mod tests {
             anchor_kind: SenseAnchorKind::Piloted,
             free_look: false,
             piloted: true,
+            spawn_range: TEST_SPAWN_RANGE,
+            flight_speed: TEST_FLIGHT_SPEED,
         }
     }
 
@@ -803,8 +901,8 @@ mod tests {
 
         assert_eq!(
             world.read_storage::<Pos>().get(eye).map(|p| p.0),
-            Some(caster_pos.0 + Vec3::new(EYE_SPAWN_RANGE, 0.0, 0.0)),
-            "the eye spawns EYE_SPAWN_RANGE along the caster's own look direction"
+            Some(caster_pos.0 + Vec3::new(TEST_SPAWN_RANGE, 0.0, 0.0)),
+            "the eye spawns ev.spawn_range along the caster's own look direction"
         );
         assert!(
             matches!(
@@ -836,6 +934,159 @@ mod tests {
         assert!(
             world.read_storage::<Is<Piloted>>().get(eye).is_some(),
             "the eye must be wired as the Piloted half of the Piloting link"
+        );
+    }
+
+    /// The core regression this row's fix is about: casting `arcane_eye`
+    /// (or any of its siblings) while the caster already holds an active
+    /// `RemoteSense` link must not silently overwrite the caster's
+    /// component slot and orphan the old anchor. After a recast, exactly
+    /// one live anchor must exist, and the old one must be torn down: its
+    /// `Is<Pilot>` replaced (never doubled up), and a `DeleteEvent` queued
+    /// for its spawned entity (mirroring the per-tick `to_end` reaper).
+    ///
+    /// 🟡 **Scope note**: this only proves the ECS-teardown mechanics in
+    /// isolation -- it calls `ResolveRemoteSenseEvent`'s handler directly,
+    /// with no `Buffs` ever populated and `EventHandler<BuffEvent>` never
+    /// run, so it does **not** exercise the same-tick buff-ordering claim
+    /// `teardown_existing_anchor`'s own doc comment leans on (that
+    /// `EventHandler<BuffEvent>` has already applied this tick's own
+    /// `BuffEvent::Add` by the time this handler runs, via the
+    /// `event_dispatch::<ResolveRemoteSenseEvent>` → `BuffEvent` edge in
+    /// `server/src/events/entity_manipulation.rs`). That ordering was
+    /// verified by hand against the real dispatcher wiring during review,
+    /// not by an automated test -- a real integration test would need to
+    /// build and run the actual `BuffEvent`+`ResolveRemoteSenseEvent`
+    /// two-system dispatcher pair together and assert a same-spell recast
+    /// leaves exactly one live `RemoteSensing` buff entry. Left as a
+    /// follow-up rather than blocking this fix on writing that harness.
+    #[test]
+    fn recasting_piloted_while_already_piloting_tears_down_the_old_eye() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let caster_pos = Pos(Vec3::new(4.0, 4.0, 5.0));
+        let caster = world
+            .create_entity()
+            .with(caster_pos)
+            .with(Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap())
+            .with(Uid(NonZeroU64::new(1).unwrap()))
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(caster_uid, caster);
+
+        // First cast: grants a link and spawns the first eye.
+        dispatch(&world, piloted_event(caster));
+        let first_eye_uid = match world
+            .read_storage::<RemoteSense>()
+            .get(caster)
+            .copied()
+            .expect("the first cast must grant a link")
+            .anchor
+        {
+            SenseAnchor::Piloted(eye_uid) => eye_uid,
+            other => panic!("expected a Piloted anchor, got {other:?}"),
+        };
+        let first_eye = world
+            .read_resource::<IdMaps>()
+            .uid_entity(first_eye_uid)
+            .expect("the first eye's Uid must resolve to a live entity");
+        assert!(
+            world.entities().is_alive(first_eye),
+            "the first eye must be alive right after the first cast"
+        );
+
+        // Simulates what `remote_sense::Sys`'s per-tick re-validation would
+        // have written by the time a recast reaches this handler: the
+        // caster's `SpectatingEntity` pointing at the first (still-live) eye.
+        world
+            .write_storage::<SpectatingEntity>()
+            .insert(caster, SpectatingEntity(first_eye))
+            .unwrap();
+
+        let entities_before_recast = world.entities().join().count();
+
+        // Recast without the first link ever ending -- the double-tap
+        // scenario the bug is about. This must tear the old eye down
+        // rather than silently overwriting the caster's `RemoteSense` slot.
+        dispatch(&world, piloted_event(caster));
+
+        // Exactly one live anchor after the recast: the caster's
+        // `RemoteSense` now names a brand new eye, not the old one.
+        let remote_sense = world
+            .read_storage::<RemoteSense>()
+            .get(caster)
+            .copied()
+            .expect("the recast must grant a fresh link");
+        let second_eye_uid = match remote_sense.anchor {
+            SenseAnchor::Piloted(eye_uid) => eye_uid,
+            other => panic!("expected a Piloted anchor, got {other:?}"),
+        };
+        assert_ne!(
+            second_eye_uid, first_eye_uid,
+            "the recast must anchor to a brand new eye, not the stale one"
+        );
+
+        // Exactly one new eye entity was spawned by the recast.
+        assert_eq!(
+            world.entities().join().count(),
+            entities_before_recast + 1,
+            "the recast must spawn exactly one new eye entity"
+        );
+
+        // The old eye is queued for teardown via exactly one `DeleteEvent`
+        // -- this handler has no `&mut State`, so it cannot delete the
+        // entity outright, only queue it the same way
+        // `server/src/sys/remote_sense.rs`'s own per-tick reaper does.
+        let deleted: Vec<_> = world
+            .read_resource::<EventBus<DeleteEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            deleted.len(),
+            1,
+            "the recast must queue exactly one DeleteEvent, for the old eye"
+        );
+        assert_eq!(
+            deleted[0].0, first_eye,
+            "the queued DeleteEvent must target the old eye, not the new one"
+        );
+
+        // The caster ends up with exactly one `Is<Pilot>` -- the new one --
+        // never two, and never a dangling reference to the old eye.
+        let is_pilots = world.read_storage::<Is<Pilot>>();
+        let is_pilot = is_pilots
+            .get(caster)
+            .expect("the caster must still be wired as a Pilot after the recast");
+        assert_eq!(
+            is_pilot.piloted, second_eye_uid,
+            "the caster's Is<Pilot> must point at the new eye, not the old one"
+        );
+        drop(is_pilots);
+
+        // The new eye has its own `Is<Piloted>` half of the link.
+        let second_eye = world
+            .read_resource::<IdMaps>()
+            .uid_entity(second_eye_uid)
+            .expect("the second eye's Uid must resolve to a live entity");
+        assert!(
+            world
+                .read_storage::<Is<Piloted>>()
+                .get(second_eye)
+                .is_some(),
+            "the new eye must be wired as the Piloted half of the Piloting link"
+        );
+
+        // The stale `SpectatingEntity` pointing at the now-deleted first eye
+        // must not survive the recast -- left alone it would name a dead
+        // entity for one tick until `remote_sense::Sys` next self-heals it.
+        assert!(
+            world
+                .read_storage::<SpectatingEntity>()
+                .get(caster)
+                .is_none(),
+            "teardown_existing_anchor must clear the stale SpectatingEntity, not leave it \
+             pointing at the deleted first eye"
         );
     }
 }

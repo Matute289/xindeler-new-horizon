@@ -147,7 +147,23 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<StartTeleportingEvent>(builder, &[]);
     event_dispatch::<RegrowHeadEvent>(builder, &[]);
     event_dispatch::<TranscribeSpellEvent>(builder, &[]);
-    event_dispatch::<ResolveRemoteSenseEvent>(builder, &[]);
+    // *After* `BuffEvent`: `server/src/events/remote_sense.rs`'s
+    // `teardown_existing_anchor` (run from this handler, for a recast that
+    // supersedes an existing remote-sensing link) deliberately does not
+    // force-remove the superseded `BuffKind::RemoteSensing` buff, reasoning
+    // that the same tick's own `BuffEvent::Add` (emitted alongside this
+    // event by `common/src/states/self_buff.rs`) has *already* landed by
+    // the time this handler runs, so re-adding a removal here would only
+    // apply next tick and could kill the brand-new buff instead of the
+    // stale one. That reasoning is only true if `EventHandler<BuffEvent>`
+    // really does run first -- both handlers write-conflict on `Buffs`
+    // (`BuffEventData`/`ResolveRemoteSenseEventData`), so specs serialises
+    // them either way, but without this declared edge the *order* was only
+    // an insertion-order tie-break, exactly the hazard
+    // `common/systems/src/lib.rs`'s `pilot::Sys` → `interpolation::Sys`
+    // dependency (same PR) hardens elsewhere. This edge makes it a
+    // compiler-checked constraint instead.
+    event_dispatch::<ResolveRemoteSenseEvent>(builder, &[&event_sys_name::<BuffEvent>()]);
 }
 
 event_emitters! {

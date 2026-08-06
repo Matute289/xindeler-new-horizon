@@ -762,6 +762,7 @@ mod tests {
             free_look: true,
             piloted: false,
             caster: uid(1),
+            flight_speed: 0.0,
         }
     }
 

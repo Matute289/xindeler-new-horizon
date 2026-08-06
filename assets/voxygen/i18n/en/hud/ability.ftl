@@ -542,6 +542,10 @@ common-abilities-spells-divination-beast_sense = Beast Sense
     .desc = Touch a bonded or charmed beast to see and hear through its senses; your own body goes blind and deaf until the link ends.
 common-abilities-spells-divination-clairvoyance = Clairvoyance
     .desc = Plant an invisible sensor at a point within your own sight; see and hear through it while your body stays behind, rooted and blind.
+# "9 meters" here must be kept in sync by hand with
+# assets/common/abilities/spells/divination/arcane_eye.ron's
+# `spawn_range` field -- no shared source of truth yet, see that RON
+# file's own comment on the same coupling.
 common-abilities-spells-divination-arcane_eye = Arcane Eye
     .desc = Conjure an invisible eye within 9 meters that hovers and drifts at your command; see and hear through it while your body stays behind, rooted and blind.
 common-abilities-spells-divine-dawnmote = Dawnmote

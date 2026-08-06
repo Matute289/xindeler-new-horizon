@@ -249,6 +249,7 @@ mod tests {
                 free_look: false,
                 piloted: false,
                 caster: caster_uid,
+                flight_speed: 0.0,
             })
             .unwrap();
 
@@ -321,6 +322,7 @@ mod tests {
                 free_look: false,
                 piloted: false,
                 caster: caster_uid,
+                flight_speed: 0.0,
             })
             .unwrap();
         world
@@ -379,6 +381,7 @@ mod tests {
                 free_look: true,
                 piloted: false,
                 caster: caster_uid,
+                flight_speed: 0.0,
             })
             .unwrap();
         world
@@ -446,6 +449,7 @@ mod tests {
                 free_look: false,
                 piloted: true,
                 caster: caster_uid,
+                flight_speed: 0.0,
             })
             .unwrap();
         world

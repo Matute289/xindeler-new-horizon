@@ -48,7 +48,7 @@
 //! `move_z`) vertical cruise motion need to be supplied here.
 
 use common::{
-    comp::{Controller, Ori, Vel, controller::ControllerInputs},
+    comp::{Controller, Ori, RemoteSense, Vel, controller::ControllerInputs},
     link::Is,
     piloting::Piloted,
     uid::IdMaps,
@@ -56,11 +56,6 @@ use common::{
 use common_ecs::{Job, Origin, Phase, System};
 use specs::{Entities, Join, Read, ReadStorage, WriteStorage};
 use vek::Vec3;
-
-/// Horizontal/vertical cruise speed of a piloted arcane eye, in blocks per
-/// second. A `game-balance-designer` pass can retune this without touching
-/// anything else in this file.
-const EYE_FLIGHT_SPEED: f32 = 6.0;
 
 #[derive(Default)]
 pub struct Sys;
@@ -70,6 +65,7 @@ impl<'a> System<'a> for Sys {
         Read<'a, IdMaps>,
         Entities<'a>,
         ReadStorage<'a, Is<Piloted>>,
+        ReadStorage<'a, RemoteSense>,
         WriteStorage<'a, Controller>,
         WriteStorage<'a, Vel>,
         WriteStorage<'a, Ori>,
@@ -81,10 +77,31 @@ impl<'a> System<'a> for Sys {
 
     fn run(
         _job: &mut Job<Self>,
-        (id_maps, entities, is_piloted, mut controllers, mut velocities, mut orientations): Self::SystemData,
+        (
+            id_maps,
+            entities,
+            is_piloted,
+            remote_senses,
+            mut controllers,
+            mut velocities,
+            mut orientations,
+        ): Self::SystemData,
     ) {
         for (eye, is_piloted) in (&entities, &is_piloted).join() {
             let Some(pilot) = id_maps.uid_entity(is_piloted.pilot) else {
+                // The pilot no longer resolves (disconnected -- their entity
+                // is deleted synchronously on disconnect, so this branch
+                // fires immediately, not just after some delay). Left alone,
+                // the eye would keep drifting at whatever velocity it had at
+                // the exact moment of disconnect until
+                // `Object::DeleteAfter` reaps it, up to
+                // `SENSOR_MAX_LIFETIME` (`server/src/events/remote_sense.rs`)
+                // later. Zeroing `Vel` here stops the drift immediately;
+                // `Ori` is left as-is since a stale facing is harmless and
+                // the eye is about to be reaped anyway.
+                if let Some(vel) = velocities.get_mut(eye) {
+                    vel.0 = Vec3::zero();
+                }
                 continue;
             };
 
@@ -94,8 +111,34 @@ impl<'a> System<'a> for Sys {
             let Some(pilot_inputs) = controllers.get(pilot).map(|c| c.inputs.clone()) else {
                 continue;
             };
+
+            // RON-authored per-ability (`comp::buff::MiscBuffData::RemoteSense
+            // ::flight_speed`), forwarded onto the caster's own `RemoteSense`
+            // component at cast time (`server/src/events/remote_sense.rs`'s
+            // `resolve_piloted`) so it can be read back here every tick
+            // without touching `Buffs` at all. A pilot whose `RemoteSense`
+            // has since ended (but whose `Is<Pilot>`/`Is<Piloted>` link
+            // hasn't been torn down yet -- a single-tick race, not a steady
+            // state) falls back to `arcane_eye`'s own shipped speed rather
+            // than freezing the eye outright.
+            let flight_speed = remote_senses
+                .get(pilot)
+                .map_or(FALLBACK_FLIGHT_SPEED, |rs| rs.flight_speed);
+
+            // `drive_eye` only ever needs a `&ControllerInputs`, so it runs
+            // before `pilot_inputs` is moved into the eye's own controller
+            // below -- one clone (out of the pilot's own `Controller`)
+            // instead of two.
+            drive_eye(
+                eye,
+                &pilot_inputs,
+                flight_speed,
+                &mut velocities,
+                &mut orientations,
+            );
+
             if let Some(dst) = controllers.get_mut(eye) {
-                dst.inputs = pilot_inputs.clone();
+                dst.inputs = pilot_inputs;
                 // Movement-only: `ControllerInputs` (move_dir/move_z/look_dir/
                 // strafing) is continuous state with no attack/ability
                 // surface by construction. `actions` (the queue of discrete
@@ -106,11 +149,17 @@ impl<'a> System<'a> for Sys {
                 // filter.
                 dst.actions.clear();
             }
-
-            drive_eye(eye, &pilot_inputs, &mut velocities, &mut orientations);
         }
     }
 }
+
+/// Used only if a pilot's `RemoteSense` has already ended by the tick this
+/// runs on (see the call site's doc comment) -- not a balance value in its
+/// own right, just `arcane_eye`'s own shipped flight speed as a safety net
+/// so a mid-teardown eye still moves sanely for one tick instead of
+/// freezing. The real, tunable value lives in `arcane_eye.ron`'s
+/// `flight_speed` field.
+const FALLBACK_FLIGHT_SPEED: f32 = 6.0;
 
 /// Turns the forwarded `ControllerInputs` into the eye's own `Vel`/`Ori` --
 /// the translation `character_behavior::Sys` would normally do via a
@@ -119,6 +168,7 @@ impl<'a> System<'a> for Sys {
 fn drive_eye(
     eye: specs::Entity,
     inputs: &ControllerInputs,
+    flight_speed: f32,
     velocities: &mut WriteStorage<Vel>,
     orientations: &mut WriteStorage<Ori>,
 ) {
@@ -133,7 +183,7 @@ fn drive_eye(
     let vertical = Vec3::unit_z() * inputs.move_z.clamp(-1.0, 1.0);
 
     if let Some(vel) = velocities.get_mut(eye) {
-        vel.0 = (horizontal + vertical) * EYE_FLIGHT_SPEED;
+        vel.0 = (horizontal + vertical) * flight_speed;
     }
     if let Some(ori) = orientations.get_mut(eye) {
         *ori = look_ori;
@@ -143,12 +193,15 @@ fn drive_eye(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interpolation;
     use common::{
-        comp::{Body, Pos, controller::InputKind},
+        comp::{Body, Pos, controller::InputKind, remote_sense::SenseAnchor},
         link::LinkHandle,
         piloting::Piloting,
+        resources::{PlayerEntity, Time},
         uid::Uid,
     };
+    use common_net::sync::interpolation::InterpBuffer;
     use specs::{Builder, WorldExt};
     use std::num::NonZeroU64;
     use vek::Vec2;
@@ -167,6 +220,7 @@ mod tests {
         world.register::<Pos>();
         world.register::<Body>();
         world.register::<Is<Piloted>>();
+        world.register::<RemoteSense>();
         world.insert(IdMaps::default());
         world.insert(common_ecs::SysMetrics::default());
         world
@@ -287,6 +341,187 @@ mod tests {
             world.read_storage::<Vel>().get(eye).copied(),
             Some(Vel(Vec3::zero())),
             "zero move input must zero the eye's velocity, even if it was moving before"
+        );
+    }
+
+    /// `flight_speed` is RON-authored per-ability
+    /// (`comp::buff::MiscBuffData::RemoteSense::flight_speed`) and forwarded
+    /// onto the pilot's own `RemoteSense` component at cast time -- this
+    /// system must read it back from there, not from a hardcoded constant.
+    /// A deliberately non-default value (double `FALLBACK_FLIGHT_SPEED`)
+    /// proves the value in play is the one carried by `RemoteSense`.
+    #[test]
+    fn drive_speed_comes_from_the_pilots_remote_sense_not_a_constant() {
+        let mut world = setup_world();
+
+        let pilot_uid = uid(1);
+        let eye_uid = uid(2);
+        const CUSTOM_FLIGHT_SPEED: f32 = FALLBACK_FLIGHT_SPEED * 2.0;
+
+        let mut pilot_controller = Controller::default();
+        pilot_controller.inputs.move_dir = Vec2::new(0.0, 1.0);
+        let pilot = world
+            .create_entity()
+            .with(pilot_controller)
+            .with(RemoteSense {
+                anchor: SenseAnchor::Piloted(eye_uid),
+                free_look: false,
+                piloted: true,
+                caster: pilot_uid,
+                flight_speed: CUSTOM_FLIGHT_SPEED,
+            })
+            .build();
+        let eye = world
+            .create_entity()
+            .with(Controller::default())
+            .with(Vel(Vec3::zero()))
+            .with(Ori::default())
+            .build();
+
+        {
+            let mut id_maps = world.write_resource::<IdMaps>();
+            id_maps.add_entity(pilot_uid, pilot);
+            id_maps.add_entity(eye_uid, eye);
+        }
+
+        let handle = test_piloting_link(pilot_uid, eye_uid);
+        world
+            .write_storage::<Is<Piloted>>()
+            .insert(eye, handle.make_role())
+            .unwrap();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        let eye_vel = world.read_storage::<Vel>().get(eye).copied().unwrap();
+        assert!(
+            (eye_vel.0.magnitude() - CUSTOM_FLIGHT_SPEED).abs() < f32::EPSILON,
+            "the eye's speed must come from the pilot's own RemoteSense::flight_speed \
+             ({CUSTOM_FLIGHT_SPEED}), got magnitude {}",
+            eye_vel.0.magnitude()
+        );
+    }
+
+    /// A pilot whose `Uid` no longer resolves -- e.g. disconnected, whose
+    /// entity is deleted synchronously on disconnect -- must not leave the
+    /// eye drifting at its last velocity. Before this fix, the early
+    /// `continue` skipped the eye entirely; now it must zero `Vel` first.
+    #[test]
+    fn an_orphaned_eye_has_its_velocity_zeroed() {
+        let mut world = setup_world();
+
+        // Deliberately never registered in `IdMaps` -- must never resolve,
+        // modelling a pilot whose entity is already gone.
+        let orphan_pilot_uid = uid(1);
+        let eye_uid = uid(2);
+
+        let eye = world
+            .create_entity()
+            .with(Controller::default())
+            .with(Vel(Vec3::new(9.0, 9.0, 9.0)))
+            .with(Ori::default())
+            .build();
+
+        world.write_resource::<IdMaps>().add_entity(eye_uid, eye);
+
+        let handle = test_piloting_link(orphan_pilot_uid, eye_uid);
+        world
+            .write_storage::<Is<Piloted>>()
+            .insert(eye, handle.make_role())
+            .unwrap();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        assert_eq!(
+            world.read_storage::<Vel>().get(eye).copied(),
+            Some(Vel(Vec3::zero())),
+            "an eye whose pilot no longer resolves must have its velocity zeroed, not left \
+             drifting at its last known value"
+        );
+    }
+
+    /// Regression for the missing `interpolation::Sys` dependency:
+    /// `add_local_systems` now declares `pilot::Sys` to depend on
+    /// `interpolation::Sys` precisely so that, on any given tick, the
+    /// eye's `Vel` reflects the pilot's *fresh* input rather than a stale
+    /// value `interpolation::Sys` wrote from the eye's `InterpData` (every
+    /// synced remote entity on a client carries one, including the eye --
+    /// its only exclusion is the *local player's own* entity). This test
+    /// exercises that exact ordering directly: run `interpolation::Sys`
+    /// first (as the declared dependency now guarantees), then
+    /// `pilot::Sys`, and confirm the pilot-forwarded write is what's left
+    /// standing, not the interpolated one.
+    #[test]
+    fn pilot_write_wins_over_a_stale_interpolated_velocity_when_run_after_it() {
+        let mut world = setup_world();
+        world.register::<InterpBuffer<Pos>>();
+        world.register::<InterpBuffer<Vel>>();
+        world.register::<InterpBuffer<Ori>>();
+        world.insert(PlayerEntity(None));
+        world.insert(Time(1.0));
+
+        let pilot_uid = uid(1);
+        let eye_uid = uid(2);
+
+        let mut pilot_controller = Controller::default();
+        pilot_controller.inputs.move_dir = Vec2::new(0.3, 0.7);
+        pilot_controller.inputs.move_z = 1.0;
+        let pilot = world.create_entity().with(pilot_controller).build();
+
+        // A stale interpolation buffer standing in for a remote-synced
+        // `InterpData` write: on its own (`t0=0.0 -> Vel(100,0,0)`,
+        // `t1=1.0 -> Vel(200,0,0)`, sampled at `Time = 1.0`), this drives
+        // the eye's `Vel` to a large, obviously-not-pilot-driven magnitude
+        // (~20 on the x axis) -- see
+        // `common/net/src/sync/interpolation.rs`'s `Vel::interpolate`.
+        let stale_interp = InterpBuffer::<Vel> {
+            buf: [
+                (0.0, Vel(Vec3::new(100.0, 0.0, 0.0))),
+                (1.0, Vel(Vec3::new(200.0, 0.0, 0.0))),
+                (0.0, Vel(Vec3::zero())),
+                (0.0, Vel(Vec3::zero())),
+            ],
+            i: 1,
+        };
+
+        let eye = world
+            .create_entity()
+            .with(Controller::default())
+            .with(Vel(Vec3::zero()))
+            .with(Ori::default())
+            .with(stale_interp)
+            .build();
+
+        {
+            let mut id_maps = world.write_resource::<IdMaps>();
+            id_maps.add_entity(pilot_uid, pilot);
+            id_maps.add_entity(eye_uid, eye);
+        }
+
+        let handle = test_piloting_link(pilot_uid, eye_uid);
+        world
+            .write_storage::<Is<Piloted>>()
+            .insert(eye, handle.make_role())
+            .unwrap();
+
+        // Sanity check: interpolation alone really does push the eye's Vel
+        // to the large stale value this test is guarding against.
+        common_ecs::run_now::<interpolation::Sys>(&world);
+        let interpolated_only = world.read_storage::<Vel>().get(eye).copied().unwrap();
+        assert!(
+            interpolated_only.0.magnitude() > FALLBACK_FLIGHT_SPEED * 2.0,
+            "test setup sanity check failed: the stale InterpData must produce a velocity clearly \
+             larger than any pilot-driven one, got {interpolated_only:?}"
+        );
+
+        // Now run pilot::Sys, exactly as `add_local_systems`'s declared
+        // dependency guarantees happens *after* interpolation::Sys.
+        common_ecs::run_now::<Sys>(&world);
+
+        let eye_vel = world.read_storage::<Vel>().get(eye).copied().unwrap();
+        assert!(
+            eye_vel.0.magnitude() < FALLBACK_FLIGHT_SPEED * 2.0,
+            "pilot::Sys's own forwarded write must be what's left standing when it runs after \
+             interpolation::Sys, not the stale interpolated value -- got {eye_vel:?}"
         );
     }
 }
