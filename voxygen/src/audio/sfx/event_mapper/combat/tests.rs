@@ -89,6 +89,7 @@ fn maps_basic_melee() {
                     angle: 15.0,
                     damage_effect: None,
                     attack_effect: None,
+                    attack_effect_target: None,
                     multi_target: None,
                     simultaneous_hits: 1,
                     custom_combo: melee::CustomCombo {
@@ -160,6 +161,7 @@ fn attacking_state() -> CharacterState {
                 angle: 15.0,
                 damage_effect: None,
                 attack_effect: None,
+                attack_effect_target: None,
                 multi_target: None,
                 simultaneous_hits: 1,
                 custom_combo: melee::CustomCombo {

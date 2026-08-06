@@ -5843,6 +5843,8 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // Same sleep iconography as Asleep -- distinguished from it only by
         // the positive/negative classification and tooltip text.
         BuffKind::RestfulSleep => imgs.debuff_asleep,
+        // Placeholder icon reuse pending dedicated art.
+        BuffKind::OtherworldlyWard => imgs.buff_protecting_ward,
         BuffKind::Bane | BuffKind::FaerieFire => imgs.debuff_cursed,
         BuffKind::Enfeebled => imgs.debuff_crippled,
         BuffKind::Chilled => imgs.debuff_chilled,

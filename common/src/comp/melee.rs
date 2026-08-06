@@ -84,6 +84,14 @@ pub struct MeleeConstructor {
     pub multi_target: Option<MultiTarget>,
     pub damage_effect: Option<CombatEffect>,
     pub attack_effect: Option<(CombatEffect, CombatRequirement)>,
+    /// Overrides the group this attack's `attack_effect` resolves against;
+    /// every weapon-damage/poise/knockback component of a melee attack
+    /// always targets `OutOfGroup` regardless of this field, so it exists
+    /// only to let a touch-range beneficial `attack_effect` (e.g. an ally
+    /// cleanse) reach `InGroup` instead. `None` keeps the historical
+    /// `OutOfGroup` default every existing melee ability relies on.
+    #[serde(default)]
+    pub attack_effect_target: Option<GroupTarget>,
     #[serde(default)]
     pub dodgeable: Dodgeable,
     #[serde(default = "default_true")]
@@ -434,8 +442,11 @@ impl MeleeConstructor {
         .with_blockable(self.blockable);
 
         let attack = if let Some((effect, requirement)) = self.attack_effect {
-            let effect = AttackEffect::new(Some(GroupTarget::OutOfGroup), effect)
-                .with_requirement(requirement);
+            let effect = AttackEffect::new(
+                Some(self.attack_effect_target.unwrap_or(GroupTarget::OutOfGroup)),
+                effect,
+            )
+            .with_requirement(requirement);
             attack.with_effect(effect)
         } else {
             attack

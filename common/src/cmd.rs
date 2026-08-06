@@ -206,6 +206,7 @@ lazy_static! {
             BuffKind::Blessed => "blessed",
             BuffKind::CrusadersMantle => "crusaders_mantle",
             BuffKind::RestfulSleep => "restful_sleep",
+            BuffKind::OtherworldlyWard => "otherworldly_ward",
             BuffKind::Bane => "bane",
             BuffKind::FaerieFire => "faerie_fire",
             BuffKind::Enfeebled => "enfeebled",

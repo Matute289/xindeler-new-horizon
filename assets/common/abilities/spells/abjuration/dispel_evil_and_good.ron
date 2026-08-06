@@ -1,0 +1,17 @@
+// Primary effect only: a passive self-ward while the caster concentrates. The
+// source spell's secondary action -- touching a creature to end a charm/possession
+// on it, or to force a banish check on a summoned creature -- is not implemented
+// here; this ability has no per-target trigger for either of those. There is also
+// no creature-kind-conditional resistance primitive in this engine, so the ward
+// reduces all incoming damage while it holds rather than only damage from
+// Celestial/Elemental/Fey/Fiend/Undead attackers (see BuffKind::OtherworldlyWard).
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: OtherworldlyWard, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 90.0,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)
