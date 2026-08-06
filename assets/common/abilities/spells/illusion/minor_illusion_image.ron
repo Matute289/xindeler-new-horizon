@@ -1,0 +1,42 @@
+// Minor Illusion, image mode. L0 cantrip: conjures the shape of a small
+// object at a nearby point. Shares one compendium entry
+// (spells.illusion.minor_illusion) with minor_illusion_sound.ron -- this is
+// the RON actually wired into that entry's `ability` field; the sound
+// variant is authored alongside it but not separately catalogued, since
+// `SpellDef.ability` is a single asset specifier and no mode-selector was
+// built to pick between the two at cast time.
+//
+// `phantom_illusion: true` + `incorporeal: true` + `has_health: false` +
+// `with_agent: false` + `alignment: Some(Passive)` is the shipped phantasm
+// recipe (see `common/src/comp/phantom_illusion.rs`). `delete_after_expiry:
+// true` gives the client-side final-seconds flicker for free
+// (`voxygen/src/scene/figure/mod.rs`'s `should_flicker`).
+BasicSummon(
+    buildup_duration: 0.3,
+    cast_duration: 0.1,
+    recover_duration: 0.3,
+    summon_info: Npc(
+        summoned_amount: 1,
+        // Tight radius: SummonInfo::Npc's clockwise-placement fan is
+        // irrelevant at summoned_amount: 1, this just keeps the illusion
+        // spawning essentially where aimed.
+        summon_distance: (1.0, 2.0),
+        body: Object(Pebble),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        // A cantrip-tier decoy: a couple minutes at most, well short of
+        // silent_image's Concentration(60).
+        duration: Some((
+            secs: 180,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)
