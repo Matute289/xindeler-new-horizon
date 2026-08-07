@@ -49,6 +49,18 @@ layout(location = 0) in vec2 uv;
 layout(set = 2, binding = 5)
 uniform utexture2D t_src_mat;
 
+#ifdef SSAO_ENABLED
+layout(set = 2, binding = 6)
+uniform texture2D t_src_ao;
+
+// MAT_BLOCK / MAT_LOD already carry the mesher's own baked 1-bit corner AO
+// (`terrain-frag.glsl`, `sprite-frag.glsl`); weighting screen-space AO down
+// there avoids double-darkening the same corners. MAT_FIGURE (and anything
+// else not listed here, e.g. MAT_WATER / MAT_PUDDLE) has no baked AO at all
+// and gets full strength.
+const float SSAO_BAKED_AO_WEIGHT = 0.5;
+#endif
+
 layout(location = 0) out vec4 tgt_color;
 
 vec3 wpos_at(vec2 uv) {
@@ -293,6 +305,23 @@ void main() {
                     cloud_blend = 1;
                 }
         }
+
+        #ifdef SSAO_ENABLED
+        // Ambient occlusion multiplies the shader's already-combined
+        // emitted + reflected radiance here, not an isolated ambient term,
+        // because this engine's forward shaders write those pre-combined
+        // and never keep them separate. Splitting them apart to make this
+        // "correct" would be a deferred-shading change to every opaque
+        // shader, which is out of scope here -- this approximation is
+        // accepted, and `mix`'s strength floor keeps it from ever fully
+        // blacking out direct light.
+        if (mat.a != MAT_SKY) {
+            float ao = texture(sampler2D(t_src_ao, s_src_color), uv).r;
+            float ao_weight = (mat.a == MAT_BLOCK || mat.a == MAT_LOD) ? SSAO_BAKED_AO_WEIGHT : 1.0;
+            color.rgb *= mix(1.0, ao, SSAO_STRENGTH * ao_weight);
+        }
+        #endif
+
         color.rgb = mix(color.rgb, get_cloud_color(color.rgb, dir, cam_pos.xyz, dist, 1.0), cloud_blend);
 
         #ifndef RAIN_ENABLED

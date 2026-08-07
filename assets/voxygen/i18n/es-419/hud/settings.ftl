@@ -98,6 +98,7 @@ hud-settings-lossy_terrain_compression = Comprensión del terreno
 hud-settings-weapon_trails = Rastros de armas
 hud-settings-flashing_lights = Luces brillantes
 hud-settings-flashing_lights_info = Ilumina con más luces, como la de parpadeos y relámpagos
+hud-settings-ssao = Oclusión ambiental
 hud-settings-resolution = Resolución
 hud-settings-bit_depth = Profundidad de bits
 hud-settings-refresh_rate = Tasa de refresco

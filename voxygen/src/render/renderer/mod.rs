@@ -54,7 +54,6 @@ struct ImmutableLayouts {
     sprite: sprite::SpriteLayout,
     terrain: terrain::TerrainLayout,
     rope: rope::RopeLayout,
-    clouds: clouds::CloudsLayout,
     bloom: bloom::BloomLayout,
     ssao: ssao::SsaoLayout,
     ssao_blur: ssao::SsaoBlurLayout,
@@ -67,6 +66,11 @@ struct ImmutableLayouts {
 struct Layouts {
     immutable: Arc<ImmutableLayouts>,
 
+    // Both of these depend on `PipelineModes` (postprocess on bloom/the
+    // material texture, clouds on whether SSAO is enabled) and so, unlike
+    // everything in `ImmutableLayouts`, get recreated whenever the render
+    // mode changes.
+    clouds: Arc<clouds::CloudsLayout>,
     postprocess: Arc<postprocess::PostProcessLayout>,
 }
 
@@ -125,6 +129,7 @@ enum State {
                         Pipelines,
                         ShadowPipelines,
                         RainOcclusionPipelines,
+                        Arc<clouds::CloudsLayout>,
                         Arc<postprocess::PostProcessLayout>,
                     ),
                     RenderError,
@@ -463,10 +468,10 @@ impl Renderer {
             let sprite = sprite::SpriteLayout::new(&device);
             let terrain = terrain::TerrainLayout::new(&device);
             let rope = rope::RopeLayout::new(&device);
-            let clouds = clouds::CloudsLayout::new(&device);
             let bloom = bloom::BloomLayout::new(&device);
             let ssao = ssao::SsaoLayout::new(&device);
             let ssao_blur = ssao::SsaoBlurLayout::new(&device);
+            let clouds = Arc::new(clouds::CloudsLayout::new(&device, &pipeline_modes));
             let postprocess = Arc::new(postprocess::PostProcessLayout::new(
                 &device,
                 &pipeline_modes,
@@ -485,7 +490,6 @@ impl Renderer {
                 sprite,
                 terrain,
                 rope,
-                clouds,
                 bloom,
                 ssao,
                 ssao_blur,
@@ -496,6 +500,7 @@ impl Renderer {
 
             Layouts {
                 immutable,
+                clouds,
                 postprocess,
             }
         };
@@ -505,6 +510,7 @@ impl Renderer {
             graphics_backend,
             Layouts {
                 immutable: Arc::clone(&layouts.immutable),
+                clouds: Arc::clone(&layouts.clouds),
                 postprocess: Arc::clone(&layouts.postprocess),
             },
             shaders.cloned(),
@@ -578,6 +584,7 @@ impl Renderer {
             }),
             &views.tgt_color_pp,
             &views.tgt_ao,
+            &views.tgt_ao_blur,
             &sampler,
             &depth_sampler,
         );
@@ -820,6 +827,7 @@ impl Renderer {
                 bloom_params,
                 &self.views.tgt_color_pp,
                 &self.views.tgt_ao,
+                &self.views.tgt_ao_blur,
                 &self.sampler,
                 &self.depth_sampler,
             );
@@ -1236,6 +1244,7 @@ impl Renderer {
                     pipelines,
                     shadow_pipelines,
                     rain_occlusion_pipelines,
+                    clouds_layout,
                     postprocess_layout,
                 ))) => {
                     if let (
@@ -1271,6 +1280,7 @@ impl Renderer {
                     }
 
                     self.pipeline_modes = new_pipeline_modes;
+                    self.layouts.clouds = clouds_layout;
                     self.layouts.postprocess = postprocess_layout;
                     // TODO: we have the potential to skip recreating bindings / render targets on
                     // pipeline recreation trigged by shader reloading (would need to ensure new
