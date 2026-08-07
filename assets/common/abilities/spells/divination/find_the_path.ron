@@ -1,0 +1,45 @@
+// Find the Path: `BuffKind::Detecting` applied to `SenseKind::Path`, the one
+// sense kind that reveals a place instead of a set of things
+// (`server/src/sys/detection.rs`'s `evaluate_sense`): it resolves to the
+// nearest `WaypointArea` entity in range and surfaces it as a single
+// `DetectedPoint`, rendered through the in-world label surface rather than
+// the minimap. This maps directly onto the real, already-wired
+// `WaypointArea` component campfires and similar rest points carry -- no
+// simplification of the underlying mechanism needed, only of scope: the
+// D&D original finds a route to any destination the caster has ever known,
+// which has no literal engine equivalent, so this finds the nearest actual
+// waypoint entity instead.
+//
+// Radius: 450 m, the same "wide area" tier `commune_with_nature.ron` uses,
+// reflecting this spell's own high level (6th) and the flavour of finding a
+// route across real distance -- a deliberately bounded substitute for the
+// D&D original's effectively unlimited pathfinding.
+//
+// `SenseMode::Snapshot`: the nearest waypoint is resolved once at cast and
+// held for the buff's `Concentration(60)` duration, matching "the sense of
+// the way persists... as long as you keep your attention fixed upon it."
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Sense(Path, 450.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 50,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Divine),
+        // level 6 spell -> min_level 36, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(36)),
+    ),
+)

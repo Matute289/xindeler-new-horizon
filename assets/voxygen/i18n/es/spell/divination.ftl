@@ -1,0 +1,21 @@
+# Divination spell names and descriptions.
+spell-detect_magic = Detectar Magia
+spell-detect_magic-desc = Durante un breve instante percibes las energías tejidas del encantamiento a tu alrededor, sintiendo cualquier magia activa cercana. Un tenue resplandor rodea todo lo que esa energía toca.
+spell-detect_evil_and_good = Detectar el Mal y el Bien
+spell-detect_evil_and_good-desc = Durante un breve instante, sientes la presencia y dirección de seres antinaturales u otramundanos cercanos, desde horrores infernales hasta los muertos inquietos. Revela su ubicación, pero no te otorga poder alguno para dañarlos.
+spell-detect_poison_and_disease = Detectar Veneno y Enfermedad
+spell-detect_poison_and_disease-desc = Tus sentidos se agudizan ante la mancha del veneno y la enfermedad, revelando la presencia y ubicación de quien esté afligido por ellos cerca de ti.
+spell-detect_thoughts = Detectar Pensamientos
+spell-detect_thoughts-desc = Al sintonizar tu percepción con las corrientes superficiales de las mentes cercanas, sientes a toda criatura sintiente a tu alrededor mientras mantengas la concentración.
+spell-locate_animals_or_plants = Ubicar Animales o Plantas
+spell-locate_animals_or_plants-desc = Al sintonizarte con el pulso silencioso del mundo vivo a tu alrededor, sientes la dirección de cada bestia y planta cercana en un instante fugaz de percepción.
+spell-locate_object = Ubicar Objeto
+spell-locate_object-desc = Al imaginar un objeto familiar en tu mente, sientes una atracción constante hacia los objetos que se hallan a tu alcance, rastreándolos incluso mientras cambian de posición.
+spell-warp_sense = Sentido del Sesgo
+spell-warp_sense-desc = Tu percepción se extiende a través del tejido del espacio, revelando toda puerta y costura entre lugares cercanos, incluso las que llevan mucho tiempo inactivas.
+spell-locate_creature = Ubicar Criatura
+spell-locate_creature-desc = Al mantener en mente la imagen clara de un ser conocido, sientes una atracción hacia la posición de las criaturas cercanas, percibida mientras permanezcan a tu alcance.
+spell-commune_with_nature = Comulgar con la Naturaleza
+spell-commune_with_nature-desc = Por un momento tus sentidos se funden con la tierra viva, revelando una percepción íntima de las bestias y plantas a tu alrededor.
+spell-find_the_path = Hallar el Camino
+spell-find_the_path-desc = Al enfocarte en un destino que conoces, percibes la ruta más corta y directa hacia el punto de descanso conocido más cercano. La sensación del camino persiste mientras mantengas tu atención fija en ella.

@@ -271,7 +271,7 @@ buff-drencharrow = Drench Arrow
 ## Jolt Arrow
 buff-joltarrow = Jolt Arrow
     .desc = You've statically charged your next arrow, which will create arcs of electricity from the target it strikes, and it may be attracted to targets if fired in a certain way.
-## Detecting (placeholder strings; content spells land separately)
+## Detecting
 buff-detecting = Detecting
     .desc = You are attuned to a magical sense.
 ## See Invisible (placeholder strings; content spells land separately)

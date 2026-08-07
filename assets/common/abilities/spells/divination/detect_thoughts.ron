@@ -1,0 +1,41 @@
+// Detect Thoughts: `BuffKind::Detecting` applied to `SenseKind::Thought`,
+// which reveals sapient minds (`CreatureKind::Humanoid`, the creature
+// classification, not the `Body::Humanoid` skeleton -- see the predicate's
+// own doc comment in `server/src/sys/detection.rs`). Simplified from the
+// D&D original in two ways: it reveals every sapient mind in range rather
+// than letting the caster concentrate on one chosen creature, and it never
+// surfaces any actual thought content -- there is no dialogue/thought-string
+// system to hook into, only the reveal glow and a `SenseKind::Thought` tag.
+// Same presence-only shape as every other spell in this family.
+//
+// No `aoe` in the sheet; using the same 30 ft / 9 m radius the sibling
+// level-1 detect spells (`detect_poison_and_disease`) derive theirs from,
+// absent any other stated distance for this spell.
+//
+// `SenseMode::Snapshot`: membership is frozen at cast and held for the
+// buff's `Concentration(60)` duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Sense(Thought, 9.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 20,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(12)),
+    ),
+)

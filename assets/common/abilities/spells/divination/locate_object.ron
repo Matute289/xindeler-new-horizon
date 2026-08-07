@@ -1,0 +1,40 @@
+// Locate Object: `BuffKind::Detecting` applied to `SenseKind::Object`, which
+// reveals every dropped item (`PickupItem`) in range -- see the predicate's
+// own comment in `server/src/sys/detection.rs`. Simplified from the D&D
+// original: it reveals every nearby item rather than pulling toward one
+// specific familiar object by description, since the sense declaration has
+// no per-target descriptor to narrow against (the same limitation
+// `SenseKind::Creature`'s own doc comment states).
+//
+// No `aoe` in the sheet; the D&D original's ~1000 ft range converts to
+// roughly 300 m, which this radius uses directly rather than inventing a
+// smaller number -- see `locate_creature.ron`, the sibling "locate" spell
+// that states this distance explicitly in its own sheet notes.
+//
+// `SenseMode::Snapshot`: membership is frozen at cast and held for the
+// buff's `Concentration(60)` duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Sense(Object, 300.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 20,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Divine),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(12)),
+    ),
+)

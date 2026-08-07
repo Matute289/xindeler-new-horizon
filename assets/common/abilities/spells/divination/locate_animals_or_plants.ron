@@ -1,0 +1,46 @@
+// Locate Animals or Plants: `BuffKind::Detecting` applied to
+// `SenseKind::Nature`, whose predicate matches `CreatureKind::Beast` *or*
+// `CreatureKind::Plant` (`server/src/sys/detection.rs`) -- a direct
+// mechanical fit for a spell that lets the caster choose either category.
+// Simplified from the D&D original the same way every other spell in this
+// family is: it reveals every matching creature in range rather than
+// pulling toward one named kind, since the sense declaration carries no
+// target descriptor.
+//
+// The D&D original's range is 5 miles, which has no sane literal conversion
+// for a bounded spatial query -- deliberately scaled down to 300 m instead,
+// the same magnitude the "locate" family (`locate_object.ron`/
+// `locate_creature.ron`) already uses for their own (smaller, ~1000 ft)
+// D&D ranges, rather than inventing a third distance tier for one spell.
+//
+// Sheet duration is `Instant`; `duration: Some(1.0)` here is a plumbing
+// formality exactly like `identify.ron`'s own -- a `BuffData` needs a
+// nonzero duration for at least one tick to exist and be revealed/synced at
+// all, and one second is long enough for that single reveal to land on the
+// client before the buff (and the `Detected` entry) expires. This is a
+// one-shot flash of insight, not an ongoing sense.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(1.0),
+                misc_data: Some(Sense(Nature, 300.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 20,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Primordial),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(12)),
+    ),
+)

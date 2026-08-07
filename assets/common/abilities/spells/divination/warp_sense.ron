@@ -1,0 +1,36 @@
+// Warp Sense: `BuffKind::Detecting` applied to `SenseKind::Portal`, which
+// reveals any entity carrying `Object::Portal` -- see the predicate's own
+// comment in `server/src/sys/detection.rs`. Portals are real, positioned
+// entities in this engine (not terrain blocks), so this maps onto the
+// generic reveal mechanism with no simplification needed: it reveals every
+// portal in range, active or inactive, exactly as the D&D original
+// describes.
+//
+// `SenseMode::Snapshot`: membership is frozen at cast and held for the
+// buff's `Concentration(60)` duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                // Sheet aoe: 30 ft radius -> Sphere r9.
+                misc_data: Some(Sense(Portal, 9.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 20,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(12)),
+    ),
+)

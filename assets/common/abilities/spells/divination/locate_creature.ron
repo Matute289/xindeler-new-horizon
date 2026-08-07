@@ -1,0 +1,37 @@
+// Locate Creature: `BuffKind::Detecting` applied to `SenseKind::Creature`,
+// which reveals anything the bestiary classifies as a creature at all --
+// see the predicate's own comment in `server/src/sys/detection.rs`.
+// Simplified from the D&D original: it reveals every creature in range
+// rather than pulling toward one named or described creature, since the
+// sense declaration carries no target descriptor to narrow against.
+//
+// Radius taken directly from the sheet notes' own conversion: "~300 m"
+// (from the D&D original's ~1000 ft range).
+//
+// `SenseMode::Snapshot`: membership is frozen at cast and held for the
+// buff's `Concentration(60)` duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Sense(Creature, 300.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 30,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Primordial),
+        // level 4 spell -> min_level 24, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(24)),
+    ),
+)
