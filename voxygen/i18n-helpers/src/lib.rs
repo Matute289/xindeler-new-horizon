@@ -432,6 +432,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::SeeInvisible
         | BuffKind::TrueSight
         | BuffKind::RemoteSensing
+        | BuffKind::Identifying
         | BuffKind::PassWithoutTrace
         | BuffKind::Mooncloak
         | BuffKind::Nondetection

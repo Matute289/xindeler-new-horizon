@@ -128,3 +128,20 @@ hud-compass-south = S
 hud-compass-southwest = SO
 hud-compass-west = O
 hud-compass-northwest = NO
+
+## Ficha de inspección de Identificar (mitad criatura; la mitad de objeto
+## reutiliza el tooltip de objeto normal tal cual)
+hud-creature_card-level = Niv. { $level }
+hud-creature_card-health = Salud: { $current } / { $max }
+hud-creature_card-energy = Energía: { $current } / { $max }
+hud-creature_card-poise = Aplomo: { $current } / { $max }
+hud-creature_card-buffs = Efectos activos
+hud-creature_card-no_buffs = Sin efectos activos
+hud-creature_card-resistances = Resistencias: Fuego { $fire }% · Escarcha { $frost }% · Veneno { $poison }% · Magia { $magic }%
+hud-creature_card-alignment_wild = Salvaje
+hud-creature_card-alignment_enemy = Hostil
+hud-creature_card-alignment_npc = Neutral
+hud-creature_card-alignment_tame = Domesticado
+hud-creature_card-alignment_owned = Con dueño
+hud-creature_card-alignment_passive = Pasivo
+hud-creature_card-close_hint = Presioná la tecla de inspección de nuevo para cerrar

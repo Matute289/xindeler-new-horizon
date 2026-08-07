@@ -7395,6 +7395,7 @@ fn build_buff(
             | BuffKind::SeeInvisible
             | BuffKind::TrueSight
             | BuffKind::RemoteSensing
+            | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
             | BuffKind::Mooncloak
             | BuffKind::Nondetection

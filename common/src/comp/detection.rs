@@ -96,12 +96,35 @@ pub enum SenseKind {
     True,
 }
 
-/// The kind of Identify-style inspect card a `DetectedEntity` may open. Carries
-/// no data — see the doc comment on `DetectedEntity::detail`.
+/// The kind of Identify-style inspect card a `DetectedEntity` may open.
+///
+/// 🟡 **UI affordance, not a secret.** Every field either inspect card can
+/// ever show is *already* fully synced to every client for every entity
+/// (`Stats`, `SkillSet`, `Buffs`, `Health`/`Energy`/`Poise`, `Alignment`,
+/// `Body`, `CharacterClass`, … are all `SyncFrom::AnyEntity`, the same data
+/// that already drives the overhead nametag). Casting Identify does not grant
+/// the caster's client any information it did not already have — it grants
+/// permission to open a *UI panel* presenting a subset of that
+/// already-present information in one place. `DetectDetail` (and the
+/// server-side `IdentifyLinks` tier that gates which subset, see
+/// `server/src/sys/detection.rs`) exist purely to answer "should the inspect
+/// card render for this observer right now", never "what can this observer
+/// possibly know" — the latter question has nothing left to gate. A future
+/// change that turns this into a real server-side secret (e.g. withholding
+/// `Stats`/`Buffs` sync from non-casters) would be undoing that deliberate
+/// choice, not "fixing" a leak — do not build anti-cheat theatre around this
+/// field.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DetectDetail {
+    /// Opens `ItemTooltip` (reused verbatim) for the target's `PickupItem`.
     Item,
-    Creature,
+    /// Opens the creature inspect card. `tier` selects which subset of the
+    /// card's rows the observer is currently permitted to see (see
+    /// `server/src/sys/detection.rs`'s `IdentifyLinks` doc comment for the
+    /// tier→field mapping this number indexes into) — set server-side at
+    /// creature-card-payload-construction time and carried here rather than
+    /// through a second sync channel, per this enum's own doc comment above.
+    Creature { tier: u8 },
 }
 
 /// Marks an entity as invisible to normal perception and revealed only to an

@@ -1768,6 +1768,25 @@
         ability: "common.abilities.spells.divination.arcane_eye",
     ),
     (
+        id: "spells.divination.identify",
+        name_i18n: "spell-identify",
+        level: 1,
+        school: Some(Divination),
+        source: Arcane,
+        classes: [Artificer, Bard, Sorcerer, Mage],
+        cast_time: Action,
+        // Duration is a formality (see identify.ron's own comment) -- the
+        // real reveal window is server-side IdentifyLinks' own 10-minute
+        // re-cast window, not this cast's own buff duration.
+        duration: Secs(1.0),
+        // Cast-time acquisition distance; matches
+        // `server/src/events/identify.rs::IDENTIFY_RANGE`.
+        range: Meters(20.0),
+        aoe: None,
+        description_i18n: "spell-identify-desc",
+        ability: "common.abilities.spells.divination.identify",
+    ),
+    (
         id: "spells.divination.see_invisibility",
         name_i18n: "spell-see_invisibility",
         level: 2,

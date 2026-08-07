@@ -1,0 +1,36 @@
+// Identify: a single-target inspect permission, not an area sense -- see
+// `BuffKind::Identifying`'s own doc comment. Shaped as a `SelfBuff` for the
+// same reason `see_invisibility.ron`/`true_seeing.ron` are: the engine has no
+// touch-a-target mechanism to hook into, so the cast-time target instead
+// travels through `AbilityInfo::input_attr::target_entity` -- the same
+// mechanism `common/src/states/self_buff.rs` already reads to resolve
+// `RemoteSensing`'s own anchor -- and is picked up there to emit
+// `ResolveIdentifyEvent`, never through this buff's own (absent) `misc_data`.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(
+            kind: Identifying,
+            data: BuffData(
+                strength: 0.0,
+                // Purely a cast-in-flight indicator; the real per-target
+                // reveal state lives server-side in `IdentifyLinks`, keyed on
+                // (observer, target) with its own 10-minute re-cast window,
+                // not on this buff's own duration.
+                duration: Some(1.0),
+            ),
+        ),
+    ],
+    energy_cost: 15,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 1 spell -> min_level 6, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(6)),
+    ),
+)

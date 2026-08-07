@@ -54,14 +54,127 @@ use common::{
         WaypointArea,
         buff::{BuffCategory, BuffKind, SenseMode},
         creature_type::CreatureKind,
-        detection::{Detected, DetectedEntity, DetectedPoint, SenseKind},
+        detection::{DetectDetail, Detected, DetectedEntity, DetectedPoint, SenseKind},
     },
+    resources::Time,
     uid::Uid,
 };
 use common_ecs::{Job, Origin, Phase, System};
 use hashbrown::HashMap;
 use specs::{Entities, Entity, Join, Read, ReadStorage, SystemData, Write, WriteStorage, shred};
 use vek::Vec3;
+
+/// Per-(observer, target) Identify progressive-reveal tracking. A small
+/// server-only resource -- no sync, no component -- exactly the "small
+/// per-pair tracking resource with a TTL, read/advanced each relevant tick,
+/// cleaned up when stale" idiom `SenseAnchor::Tracking`'s `next_resist_roll`
+/// field (`common/src/comp/remote_sense.rs`) and its per-tick driver
+/// (`server/src/sys/remote_sense.rs`) already establish for scrying.
+///
+/// Populated at cast time by `server/src/events/identify.rs`'s
+/// `ResolveIdentifyEvent` handler (`record_cast`); read every run by this
+/// system's own `Sys::run`, alongside the per-sense spatial query above, to
+/// merge each observer's still-live links into their `Detected`.
+///
+/// # Tier → creature-card field mapping
+///
+/// `IdentifyLink::tier` gates which rows of the creature inspect card
+/// (`voxygen/src/hud/creature_card.rs`) an observer is currently permitted to
+/// see for one target. Chosen simply and documented here so it's easy for a
+/// human to retune later -- there is no existing precedent in this codebase
+/// for "which fields unlock at which tier":
+///
+/// | tier | adds (cumulative)                                    |
+/// |------|-------------------------------------------------------|
+/// | 1    | name, level, class, body                             |
+/// | 2    | + health, energy, poise                              |
+/// | 3    | + alignment, buffs                                   |
+/// | 4    | + resistances (fire/frost/poison/magic) -- full card |
+///
+/// `MAX_CREATURE_TIER` (4) is the cap: a 5th+ recast inside the window stays
+/// at the full card rather than growing further or erroring.
+///
+/// Meaningless for `DetectDetail::Item` links -- `ItemTooltip` shows
+/// everything at once, no tiering -- but `IdentifyLink` still carries a
+/// `tier` field even for `is_item: true` links, for one uniform struct shape;
+/// the merge step below simply never reads it for those.
+#[derive(Default)]
+pub struct IdentifyLinks(HashMap<Uid, HashMap<Uid, IdentifyLink>>);
+
+/// One (observer, target) Identify link. See [`IdentifyLinks`]'s doc comment
+/// for the tier→field mapping.
+#[derive(Clone, Copy, Debug)]
+pub struct IdentifyLink {
+    pub is_item: bool,
+    pub tier: u8,
+    /// Absolute `Time` (matching `resources::Time`, real seconds) at which
+    /// this link goes stale. A cast refreshes it to `now +
+    /// RECAST_WINDOW_SECS`; letting it lapse means the *next* cast on this
+    /// (observer, target) pair starts back at tier 1 rather than resuming —
+    /// see `IdentifyLinks::record_cast`.
+    pub expires_at: f64,
+}
+
+/// The re-cast window: casting Identify again on the same (observer, target)
+/// pair within this many seconds of the previous cast increments `tier`;
+/// letting it lapse resets to tier 1 on the next cast instead of resuming
+/// from where it left off. 10 minutes.
+const RECAST_WINDOW_SECS: f64 = 600.0;
+
+/// The creature card's full field count (see [`IdentifyLinks`]'s tier
+/// table) — the cap [`IdentifyLinks::record_cast`] clamps `tier` to.
+pub const MAX_CREATURE_TIER: u8 = 4;
+
+impl IdentifyLinks {
+    /// Records an Identify cast from `observer` on `target`. Increments
+    /// `tier` (capped at [`MAX_CREATURE_TIER`]) if the previous cast on this
+    /// exact pair is still inside [`RECAST_WINDOW_SECS`]; otherwise (no
+    /// previous link, or it lapsed) starts fresh at tier 1.
+    pub fn record_cast(&mut self, observer: Uid, target: Uid, is_item: bool, now: f64) {
+        let per_observer = self.0.entry(observer).or_default();
+        let tier = match per_observer.get(&target) {
+            Some(existing) if existing.expires_at > now => {
+                existing.tier.saturating_add(1).min(MAX_CREATURE_TIER)
+            },
+            _ => 1,
+        };
+        per_observer.insert(target, IdentifyLink {
+            is_item,
+            tier,
+            expires_at: now + RECAST_WINDOW_SECS,
+        });
+    }
+
+    /// This observer's currently-live (non-stale) links, if any.
+    fn live_links(
+        &self,
+        observer: Uid,
+        now: f64,
+    ) -> impl Iterator<Item = (Uid, IdentifyLink)> + '_ {
+        self.0
+            .get(&observer)
+            .into_iter()
+            .flat_map(|links| links.iter())
+            .filter(move |(_, link)| link.expires_at > now)
+            .map(|(uid, link)| (*uid, *link))
+    }
+
+    fn has_live_links(&self, observer: Uid, now: f64) -> bool {
+        self.live_links(observer, now).next().is_some()
+    }
+
+    /// Drops every stale (observer, target) entry, and every observer left
+    /// with no entries at all — mirrors `server/src/sys/remote_sense.rs`'s
+    /// own per-tick validity-pass cleanup for its small per-pair tracking
+    /// state, so this resource cannot grow without bound as observers/targets
+    /// churn.
+    fn prune_stale(&mut self, now: f64) {
+        for links in self.0.values_mut() {
+            links.retain(|_, link| link.expires_at > now);
+        }
+        self.0.retain(|_, links| !links.is_empty());
+    }
+}
 
 /// Buff kinds that count as a poison/disease-family affliction.
 const AFFLICTION_BUFFS: &[BuffKind] = &[BuffKind::Poisoned, BuffKind::Cursed, BuffKind::Burning];
@@ -130,6 +243,7 @@ impl DetectionSnapshots {
 pub struct ReadData<'a> {
     entities: Entities<'a>,
     cached_spatial_grid: Read<'a, CachedSpatialGrid>,
+    time: Read<'a, Time>,
     positions: ReadStorage<'a, Pos>,
     stats: ReadStorage<'a, Stats>,
     uids: ReadStorage<'a, Uid>,
@@ -152,23 +266,34 @@ impl<'a> System<'a> for Sys {
         ReadData<'a>,
         WriteStorage<'a, Detected>,
         Write<'a, DetectionSnapshots>,
+        Write<'a, IdentifyLinks>,
     );
 
     const NAME: &'static str = "detection";
     const ORIGIN: Origin = Origin::Server;
     const PHASE: Phase = Phase::Create;
 
-    fn run(_job: &mut Job<Self>, (read_data, mut detecteds, mut snapshots): Self::SystemData) {
+    fn run(
+        _job: &mut Job<Self>,
+        (read_data, mut detecteds, mut snapshots, mut identify_links): Self::SystemData,
+    ) {
         snapshots.begin_run();
         let run = snapshots.run;
+        let now = read_data.time.0;
+        identify_links.prune_stale(now);
 
         for (observer, observer_pos, observer_stats) in
             (&read_data.entities, &read_data.positions, &read_data.stats).join()
         {
-            if observer_stats.senses.is_empty() {
-                // Every sense ended: the reveal set no longer exists at all.
-                // Leaving an empty component behind would keep syncing a dead
-                // payload to the client forever.
+            let observer_uid = read_data.uids.get(observer).copied();
+            let has_identify_links =
+                observer_uid.is_some_and(|uid| identify_links.has_live_links(uid, now));
+
+            if observer_stats.senses.is_empty() && !has_identify_links {
+                // Every sense ended and no Identify link is live either: the
+                // reveal set no longer exists at all. Leaving an empty
+                // component behind would keep syncing a dead payload to the
+                // client forever.
                 if detecteds.contains(observer) {
                     detecteds.remove(observer);
                 }
@@ -258,6 +383,31 @@ impl<'a> System<'a> for Sys {
                             );
                         }
                     },
+                }
+            }
+
+            // Task N40-AG: merge in this observer's single-target Identify
+            // links, alongside the area-sense query above. Independent of
+            // `senses`/`merged_senses` entirely -- an Identify link is never
+            // declared through `Stats.senses`, so it cannot be
+            // frozen/throttled by the snapshot/continuous bookkeeping above,
+            // and it survives even when `senses` is empty (see the
+            // `has_identify_links` early-out condition above).
+            if let Some(uid) = observer_uid {
+                for (target_uid, link) in identify_links.live_links(uid, now) {
+                    entities.push(DetectedEntity {
+                        uid: target_uid,
+                        sense: if link.is_item {
+                            SenseKind::Object
+                        } else {
+                            SenseKind::Creature
+                        },
+                        detail: Some(if link.is_item {
+                            DetectDetail::Item
+                        } else {
+                            DetectDetail::Creature { tier: link.tier }
+                        }),
+                    });
                 }
             }
 
@@ -528,6 +678,8 @@ mod tests {
         world.insert(IdMaps::default());
         world.insert(CachedSpatialGrid::default());
         world.insert(DetectionSnapshots::default());
+        world.insert(IdentifyLinks::default());
+        world.insert(Time(0.0));
         // `common_ecs::run_now`'s `Job<T>` wrapper records CPU-time metrics
         // per system and expects this resource to already exist.
         world.insert(common_ecs::SysMetrics::default());
@@ -1214,6 +1366,159 @@ mod tests {
         assert!(
             !detected_uids(&world, observer).contains(&uid(2)),
             "nondetection must win over a same-sense false_aura"
+        );
+    }
+
+    // ───────────────────────────── IdentifyLinks ────────────────────────────
+
+    #[test]
+    fn identify_link_starts_at_tier_one() {
+        let mut links = IdentifyLinks::default();
+        links.record_cast(uid(1), uid(2), false, 0.0);
+        let (_, link) = links.live_links(uid(1), 0.0).next().unwrap();
+        assert_eq!(link.tier, 1);
+        assert!(!link.is_item);
+    }
+
+    #[test]
+    fn identify_link_tier_increments_on_recast_within_the_window() {
+        let mut links = IdentifyLinks::default();
+        links.record_cast(uid(1), uid(2), false, 0.0);
+        links.record_cast(uid(1), uid(2), false, 100.0);
+        let (_, link) = links.live_links(uid(1), 100.0).next().unwrap();
+        assert_eq!(link.tier, 2);
+    }
+
+    #[test]
+    fn identify_link_tier_caps_at_the_creature_card_field_count() {
+        let mut links = IdentifyLinks::default();
+        let mut now = 0.0;
+        for _ in 0..(MAX_CREATURE_TIER as usize + 5) {
+            links.record_cast(uid(1), uid(2), false, now);
+            now += 1.0;
+        }
+        let (_, link) = links.live_links(uid(1), now).next().unwrap();
+        assert_eq!(link.tier, MAX_CREATURE_TIER);
+    }
+
+    #[test]
+    fn identify_link_tier_resets_once_the_recast_window_lapses() {
+        let mut links = IdentifyLinks::default();
+        links.record_cast(uid(1), uid(2), false, 0.0);
+        links.record_cast(uid(1), uid(2), false, 50.0);
+        // Recast long after the second cast's own window (50.0 +
+        // RECAST_WINDOW_SECS) has lapsed: the next cast must start over at
+        // tier 1, not resume from tier 2.
+        links.record_cast(uid(1), uid(2), false, 50.0 + RECAST_WINDOW_SECS + 1.0);
+        let (_, link) = links
+            .live_links(uid(1), 50.0 + RECAST_WINDOW_SECS + 1.0)
+            .next()
+            .unwrap();
+        assert_eq!(
+            link.tier, 1,
+            "a lapsed recast window must reset tier, not stay stuck at the old value"
+        );
+    }
+
+    #[test]
+    fn identify_links_are_pruned_once_stale() {
+        let mut links = IdentifyLinks::default();
+        links.record_cast(uid(1), uid(2), false, 0.0);
+        links.prune_stale(RECAST_WINDOW_SECS + 1.0);
+        assert!(!links.has_live_links(uid(1), RECAST_WINDOW_SECS + 1.0));
+    }
+
+    #[test]
+    fn identify_link_for_an_item_carries_the_item_flag() {
+        let mut links = IdentifyLinks::default();
+        links.record_cast(uid(1), uid(3), true, 0.0);
+        let (_, link) = links.live_links(uid(1), 0.0).next().unwrap();
+        assert!(link.is_item);
+    }
+
+    #[test]
+    fn identify_link_merges_into_detected_even_with_no_active_senses() {
+        let mut world = setup_world();
+        // An observer with no active magical sense at all.
+        let observer = world
+            .create_entity()
+            .with(Pos(Vec3::zero()))
+            .with(Stats::empty(Body::Humanoid(humanoid::Body::random())))
+            .with(uid(1))
+            .build();
+        spawn_target(&mut world, 2, 5.0).with(beast_body()).build();
+
+        world
+            .write_resource::<IdentifyLinks>()
+            .record_cast(uid(1), uid(2), false, 0.0);
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+
+        let detected = world.read_storage::<Detected>();
+        let entry = detected
+            .get(observer)
+            .and_then(|d| d.entities.iter().find(|e| e.uid == uid(2)))
+            .expect("an Identify link must produce a Detected entry even with no active senses");
+        assert_eq!(entry.sense, SenseKind::Creature);
+        assert_eq!(entry.detail, Some(DetectDetail::Creature { tier: 1 }));
+    }
+
+    #[test]
+    fn identify_link_for_an_item_target_uses_the_object_sense_and_item_detail() {
+        let mut world = setup_world();
+        let observer = world
+            .create_entity()
+            .with(Pos(Vec3::zero()))
+            .with(Stats::empty(Body::Humanoid(humanoid::Body::random())))
+            .with(uid(1))
+            .build();
+        spawn_target(&mut world, 2, 5.0)
+            .with(pickup("common.items.crafting_ing.twigs"))
+            .build();
+
+        world
+            .write_resource::<IdentifyLinks>()
+            .record_cast(uid(1), uid(2), true, 0.0);
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+
+        let detected = world.read_storage::<Detected>();
+        let entry = detected
+            .get(observer)
+            .and_then(|d| d.entities.iter().find(|e| e.uid == uid(2)))
+            .expect("an item Identify link must produce a Detected entry");
+        assert_eq!(entry.sense, SenseKind::Object);
+        assert_eq!(entry.detail, Some(DetectDetail::Item));
+    }
+
+    #[test]
+    fn a_stale_identify_link_stops_being_merged_into_detected() {
+        let mut world = setup_world();
+        let observer = world
+            .create_entity()
+            .with(Pos(Vec3::zero()))
+            .with(Stats::empty(Body::Humanoid(humanoid::Body::random())))
+            .with(uid(1))
+            .build();
+        spawn_target(&mut world, 2, 5.0).with(beast_body()).build();
+
+        world
+            .write_resource::<IdentifyLinks>()
+            .record_cast(uid(1), uid(2), false, 0.0);
+        *world.write_resource::<Time>() = Time(RECAST_WINDOW_SECS + 1.0);
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+
+        assert!(
+            !detected_uids(&world, observer).contains(&uid(2)),
+            "a stale Identify link must not still be merged into Detected"
+        );
+        assert!(
+            world.read_storage::<Detected>().get(observer).is_none(),
+            "an observer with no senses and no live Identify links must carry no Detected at all"
         );
     }
 }

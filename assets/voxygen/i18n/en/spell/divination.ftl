@@ -1,3 +1,5 @@
+spell-identify = Identify
+spell-identify-desc = You study a creature or object, drawing out and organizing knowledge about it that a sufficiently attentive observer could already have gathered -- its nature, its capabilities, what it carries within it. Studying the same target again soon after deepens your understanding further.
 spell-beast_sense = Beast Sense
 spell-beast_sense-desc = You touch a bonded or charmed beast and borrow its senses, seeing and hearing through it while your own body goes blind and deaf until the link ends.
 spell-clairvoyance = Clairvoyance

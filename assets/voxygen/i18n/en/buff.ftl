@@ -283,6 +283,9 @@ buff-truesight = True Sight
 ## Remote Sensing (placeholder strings; content spells land separately)
 buff-remotesensing = Remote Sensing
     .desc = Your senses are anchored elsewhere; your own body stands unattended.
+## Identifying (placeholder strings; content spells land separately)
+buff-identifying = Identifying
+    .desc = You are studying a target, gathering knowledge you already possess about it.
 ## Disguised (placeholder strings; content spells land separately)
 buff-disguised = Disguised
     .desc = You appear as something else. Your body, movement and reach are unchanged.

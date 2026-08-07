@@ -443,6 +443,9 @@ impl Server {
         state
             .ecs_mut()
             .insert(sys::detection::DetectionSnapshots::default());
+        state
+            .ecs_mut()
+            .insert(sys::detection::IdentifyLinks::default());
         {
             let (sender, receiver) =
                 crossbeam_channel::bounded::<chunk_serialize::SerializedChunk>(10_000);

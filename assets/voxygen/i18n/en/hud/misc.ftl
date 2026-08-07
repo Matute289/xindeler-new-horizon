@@ -128,3 +128,20 @@ hud-compass-south = S
 hud-compass-southwest = SW
 hud-compass-west = W
 hud-compass-northwest = NW
+
+## Identify inspect card (creature half; the item half reuses the ordinary
+## item tooltip verbatim)
+hud-creature_card-level = Lvl { $level }
+hud-creature_card-health = Health: { $current } / { $max }
+hud-creature_card-energy = Energy: { $current } / { $max }
+hud-creature_card-poise = Poise: { $current } / { $max }
+hud-creature_card-buffs = Active Effects
+hud-creature_card-no_buffs = No active effects
+hud-creature_card-resistances = Resistances: Fire { $fire }% · Frost { $frost }% · Poison { $poison }% · Magic { $magic }%
+hud-creature_card-alignment_wild = Wild
+hud-creature_card-alignment_enemy = Hostile
+hud-creature_card-alignment_npc = Neutral
+hud-creature_card-alignment_tame = Tamed
+hud-creature_card-alignment_owned = Owned
+hud-creature_card-alignment_passive = Passive
+hud-creature_card-close_hint = Press the inspect key again to close
