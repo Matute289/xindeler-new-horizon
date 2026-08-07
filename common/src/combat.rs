@@ -3314,6 +3314,131 @@ impl CombatBuff {
     }
 }
 
+/// Shared, dynamically-shrinking HP-pool debuff config (`Sleep`'s
+/// mechanism) -- unlike `CombatEffect`/`CombatRequirement`, which the
+/// surrounding `Attack::apply_attack` pipeline resolves independently per
+/// target with no visibility into any other target in the same volley,
+/// `resolve_pooled_debuff_targets` below is deliberately resolved in a
+/// pre-pass over the *entire* target list for one cast before any buff is
+/// applied -- the outcome for target N depends on which of targets 1..N-1
+/// already consumed from `pool`. Delivered via `RadiusEffect::PooledDebuff`
+/// (`explosion.rs`), which the `ExplosionEvent` handler resolves as a single
+/// block rather than folding it into the generic per-entity effect loop.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PooledDebuff {
+    /// Total shared HP budget for one cast. Ships with 30.0 as a first-pass
+    /// placeholder -- see the RON comment on
+    /// `assets/common/abilities/spells/arcane/sleep.ron` for the reasoning
+    /// and the explicit "tune later" caveat.
+    pub pool: f32,
+    /// Debuff granted to every target the pool ends up affecting. `chance`
+    /// is expected to stay at 1.0 for this use -- a target's odds of being
+    /// affected are entirely the deterministic pool math below, not an RNG
+    /// roll on top of it.
+    pub buff: CombatBuff,
+    /// Threaded through to `CombatBuff::to_buff` for `BuffSource`/
+    /// `magic_source` attribution (dispel/antimagic interactions, the caster
+    /// tool_kind, etc.) -- `RadiusEffect::PooledDebuff` bypasses the `Attack`
+    /// struct entirely (no damage/knockback/poise involved), so this is the
+    /// only path that information has left to travel through.
+    pub ability_info: Option<AbilityInfo>,
+}
+
+/// Resolves a shared, dynamically-shrinking HP pool against a list of
+/// candidates -- the classic "Sleep spell" algorithm: sort every candidate
+/// ascending by current HP, then walk the sorted list applying the debuff
+/// and subtracting that candidate's HP from `pool`, until the pool is
+/// exhausted or the list has been fully walked. A candidate whose HP is
+/// larger than what remains in `pool` is skipped outright -- not partially
+/// affected -- and resolution continues to the next-lowest candidate.
+///
+/// Because `pool` only ever shrinks and the list is sorted ascending, once a
+/// candidate is skipped every candidate after it (equal or higher HP) is
+/// mathematically guaranteed to be skipped too. This function still walks
+/// the whole list rather than breaking out on the first skip, matching the
+/// mechanic's own literal framing ("skipped entirely... the spell moves to
+/// the next-lowest creature instead, and so on until the pool runs out or
+/// the list is exhausted") rather than relying on a caller to trust that
+/// invariant forever.
+///
+/// Generic over the candidate identifier (`T`, e.g. `specs::Entity` in
+/// production, a plain `u32` in tests) so the pure pool-consumption logic
+/// can be unit-tested without any ECS machinery.
+pub fn resolve_pooled_debuff_targets<T: Copy>(mut candidates: Vec<(T, f32)>, pool: f32) -> Vec<T> {
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    let mut remaining = pool;
+    let mut affected = Vec::with_capacity(candidates.len());
+    for (id, hp) in candidates {
+        if hp <= remaining {
+            remaining -= hp;
+            affected.push(id);
+        }
+    }
+    affected
+}
+
+#[cfg(test)]
+mod sleep_pool_tests {
+    use super::resolve_pooled_debuff_targets;
+
+    #[test]
+    fn affects_ascending_by_current_hp_regardless_of_input_order() {
+        // Input deliberately out of HP order -- the function must sort, not
+        // trust caller ordering.
+        let candidates = vec![(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
+        // Pool big enough for all three (5 + 12 + 40 = 57).
+        let affected = resolve_pooled_debuff_targets(candidates, 57.0);
+        assert_eq!(affected, vec![2, 3, 1], "must process lowest-HP first");
+    }
+
+    #[test]
+    fn stops_once_pool_is_exhausted() {
+        // 5 + 12 = 17 fits in a pool of 20; the last (40) does not.
+        let candidates = vec![(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 20.0);
+        assert_eq!(affected, vec![2, 3]);
+    }
+
+    #[test]
+    fn skips_a_creature_bigger_than_the_remaining_pool_without_consuming_it() {
+        // Pool of 10: the 5-HP creature fits (remaining -> 5), but the next
+        // (8 HP) exceeds what's left and must be skipped entirely -- not
+        // partially applied, and its HP is not deducted from the pool.
+        let candidates = vec![(1u32, 5.0), (2u32, 8.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 10.0);
+        assert_eq!(
+            affected,
+            vec![1],
+            "the 8-HP creature must be skipped, not partially affected"
+        );
+    }
+
+    #[test]
+    fn exact_pool_match_is_affected() {
+        // hp <= remaining uses <=, so an exact match still affects.
+        let candidates = vec![(1u32, 30.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 30.0);
+        assert_eq!(affected, vec![1]);
+    }
+
+    #[test]
+    fn empty_candidate_list_returns_empty() {
+        let affected = resolve_pooled_debuff_targets::<u32>(vec![], 30.0);
+        assert!(affected.is_empty());
+    }
+
+    #[test]
+    fn zero_pool_affects_nothing_even_with_zero_hp_candidates_unlikely_in_practice() {
+        // Defensive: a 0.0 HP candidate would still be "affected" against a
+        // 0.0 pool (0.0 <= 0.0), but in production dead entities are always
+        // filtered out before this function ever sees them.
+        let candidates = vec![(1u32, 0.0), (2u32, 1.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 0.0);
+        assert_eq!(affected, vec![1]);
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScalingKind {
     Linear,

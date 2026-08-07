@@ -1,5 +1,5 @@
 use crate::{
-    combat::Attack,
+    combat::{Attack, PooledDebuff},
     comp::{ability::Dodgeable, item::Reagent},
     effect::Effect,
 };
@@ -24,6 +24,11 @@ pub enum RadiusEffect {
         attack: Attack,
         dodgeable: Dodgeable,
     },
+    /// Shared, dynamically-shrinking HP-pool debuff (see
+    /// `combat::resolve_pooled_debuff_targets`). Resolved once for the whole
+    /// explosion target list, not per-entity-independent like the other
+    /// variants above.
+    PooledDebuff(PooledDebuff),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

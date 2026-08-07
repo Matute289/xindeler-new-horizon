@@ -37,3 +37,5 @@ spell-mind_sliver = Mind Sliver
 spell-mind_sliver-desc = You jab a barbed spike of mental force into a creature's thoughts, searing its mind. The lingering ache muddles its focus.
 spell-vicious_mockery = Vicious Mockery
 spell-vicious_mockery-desc = You hurl a barbed taunt woven with subtle compulsion at a foe who can hear you, searing their mind with psychic pain. The sting throws off their aim.
+spell-sleep = Sleep
+spell-sleep-desc = A wave of drowsy magic washes over a chosen area, dragging the weakest creatures within it into a deep, helpless slumber. Stronger or more wakeful beings shrug off the heaviness and remain alert.

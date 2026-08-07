@@ -3452,6 +3452,115 @@ impl ServerEvent for ExplosionEvent {
                             }
                         }
                     },
+                    RadiusEffect::PooledDebuff(combat::PooledDebuff {
+                        pool,
+                        buff,
+                        ability_info,
+                    }) => {
+                        // A pool-selected target is always affected -- see
+                        // `PooledDebuff::buff`'s own doc comment. `chance`
+                        // is never consulted below, so a future spell
+                        // reusing this primitive with `chance < 1.0`
+                        // (expecting an extra resist roll on top of the
+                        // pool) would silently always land instead.
+                        debug_assert!(
+                            buff.chance >= 1.0,
+                            "RadiusEffect::PooledDebuff ignores CombatBuff::chance; author it as \
+                             1.0 or add a roll before calling to_buff below"
+                        );
+                        // Gather every living, eligible target inside the
+                        // sphere first -- whether one target is affected
+                        // depends on which other targets already consumed
+                        // from the shared pool, so this can't be resolved
+                        // as each entity is visited independently the way
+                        // `Attack`/`Entity` above are. Containment check
+                        // mirrors `RadiusEffect::Entity` above (no LOS
+                        // raycast -- this isn't a directed attack).
+                        let mut candidates: Vec<(Entity, f32)> = Vec::new();
+                        for (entity_b, pos_b, health_b, body_b_maybe) in (
+                            &data.entities,
+                            &data.positions,
+                            &data.healths,
+                            data.bodies.maybe(),
+                        )
+                            .join()
+                            .filter(|(_, _, health, _)| !health.is_dead)
+                        {
+                            let strength = if let Some(body) = body_b_maybe {
+                                cylinder_sphere_strength(
+                                    ev.pos,
+                                    ev.explosion.radius,
+                                    ev.explosion.min_falloff,
+                                    pos_b.0,
+                                    *body,
+                                )
+                            } else {
+                                let dist_sqrd = ev.pos.distance_squared(pos_b.0);
+                                1.0 - dist_sqrd / ev.explosion.radius.powi(2)
+                            };
+                            // Unlike `RadiusEffect::Attack`/`Entity`, `strength` is used only as
+                            // a binary containment gate here, never threaded into a graduated
+                            // magnitude -- a "50%-applied" sleep debuff has no obvious meaning.
+                            // `min_falloff` still reshapes the containment boundary (a smaller
+                            // effective radius near the falloff edge), it just doesn't scale
+                            // anything past that.
+                            if strength <= 0.0 {
+                                continue;
+                            }
+
+                            // Same group/PvP gating a normal Attack would
+                            // apply -- a debuff this strong shouldn't
+                            // bypass friendly-fire rules just because it
+                            // isn't routed through `Attack`.
+                            let same_group = owner_entity
+                                .and_then(|e| data.groups.get(e))
+                                .map(|group_a| Some(group_a) == data.groups.get(entity_b))
+                                .unwrap_or(Some(entity_b) == owner_entity);
+                            let allow_friendly_fire = owner_entity.is_some_and(|owner_entity| {
+                                combat::allow_friendly_fire(
+                                    &data.entered_auras,
+                                    owner_entity,
+                                    entity_b,
+                                )
+                            });
+                            if same_group && !allow_friendly_fire {
+                                continue;
+                            }
+                            let permit_pvp = combat::permit_pvp(
+                                &data.alignments,
+                                &data.players,
+                                &data.entered_auras,
+                                &data.id_maps,
+                                owner_entity,
+                                entity_b,
+                            );
+                            if !permit_pvp {
+                                continue;
+                            }
+
+                            candidates.push((entity_b, health_b.current()));
+                        }
+
+                        for entity_b in combat::resolve_pooled_debuff_targets(candidates, pool) {
+                            emitters.emit(BuffEvent {
+                                entity: entity_b,
+                                buff_change: buff::BuffChange::Add(buff.to_buff(
+                                    *data.time,
+                                    (ev.owner, owner_entity.and_then(|e| data.masses.get(e))),
+                                    (data.stats.get(entity_b), data.masses.get(entity_b)),
+                                    // `damage` is a no-op for `CombatBuffStrength::Value` (what
+                                    // every `PooledDebuff` spell should author -- there's no
+                                    // damage roll here to scale off of). A future spell
+                                    // configured with `DamageFraction` would silently compute a
+                                    // strength of 0.0; that combination isn't supported by this
+                                    // resolution path.
+                                    0.0,
+                                    1.0,
+                                    ability_info,
+                                )),
+                            });
+                        }
+                    },
                     RadiusEffect::Entity(mut effect) => {
                         for (entity_b, pos_b, body_b_maybe) in
                             (&data.entities, &data.positions, data.bodies.maybe()).join()
