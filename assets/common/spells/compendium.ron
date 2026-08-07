@@ -1163,6 +1163,23 @@
         ability: "common.abilities.spells.arcane.hideous_laughter",
     ),
     (
+        id: "spells.enchantment.sleep",
+        name_i18n: "spell-sleep",
+        level: 1,
+        school: Some(Enchantment),
+        source: Arcane,
+        // "Wizard" maps to this project's generic arcane-caster class,
+        // `Mage` -- there is no separate `ClassKind::Wizard` (see
+        // `common/src/comp/class.rs`).
+        classes: [Mage, Sorcerer, Bard],
+        cast_time: Action,
+        duration: Instant,
+        range: Meters(27.0),
+        aoe: Some(Sphere(6.0)),
+        description_i18n: "spell-sleep-desc",
+        ability: "common.abilities.spells.arcane.sleep",
+    ),
+    (
         id: "spells.enchantment.irresistible_dance",
         name_i18n: "spell-irresistible_dance",
         level: 6,

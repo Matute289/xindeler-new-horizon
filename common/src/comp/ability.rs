@@ -1384,6 +1384,18 @@ impl Default for Amount {
     fn default() -> Self { Self::Value(1) }
 }
 
+/// RON-authored config for `CharacterAbility::GroundAoe::pooled_debuff`.
+/// `combat::PooledDebuff` (the runtime shape this expands into, carried by
+/// `ground_aoe::StaticData` and `RadiusEffect::PooledDebuff`) also has an
+/// `ability_info` field, but that's the caster's tool/hand/source info
+/// filled in per-cast from `AbilityInfo::new` -- not something a RON author
+/// supplies, so it has no place in this config struct.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PooledDebuffConfig {
+    pub pool: f32,
+    pub buff: combat::CombatBuff,
+}
+
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 /// For documentation on individual fields, see the corresponding character
@@ -1728,6 +1740,18 @@ pub enum CharacterAbility {
         /// If true the caster cannot move during the telegraph
         #[serde(default)]
         rooted_cast: bool,
+        /// Shared HP-pool debuff resolution (e.g. `Sleep`): sorts every
+        /// target in the AoE ascending by current HP and consumes `pool`
+        /// from lowest to highest, applying `buff` to each until the pool
+        /// is exhausted -- see `combat::resolve_pooled_debuff_targets`.
+        /// When set, this ability's strike skips the normal `damage`/
+        /// `poise`/`knockback` attack entirely and emits only the pooled
+        /// debuff (those fields are otherwise unused -- keep them at 0/
+        /// no-op in RON for a pool-only cast). `#[serde(default)]` so
+        /// every existing GroundAoe RON (bloodboil, dark_star, ...) stays
+        /// byte-unchanged and keeps parsing as `None`.
+        #[serde(default)]
+        pooled_debuff: Option<PooledDebuffConfig>,
         #[serde(default)]
         meta: AbilityMeta,
     },
@@ -2621,6 +2645,12 @@ impl CharacterAbility {
                 dodgeable: _,
                 reagent: _,
                 rooted_cast: _,
+                // Not stat-scaled for now: the pool is a flat, deterministic
+                // budget, not a per-hit damage/effect number the existing
+                // `stats.power`/`stats.effect_power` multipliers are meant
+                // for. Revisit if/when a "pool scales with caster level"
+                // design lands.
+                pooled_debuff: _,
                 meta: _,
             } => {
                 *energy_cost /= stats.energy_efficiency;
@@ -3956,6 +3986,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 dodgeable,
                 reagent,
                 rooted_cast,
+                pooled_debuff,
                 meta: _,
             } => CharacterState::GroundAoe(ground_aoe::Data {
                 static_data: ground_aoe::StaticData {
@@ -3971,6 +4002,16 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     dodgeable: *dodgeable,
                     reagent: *reagent,
                     rooted_cast: *rooted_cast,
+                    // The RON-authored config carries no `ability_info` (see
+                    // `PooledDebuffConfig`'s doc comment) -- fill it in here
+                    // from this cast's own `ability_info`, same as
+                    // `Attack::new(Some(self.static_data.ability_info))`
+                    // does for the non-pooled damage path below.
+                    pooled_debuff: (*pooled_debuff).map(|pd| combat::PooledDebuff {
+                        pool: pd.pool,
+                        buff: pd.buff,
+                        ability_info: Some(ability_info),
+                    }),
                     ability_info,
                 },
                 timer: Duration::default(),

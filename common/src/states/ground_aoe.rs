@@ -1,6 +1,6 @@
 use crate::{
     Damage, DamageKind, Explosion, GroupTarget, Knockback, RadiusEffect,
-    combat::{Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement},
+    combat::{Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, PooledDebuff},
     comp::{
         CharacterState, StateUpdate, ability::Dodgeable, character_state::OutputEvents,
         item::Reagent,
@@ -32,6 +32,10 @@ pub struct StaticData {
     pub dodgeable: Dodgeable,
     pub reagent: Option<Reagent>,
     pub rooted_cast: bool,
+    /// See `CharacterAbility::GroundAoe::pooled_debuff` -- when set, the
+    /// strike below emits only this pooled debuff and skips the normal
+    /// `damage`/`poise`/`knockback` attack entirely.
+    pub pooled_debuff: Option<PooledDebuff>,
     pub ability_info: AbilityInfo,
 }
 
@@ -109,36 +113,53 @@ impl CharacterBehavior for Data {
                     });
                 } else {
                     // Strike: server resolves an explosion at the locked pos.
+                    //
+                    // A pool-driven cast (e.g. `Sleep`) has no direct
+                    // damage/poise/knockback of its own -- routing it
+                    // through `RadiusEffect::Attack` with a zero damage
+                    // instance would still run the full to-hit/dodge/block
+                    // pipeline and emit an "attacked" outcome against every
+                    // unaffected target, which is both wasted work and
+                    // wrong presentation for a spell that isn't attacking
+                    // full-health/tough creatures at all. So it emits only
+                    // the pooled debuff and skips the attack effect
+                    // entirely; every other GroundAoe keeps the original
+                    // damage-attack-only path unchanged.
                     if let Some(pos) = self.target_pos {
+                        let effects = if let Some(pooled_debuff) = self.static_data.pooled_debuff {
+                            vec![RadiusEffect::PooledDebuff(pooled_debuff)]
+                        } else {
+                            vec![RadiusEffect::Attack {
+                                attack: Attack::new(Some(self.static_data.ability_info))
+                                    .with_damage(AttackDamage::new(
+                                        Damage {
+                                            kind: DamageKind::Energy,
+                                            value: self.static_data.damage,
+                                        },
+                                        Some(GroupTarget::OutOfGroup),
+                                        rand::random(),
+                                    ))
+                                    .with_effect(
+                                        AttackEffect::new(
+                                            Some(GroupTarget::OutOfGroup),
+                                            CombatEffect::Poise(self.static_data.poise),
+                                        )
+                                        .with_requirement(CombatRequirement::AnyDamage),
+                                    )
+                                    .with_effect(
+                                        AttackEffect::new(
+                                            Some(GroupTarget::OutOfGroup),
+                                            CombatEffect::Knockback(self.static_data.knockback),
+                                        )
+                                        .with_requirement(CombatRequirement::AnyDamage),
+                                    ),
+                                dodgeable: self.static_data.dodgeable,
+                            }]
+                        };
                         output_events.emit_server(ExplosionEvent {
                             pos,
                             explosion: Explosion {
-                                effects: vec![RadiusEffect::Attack {
-                                    attack: Attack::new(Some(self.static_data.ability_info))
-                                        .with_damage(AttackDamage::new(
-                                            Damage {
-                                                kind: DamageKind::Energy,
-                                                value: self.static_data.damage,
-                                            },
-                                            Some(GroupTarget::OutOfGroup),
-                                            rand::random(),
-                                        ))
-                                        .with_effect(
-                                            AttackEffect::new(
-                                                Some(GroupTarget::OutOfGroup),
-                                                CombatEffect::Poise(self.static_data.poise),
-                                            )
-                                            .with_requirement(CombatRequirement::AnyDamage),
-                                        )
-                                        .with_effect(
-                                            AttackEffect::new(
-                                                Some(GroupTarget::OutOfGroup),
-                                                CombatEffect::Knockback(self.static_data.knockback),
-                                            )
-                                            .with_requirement(CombatRequirement::AnyDamage),
-                                        ),
-                                    dodgeable: self.static_data.dodgeable,
-                                }],
+                                effects,
                                 radius: self.static_data.radius,
                                 reagent: self.static_data.reagent,
                                 min_falloff: self.static_data.min_falloff,
