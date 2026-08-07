@@ -7,7 +7,9 @@ use crate::{
         },
         character_state::OutputEvents,
     },
-    event::{BuffEvent, ComboChangeEvent, LocalEvent, ResolveRemoteSenseEvent},
+    event::{
+        BuffEvent, ComboChangeEvent, LocalEvent, ResolveIdentifyEvent, ResolveRemoteSenseEvent,
+    },
     outcome::Outcome,
     states::{
         behavior::{CharacterBehavior, JoinData},
@@ -210,6 +212,20 @@ impl CharacterBehavior for Data {
                                 flight_speed,
                                 behind_dist,
                                 above_dist,
+                            });
+                        }
+
+                        // Same reasoning as `RemoteSensing` just above: the
+                        // cast's target is only available here, at cast
+                        // time, so it must be forwarded now or it is lost.
+                        if buff_desc.kind == BuffKind::Identifying {
+                            output_events.emit_server(ResolveIdentifyEvent {
+                                entity: data.entity,
+                                target_entity: self
+                                    .static_data
+                                    .ability_info
+                                    .input_attr
+                                    .and_then(|ia| ia.target_entity),
                             });
                         }
                     }

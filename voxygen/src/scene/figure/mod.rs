@@ -1510,6 +1510,13 @@ impl FigureMgr {
             return;
         }
 
+        // The same "is this figure currently revealed to me by an active magical
+        // sense" condition `reveal_tint` uses to pick `col`'s multiplier below,
+        // reused as-is to drive the emissive rim highlight (`Locals.flags` bit 1)
+        // rather than inventing a second reveal check.
+        let revealing_sense = data.scene_data.revealed_entities.get(&entity).copied();
+        let is_revealed = revealing_sense.is_some();
+
         // Change in health as color!
         let col = health
                 .map(|h| {
@@ -1528,10 +1535,7 @@ impl FigureMgr {
                 Rgba::one()
             }
             // Tint entities revealed to us by an active magical sense
-            * reveal_tint(
-                data.scene_data.revealed_entities.get(&entity).copied(),
-                phantom_illusion.is_some(),
-            );
+            * reveal_tint(revealing_sense, phantom_illusion.is_some());
 
         let scale = scale.map(|s| s.0).unwrap_or(1.0);
 
@@ -1615,6 +1619,7 @@ impl FigureMgr {
             col,
             dt,
             is_player: is_viewpoint,
+            is_revealed,
             terrain: data.terrain,
             ground_vel: physics.ground_vel,
             primary_trail_points: self.trail_points(data.scene_data, entity, true),
@@ -8613,6 +8618,12 @@ pub struct FigureUpdateCommonParameters<'a> {
     pub col: Rgba<f32>,
     pub dt: f32,
     pub is_player: bool,
+    /// Whether this figure is currently revealed to the local client by an
+    /// active magical sense (i.e. it has an entry in
+    /// `SceneData::revealed_entities`), the same condition `reveal_tint`
+    /// uses to pick `col`'s multiplier. Drives the emissive rim highlight
+    /// (`Locals.flags` bit 1) in `figure-frag.glsl`.
+    pub is_revealed: bool,
     pub terrain: Option<&'a Terrain>,
     pub ground_vel: Vec3<f32>,
     pub primary_trail_points: Option<(anim::vek::Vec3<f32>, anim::vek::Vec3<f32>)>,
@@ -8698,6 +8709,7 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
             col,
             dt,
             is_player,
+            is_revealed,
             terrain,
             ground_vel,
             primary_trail_points,
@@ -8834,6 +8846,7 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
             *is_player,
             self.last_light,
             self.last_glow,
+            *is_revealed,
         );
         renderer.update_consts(&mut self.meta.bound.0, &[locals]);
 

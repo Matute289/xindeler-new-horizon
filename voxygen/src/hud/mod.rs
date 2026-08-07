@@ -6,6 +6,7 @@ mod buttons;
 mod change_notification;
 mod chat;
 mod crafting;
+mod creature_card;
 mod diary;
 mod esc_menu;
 mod group;
@@ -48,6 +49,7 @@ use change_notification::{ChangeNotification, NotificationReason};
 use chat::Chat;
 use chrono::NaiveTime;
 use crafting::Crafting;
+use creature_card::CreatureCard;
 use diary::{Diary, SelectedSkillTree};
 use esc_menu::EscMenu;
 use group::Group;
@@ -87,7 +89,7 @@ use crate::{
     },
     settings::chat::ChatFilter,
     ui::{
-        Graphic, Ingameable, ScaleMode, Ui,
+        Graphic, ImageFrame, Ingameable, ItemTooltip, ScaleMode, Ui,
         fonts::Fonts,
         img_ids::Rotations,
         slot::{self, SlotKey},
@@ -97,7 +99,7 @@ use crate::{
 use client::{Client, UserNotification};
 use common::{
     comp::{
-        self, AbilityCooldowns, BuffData, BuffKind, Content, Detected, Health, Item,
+        self, AbilityCooldowns, BuffData, BuffKind, Content, DetectDetail, Detected, Health, Item,
         MapMarkerChange, PickupItem, PresenceKind, SenseKind,
         ability::{AuxiliaryAbility, Stance},
         fluid_dynamics,
@@ -309,6 +311,8 @@ widget_ids! {
         map,
         world_map,
         popup,
+        creature_card,
+        identify_item_tooltip,
         minimap,
         prompt_dialog,
         bag,
@@ -675,6 +679,15 @@ pub struct HudInfo<'a> {
     /// Entities the viewpoint entity currently perceives through a magical
     /// sense, each tagged with the sense that revealed it.
     pub revealed_entities: &'a HashMap<specs::Entity, SenseKind>,
+    /// The subset of `revealed_entities` the viewpoint entity is also
+    /// permitted to open an Identify inspect card for, tagged with which
+    /// kind of card. Built from the viewpoint's own `Detected` component
+    /// (owner-private, synced only to its owner), so an entry existing here
+    /// at all already proves "I am the one who cast Identify on this
+    /// entity" — see `common::comp::detection::DetectDetail`'s own doc
+    /// comment for why that sync scope is the permission check, not a
+    /// second one layered on top.
+    pub identified_entities: &'a HashMap<specs::Entity, DetectDetail>,
     pub persistence_load_error: Option<SkillsPersistenceError>,
     pub key_state: &'a KeyState,
 }
@@ -950,6 +963,13 @@ pub struct Show {
     zoom_lock: ChangeNotification,
     camera_clamp: bool,
     remote_sensing: bool,
+    /// Which entity's Identify inspect card is currently open, if any (see
+    /// `Hud::toggle_identify_card`). Not gated by permission here — the
+    /// render pass re-checks `HudInfo::identified_entities` every frame and
+    /// simply draws nothing if the target no longer carries a `DetectDetail`
+    /// the local player is permitted to see (e.g. the link expired, or the
+    /// target left `Detected` range).
+    identify_card: Option<specs::Entity>,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
     // A stack of open menus; the menu in focus should be on top
@@ -992,6 +1012,7 @@ impl Show {
             zoom_lock: ChangeNotification::default(),
             camera_clamp: false,
             remote_sensing: false,
+            identify_card: None,
             prompt_dialog: None,
             trade_amount_input_key: None,
             focus: Vec::new(),
@@ -3393,6 +3414,64 @@ impl Hud {
         let char_states = ecs.read_storage::<comp::CharacterState>();
         let buffs = ecs.read_storage::<comp::Buffs>();
         let oracle_live = ecs.read_resource::<OracleLive>().0;
+
+        // Identify inspect card: only rendered while `self.show.identify_card`
+        // names a target AND that target still carries a `DetectDetail` the
+        // local player is currently permitted to see. `info.identified_entities`
+        // (built from the player's own owner-private `Detected` component) is
+        // the entire permission check -- an entry existing there at all already
+        // proves this client is the one who cast Identify on that entity, see
+        // `HudInfo::identified_entities`'s own doc comment.
+        if let Some(target) = self.show.identify_card {
+            match info.identified_entities.get(&target) {
+                Some(DetectDetail::Item) => {
+                    if let Some(pickup) = ecs.read_storage::<comp::PickupItem>().get(target) {
+                        let edge = &self.rot_imgs.tt_side;
+                        let corner = &self.rot_imgs.tt_corner;
+                        ItemTooltip::new(
+                            ImageFrame::new(
+                                [edge.cw180, edge.none, edge.cw270, edge.cw90],
+                                [corner.none, corner.cw270, corner.cw90, corner.cw180],
+                                Color::Rgba(0.08, 0.07, 0.04, 1.0),
+                                5.0,
+                            ),
+                            client,
+                            &info,
+                            &self.imgs,
+                            &self.item_imgs,
+                            self.pulse,
+                            &msm,
+                            &rbm,
+                            inventories.get(entity),
+                            i18n,
+                            &self.item_i18n,
+                        )
+                        .item(pickup.item())
+                        .title_font_size(self.fonts.cyri.scale(20))
+                        .desc_font_size(self.fonts.cyri.scale(12))
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .desc_text_color(TEXT_COLOR)
+                        .top_right_with_margins_on(ui_widgets.window, 80.0, 20.0)
+                        .set(self.ids.identify_item_tooltip, ui_widgets);
+                    } else {
+                        // The target stopped being a pickup item (picked up,
+                        // despawned, ...) -- close the stale card.
+                        self.show.identify_card = None;
+                    }
+                },
+                Some(DetectDetail::Creature { tier }) => {
+                    CreatureCard::new(client, target, *tier, &self.fonts, i18n)
+                        .set(self.ids.creature_card, ui_widgets);
+                },
+                None => {
+                    // The link expired, the target left `Detected` range, or
+                    // this client was never the caster to begin with --
+                    // close the stale card rather than leaving it stuck open.
+                    self.show.identify_card = None;
+                },
+            }
+        }
+
         // Combo floater stuffs
         self.floaters.combo_floater = self.floaters.combo_floater.map(|mut f| {
             f.timer -= dt.as_secs_f64();
@@ -5584,6 +5663,21 @@ impl Hud {
         self.show.remote_sensing = remote_sensing;
     }
 
+    /// Opens the Identify inspect card for `target`, or closes it if it was
+    /// already open for that same entity. Switches straight to a different
+    /// target if one was already open. The actual permission check ("does
+    /// this target carry a `DetectDetail` I'm allowed to see") happens every
+    /// frame at render time against `HudInfo::identified_entities`, not
+    /// here — this setter only tracks *which* entity the player asked to
+    /// inspect.
+    pub fn toggle_identify_card(&mut self, target: Option<specs::Entity>) {
+        self.show.identify_card = match (self.show.identify_card, target) {
+            (Some(current), Some(new)) if current == new => None,
+            (_, Some(new)) => Some(new),
+            (_, None) => None,
+        };
+    }
+
     /// Remind the player camera zoom is currently locked, for example if they
     /// are trying to zoom.
     pub fn zoom_lock_reminder(&mut self) {
@@ -6007,6 +6101,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // Reuse the perception-themed icon until dedicated art ships with the
         // spells that grant this buff.
         BuffKind::RemoteSensing => imgs.buff_eagle_eye,
+        // Reuse the perception-themed icon until dedicated art ships with the
+        // Identify spell.
+        BuffKind::Identifying => imgs.buff_eagle_eye,
         // Reuse the polymorph icon (both are "your appearance has changed")
         // until dedicated disguise art ships with the spells that grant this
         // buff.

@@ -329,6 +329,7 @@ impl Scene {
                 col: Rgba::broadcast(1.0),
                 dt,
                 is_player: false,
+                is_revealed: false,
                 terrain: None,
                 ground_vel: Vec3::zero(),
                 primary_trail_points: None,

@@ -481,6 +481,20 @@ pub enum BuffKind {
     /// other concentration effect, and only one such link is held at a time.
     RemoteSensing,
     // =================
+    //     IDENTIFY
+    // =================
+    /// Declares an Identify cast in flight. Carries no reveal-set data of its
+    /// own — like `RemoteSensing` above, this buff's job is only to be the
+    /// caster's own visible "cast in progress" indicator and the side-channel
+    /// `self_buff.rs` uses to notice the cast and emit
+    /// `ResolveIdentifyEvent`, which does the real work of writing into the
+    /// server-only `IdentifyLinks` resource (`server/src/sys/detection.rs`).
+    /// The cast's target is only available at cast time in `self_buff.rs`
+    /// (`AbilityInfo::input_attr`), so — same reasoning as
+    /// `RemoteSensing`'s own doc comment — it is forwarded there rather than
+    /// carried in this buff's `misc_data`.
+    Identifying,
+    // =================
     //     DISGUISE
     // =================
     /// A cast disguise: cosmetic-only, unlike `Polymorphed` above. Declares
@@ -620,6 +634,7 @@ impl BuffKind {
             | BuffKind::SeeInvisible
             | BuffKind::TrueSight
             | BuffKind::RemoteSensing
+            | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
             | BuffKind::Mooncloak
             | BuffKind::Nondetection
@@ -1411,6 +1426,12 @@ impl BuffKind {
                 }
                 effects
             },
+            // Purely a cast-in-flight indicator (buff icon) and the
+            // side-channel `self_buff.rs` uses to notice the cast and emit
+            // `ResolveIdentifyEvent` -- see this variant's own doc comment.
+            // No `BuffEffect` of its own: unlike `RemoteSensing`, Identify
+            // does not root the caster or grant any observable-here effect.
+            BuffKind::Identifying => vec![],
             // Cosmetic-only disguise — see `BuffEffect::Disguise`'s doc
             // comment for why this must never become a `BodyChange`.
             // `cast_accuracy` is carried in `data.strength`: the caster's
@@ -2566,6 +2587,28 @@ pub mod tests {
             })),
             "the anchor shape must reach the effect unchanged"
         );
+    }
+
+    #[test]
+    fn identifying_grants_no_gameplay_effect() {
+        // Unlike `RemoteSensing`, an Identify cast must not root the caster
+        // or otherwise affect them -- it is purely the cast-in-flight
+        // indicator plus the `self_buff.rs` side-channel that emits
+        // `ResolveIdentifyEvent`; the real single-target reveal write lives
+        // entirely in that event's server-side handler, not in this buff's
+        // own effects.
+        let effects =
+            BuffKind::Identifying.effects(&BuffData::new(0.0, Some(Secs(1.0))), None, None);
+        assert!(
+            effects.is_empty(),
+            "Identifying must carry no BuffEffect of its own"
+        );
+    }
+
+    #[test]
+    fn identifying_is_a_simple_positive_buff() {
+        assert!(BuffKind::Identifying.is_buff());
+        assert!(BuffKind::Identifying.is_simple());
     }
 
     #[test]

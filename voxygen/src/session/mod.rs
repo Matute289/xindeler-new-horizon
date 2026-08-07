@@ -17,8 +17,8 @@ use common::{
     CachedSpatialGrid,
     comp::{
         self, ActiveAbilities, CharacterActivity, CharacterState, ChatType, Combo, Content,
-        Detected, Fluid, InputKind, InventoryUpdateEvent, Pos, PresenceKind, RemoteSense,
-        SenseKind, Stats, UtteranceKind, Vel,
+        DetectDetail, Detected, Fluid, InputKind, InventoryUpdateEvent, Pos, PresenceKind,
+        RemoteSense, SenseKind, Stats, UtteranceKind, Vel,
         inventory::slot::{EquipSlot, Slot},
         invite::InviteKind,
         item::{ItemDesc, tool::ToolKind},
@@ -168,6 +168,11 @@ pub struct SessionState {
     /// per tick so the figure renderer and the HUD can both consume it
     /// cheaply.
     revealed_entities: HashMap<specs::Entity, SenseKind>,
+    /// The subset of `revealed_entities` carrying an Identify `detail` --
+    /// resolved from the same owner-private `Detected` component, in the
+    /// same pass. See `HudInfo::identified_entities`'s own doc comment for
+    /// why this doubles as the "am I the caster" permission check.
+    identified_entities: HashMap<specs::Entity, DetectDetail>,
     #[cfg(not(target_os = "macos"))]
     mumble_link: SharedLink,
     hitboxes: HashMap<specs::Entity, DebugShapeId>,
@@ -246,6 +251,7 @@ impl SessionState {
             viewpoint_piloted: false,
             interactables: Default::default(),
             revealed_entities: HashMap::new(),
+            identified_entities: HashMap::new(),
             #[cfg(not(target_os = "macos"))]
             mumble_link,
             hitboxes: HashMap::new(),
@@ -781,6 +787,7 @@ impl PlayState for SessionState {
             // `Uid`s into local entity handles. Rebuilt wholesale each tick, mirroring
             // how the server rebuilds the component itself.
             self.revealed_entities.clear();
+            self.identified_entities.clear();
             {
                 let ecs = client.state().ecs();
                 let detected = ecs.read_storage::<Detected>();
@@ -792,6 +799,16 @@ impl PlayState for SessionState {
                             .iter()
                             .filter_map(|d| id_maps.uid_entity(d.uid).map(|e| (e, d.sense))),
                     );
+                    // A `detail` is only ever written into *my own*
+                    // `Detected` when I am the one who cast Identify on that
+                    // entity (see `HudInfo::identified_entities`'s doc
+                    // comment) -- this filter is the entire permission
+                    // check, no further server round-trip needed.
+                    self.identified_entities
+                        .extend(detected.entities.iter().filter_map(|d| {
+                            d.detail
+                                .and_then(|detail| id_maps.uid_entity(d.uid).map(|e| (e, detail)))
+                        }));
                 }
             }
 
@@ -1417,6 +1434,15 @@ impl PlayState for SessionState {
                                     self.client.borrow_mut().cancel_remote_sense();
                                 }
                             },
+                            GameInput::Inspect if state => {
+                                // A pure client-local UI action: whether an
+                                // inspect card actually opens is decided at
+                                // render time against `identified_entities`
+                                // (built from the player's own owner-private
+                                // `Detected` component), never here -- this
+                                // only records which target was asked for.
+                                self.hud.toggle_identify_card(self.target_entity);
+                            },
                             GameInput::ToggleWalk if state => {
                                 global_state
                                     .settings
@@ -1933,6 +1959,7 @@ impl PlayState for SessionState {
                     target_entity: self.target_entity,
                     selected_entity: self.selected_entity,
                     revealed_entities: &self.revealed_entities,
+                    identified_entities: &self.identified_entities,
                     persistence_load_error: self.metadata.skill_set_persistence_load_error,
                     key_state: &self.key_state,
                 },

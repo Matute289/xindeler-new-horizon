@@ -176,6 +176,11 @@ pub enum GameInput {
     /// returning them to their body before its duration expires.
     #[strum(serialize = "gameinput-cancelremotesense")]
     CancelRemoteSense,
+    /// Opens (or closes) the Identify inspect card for the player's current
+    /// target, if it carries a `DetectDetail` the local player is currently
+    /// permitted to see (see `common::comp::detection::DetectDetail`).
+    #[strum(serialize = "gameinput-inspect")]
+    Inspect,
     #[strum(serialize = "gameinput-mutemaster")]
     MuteMaster,
     #[strum(serialize = "gameinput-muteinactivemaster")]

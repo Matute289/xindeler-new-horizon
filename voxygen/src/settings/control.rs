@@ -289,6 +289,7 @@ impl ControlSettings {
             GameInput::SpectateSpeedBoost => Key::Named(NamedKey::Control),
             GameInput::SpectateViewpoint => return Some(KeyMouse::Mouse(MouseButton::Middle)),
             GameInput::CancelRemoteSense => Key::Named(NamedKey::Backspace),
+            GameInput::Inspect => char("U"),
             GameInput::MuteMaster => Key::Named(NamedKey::AudioVolumeMute),
             GameInput::MuteInactiveMaster => return None,
             GameInput::MuteMusic => Key::Named(NamedKey::F8),

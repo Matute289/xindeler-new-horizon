@@ -231,6 +231,7 @@ lazy_static! {
             BuffKind::SeeInvisible => "see_invisible",
             BuffKind::TrueSight => "true_sight",
             BuffKind::RemoteSensing => "remote_sensing",
+            BuffKind::Identifying => "identifying",
             BuffKind::Disguised => "disguised",
             BuffKind::PassWithoutTrace => "pass_without_trace",
             BuffKind::Mooncloak => "mooncloak",

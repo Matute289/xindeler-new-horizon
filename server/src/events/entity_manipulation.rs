@@ -51,9 +51,10 @@ use common::{
         Emitter, EnergyChangeEvent, EntityAttackedHookEvent, EventBus, ExplosionEvent,
         HealthChangeEvent, HelpDownedEvent, KillEvent, KnockbackEvent, LandOnGroundEvent,
         MakeAdminEvent, ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
-        RemoveLightEmitterEvent, ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent,
-        ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent, TeleportToEvent,
-        TeleportToPositionEvent, TranscribeSpellEvent, TransformEvent, UpdateMapMarkerEvent,
+        RemoveLightEmitterEvent, ResolveIdentifyEvent, ResolveRemoteSenseEvent, RespawnEvent,
+        SetAbilityCooldownEvent, ShootEvent, SoundEvent, StartInteractionEvent,
+        StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent, TranscribeSpellEvent,
+        TransformEvent, UpdateMapMarkerEvent,
     },
     event_emitters,
     explosion::{ColorPreset, TerrainReplacementPreset},
@@ -164,6 +165,13 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     // dependency (same PR) hardens elsewhere. This edge makes it a
     // compiler-checked constraint instead.
     event_dispatch::<ResolveRemoteSenseEvent>(builder, &[&event_sys_name::<BuffEvent>()]);
+    // *After* `BuffEvent` for the same reason as `ResolveRemoteSenseEvent`
+    // just above: `server/src/events/identify.rs`'s handler only needs the
+    // caster/target's already-current components, but ordering it after the
+    // buff add keeps the two `Identifying`/`RemoteSensing` cast-resolution
+    // events on the same, compiler-checked footing rather than an
+    // insertion-order coincidence.
+    event_dispatch::<ResolveIdentifyEvent>(builder, &[&event_sys_name::<BuffEvent>()]);
 }
 
 event_emitters! {

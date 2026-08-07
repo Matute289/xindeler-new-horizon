@@ -628,6 +628,21 @@ pub struct ResolveRemoteSenseEvent {
     pub above_dist: f32,
 }
 
+/// Intent to resolve a `BuffKind::Identifying` cast into a written
+/// `IdentifyLinks` entry (`server/src/sys/detection.rs`). Emitted once, at
+/// cast time, by `self_buff.rs`'s cast-fire branch when the buff being
+/// applied is `Identifying` -- same reasoning as `ResolveRemoteSenseEvent`
+/// above: `Buff`/`BuffData` never carry a `Uid`, so the cast's target has
+/// nowhere else to survive until the server-side handler can validate it.
+/// Carries the raw, unvalidated cast-time target; every predicate that
+/// decides whether the cast actually takes (is the target in range, is it an
+/// item or a creature, is it protected by `nondetection`, ...) is
+/// authoritative only in `server/src/events/identify.rs`, never here.
+pub struct ResolveIdentifyEvent {
+    pub entity: EcsEntity,
+    pub target_entity: Option<Uid>,
+}
+
 pub struct EnergyChangeEvent {
     pub entity: EcsEntity,
     pub change: f32,

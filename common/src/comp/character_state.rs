@@ -72,6 +72,7 @@ event_emitters! {
         health_change: event::HealthChangeEvent,
         remote_unlock: event::RemoteUnlockEvent,
         resolve_remote_sense: event::ResolveRemoteSenseEvent,
+        resolve_identify: event::ResolveIdentifyEvent,
     }
 }
 

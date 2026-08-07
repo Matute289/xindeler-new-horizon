@@ -359,7 +359,7 @@ impl<'a> ItemTooltip<'a> {
         pub title_line_spacing { style.title.line_spacing = Some(Scalar) }
         pub desc_line_spacing { style.desc.line_spacing = Some(Scalar) }
         image { image = Option<image::Id> }
-        item { item = &'a dyn ItemDesc }
+        pub item { item = &'a dyn ItemDesc }
         prices { prices = &'a Option<SitePrices> }
         msm { msm = &'a MaterialStatManifest }
         rbm { rbm = &'a RecipeBookManifest }

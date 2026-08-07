@@ -29,7 +29,8 @@ uniform u_locals {
     ivec4 atlas_offs;
     vec3 model_pos;
     // bit 0 - is player
-    // bit 1-31 - unused
+    // bit 1 - is revealed by an active magical sense (emissive rim highlight)
+    // bit 2-31 - unused
     int flags;
 };
 

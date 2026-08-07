@@ -36,6 +36,7 @@ mod entity_creation;
 mod entity_manipulation;
 mod event_types;
 mod group_manip;
+mod identify;
 mod information;
 mod interaction;
 mod inventory_manip;
