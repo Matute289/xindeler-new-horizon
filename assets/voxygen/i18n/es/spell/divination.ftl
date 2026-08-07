@@ -1,4 +1,6 @@
 # Divination spell names and descriptions.
+spell-identify = Identificar
+spell-identify-desc = Estudias una criatura u objeto, extrayendo y organizando conocimiento sobre él que un observador suficientemente atento ya podría haber reunido -- su naturaleza, sus capacidades, lo que lleva consigo. Estudiar al mismo objetivo de nuevo poco después profundiza tu comprensión aún más.
 spell-detect_magic = Detectar Magia
 spell-detect_magic-desc = Durante un breve instante percibes las energías tejidas del encantamiento a tu alrededor, sintiendo cualquier magia activa cercana. Un tenue resplandor rodea todo lo que esa energía toca.
 spell-detect_evil_and_good = Detectar el Mal y el Bien

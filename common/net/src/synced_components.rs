@@ -113,7 +113,14 @@ macro_rules! synced_components {
             // The detection reveal set. Owner-private on purpose: a
             // concealment-piercing reveal broadcast to every nearby client
             // (like `Stats`) would leak the concealed entity's position to
-            // everyone in range, not just the caster.
+            // everyone in range, not just the caster. A SECOND, independent
+            // reason this must stay owner-private: `DetectDetail` (see that
+            // type's own doc comment, `common/src/comp/detection.rs`) doubles
+            // as the Identify UI's entire permission check -- a
+            // `detail: Some(...)` entry existing on a client's own copy of
+            // this component is itself the proof that client cast Identify
+            // on that target. If this ever becomes `AnyEntity`, that check
+            // breaks along with the PvP-leak concern above.
             detected: Detected,
             can_build: CanBuild,
             is_interactor: IsInteractor,
