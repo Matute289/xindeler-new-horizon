@@ -312,13 +312,14 @@ impl CombatTuning {
 
 /// Balance numbers for one "does a mind/perception effect land?" family — a
 /// resisted magical roll evaluated by the shared
-/// [`magic_effect_success_chance`] formula. Two instances exist today: the
+/// [`magic_effect_success_chance`] formula. Three instances exist today: the
 /// charm/domination/banishment family (built from [`CombatTuning`]'s flat
 /// `save_*` fields via [`CombatTuning::save_tuning`], so its RON shape is
-/// unchanged) and the disguise-suspicion family (`CombatTuning::disguise`,
-/// its own `disguise:` section in `assets/common/combat_tuning.ron`).
-/// A future resisted-perception effect adds a third instance here, never a
-/// third formula.
+/// unchanged), the disguise-suspicion family (`CombatTuning::disguise`, its
+/// own `disguise:` section in `assets/common/combat_tuning.ron`), and the
+/// scrying resist-roll family (`CombatTuning::scrying`, its own `scrying:`
+/// section). A future resisted-perception effect adds a fourth instance here,
+/// never a new formula.
 ///
 /// 🔴 Deliberately **not** `#[serde(default)]`: unlike `CombatTuning` (whose
 /// flat fields are never renamed and are additive-only), a `disguise:`

@@ -88,6 +88,15 @@ pub enum SenseAnchor {
         sensor: Uid,
         target: Uid,
         next_resist_roll: f64,
+        /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::behind_dist`
+        /// / `above_dist` at cast time, carried here so
+        /// `server/src/sys/remote_sense.rs`'s per-tick follow logic doesn't
+        /// need to re-consult `Buffs` every tick to know where the sensor
+        /// should float -- same "read once at cast time, ride along on the
+        /// anchor" idiom as `next_resist_roll`'s own doc comment describes
+        /// for that field.
+        behind_dist: f32,
+        above_dist: f32,
     },
 }
 
@@ -132,6 +141,8 @@ mod tests {
                 sensor: uid(4),
                 target: uid(5),
                 next_resist_roll: 0.0,
+                behind_dist: 3.0,
+                above_dist: 2.0,
             }
             .uid(),
             uid(4),
@@ -149,6 +160,8 @@ mod tests {
                 sensor: uid(4),
                 target: uid(5),
                 next_resist_roll: 0.0,
+                behind_dist: 3.0,
+                above_dist: 2.0,
             }
             .is_spawned_sensor(),
             "Tracking owns a spawned sensor entity, same as Sensor/Piloted"

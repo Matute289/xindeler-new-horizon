@@ -187,6 +187,8 @@ impl CharacterBehavior for Data {
                                 piloted,
                                 spawn_range,
                                 flight_speed,
+                                behind_dist,
+                                above_dist,
                             }) = buff_data.misc_data
                         {
                             output_events.emit_server(ResolveRemoteSenseEvent {
@@ -206,6 +208,8 @@ impl CharacterBehavior for Data {
                                 piloted,
                                 spawn_range,
                                 flight_speed,
+                                behind_dist,
+                                above_dist,
                             });
                         }
                     }

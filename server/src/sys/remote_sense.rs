@@ -66,11 +66,6 @@ pub(crate) fn max_sense_range(presence: Option<&Presence>) -> f32 {
     })
 }
 
-/// How far behind the scried target `scrying`'s sensor floats, in blocks.
-const SCRY_SENSOR_BEHIND_DIST: f32 = 3.0;
-/// How far above the scried target `scrying`'s sensor floats, in blocks.
-const SCRY_SENSOR_ABOVE_DIST: f32 = 2.0;
-
 /// `common.items.utility.scrying_crystal`'s definition id -- the divination
 /// focus `scrying`'s resist roll checks for via
 /// `Inventory::get_slot_of_item_by_def_id`, the same "does the caster hold
@@ -84,8 +79,9 @@ pub(crate) fn scrying_focus_item_def_id() -> ItemDefinitionIdOwned {
 }
 
 /// Where `scrying`'s sensor sits relative to the scried target this tick:
-/// `SCRY_SENSOR_BEHIND_DIST` behind their horizontal facing and
-/// `SCRY_SENSOR_ABOVE_DIST` above them, recomputed from `target_ori` every
+/// `behind_dist` behind their horizontal facing and `above_dist` above them
+/// (both forwarded from the cast's own `MiscBuffData::RemoteSense` via the
+/// active link's `SenseAnchor::Tracking`), recomputed from `target_ori` every
 /// call so the sensor swings around with the target rather than clipping
 /// through them as they turn. Pitch is deliberately ignored (only the
 /// horizontal component of `look_dir` is used) so the sensor never dives
@@ -93,7 +89,11 @@ pub(crate) fn scrying_focus_item_def_id() -> ItemDefinitionIdOwned {
 /// when `target_ori` is absent, or the target is looking close enough to
 /// straight up/down that the horizontal component is degenerate, this falls
 /// back to a fixed south-behind offset rather than producing a zero vector.
-pub(crate) fn scrying_follow_offset(target_ori: Option<&Ori>) -> Vec3<f32> {
+pub(crate) fn scrying_follow_offset(
+    target_ori: Option<&Ori>,
+    behind_dist: f32,
+    above_dist: f32,
+) -> Vec3<f32> {
     const DEGENERATE_EPS: f32 = 1e-6;
     let horizontal_behind = target_ori
         .map(|ori| ori.look_dir().to_vec())
@@ -103,9 +103,9 @@ pub(crate) fn scrying_follow_offset(target_ori: Option<&Ori>) -> Vec3<f32> {
         })
         .unwrap_or(Vec2::new(0.0, -1.0));
     Vec3::new(
-        horizontal_behind.x * SCRY_SENSOR_BEHIND_DIST,
-        horizontal_behind.y * SCRY_SENSOR_BEHIND_DIST,
-        SCRY_SENSOR_ABOVE_DIST,
+        horizontal_behind.x * behind_dist,
+        horizontal_behind.y * behind_dist,
+        above_dist,
     )
 }
 
@@ -214,6 +214,8 @@ impl<'a> System<'a> for Sys {
             sensor: Uid,
             target: Uid,
             next_resist_roll: f64,
+            behind_dist: f32,
+            above_dist: f32,
         }
         let tracking_links: Vec<TrackingLink> = (&entities, &remote_senses)
             .join()
@@ -222,11 +224,15 @@ impl<'a> System<'a> for Sys {
                     sensor,
                     target,
                     next_resist_roll,
+                    behind_dist,
+                    above_dist,
                 } => Some(TrackingLink {
                     caster,
                     sensor,
                     target,
                     next_resist_roll,
+                    behind_dist,
+                    above_dist,
                 }),
                 _ => None,
             })
@@ -261,7 +267,11 @@ impl<'a> System<'a> for Sys {
                     continue;
                 }
 
-                let offset = scrying_follow_offset(orientations.get(target_entity));
+                let offset = scrying_follow_offset(
+                    orientations.get(target_entity),
+                    link.behind_dist,
+                    link.above_dist,
+                );
                 let new_sensor_pos = target_pos.0 + offset;
                 let _ = positions.insert(sensor_entity, Pos(new_sensor_pos));
 
@@ -714,9 +724,11 @@ mod tests {
     /// ECS involved.
     #[test]
     fn follow_offset_sits_behind_and_above_the_targets_facing() {
+        const BEHIND_DIST: f32 = 3.0;
+        const ABOVE_DIST: f32 = 2.0;
         // Facing +x: "behind" is -x.
         let facing_east = Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap();
-        let offset = scrying_follow_offset(Some(&facing_east));
+        let offset = scrying_follow_offset(Some(&facing_east), BEHIND_DIST, ABOVE_DIST);
         assert!(
             offset.x < 0.0,
             "behind +x facing must be -x, got {offset:?}"
@@ -726,13 +738,13 @@ mod tests {
             "no lateral drift for a pure +x facing, got {offset:?}"
         );
         assert!(
-            (offset.z - SCRY_SENSOR_ABOVE_DIST).abs() < 1e-3,
-            "must sit exactly SCRY_SENSOR_ABOVE_DIST above regardless of facing, got {offset:?}"
+            (offset.z - ABOVE_DIST).abs() < 1e-3,
+            "must sit exactly above_dist above regardless of facing, got {offset:?}"
         );
         let horizontal_dist = (offset.x * offset.x + offset.y * offset.y).sqrt();
         assert!(
-            (horizontal_dist - SCRY_SENSOR_BEHIND_DIST).abs() < 1e-3,
-            "horizontal distance must be exactly SCRY_SENSOR_BEHIND_DIST, got {horizontal_dist}"
+            (horizontal_dist - BEHIND_DIST).abs() < 1e-3,
+            "horizontal distance must be exactly behind_dist, got {horizontal_dist}"
         );
     }
 
@@ -742,24 +754,27 @@ mod tests {
     /// direction.
     #[test]
     fn follow_offset_falls_back_when_the_targets_facing_is_unavailable() {
-        let offset = scrying_follow_offset(None);
+        const BEHIND_DIST: f32 = 3.0;
+        const ABOVE_DIST: f32 = 2.0;
+        let offset = scrying_follow_offset(None, BEHIND_DIST, ABOVE_DIST);
         assert!(
-            (offset.z - SCRY_SENSOR_ABOVE_DIST).abs() < 1e-3,
+            (offset.z - ABOVE_DIST).abs() < 1e-3,
             "still floats above with no Ori, got {offset:?}"
         );
         let horizontal_dist = (offset.x * offset.x + offset.y * offset.y).sqrt();
         assert!(
-            (horizontal_dist - SCRY_SENSOR_BEHIND_DIST).abs() < 1e-3,
+            (horizontal_dist - BEHIND_DIST).abs() < 1e-3,
             "still offsets a fixed horizontal distance with no Ori, got {horizontal_dist}"
         );
 
         let facing_straight_up = Ori::from_unnormalized_vec(Vec3::new(0.0, 0.0, 1.0)).unwrap();
-        let degenerate_offset = scrying_follow_offset(Some(&facing_straight_up));
+        let degenerate_offset =
+            scrying_follow_offset(Some(&facing_straight_up), BEHIND_DIST, ABOVE_DIST);
         let degenerate_horizontal_dist = (degenerate_offset.x * degenerate_offset.x
             + degenerate_offset.y * degenerate_offset.y)
             .sqrt();
         assert!(
-            (degenerate_horizontal_dist - SCRY_SENSOR_BEHIND_DIST).abs() < 1e-3,
+            (degenerate_horizontal_dist - BEHIND_DIST).abs() < 1e-3,
             "looking straight up must not collapse the horizontal offset to zero, got \
              {degenerate_offset:?}"
         );
@@ -831,6 +846,8 @@ mod tests {
                     sensor: sensor_uid,
                     target: target_uid,
                     next_resist_roll,
+                    behind_dist: 3.0,
+                    above_dist: 2.0,
                 },
                 free_look: true,
                 piloted: false,
@@ -871,9 +888,11 @@ mod tests {
         common_ecs::run_now::<Sys>(&world);
 
         let expected_pos = target_pos
-            + scrying_follow_offset(Some(
-                &Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap(),
-            ));
+            + scrying_follow_offset(
+                Some(&Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap()),
+                3.0,
+                2.0,
+            );
         assert_eq!(
             world.read_storage::<Pos>().get(fixture.sensor).map(|p| p.0),
             Some(expected_pos),
@@ -891,6 +910,8 @@ mod tests {
                 sensor: fixture.sensor_uid,
                 target: fixture.target_uid,
                 next_resist_roll: 1_000_000.0,
+                behind_dist: 3.0,
+                above_dist: 2.0,
             },
             "next_resist_roll must be untouched when the reroll doesn't fire this tick"
         );

@@ -6,7 +6,7 @@ use crate::render::{
 use super::{
     super::{
         AaMode, BloomMode, CloudMode, ExperimentalShader, FluidMode, LightingMode, PipelineModes,
-        ReflectionMode, RenderError, ShadowMode,
+        ReflectionMode, RenderError, ShadowMode, SsaoMode, SsaoQuality,
         pipelines::{
             blit, bloom, clouds, debug, figure, fluid, lod_object, lod_terrain, particle,
             postprocess, rope, shadow, skybox, sprite, ssao, terrain, trail, ui,
@@ -230,11 +230,20 @@ impl ShaderModules {
                 ShadowMode::Map(_) if has_shadow_views => "SHADOW_MODE_MAP",
                 ShadowMode::Cheap | ShadowMode::Map(_) => "SHADOW_MODE_CHEAP",
             },
-            // Not yet driven by `PipelineModes` -- there is no user-facing
-            // SSAO setting to read a tier from until that lands. Fixed at
-            // Medium so the three `SSAO_QUALITY_*` tap-count tiers compile
-            // and are exercised by every build in the meantime.
-            "SSAO_QUALITY_MEDIUM",
+            // `SSAO_QUALITY` must resolve even when SSAO is off: the
+            // generation/blur passes run unconditionally every frame
+            // regardless of the setting (only the clouds pass's
+            // consumption of the result is gated, by `SSAO_ENABLED` below),
+            // so `ssao-frag.glsl` is always compiled and always needs a
+            // valid tap-count tier.
+            match pipeline_modes.ssao {
+                SsaoMode::Off => "SSAO_QUALITY_MEDIUM",
+                SsaoMode::On(config) => match config.quality {
+                    SsaoQuality::Low => "SSAO_QUALITY_LOW",
+                    SsaoQuality::Medium => "SSAO_QUALITY_MEDIUM",
+                    SsaoQuality::High => "SSAO_QUALITY_HIGH",
+                },
+            },
         );
 
         if pipeline_modes.point_glow > f32::EPSILON {
@@ -273,6 +282,22 @@ impl ShaderModules {
                     constants,
                     config.factor.fraction(),
                     config.uniform_blur,
+                )
+            },
+        };
+
+        let constants = match pipeline_modes.ssao {
+            SsaoMode::Off => constants,
+            SsaoMode::On(config) => {
+                format!(
+                    r#"
+{}
+
+#define SSAO_ENABLED
+#define SSAO_STRENGTH {}
+
+"#,
+                    constants, config.strength,
                 )
             },
         };
@@ -1018,6 +1043,7 @@ pub(super) fn recreate_pipelines(
             Pipelines,
             ShadowPipelines,
             RainOcclusionPipelines,
+            Arc<clouds::CloudsLayout>,
             Arc<postprocess::PostProcessLayout>,
         ),
         RenderError,
@@ -1065,7 +1091,11 @@ pub(super) fn recreate_pipelines(
             };
         drop(guard);
 
-        // Create new postprocess layouts
+        // Create new clouds and postprocess layouts -- both depend on
+        // `PipelineModes` (clouds on whether SSAO is enabled, postprocess on
+        // bloom/the material texture) and so need to be rebuilt here, unlike
+        // everything in `immutable_layouts`.
+        let clouds_layouts = Arc::new(clouds::CloudsLayout::new(&device, &pipeline_modes));
         let postprocess_layouts = Arc::new(postprocess::PostProcessLayout::new(
             &device,
             &pipeline_modes,
@@ -1073,6 +1103,7 @@ pub(super) fn recreate_pipelines(
 
         let layouts = Layouts {
             immutable: immutable_layouts,
+            clouds: clouds_layouts,
             postprocess: postprocess_layouts,
         };
 
@@ -1099,6 +1130,7 @@ pub(super) fn recreate_pipelines(
                 Pipelines::consolidate(interface, ingame),
                 shadow,
                 rain_occlusion,
+                layouts.clouds,
                 layouts.postprocess,
             )))
             .expect("Channel disconnected");

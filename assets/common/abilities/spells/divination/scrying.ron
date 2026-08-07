@@ -16,10 +16,15 @@ SelfBuff(
                 // spawn_range/flight_speed are meaningless here (never a
                 // Piloted anchor); forwarded anyway for the uniform
                 // RemoteSense construction shape every anchor kind shares.
+                // behind_dist/above_dist place the sensor relative to the
+                // scried target every tick (`scrying_follow_offset`) -- the
+                // only anchor kind that reads these two.
                 misc_data: Some(RemoteSense(
                     anchor_kind: Tracking,
                     free_look: true,
                     piloted: false,
+                    behind_dist: 3.0,
+                    above_dist: 2.0,
                 )),
             ),
         ),
@@ -29,10 +34,8 @@ SelfBuff(
     meta: (
         school: Some(Divination),
         source: Some(Arcane),
-        // Follows the same min_level == spell-level convention this family's
-        // own siblings already use (beast_sense: level 2 -> 2, clairvoyance:
-        // level 3 -> 3, arcane_eye: level 4 -> 4) -- scrying is a level 5
-        // spell.
-        requirements: (min_level: Some(5)),
+        // level 5 spell -> min_level 30, same `level * 6` convention
+        // `see_invisibility`/`true_seeing` already use.
+        requirements: (min_level: Some(30)),
     ),
 )

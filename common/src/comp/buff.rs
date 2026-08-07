@@ -1573,6 +1573,19 @@ pub enum MiscBuffData {
         /// `spawn_range` above.
         #[serde(default = "default_piloted_flight_speed")]
         flight_speed: f32,
+        /// How far behind a `Tracking` anchor's watched target its sensor
+        /// floats, in blocks (`server/src/sys/remote_sense.rs`'s
+        /// `scrying_follow_offset`). Meaningless for every other anchor kind.
+        /// Defaults to `scrying`'s own shipped value so
+        /// `arcane_eye.ron`/`clairvoyance.ron`/`beast_sense.ron` (none of
+        /// which uses a `Tracking` anchor) don't need updating.
+        #[serde(default = "default_tracking_behind_dist")]
+        behind_dist: f32,
+        /// How far above a `Tracking` anchor's watched target its sensor
+        /// floats, in blocks. Same defaulting rationale as `behind_dist`
+        /// above.
+        #[serde(default = "default_tracking_above_dist")]
+        above_dist: f32,
     },
     /// A secondary `BuffEffect::Resistance(ResistKind::Magic, ..)` magnitude,
     /// authored independently of a buff's primary `strength` field. Used by
@@ -1601,6 +1614,16 @@ fn default_piloted_spawn_range() -> f32 { 9.0 }
 /// old `EYE_FLIGHT_SPEED` const, before this became a RON-authored field),
 /// same defaulting rationale as `default_piloted_spawn_range` above.
 fn default_piloted_flight_speed() -> f32 { 6.0 }
+
+/// `scrying`'s own shipped behind-distance
+/// (`server/src/sys/remote_sense.rs`'s old `SCRY_SENSOR_BEHIND_DIST` const,
+/// before this became a RON-authored field), same defaulting rationale as
+/// `default_piloted_spawn_range` above.
+fn default_tracking_behind_dist() -> f32 { 3.0 }
+
+/// `scrying`'s own shipped above-distance (formerly `SCRY_SENSOR_ABOVE_DIST`),
+/// same defaulting rationale as `default_tracking_behind_dist` above.
+fn default_tracking_above_dist() -> f32 { 2.0 }
 
 /// Which kind of `SenseAnchor` a `RemoteSensing` buff declares, without the
 /// anchor's identity (see `MiscBuffData::RemoteSense`'s doc comment for why
@@ -1834,9 +1857,9 @@ pub enum BuffEffect {
     /// by `combat::perception_dist_multiplier_from_stealth`.
     PierceConcealment,
     /// Grants the buffed entity the ability to see through illusions and
-    /// disguises unconditionally. Sets `Stats.pierce_illusion` — a flag
-    /// only, same as `PierceDarkness` below; its consumer (skipping the
-    /// disguise suspicion roll) is a separate future addition.
+    /// disguises unconditionally. Sets `Stats.pierce_illusion`, read by
+    /// `server/agent/src/action_nodes.rs`'s `true_sight_pierces_disguise` as
+    /// an early-out before the disguise suspicion roll.
     PierceIllusion,
     /// Grants the buffed entity the ability to see through mundane and
     /// magical darkness. Sets `Stats.pierce_darkness` — a flag only, its
@@ -2477,6 +2500,8 @@ pub mod tests {
                 piloted: true,
                 spawn_range: default_piloted_spawn_range(),
                 flight_speed: default_piloted_flight_speed(),
+                behind_dist: default_tracking_behind_dist(),
+                above_dist: default_tracking_above_dist(),
             }),
             ..BuffData::new(0.0, Some(Secs(60.0)))
         };

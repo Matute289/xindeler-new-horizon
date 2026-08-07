@@ -344,6 +344,10 @@ widget_ids! {
         camera_clamp_txt,
         camera_clamp_bg,
 
+        // Remote-sensing indicator
+        remote_sensing_txt,
+        remote_sensing_bg,
+
         // Tutorial
         quest_bg,
         q_headline_bg,
@@ -945,6 +949,7 @@ pub struct Show {
     auto_walk: bool,
     zoom_lock: ChangeNotification,
     camera_clamp: bool,
+    remote_sensing: bool,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
     // A stack of open menus; the menu in focus should be on top
@@ -986,6 +991,7 @@ impl Show {
             auto_walk: false,
             zoom_lock: ChangeNotification::default(),
             camera_clamp: false,
+            remote_sensing: false,
             prompt_dialog: None,
             trade_amount_input_key: None,
             focus: Vec::new(),
@@ -4331,6 +4337,36 @@ impl Hud {
                 .font_id(self.fonts.cyri.conrod_id)
                 .font_size(self.fonts.cyri.scale(20))
                 .set(self.ids.camera_clamp_txt, ui_widgets);
+            indicator_offset += 30.0;
+        }
+
+        // Remote-sensing indicator: persistent for the whole time a
+        // beast_sense/clairvoyance/arcane_eye/scrying spell has the player's
+        // viewpoint anchored away from their own body, since that body keeps
+        // taking damage unattended the entire time. Names the same cancel
+        // keybind session/mod.rs's `GameInput::CancelRemoteSense` handler
+        // acts on, mirroring the camera-clamp indicator above.
+        if let Some(cancel_key) = global_state
+            .settings
+            .controls
+            .get_binding(GameInput::CancelRemoteSense)
+            && self.show.remote_sensing
+        {
+            let msg = i18n.get_msg_ctx("hud-remote_sensing_indicator", &i18n::fluent_args! {
+                "key" => cancel_key.display_string(),
+            });
+            Text::new(&msg)
+                .color(TEXT_BG)
+                .mid_top_with_margin_on(ui_widgets.window, indicator_offset)
+                .font_id(self.fonts.cyri.conrod_id)
+                .font_size(self.fonts.cyri.scale(20))
+                .set(self.ids.remote_sensing_bg, ui_widgets);
+            Text::new(&msg)
+                .color(KILL_COLOR)
+                .top_left_with_margins_on(self.ids.remote_sensing_bg, -1.0, -1.0)
+                .font_id(self.fonts.cyri.conrod_id)
+                .font_size(self.fonts.cyri.scale(20))
+                .set(self.ids.remote_sensing_txt, ui_widgets);
         }
 
         // Maintain slot manager
@@ -5538,6 +5574,15 @@ impl Hud {
     pub fn auto_walk(&mut self, auto_walk: bool) { self.show.auto_walk = auto_walk; }
 
     pub fn camera_clamp(&mut self, camera_clamp: bool) { self.show.camera_clamp = camera_clamp; }
+
+    /// Toggles the persistent "you are remote-sensing" indicator, shown for
+    /// as long as a `beast_sense`/`clairvoyance`/`arcane_eye`/`scrying`
+    /// spell has the player's viewpoint anchored away from their own body
+    /// (see `SessionState`'s `viewpoint_source` in `voxygen/src/session`,
+    /// which drives every call site of this setter).
+    pub fn remote_sensing(&mut self, remote_sensing: bool) {
+        self.show.remote_sensing = remote_sensing;
+    }
 
     /// Remind the player camera zoom is currently locked, for example if they
     /// are trying to zoom.

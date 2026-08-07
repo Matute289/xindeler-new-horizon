@@ -527,6 +527,17 @@ common-abilities-spells-illusion-major_image = Imagen Mayor
     .desc = Conjurá un fantasma vívido y realista de un objeto, criatura o escena de hasta un gran cubo de tamaño.
 common-abilities-spells-illusion-project_image = Imagen Proyectada
     .desc = Conjurá un doble ilusorio estacionario de vos mismo cerca tuyo.
+common-abilities-spells-divination-beast_sense = Sentido Bestial
+    .desc = Tocá a una bestia vinculada o hechizada para ver y oír a través de sus sentidos; tu propio cuerpo queda ciego y sordo hasta que el vínculo termina.
+common-abilities-spells-divination-clairvoyance = Clarividencia
+    .desc = Plantá un sensor invisible en un punto dentro de tu propio campo de visión; ves y oís a través de él mientras tu cuerpo queda atrás, inmóvil y ciego.
+# "9 metros" acá debe mantenerse sincronizado a mano con el campo
+# `spawn_range` de
+# assets/common/abilities/spells/divination/arcane_eye.ron -- todavía no
+# hay una fuente de verdad compartida, ver el comentario de ese mismo
+# archivo RON sobre este acoplamiento.
+common-abilities-spells-divination-arcane_eye = Ojo Arcano
+    .desc = Conjurá un ojo invisible a 9 metros que flota y se desplaza a tu voluntad; ves y oís a través de él mientras tu cuerpo queda atrás, inmóvil y ciego.
 common-abilities-spells-divination-see_invisibility = Ver lo Invisible
     .desc = Tus ojos se sintonizan con longitudes de onda más allá de la vista ordinaria, exponiendo como formas simples a las criaturas y objetos ocultos de la vista.
 common-abilities-spells-divination-true_seeing = Visión Verdadera

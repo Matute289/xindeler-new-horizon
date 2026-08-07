@@ -43,10 +43,12 @@ impl Locals {
         tgt_depth_view: &wgpu::TextureView,
         bloom: Option<BloomParams>,
         tgt_color_pp_view: &wgpu::TextureView,
-        // The blur pass's *source*: it reads the AO-generation pass's output. Its
-        // own output (`tgt_ao_blur`) is only ever a render pass attachment, never
-        // sampled through a bind group, so it isn't threaded through here.
+        // The blur pass's *source*: it reads the AO-generation pass's output.
         tgt_ao_view: &wgpu::TextureView,
+        // The blur pass's *output* -- the final, denoised AO the clouds pass
+        // samples (when SSAO is enabled; `CloudsLayout::bind` drops this on
+        // the floor otherwise).
+        tgt_ao_blur_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         depth_sampler: &wgpu::Sampler,
     ) -> Self {
@@ -55,6 +57,7 @@ impl Locals {
             tgt_color_view,
             tgt_mat_view,
             tgt_depth_view,
+            Some(tgt_ao_blur_view),
             sampler,
             depth_sampler,
             &clouds_locals,
@@ -113,6 +116,7 @@ impl Locals {
         bloom: Option<BloomParams>,
         tgt_color_pp_view: &wgpu::TextureView,
         tgt_ao_view: &wgpu::TextureView,
+        tgt_ao_blur_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         depth_sampler: &wgpu::Sampler,
     ) {
@@ -121,6 +125,7 @@ impl Locals {
             tgt_color_view,
             tgt_mat_view,
             tgt_depth_view,
+            Some(tgt_ao_blur_view),
             sampler,
             depth_sampler,
             &self.clouds,

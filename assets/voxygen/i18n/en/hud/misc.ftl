@@ -45,6 +45,7 @@ hud-free_look_indicator =
 }
 hud-camera_clamp_indicator = Camera vertical clamp active. Press { $key } to disable.
 hud-auto_walk_indicator = Auto walk/swim active
+hud-remote_sensing_indicator = Remote-sensing — your body is unattended. Press { $key } to return.
 hud-zoom_lock_indicator-remind = Zoom locked
 hud-zoom_lock_indicator-enable = Camera zoom locked
 hud-zoom_lock_indicator-disable = Camera zoom unlocked

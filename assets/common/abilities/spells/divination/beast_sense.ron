@@ -17,6 +17,8 @@ SelfBuff(
     meta: (
         school: Some(Divination),
         source: Some(Primordial),
-        requirements: (min_level: Some(2)),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // `see_invisibility`/`true_seeing` already use.
+        requirements: (min_level: Some(12)),
     ),
 )

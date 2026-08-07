@@ -1382,7 +1382,10 @@ impl PlayState for SessionState {
                                     client.stop_spectate_entity();
                                     clear_stale_spectator_components(&client, spectated_entity);
                                     self.viewpoint_entity = None;
-                                    self.viewpoint_source = None;
+                                    if self.viewpoint_source.take() == Some(ViewpointSource::Spell)
+                                    {
+                                        self.hud.remote_sensing(false);
+                                    }
                                     self.viewpoint_piloted = false;
                                     self.scene.camera_mut().set_mode(CameraMode::Freefly);
                                     let mut ori = self.scene.camera().get_orientation();
@@ -1511,6 +1514,7 @@ impl PlayState for SessionState {
                     let mut ori = self.scene.camera().get_orientation();
                     ori.z = 0.0;
                     self.scene.camera_mut().set_orientation(ori);
+                    self.hud.remote_sensing(false);
                 }
             }
 
@@ -1554,6 +1558,7 @@ impl PlayState for SessionState {
                             } else {
                                 CameraMode::FirstPerson
                             });
+                            self.hud.remote_sensing(true);
                         }
                     },
                     None if self.viewpoint_source == Some(ViewpointSource::Spell) => {
@@ -1572,6 +1577,7 @@ impl PlayState for SessionState {
                         let mut ori = self.scene.camera().get_orientation();
                         ori.z = 0.0;
                         self.scene.camera_mut().set_orientation(ori);
+                        self.hud.remote_sensing(false);
                     },
                     _ => {},
                 }
