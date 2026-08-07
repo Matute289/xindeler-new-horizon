@@ -949,7 +949,15 @@ impl BuffKind {
             // (evasion). Kept to a smaller magnitude than those two since
             // `Stats.crit_chance` is a raw 0..1 probability rather than an
             // accuracy-point term scaled through `hit_k`.
-            BuffKind::Hexed => vec![BuffEffect::CritChance(-0.15 * nn_scaling(data.strength))],
+            // -0.055 base: every other shipped `CritChance` producer is a
+            // skill/feat node worth +0.02-0.03 (`class_skill_modifiers.ron`,
+            // `feat_modifiers.ron`); at hex's own strength (0.7) this lands
+            // around -3.2pp, roughly one skill-tree node's worth per cast --
+            // meaningful without floor-clamping every low-crit target it
+            // touches, unlike the originally-authored -0.15 (~-8.75pp,
+            // 3-4x a full crit-tree investment; game-balance-designer
+            // finding, 2026-08-07).
+            BuffKind::Hexed => vec![BuffEffect::CritChance(-0.055 * nn_scaling(data.strength))],
             // BL-66 d: generic movement slow, mirrors Crippled's speed curve
             // without the HP drain.
             BuffKind::Slowed => vec![BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength))],

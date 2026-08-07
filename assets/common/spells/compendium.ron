@@ -988,7 +988,12 @@
         source: Arcane,
         classes: [Sorcerer, Mage],
         cast_time: Action,
-        duration: Secs(60.0),
+        // Instant, not Secs(60.0) -- weave_transfusion is a one-shot heal
+        // (BasicMelee, no ongoing buff), the RON's own duration field
+        // predates the "no te compliques" simplification to a plain heal
+        // and was never updated to match (game-balance-designer finding,
+        // 2026-08-07: was showing a wrong "60s" in the tooltip).
+        duration: Instant,
         range: Touch,
         aoe: None,
         description_i18n: "spell-weave_transfusion-desc",
