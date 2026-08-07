@@ -336,6 +336,8 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Bane => "buff-bane",
         BuffKind::FaerieFire => "buff-faeriefire",
         BuffKind::Enfeebled => "buff-enfeebled",
+        BuffKind::Sickened => "buff-sickened",
+        BuffKind::Hexed => "buff-hexed",
         BuffKind::Detecting => "buff-detecting",
         BuffKind::SeeInvisible => "buff-seeinvisible",
         BuffKind::TrueSight => "buff-truesight",
@@ -382,6 +384,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Polymorphed => "buff-polymorphed",
         // Positive
         BuffKind::FreedomOfMovement => "buff-freedom_of_movement",
+        BuffKind::Fearless => "buff-fearless",
     }
 }
 
@@ -539,6 +542,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Hollowtouched
                         | BuffKind::DifficultTerrain
                         | BuffKind::FreedomOfMovement
+                        | BuffKind::Fearless
                         | BuffKind::Antimagic
                         | BuffKind::Anchored
                         | BuffKind::Asleep
@@ -564,6 +568,8 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Bane
                         | BuffKind::FaerieFire
                         | BuffKind::Enfeebled
+                        | BuffKind::Sickened
+                        | BuffKind::Hexed
                         | BuffKind::Detecting
                         | BuffKind::SeeInvisible
                         | BuffKind::TrueSight

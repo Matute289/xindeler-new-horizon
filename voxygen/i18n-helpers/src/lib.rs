@@ -373,6 +373,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         BuffKind::Cursed => "curse",
         BuffKind::Crippled => "crippled",
         BuffKind::Frozen => "frozen",
+        BuffKind::Sickened => "sickened",
         BuffKind::Regeneration
         | BuffKind::Saturation
         | BuffKind::Potion
@@ -426,6 +427,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::RestfulSleep
         | BuffKind::OtherworldlyWard
         | BuffKind::FreedomOfMovement
+        | BuffKind::Fearless
         | BuffKind::Detecting
         | BuffKind::SeeInvisible
         | BuffKind::TrueSight
@@ -466,6 +468,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Bane
         | BuffKind::FaerieFire
         | BuffKind::Enfeebled
+        | BuffKind::Hexed
         | BuffKind::Slowed
         | BuffKind::Agonized => {
             tracing::error!("Player was killed by a debuff that doesn't do damage!");

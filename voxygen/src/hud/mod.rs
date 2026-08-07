@@ -5936,6 +5936,10 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::OtherworldlyWard => imgs.buff_protecting_ward,
         BuffKind::Bane | BuffKind::FaerieFire => imgs.debuff_cursed,
         BuffKind::Enfeebled => imgs.debuff_crippled,
+        // Same curse-family icon as Bane/FaerieFire pending dedicated art:
+        // Sickened folds Bane's own accuracy penalty into its shape, and
+        // Hexed is the third hex-mode aspect alongside them.
+        BuffKind::Sickened | BuffKind::Hexed => imgs.debuff_cursed,
         BuffKind::Chilled => imgs.debuff_chilled,
         BuffKind::ComboGeneration => imgs.buff_combo_generation,
         BuffKind::Crippled => imgs.debuff_crippled,
@@ -5952,6 +5956,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Flame => imgs.buff_flame,
         BuffKind::Fortitude => imgs.buff_fortitude,
         BuffKind::FreedomOfMovement => imgs.buff_freedom_of_movement,
+        // Reuse the crowd-control-resistance icon pending dedicated art:
+        // fear immunity is the same "warded against a CC effect" shape.
+        BuffKind::Fearless => imgs.buff_resilience,
         BuffKind::FreezeArrow => imgs.bow_freeze_arrow,
         BuffKind::Frenzied => imgs.buff_frenzied,
         BuffKind::Frigid => imgs.buff_frigid,

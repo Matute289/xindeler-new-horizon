@@ -1,0 +1,30 @@
+// Hex, evasion mode. See hex_accuracy.ron for the shared submode/
+// simplification notes. Reuses `FaerieFire` directly, already shipped as a
+// flat evasion penalty (attacks against the target land more easily).
+BasicRanged(
+    energy_cost: 30.0,
+    buildup_duration: 0.3,
+    recover_duration: 0.2,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 5,
+            buff: Some((
+                kind: FaerieFire,
+                dur_secs: 60,
+                strength: Value(0.7),
+                chance: 1.0,
+            )),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 1 spell -> min_level 6, same `level * 6` convention.
+        requirements: (min_level: Some(6)),
+    ),
+)

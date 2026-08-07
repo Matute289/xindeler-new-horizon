@@ -241,6 +241,9 @@ buff-septicshot = Septic Shot
 ## Terrified
 buff-terrified = Terrified
     .desc = Dread floods your limbs, slowing every step.
+## Fearless
+buff-fearless = Fearless
+    .desc = A surge of courage steels you against fear itself.
 ## Charmed
 buff-charmed = Charmed
     .desc = You cannot bring yourself to harm whoever did this to you.
@@ -328,6 +331,10 @@ buff-faeriefire = Faerie Fire
     .desc = A glow clings to you, leaving you unable to hide. Attacks against you land more easily.
 buff-enfeebled = Enfeebled
     .desc = Your blows land weak, dealing only a fraction of their usual force.
+buff-sickened = Sickened
+    .desc = A baleful sickness saps your focus and wracks your body with pain.
+buff-hexed = Hexed
+    .desc = A curse dulls your precision - your blows are less likely to land a telling hit.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

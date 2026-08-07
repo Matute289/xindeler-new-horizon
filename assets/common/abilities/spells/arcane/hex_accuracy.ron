@@ -1,0 +1,43 @@
+// Hex, accuracy mode. Companion RONs hex_evasion.ron/hex_crit.ron cover the
+// other two chosen-aspect submodes -- same "each mode is its own compendium
+// entry, no in-cast submode selector" shape as eyebite (see
+// eyebite_asleep.ron's own comment). Reuses `Bane` directly, already shipped
+// as a flat accuracy penalty.
+//
+// Known simplification: the sheet's "extra necrotic damage on the caster's
+// own hits against the hexed target" rider is NOT implemented here. This
+// engine has no existing primitive for "caster deals +N damage to a specific
+// marked target on every subsequent hit" (the closest shipped analogue,
+// `BuffKind::ArdentHunt`'s `MarkEntity` + `CombatRequirement::Target(uid)`
+// combo, is authored on the ATTACKER's own buff and would need real new
+// wiring to instead read off a debuff carried by the DEFENDER) -- building
+// that is real, non-trivial plumbing beyond a content-only spell batch.
+// Shipping the disadvantage-only mechanic now; the necrotic-on-hit rider is a
+// documented follow-up.
+BasicRanged(
+    energy_cost: 30.0,
+    buildup_duration: 0.3,
+    recover_duration: 0.2,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 5,
+            buff: Some((
+                kind: Bane,
+                dur_secs: 60,
+                strength: Value(0.7),
+                chance: 1.0,
+            )),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 1 spell -> min_level 6, same `level * 6` convention.
+        requirements: (min_level: Some(6)),
+    ),
+)

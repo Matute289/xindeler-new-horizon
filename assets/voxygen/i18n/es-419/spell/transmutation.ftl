@@ -11,6 +11,8 @@ spell-telekinesis = Telequinesis
 spell-telekinesis-desc = Extendés tu mente y agarrás un objeto suelto bien lejos de tu alcance, sosteniéndolo suspendido en el aire o arrojándolo con fuerza contundente contra lo que elijas.
 spell-catapult = Catapulta
 spell-catapult-desc = Arrojás un objeto pequeño y suelto contra un objetivo con un estallido repentino de fuerza, sin necesitar brazo de lanzamiento.
+spell-weave_transfusion = Transfusión del Tejido
+spell-weave_transfusion-desc = Tocás a un aliado herido y volcás en él una oleada de vitalidad pura, cerrando sus heridas en un instante.
 
 # Names only for now; their descriptions are pending the spell-prose pass.
 spell-knock = Abrir

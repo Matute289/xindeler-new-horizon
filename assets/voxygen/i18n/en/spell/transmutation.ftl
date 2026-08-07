@@ -19,3 +19,5 @@ spell-catapult = Catapult
 spell-catapult-desc = You hurl a small loose object at a target with a sudden burst of force, no throwing arm required.
 spell-sequester = Sequester
 spell-sequester-desc = You wrap yourself in a veil of stillness, turning yourself unseen and shielding yourself from every form of remote sensing.
+spell-weave_transfusion = Weave Transfusion
+spell-weave_transfusion-desc = You touch a wounded ally and pour a surge of raw vitality into them, closing wounds in an instant.

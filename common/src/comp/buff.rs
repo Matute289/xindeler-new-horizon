@@ -99,6 +99,11 @@ pub enum BuffKind {
     /// each tick via the existing `BuffImmunity` model (same as
     /// Frozen→Chilled).
     FreedomOfMovement,
+    /// Immunity to `Terrified` -- an exact mirror of `FreedomOfMovement`'s
+    /// shape: a tag-only buff with no numeric effect of its own, just a flag
+    /// that strips a re-applied `Terrified` the same reactive-immunity way
+    /// `FreedomOfMovement` strips `DifficultTerrain`.
+    Fearless,
     /// Increases resistance to incoming poise, and poise damage dealt as health
     /// is lost.
     /// Strength scales the resistance non-linearly. 0.5 provides 50%, 1.0
@@ -437,6 +442,17 @@ pub enum BuffKind {
     /// rather than zeroed — the target is debilitated, not incapacitated
     /// outright. The ability lock does not scale with strength.
     Agonized,
+    /// Folds `Bane`'s flat accuracy penalty and a `Bleeding`-style health
+    /// drain tick into one buff, so a target hit by both effects at once
+    /// shows a single icon/tooltip rather than two. Strength scales both:
+    /// the accuracy penalty follows `Bane`'s own `nn_scaling` curve, and the
+    /// drain rate is `strength` HP/tick, the same units `Bleeding` uses.
+    Sickened,
+    /// Reduces the bearer's own critical-hit chance -- the third hexable
+    /// aspect alongside `Bane` (accuracy) and `FaerieFire` (evasion).
+    /// Strength scales the flat reduction non-linearly, same curve as those
+    /// two.
+    Hexed,
     // =================
     //      COMPLEX
     // =================
@@ -599,6 +615,7 @@ impl BuffKind {
             | BuffKind::RestfulSleep
             | BuffKind::OtherworldlyWard
             | BuffKind::FreedomOfMovement
+            | BuffKind::Fearless
             | BuffKind::Detecting
             | BuffKind::SeeInvisible
             | BuffKind::TrueSight
@@ -641,7 +658,9 @@ impl BuffKind {
             | BuffKind::Asleep
             | BuffKind::Blinded
             | BuffKind::Slowed
-            | BuffKind::Agonized => BuffDescriptor::SimpleNegative,
+            | BuffKind::Agonized
+            | BuffKind::Sickened
+            | BuffKind::Hexed => BuffDescriptor::SimpleNegative,
             BuffKind::Polymorphed | BuffKind::Disguised => BuffDescriptor::Complex,
         }
     }
@@ -876,10 +895,12 @@ impl BuffKind {
             BuffKind::DifficultTerrain => {
                 vec![BuffEffect::MovementSpeed((1.0 - data.strength).max(0.0))]
             },
-            // BL-03: "freedom of movement" — only negates difficult terrain.
+            // "freedom of movement" — only negates difficult terrain.
             BuffKind::FreedomOfMovement => {
                 vec![BuffEffect::BuffImmunity(BuffKind::DifficultTerrain)]
             },
+            // Fear immunity — only negates Terrified.
+            BuffKind::Fearless => vec![BuffEffect::BuffImmunity(BuffKind::Terrified)],
             // BL-36: antimagic — suppress magic casting + attuned magic-item effects.
             BuffKind::Antimagic => vec![BuffEffect::DisableMagic],
             // BL-05 rider: dimensional anchor — block teleport/blink only.
@@ -913,6 +934,30 @@ impl BuffKind {
             },
             BuffKind::Bane => vec![BuffEffect::Accuracy(-12.0 * nn_scaling(data.strength))],
             BuffKind::FaerieFire => vec![BuffEffect::Evasion(-12.0 * nn_scaling(data.strength))],
+            // Bane's own accuracy curve plus a Bleeding-shaped drain tick,
+            // folded into one buff for a single icon/tooltip.
+            BuffKind::Sickened => vec![
+                BuffEffect::Accuracy(-12.0 * nn_scaling(data.strength)),
+                BuffEffect::HealthChangeOverTime {
+                    rate: -data.strength,
+                    kind: ModifierKind::Additive,
+                    instance,
+                    tick_dur: Secs(0.5),
+                },
+            ],
+            // The crit-chance analogue of Bane (accuracy) / FaerieFire
+            // (evasion). Kept to a smaller magnitude than those two since
+            // `Stats.crit_chance` is a raw 0..1 probability rather than an
+            // accuracy-point term scaled through `hit_k`.
+            // -0.055 base: every other shipped `CritChance` producer is a
+            // skill/feat node worth +0.02-0.03 (`class_skill_modifiers.ron`,
+            // `feat_modifiers.ron`); at hex's own strength (0.7) this lands
+            // around -3.2pp, roughly one skill-tree node's worth per cast --
+            // meaningful without floor-clamping every low-crit target it
+            // touches, unlike the originally-authored -0.15 (~-8.75pp,
+            // 3-4x a full crit-tree investment; game-balance-designer
+            // finding, 2026-08-07).
+            BuffKind::Hexed => vec![BuffEffect::CritChance(-0.055 * nn_scaling(data.strength))],
             // BL-66 d: generic movement slow, mirrors Crippled's speed curve
             // without the HP drain.
             BuffKind::Slowed => vec![BuffEffect::MovementSpeed(1.0 - nn_scaling(data.strength))],

@@ -7374,6 +7374,8 @@ fn build_buff(
             | BuffKind::Bane
             | BuffKind::FaerieFire
             | BuffKind::Enfeebled
+            | BuffKind::Sickened
+            | BuffKind::Hexed
             | BuffKind::Terrified
             | BuffKind::Charmed
             | BuffKind::Dominated
@@ -7382,6 +7384,7 @@ fn build_buff(
             | BuffKind::Hollowtouched
             | BuffKind::DifficultTerrain
             | BuffKind::FreedomOfMovement
+            | BuffKind::Fearless
             | BuffKind::Antimagic
             | BuffKind::Anchored
             | BuffKind::Asleep
