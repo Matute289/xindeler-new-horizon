@@ -3457,6 +3457,17 @@ impl ServerEvent for ExplosionEvent {
                         buff,
                         ability_info,
                     }) => {
+                        // A pool-selected target is always affected -- see
+                        // `PooledDebuff::buff`'s own doc comment. `chance`
+                        // is never consulted below, so a future spell
+                        // reusing this primitive with `chance < 1.0`
+                        // (expecting an extra resist roll on top of the
+                        // pool) would silently always land instead.
+                        debug_assert!(
+                            buff.chance >= 1.0,
+                            "RadiusEffect::PooledDebuff ignores CombatBuff::chance; author it as \
+                             1.0 or add a roll before calling to_buff below"
+                        );
                         // Gather every living, eligible target inside the
                         // sphere first -- whether one target is affected
                         // depends on which other targets already consumed
@@ -3487,6 +3498,12 @@ impl ServerEvent for ExplosionEvent {
                                 let dist_sqrd = ev.pos.distance_squared(pos_b.0);
                                 1.0 - dist_sqrd / ev.explosion.radius.powi(2)
                             };
+                            // Unlike `RadiusEffect::Attack`/`Entity`, `strength` is used only as
+                            // a binary containment gate here, never threaded into a graduated
+                            // magnitude -- a "50%-applied" sleep debuff has no obvious meaning.
+                            // `min_falloff` still reshapes the containment boundary (a smaller
+                            // effective radius near the falloff edge), it just doesn't scale
+                            // anything past that.
                             if strength <= 0.0 {
                                 continue;
                             }
@@ -3524,13 +3541,19 @@ impl ServerEvent for ExplosionEvent {
                             candidates.push((entity_b, health_b.current()));
                         }
 
-                        for entity_b in combat::resolve_pooled_debuff_targets(&candidates, pool) {
+                        for entity_b in combat::resolve_pooled_debuff_targets(candidates, pool) {
                             emitters.emit(BuffEvent {
                                 entity: entity_b,
                                 buff_change: buff::BuffChange::Add(buff.to_buff(
                                     *data.time,
                                     (ev.owner, owner_entity.and_then(|e| data.masses.get(e))),
                                     (data.stats.get(entity_b), data.masses.get(entity_b)),
+                                    // `damage` is a no-op for `CombatBuffStrength::Value` (what
+                                    // every `PooledDebuff` spell should author -- there's no
+                                    // damage roll here to scale off of). A future spell
+                                    // configured with `DamageFraction` would silently compute a
+                                    // strength of 0.0; that combination isn't supported by this
+                                    // resolution path.
                                     0.0,
                                     1.0,
                                     ability_info,

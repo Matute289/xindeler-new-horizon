@@ -3364,13 +3364,12 @@ pub struct PooledDebuff {
 /// Generic over the candidate identifier (`T`, e.g. `specs::Entity` in
 /// production, a plain `u32` in tests) so the pure pool-consumption logic
 /// can be unit-tested without any ECS machinery.
-pub fn resolve_pooled_debuff_targets<T: Copy>(candidates: &[(T, f32)], pool: f32) -> Vec<T> {
-    let mut sorted: Vec<(T, f32)> = candidates.to_vec();
-    sorted.sort_by(|a, b| a.1.total_cmp(&b.1));
+pub fn resolve_pooled_debuff_targets<T: Copy>(mut candidates: Vec<(T, f32)>, pool: f32) -> Vec<T> {
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut remaining = pool;
-    let mut affected = Vec::with_capacity(sorted.len());
-    for (id, hp) in sorted {
+    let mut affected = Vec::with_capacity(candidates.len());
+    for (id, hp) in candidates {
         if hp <= remaining {
             remaining -= hp;
             affected.push(id);
@@ -3387,17 +3386,17 @@ mod sleep_pool_tests {
     fn affects_ascending_by_current_hp_regardless_of_input_order() {
         // Input deliberately out of HP order -- the function must sort, not
         // trust caller ordering.
-        let candidates = [(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
+        let candidates = vec![(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
         // Pool big enough for all three (5 + 12 + 40 = 57).
-        let affected = resolve_pooled_debuff_targets(&candidates, 57.0);
+        let affected = resolve_pooled_debuff_targets(candidates, 57.0);
         assert_eq!(affected, vec![2, 3, 1], "must process lowest-HP first");
     }
 
     #[test]
     fn stops_once_pool_is_exhausted() {
         // 5 + 12 = 17 fits in a pool of 20; the last (40) does not.
-        let candidates = [(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
-        let affected = resolve_pooled_debuff_targets(&candidates, 20.0);
+        let candidates = vec![(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 20.0);
         assert_eq!(affected, vec![2, 3]);
     }
 
@@ -3406,8 +3405,8 @@ mod sleep_pool_tests {
         // Pool of 10: the 5-HP creature fits (remaining -> 5), but the next
         // (8 HP) exceeds what's left and must be skipped entirely -- not
         // partially applied, and its HP is not deducted from the pool.
-        let candidates = [(1u32, 5.0), (2u32, 8.0)];
-        let affected = resolve_pooled_debuff_targets(&candidates, 10.0);
+        let candidates = vec![(1u32, 5.0), (2u32, 8.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 10.0);
         assert_eq!(
             affected,
             vec![1],
@@ -3418,14 +3417,14 @@ mod sleep_pool_tests {
     #[test]
     fn exact_pool_match_is_affected() {
         // hp <= remaining uses <=, so an exact match still affects.
-        let candidates = [(1u32, 30.0)];
-        let affected = resolve_pooled_debuff_targets(&candidates, 30.0);
+        let candidates = vec![(1u32, 30.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 30.0);
         assert_eq!(affected, vec![1]);
     }
 
     #[test]
     fn empty_candidate_list_returns_empty() {
-        let affected = resolve_pooled_debuff_targets::<u32>(&[], 30.0);
+        let affected = resolve_pooled_debuff_targets::<u32>(vec![], 30.0);
         assert!(affected.is_empty());
     }
 
@@ -3434,8 +3433,8 @@ mod sleep_pool_tests {
         // Defensive: a 0.0 HP candidate would still be "affected" against a
         // 0.0 pool (0.0 <= 0.0), but in production dead entities are always
         // filtered out before this function ever sees them.
-        let candidates = [(1u32, 0.0), (2u32, 1.0)];
-        let affected = resolve_pooled_debuff_targets(&candidates, 0.0);
+        let candidates = vec![(1u32, 0.0), (2u32, 1.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 0.0);
         assert_eq!(affected, vec![1]);
     }
 }
