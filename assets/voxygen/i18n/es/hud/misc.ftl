@@ -36,6 +36,7 @@ hud-free_look_indicator =
     }
 hud-camera_clamp_indicator = Cámara fija vertical activa. Pulsa { $key } para desactivarla.
 hud-auto_walk_indicator = Avance automático activo
+hud-remote_sensing_indicator = Detección a distancia activa — tu cuerpo quedó desatendido. Pulsa { $key } para volver.
 hud-zoom_lock_indicator-remind = Zoom fijado
 hud-zoom_lock_indicator-enable = Zoom de cámara fijado
 hud-zoom_lock_indicator-disable = Zoom de cámara desbloqueado

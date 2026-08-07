@@ -1576,6 +1576,57 @@
     ),
     // --- Divination ---
     (
+        id: "spells.divination.beast_sense",
+        name_i18n: "spell-beast_sense",
+        level: 2,
+        school: Some(Divination),
+        source: Primordial,
+        classes: [Druid, Ranger],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        range: Touch,
+        aoe: None,
+        description_i18n: "spell-beast_sense-desc",
+        ability: "common.abilities.spells.divination.beast_sense",
+    ),
+    (
+        id: "spells.divination.clairvoyance",
+        name_i18n: "spell-clairvoyance",
+        level: 3,
+        school: Some(Divination),
+        source: Arcane,
+        classes: [Bard, Cleric, Sorcerer, Mage],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        // Sheet range is a remote point far away (miles); modeled as
+        // self-only because the caster's own body stays put and only their
+        // senses project -- see clairvoyance.ron's `anchor_kind: Sensor`,
+        // which places the sensor server-side rather than tying this field
+        // to any real cast-time targeting distance.
+        range: SelfOnly,
+        aoe: None,
+        description_i18n: "spell-clairvoyance-desc",
+        ability: "common.abilities.spells.divination.clairvoyance",
+    ),
+    (
+        id: "spells.divination.arcane_eye",
+        name_i18n: "spell-arcane_eye",
+        level: 4,
+        school: Some(Divination),
+        source: Arcane,
+        classes: [Artificer, Mage],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        // The 9-meter figure in arcane_eye.ron's `spawn_range` is how far
+        // the conjured eye may drift from the caster once it exists, not a
+        // cast-time target distance -- this is a SelfBuff ability with no
+        // targeting step, so self-only is the correct cast range here.
+        range: SelfOnly,
+        aoe: None,
+        description_i18n: "spell-arcane_eye-desc",
+        ability: "common.abilities.spells.divination.arcane_eye",
+    ),
+    (
         id: "spells.divination.see_invisibility",
         name_i18n: "spell-see_invisibility",
         level: 2,

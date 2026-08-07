@@ -1,3 +1,9 @@
+spell-beast_sense = Beast Sense
+spell-beast_sense-desc = You touch a bonded or charmed beast and borrow its senses, seeing and hearing through it while your own body goes blind and deaf until the link ends.
+spell-clairvoyance = Clairvoyance
+spell-clairvoyance-desc = You plant an invisible sensor at a point within your own sight, seeing and hearing through it while your body stays behind, rooted and blind.
+spell-arcane_eye = Arcane Eye
+spell-arcane_eye-desc = You conjure an invisible eye within 9 meters that hovers and drifts at your command, seeing and hearing through it while your body stays behind, rooted and blind.
 spell-see_invisibility = See Invisibility
 spell-see_invisibility-desc = Your eyes attune to wavelengths beyond ordinary sight, exposing creatures and objects cloaked from view as plain shapes.
 spell-true_seeing = True Seeing

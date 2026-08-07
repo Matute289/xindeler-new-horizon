@@ -263,3 +263,5 @@ buff-seeinvisible = Ver lo Invisible
     .desc = Podés percibir criaturas ocultas e invisibles.
 buff-truesight = Visión Verdadera
     .desc = Ves a través de la ilusión, la invisibilidad y la oscuridad.
+buff-remotesensing = Detección a Distancia
+    .desc = Tus sentidos están anclados en otro lugar; tu propio cuerpo queda desatendido.
