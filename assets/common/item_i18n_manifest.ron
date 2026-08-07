@@ -2446,6 +2446,9 @@
             "common.items.utility.training_dummy",
         ): "object-training_dummy",
         Simple(
+            "common.items.utility.scrying_crystal",
+        ): "object-scrying_crystal",
+        Simple(
             "common.items.food.apple",
         ): "object-apple_half",
         Simple(

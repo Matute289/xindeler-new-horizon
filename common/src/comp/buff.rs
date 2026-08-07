@@ -1610,6 +1610,12 @@ pub enum SenseAnchorKind {
     Existing,
     Sensor,
     Piloted,
+    /// `scrying`: a spawned sensor, like `Sensor`, but one that follows a
+    /// specific targeted creature (`ResolveRemoteSenseEvent::target_entity`)
+    /// instead of sitting at a fixed point, and whose link is subject to a
+    /// periodic resisted-magic-effect re-roll against that creature rather
+    /// than only a range/aliveness check. See `SenseAnchor::Tracking`.
+    Tracking,
 }
 
 /// Whether a sense's reveal set is computed once and frozen for the buff's

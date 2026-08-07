@@ -71,15 +71,36 @@ pub enum SenseAnchor {
     Sensor(Uid),
     /// A sensor entity spawned for this link, which the caster also drives.
     Piloted(Uid),
+    /// `scrying`'s sensor: spawned for this link like `Sensor`, but its `Pos`
+    /// is rewritten every tick by `server/src/sys/remote_sense.rs` to track
+    /// `target` (never `Tethered` -- see that system's own doc comment on
+    /// why a physics leash is the wrong tool here) instead of sitting still.
+    /// `sensor` is the spectate anchor (what `uid()` returns, same role as
+    /// `Sensor`'s payload); `target` is the creature being watched and
+    /// periodically re-rolled against for a resist. `next_resist_roll` is
+    /// the next absolute `Time` (real seconds, matching `resources::Time`)
+    /// at which that re-roll fires, advanced in place by
+    /// `server/src/sys/remote_sense.rs` each time the link survives one --
+    /// the one deliberate exception to this component's own "rewritten
+    /// wholesale, never patched" doc comment above, since no other anchor
+    /// kind carries per-tick-evolving state.
+    Tracking {
+        sensor: Uid,
+        target: Uid,
+        next_resist_roll: f64,
+    },
 }
 
 impl SenseAnchor {
-    /// The `Uid` this anchor points at, regardless of variant.
+    /// The `Uid` this anchor points at, regardless of variant -- the entity
+    /// the caster's viewpoint is anchored to (for `Tracking`, the sensor
+    /// itself, not the watched `target`).
     pub fn uid(&self) -> Uid {
         match self {
             SenseAnchor::Existing(uid) | SenseAnchor::Sensor(uid) | SenseAnchor::Piloted(uid) => {
                 *uid
             },
+            SenseAnchor::Tracking { sensor, .. } => *sensor,
         }
     }
 
@@ -87,7 +108,10 @@ impl SenseAnchor {
     /// opposed to an entity that existed independently of it), and so should
     /// be despawned when the link ends.
     pub fn is_spawned_sensor(&self) -> bool {
-        matches!(self, SenseAnchor::Sensor(_) | SenseAnchor::Piloted(_))
+        matches!(
+            self,
+            SenseAnchor::Sensor(_) | SenseAnchor::Piloted(_) | SenseAnchor::Tracking { .. }
+        )
     }
 }
 
@@ -103,6 +127,16 @@ mod tests {
         assert_eq!(SenseAnchor::Existing(uid(1)).uid(), uid(1));
         assert_eq!(SenseAnchor::Sensor(uid(2)).uid(), uid(2));
         assert_eq!(SenseAnchor::Piloted(uid(3)).uid(), uid(3));
+        assert_eq!(
+            SenseAnchor::Tracking {
+                sensor: uid(4),
+                target: uid(5),
+                next_resist_roll: 0.0,
+            }
+            .uid(),
+            uid(4),
+            "Tracking's uid() must be the sensor (the spectate anchor), not the watched target"
+        );
     }
 
     #[test]
@@ -110,6 +144,15 @@ mod tests {
         assert!(!SenseAnchor::Existing(uid(1)).is_spawned_sensor());
         assert!(SenseAnchor::Sensor(uid(2)).is_spawned_sensor());
         assert!(SenseAnchor::Piloted(uid(3)).is_spawned_sensor());
+        assert!(
+            SenseAnchor::Tracking {
+                sensor: uid(4),
+                target: uid(5),
+                next_resist_roll: 0.0,
+            }
+            .is_spawned_sensor(),
+            "Tracking owns a spawned sensor entity, same as Sensor/Piloted"
+        );
     }
 
     #[test]

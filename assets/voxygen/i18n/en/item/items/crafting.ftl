@@ -226,6 +226,9 @@ object-v-coin = Coins
 object-collar = Collar
     .desc = Tames neutral wild animals within 5 blocks.
 
+object-scrying_crystal = Scrying Crystal
+    .desc = A palm-sized sphere of clouded quartz that clears like still water when a scrying working is drawn through it, sharpening the caster's grasp on a distant, watched mind.
+
 object-training_dummy = Training Dummy
     .desc = His name is William. Fire at will.
 
