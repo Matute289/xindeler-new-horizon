@@ -157,6 +157,37 @@ pub struct CombatTuning {
     /// not an engine constant, so it lives here rather than as a Rust
     /// literal in `server/agent/src/action_nodes.rs`.
     pub disguise_suspicion_reroll_secs: f32,
+    /// `scrying`'s own tuning instance for the same shared formula
+    /// ([`magic_effect_success_chance`]) — a third named [`MagicEffectTuning`]
+    /// alongside `save_*`/`disguise` above, not a third formula. `scrying`
+    /// does not use this struct's own `situational_penalty` field (it always
+    /// calls the formula with `situational: false` — every field must still
+    /// be present or the whole `scrying:` section fails to load, see
+    /// [`MagicEffectTuning`]'s own doc comment): the roll's context-dependent
+    /// terms are additive *bonuses*, not a subtracted penalty, expressed
+    /// instead via `scrying_party_bonus_accuracy`/
+    /// `scrying_focus_item_bonus_accuracy` below.
+    pub scrying: MagicEffectTuning,
+    /// Flat bonus added to the caster's `magic_accuracy` before the scrying
+    /// resist roll (both the cast-time roll and every periodic re-roll) when
+    /// the scried target shares the caster's own party/group — watching an
+    /// ally is easier than watching a stranger. Expressed in
+    /// magic-accuracy-equivalent points (scaled through `hit_k` by
+    /// [`magic_effect_success_chance`] exactly like the caster's own base
+    /// `magic_accuracy`), so it composes additively with the base roll and
+    /// with `scrying_focus_item_bonus_accuracy` below — both may apply to
+    /// the same roll at once, neither overrides the other or the base term.
+    pub scrying_party_bonus_accuracy: f32,
+    /// Flat bonus applied the same way as `scrying_party_bonus_accuracy`
+    /// when the caster holds a divination-focus item (a scrying crystal) —
+    /// see that field's own doc comment for why the two stack rather than
+    /// picking one.
+    pub scrying_focus_item_bonus_accuracy: f32,
+    /// How often, in real seconds, an active `scrying` link gets another
+    /// periodic resist re-roll against the scried target — the per-link
+    /// counterpart of `disguise_suspicion_reroll_secs`'s per-observer
+    /// cadence (server/src/sys/remote_sense.rs`).
+    pub scrying_reroll_secs: f32,
     /// Multiplier applied to physical damage, poise/knockback and crit when
     /// the swung weapon is not in the wielder's proficiency set (a soft
     /// weapon-proficiency gate). 1.0 = no penalty.
@@ -220,6 +251,18 @@ impl Default for CombatTuning {
                 outclassed_wall: None,
             },
             disguise_suspicion_reroll_secs: 8.0,
+            scrying: MagicEffectTuning {
+                base_hit: 0.75,
+                hit_floor: 0.05,
+                hit_ceil: 0.90,
+                mr_soft_cap: 0.75,
+                cr_to_evasion: 2.0,
+                situational_penalty: 0.0,
+                outclassed_wall: Some(0.30),
+            },
+            scrying_party_bonus_accuracy: 8.0,
+            scrying_focus_item_bonus_accuracy: 10.0,
+            scrying_reroll_secs: 15.0,
             non_proficient_damage_mult: 0.40,
             trigger_slot_cooldown_secs: DEFAULT_TRIGGER_SLOT_COOLDOWNS.to_vec(),
         }
@@ -422,6 +465,58 @@ pub fn saving_throw_chance(
         target,
         fighting_caster,
         &tuning.save_tuning(),
+        tuning,
+    )
+}
+
+/// Probability in `0.0..=1.0` that a `scrying` link is established (at cast
+/// time) or survives one periodic resist re-roll (thereafter) against
+/// `target` -- `scrying`'s own named consumer of
+/// [`magic_effect_success_chance`], parallel to [`saving_throw_chance`].
+///
+/// Unlike `saving_throw_chance`'s single `situational` bool, this roll's
+/// context-dependent terms are three additive contributions rather than one
+/// true/false pick: (A) the unconditional base roll (caster accuracy vs.
+/// target evasion/resistance -- just calling [`magic_effect_success_chance`]
+/// normally), (B) a free bonus when the scried target shares the caster's
+/// own party/group, and (C) a bonus when the caster holds a
+/// divination-focus item. `magic_effect_success_chance` has no lever for
+/// three independent bonuses (its one `situational` term is a single
+/// subtracted penalty, not a sum of bonuses) -- so B and C are folded in
+/// *before* the call, as flat bonuses to the caster's own `magic_accuracy`
+/// (`tuning.scrying_party_bonus_accuracy` /
+/// `tuning.scrying_focus_item_bonus_accuracy`). Because
+/// `magic_effect_success_chance`'s `level_term` is linear in
+/// `caster.magic_accuracy`, this makes each bonus scale through `hit_k`
+/// exactly like the caster's own base accuracy does and land as its own
+/// separate additive term in the final chance -- both may apply to the same
+/// roll at once, and neither ever overrides the base term or the other:
+///
+/// `chance = A(base_hit + base_level_term - resist) + B(party_bonus*hit_k, if
+/// in_group) + C(item_bonus*hit_k, if holding focus)`
+///
+/// `situational` is always passed as `false`:
+/// `tuning.scrying.situational_penalty` is unused by this roll (see that
+/// field's own doc comment on `CombatTuning::scrying`).
+pub fn scrying_success_chance(
+    caster: &SaveCasterInfo,
+    target: &SaveTargetInfo,
+    target_in_casters_group: bool,
+    caster_holds_focus_item: bool,
+    tuning: &CombatTuning,
+) -> f32 {
+    let mut magic_accuracy = caster.magic_accuracy;
+    if target_in_casters_group {
+        magic_accuracy += tuning.scrying_party_bonus_accuracy;
+    }
+    if caster_holds_focus_item {
+        magic_accuracy += tuning.scrying_focus_item_bonus_accuracy;
+    }
+    magic_effect_success_chance(
+        &SaveCasterInfo { magic_accuracy },
+        target,
+        false,
+        &tuning.scrying,
         tuning,
     )
 }
@@ -5371,6 +5466,167 @@ mod disguise_suspicion_formula_tests {
 
         // Row 7: same pair, close inspection. 0.505 - 0.25 = 0.255.
         assert!((holds(&t, 7.0, &player(30.0), true) - 0.255).abs() < EPS);
+    }
+}
+
+/// `scrying`'s own tuning instance, exercised through
+/// [`scrying_success_chance`] -- the acceptance artefact proving the
+/// additive A+B+C shape actually behaves additively against the real
+/// shipped formula, not just in the doc comment's algebra.
+#[cfg(test)]
+mod scrying_formula_tests {
+    use super::{CombatTuning, SaveCasterInfo, SaveTargetInfo, scrying_success_chance};
+    use crate::{assets::AssetExt, comp::body::MagicResistTier};
+
+    const EPS: f32 = 1e-3;
+
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: tier,
+            combat_rating,
+        }
+    }
+
+    fn chance(
+        t: &CombatTuning,
+        accuracy: f32,
+        target: &SaveTargetInfo,
+        in_group: bool,
+        holds_item: bool,
+    ) -> f32 {
+        scrying_success_chance(
+            &SaveCasterInfo {
+                magic_accuracy: accuracy,
+            },
+            target,
+            in_group,
+            holds_item,
+            t,
+        )
+    }
+
+    /// The shipped asset's `scrying:` section and its two bonus fields carry
+    /// the intended numbers.
+    #[test]
+    fn asset_carries_the_scrying_tuning() {
+        let t = CombatTuning::default();
+        assert!((t.scrying.base_hit - 0.75).abs() < 1e-6);
+        assert!((t.scrying.hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.scrying.hit_ceil - 0.90).abs() < 1e-6);
+        assert!((t.scrying.mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.scrying.cr_to_evasion - 2.0).abs() < 1e-6);
+        assert_eq!(t.scrying.outclassed_wall, Some(0.30));
+        assert!((t.scrying_party_bonus_accuracy - 8.0).abs() < 1e-6);
+        assert!((t.scrying_focus_item_bonus_accuracy - 10.0).abs() < 1e-6);
+        assert!((t.scrying_reroll_secs - 15.0).abs() < 1e-6);
+    }
+
+    /// A `scrying:` section that only specifies *some* of
+    /// `MagicEffectTuning`'s fields must fail to deserialize, the same
+    /// footgun-avoidance `disguise_suspicion_formula_tests` already proves
+    /// for `disguise:`.
+    #[test]
+    fn a_partially_specified_scrying_section_fails_to_deserialize() {
+        let result: Result<CombatTuning, _> = ron::from_str("(scrying: (base_hit: 0.99))");
+        assert!(
+            result.is_err(),
+            "a scrying: section missing fields must be rejected, not silently defaulted"
+        );
+    }
+
+    /// Loading `common.combat_tuning` proves the RON asset itself carries
+    /// the new `scrying:` section and its sibling bonus fields.
+    #[test]
+    fn combat_tuning_ron_carries_the_scrying_section() {
+        let tuning = crate::assets::Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let t = &tuning.read().0;
+        assert!((t.scrying.base_hit - 0.75).abs() < 1e-6);
+        assert!((t.scrying_party_bonus_accuracy - 8.0).abs() < 1e-6);
+        assert!((t.scrying_focus_item_bonus_accuracy - 10.0).abs() < 1e-6);
+    }
+
+    /// Sane baseline: a caster reasonably matched against a middling target,
+    /// with neither bonus, lands a plausible-but-not-guaranteed chance
+    /// strictly between the floor and ceiling.
+    #[test]
+    fn base_roll_is_sane_for_a_matched_pair() {
+        let t = CombatTuning::default();
+        // A weak caster (accuracy 5) against a nearly-trivial target (CR 1,
+        // no resistance): favourable but not so lopsided it clamps to the
+        // ceiling, so this actually exercises the unclamped formula.
+        let target = creature(1.0, MagicResistTier::None);
+        let c = chance(&t, 5.0, &target, false, false);
+        assert!(
+            c > t.scrying.hit_floor && c < t.scrying.hit_ceil,
+            "expected a mid-range chance, got {c}"
+        );
+    }
+
+    /// The core acceptance case: against a target tough enough that the base
+    /// roll sits well clear of both the floor and the ceiling, the party and
+    /// focus-item bonuses each add their own independent contribution, and
+    /// applying both sums the two rather than one overriding the other.
+    #[test]
+    fn party_and_focus_item_bonuses_stack_additively() {
+        let t = CombatTuning::default();
+        // CR 20, Minor resistance: effective evasion 40, resist 0.15 --
+        // tough enough that a 30-accuracy caster's base roll lands well off
+        // both the floor and the ceiling, so every bonus's contribution is
+        // visible unclamped.
+        let target = creature(20.0, MagicResistTier::Minor);
+
+        let base = chance(&t, 30.0, &target, false, false);
+        let with_party = chance(&t, 30.0, &target, true, false);
+        let with_item = chance(&t, 30.0, &target, false, true);
+        let with_both = chance(&t, 30.0, &target, true, true);
+
+        let party_contribution = t.scrying_party_bonus_accuracy * t.hit_k;
+        let item_contribution = t.scrying_focus_item_bonus_accuracy * t.hit_k;
+
+        assert!(
+            (with_party - (base + party_contribution)).abs() < EPS,
+            "party bonus must add its own accuracy-scaled term: base {base}, with_party \
+             {with_party}, expected +{party_contribution}"
+        );
+        assert!(
+            (with_item - (base + item_contribution)).abs() < EPS,
+            "item bonus must add its own accuracy-scaled term: base {base}, with_item \
+             {with_item}, expected +{item_contribution}"
+        );
+        assert!(
+            (with_both - (base + party_contribution + item_contribution)).abs() < EPS,
+            "both bonuses together must sum, neither overriding the other: base {base}, with_both \
+             {with_both}, expected +{party_contribution} +{item_contribution}"
+        );
+        // Sanity: applying both must be strictly more favourable than either
+        // alone -- confirms this isn't secretly a max()/pick-one gate.
+        assert!(with_both > with_party && with_both > with_item);
+    }
+
+    /// A badly outclassed caster still hard-fails via `outclassed_wall`,
+    /// same shape as charm/save -- unlike disguise, scrying does not waive
+    /// this wall.
+    #[test]
+    fn a_badly_outclassed_caster_hard_fails() {
+        let t = CombatTuning::default();
+        let boss = creature(30.0, MagicResistTier::Legendary);
+        // effective evasion = 60; level_term = (0-60)*0.015 = -0.90, far past
+        // the -0.30 wall.
+        let c = chance(&t, 0.0, &boss, false, false);
+        assert_eq!(
+            c, 0.0,
+            "a wall-breaching deficit must hard-fail to exactly 0.0"
+        );
+        // Even with both bonuses (+18 accuracy), the wall still bites:
+        // level_term = (18-60)*0.015 = -0.63, still past -0.30.
+        let c_with_bonuses = chance(&t, 0.0, &boss, true, true);
+        assert_eq!(
+            c_with_bonuses, 0.0,
+            "bonuses shift the level term but do not waive the outclassed wall on their own"
+        );
     }
 }
 

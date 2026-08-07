@@ -69,6 +69,14 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // still sustained. That system isn't reachable from here (its module is
     // private to `common-systems`), so the dependency is named by its
     // computed `sys_name()`: `"Common_buff_sys"`.
+    //
+    // No declared ordering against `phys::Sys` for the `scrying` sensor's
+    // per-tick `Pos` write: safe today only because `Body::Object(RemoteSensor)`
+    // uses `AIR_DENSITY` (matching the already-shipped `clairvoyance` sensor),
+    // which keeps the entity's `Vel` near zero via buoyancy instead of
+    // accumulating gravity, so whichever system runs first this tick makes no
+    // visible difference. Revisit if `RemoteSensor`'s density or buoyancy
+    // handling ever changes.
     dispatch::<remote_sense::Sys>(dispatch_builder, &["Common_buff_sys"]);
     // Must run after the buff system, which rebuilds `Stats` (and with it the
     // active-sense declarations this reads) from scratch every tick; running

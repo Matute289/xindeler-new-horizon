@@ -21,21 +21,30 @@
 //! choices), but worth knowing if this ever needs to change.
 
 use common::{
+    assets::{AssetExt, Ron},
+    combat::{self, CombatTuning, SaveCasterInfo, SaveTargetInfo},
     comp::{
-        Buffs, Health, Pos, Presence, RemoteSense, SpectatingEntity,
+        Body, Buffs, DerivedStats, Group, Health, Inventory, Ori, Pos, Presence, RemoteSense,
+        SpectatingEntity, Stats,
+        body::MagicResistTier,
         buff::{BuffChange, BuffKind},
+        item::ItemDefinitionIdOwned,
         remote_sense::SenseAnchor,
     },
-    event::{BuffEvent, DeleteEvent, EmitExt},
+    event::{BuffEvent, DeleteEvent, EmitExt, EventBus},
     event_emitters,
     link::Is,
+    outcome::Outcome,
     piloting::Pilot,
+    resources::Time,
     terrain::TerrainChunkSize,
-    uid::IdMaps,
+    uid::{IdMaps, Uid},
     vol::RectVolSize,
 };
 use common_ecs::{Job, Origin, Phase, System};
+use rand::RngExt;
 use specs::{Entities, Entity, Join, Read, ReadStorage, WriteStorage};
+use vek::{Vec2, Vec3};
 
 event_emitters! {
     struct Events[Emitters] {
@@ -57,6 +66,83 @@ pub(crate) fn max_sense_range(presence: Option<&Presence>) -> f32 {
     })
 }
 
+/// How far behind the scried target `scrying`'s sensor floats, in blocks.
+const SCRY_SENSOR_BEHIND_DIST: f32 = 3.0;
+/// How far above the scried target `scrying`'s sensor floats, in blocks.
+const SCRY_SENSOR_ABOVE_DIST: f32 = 2.0;
+
+/// `common.items.utility.scrying_crystal`'s definition id -- the divination
+/// focus `scrying`'s resist roll checks for via
+/// `Inventory::get_slot_of_item_by_def_id`, the same "does the caster hold
+/// item X" idiom `AbilityRequirements.item`/`AbilityReqItem`
+/// (`common/src/comp/ability.rs`) already use for consumables. This is a
+/// direct inventory-presence check, not routed through `AbilityReqItem`:
+/// holding the crystal grants a bonus, it never gates casting `scrying`
+/// itself.
+pub(crate) fn scrying_focus_item_def_id() -> ItemDefinitionIdOwned {
+    ItemDefinitionIdOwned::Simple(String::from("common.items.utility.scrying_crystal"))
+}
+
+/// Where `scrying`'s sensor sits relative to the scried target this tick:
+/// `SCRY_SENSOR_BEHIND_DIST` behind their horizontal facing and
+/// `SCRY_SENSOR_ABOVE_DIST` above them, recomputed from `target_ori` every
+/// call so the sensor swings around with the target rather than clipping
+/// through them as they turn. Pitch is deliberately ignored (only the
+/// horizontal component of `look_dir` is used) so the sensor never dives
+/// underground or rockets skyward when the target merely looks up or down;
+/// when `target_ori` is absent, or the target is looking close enough to
+/// straight up/down that the horizontal component is degenerate, this falls
+/// back to a fixed south-behind offset rather than producing a zero vector.
+pub(crate) fn scrying_follow_offset(target_ori: Option<&Ori>) -> Vec3<f32> {
+    const DEGENERATE_EPS: f32 = 1e-6;
+    let horizontal_behind = target_ori
+        .map(|ori| ori.look_dir().to_vec())
+        .and_then(|look| {
+            let flat = Vec2::new(look.x, look.y);
+            (flat.magnitude_squared() > DEGENERATE_EPS).then(|| -flat.normalized())
+        })
+        .unwrap_or(Vec2::new(0.0, -1.0));
+    Vec3::new(
+        horizontal_behind.x * SCRY_SENSOR_BEHIND_DIST,
+        horizontal_behind.y * SCRY_SENSOR_BEHIND_DIST,
+        SCRY_SENSOR_ABOVE_DIST,
+    )
+}
+
+/// The scrying resist roll for one link: the caster's own `magic_accuracy`
+/// plus the additive party/focus-item bonuses (see
+/// `combat::scrying_success_chance`'s own doc comment), gathered from
+/// already-shipped components exactly like `server/src/events/banishment.rs`
+/// gathers the same shapes for its own saving throw. Shared by the cast-time
+/// roll (`server/src/events/remote_sense.rs`) and this system's periodic
+/// re-roll so both are provably the same mechanism, not two.
+pub(crate) fn scrying_resist_roll_chance(
+    caster_stats: &Stats,
+    target_stats: Option<&Stats>,
+    target_body: Option<&Body>,
+    target_derived: Option<&DerivedStats>,
+    same_group: bool,
+    caster_holds_focus_item: bool,
+    tuning: &CombatTuning,
+) -> f32 {
+    let target_info = SaveTargetInfo {
+        stats_magic_evasion: target_stats.map_or(0.0, |s| s.magic_evasion),
+        crowd_control_resistance: target_stats.map_or(0.0, |s| s.crowd_control_resistance),
+        stats_magic_resistance: target_stats.map_or(0.0, |s| s.magic_resistance),
+        magic_resist_tier: target_body.map_or(MagicResistTier::None, Body::magic_resist_tier),
+        combat_rating: target_derived.map_or(0.0, |d| d.combat_rating),
+    };
+    combat::scrying_success_chance(
+        &SaveCasterInfo {
+            magic_accuracy: caster_stats.magic_accuracy,
+        },
+        &target_info,
+        same_group,
+        caster_holds_focus_item,
+        tuning,
+    )
+}
+
 #[derive(Default)]
 pub struct Sys;
 
@@ -65,10 +151,18 @@ impl<'a> System<'a> for Sys {
         Entities<'a>,
         Events<'a>,
         Read<'a, IdMaps>,
-        ReadStorage<'a, Pos>,
+        Read<'a, Time>,
+        Read<'a, EventBus<Outcome>>,
+        WriteStorage<'a, Pos>,
+        ReadStorage<'a, Ori>,
         ReadStorage<'a, Buffs>,
         ReadStorage<'a, Health>,
         ReadStorage<'a, Presence>,
+        ReadStorage<'a, Stats>,
+        ReadStorage<'a, DerivedStats>,
+        ReadStorage<'a, Group>,
+        ReadStorage<'a, Inventory>,
+        ReadStorage<'a, Body>,
         WriteStorage<'a, RemoteSense>,
         WriteStorage<'a, SpectatingEntity>,
         WriteStorage<'a, Is<Pilot>>,
@@ -84,16 +178,136 @@ impl<'a> System<'a> for Sys {
             entities,
             events,
             id_maps,
-            positions,
+            time,
+            outcomes,
+            mut positions,
+            orientations,
             buffs,
             healths,
             presences,
+            stats,
+            derived_stats,
+            groups,
+            inventories,
+            bodies,
             mut remote_senses,
             mut spectating_entities,
             mut is_pilots,
         ): Self::SystemData,
     ) {
         let mut emitters = events.get_emitters();
+        let mut outcome_emitter = outcomes.emitter();
+
+        // --- `Tracking` (`scrying`) upkeep: follow the target, then re-roll
+        // the resist check on its own cadence. Runs before the generic
+        // validity pass below so that pass's range check reads each
+        // sensor's freshly-updated `Pos`, not last tick's.
+        //
+        // The link's own state (`caster`, sensor/target `Uid`,
+        // `next_resist_roll`) is copied out of `remote_senses` up front so
+        // this borrows it only immutably and briefly -- `positions` (needed
+        // both to read the target and to write the sensor) and, later,
+        // `remote_senses` itself (to advance `next_resist_roll`) are then
+        // free to be borrowed again without conflict.
+        struct TrackingLink {
+            caster: Entity,
+            sensor: Uid,
+            target: Uid,
+            next_resist_roll: f64,
+        }
+        let tracking_links: Vec<TrackingLink> = (&entities, &remote_senses)
+            .join()
+            .filter_map(|(caster, rs)| match rs.anchor {
+                SenseAnchor::Tracking {
+                    sensor,
+                    target,
+                    next_resist_roll,
+                } => Some(TrackingLink {
+                    caster,
+                    sensor,
+                    target,
+                    next_resist_roll,
+                }),
+                _ => None,
+            })
+            .collect();
+
+        let mut target_lost: Vec<Entity> = Vec::new();
+        let mut resisted: Vec<Entity> = Vec::new();
+
+        if !tracking_links.is_empty() {
+            let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning").read();
+            let mut rng = rand::rng();
+            let focus_item_def_id = scrying_focus_item_def_id();
+
+            for link in &tracking_links {
+                // The sensor itself missing is not handled here: the
+                // generic validity pass below already ends any link whose
+                // `anchor_uid()` no longer resolves, Tracking included.
+                let Some(sensor_entity) = id_maps.uid_entity(link.sensor) else {
+                    continue;
+                };
+                let Some(target_entity) = id_maps.uid_entity(link.target) else {
+                    target_lost.push(link.caster);
+                    continue;
+                };
+                let target_alive = !healths.get(target_entity).is_some_and(|h| h.is_dead);
+                let Some(target_pos) = positions.get(target_entity).copied() else {
+                    target_lost.push(link.caster);
+                    continue;
+                };
+                if !target_alive {
+                    target_lost.push(link.caster);
+                    continue;
+                }
+
+                let offset = scrying_follow_offset(orientations.get(target_entity));
+                let new_sensor_pos = target_pos.0 + offset;
+                let _ = positions.insert(sensor_entity, Pos(new_sensor_pos));
+
+                if time.0 < link.next_resist_roll {
+                    continue;
+                }
+
+                let Some(caster_stats) = stats.get(link.caster) else {
+                    // No Stats on the caster (should not happen for a
+                    // caster that formed this link) -- fail closed rather
+                    // than leave an un-rollable link running forever.
+                    resisted.push(link.caster);
+                    continue;
+                };
+                let same_group = groups
+                    .get(link.caster)
+                    .map(|g| Some(g) == groups.get(target_entity))
+                    .unwrap_or(false);
+                let holds_focus_item = inventories.get(link.caster).is_some_and(|inv| {
+                    inv.get_slot_of_item_by_def_id(&focus_item_def_id).is_some()
+                });
+                let chance = scrying_resist_roll_chance(
+                    caster_stats,
+                    stats.get(target_entity),
+                    bodies.get(target_entity),
+                    derived_stats.get(target_entity),
+                    same_group,
+                    holds_focus_item,
+                    &tuning.0,
+                );
+
+                if rng.random::<f32>() >= chance {
+                    resisted.push(link.caster);
+                    outcome_emitter.emit(Outcome::Resisted {
+                        pos: new_sensor_pos,
+                        target: link.target,
+                    });
+                } else if let Some(mut remote_sense) = remote_senses.get_mut(link.caster)
+                    && let SenseAnchor::Tracking {
+                        next_resist_roll, ..
+                    } = &mut remote_sense.anchor
+                {
+                    *next_resist_roll = time.0 + f64::from(tuning.0.scrying_reroll_secs);
+                }
+            }
+        }
 
         // Two passes: the first only reads `remote_senses` to decide what's
         // still valid (join requires it be borrowed immutably), the second
@@ -126,6 +340,16 @@ impl<'a> System<'a> for Sys {
                     let _ = spectating_entities.insert(caster, SpectatingEntity(anchor_entity));
                 }
             } else {
+                to_end.push(caster);
+            }
+        }
+
+        // Merge in the Tracking-specific endings (target gone/dead, or the
+        // periodic resist re-roll failed) collected above, deduped against
+        // whatever the generic pass already caught (e.g. a resisted link
+        // whose sensor also just fell out of range this same tick).
+        for caster in target_lost.into_iter().chain(resisted) {
+            if !to_end.contains(&caster) {
                 to_end.push(caster);
             }
         }
@@ -166,8 +390,9 @@ impl<'a> System<'a> for Sys {
 mod tests {
     use super::*;
     use common::{
+        ViewDistances,
         comp::{
-            Body,
+            Body, PresenceKind,
             buff::{Buff, BuffData, BuffSource, DestInfo},
             humanoid,
             remote_sense::SenseAnchor,
@@ -199,13 +424,21 @@ mod tests {
     fn setup_world() -> specs::World {
         let mut world = specs::World::new();
         world.register::<Pos>();
+        world.register::<Ori>();
         world.register::<Buffs>();
         world.register::<Health>();
         world.register::<Presence>();
+        world.register::<Stats>();
+        world.register::<DerivedStats>();
+        world.register::<Group>();
+        world.register::<Inventory>();
+        world.register::<Body>();
         world.register::<RemoteSense>();
         world.register::<SpectatingEntity>();
         world.register::<Is<Pilot>>();
         world.insert(IdMaps::default());
+        world.insert(Time(0.0));
+        world.insert(EventBus::<Outcome>::default());
         // `common_ecs::run_now`'s `Job<T>` wrapper records CPU-time metrics
         // per system and expects this resource to already exist.
         world.insert(common_ecs::SysMetrics::default());
@@ -473,6 +706,274 @@ mod tests {
         assert!(
             world.read_storage::<Is<Pilot>>().get(caster).is_none(),
             "ending a Piloted link must also clear the caster's Is<Pilot>"
+        );
+    }
+
+    /// `scrying_follow_offset`'s own shape: behind the target's horizontal
+    /// facing and a fixed height above, using only the pure function -- no
+    /// ECS involved.
+    #[test]
+    fn follow_offset_sits_behind_and_above_the_targets_facing() {
+        // Facing +x: "behind" is -x.
+        let facing_east = Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let offset = scrying_follow_offset(Some(&facing_east));
+        assert!(
+            offset.x < 0.0,
+            "behind +x facing must be -x, got {offset:?}"
+        );
+        assert!(
+            offset.y.abs() < 1e-3,
+            "no lateral drift for a pure +x facing, got {offset:?}"
+        );
+        assert!(
+            (offset.z - SCRY_SENSOR_ABOVE_DIST).abs() < 1e-3,
+            "must sit exactly SCRY_SENSOR_ABOVE_DIST above regardless of facing, got {offset:?}"
+        );
+        let horizontal_dist = (offset.x * offset.x + offset.y * offset.y).sqrt();
+        assert!(
+            (horizontal_dist - SCRY_SENSOR_BEHIND_DIST).abs() < 1e-3,
+            "horizontal distance must be exactly SCRY_SENSOR_BEHIND_DIST, got {horizontal_dist}"
+        );
+    }
+
+    /// A missing `Ori` (or one looking straight up/down, the degenerate
+    /// horizontal case) must not collapse to a zero offset -- the sensor
+    /// still floats a fixed distance away and above, just along a fallback
+    /// direction.
+    #[test]
+    fn follow_offset_falls_back_when_the_targets_facing_is_unavailable() {
+        let offset = scrying_follow_offset(None);
+        assert!(
+            (offset.z - SCRY_SENSOR_ABOVE_DIST).abs() < 1e-3,
+            "still floats above with no Ori, got {offset:?}"
+        );
+        let horizontal_dist = (offset.x * offset.x + offset.y * offset.y).sqrt();
+        assert!(
+            (horizontal_dist - SCRY_SENSOR_BEHIND_DIST).abs() < 1e-3,
+            "still offsets a fixed horizontal distance with no Ori, got {horizontal_dist}"
+        );
+
+        let facing_straight_up = Ori::from_unnormalized_vec(Vec3::new(0.0, 0.0, 1.0)).unwrap();
+        let degenerate_offset = scrying_follow_offset(Some(&facing_straight_up));
+        let degenerate_horizontal_dist = (degenerate_offset.x * degenerate_offset.x
+            + degenerate_offset.y * degenerate_offset.y)
+            .sqrt();
+        assert!(
+            (degenerate_horizontal_dist - SCRY_SENSOR_BEHIND_DIST).abs() < 1e-3,
+            "looking straight up must not collapse the horizontal offset to zero, got \
+             {degenerate_offset:?}"
+        );
+    }
+
+    /// Everything a `Tracking` link's own tests below need beyond
+    /// `setup_world()`: a caster, a target, and a sensor, wired through
+    /// `IdMaps`, with `RemoteSense` anchored `Tracking` between them.
+    struct TrackingFixture {
+        caster: Entity,
+        caster_uid: Uid,
+        target: Entity,
+        target_uid: Uid,
+        sensor: Entity,
+        sensor_uid: Uid,
+    }
+
+    fn setup_tracking_fixture(
+        world: &mut specs::World,
+        target_pos: Vec3<f32>,
+        next_resist_roll: f64,
+    ) -> TrackingFixture {
+        let caster_uid = uid(1);
+        let target_uid = uid(2);
+        let sensor_uid = uid(3);
+
+        let body = Body::Humanoid(humanoid::Body::random());
+        let caster = world
+            .create_entity()
+            .with(Pos(Vec3::zero()))
+            .with(Health::new(body))
+            .with(Presence::new(
+                ViewDistances {
+                    terrain: 10,
+                    entity: 10,
+                },
+                PresenceKind::Spectator,
+            ))
+            .with({
+                let mut stats = Stats::new(common_i18n::Content::Plain(String::new()), body);
+                stats.magic_accuracy = 0.0;
+                stats
+            })
+            .build();
+        let target = world
+            .create_entity()
+            .with(Pos(target_pos))
+            .with(Health::new(body))
+            .build();
+        let sensor = world.create_entity().with(Pos(Vec3::zero())).build();
+
+        {
+            let mut id_maps = world.write_resource::<IdMaps>();
+            id_maps.add_entity(caster_uid, caster);
+            id_maps.add_entity(target_uid, target);
+            id_maps.add_entity(sensor_uid, sensor);
+        }
+
+        let mut buffs = Buffs::default();
+        buffs.insert(remote_sensing_buff(), Time(0.0));
+        world
+            .write_storage::<Buffs>()
+            .insert(caster, buffs)
+            .unwrap();
+        world
+            .write_storage::<RemoteSense>()
+            .insert(caster, RemoteSense {
+                anchor: SenseAnchor::Tracking {
+                    sensor: sensor_uid,
+                    target: target_uid,
+                    next_resist_roll,
+                },
+                free_look: true,
+                piloted: false,
+                caster: caster_uid,
+                flight_speed: 0.0,
+            })
+            .unwrap();
+
+        TrackingFixture {
+            caster,
+            caster_uid,
+            target,
+            target_uid,
+            sensor,
+            sensor_uid,
+        }
+    }
+
+    /// The sensor's `Pos` is rewritten directly from the target's own `Pos`
+    /// and `Ori` every tick -- never `Tethered` (a physics leash), per this
+    /// system's own doc comment on why. Also proves the link survives a
+    /// tick where the reroll isn't due yet, and `next_resist_roll` is left
+    /// untouched.
+    #[test]
+    fn tracking_sensor_follows_the_target_each_tick() {
+        let mut world = setup_world();
+        let target_pos = Vec3::new(20.0, 0.0, 5.0);
+        // Far in the future: this tick's reroll must not fire.
+        let fixture = setup_tracking_fixture(&mut world, target_pos, 1_000_000.0);
+        world
+            .write_storage::<Ori>()
+            .insert(
+                fixture.target,
+                Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            )
+            .unwrap();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        let expected_pos = target_pos
+            + scrying_follow_offset(Some(
+                &Ori::from_unnormalized_vec(Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            ));
+        assert_eq!(
+            world.read_storage::<Pos>().get(fixture.sensor).map(|p| p.0),
+            Some(expected_pos),
+            "the sensor's Pos must be written directly from the target's Pos + facing offset"
+        );
+        let remote_sense = world
+            .read_storage::<RemoteSense>()
+            .get(fixture.caster)
+            .copied()
+            .expect("the link must survive a tick where the reroll isn't due");
+        assert_eq!(remote_sense.caster, fixture.caster_uid);
+        assert_eq!(
+            remote_sense.anchor,
+            SenseAnchor::Tracking {
+                sensor: fixture.sensor_uid,
+                target: fixture.target_uid,
+                next_resist_roll: 1_000_000.0,
+            },
+            "next_resist_roll must be untouched when the reroll doesn't fire this tick"
+        );
+    }
+
+    /// A caster hopelessly outclassed by the scried target's combat rating
+    /// hard-fails `scrying_success_chance`'s `outclassed_wall` to exactly
+    /// `0.0` (see `combat::scrying_success_chance`), so the very first
+    /// due reroll must resist and end the link -- reaping the sensor and
+    /// clearing the sustaining buff the same way every other ended link
+    /// does.
+    #[test]
+    fn an_outclassed_scrying_link_is_resisted_and_ends() {
+        let mut world = setup_world();
+        world.insert(EventBus::<DeleteEvent>::default());
+        let target_pos = Vec3::new(20.0, 0.0, 5.0);
+        // Due now (Time defaults to 0.0).
+        let fixture = setup_tracking_fixture(&mut world, target_pos, 0.0);
+        world
+            .write_storage::<DerivedStats>()
+            .insert(fixture.target, DerivedStats {
+                combat_rating: 100.0,
+                ..Default::default()
+            })
+            .unwrap();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        assert!(
+            world
+                .read_storage::<RemoteSense>()
+                .get(fixture.caster)
+                .is_none(),
+            "a hard-failed resist roll must end the link"
+        );
+        let deleted: Vec<_> = world
+            .read_resource::<EventBus<DeleteEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            deleted.len(),
+            1,
+            "the sensor must be reaped when the link ends"
+        );
+        assert_eq!(deleted[0].0, fixture.sensor);
+        let resisted_outcomes: Vec<_> = world
+            .read_resource::<EventBus<Outcome>>()
+            .recv_all()
+            .filter(
+                |o| matches!(o, Outcome::Resisted { target, .. } if *target == fixture.target_uid),
+            )
+            .collect();
+        assert_eq!(
+            resisted_outcomes.len(),
+            1,
+            "a resisted roll must emit exactly one Outcome::Resisted for the scried target"
+        );
+    }
+
+    /// The scried target dying (or otherwise no longer resolving) must end
+    /// the link even though the sensor itself is untouched and would
+    /// otherwise still be in range -- a frozen sensor with nothing left to
+    /// follow is not a valid link.
+    #[test]
+    fn losing_the_scried_target_ends_the_link() {
+        let mut world = setup_world();
+        world.insert(EventBus::<DeleteEvent>::default());
+        let target_pos = Vec3::new(0.0, 0.0, 0.0);
+        let fixture = setup_tracking_fixture(&mut world, target_pos, 1_000_000.0);
+        world
+            .write_storage::<Health>()
+            .get_mut(fixture.target)
+            .unwrap()
+            .is_dead = true;
+
+        common_ecs::run_now::<Sys>(&world);
+
+        assert!(
+            world
+                .read_storage::<RemoteSense>()
+                .get(fixture.caster)
+                .is_none(),
+            "a dead scried target must end the link even with the reroll not yet due"
         );
     }
 }

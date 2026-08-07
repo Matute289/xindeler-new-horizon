@@ -1,0 +1,38 @@
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: RemoteSensing,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                // anchor_kind: Tracking is the only anchor kind that reads
+                // the cast's own InputAttr.target_entity (the creature the
+                // caster had selected when casting) rather than a fixed
+                // point or an owned/charmed beast -- see
+                // `server/src/events/remote_sense.rs`'s `resolve_tracking`.
+                // spawn_range/flight_speed are meaningless here (never a
+                // Piloted anchor); forwarded anyway for the uniform
+                // RemoteSense construction shape every anchor kind shares.
+                misc_data: Some(RemoteSense(
+                    anchor_kind: Tracking,
+                    free_look: true,
+                    piloted: false,
+                )),
+            ),
+        ),
+    ],
+    energy_cost: 50,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // Follows the same min_level == spell-level convention this family's
+        // own siblings already use (beast_sense: level 2 -> 2, clairvoyance:
+        // level 3 -> 3, arcane_eye: level 4 -> 4) -- scrying is a level 5
+        // spell.
+        requirements: (min_level: Some(5)),
+    ),
+)

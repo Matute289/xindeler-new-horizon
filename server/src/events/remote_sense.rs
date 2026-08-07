@@ -10,27 +10,34 @@
 //! only ever runs once, at cast time.
 
 use common::{
+    assets::{AssetExt, Ron},
+    combat::CombatTuning,
     comp::{
-        Alignment, Body, Buffs, Collider, ConcealedUnlessTrueSight, Controller, Density, Energy,
-        Health, Immovable, Inventory, Mass, Object, Ori, Poise, Pos, Presence, RemoteSense,
-        SkillSet, SpectatingEntity, Stats, Vel, buff::SenseAnchorKind, object::Body as ObjectBody,
-        pet::is_tameable, projectile::ProjectileHitEntities, remote_sense::SenseAnchor,
+        Alignment, Body, Buffs, Collider, ConcealedUnlessTrueSight, Controller, Density,
+        DerivedStats, Energy, Group, Health, Immovable, Inventory, Mass, Object, Ori, Poise, Pos,
+        Presence, RemoteSense, SkillSet, SpectatingEntity, Stats, Vel, buff::SenseAnchorKind,
+        object::Body as ObjectBody, pet::is_tameable, projectile::ProjectileHitEntities,
+        remote_sense::SenseAnchor,
     },
     event::{DeleteEvent, EventBus, ResolveRemoteSenseEvent},
     link::{Is, LinkHandle},
+    outcome::Outcome,
     piloting::{Pilot, Piloted, Piloting},
     resources::Time,
     terrain::{TerrainGrid, positions_have_line_of_sight},
     uid::{IdMaps, Uid},
 };
 use common_i18n::Content;
+use rand::RngExt;
 use specs::{
     Entities, Entity, Read, ReadExpect, ReadStorage, SystemData, Write, WriteStorage, shred,
 };
 use std::time::Duration;
 use vek::Vec3;
 
-use crate::sys::remote_sense::max_sense_range;
+use crate::sys::remote_sense::{
+    max_sense_range, scrying_focus_item_def_id, scrying_follow_offset, scrying_resist_roll_chance,
+};
 
 use super::ServerEvent;
 
@@ -71,6 +78,13 @@ pub struct ResolveRemoteSenseEventData<'a> {
     projectile_hit_entities: WriteStorage<'a, ProjectileHitEntities>,
     objects: WriteStorage<'a, Object>,
     presences: ReadStorage<'a, Presence>,
+    /// `scrying`'s resist roll needs the scried target's `combat_rating`
+    /// (`server/src/events/banishment.rs` reads the same cache for its own
+    /// saving throw, same rationale).
+    derived_stats: ReadStorage<'a, DerivedStats>,
+    /// `scrying`'s party-bonus check ("is the scried target in my own
+    /// group").
+    groups: ReadStorage<'a, Group>,
     remote_senses: WriteStorage<'a, RemoteSense>,
     concealed: WriteStorage<'a, ConcealedUnlessTrueSight>,
     controllers: WriteStorage<'a, Controller>,
@@ -78,6 +92,9 @@ pub struct ResolveRemoteSenseEventData<'a> {
     is_piloteds: WriteStorage<'a, Is<Piloted>>,
     spectating_entities: WriteStorage<'a, SpectatingEntity>,
     delete_events: Read<'a, EventBus<DeleteEvent>>,
+    /// Drives the same floating "Resisted" indicator every other resisted
+    /// magical effect uses when `scrying`'s cast-time roll fails.
+    outcomes: Read<'a, EventBus<Outcome>>,
 }
 
 impl ServerEvent for ResolveRemoteSenseEvent {
@@ -105,6 +122,9 @@ impl ServerEvent for ResolveRemoteSenseEvent {
                 SenseAnchorKind::Piloted => {
                     resolve_piloted(&mut data, &ev, ev.entity, caster_uid, caster_pos);
                 },
+                SenseAnchorKind::Tracking => {
+                    resolve_tracking(&mut data, &ev, ev.entity, caster_uid, caster_pos);
+                },
             }
         }
     }
@@ -112,8 +132,8 @@ impl ServerEvent for ResolveRemoteSenseEvent {
 
 /// If `caster` already holds an active `RemoteSense` link, synchronously
 /// tears it down so a new one can be wired over it without orphaning the
-/// old one. Recasting `arcane_eye` (or any of the row's other 3
-/// remote-sensing spells) while already piloting/sensing through a prior
+/// old one. Recasting `arcane_eye` (or any of the other remote-sensing
+/// spells) while already piloting/sensing through a prior
 /// anchor must not leave that anchor's spawned entity -- and the caster's
 /// `Is<Pilot>` link, if it was `Piloted` -- lingering, driven by nothing
 /// that can ever revalidate it, until `SENSOR_MAX_LIFETIME` finally reaps it.
@@ -238,18 +258,20 @@ fn resolve_existing(
 
 /// Builds the "invisible, 30 HP, destructible, `Alignment::Passive` prop"
 /// shape shared by every remote-sensing sensor entity -- `resolve_sensor`'s
-/// `Sensor` anchor and `resolve_piloted`'s `Piloted` anchor alike: `Uid`,
-/// `Pos`, `Vel`, `Ori`, `Mass`/`Density` (from `body`), `Collider::Point`
-/// (never an absent `Collider` -- an absent one drops `PhysicsState`
-/// entirely, which silently drops the entity from the figure renderer),
-/// `Body`, `Alignment::Passive`, `ConcealedUnlessTrueSight` (the
-/// True-Sight-gated visibility/targetability marker consumed by
-/// `voxygen/src/session/target.rs`, `voxygen/src/scene/figure/mod.rs`, and
-/// `voxygen/src/hud/mod.rs`), `Health`/`Stats`/`Energy`/`Poise`/`SkillSet`/
-/// `Buffs`/`Inventory`/`Immovable`/`ProjectileHitEntities`, and the
-/// belt-and-braces `Object::DeleteAfter`. Callers add whatever is specific to
-/// their own anchor kind on top (`resolve_piloted` additionally inserts
-/// `Controller` and the `Piloting` link).
+/// `Sensor` anchor, `resolve_piloted`'s `Piloted` anchor, and
+/// `resolve_tracking`'s `Tracking` anchor alike: `Uid`, `Pos`, `Vel`, `Ori`,
+/// `Mass`/`Density` (from `body`), `Collider::Point` (never an absent
+/// `Collider` -- an absent one drops `PhysicsState` entirely, which silently
+/// drops the entity from the figure renderer), `Body`, `Alignment::Passive`,
+/// `ConcealedUnlessTrueSight` (the True-Sight-gated visibility/targetability
+/// marker consumed by `voxygen/src/session/target.rs`,
+/// `voxygen/src/scene/figure/mod.rs`, and `voxygen/src/hud/mod.rs`),
+/// `Health`/`Stats`/`Energy`/`Poise`/`SkillSet`/`Buffs`/`Inventory`/
+/// `Immovable`/`ProjectileHitEntities`, and the belt-and-braces
+/// `Object::DeleteAfter`. Callers add whatever is specific to their own
+/// anchor kind on top (`resolve_piloted` additionally inserts `Controller`
+/// and the `Piloting` link; `resolve_tracking`'s own per-tick `Pos` upkeep
+/// lives in `server/src/sys/remote_sense.rs`, not here).
 fn spawn_sensor_base(
     data: &mut ResolveRemoteSenseEventData,
     body: Body,
@@ -402,6 +424,97 @@ fn resolve_piloted(
     });
 }
 
+/// The `SenseAnchorKind::Tracking` predicate, resist roll, and spawn:
+/// `scrying`. The target must be alive and within the caster's own sense
+/// range (the same range predicate `resolve_existing` uses, and no line of
+/// sight requirement -- like `resolve_existing`, unlike `resolve_sensor`,
+/// this targets a specific creature rather than an aimed point the caster
+/// must be able to see). Unlike every other anchor kind here, forming the
+/// link is also gated on a resisted-magic-effect roll
+/// (`scrying_resist_roll_chance`, the same formula this system's own
+/// per-tick re-roll uses) -- a failed roll behaves like any other
+/// unresolved predicate (no link granted) but additionally raises the
+/// standard `Outcome::Resisted` feedback, since here (unlike a structural
+/// failure such as being out of range) the target's own resistance is what
+/// stopped the link.
+fn resolve_tracking(
+    data: &mut ResolveRemoteSenseEventData,
+    ev: &ResolveRemoteSenseEvent,
+    caster: Entity,
+    caster_uid: Uid,
+    caster_pos: Pos,
+) {
+    let Some(target_uid) = ev.target_entity else {
+        return;
+    };
+    let Some(target_entity) = data.id_maps.uid_entity(target_uid) else {
+        return;
+    };
+    let Some(target_pos) = data.positions.get(target_entity).copied() else {
+        return;
+    };
+    let is_alive = data
+        .healths
+        .get(target_entity)
+        .is_some_and(|health| !health.is_dead);
+    let max_range = max_sense_range(data.presences.get(caster));
+    let is_in_range = target_pos.0.distance_squared(caster_pos.0) <= max_range * max_range;
+    if !is_alive || !is_in_range {
+        return;
+    }
+    let Some(caster_stats) = data.stats.get(caster) else {
+        return;
+    };
+
+    let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning").read();
+    let same_group = data
+        .groups
+        .get(caster)
+        .map(|g| Some(g) == data.groups.get(target_entity))
+        .unwrap_or(false);
+    let holds_focus_item = data.inventories.get(caster).is_some_and(|inv| {
+        inv.get_slot_of_item_by_def_id(&scrying_focus_item_def_id())
+            .is_some()
+    });
+    let chance = scrying_resist_roll_chance(
+        caster_stats,
+        data.stats.get(target_entity),
+        data.bodies.get(target_entity),
+        data.derived_stats.get(target_entity),
+        same_group,
+        holds_focus_item,
+        &tuning.0,
+    );
+    let mut rng = rand::rng();
+    if rng.random::<f32>() >= chance {
+        data.outcomes.emitter().emit(Outcome::Resisted {
+            pos: target_pos.0,
+            target: target_uid,
+        });
+        return;
+    }
+
+    teardown_existing_anchor(data, caster);
+
+    let spawn_pos = target_pos.0 + scrying_follow_offset(data.orientations.get(target_entity));
+    let body = Body::Object(ObjectBody::RemoteSensor);
+    let (_sensor, sensor_uid) = spawn_sensor_base(data, body, spawn_pos, "name-remote-sensor");
+
+    let _ = data.remote_senses.insert(caster, RemoteSense {
+        anchor: SenseAnchor::Tracking {
+            sensor: sensor_uid,
+            target: target_uid,
+            next_resist_roll: data.time.0 + f64::from(tuning.0.scrying_reroll_secs),
+        },
+        free_look: ev.free_look,
+        piloted: ev.piloted,
+        caster: caster_uid,
+        // Meaningless for `Tracking` (never driven), same uniform-shape
+        // rationale as `resolve_existing`/`resolve_sensor`.
+        flight_speed: ev.flight_speed,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +562,8 @@ mod tests {
         world.register::<Buffs>();
         world.register::<Health>();
         world.register::<Stats>();
+        world.register::<DerivedStats>();
+        world.register::<Group>();
         world.register::<Energy>();
         world.register::<Poise>();
         world.register::<SkillSet>();
@@ -468,6 +583,7 @@ mod tests {
         world.insert(Time(0.0));
         world.insert(empty_terrain());
         world.insert(EventBus::<DeleteEvent>::default());
+        world.insert(EventBus::<Outcome>::default());
         world
     }
 
@@ -1087,6 +1203,168 @@ mod tests {
                 .is_none(),
             "teardown_existing_anchor must clear the stale SpectatingEntity, not leave it \
              pointing at the deleted first eye"
+        );
+    }
+
+    fn tracking_event(caster: Entity, target: Uid) -> ResolveRemoteSenseEvent {
+        ResolveRemoteSenseEvent {
+            entity: caster,
+            target_entity: Some(target),
+            target_pos: None,
+            anchor_kind: SenseAnchorKind::Tracking,
+            free_look: true,
+            piloted: false,
+            spawn_range: TEST_SPAWN_RANGE,
+            flight_speed: TEST_FLIGHT_SPEED,
+        }
+    }
+
+    /// A caster's own `Stats` is required for `resolve_tracking` to even
+    /// attempt the resist roll (a caster somehow missing `Stats` fails
+    /// closed, the same "no remote view granted" shape as every other
+    /// unresolved predicate here).
+    fn caster_with_stats(world: &mut specs::World, uid_val: Uid, pos: Vec3<f32>) -> Entity {
+        let caster = world
+            .create_entity()
+            .with(Pos(pos))
+            .with(uid_val)
+            .with(Stats::new(
+                common_i18n::Content::Plain(String::new()),
+                tameable_body(),
+            ))
+            .with(Presence::new(
+                ViewDistances {
+                    terrain: 10,
+                    entity: 10,
+                },
+                PresenceKind::Spectator,
+            ))
+            .build();
+        world.write_resource::<IdMaps>().add_entity(uid_val, caster);
+        caster
+    }
+
+    #[test]
+    fn tracking_out_of_range_target_grants_no_link() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let target_uid = uid(2);
+        // No Presence on this caster (built by hand, not via
+        // `caster_with_stats`) -- `max_sense_range` defaults to 0.0, so any
+        // nonzero distance is out of range, the same shape
+        // `sensor_out_of_range_target_grants_no_link_and_spawns_nothing`
+        // already proves for the `Sensor` anchor.
+        let caster = world
+            .create_entity()
+            .with(Pos(Vec3::new(4.0, 4.0, 5.0)))
+            .with(Uid(NonZeroU64::new(1).unwrap()))
+            .with(Stats::new(
+                common_i18n::Content::Plain(String::new()),
+                tameable_body(),
+            ))
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(caster_uid, caster);
+        let target = world
+            .create_entity()
+            .with(Pos(Vec3::new(400.0, 4.0, 5.0)))
+            .with(Health::new(tameable_body()))
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(target_uid, target);
+
+        let entities_before = world.entities().join().count();
+
+        dispatch(&world, tracking_event(caster, target_uid));
+
+        assert!(
+            world.read_storage::<RemoteSense>().get(caster).is_none(),
+            "an out-of-range target must not grant a link"
+        );
+        assert_eq!(
+            world.entities().join().count(),
+            entities_before,
+            "an out-of-range target must not spawn a sensor entity"
+        );
+    }
+
+    #[test]
+    fn tracking_dead_target_grants_no_link() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let target_uid = uid(2);
+        let caster = caster_with_stats(&mut world, caster_uid, Vec3::new(4.0, 4.0, 5.0));
+        let mut target_health = Health::new(tameable_body());
+        target_health.is_dead = true;
+        let target = world
+            .create_entity()
+            .with(Pos(Vec3::new(6.0, 4.0, 5.0)))
+            .with(target_health)
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(target_uid, target);
+
+        dispatch(&world, tracking_event(caster, target_uid));
+
+        assert!(
+            world.read_storage::<RemoteSense>().get(caster).is_none(),
+            "a dead target must not grant a link"
+        );
+    }
+
+    /// The cast-time counterpart of
+    /// `server/src/sys/remote_sense.rs`'s own
+    /// `an_outclassed_scrying_link_is_resisted_and_ends`: a caster hopelessly
+    /// outclassed by the target's `combat_rating` hard-fails
+    /// `scrying_success_chance`'s `outclassed_wall` to exactly `0.0`, so the
+    /// very first cast must be resisted -- no link, no sensor spawned, and
+    /// the standard `Outcome::Resisted` feedback fires (this is the target's
+    /// own resistance stopping the link, not a structural failure like
+    /// range).
+    #[test]
+    fn tracking_outclassed_caster_is_resisted_and_grants_no_link() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let target_uid = uid(2);
+        let caster = caster_with_stats(&mut world, caster_uid, Vec3::new(4.0, 4.0, 5.0));
+        let target = world
+            .create_entity()
+            .with(Pos(Vec3::new(6.0, 4.0, 5.0)))
+            .with(Health::new(tameable_body()))
+            .with(DerivedStats {
+                combat_rating: 100.0,
+                ..Default::default()
+            })
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(target_uid, target);
+
+        let entities_before = world.entities().join().count();
+
+        dispatch(&world, tracking_event(caster, target_uid));
+
+        assert!(
+            world.read_storage::<RemoteSense>().get(caster).is_none(),
+            "a hard-failed resist roll must not grant a link"
+        );
+        assert_eq!(
+            world.entities().join().count(),
+            entities_before,
+            "a resisted cast must not spawn a sensor entity"
+        );
+        let resisted: Vec<_> = world
+            .read_resource::<EventBus<Outcome>>()
+            .recv_all()
+            .filter(|o| matches!(o, Outcome::Resisted { target, .. } if *target == target_uid))
+            .collect();
+        assert_eq!(
+            resisted.len(),
+            1,
+            "a resisted cast-time roll must emit exactly one Outcome::Resisted"
         );
     }
 }

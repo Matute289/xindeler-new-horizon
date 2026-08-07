@@ -71,6 +71,40 @@
     // periodic suspicion roll against a disguise it can currently sense.
     disguise_suspicion_reroll_secs: 8.0,
 
+    // --- scrying resist roll ---
+    // Third named instance of the same shared resisted-magic-effect formula
+    // (see MagicEffectTuning in combat.rs). Unlike save_*/disguise above,
+    // scrying's context-dependent term is not a single subtracted penalty --
+    // it's two independent additive bonuses (party + focus item, below),
+    // applied to the caster's own magic_accuracy before the roll -- so
+    // situational_penalty is unused here (always called with situational:
+    // false); it is set to 0.0 only because MagicEffectTuning requires every
+    // field present.
+    // 🔴 Not #[serde(default)] -- every field below must stay present, or the
+    // whole `scrying:` section fails to load rather than silently reverting
+    // a missing field to a different instance's number.
+    scrying: (
+        base_hit: 0.75, // between save's 0.70 and disguise's 0.85: a real probe, not mind control, not a casual glance
+        hit_floor: 0.05, // never impossible for a disadvantaged-not-outclassed caster
+        hit_ceil: 0.90, // never guaranteed, and a notch below save/disguise's 0.95: watching is never certain
+        mr_soft_cap: 0.75, // mirrors save_mr_soft_cap/disguise's own cap
+        cr_to_evasion: 2.0, // identical to save/disguise: a boss that resists charm also resists scrying
+        situational_penalty: 0.0, // unused -- see comment above; scrying's context terms are additive bonuses, not this
+        outclassed_wall: Some(0.30), // same wall as charm/save: a badly outclassed diviner just can't establish the link
+    ),
+    // Flat magic-accuracy bonus (scaled through hit_k, same as the caster's
+    // own base accuracy) applied to the scrying roll when the scried target
+    // shares the caster's own party/group. Stacks additively with
+    // scrying_focus_item_bonus_accuracy below -- both may apply at once.
+    scrying_party_bonus_accuracy: 8.0,
+    // Flat magic-accuracy bonus applied the same way when the caster holds a
+    // divination-focus item (a scrying crystal). See
+    // scrying_party_bonus_accuracy above for why the two stack.
+    scrying_focus_item_bonus_accuracy: 10.0,
+    // How often, in real seconds, an active scrying link gets another
+    // periodic resist re-roll against the scried target.
+    scrying_reroll_secs: 15.0,
+
     // --- weapon proficiency ---
     // Physical damage/poise/knockback/crit multiplier when the swung weapon is
     // not in the wielder's class proficiency set. 0.40 = -60%. Retune here, no rebuild.

@@ -1605,4 +1605,23 @@
         description_i18n: "spell-true_seeing-desc",
         ability: "common.abilities.spells.divination.true_seeing",
     ),
+    (
+        id: "spells.divination.scrying",
+        name_i18n: "spell-scrying",
+        level: 5,
+        school: Some(Divination),
+        source: Arcane,
+        classes: [Bard, Druid, Sorcerer, Warlock, Mage],
+        cast_time: Action,
+        duration: Concentration(60.0),
+        // Targets a specific creature rather than a fixed point (unlike
+        // clairvoyance's server-validated point target) -- range here is the
+        // cast-time acquisition distance; the sensor's own ongoing tether
+        // range afterward is the caster's view distance, enforced server-side
+        // (server/src/sys/remote_sense.rs's max_sense_range), not this field.
+        range: Meters(30.0),
+        aoe: None,
+        description_i18n: "spell-scrying-desc",
+        ability: "common.abilities.spells.divination.scrying",
+    ),
 ]
