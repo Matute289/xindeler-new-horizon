@@ -188,6 +188,18 @@ board to inform a decision, and before every `cd docs/design && git ...` write, 
 session's in-progress work per the general git-safety rules — do not discard, stash, or commit over
 it; read around it or ask if it's genuinely blocking.
 
+**Writes to `docs/design/` also go through a branch + PR, never a direct commit to `main` there**
+(Matías, 2026-08-06) — the same discipline this repo already uses for code, applied to the nested
+private repo too. `docs/design/` is a single shared working-tree checkout other sessions actively
+read and write concurrently; committing straight to `main` risks colliding with another session
+mid-checkout (observed directly: a concurrent session's branch switch mid-edit, twice in one
+session). Concretely: `cd docs/design && git checkout main && git pull`, then
+`git checkout -b <descriptive-branch-name>`, make the edit, commit, push, `gh pr create --base main
+--head <branch>` (same repo, same `gh`, just pointed at `Matute289/xindeler-design`), then switch
+back to `main` locally and stop — do not merge. If the shared checkout shows another session's
+uncommitted work when you arrive, don't even create your branch yet: wait or ask, the same as the
+read/write rule above.
+
 **Branch protection (public repo `Matute289/xindeler-new-horizon`):**
 - `main` and `development` require a PR + 1 approval, block force-pushes and deletion — but **`enforce_admins` is OFF**: Matias (as repo admin) can merge or push directly when he chooses to, unlike the sibling Bevy-port repo where even admins are hard-blocked. This is deliberate for this project.
 - AI agents must still NEVER merge or approve PRs, push to `main`/`development`, or touch branch-protection settings themselves — the admin-bypass exists for Matias, not for the agent. Workflow: branch off `development` → commit → push branch → open PR with base `development` → stop and report. Only Matias reviews and merges (or bypasses, at his own discretion).
