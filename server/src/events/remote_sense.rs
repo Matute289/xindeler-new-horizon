@@ -496,7 +496,12 @@ fn resolve_tracking(
 
     teardown_existing_anchor(data, caster);
 
-    let spawn_pos = target_pos.0 + scrying_follow_offset(data.orientations.get(target_entity));
+    let spawn_pos = target_pos.0
+        + scrying_follow_offset(
+            data.orientations.get(target_entity),
+            ev.behind_dist,
+            ev.above_dist,
+        );
     let body = Body::Object(ObjectBody::RemoteSensor);
     let (_sensor, sensor_uid) = spawn_sensor_base(data, body, spawn_pos, "name-remote-sensor");
 
@@ -505,6 +510,8 @@ fn resolve_tracking(
             sensor: sensor_uid,
             target: target_uid,
             next_resist_roll: data.time.0 + f64::from(tuning.0.scrying_reroll_secs),
+            behind_dist: ev.behind_dist,
+            above_dist: ev.above_dist,
         },
         free_look: ev.free_look,
         piloted: ev.piloted,
@@ -604,6 +611,11 @@ mod tests {
     /// each one re-deriving it.
     const TEST_SPAWN_RANGE: f32 = 9.0;
     const TEST_FLIGHT_SPEED: f32 = 6.0;
+    /// `scrying`'s own shipped values (the old `SCRY_SENSOR_BEHIND_DIST`/
+    /// `SCRY_SENSOR_ABOVE_DIST` consts), same rationale as
+    /// `TEST_SPAWN_RANGE`/`TEST_FLIGHT_SPEED` above.
+    const TEST_BEHIND_DIST: f32 = 3.0;
+    const TEST_ABOVE_DIST: f32 = 2.0;
 
     fn event(caster: Entity, target: Uid) -> ResolveRemoteSenseEvent {
         ResolveRemoteSenseEvent {
@@ -615,6 +627,8 @@ mod tests {
             piloted: false,
             spawn_range: TEST_SPAWN_RANGE,
             flight_speed: TEST_FLIGHT_SPEED,
+            behind_dist: TEST_BEHIND_DIST,
+            above_dist: TEST_ABOVE_DIST,
         }
     }
 
@@ -770,6 +784,8 @@ mod tests {
             piloted: false,
             spawn_range: TEST_SPAWN_RANGE,
             flight_speed: TEST_FLIGHT_SPEED,
+            behind_dist: TEST_BEHIND_DIST,
+            above_dist: TEST_ABOVE_DIST,
         }
     }
 
@@ -937,6 +953,8 @@ mod tests {
             piloted: true,
             spawn_range: TEST_SPAWN_RANGE,
             flight_speed: TEST_FLIGHT_SPEED,
+            behind_dist: TEST_BEHIND_DIST,
+            above_dist: TEST_ABOVE_DIST,
         }
     }
 
@@ -1216,6 +1234,8 @@ mod tests {
             piloted: false,
             spawn_range: TEST_SPAWN_RANGE,
             flight_speed: TEST_FLIGHT_SPEED,
+            behind_dist: TEST_BEHIND_DIST,
+            above_dist: TEST_ABOVE_DIST,
         }
     }
 

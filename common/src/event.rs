@@ -619,6 +619,13 @@ pub struct ResolveRemoteSenseEvent {
     /// off the caster's own component; meaningless for the
     /// `Existing`/`Sensor` anchor kinds.
     pub flight_speed: f32,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::behind_dist`.
+    /// Consumed only by `server/src/events/remote_sense.rs`'s
+    /// `resolve_tracking`; meaningless for every other anchor kind.
+    pub behind_dist: f32,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::above_dist`.
+    /// Same consumption/scope as `behind_dist` above.
+    pub above_dist: f32,
 }
 
 pub struct EnergyChangeEvent {
