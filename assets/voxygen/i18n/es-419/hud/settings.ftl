@@ -188,7 +188,6 @@ hud-settings-game_layers = Capas de Juego
 hud-settings-menu_buttons = Botones de Menú
 hud-settings-row_background_opacity = Opacidad del Fondo de la Fila
 hud-settings-quality_preset = Preajuste de calidad
-hud-settings-ssao = Oclusión ambiental (SSAO)
 hud-settings-taa = Antialiasing (TAA)
 hud-settings-volumetric_fog = Niebla volumétrica
 hud-settings-contact_shadows = Sombras de contacto
