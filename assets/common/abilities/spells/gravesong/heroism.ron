@@ -1,0 +1,68 @@
+// Heroism: a touch-range spell granting a willing ally BOTH a temp-HP pool
+// and immunity to fear in one cast. `SelfBuff` cannot deliver this -- that
+// ability variant always lands its buffs on the caster (`entity: data.entity`
+// in `common/src/states/self_buff.rs`), never on a touched ally. The
+// established mechanism for "touch spell affecting an ally" in this engine is
+// `attack_effect_target: Some(InGroup)` on a near-inert melee hit (see
+// `lesser_restoration.ron`/`greater_restoration.ron`), but a single
+// `melee_constructor` only exposes one redirectable `attack_effect` slot, so
+// two ally-targeted buffs need two strikes. `ComboMelee2` with two quick,
+// identical-range strikes is the smallest RON-only way to do that: strike one
+// lands `Shielded` (the temp-HP absorb pool), strike two lands `Fearless`
+// (fear immunity). Both use `damage: 1` (inert, matching the
+// lesser/greater_restoration precedent) so the touch always registers as a
+// hit without meaningfully harming the ally.
+ComboMelee2(
+    strikes: [
+        (
+            melee_constructor: (
+                kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+                range: 3.0,
+                angle: 20.0,
+                attack_effect: Some((
+                    Buff((
+                        kind: Shielded,
+                        dur_secs: 60.0,
+                        strength: Value(15.0),
+                        chance: 1.0,
+                    )),
+                    AnyDamage,
+                )),
+                attack_effect_target: Some(InGroup),
+            ),
+            buildup_duration: 0.4,
+            swing_duration: 0.1,
+            hit_timing: 0.5,
+            recover_duration: 0.2,
+        ),
+        (
+            melee_constructor: (
+                kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+                range: 3.0,
+                angle: 20.0,
+                attack_effect: Some((
+                    Buff((
+                        kind: Fearless,
+                        dur_secs: 60.0,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                    AnyDamage,
+                )),
+                attack_effect_target: Some(InGroup),
+            ),
+            buildup_duration: 0.1,
+            swing_duration: 0.1,
+            hit_timing: 0.5,
+            recover_duration: 0.4,
+        ),
+    ],
+    energy_cost_per_strike: 20,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Divine),
+        // level 1 spell -> min_level 6, same `level * 6` convention every
+        // other shipped spell follows (see see_invisibility.ron).
+        requirements: (min_level: Some(6)),
+    ),
+)

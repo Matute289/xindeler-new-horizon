@@ -1,0 +1,31 @@
+// Hex, crit mode. See hex_accuracy.ron for the shared submode/
+// simplification notes. Grants the new `Hexed` buff -- no existing BuffKind
+// expressed a crit-chance debuff, so this is the third hexable aspect
+// alongside `Bane` (accuracy) and `FaerieFire` (evasion).
+BasicRanged(
+    energy_cost: 30.0,
+    buildup_duration: 0.3,
+    recover_duration: 0.2,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 5,
+            buff: Some((
+                kind: Hexed,
+                dur_secs: 60,
+                strength: Value(0.7),
+                chance: 1.0,
+            )),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 1 spell -> min_level 6, same `level * 6` convention.
+        requirements: (min_level: Some(6)),
+    ),
+)

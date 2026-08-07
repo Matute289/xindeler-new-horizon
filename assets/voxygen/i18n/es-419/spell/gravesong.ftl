@@ -19,6 +19,8 @@ spell-bless = Bendición
 spell-bless-desc = Envolvés a hasta tres aliados elegidos en un baño de luz alentadora, afinando sus golpes y su determinación.
 spell-crusaders_mantle = Manto del Cruzado
 spell-crusaders_mantle-desc = Un radio de luz consagrada florece a tu alrededor y viaja con vos, llenando de valor a los aliados cercanos. Mientras dura, sus golpes llevan un plus de radiancia abrasadora.
+spell-heroism = Heroísmo
+spell-heroism-desc = Tocás a un aliado dispuesto y lo llenás de valentía, envolviéndolo en una protección reconfortante y blindándolo contra el miedo mismo mientras mantengas la concentración.
 
 # Name only for now; its description is pending the spell-prose pass.
 spell-censure = Censura

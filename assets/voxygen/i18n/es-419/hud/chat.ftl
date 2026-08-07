@@ -11,6 +11,7 @@ hud-chat-died_of_pvp_buff_msg =
     .curse = { $victim } murió de: una maldición causada por { $attacker }
     .crippled = { $victim } murió de: heridas graves causadas por { $attacker }
     .frozen = { $victim } murió de: congelado causado por { $attacker }
+    .sickened = { $victim } murió de: una enfermedad causada por { $attacker }
     .mysterious = { $victim } murió de: manera misteriosa causado por { $attacker }
 hud-chat-died_of_buff_nonexistent_msg =
     .burning = { $victim } murió de: quemado
@@ -18,6 +19,7 @@ hud-chat-died_of_buff_nonexistent_msg =
     .curse = { $victim } murió de: una maldición
     .crippled = { $victim } murió de: heridas graves
     .frozen = { $victim } murió de: congelado
+    .sickened = { $victim } murió de: una enfermedad
     .mysterious = { $victim } murió de: manera misteriosa
 hud-chat-died_of_npc_buff_msg =
     .burning = { "[" }{ $victim }] murió de: quemado causado por { $attacker }
@@ -25,6 +27,7 @@ hud-chat-died_of_npc_buff_msg =
     .curse = { "[" }{ $victim }] murió de: una maldición causada por { $attacker }
     .crippled = { "[" }{ $victim }] murió de: heridas graves causadas por { $attacker }
     .frozen = { "[" }{ $victim }] murió de: congelado causado por { $attacker }
+    .sickened = { "[" }{ $victim }] murió de: una enfermedad causada por { $attacker }
     .mysterious = { "[" }{ $victim }] murió de: manera misteriosa causado por { $attacker }
 
 ## PvP deaths

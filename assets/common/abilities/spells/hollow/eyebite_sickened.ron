@@ -1,0 +1,30 @@
+// Eyebite, sickness mode. See eyebite_asleep.ron for the shared submode/
+// simplification notes. Grants `Sickened` (Bane's accuracy penalty plus a
+// Bleeding-style drain tick, folded into one buff/one icon).
+BasicRanged(
+    energy_cost: 100.0,
+    buildup_duration: 0.6,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 8,
+            buff: Some((
+                kind: Sickened,
+                dur_secs: 60,
+                strength: Value(0.8),
+                chance: 1.0,
+            )),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, same `level * 6` convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

@@ -1,0 +1,41 @@
+// Weave Transfusion: deliberately simplified to a large instant heal on a
+// touched ally, per an explicit design call ("no te compliques") rather than
+// the sheet's original life-transfer mechanic.
+//
+// `SelfBuff` cannot deliver this -- that ability variant always lands its
+// effect on the caster (`entity: data.entity` in
+// `common/src/states/self_buff.rs`), never on a touched ally. Shipped instead
+// as `BasicMelee` using the exact touch-ally pattern already shipped for
+// `lesser_restoration.ron`/`greater_restoration.ron`
+// (`attack_effect_target: Some(InGroup)` on a near-inert melee hit).
+//
+// `CombatEffect::Heal(f32)` (`common/src/combat.rs`) already derives
+// `Deserialize` and was already exposed by `melee_constructor.attack_effect`
+// -- it had simply never been authored in any shipped RON before this file.
+// Magnitude follows the same convention `AdditionalDamage`'s sibling f32
+// fields use elsewhere (a raw magnitude scaled by the caster's own stats at
+// resolution time, here `heal_power` -- see `CombatEffect::Heal`'s handling
+// in `common/src/combat.rs`).
+BasicMelee(
+    energy_cost: 90.0,
+    buildup_duration: 0.6,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Heal(200.0),
+            AnyDamage,
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 7 spell -> min_level 42, same `level * 6` convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

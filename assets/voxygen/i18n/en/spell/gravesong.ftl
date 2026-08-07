@@ -19,6 +19,8 @@ spell-bless = Bless
 spell-bless-desc = You wrap up to three chosen allies in a wash of encouraging light, sharpening their strikes and resolve.
 spell-crusaders_mantle = Crusader's Mantle
 spell-crusaders_mantle-desc = A radius of consecrated light blooms around you and travels as you move, filling nearby allies with valor. While it holds, their strikes carry an extra surge of searing radiance.
+spell-heroism = Heroism
+spell-heroism-desc = You touch a willing ally and fill them with bravery, wrapping them in a bolstering ward and steeling them against fear itself for as long as you hold focus.
 
 # Name only for now; its description is pending the spell-prose pass.
 spell-censure = Censure
