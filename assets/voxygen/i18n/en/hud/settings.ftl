@@ -113,6 +113,7 @@ hud-settings-lossy_terrain_compression = Lossy terrain compression
 hud-settings-weapon_trails = Weapon trails
 hud-settings-flashing_lights = Flashing lights
 hud-settings-flashing_lights_info = Enables all kinds of flashing, e.g. flickering or lightning strikes
+hud-settings-ssao = Ambient Occlusion
 hud-settings-resolution = Resolution
 hud-settings-bit_depth = Bit Depth
 hud-settings-refresh_rate = Refresh Rate

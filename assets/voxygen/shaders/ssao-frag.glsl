@@ -55,12 +55,15 @@ float depth_at(vec2 uv) {
 // darkening whole rooms.
 const float SSAO_RADIUS = 1.0;
 
-// `mix(1.0, ao, SSAO_STRENGTH)` never reaches 0: the forward shaders already
-// combine emitted + reflected light into `tgt_color` (no separate ambient
-// channel exists), so SSAO here approximates by multiplying *total* outgoing
-// radiance rather than just the ambient term. A strength floor keeps that
-// approximation from ever fully blacking out direct light.
-const float SSAO_STRENGTH = 0.85;
+// Controls how strongly the per-tap occlusion sum darkens the raw value
+// written to `tgt_ao` during *generation*. This is distinct from the
+// `SSAO_STRENGTH` #define (`pipeline_creation.rs`, used in
+// `clouds-frag.glsl`), which controls how strongly that already-generated
+// occlusion value darkens the final composited colour during *consumption*;
+// the two are deliberately named differently so they can't collide as
+// preprocessor identifiers (this file's constants block, `constants.glsl`,
+// is shared with `clouds-frag.glsl`).
+const float SSAO_OCCLUSION_STRENGTH = 0.85;
 
 // Pushes each hemisphere sample's origin along the surface normal before
 // projecting it, so a flat surface doesn't self-occlude from depth-buffer
@@ -164,6 +167,6 @@ void main() {
         occlusion_sum += occluded * range_check;
     }
 
-    float occlusion = 1.0 - SSAO_STRENGTH * (occlusion_sum / float(SSAO_TAPS));
+    float occlusion = 1.0 - SSAO_OCCLUSION_STRENGTH * (occlusion_sum / float(SSAO_TAPS));
     tgt_ao = vec4(occlusion);
 }

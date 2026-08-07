@@ -534,11 +534,12 @@ impl<'frame> Drawer<'frame> {
     /// Does nothing if the ingame pipelines are not yet ready.
     ///
     /// Writes real occlusion into `tgt_ao` (AO-generation pass) and a
-    /// depth-aware blurred copy into `tgt_ao_blur` (blur pass). Nothing
-    /// samples either target for visible output yet -- that wiring lives in
-    /// the volumetric (clouds) pass, gated behind `SSAO_ENABLED`, which is
-    /// separate follow-up work -- so this remains visually a no-op even
-    /// though the math it computes is now real.
+    /// depth-aware blurred copy into `tgt_ao_blur` (blur pass). The
+    /// volumetric (clouds) pass samples `tgt_ao_blur` when SSAO is enabled
+    /// (`SSAO_ENABLED`, gated on `SsaoMode`) -- see `VolumetricPassDrawer`.
+    /// These two passes themselves still run unconditionally regardless of
+    /// that setting, since the AO targets are not `Option`-wrapped; only the
+    /// consumption is gated.
     pub fn ssao_passes(&mut self) {
         let Some(pipelines) = self.borrow.pipelines.all() else {
             return;
