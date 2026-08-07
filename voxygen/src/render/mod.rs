@@ -433,6 +433,14 @@ impl SsaoMode {
     fn is_on(&self) -> bool { matches!(self, SsaoMode::On(_)) }
 }
 
+impl PipelineModes {
+    /// Whether the AO generation+blur passes should run at all this frame.
+    /// `Drawer::ssao_passes` skips them entirely when this is `false`, so
+    /// `SsaoMode::Off` actually sheds the cost it exists to let players shed,
+    /// not just the visual effect.
+    pub fn ssao_is_on(&self) -> bool { self.ssao.is_on() }
+}
+
 /// Render modes
 #[derive(PartialEq, Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]

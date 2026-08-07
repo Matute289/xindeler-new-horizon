@@ -531,16 +531,20 @@ impl<'frame> Drawer<'frame> {
     }
 
     /// To be ran between `first_pass` and `volumetric_pass`.
-    /// Does nothing if the ingame pipelines are not yet ready.
+    /// Does nothing if the ingame pipelines are not yet ready, or if SSAO is
+    /// currently off.
     ///
     /// Writes real occlusion into `tgt_ao` (AO-generation pass) and a
     /// depth-aware blurred copy into `tgt_ao_blur` (blur pass). The
     /// volumetric (clouds) pass samples `tgt_ao_blur` when SSAO is enabled
     /// (`SSAO_ENABLED`, gated on `SsaoMode`) -- see `VolumetricPassDrawer`.
-    /// These two passes themselves still run unconditionally regardless of
-    /// that setting, since the AO targets are not `Option`-wrapped; only the
-    /// consumption is gated.
+    /// Skipped entirely when `SsaoMode::Off`, so the setting actually saves
+    /// the generation+blur cost it exists to let players shed, not just the
+    /// visual effect.
     pub fn ssao_passes(&mut self) {
+        if !self.borrow.pipeline_modes.ssao_is_on() {
+            return;
+        }
         let Some(pipelines) = self.borrow.pipelines.all() else {
             return;
         };
