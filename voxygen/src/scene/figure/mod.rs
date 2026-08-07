@@ -53,8 +53,8 @@ use anim::{
 use common::{
     comp::{
         self, Body, CharacterActivity, CharacterState, Collider, Controller, Disguise, Health,
-        Inventory, ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhysicsState,
-        PickupItem, PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
+        Inventory, ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhantomIllusion,
+        PhysicsState, PickupItem, PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
         body::{self, parts::HeadState},
         inventory::slot::EquipSlot,
         item::{Hands, ItemKind, ToolKind, armor::ArmorKind},
@@ -128,6 +128,129 @@ fn sense_tint(sense: SenseKind) -> Rgba<f32> {
         SenseKind::True => (1.6, 1.6, 1.6),
     };
     Rgba::new(r, g, b, 1.0)
+}
+
+/// The colour multiply for this client's own reveal of `entity`, folding in
+/// the one exception to the plain per-`SenseKind` tint above: a revealed
+/// phantasm has no separate real body to swap in the way a disguised entity
+/// does (see `disguise_for_observer`), so a colour cue is the only way this
+/// client's own True Sight can mark it as illusory rather than a solid
+/// creature. It gets a faded, desaturated multiplier instead of the bright
+/// `sense_tint(True)` glow — the closest a plain colour multiply gets to
+/// "translucent" without a second render pass or shader (the renderer's
+/// figure pipeline only ever consumes this multiply's RGB, never an alpha
+/// channel — see `pipelines::figure::Locals::new`).
+fn reveal_tint(sense: Option<SenseKind>, is_phantasm: bool) -> Rgba<f32> {
+    match sense {
+        Some(SenseKind::True) if is_phantasm => Rgba::new(0.55, 0.55, 0.62, 1.0),
+        Some(sense) => sense_tint(sense),
+        None => Rgba::one(),
+    }
+}
+
+/// The disguise this client's own observer should still be fooled by:
+/// `disguise` unchanged, or `None` when `entity` is in this client's own
+/// True Sight reveal set (`SenseKind::True` in `revealed_entities`).
+///
+/// `Disguise::render_body` itself stays a pure, observer-agnostic function —
+/// a disguise's lie is synced to every client alike, so the function that
+/// resolves it must not know who is looking. This is the one seam every
+/// `Disguise::render_body` call site in this file goes through first, so a
+/// True-Sight-holding observer sees the real body/name at every one of them
+/// consistently — this file has exactly one observer (the local client), so
+/// nothing here needs to vary per call site.
+fn disguise_for_observer<'a>(
+    disguise: Option<&'a Disguise>,
+    entity: EcsEntity,
+    revealed_entities: &HashMap<EcsEntity, SenseKind>,
+) -> Option<&'a Disguise> {
+    if revealed_entities.get(&entity) == Some(&SenseKind::True) {
+        None
+    } else {
+        disguise
+    }
+}
+
+#[cfg(test)]
+mod true_sight_reveal_tests {
+    use super::*;
+    use common::{comp::body::humanoid, uid::Uid};
+    use specs::{Builder, WorldExt};
+    use std::num::NonZeroU64;
+
+    fn disguise() -> Disguise {
+        Disguise {
+            apparent_body: Body::Humanoid(humanoid::Body::random()),
+            apparent_name: None,
+            caster: Uid(NonZeroU64::new(1).unwrap()),
+            cast_accuracy: 0.5,
+        }
+    }
+
+    #[test]
+    fn an_unrevealed_entity_keeps_its_disguise() {
+        let mut world = specs::World::new();
+        let entity = world.create_entity().build();
+        let d = disguise();
+        let revealed = HashMap::new();
+        assert!(disguise_for_observer(Some(&d), entity, &revealed).is_some());
+    }
+
+    #[test]
+    fn a_true_sight_revealed_entity_loses_its_disguise() {
+        let mut world = specs::World::new();
+        let entity = world.create_entity().build();
+        let d = disguise();
+        let mut revealed = HashMap::new();
+        revealed.insert(entity, SenseKind::True);
+        assert!(
+            disguise_for_observer(Some(&d), entity, &revealed).is_none(),
+            "a True-Sight-revealed disguise must resolve as if there were none"
+        );
+    }
+
+    #[test]
+    fn a_reveal_by_an_unrelated_sense_kind_does_not_bypass_the_disguise() {
+        let mut world = specs::World::new();
+        let entity = world.create_entity().build();
+        let d = disguise();
+        let mut revealed = HashMap::new();
+        revealed.insert(entity, SenseKind::Magic);
+        assert!(
+            disguise_for_observer(Some(&d), entity, &revealed).is_some(),
+            "only SenseKind::True bypasses a disguise, not an arbitrary reveal"
+        );
+    }
+
+    #[test]
+    fn reveal_tint_gives_a_true_sight_revealed_phantasm_a_distinct_faded_tint() {
+        let tint = reveal_tint(Some(SenseKind::True), true);
+        assert_eq!(tint, Rgba::new(0.55, 0.55, 0.62, 1.0));
+        assert_ne!(
+            tint,
+            sense_tint(SenseKind::True),
+            "a revealed phantasm must not get the ordinary bright True Sight glow"
+        );
+    }
+
+    #[test]
+    fn reveal_tint_falls_back_to_the_ordinary_sense_tint_for_a_non_phantasm() {
+        assert_eq!(
+            reveal_tint(Some(SenseKind::True), false),
+            sense_tint(SenseKind::True)
+        );
+        assert_eq!(
+            reveal_tint(Some(SenseKind::Magic), true),
+            sense_tint(SenseKind::Magic),
+            "the phantasm tint only overrides SenseKind::True, not every sense"
+        );
+    }
+
+    #[test]
+    fn reveal_tint_is_neutral_without_any_reveal() {
+        assert_eq!(reveal_tint(None, false), Rgba::one());
+        assert_eq!(reveal_tint(None, true), Rgba::one());
+    }
 }
 
 /// camera data, figure LOD render distance.
@@ -601,6 +724,11 @@ struct FigureReadData<'a> {
     // model/skeleton/nameplate selection prefers this when present — see
     // `Disguise::render_body`.
     disguises: ReadStorage<'a, Disguise>,
+    // Marks a shared-illusion decoy. Read only by `maintain_entity`'s own
+    // True-Sight tint branch — a phantasm has no separate real body to swap
+    // in the way a disguise does, so revealing one to this client is purely
+    // a colour treatment, not a model/skeleton override.
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 struct FigureUpdateData<'a, CSS, COR> {
@@ -651,6 +779,7 @@ impl FigureReadData<'_> {
             collider: self.colliders.get(entity),
             heads: self.heads.get(entity),
             disguise: self.disguises.get(entity),
+            phantom_illusion: self.phantom_illusions.get(entity),
         })
     }
 
@@ -680,6 +809,7 @@ impl FigureReadData<'_> {
                 self.colliders.maybe(),
                 self.heads.maybe(),
                 self.disguises.maybe(),
+                self.phantom_illusions.maybe(),
             ),
         )
             .join()
@@ -709,6 +839,7 @@ impl FigureReadData<'_> {
                         collider,
                         heads,
                         disguise,
+                        phantom_illusion,
                     ),
                 )| FigureUpdateParams {
                     entity,
@@ -734,6 +865,7 @@ impl FigureReadData<'_> {
                     collider,
                     heads,
                     disguise,
+                    phantom_illusion,
                 },
             )
     }
@@ -763,6 +895,7 @@ struct FigureUpdateParams<'a> {
     collider: Option<&'a Collider>,
     heads: Option<&'a Heads>,
     disguise: Option<&'a Disguise>,
+    phantom_illusion: Option<&'a PhantomIllusion>,
 }
 
 pub struct FigureMgr {
@@ -1260,6 +1393,7 @@ impl FigureMgr {
             collider,
             heads,
             disguise,
+            phantom_illusion,
         } = *entity_data;
 
         // Everything below this point that selects a model/skeleton/state-map
@@ -1271,6 +1405,11 @@ impl FigureMgr {
         // itself. The real `Body` this entity actually has (still available
         // via `entity_data.body`/`read_data.bodies`) is untouched by this —
         // nothing about physics or line-of-sight is computed in this file.
+        // `disguise_for_observer` folds this client's own True Sight reveal
+        // set into the same seam, so a revealed disguise never gets keyed
+        // into the state-map cache under its apparent body in the first
+        // place.
+        let disguise = disguise_for_observer(disguise, entity, data.scene_data.revealed_entities);
         let body = &Disguise::render_body(disguise, *body);
 
         let renderer = &mut *data.renderer;
@@ -1386,11 +1525,10 @@ impl FigureMgr {
                 Rgba::one()
             }
             // Tint entities revealed to us by an active magical sense
-            * data
-                .scene_data
-                .revealed_entities
-                .get(&entity)
-                .map_or_else(Rgba::one, |sense| sense_tint(*sense));
+            * reveal_tint(
+                data.scene_data.revealed_entities.get(&entity).copied(),
+                phantom_illusion.is_some(),
+            );
 
         let scale = scale.map(|s| s.0).unwrap_or(1.0);
 
@@ -7153,6 +7291,7 @@ impl FigureMgr {
         player_entity: EcsEntity,
         viewpoint_entity: EcsEntity,
         tick: u64,
+        revealed_entities: &HashMap<EcsEntity, SenseKind>,
         (camera, figure_lod_render_distance): CameraData,
     ) {
         span!(_guard, "render", "FigureManager::render");
@@ -7200,7 +7339,11 @@ impl FigureMgr {
             // see `Disguise::render_body`'s doc comment. `real_body` stays
             // available above for anything that must not be fooled (nothing
             // in this render pass needs that, but keeping the name distinct
-            // avoids an accidental future misuse).
+            // avoids an accidental future misuse). Folded through
+            // `disguise_for_observer` first so a True-Sight-revealed
+            // disguise renders as its real body here too, matching the
+            // state-map key `maintain_entity` already resolved it under.
+            let disguise = disguise_for_observer(disguise, entity, revealed_entities);
             let body = &Disguise::render_body(disguise, *real_body);
             if let Some((bound, model, atlas)) = self.get_model_for_render(
                 tick,
@@ -7903,7 +8046,9 @@ impl FigureMgr {
             return Vec3::zero();
         };
         let disguise = ecs.read_storage::<Disguise>();
-        let body = Disguise::render_body(disguise.get(entity), real_body);
+        let disguise =
+            disguise_for_observer(disguise.get(entity), entity, scene_data.revealed_entities);
+        let body = Disguise::render_body(disguise, real_body);
         match &body {
             Body::Humanoid(_) => self
                 .states
@@ -8033,7 +8178,9 @@ impl FigureMgr {
         // rider silently gets no attachment transform.
         let real_body = ecs.read_storage::<Body>().get(entity).copied()?;
         let disguise = ecs.read_storage::<Disguise>();
-        let body = Disguise::render_body(disguise.get(entity), real_body);
+        let disguise =
+            disguise_for_observer(disguise.get(entity), entity, scene_data.revealed_entities);
+        let body = Disguise::render_body(disguise, real_body);
         match &body {
             Body::Humanoid(_) => {
                 self.states.character_states.get(&entity).map(|state| {
