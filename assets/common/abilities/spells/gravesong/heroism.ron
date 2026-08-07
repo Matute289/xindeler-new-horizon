@@ -12,6 +12,32 @@
 // (fear immunity). Both use `damage: 1` (inert, matching the
 // lesser/greater_restoration precedent) so the touch always registers as a
 // hit without meaningfully harming the ally.
+//
+// `auto_progress: true` is load-bearing, not cosmetic: `ComboMelee2`
+// defaults to requiring the input to still be held when strike 1's swing
+// finishes (`common/src/states/combo_melee2.rs`) to advance to strike 2 --
+// the "hold to combo" mechanic every real weapon combo wants. A one-tap cast
+// (the natural way to use a support spell) would otherwise land `Shielded`
+// and silently never reach `Fearless`. `auto_progress` skips that
+// hold-check so both strikes always fire from a single tap.
+//
+// 🔴 `AttackSource(Melee)`, not `AnyDamage`, gates each `attack_effect`:
+// `Stab`'s own `AttackDamage` entry is hardcoded to `GroupTarget::OutOfGroup`
+// regardless of `attack_effect_target` (`common/src/comp/melee.rs`), so an
+// `InGroup` (ally) hit always accumulates zero damage against this attack --
+// `AnyDamage` (`damage > 0.0`) can never be true here and would silently
+// swallow both buffs. `AttackSource(Melee)` doesn't depend on damage at all,
+// same "trivially true for this delivery" idiom `septic_shot.ron` already
+// uses with `AttackSource(Projectile)`.
+//
+// 🟡 Known residual limitation, not fixed here: each strike independently
+// re-resolves its own `InGroup` melee cone (`attack_options`), so nothing
+// guarantees strike 2 lands on the SAME ally strike 1 did if more than one
+// ally is in melee range when this is cast (e.g. a second ally steps into
+// range between the two strikes, ~0.7s apart). Low-probability in practice
+// (single touch-range cast, sub-second window) but a real gap -- a proper
+// fix needs a primitive that grants >1 buff from one melee hit (an
+// `attack_effect: Vec<...>` instead of a single slot), not built tonight.
 ComboMelee2(
     strikes: [
         (
@@ -26,7 +52,7 @@ ComboMelee2(
                         strength: Value(15.0),
                         chance: 1.0,
                     )),
-                    AnyDamage,
+                    AttackSource(Melee),
                 )),
                 attack_effect_target: Some(InGroup),
             ),
@@ -47,7 +73,7 @@ ComboMelee2(
                         strength: Value(1.0),
                         chance: 1.0,
                     )),
-                    AnyDamage,
+                    AttackSource(Melee),
                 )),
                 attack_effect_target: Some(InGroup),
             ),
@@ -58,6 +84,7 @@ ComboMelee2(
         ),
     ],
     energy_cost_per_strike: 20,
+    auto_progress: true,
     meta: (
         school: Some(Enchantment),
         source: Some(Divine),

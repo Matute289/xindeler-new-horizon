@@ -16,6 +16,18 @@
 // fields use elsewhere (a raw magnitude scaled by the caster's own stats at
 // resolution time, here `heal_power` -- see `CombatEffect::Heal`'s handling
 // in `common/src/combat.rs`).
+//
+// 🔴 `AttackSource(Melee)`, not `AnyDamage`, gates the heal: `Stab`'s own
+// `AttackDamage` entry is hardcoded to `GroupTarget::OutOfGroup` regardless
+// of `attack_effect_target` (`common/src/comp/melee.rs`), so an `InGroup`
+// hit always accumulates zero damage against this attack -- `AnyDamage`
+// (`damage > 0.0`) can never be true here and would silently swallow the
+// heal. `lesser_restoration.ron`/`greater_restoration.ron` sidestep this the
+// same way, just with `TargetHasBuff(...)` instead since their own
+// requirement needs to check something about the target anyway;
+// `AttackSource(Melee)` is the equivalent "trivially true for this
+// delivery" idiom when there's nothing else to gate on (see
+// `septic_shot.ron`'s `AttackSource(Projectile)`).
 BasicMelee(
     energy_cost: 90.0,
     buildup_duration: 0.6,
@@ -28,7 +40,7 @@ BasicMelee(
         angle: 20.0,
         attack_effect: Some((
             Heal(200.0),
-            AnyDamage,
+            AttackSource(Melee),
         )),
         attack_effect_target: Some(InGroup),
     ),
