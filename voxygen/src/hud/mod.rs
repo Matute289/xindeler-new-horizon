@@ -2571,8 +2571,15 @@ impl Hud {
                         // client-side counterpart of the model/skeleton
                         // override in the figure-rendering path. `None`
                         // (no apparent name authored yet) falls back to the
-                        // real name, same as an undisguised entity.
+                        // real name, same as an undisguised entity. An
+                        // entity in our own True Sight reveal set bypasses
+                        // the disguise entirely and always shows its real
+                        // name, matching the real body the figure-rendering
+                        // path already renders for it.
+                        let true_sight_revealed =
+                            info.revealed_entities.get(&entity) == Some(&SenseKind::True);
                         let display_name = disguise
+                            .filter(|_| !true_sight_revealed)
                             .and_then(|d| d.apparent_name.as_ref())
                             .unwrap_or(&stats.name);
                         let info = display_overhead_info.then(|| overhead::Info {

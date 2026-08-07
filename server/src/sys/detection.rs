@@ -50,7 +50,8 @@
 use common::{
     CachedSpatialGrid,
     comp::{
-        ActiveSense, Body, Buffs, Object, PickupItem, Pos, Stats, WaypointArea,
+        ActiveSense, Body, Buffs, Disguise, Object, PhantomIllusion, PickupItem, Pos, Stats,
+        WaypointArea,
         buff::{BuffCategory, BuffKind, SenseMode},
         creature_type::CreatureKind,
         detection::{Detected, DetectedEntity, DetectedPoint, SenseKind},
@@ -137,6 +138,10 @@ pub struct ReadData<'a> {
     objects: ReadStorage<'a, Object>,
     pickup_items: ReadStorage<'a, PickupItem>,
     waypoint_areas: ReadStorage<'a, WaypointArea>,
+    /// True Sight's own reveal targets, read by [`reveals`]'s `SenseKind::True`
+    /// arm.
+    disguises: ReadStorage<'a, Disguise>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 #[derive(Default)]
@@ -318,6 +323,10 @@ fn merged_senses(senses: &[ActiveSense]) -> Vec<ActiveSense> {
 /// Candidates come from the cached spatial grid — never a full-world join. The
 /// grid answers with the entities in the *bounding box* of the circle, so an
 /// exact radius check still has to be applied per candidate.
+///
+/// `SenseKind::True` shares this exact spatial query (same grid, same radius
+/// and distance check) with every other sense kind, and is judged by the same
+/// [`reveals`] dispatcher below — including its anti-divination early-out.
 fn evaluate_sense(
     read_data: &ReadData,
     observer: Entity,
@@ -326,14 +335,6 @@ fn evaluate_sense(
     entities: &mut Vec<DetectedEntity>,
     points: &mut Vec<DetectedPoint>,
 ) {
-    // The illusion-piercing reveal set is built separately, together with the
-    // rest of its piercing flags — it never contributes to the area reveal
-    // set here. Skip the spatial-grid scan entirely rather than run it only
-    // to have every candidate rejected by `reveals`.
-    if sense.kind == SenseKind::True {
-        return;
-    }
-
     let radius_sqr = sense.radius * sense.radius;
     // `Path` reveals a place rather than a set of things, so it resolves to the
     // single closest candidate instead of appending every match.
@@ -368,9 +369,9 @@ fn evaluate_sense(
                 return;
             }
 
-            if reveals(read_data, target, sense.kind)
-                && let Some(uid) = read_data.uids.get(target)
-            {
+            let revealed = reveals(read_data, target, sense.kind);
+
+            if revealed && let Some(uid) = read_data.uids.get(target) {
                 entities.push(DetectedEntity {
                     uid: *uid,
                     sense: sense.kind,
@@ -445,10 +446,16 @@ fn reveals(read_data: &ReadData, target: Entity, kind: SenseKind) -> bool {
         // fiends ∪ undead once that helper lands; until then this sense
         // deliberately reveals nothing rather than guessing at a subset.
         SenseKind::Aberrant => false,
-        // The illusion-piercing reveal set is the continuous always-on sense,
-        // which is built together with the rest of its piercing flags; it is
-        // not one of the area predicates.
-        SenseKind::True => false,
+        // A phantasm has no separate "real form" hiding underneath it the
+        // way a disguised entity does; being caught by this arm at all is
+        // itself the reveal — it tells the observer the entity in front of
+        // them is not what it appears to be. Shares the same anti-divination
+        // early-out above as every other sense: a `nondetection`-protected
+        // disguise/phantasm stays hidden even from True Sight, matching
+        // `Stats.nondetection`'s own "stronger, unconditional claim" doc.
+        SenseKind::True => {
+            read_data.disguises.contains(target) || read_data.phantom_illusions.contains(target)
+        },
         // Handled before the predicate runs — points, not entities.
         SenseKind::Path => false,
     }
@@ -515,6 +522,8 @@ mod tests {
         world.register::<Object>();
         world.register::<PickupItem>();
         world.register::<WaypointArea>();
+        world.register::<Disguise>();
+        world.register::<PhantomIllusion>();
         world.register::<Detected>();
         world.insert(IdMaps::default());
         world.insert(CachedSpatialGrid::default());
@@ -827,6 +836,110 @@ mod tests {
         rebuild_spatial_grid(&world);
         common_ecs::run_now::<Sys>(&world);
         assert!(detected_uids(&world, observer).is_empty());
+    }
+
+    // ───────────────────────── True Sight reveal targets ────────────────────
+
+    fn disguise_component() -> Disguise {
+        Disguise {
+            apparent_body: beast_body(),
+            apparent_name: None,
+            caster: uid(99),
+            cast_accuracy: 0.5,
+        }
+    }
+
+    #[test]
+    fn true_sight_reveals_a_disguised_entity_and_a_phantasm() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::True, SenseMode::Continuous);
+        spawn_target(&mut world, 2, 5.0)
+            .with(disguise_component())
+            .build();
+        spawn_target(&mut world, 3, 6.0)
+            .with(PhantomIllusion)
+            .build();
+        // An ordinary, undisguised entity must not show up in the True
+        // Sight reveal set — being caught by neither `Disguise` nor
+        // `PhantomIllusion` is the "nothing to see through" case.
+        spawn_target(&mut world, 4, 7.0).build();
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+        let mut revealed = detected_uids(&world, observer);
+        revealed.sort_by_key(|uid| uid.0);
+        assert_eq!(revealed, vec![uid(2), uid(3)]);
+        for entry in &world
+            .read_storage::<Detected>()
+            .get(observer)
+            .unwrap()
+            .entities
+        {
+            assert_eq!(
+                entry.sense,
+                SenseKind::True,
+                "a True Sight reveal must always be tagged SenseKind::True"
+            );
+        }
+    }
+
+    #[test]
+    fn an_observer_without_true_sight_does_not_see_disguises_or_phantasms() {
+        let mut world = setup_world();
+        // A completely unrelated sense: neither Disguise nor PhantomIllusion
+        // is anywhere in its own predicate, so this doubles as a check that
+        // ordinary senses never accidentally pick up an illusory target.
+        let observer = spawn_observer(&mut world, SenseKind::Creature, SenseMode::Snapshot);
+        spawn_target(&mut world, 2, 5.0)
+            .with(disguise_component())
+            .build();
+        spawn_target(&mut world, 3, 6.0)
+            .with(PhantomIllusion)
+            .build();
+
+        rebuild_spatial_grid(&world);
+        common_ecs::run_now::<Sys>(&world);
+        assert!(
+            detected_uids(&world, observer).is_empty(),
+            "an observer with no True Sight sense must never see through a disguise or phantasm"
+        );
+    }
+
+    #[test]
+    fn nondetection_hides_a_disguise_even_from_true_sight() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::True, SenseMode::Continuous);
+
+        // An ordinary disguise: True Sight's own predicate would reveal it.
+        spawn_target(&mut world, 2, 5.0)
+            .with(disguise_component())
+            .build();
+
+        // Same disguise, but the wearer also carries nondetection -- the
+        // stronger, unconditional anti-divination claim must win even
+        // against True Sight, exactly as it does for every other sense.
+        let mut hidden_stats = Stats::empty(beast_body());
+        hidden_stats.nondetection = true;
+        spawn_target(&mut world, 3, 6.0)
+            .with(disguise_component())
+            .with(hidden_stats)
+            .build();
+
+        assert_reveals_only(&world, observer, uid(2), uid(3));
+    }
+
+    #[test]
+    fn true_sight_ignores_illusions_outside_its_radius() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::True, SenseMode::Continuous);
+        spawn_target(&mut world, 2, RADIUS - 1.0)
+            .with(disguise_component())
+            .build();
+        spawn_target(&mut world, 3, RADIUS + 5.0)
+            .with(PhantomIllusion)
+            .build();
+
+        assert_reveals_only(&world, observer, uid(2), uid(3));
     }
 
     // ─────────────────────────── snapshot lifecycle ─────────────────────────

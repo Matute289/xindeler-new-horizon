@@ -15,7 +15,7 @@ use common::{
     combat::{self, perception_dist_multiplier_from_stealth},
     comp::{
         self, Agent, Alignment, Body, CharacterState, Content, ControlAction, ControlEvent,
-        Controller, HealthChange, InputKind, InventoryAction, Pos, PresenceKind, Scale,
+        Controller, HealthChange, InputKind, InventoryAction, Pos, PresenceKind, Scale, Stats,
         UnresolvedChatMsg, UtteranceKind,
         ability::BASE_ABILITY_LIMIT,
         agent::{FlightMode, PidControllers, Sound, SoundKind, Target},
@@ -2414,6 +2414,15 @@ impl AgentData<'_> {
             // illusion holds.
             return false;
         };
+        if true_sight_pierces_disguise(self_stats) {
+            // True Sight pierces disguise unconditionally -- neither
+            // suspicion roll is ever reached, so this call spends no RNG
+            // draw and never touches `agent`'s cooldown/latch bookkeeping.
+            // Checked before either trigger condition below so that a
+            // True-Sight-holding observer never pays for a roll it can never
+            // fail.
+            return true;
+        }
 
         // Loaded once per disguised-and-not-yet-latched candidate (still the
         // rare path: `read_data.disguises.get` above already filtered out
@@ -2777,6 +2786,21 @@ fn sense_radius_from_stealth_multiplier(stealth_multiplier: f32) -> f32 {
 /// concealment, so it has no stealth value of its own to scale this by.
 const CLOSE_INSPECT_DIST_M: f32 = NEAR_SENSE_RADIUS_M;
 
+/// Whether an observer's own `Stats.pierce_illusion` is, on its own, enough
+/// to see straight through a disguise. Consulted by
+/// [`AgentData::passes_disguise_gate`] immediately once `self_stats` is
+/// known to exist, before either suspicion-roll trigger condition is
+/// evaluated: True Sight pierces disguise unconditionally, not "at
+/// advantage" over the roll.
+///
+/// Factored out to a one-line predicate over `&Stats` for the same reason
+/// [`resolve_disguise_gate`] below is factored out: `ReadData`'s
+/// `ReadExpect` surface (`world`, `terrain`, `msm`, `ability_map`, ...)
+/// makes constructing a full `AgentData`/`ReadData` pair in a unit test
+/// impractical, so the decision itself is pulled out to where it can be
+/// tested without either.
+fn true_sight_pierces_disguise(self_stats: &Stats) -> bool { self_stats.pierce_illusion }
+
 /// Pure decision core of [`AgentData::passes_disguise_gate`], factored out so
 /// the latch/cooldown bookkeeping is unit-testable without an ECS `World`,
 /// `ReadData` or a real RNG draw.
@@ -2927,6 +2951,37 @@ mod disguise_gate_tests {
         resolve_disguise_gate(&mut a, uid(1), true, false, false, false);
         assert!(a.close_inspected_disguises.contains(&uid(1)));
         assert!(!a.seen_through_disguises.contains(&uid(1)));
+    }
+
+    // ───────────────────── True Sight's unconditional early-out ─────────────
+
+    fn stats_with_pierce_illusion(pierce_illusion: bool) -> Stats {
+        let mut stats = Stats::empty(Body::Humanoid(humanoid::Body::random()));
+        stats.pierce_illusion = pierce_illusion;
+        stats
+    }
+
+    /// An observer whose `Stats.pierce_illusion` is set always sees through
+    /// a disguise -- the exact flag `passes_disguise_gate` reads before
+    /// either suspicion-roll trigger is evaluated.
+    #[test]
+    fn true_sight_pierce_illusion_sees_through_unconditionally() {
+        let stats = stats_with_pierce_illusion(true);
+        assert!(true_sight_pierces_disguise(&stats));
+    }
+
+    /// Regression guard: without `pierce_illusion`, the early-out must defer
+    /// entirely -- `passes_disguise_gate` falls through to the exact same
+    /// `resolve_disguise_gate`-driven roll path the tests above already
+    /// cover, completely unchanged by this early-out's addition.
+    #[test]
+    fn without_pierce_illusion_the_gate_defers_to_the_suspicion_roll() {
+        let stats = stats_with_pierce_illusion(false);
+        assert!(
+            !stats.pierce_illusion,
+            "sanity: Stats::empty must default pierce_illusion to false"
+        );
+        assert!(!true_sight_pierces_disguise(&stats));
     }
 }
 

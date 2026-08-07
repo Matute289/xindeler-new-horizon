@@ -1551,6 +1551,7 @@ impl Scene {
                 state,
                 viewpoint_entity,
                 tick,
+                scene_data.revealed_entities,
                 camera_data,
             );
 
@@ -1563,6 +1564,7 @@ impl Scene {
                 scene_data.client.entity(),
                 viewpoint_entity,
                 tick,
+                scene_data.revealed_entities,
                 camera_data,
             );
 
