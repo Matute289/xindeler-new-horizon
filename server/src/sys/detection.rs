@@ -138,10 +138,8 @@ pub struct ReadData<'a> {
     objects: ReadStorage<'a, Object>,
     pickup_items: ReadStorage<'a, PickupItem>,
     waypoint_areas: ReadStorage<'a, WaypointArea>,
-    /// True Sight's own reveal targets — read only by
-    /// [`true_sight_reveals`], never by the generic per-`SenseKind`
-    /// predicate [`reveals`], which stays deliberately unaware of either
-    /// type.
+    /// True Sight's own reveal targets, read by [`reveals`]'s `SenseKind::True`
+    /// arm.
     disguises: ReadStorage<'a, Disguise>,
     phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
@@ -327,10 +325,8 @@ fn merged_senses(senses: &[ActiveSense]) -> Vec<ActiveSense> {
 /// exact radius check still has to be applied per candidate.
 ///
 /// `SenseKind::True` shares this exact spatial query (same grid, same radius
-/// and distance check) with every other sense kind, but is routed to
-/// [`true_sight_reveals`] instead of the generic [`reveals`] dispatcher below:
-/// its reveal targets (`Disguise`, `PhantomIllusion`) are content that the
-/// shared, content-agnostic `reveals` predicate must never learn about.
+/// and distance check) with every other sense kind, and is judged by the same
+/// [`reveals`] dispatcher below — including its anti-divination early-out.
 fn evaluate_sense(
     read_data: &ReadData,
     observer: Entity,
@@ -373,11 +369,7 @@ fn evaluate_sense(
                 return;
             }
 
-            let revealed = if sense.kind == SenseKind::True {
-                true_sight_reveals(read_data, target)
-            } else {
-                reveals(read_data, target, sense.kind)
-            };
+            let revealed = reveals(read_data, target, sense.kind);
 
             if revealed && let Some(uid) = read_data.uids.get(target) {
                 entities.push(DetectedEntity {
@@ -454,28 +446,19 @@ fn reveals(read_data: &ReadData, target: Entity, kind: SenseKind) -> bool {
         // fiends ∪ undead once that helper lands; until then this sense
         // deliberately reveals nothing rather than guessing at a subset.
         SenseKind::Aberrant => false,
-        // Never actually reached: `evaluate_sense` routes `True` to
-        // `true_sight_reveals` before this dispatcher is ever called, so
-        // this predicate is never asked to judge a `Disguise`/
-        // `PhantomIllusion` target. Kept only so this match stays
-        // exhaustive over every `SenseKind`.
-        SenseKind::True => false,
+        // A phantasm has no separate "real form" hiding underneath it the
+        // way a disguised entity does; being caught by this arm at all is
+        // itself the reveal — it tells the observer the entity in front of
+        // them is not what it appears to be. Shares the same anti-divination
+        // early-out above as every other sense: a `nondetection`-protected
+        // disguise/phantasm stays hidden even from True Sight, matching
+        // `Stats.nondetection`'s own "stronger, unconditional claim" doc.
+        SenseKind::True => {
+            read_data.disguises.contains(target) || read_data.phantom_illusions.contains(target)
+        },
         // Handled before the predicate runs — points, not entities.
         SenseKind::Path => false,
     }
-}
-
-/// `SenseKind::True`'s own predicate: does this candidate present a lie the
-/// sense should see straight through? Deliberately kept out of `reveals`
-/// above — that dispatcher is shared across every generic sense kind and
-/// must stay unaware of both component types checked here.
-///
-/// A phantasm has no separate "real form" hiding underneath it the way a
-/// disguised entity does; being caught by this predicate at all is itself
-/// the reveal — it tells the observer the entity in front of them is not
-/// what it appears to be.
-fn true_sight_reveals(read_data: &ReadData, target: Entity) -> bool {
-    read_data.disguises.contains(target) || read_data.phantom_illusions.contains(target)
 }
 
 fn is_creature_kind(
@@ -920,6 +903,29 @@ mod tests {
             detected_uids(&world, observer).is_empty(),
             "an observer with no True Sight sense must never see through a disguise or phantasm"
         );
+    }
+
+    #[test]
+    fn nondetection_hides_a_disguise_even_from_true_sight() {
+        let mut world = setup_world();
+        let observer = spawn_observer(&mut world, SenseKind::True, SenseMode::Continuous);
+
+        // An ordinary disguise: True Sight's own predicate would reveal it.
+        spawn_target(&mut world, 2, 5.0)
+            .with(disguise_component())
+            .build();
+
+        // Same disguise, but the wearer also carries nondetection -- the
+        // stronger, unconditional anti-divination claim must win even
+        // against True Sight, exactly as it does for every other sense.
+        let mut hidden_stats = Stats::empty(beast_body());
+        hidden_stats.nondetection = true;
+        spawn_target(&mut world, 3, 6.0)
+            .with(disguise_component())
+            .with(hidden_stats)
+            .build();
+
+        assert_reveals_only(&world, observer, uid(2), uid(3));
     }
 
     #[test]

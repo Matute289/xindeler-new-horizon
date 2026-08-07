@@ -164,6 +164,9 @@ fn disguise_for_observer<'a>(
     entity: EcsEntity,
     revealed_entities: &HashMap<EcsEntity, SenseKind>,
 ) -> Option<&'a Disguise> {
+    // Skip the reveal-set lookup entirely for the common case of an
+    // undisguised figure -- most entities never carry a `Disguise`.
+    disguise?;
     if revealed_entities.get(&entity) == Some(&SenseKind::True) {
         None
     } else {
@@ -7382,6 +7385,7 @@ impl FigureMgr {
         state: &State,
         viewpoint_entity: EcsEntity,
         tick: u64,
+        revealed_entities: &HashMap<EcsEntity, SenseKind>,
         (camera, figure_lod_render_distance): CameraData,
     ) {
         span!(_guard, "render_player", "FigureManager::render_player");
@@ -7405,9 +7409,14 @@ impl FigureMgr {
 
             let inventory_storage = ecs.read_storage::<Inventory>();
             let inventory = inventory_storage.get(viewpoint_entity);
-            // See `render`'s own comment: apparent body while disguised.
+            // See `render`'s own comment: apparent body while disguised,
+            // unless this observer's own True Sight has revealed it.
             let disguise_storage = ecs.read_storage::<Disguise>();
-            let disguise = disguise_storage.get(viewpoint_entity);
+            let disguise = disguise_for_observer(
+                disguise_storage.get(viewpoint_entity),
+                viewpoint_entity,
+                revealed_entities,
+            );
             let body = &Disguise::render_body(disguise, *real_body);
 
             if let Some((bound, model, atlas)) = self.get_model_for_render(

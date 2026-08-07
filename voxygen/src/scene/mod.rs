@@ -1551,6 +1551,7 @@ impl Scene {
                 state,
                 viewpoint_entity,
                 tick,
+                scene_data.revealed_entities,
                 camera_data,
             );
 
