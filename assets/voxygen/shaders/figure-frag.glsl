@@ -49,7 +49,8 @@ uniform u_locals {
     ivec4 atlas_offs;
     vec3 model_pos;
     // bit 0 - is player
-    // bit 1-31 - unused
+    // bit 1 - is revealed by an active magical sense (emissive rim highlight)
+    // bit 2-31 - unused
     int flags;
 };
 
@@ -191,6 +192,19 @@ void main() {
         * glow_light(f_pos)
         * mix((max(dot(f_norm, model_glow.xyz / glow_mag) * 0.5 + 0.5, 0.0)), 1.0, 1.0 / (1.0 + glow_mag * 10.0));
     reflected_light += glow * cam_attenuation;
+
+    // Emissive rim highlight for figures currently revealed to us by an
+    // active magical sense (`Locals.flags` bit 1, set alongside
+    // `highlight_col`'s per-sense tint by `reveal_tint` on the CPU side --
+    // see `figure/mod.rs`). A subtle fresnel-style edge glow layered on top
+    // of the baked-glow contribution above, in the same additive style, so a
+    // revealed figure reads clearly at a glance. Since the whole surface
+    // colour is multiplied by `highlight_col.rgb` below, this rim term picks
+    // up the same sense colour automatically without needing its own tint.
+    if ((flags & 2) == 2) {
+        float rim = pow(1.0 - max(dot(f_norm, view_dir), 0.0), 3.0);
+        reflected_light += rim * 0.35 * cam_attenuation;
+    }
 
     // Apply baked AO
     float ao = f_ao * sqrt(f_ao);

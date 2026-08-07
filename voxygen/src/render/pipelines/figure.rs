@@ -37,9 +37,14 @@ impl Locals {
         is_player: bool,
         light: f32,
         glow: (Vec3<f32>, f32),
+        is_revealed: bool,
     ) -> Self {
         let mut flags = 0;
         flags |= is_player as u32;
+        // Bit 1: this figure is currently revealed to the local client by an
+        // active magical sense (see `figure::mod::reveal_tint`) — consumed by
+        // the emissive rim highlight in `figure-frag.glsl`.
+        flags |= (is_revealed as u32) << 1;
 
         Self {
             model_mat: model_mat.into_col_arrays(),
@@ -63,6 +68,7 @@ impl Default for Locals {
             false,
             1.0,
             (Vec3::zero(), 0.0),
+            false,
         )
     }
 }
