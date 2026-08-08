@@ -73,7 +73,11 @@ crossbeam-channel = { workspace = true }
 prometheus = { workspace = true }
 portpicker = { git = "https://github.com/xMAC94x/portpicker-rs", rev = "e04e3a61d6c1645c865b36c57877f1f8e48e0cb7" }
 # Private repository. See the note in README.md before cloning.
-authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", branch = "main" }
+# Pinned to a rev, not a floating branch: this dependency performs
+# authentication, so a routine `cargo update` must never silently change its
+# behavior. Bump the rev deliberately when xindeler-auth ships something this
+# repo needs.
+authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "99afc8ff5ff43d5d69cf06e56117b25ca0623de3" }
 enum-map = { workspace = true }
 noise = { workspace = true }
 censor = "0.3"

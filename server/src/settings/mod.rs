@@ -195,7 +195,22 @@ impl CalendarMode {
 #[serde(default)]
 pub struct Settings {
     pub gameserver_protocols: Vec<Protocol>,
+    /// Advertised to every connecting client as the URL to authenticate
+    /// against (`ServerInfo::auth_provider`) -- must be a public, trusted
+    /// URL. NEVER a loopback address: `client/src/lib.rs` has every remote
+    /// player's own machine build an `AuthClient` from this exact string, so
+    /// a loopback value here would tell every player to authenticate against
+    /// their own computer.
     pub auth_server_address: Option<String>,
+    /// The URL THIS server itself calls to verify a login token
+    /// (`/verify`). Defaults to `auth_server_address` when unset (`None`),
+    /// which is the correct behaviour for a server not co-located with its
+    /// auth service. When the auth service runs on the same host, set this
+    /// to its loopback address (e.g. `http://127.0.0.1:19253`) to skip
+    /// DNS/TLS/nginx on the login hot path -- `xindeler-authc` only allows
+    /// plain `http://` against loopback hosts, so a non-loopback value here
+    /// still requires `https://`.
+    pub auth_service_address: Option<String>,
     pub query_address: Option<SocketAddr>,
     pub max_players: u16,
     pub world_seed: u32,
@@ -237,6 +252,7 @@ impl Default for Settings {
                 },
             ],
             auth_server_address: Some("https://auth.xindeler.com".into()),
+            auth_service_address: None,
             query_address: Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 14006))),
             world_seed: DEFAULT_WORLD_SEED,
             server_name: "Veloren Server".into(),
@@ -319,6 +335,7 @@ impl Settings {
                 )),
             }],
             auth_server_address: None,
+            auth_service_address: None,
             // If loading the default map file, make sure the seed is also default.
             world_seed: if load.map_file.is_some() {
                 load.world_seed

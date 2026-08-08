@@ -380,10 +380,22 @@ impl Server {
             .ecs_mut()
             .insert(EventBus::<chunk_serialize::ChunkSendEntry>::default());
         state.ecs_mut().insert(Locations::default());
-        state.ecs_mut().insert(LoginProvider::new(
-            settings.auth_server_address.clone(),
-            Arc::clone(&runtime),
-        ));
+        state.ecs_mut().insert(
+            LoginProvider::new(
+                // This server's own /verify calls: `auth_service_address` if
+                // set (e.g. a loopback URL, when co-located with the auth
+                // service), otherwise the same public URL advertised to
+                // clients. NEVER the reverse -- `ServerInfo::auth_provider`
+                // below always advertises `auth_server_address` regardless of
+                // this fallback.
+                settings
+                    .auth_service_address
+                    .clone()
+                    .or_else(|| settings.auth_server_address.clone()),
+                Arc::clone(&runtime),
+            )
+            .map_err(Error::Other)?,
+        );
         state.ecs_mut().insert(HwStats {
             hardware_threads: num_cpus::get() as u32,
             rayon_threads: num_cpus::get() as u32,

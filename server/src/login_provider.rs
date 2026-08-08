@@ -71,36 +71,44 @@ pub struct LoginProvider {
 }
 
 impl LoginProvider {
-    pub fn new(auth_addr: Option<String>, runtime: Arc<Runtime>) -> Self {
+    /// # Errors
+    /// Returns `Err` if `auth_addr` is malformed (fails `AuthClient`'s own
+    /// validation -- e.g. not `https://` and not a loopback host). This is a
+    /// config-typo error, distinct from the deliberate panic just below for a
+    /// missing `AUTH_SERVICE_TOKEN`: both leave the server unable to
+    /// authenticate anyone, but a malformed URL is a caller mistake worth a
+    /// clean startup error rather than a raw panic backtrace.
+    pub fn new(auth_addr: Option<String>, runtime: Arc<Runtime>) -> Result<Self, String> {
         tracing::trace!(?auth_addr, "Starting LoginProvider");
 
-        let auth_server = auth_addr.map(|addr| {
-            // The service credential authenticates this game server to the
-            // auth server's service endpoints (/verify, /uuid_to_username).
-            // It is read from the environment rather than settings.ron,
-            // because that file is written to disk and shared, and this is a
-            // shared secret.
-            //
-            // Failing here is deliberate: without it every single login would
-            // be rejected with 401, and a server that cannot authenticate
-            // anyone should not come up pretending it can.
-            let service_token = std::env::var(AUTH_SERVICE_TOKEN_VAR).unwrap_or_else(|_| {
-                panic!(
-                    "{AUTH_SERVICE_TOKEN_VAR} must be set when auth_server_address is configured \
-                     (got auth_server_address = {addr:?})"
-                )
-            });
+        let auth_server = auth_addr
+            .map(|addr| {
+                // The service credential authenticates this game server to the
+                // auth server's service endpoints (/verify, /uuid_to_username).
+                // It is read from the environment rather than settings.ron,
+                // because that file is written to disk and shared, and this is a
+                // shared secret.
+                //
+                // Failing here is deliberate: without it every single login would
+                // be rejected with 401, and a server that cannot authenticate
+                // anyone should not come up pretending it can.
+                let service_token = std::env::var(AUTH_SERVICE_TOKEN_VAR).unwrap_or_else(|_| {
+                    panic!(
+                        "{AUTH_SERVICE_TOKEN_VAR} must be set when auth_server_address is \
+                         configured (got auth_server_address = {addr:?})"
+                    )
+                });
 
-            Arc::new(
                 AuthClient::with_service_token(addr.as_str(), service_token)
-                    .expect("invalid auth server address"),
-            )
-        });
+                    .map(Arc::new)
+                    .map_err(|err| format!("invalid auth server address {addr:?}: {err}"))
+            })
+            .transpose()?;
 
-        Self {
+        Ok(Self {
             runtime,
             auth_server,
-        }
+        })
     }
 
     pub fn verify(&self, username_or_token: &str) -> PendingLogin {

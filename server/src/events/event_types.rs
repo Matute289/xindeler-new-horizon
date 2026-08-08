@@ -12,11 +12,10 @@ pub use common::event::{
     ParryHookEvent, PoiseChangeEvent, PossessEvent, ProcessTradeActionEvent, RegrowHeadEvent,
     RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, ResolveIdentifyEvent,
     ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent,
-    SetLanternEvent, SetPetStayEvent,
-    ShockwaveEvent, ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent,
-    SummonBeamPillarsEvent, TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent,
-    ToggleSpriteLightEvent, TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent,
-    UpdateMapMarkerEvent,
+    SetLanternEvent, SetPetStayEvent, ShockwaveEvent, ShootEvent, SoundEvent,
+    StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent, TamePetEvent,
+    TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent,
+    TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
 };
 
 #[cfg(feature = "plugins")]
