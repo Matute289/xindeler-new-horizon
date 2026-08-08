@@ -142,7 +142,10 @@ fn main() -> io::Result<()> {
         match command {
             ArgvCommand::Shared(SharedCommand::Admin { command }) => {
                 let login_provider = server::login_provider::LoginProvider::new(
-                    server_settings.auth_server_address,
+                    server_settings
+                        .auth_service_address
+                        .clone()
+                        .or_else(|| server_settings.auth_server_address.clone()),
                     runtime,
                 )
                 .map_err(io::Error::other)?;
