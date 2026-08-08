@@ -10,8 +10,9 @@ pub use common::event::{
     InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
     LandOnGroundEvent, MakeAdminEvent, MineBlockEvent, MountEvent, NpcInteractEvent,
     ParryHookEvent, PoiseChangeEvent, PossessEvent, ProcessTradeActionEvent, RegrowHeadEvent,
-    RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, ResolveRemoteSenseEvent,
-    RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent, SetLanternEvent, SetPetStayEvent,
+    RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, ResolveIdentifyEvent,
+    ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent,
+    SetLanternEvent, SetPetStayEvent,
     ShockwaveEvent, ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent,
     SummonBeamPillarsEvent, TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent,
     ToggleSpriteLightEvent, TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent,
@@ -102,6 +103,7 @@ macro_rules! server_events {
             CreatePoolEvent
             TranscribeSpellEvent
             ResolveRemoteSenseEvent
+            ResolveIdentifyEvent
             DispelIllusionEvent
         }
 
