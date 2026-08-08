@@ -370,6 +370,27 @@ impl Settings {
             );
             self.day_length = default_values.day_length;
         }
+
+        // `auth_service_address` without `auth_server_address` is a
+        // foot-gun, not a valid "auth partially enabled" state: nothing
+        // observes `auth_service_address` on its own to decide whether auth
+        // is on (that's still `auth_server_address.is_none()`, e.g. the
+        // startup log and `ServerInfo::auth_provider`), but `LoginProvider`
+        // *does* fall back to `auth_service_address` when constructing its
+        // auth client. Left alone, that combination would have the server
+        // advertise "no auth" to every client (who then send a bare
+        // username) while `LoginProvider` still tries to validate that
+        // username as a real auth token against the service address --
+        // every login fails silently.
+        if self.auth_service_address.is_some() && self.auth_server_address.is_none() {
+            warn!(
+                "{INVALID_SETTING_MSG} Setting: auth_service_address is set but \
+                 auth_server_address is not -- this would silently break every login. Clearing \
+                 auth_service_address. Help: auth_server_address must be set whenever \
+                 auth_service_address is."
+            );
+            self.auth_service_address = None;
+        }
     }
 
     /// Derive a coefficient that is the relatively speed of the in-game
