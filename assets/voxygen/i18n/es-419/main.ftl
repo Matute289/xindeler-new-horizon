@@ -1,6 +1,7 @@
 main-username = Nombre de Usuario
 main-server = Servidor
 main-password = Contraseña
+main-create_account = Crear Cuenta
 main-connecting = Conectando
 main-creating_world = Creando mundo
 main-tip = Consejo:

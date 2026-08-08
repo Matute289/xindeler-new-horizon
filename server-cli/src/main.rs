@@ -126,6 +126,7 @@ fn main() -> io::Result<()> {
     // Apply no_auth modifier to the settings
     if no_auth {
         server_settings.auth_server_address = None;
+        server_settings.auth_service_address = None;
     }
 
     // Relative to data_dir
@@ -143,7 +144,8 @@ fn main() -> io::Result<()> {
                 let login_provider = server::login_provider::LoginProvider::new(
                     server_settings.auth_server_address,
                     runtime,
-                );
+                )
+                .map_err(io::Error::other)?;
 
                 return match command {
                     Admin::Add { username, role } => {
