@@ -5441,6 +5441,17 @@ impl Hud {
                     self.show.osk(opening);
                     if opening {
                         self.force_chat = true;
+                        // If the real chat TextEdit already had keyboard
+                        // focus (e.g. the player was mid-keyboard-typing
+                        // and then pressed a controller-bound Chat button
+                        // without closing chat first), release it. Without
+                        // this, `self.typing()` stays true while
+                        // `self.show.osk` is also true, and the
+                        // `WinEvent::MenuInput` handler checks `typing()`
+                        // first — every Up/Down/Left/Right/Apply meant for
+                        // the OSK would be silently dropped, leaving it
+                        // rendered but frozen until a second Back press.
+                        self.ui.focus_widget(None);
                     }
                 } else {
                     self.ui.focus_widget(if self.typing() {

@@ -60,6 +60,7 @@ impl From<ControllerSettings> for ControllerSettingsSerde {
         let pan_sensitivity = controller_settings.pan_sensitivity;
         let pan_invert_y = controller_settings.pan_invert_y;
         let axis_deadzones = controller_settings.axis_deadzones;
+        let button_deadzones = controller_settings.button_deadzones;
 
         let mouse_emulation_sensitivity = controller_settings.mouse_emulation_sensitivity;
         let inverted_axes = controller_settings.inverted_axes;
@@ -78,7 +79,7 @@ impl From<ControllerSettings> for ControllerSettingsSerde {
             pan_invert_y,
             axis_deadzones,
 
-            button_deadzones: HashMap::new(),
+            button_deadzones,
             mouse_emulation_sensitivity,
             inverted_axes,
         }
@@ -1313,16 +1314,23 @@ mod tests {
         );
     }
 
-    /// Regression test for a bug this round-trip check caught directly:
-    /// `From<ControllerSettingsSerde> for ControllerSettings` restored only
-    /// the three keybinding delta maps and silently dropped
-    /// `pan_sensitivity`/`pan_invert_y`/`axis_deadzones`/
+    /// Regression test for two bugs this round-trip check caught directly:
+    /// `From<ControllerSettingsSerde> for ControllerSettings` (the load
+    /// side) restored only the three keybinding delta maps and silently
+    /// dropped `pan_sensitivity`/`pan_invert_y`/`axis_deadzones`/
     /// `button_deadzones`/`mouse_emulation_sensitivity`/`inverted_axes`/
     /// `modifier_buttons` back to hardcoded defaults on every load, even
-    /// though they were written to the settings file correctly (those
+    /// though they were written to the settings file correctly (these
     /// fields are copied through unconditionally on the serialize side, not
-    /// diffed against a default — see `From<ControllerSettings> for
-    /// ControllerSettingsSerde` above).
+    /// diffed against a default, unlike the button maps — see
+    /// `From<ControllerSettings> for ControllerSettingsSerde` above). A
+    /// second, narrower bug was on the *save* side specifically for
+    /// `button_deadzones`: it was hardcoded to an empty map there too
+    /// (`game_analog_button_map`/`menu_analog_button_map` are legitimately
+    /// always empty — their key types are uninhabited enums — but
+    /// `button_deadzones` has a real reader, `apply_button_deadzone`), so
+    /// even after fixing the load side alone it would still have round-
+    /// tripped to empty every time.
     #[test]
     fn round_trips_sensitivity_and_deadzone_settings() {
         let mut settings = ControllerSettings {
@@ -1340,6 +1348,15 @@ mod tests {
         settings
             .inverted_axes
             .push(Axis::Simple(GilAxis::RightStickY));
+        // Also read by `apply_button_deadzone` (analog trigger deadzone) —
+        // regression coverage for the same class of bug found on
+        // `axis_deadzones`/`pan_sensitivity`/etc., but on the save side
+        // this time: `From<ControllerSettings> for ControllerSettingsSerde`
+        // was hardcoding this field to an empty map on every save,
+        // independent of the load-side fix above it.
+        settings
+            .button_deadzones
+            .insert(AnalogButton::Simple(GilButton::LeftTrigger2), 0.4);
 
         let restored = round_trip(&settings);
 
@@ -1362,6 +1379,12 @@ mod tests {
             restored
                 .inverted_axes
                 .contains(&Axis::Simple(GilAxis::RightStickY))
+        );
+        assert_eq!(
+            restored
+                .button_deadzones
+                .get(&AnalogButton::Simple(GilButton::LeftTrigger2)),
+            Some(&0.4)
         );
     }
 
