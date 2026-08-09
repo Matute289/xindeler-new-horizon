@@ -4318,8 +4318,14 @@ impl Hud {
         }
 
         if self.show.esc_menu {
-            match EscMenu::new(&self.imgs, &self.fonts, i18n, &self.menu_events)
-                .set(self.ids.esc_menu, ui_widgets)
+            match EscMenu::new(
+                &self.imgs,
+                &self.fonts,
+                i18n,
+                &self.menu_events,
+                global_state.window.last_input(),
+            )
+            .set(self.ids.esc_menu, ui_widgets)
             {
                 Some(esc_menu::Event::OpenSettings(tab)) => {
                     common::telemetry!("ui", widget = "EscMenu", btn = "Settings");

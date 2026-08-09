@@ -13,10 +13,10 @@ use crate::{
     hud::{Show, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN, img_ids::Imgs},
     session::settings_change::SettingsChange,
     ui::fonts::Fonts,
-    window::MenuInput,
+    window::{LastInput, MenuInput},
 };
 use conrod_core::{
-    Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
+    Borderable, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
     widget::{self, Button, Image, Rectangle, Text},
     widget_ids,
 };
@@ -133,6 +133,11 @@ impl<'a> SettingsWindow<'a> {
 
 pub struct State {
     ids: Ids,
+    // Gamepad/keyboard menu navigation: index into the tab list in visual
+    // (top-to-bottom) order. Content-area per-row navigation is out of scope for
+    // this pass (9 sub-widgets, one per tab); mouse-emulation click-through
+    // (including scrollbar drag) still reaches it.
+    active_tab_index: usize,
 }
 
 pub enum Event {
@@ -158,6 +163,7 @@ impl Widget for SettingsWindow<'_> {
     fn init_state(&self, id_gen: widget::id::Generator) -> Self::State {
         State {
             ids: Ids::new(id_gen),
+            active_tab_index: 0,
         }
     }
 
@@ -170,15 +176,35 @@ impl Widget for SettingsWindow<'_> {
         let mut events = Vec::new();
         let tab_font_scale = 18;
 
-        // MENU INPUTS: `Back` closes the settings window, same as the
-        // X button (also aborting any pending gamepad remap). No tab/row
-        // dpad navigation yet (later phase).
+        // MENU INPUTS: `Back` closes the settings window, same as the X button
+        // (also aborting any pending gamepad remap). Up/Down highlights a tab,
+        // Apply switches to it — reusing the `ContextMenu` list-nav shape from
+        // `slot_grid.rs`. Per-row navigation of each tab's own content is out of
+        // scope for this pass (9 sub-widgets, one per tab, most of them sliders/
+        // checkboxes/dropdowns); the existing mouse-emulation fallback (left stick
+        // moves the cursor, a bound button clicks) still reaches every control,
+        // including dragging a scrollbar thumb.
+        let tabs_len = SettingsTab::iter().count();
+        let last_input = self.global_state.window.last_input();
+        let menu_active = matches!(last_input, LastInput::Keyboard | LastInput::Controller);
+        let mut tab_apply = false;
         for key in self.menu_events {
-            if let MenuInput::Back = key {
-                events.push(Event::Close);
-                events.push(Event::ResetBindingMode);
+            match *key {
+                MenuInput::Back => {
+                    events.push(Event::Close);
+                    events.push(Event::ResetBindingMode);
+                },
+                MenuInput::Up => state.update(|s| {
+                    s.active_tab_index = s.active_tab_index.saturating_sub(1);
+                }),
+                MenuInput::Down if tabs_len > 0 => state.update(|s| {
+                    s.active_tab_index = (s.active_tab_index + 1).min(tabs_len - 1);
+                }),
+                MenuInput::Apply => tab_apply = true,
+                _ => {},
             }
         }
+        let active_tab_index = state.active_tab_index.min(tabs_len.saturating_sub(1));
 
         // Frame
         Image::new(self.imgs.settings_bg)
@@ -245,6 +271,7 @@ impl Widget for SettingsWindow<'_> {
         }
         for (i, settings_tab) in SettingsTab::iter().enumerate() {
             let tab_name = self.localized_strings.get_msg(settings_tab.name_key());
+            let tab_menu_highlighted = menu_active && i == active_tab_index;
             let mut button = Button::image(if self.show.settings_tab == settings_tab {
                 self.imgs.selection
             } else {
@@ -257,7 +284,13 @@ impl Widget for SettingsWindow<'_> {
             .label(&tab_name)
             .label_font_size(self.fonts.cyri.scale(tab_font_scale))
             .label_font_id(self.fonts.cyri.conrod_id)
-            .label_color(TEXT_COLOR);
+            .label_color(TEXT_COLOR)
+            .border(if tab_menu_highlighted { 2.0 } else { 0.0 })
+            .border_color(if tab_menu_highlighted {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            });
 
             button = if i == 0 {
                 button.mid_top_with_margin_on(state.ids.tabs_align, 28.0)
@@ -265,7 +298,9 @@ impl Widget for SettingsWindow<'_> {
                 button.down_from(state.ids.tabs[i - 1], 0.0)
             };
 
-            if button.set(state.ids.tabs[i], ui).was_clicked() {
+            if button.set(state.ids.tabs[i], ui).was_clicked()
+                || (tab_apply && tab_menu_highlighted)
+            {
                 events.push(Event::ChangeTab(settings_tab));
                 events.push(Event::ResetBindingMode); // stop input mapping if tab changed
             }
