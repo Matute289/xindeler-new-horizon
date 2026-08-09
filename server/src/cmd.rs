@@ -1395,7 +1395,7 @@ fn handle_oracle(
     Ok(())
 }
 
-/// `/oracle_trigger <dmevent_id>` — admin-only manual trigger for a
+/// `/oracle_trigger <dmevent_id> [clamp]` — admin-only manual trigger for a
 /// currently-loaded ORACLE `.dmevent.ron`/`.dmevent.json` (dropped into the
 /// watched events directory, see `crate::oracle::watcher`): resolves its
 /// `spawning_rules` against currently-loaded entity templates, spawns the
@@ -1403,6 +1403,15 @@ fn handle_oracle(
 /// `world_rumor` to the chronicle, and greets the caller with its
 /// `on_enter_message`. Stands in for the real per-plano entry trigger there
 /// is no plano yet, so a human decides when and where.
+///
+/// The live-entity ceiling is enforced by `crate::oracle::trigger`, which
+/// this command defers to for the lookup/ceiling/spawn sequence itself. By
+/// default a trigger that would exceed the ceiling is refused outright and
+/// reports the live/planned/ceiling numbers so the admin can decide what to
+/// do (wait for the population to decay, despawn something first, ...).
+/// Passing `clamp` (`true`) opts into spawning only as many as fit instead —
+/// an explicit choice the admin makes after seeing those numbers, never a
+/// default this command picks on its own.
 fn handle_oracle_trigger(
     server: &mut Server,
     client: EcsEntity,
@@ -1417,65 +1426,59 @@ fn handle_oracle_trigger(
         ));
     }
 
-    let dmevent_id = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let (dmevent_id, clamp) = parse_cmd_args!(args, String, bool);
+    let dmevent_id = dmevent_id.ok_or_else(|| action.help_content())?;
+    let ceiling_policy = if clamp.unwrap_or(false) {
+        crate::oracle::trigger::CeilingPolicy::Clamp
+    } else {
+        crate::oracle::trigger::CeilingPolicy::Refuse
+    };
     let comp::Pos(pos) = position(server, target, "target")?;
 
-    let dm_event = server
-        .state
-        .ecs()
-        .read_resource::<crate::oracle::OracleWatcher>()
-        .events()
-        .dm_events()
-        .find(|(path, _)| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name == format!("{dmevent_id}.dmevent.ron")
-                        || name == format!("{dmevent_id}.dmevent.json")
-                })
-        })
-        .map(|(_, event)| event.clone())
-        .ok_or_else(|| {
-            Content::Plain(format!(
-                "No loaded ORACLE event named '{dmevent_id}' (drop a .dmevent.ron/.json file in \
-                 the watched events directory first)."
-            ))
-        })?;
-
-    let templates: Vec<_> = server
-        .state
-        .ecs()
-        .read_resource::<crate::oracle::OracleWatcher>()
-        .events()
-        .entity_templates()
-        .map(|(_, template)| template.clone())
-        .collect();
-
-    let mut spawn_rng = rng();
-    let spawns = crate::oracle::factory::spawn_dm_event(
-        &dm_event.spawning_rules,
-        templates.iter(),
+    let outcome = crate::oracle::trigger::trigger_dm_event(
+        server.state.ecs(),
+        &dmevent_id,
         pos,
-        &mut spawn_rng,
-    );
-    let spawn_count = spawns.len();
-    for (pos, ori, npc) in spawns {
-        server
-            .state
-            .ecs()
-            .read_resource::<EventBus<CreateNpcEvent>>()
-            .emit_now(CreateNpcEvent { pos, ori, npc });
+        false,
+        ceiling_policy,
+    )
+    .map_err(|err| Content::Plain(render_trigger_error(&err)))?;
+
+    if let Some(warning) = &outcome.warning {
+        server.notify_client(
+            client,
+            ServerGeneral::server_msg(
+                ChatType::CommandInfo,
+                Content::Plain(format!(
+                    "WARNING: approaching the ORACLE live-entity ceiling — {live} already live + \
+                     {planned} just spawned = {total} of a ceiling of {ceiling} (warning \
+                     threshold: {threshold}).",
+                    live = warning.live,
+                    planned = warning.planned,
+                    total = warning.live + warning.planned,
+                    ceiling = warning.ceiling,
+                    threshold = warning.threshold,
+                )),
+            ),
+        );
     }
 
-    if let Some(rumor) = &dm_event.narrative.world_rumor {
-        server
-            .state
-            .ecs()
-            .write_resource::<crate::oracle::ChronicleLog>()
-            .push(rumor.clone());
+    if outcome.clamped {
+        server.notify_client(
+            client,
+            ServerGeneral::server_msg(
+                ChatType::CommandInfo,
+                Content::Plain(format!(
+                    "Oracle event '{dmevent_id}' hit the live-entity ceiling: spawned only \
+                     {spawned} of the {requested} requested (clamp was requested explicitly).",
+                    spawned = outcome.spawned,
+                    requested = outcome.requested,
+                )),
+            ),
+        );
     }
 
-    if let Some(message) = &dm_event.narrative.on_enter_message {
+    if let Some(message) = &outcome.on_enter_message {
         crate::oracle::narrative::send_on_enter_message(server, client, message);
     }
 
@@ -1484,12 +1487,42 @@ fn handle_oracle_trigger(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::Plain(format!(
-                "Oracle event '{dmevent_id}' spawned {spawn_count} entities."
+                "Oracle event '{dmevent_id}' spawned {} entities.",
+                outcome.spawned
             )),
         ),
     );
 
     Ok(())
+}
+
+/// Renders every `crate::oracle::trigger::TriggerError` variant as an
+/// admin-facing chat message. `WouldExceedCeiling` always prints all three
+/// numbers plus how the admin can proceed (re-run with `clamp true`, or
+/// despawn/wait for the live count to drop) — an opaque "limit reached" is a
+/// control an operator learns to distrust.
+fn render_trigger_error(err: &crate::oracle::trigger::TriggerError) -> String {
+    use crate::oracle::trigger::TriggerError;
+    match err {
+        TriggerError::UnknownEvent { event_id } => format!(
+            "No loaded ORACLE event named '{event_id}' (drop a .dmevent.ron/.json file in the \
+             watched events directory first)."
+        ),
+        TriggerError::NoTemplatesMatched { event_id } => format!(
+            "Oracle event '{event_id}' names entity templates, but none of them are currently \
+             loaded (drop the matching .entity_template.ron/.json files first)."
+        ),
+        TriggerError::WouldExceedCeiling {
+            live,
+            planned,
+            ceiling,
+        } => format!(
+            "Refused: {live} ORACLE entities are already live, this trigger would add {planned} \
+             more, exceeding the ceiling of {ceiling} by {over}. Re-run with 'clamp true' to \
+             spawn only what fits, or despawn/wait for the live count to drop and try again.",
+            over = (live + planned).saturating_sub(*ceiling),
+        ),
+    }
 }
 
 fn handle_make_sprite(

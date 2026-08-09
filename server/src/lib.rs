@@ -503,6 +503,7 @@ impl Server {
         state.ecs_mut().register::<login_provider::PendingLogin>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
         state.ecs_mut().register::<common::rtsim::ActorId>();
+        state.ecs_mut().register::<oracle::OracleSpawned>();
 
         // Load banned words list
         let banned_words = settings.moderation.load_banned_words(data_dir);

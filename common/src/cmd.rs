@@ -968,7 +968,10 @@ impl ServerChatCommand {
                 Some(Admin),
             ),
             ServerChatCommand::OracleTrigger => cmd(
-                vec![Any("dmevent_id", Required)],
+                vec![
+                    Any("dmevent_id", Required),
+                    Boolean("clamp", "false".to_string(), Optional),
+                ],
                 Content::localized("command-oracle_trigger-desc"),
                 Some(Admin),
             ),

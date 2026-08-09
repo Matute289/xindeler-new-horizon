@@ -25,7 +25,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use specs::Entity as EcsEntity;
-use std::{collections::VecDeque, sync::Mutex, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use uuid::Uuid;
 use vek::*;
 
@@ -97,6 +101,15 @@ pub struct NpcBuilder {
     /// (`voxygen`'s `should_flicker`) — the "the illusion is fading" tell a
     /// phantasm wants and a plain `Projectile` timer does not give.
     pub delete_after: Option<Duration>,
+    /// The id of the PROJECT ORACLE `DmEvent` that spawned this entity, if
+    /// any. Carries the raw id rather than a component because the
+    /// attribution component lives server-side (`server::oracle::spawned`)
+    /// and needs a server-authoritative `Time` stamp, exactly like
+    /// `delete_after` above only ever expresses `Object::DeleteAfter`:
+    /// `handle_create_npc` reads its own `Time` resource and builds the
+    /// component from this id itself rather than accepting a caller-built
+    /// one.
+    pub oracle_event_id: Option<Arc<str>>,
 }
 
 impl NpcBuilder {
@@ -124,6 +137,7 @@ impl NpcBuilder {
             incorporeal: false,
             phantom_illusion: false,
             delete_after: None,
+            oracle_event_id: None,
         }
     }
 
@@ -220,6 +234,11 @@ impl NpcBuilder {
 
     pub fn with_delete_after(mut self, delete_after: impl Into<Option<Duration>>) -> Self {
         self.delete_after = delete_after.into();
+        self
+    }
+
+    pub fn with_oracle_event_id(mut self, oracle_event_id: impl Into<Option<Arc<str>>>) -> Self {
+        self.oracle_event_id = oracle_event_id.into();
         self
     }
 }
@@ -919,5 +938,40 @@ macro_rules! event_emitters {
         $(
             $vis use event_emitters::{$read_data, $emitters};
         )+
+    }
+}
+
+#[cfg(test)]
+mod npc_builder_tests {
+    use super::*;
+
+    fn bare_builder() -> NpcBuilder {
+        NpcBuilder::new(
+            comp::Stats::new(
+                comp::Content::Plain("test".to_string()),
+                comp::Body::default(),
+            ),
+            comp::Body::default(),
+            comp::Alignment::Wild,
+        )
+    }
+
+    #[test]
+    fn oracle_event_id_defaults_to_none() {
+        assert!(bare_builder().oracle_event_id.is_none());
+    }
+
+    #[test]
+    fn with_oracle_event_id_sets_the_field() {
+        let builder = bare_builder().with_oracle_event_id(Arc::from("mist_bound"));
+        assert_eq!(builder.oracle_event_id.as_deref(), Some("mist_bound"));
+    }
+
+    #[test]
+    fn with_oracle_event_id_accepts_none_to_clear() {
+        let builder = bare_builder()
+            .with_oracle_event_id(Arc::from("mist_bound"))
+            .with_oracle_event_id(None);
+        assert!(builder.oracle_event_id.is_none());
     }
 }
