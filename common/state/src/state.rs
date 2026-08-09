@@ -13,8 +13,9 @@ use common::{
     link::Is,
     mounting::{Mount, Rider, VolumeRider, VolumeRiders},
     outcome::Outcome,
+    piloting,
     resources::{
-        DeltaTime, EntitiesDiedLastTick, GameMode, PlayerEntity, PlayerPhysicsSettings,
+        DeltaTime, EntitiesDiedLastTick, GameMode, OracleLive, PlayerEntity, PlayerPhysicsSettings,
         ProgramTime, Time, TimeOfDay, TimeScale,
     },
     shared_server_config::ServerConstants,
@@ -297,9 +298,12 @@ impl State {
         ecs.register::<comp::SkillSet>();
         ecs.register::<comp::ActiveAbilities>();
         ecs.register::<comp::AbilityCooldowns>();
+        ecs.register::<comp::TriggerSlots>();
+        ecs.register::<comp::SpellMastery>();
         ecs.register::<comp::AbilityPool>();
         ecs.register::<comp::AttunedItems>();
         ecs.register::<comp::Attuning>();
+        ecs.register::<comp::Detected>();
         ecs.register::<comp::Buffs>();
         ecs.register::<comp::Auras>();
         ecs.register::<comp::EnteredAuras>();
@@ -317,6 +321,8 @@ impl State {
         ecs.register::<Is<VolumeRider>>();
         ecs.register::<Is<tether::Leader>>();
         ecs.register::<Is<tether::Follower>>();
+        ecs.register::<Is<piloting::Pilot>>();
+        ecs.register::<Is<piloting::Piloted>>();
         ecs.register::<Is<interaction::Interactor>>();
         ecs.register::<interaction::Interactors>();
         ecs.register::<comp::Mass>();
@@ -387,6 +393,23 @@ impl State {
         ecs.register::<common::combat::DeathEffects>();
         ecs.register::<common::combat::RiderEffects>();
         ecs.register::<comp::SpectatingEntity>();
+        ecs.register::<comp::RemoteSense>();
+        ecs.register::<comp::ConcealedUnlessTrueSight>();
+        ecs.register::<comp::Disguise>();
+        ecs.register::<comp::PhantomIllusion>();
+        // Deliberately not net-synced — see `comp::Banished`'s doc comment.
+        ecs.register::<comp::Banished>();
+        // Derived locally on both sides from components that are already
+        // synced, so deliberately not net-synced either.
+        ecs.register::<comp::DerivedStats>();
+
+        // The four `ReaderId`s that invalidate `comp::DerivedStats`. MUST be
+        // built after the register block above: `register_reader` needs
+        // `Inventory`, `AttunedItems`, `SkillSet` and `Body` to already exist
+        // as storages. It lives in a resource rather than in the rebuild system
+        // because `common_ecs::System` has no `setup()` hook to lazily register
+        // a reader from.
+        ecs.insert(comp::DerivedStatsTrackers::new(&ecs));
 
         // Register synced resources used by the ECS.
         ecs.insert(TimeOfDay(0.0));
@@ -411,6 +434,10 @@ impl State {
         ecs.insert(common::CachedSpatialGrid::default());
         ecs.insert(EntitiesDiedLastTick::default());
         ecs.insert(RtsimGizmos::default());
+        // Default to not-live; the server overwrites this from
+        // `GameplaySettings::oracle` at startup, and the client overwrites its own
+        // copy from the server on login / mid-session flip.
+        ecs.insert(OracleLive::default());
 
         let num_cpu = num_cpus::get() as u64;
         let slow_limit = (num_cpu / 2 + num_cpu / 4).max(1);

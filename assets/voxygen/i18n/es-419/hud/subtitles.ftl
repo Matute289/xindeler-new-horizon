@@ -93,6 +93,7 @@ subtitle-arrow_shot = Flecha disparada
 subtitle-arrow_miss = Disparo de flecha fallado
 subtitle-arrow_hit = Disparo de flecha acertado
 subtitle-skill_point = Nuevo punto de habilidad adquirido
+subtitle-character_level_up = Subida de nivel
 subtitle-sceptre_beam = Rayo del cetro
 subtitle-flame_thrower = Lanzallamas
 subtitle-break_block = Bloque destruido

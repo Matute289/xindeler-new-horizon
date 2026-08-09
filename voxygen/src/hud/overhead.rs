@@ -1,7 +1,7 @@
 use super::{
     DEFAULT_NPC, ENEMY_HP_COLOR, FACTION_COLOR, GROUP_COLOR, GROUP_MEMBER, HP_COLOR, LOW_HP_COLOR,
-    QUALITY_EPIC, REGION_COLOR, SAY_COLOR, STAMINA_COLOR, TELL_COLOR, TEXT_BG, TEXT_COLOR,
-    cr_color, img_ids::Imgs,
+    MARKED_NPC, QUALITY_EPIC, REGION_COLOR, SAY_COLOR, STAMINA_COLOR, TELL_COLOR, TEXT_BG,
+    TEXT_COLOR, cr_color, img_ids::Imgs,
 };
 use crate::{
     GlobalState,
@@ -11,7 +11,7 @@ use crate::{
     window::LastInput,
 };
 use common::{
-    comp::{Buffs, Energy, Health, SpeechBubble, SpeechBubbleType, Stance},
+    comp::{Buffs, CreatureKind, Energy, Health, SpeechBubble, SpeechBubbleType, Stance},
     resources::Time,
 };
 use conrod_core::{
@@ -43,6 +43,8 @@ widget_ids! {
         // Name
         name_bg,
         name,
+        creature_kind_bg,
+        creature_kind,
 
         // HP
         level,
@@ -76,6 +78,8 @@ pub struct Info<'a> {
     pub combat_rating: Option<f32>,
     pub hardcore: bool,
     pub stance: Option<&'a Stance>,
+    pub marked: bool,
+    pub creature_kind: Option<CreatureKind>,
 }
 
 /// Determines whether to show the healthbar
@@ -167,12 +171,21 @@ impl Widget for Overhead<'_> {
             combat_rating,
             hardcore,
             stance,
+            marked,
+            creature_kind,
         }) = self.info
         {
             let display_name = match level {
                 Some(level) => format!("{} [{}]", name.as_deref().unwrap_or(""), level),
                 None => name.as_deref().unwrap_or("").to_string(),
             };
+            let creature_kind_line = creature_kind.map(|kind| {
+                format!(
+                    "{} — {}",
+                    name.as_deref().unwrap_or(""),
+                    self.i18n.get_msg(kind.i18n_key())
+                )
+            });
             // Used to set healthbar colours based on hp_percentage
             let hp_percentage = health.map_or(100.0, |h| {
                 f64::from(h.current() / h.base_max().max(h.maximum()) * 100.0)
@@ -297,12 +310,41 @@ impl Widget for Overhead<'_> {
                     GROUP_MEMBER
                 /*} else if targets player { //TODO: Add a way to see if the entity is trying to attack the player, their pet(s) or a member of their group and recolour their nametag accordingly
                 DEFAULT_NPC*/
+                } else if marked {
+                    MARKED_NPC
                 } else {
                     DEFAULT_NPC
                 })
                 .x_y(0.0, name_y + 1.0)
                 .parent(id)
                 .set(state.ids.name, ui);
+
+            // Creature kind (e.g. "Strigoi — Undead"), shown above the name
+            // line whenever the target's taxonomy is known.
+            if let Some(creature_kind_line) = &creature_kind_line {
+                let creature_kind_font_size = (font_size as f32 * 0.7) as u32;
+                let creature_kind_y = name_y + font_size as f64 * 0.7 + 4.0;
+                Text::new(creature_kind_line)
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .font_size(creature_kind_font_size)
+                    .color(Color::Rgba(0.0, 0.0, 0.0, 1.0))
+                    .x_y(-1.0, creature_kind_y)
+                    .parent(id)
+                    .set(state.ids.creature_kind_bg, ui);
+                Text::new(creature_kind_line)
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .font_size(creature_kind_font_size)
+                    .color(if self.in_group {
+                        GROUP_MEMBER
+                    } else if marked {
+                        MARKED_NPC
+                    } else {
+                        DEFAULT_NPC
+                    })
+                    .x_y(0.0, creature_kind_y + 1.0)
+                    .parent(id)
+                    .set(state.ids.creature_kind, ui);
+            }
 
             match health {
                 Some(health)
@@ -470,7 +512,7 @@ impl Widget for Overhead<'_> {
                     .window
                     .last_input()
                 {
-                    LastInput::KeyboardMouse => self
+                    LastInput::Keyboard | LastInput::Mouse => self
                         .interaction_options
                         .iter()
                         .map(|(input, action)| {
@@ -499,9 +541,10 @@ impl Widget for Overhead<'_> {
                         .collect(),
                 };
 
-                // create two strings for inputs and actions. Actions should be left aligned
+                // Create two strings for inputs and actions. Actions should be left aligned
                 // with each other, and should not be influenced by multi-input input strings
-                // icons string
+
+                // Icons string
                 let mut temp_list: Vec<String> = Vec::new();
                 for i in &interactions {
                     // take the string element
@@ -510,7 +553,7 @@ impl Widget for Overhead<'_> {
                 }
                 let icons_input = temp_list.join("\n");
 
-                // actions string
+                // Actions string
                 let mut temp_list: Vec<String> = Vec::new();
                 for i in &interactions {
                     let s = i.1.clone();

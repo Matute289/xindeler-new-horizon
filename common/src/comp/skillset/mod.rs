@@ -3,7 +3,7 @@ use crate::{
     comp::{
         Stats,
         class::ClassKind,
-        item::tool::ToolKind,
+        item::tool::{ToolKind, WeaponRole},
         skills::{ClassPassiveStat, Skill},
     },
 };
@@ -136,6 +136,18 @@ pub enum SkillGroupKind {
     // (parallel to `General`). Points are granted via level-milestone
     // (`grant_skill_point`), never via the XP-per-group economy.
     Feats,
+    /// A second skill tree for a `ToolKind` that already has a `Weapon(..)`
+    /// tree under a *different* role — e.g. `Weapon(Staff)` is the caster
+    /// (fire) tree, so a martial-role Staff needs `WeaponRoled(Staff,
+    /// Martial)` instead, deliberately *not* `Weapon(Staff)`, to avoid
+    /// colliding with it. This is additive rather than widening `Weapon` to
+    /// `Weapon(ToolKind, WeaponRole)`: reshaping `Weapon` would change the
+    /// persisted db-string of every existing weapon group and force a respec
+    /// on every character holding one, whereas this variant touches zero
+    /// existing persisted strings. The cost — `Weapon(Staff)` and
+    /// `WeaponRoled(Staff, Martial)` meaning "the two Staff trees" rather
+    /// than one self-explanatory shape — is accepted.
+    WeaponRoled(ToolKind, WeaponRole),
 }
 
 impl SkillGroupKind {
@@ -152,6 +164,11 @@ impl SkillGroupKind {
                     .min(u32::MAX as f32) as u32)
                     .saturating_mul(25)
             },
+            // General, Weapon(Staff|Sceptre|Pick), Feats, and every
+            // `WeaponRoled(_, _)` tree fall here deliberately: they're small
+            // trees (well under the ~20-node scale of the four melee trees
+            // above), so they share the flatter, cheaper curve those two
+            // already use rather than the level-scaled one.
             _ => {
                 const EXP_INCREMENT: f32 = 10.0;
                 const STARTING_EXP: f32 = 70.0;
@@ -827,7 +844,7 @@ pub enum SkillsPersistenceError {
     SkillsUnlockFailed,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum SkillPrerequisite {
     All(HashMap<Skill, u16>),
     Any(HashMap<Skill, u16>),

@@ -19,7 +19,7 @@ use common::{
 };
 use conrod_core::{
     Color, Colorable, Labelable, Positionable, Sizeable, Ui, UiCell, Widget, WidgetCommon, color,
-    input::Key,
+    input::{Key, keyboard::ModifierKey},
     position::Dimension,
     text::{
         self,
@@ -28,6 +28,7 @@ use conrod_core::{
     widget::{self, Button, Id, Image, Line, List, Rectangle, Text, TextEdit},
     widget_ids,
 };
+use copypasta::{ClipboardContext, ClipboardProvider};
 use i18n::Localization;
 use i18n_helpers::localize_chat_message;
 use std::collections::{HashSet, VecDeque};
@@ -388,6 +389,26 @@ impl Widget for Chat<'_> {
 
         let mut force_cursor = self.force_cursor;
 
+        // Ctrl+Shift+C copies the whole visible chat log to the clipboard as plain
+        // text — the scrollback itself isn't a selectable/copyable widget (only the
+        // input line is, via `TextEdit`'s own Ctrl+C), so this is the only way to
+        // get e.g. a command's error output out to paste elsewhere. Shift
+        // distinguishes it from `TextEdit`'s native Ctrl+C (copy selection).
+        // Keyboard capture can sit on either the input line (`chat_input`, after the
+        // player has typed something) or the outer chat widget (`id`, e.g. right
+        // after clicking into the scrollback to read history) — mirrors
+        // `input_focused` below. Checking `chat_input` alone silently drops the
+        // shortcut (and its confirmation line) whenever focus is on `id`.
+        let copy_log_requested = [state.ids.chat_input, id].iter().any(|widget_id| {
+            ui.widget_input(*widget_id)
+                .presses()
+                .key()
+                .any(|key_press| {
+                    matches!(key_press.key, Key::C)
+                        && key_press.modifiers.contains(ModifierKey::CTRL_SHIFT)
+                })
+        });
+
         // If up or down are pressed: move through history
         // If any key other than up, down, or tab is pressed: stop completion.
         let (history_dir, tab_dir, stop_tab_completion) =
@@ -649,6 +670,26 @@ impl Widget for Chat<'_> {
                 (is_moderator, chat_type, text)
             })
             .collect::<Vec<_>>();
+
+        if copy_log_requested {
+            let log_text = messages
+                .iter()
+                .map(|(_, _, text)| text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let line_count = messages.len();
+            match ClipboardContext::new().and_then(|mut ctx| ctx.set_contents(log_text)) {
+                Ok(()) => self.new_messages.push_back(
+                    ChatType::CommandInfo
+                        .into_plain_msg(format!("Copied {line_count} chat line(s) to clipboard.")),
+                ),
+                Err(err) => self.new_messages.push_back(
+                    ChatType::CommandError
+                        .into_plain_msg(format!("Could not copy chat log to clipboard: {err}")),
+                ),
+            }
+        }
+
         let n_badges = messages.iter().filter(|t| t.0).count();
         if state.ids.chat_badges.len() < n_badges {
             state.update(|s| {

@@ -42,22 +42,27 @@ impl DwarvenMine {
     }
 
     pub fn name(&self) -> &str { &self.name }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        let near_entrance = within_distance(wpos, self.origin, 64);
-        SpawnRules {
-            trees: !near_entrance,
-            max_warp: (!near_entrance) as i32 as f32,
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for DwarvenMine {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_mine\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_dwarvenmine")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_dwarvenmine"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_mine"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+        let near_entrance = within_distance(wpos, self.origin, 64);
+        spawn_rules.trees &= !near_entrance;
+        spawn_rules.max_warp = spawn_rules.max_warp.min((!near_entrance) as i32 as f32);
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let center = self.bounds.center();
         // Entrance

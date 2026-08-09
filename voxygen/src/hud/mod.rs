@@ -6,6 +6,7 @@ mod buttons;
 mod change_notification;
 mod chat;
 mod crafting;
+mod creature_card;
 mod diary;
 mod esc_menu;
 mod group;
@@ -20,6 +21,7 @@ mod prompt_dialog;
 mod quest;
 mod settings_window;
 mod skillbar;
+mod slot_grid;
 mod slots;
 mod social;
 mod subtitles;
@@ -37,6 +39,7 @@ pub use hotbar::{SlotContents as HotbarSlotContents, State as HotbarState};
 pub use item_imgs::animate_by_pulse;
 pub use loot_scroller::LootMessage;
 pub use settings_window::ScaleChange;
+pub use slot_grid::{SlotEvents, SlotGrid};
 pub use subtitles::Subtitle;
 
 use bag::Bag;
@@ -46,6 +49,7 @@ use change_notification::{ChangeNotification, NotificationReason};
 use chat::Chat;
 use chrono::NaiveTime;
 use crafting::Crafting;
+use creature_card::CreatureCard;
 use diary::{Diary, SelectedSkillTree};
 use esc_menu::EscMenu;
 use group::Group;
@@ -85,19 +89,18 @@ use crate::{
     },
     settings::chat::ChatFilter,
     ui::{
-        Graphic, Ingameable, ScaleMode, Ui,
+        Graphic, ImageFrame, Ingameable, ItemTooltip, ScaleMode, Ui,
         fonts::Fonts,
         img_ids::Rotations,
         slot::{self, SlotKey},
     },
-    window::Event as WinEvent,
+    window::{Event as WinEvent, MenuInput},
 };
 use client::{Client, UserNotification};
 use common::{
-    combat,
     comp::{
-        self, AbilityCooldowns, BuffData, BuffKind, Content, Health, Item, MapMarkerChange,
-        PickupItem, PresenceKind,
+        self, AbilityCooldowns, BuffData, BuffKind, Content, DetectDetail, Detected, Health, Item,
+        MapMarkerChange, PickupItem, PresenceKind, SenseKind,
         ability::{AuxiliaryAbility, Stance},
         fluid_dynamics,
         inventory::{
@@ -107,7 +110,7 @@ use common::{
         },
         item::{
             ItemDefinitionIdOwned, ItemDesc, ItemI18n, MaterialStatManifest, Quality,
-            tool::{AbilityContext, ToolKind},
+            tool::{ToolKind, WeaponRole},
         },
         loot_owner::LootOwnerKind,
         skillset::{SkillGroupKind, SkillsPersistenceError, skills::Skill},
@@ -117,7 +120,7 @@ use common::{
     mounting::{Mount, Rider, VolumePos},
     outcome::{HealthChangeInfo, Outcome},
     recipe::RecipeBookManifest,
-    resources::{BattleMode, Secs, Time},
+    resources::{BattleMode, OracleLive, Secs, Time},
     rtsim,
     slowjob::SlowJobPool,
     terrain::{Block, SpriteKind, TerrainChunk, TerrainChunkSize, UnlockKind},
@@ -214,6 +217,7 @@ const WORLD_COLOR: Color = Color::Rgba(0.95, 1.0, 0.95, 1.0);
 //Nametags
 const GROUP_MEMBER: Color = Color::Rgba(0.47, 0.84, 1.0, 1.0);
 const DEFAULT_NPC: Color = Color::Rgba(1.0, 1.0, 1.0, 1.0);
+const MARKED_NPC: Color = Color::Rgba(1.0, 0.8, 0.0, 1.0);
 
 // UI Color-Theme
 const UI_MAIN: Color = Color::Rgba(0.61, 0.70, 0.70, 1.0); // Greenish Blue
@@ -265,6 +269,7 @@ widget_ids! {
 
         overheads[],
         overitems[],
+        detected_points[],
 
         // Game Version
         version,
@@ -306,6 +311,8 @@ widget_ids! {
         map,
         world_map,
         popup,
+        creature_card,
+        identify_item_tooltip,
         minimap,
         prompt_dialog,
         bag,
@@ -340,6 +347,10 @@ widget_ids! {
         // Camera clamp indicator
         camera_clamp_txt,
         camera_clamp_bg,
+
+        // Remote-sensing indicator
+        remote_sensing_txt,
+        remote_sensing_bg,
 
         // Tutorial
         quest_bg,
@@ -665,6 +676,18 @@ pub struct HudInfo<'a> {
     pub mutable_viewpoint: bool,
     pub target_entity: Option<specs::Entity>,
     pub selected_entity: Option<(specs::Entity, Instant)>,
+    /// Entities the viewpoint entity currently perceives through a magical
+    /// sense, each tagged with the sense that revealed it.
+    pub revealed_entities: &'a HashMap<specs::Entity, SenseKind>,
+    /// The subset of `revealed_entities` the viewpoint entity is also
+    /// permitted to open an Identify inspect card for, tagged with which
+    /// kind of card. Built from the viewpoint's own `Detected` component
+    /// (owner-private, synced only to its owner), so an entry existing here
+    /// at all already proves "I am the one who cast Identify on this
+    /// entity" — see `common::comp::detection::DetectDetail`'s own doc
+    /// comment for why that sync scope is the permission check, not a
+    /// second one layered on top.
+    pub identified_entities: &'a HashMap<specs::Entity, DetectDetail>,
     pub persistence_load_error: Option<SkillsPersistenceError>,
     pub key_state: &'a KeyState,
 }
@@ -736,6 +759,7 @@ pub enum Event {
     LeaveStance,
     UnlockSkill(Skill),
     SelectExpBar(Option<SkillGroupKind>),
+    SetFutureLevelsToSecondary(bool),
 
     RequestSiteInfo(SiteId),
     ChangeAbility(usize, AuxiliaryAbility),
@@ -903,6 +927,12 @@ impl TradeAmountInput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowId {
+    None,
+    Bag,
+}
+
 pub struct Show {
     ui: bool,
     intro: bool,
@@ -932,13 +962,77 @@ pub struct Show {
     auto_walk: bool,
     zoom_lock: ChangeNotification,
     camera_clamp: bool,
+    remote_sensing: bool,
+    /// Which entity's Identify inspect card is currently open, if any (see
+    /// `Hud::toggle_identify_card`). Not gated by permission here — the
+    /// render pass re-checks `HudInfo::identified_entities` every frame and
+    /// simply draws nothing if the target no longer carries a `DetectDetail`
+    /// the local player is permitted to see (e.g. the link expired, or the
+    /// target left `Detected` range).
+    identify_card: Option<specs::Entity>,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
+    // A stack of open menus; the menu in focus should be on top
+    focus: Vec<WindowId>,
 }
+
+impl Default for Show {
+    fn default() -> Self { Self::new() }
+}
+
 impl Show {
+    pub fn new() -> Self {
+        Self {
+            ui: true,
+            intro: false,
+            crafting: false,
+            bag: false,
+            bag_inv: false,
+            bag_details: false,
+            trade: false,
+            trade_details: false,
+            social: false,
+            diary: false,
+            group: false,
+            quest: false,
+            group_menu: false,
+            esc_menu: false,
+            open_windows: Windows::None,
+            map: false,
+            ingame: true,
+            chat_tab_settings_index: None,
+            settings_tab: SettingsTab::Interface,
+            diary_fields: diary::DiaryShow::default(),
+            crafting_fields: crafting::CraftingShow::default(),
+            social_search_key: None,
+            want_grab: true,
+            stats: false,
+            free_look: false,
+            auto_walk: false,
+            zoom_lock: ChangeNotification::default(),
+            camera_clamp: false,
+            remote_sensing: false,
+            identify_card: None,
+            prompt_dialog: None,
+            trade_amount_input_key: None,
+            focus: Vec::new(),
+        }
+    }
+
+    // Changing a window state must go through these functions
+    fn set_bag_state(&mut self, state: bool) {
+        if state {
+            self.focus.push(WindowId::Bag); // use hashset to avoid duplicates?
+            self.bag = true;
+        } else {
+            self.focus.retain(|x| *x != WindowId::Bag);
+            self.bag = false;
+        }
+    }
+
     fn bag(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.crafting_fields.salvage = false;
 
@@ -950,9 +1044,11 @@ impl Show {
         }
     }
 
+    pub fn bag_print(&self) -> bool { self.bag }
+
     fn trade(&mut self, open: bool) {
         if !self.esc_menu {
-            self.bag = open;
+            self.set_bag_state(open);
             self.trade = open;
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
@@ -962,7 +1058,7 @@ impl Show {
     fn map(&mut self, open: bool) {
         if !self.esc_menu {
             self.map = open;
-            self.bag = false;
+            self.set_bag_state(false);
             self.crafting = false;
             self.crafting_fields.salvage = false;
             self.social = false;
@@ -1002,7 +1098,7 @@ impl Show {
             self.crafting = open;
             self.crafting_fields.salvage = false;
             self.crafting_fields.recipe_inputs = HashMap::new();
-            self.bag = open;
+            self.set_bag_state(open);
             self.map = false;
             self.want_grab = !self.any_window_requires_cursor();
         }
@@ -1032,7 +1128,7 @@ impl Show {
             self.quest = false;
             self.crafting = false;
             self.crafting_fields.salvage = false;
-            self.bag = false;
+            self.set_bag_state(false);
             self.map = false;
             self.diary_fields = diary::DiaryShow::default();
             self.diary = open;
@@ -1047,7 +1143,7 @@ impl Show {
             } else {
                 Windows::None
             };
-            self.bag = false;
+            self.set_bag_state(false);
             self.social = false;
             self.quest = false;
             self.crafting = false;
@@ -1105,7 +1201,7 @@ impl Show {
 
     fn toggle_windows(&mut self, global_state: &mut GlobalState) {
         if self.any_window_requires_cursor() {
-            self.bag = false;
+            self.set_bag_state(false);
             self.trade = false;
             self.esc_menu = false;
             self.intro = false;
@@ -1136,7 +1232,7 @@ impl Show {
         self.open_windows = Windows::Settings;
         self.esc_menu = false;
         self.settings_tab = tab;
-        self.bag = false;
+        self.set_bag_state(false);
         self.want_grab = false;
     }
 
@@ -1282,9 +1378,6 @@ pub struct Hud {
     content_bubbles: Vec<(Vec3<f32>, comp::SpeechBubble)>,
     pub persisted_state: Rc<RefCell<PersistedHudState>>,
     pub show: Show,
-    //never_show: bool,
-    //intro: bool,
-    //intro_2: bool,
     to_focus: Option<Option<widget::Id>>,
     force_ungrab: bool,
     force_chat_input: Option<String>,
@@ -1295,6 +1388,7 @@ pub struct Hud {
     slot_manager: slots::SlotManager,
     hotbar: hotbar::State,
     events: Vec<Event>,
+    menu_events: Vec<MenuInput>,
     crosshair_opacity: f32,
     floaters: Floaters,
     voxel_minimap: VoxelMinimap,
@@ -1388,43 +1482,8 @@ impl Hud {
             persisted_state,
             speech_bubbles: HashMap::new(),
             content_bubbles: Vec::new(),
-            //intro: false,
-            //intro_2: false,
-            show: Show {
-                intro: false,
-                bag: false,
-                bag_inv: false,
-                bag_details: false,
-                trade: false,
-                trade_details: false,
-                esc_menu: false,
-                open_windows: Windows::None,
-                map: false,
-                crafting: false,
-                ui: true,
-                social: false,
-                diary: false,
-                group: false,
-                // Change this before implementation!
-                quest: false,
-                group_menu: false,
-                chat_tab_settings_index: None,
-                settings_tab: SettingsTab::Interface,
-                diary_fields: diary::DiaryShow::default(),
-                crafting_fields: crafting::CraftingShow::default(),
-                social_search_key: None,
-                want_grab: true,
-                ingame: true,
-                stats: false,
-                free_look: false,
-                auto_walk: false,
-                zoom_lock: ChangeNotification::default(),
-                camera_clamp: false,
-                prompt_dialog: None,
-                trade_amount_input_key: None,
-            },
+            show: Show::new(),
             to_focus: None,
-            //never_show: false,
             force_ungrab: false,
             force_chat_input: None,
             force_chat_cursor: None,
@@ -1434,6 +1493,7 @@ impl Hud {
             slot_manager,
             hotbar: hotbar_state,
             events: Vec::new(),
+            menu_events: Vec::new(),
             crosshair_opacity: 0.0,
             floaters: Floaters {
                 exp_floaters: Vec::new(),
@@ -1498,7 +1558,7 @@ impl Hud {
         self.pulse += dt.as_secs_f32();
         // FPS
         let fps = global_state.clock.stats().average_tps;
-        let version = format!("Veloren {}", *common::util::DISPLAY_VERSION);
+        let version = format!("Xindeler {}", *common::util::DISPLAY_VERSION);
         let i18n = &global_state.i18n.read();
 
         if self.show.ingame {
@@ -1517,16 +1577,30 @@ impl Hud {
             let interpolated = ecs.read_storage::<vcomp::Interpolated>();
             let scales = ecs.read_storage::<comp::Scale>();
             let bodies = ecs.read_storage::<comp::Body>();
+            let disguises = ecs.read_storage::<comp::Disguise>();
             let items = ecs.read_storage::<PickupItem>();
-            let inventories = ecs.read_storage::<comp::Inventory>();
-            let msm = ecs.read_resource::<MaterialStatManifest>();
+            // The nameplate loop below is the single heaviest `combat_rating`
+            // consumer in the codebase — one read per nearby entity, per frame.
+            // It is joined (not `.get()`-ed per entity) so the rating is a plain
+            // field access on the joined tuple and no loadout is ever walked
+            // here.
+            let derived_stats = ecs.read_storage::<comp::DerivedStats>();
             let entities = ecs.entities();
             let me = info.viewpoint_entity;
-            let poises = ecs.read_storage::<comp::Poise>();
             let is_mounts = ecs.read_storage::<Is<Mount>>();
             let is_riders = ecs.read_storage::<Is<Rider>>();
             let stances = ecs.read_storage::<comp::Stance>();
             let char_activities = ecs.read_storage::<comp::CharacterActivity>();
+            let concealed = ecs.read_storage::<comp::ConcealedUnlessTrueSight>();
+            // The actual player's own True Sight, not the current viewpoint's
+            // (`me`/`info.viewpoint_entity`) -- a remote-sensing spell's
+            // sensor/eye anchor carries no `Stats` of its own to hold the
+            // sense. Same split `voxygen/src/scene/figure/mod.rs`'s render
+            // gate and `voxygen/src/session/target.rs`'s target-acquisition
+            // gate both make.
+            let pierces_concealment = stats
+                .get(client.entity())
+                .is_some_and(comp::observer_pierces_concealment);
             let time = ecs.read_resource::<Time>();
             let id_maps = ecs.read_resource::<common::uid::IdMaps>();
             let terrain = ecs.read_resource::<common::terrain::TerrainGrid>();
@@ -1949,7 +2023,7 @@ impl Hud {
                         .bottom_left_with_margins_on(self.ids.player_rank_up_txt_1_bg, 2.0, 2.0)
                         .set(self.ids.player_rank_up_txt_1, ui_widgets);
                     // Variable skilltree icon
-                    use crate::hud::SkillGroupKind::{General, Weapon};
+                    use crate::hud::SkillGroupKind::{General, Weapon, WeaponRoled};
                     Image::new(match display.skill_tree {
                         General => self.imgs.swords_crossed,
                         Weapon(ToolKind::Hammer) => self.imgs.hammer,
@@ -1959,6 +2033,7 @@ impl Hud {
                         Weapon(ToolKind::Bow) => self.imgs.bow,
                         Weapon(ToolKind::Staff) => self.imgs.staff,
                         Weapon(ToolKind::Pick) => self.imgs.mining,
+                        WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => self.imgs.staff,
                         _ => self.imgs.swords_crossed,
                     })
                     .w_h(20.0, 20.0)
@@ -2362,7 +2437,52 @@ impl Hud {
                 .set(overitem_id, ui_widgets);
             }
 
+            // Render an in-world label for every world point a magical sense has
+            // revealed to us (e.g. a revealed path's waypoint). These are bare
+            // positions rather than entities, so they get their own label pass
+            // instead of riding along with the figure tint.
+            let detecteds = ecs.read_storage::<Detected>();
+            if let Some(detected) = detecteds.get(me) {
+                let mut detected_point_walker = self.ids.detected_points.walk();
+                for point in detected.points.iter() {
+                    let detected_point_id = detected_point_walker.next(
+                        &mut self.ids.detected_points,
+                        &mut ui_widgets.widget_id_generator(),
+                    );
+
+                    let name = i18n.get_msg(match point.sense {
+                        SenseKind::Path => "hud-detected-path",
+                        _ => "hud-detected-point",
+                    });
+                    let offset = point.pos - player_pos;
+                    let bearing = i18n.get_msg_ctx("hud-detected-bearing", &i18n::fluent_args! {
+                        "bearing" => i18n.get_msg(cardinal_direction_key(offset.xy())),
+                        "distance" => offset.magnitude().round() as i64,
+                    });
+
+                    overitem::Overitem::new(
+                        name,
+                        overitem::TEXT_COLOR,
+                        point.pos.distance_squared(player_pos),
+                        &self.fonts,
+                        i18n,
+                        overitem::OveritemProperties {
+                            active: true,
+                            pickup_failed_pulse: None,
+                        },
+                        self.pulse,
+                        vec![(None, bearing.into_owned(), overitem::TEXT_COLOR)],
+                        &self.imgs,
+                        global_state,
+                    )
+                    .x_y(0.0, 100.0)
+                    .position_ingame(point.pos + Vec3::unit_z() * 1.5)
+                    .set(detected_point_id, ui_widgets);
+                }
+            }
+
             let speech_bubbles = &self.speech_bubbles;
+            let my_stats = stats.get(me);
             // Render overhead name tags and health bars
             for (
                 entity,
@@ -2391,10 +2511,15 @@ impl Hud {
                 &bodies,
                 &mut hp_floater_lists,
                 &uids,
-                &inventories,
+                &derived_stats,
                 char_activities.maybe(),
-                poises.maybe(),
-                (is_mounts.maybe(), is_riders.maybe(), stances.maybe()),
+                (
+                    is_mounts.maybe(),
+                    is_riders.maybe(),
+                    stances.maybe(),
+                    disguises.maybe(),
+                ),
+                concealed.maybe(),
             )
                 .join()
                 .filter(|t| {
@@ -2415,16 +2540,27 @@ impl Hud {
                         body,
                         hpfl,
                         uid,
-                        inventory,
+                        derived,
                         character_activity,
-                        poise,
-                        (is_mount, is_rider, stance),
+                        (is_mount, is_rider, stance, disguise),
+                        is_concealed,
                     )| {
                         // Use interpolated position if available
                         let pos = interpolated.map_or(pos.0, |i| i.pos);
                         let in_group = client.group_members().contains_key(uid);
                         let is_me = entity == me;
                         let dist_sqr = pos.distance_squared(player_pos);
+
+                        let is_marked = my_stats.is_some_and(|s| s.marked_entities.contains(uid))
+                            || info.revealed_entities.contains_key(&entity);
+
+                        // An entity invisible to normal perception (e.g. a
+                        // remote-sensing spell's sensor) gets no nameplate,
+                        // healthbar, or speech bubble for an observer without
+                        // True Sight -- otherwise a floating healthbar with
+                        // no body under it would give it away regardless of
+                        // whether the 3-D model itself is drawn.
+                        let visible_to_me = is_concealed.is_none() || pierces_concealment;
 
                         // Determine whether to display nametag and healthbar based on whether the
                         // entity is mounted, has been damaged, is targeted/selected, or is in your
@@ -2433,6 +2569,7 @@ impl Hud {
                         // be hidden in some cases if it is at maximum
                         let has_active_buffs = buffs.iter_active().next().is_some();
                         let display_overhead_info = !is_me
+                            && visible_to_me
                             && (is_mount.is_none()
                                 || health.is_none_or(overhead::should_show_healthbar))
                             && is_rider
@@ -2441,7 +2578,8 @@ impl Hud {
                                 || info.selected_entity.is_some_and(|s| s.0 == entity)
                                 || health.is_none_or(overhead::should_show_healthbar)
                                 || in_group
-                                || has_active_buffs)
+                                || has_active_buffs
+                                || is_marked)
                             && dist_sqr
                                 < (if in_group {
                                     NAMETAG_GROUP_RANGE
@@ -2455,27 +2593,41 @@ impl Hud {
                                 })
                                 .powi(2);
 
+                        // A disguise's apparent name, when it declares one,
+                        // wins over the real `Stats.name` — this is the
+                        // client-side counterpart of the model/skeleton
+                        // override in the figure-rendering path. `None`
+                        // (no apparent name authored yet) falls back to the
+                        // real name, same as an undisguised entity. An
+                        // entity in our own True Sight reveal set bypasses
+                        // the disguise entirely and always shows its real
+                        // name, matching the real body the figure-rendering
+                        // path already renders for it.
+                        let true_sight_revealed =
+                            info.revealed_entities.get(&entity) == Some(&SenseKind::True);
+                        let display_name = disguise
+                            .filter(|_| !true_sight_revealed)
+                            .and_then(|d| d.apparent_name.as_ref())
+                            .unwrap_or(&stats.name);
                         let info = display_overhead_info.then(|| overhead::Info {
-                            name: Some(i18n.get_content(&stats.name)),
+                            name: Some(i18n.get_content(display_name)),
                             level: Some(skill_set.character_level()),
                             health,
                             buffs: Some(buffs),
                             energy,
-                            combat_rating: if let (Some(health), Some(energy), Some(poise)) =
-                                (health, energy, poise)
-                            {
-                                Some(combat::combat_rating(
-                                    inventory, health, energy, poise, skill_set, *body, &msm,
-                                ))
-                            } else {
-                                None
-                            },
+                            // A plain field read off the tuple this loop is
+                            // already joining — no storage fetch, no loadout
+                            // walk, per entity per frame.
+                            combat_rating: Some(derived.combat_rating),
                             hardcore: hardcore.contains(entity),
                             stance,
+                            marked: is_marked,
+                            creature_kind: stats.creature_kind,
                         });
                         // Only render bubble if nearby or if its me and setting is on
-                        let bubble = if (dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
-                            || (is_me && global_state.settings.interface.speech_bubble_self)
+                        let bubble = if visible_to_me
+                            && ((dist_sqr < SPEECH_BUBBLE_RANGE.powi(2) && !is_me)
+                                || (is_me && global_state.settings.interface.speech_bubble_self))
                         {
                             speech_bubbles.get(uid)
                         } else {
@@ -3152,7 +3304,6 @@ impl Hud {
         // let entity = info.viewpoint_entity;
         let stats = ecs.read_storage::<comp::Stats>();
         let skill_sets = ecs.read_storage::<comp::SkillSet>();
-        let buffs = ecs.read_storage::<comp::Buffs>();
         let msm = ecs.read_resource::<MaterialStatManifest>();
         let time = ecs.read_resource::<Time>();
 
@@ -3188,7 +3339,6 @@ impl Hud {
             self.pulse,
             global_state,
             tooltip_manager,
-            &msm,
             &time,
         )
         .set(self.ids.group_window, ui_widgets)
@@ -3255,11 +3405,73 @@ impl Hud {
         let bodies = ecs.read_storage::<comp::Body>();
         let poises = ecs.read_storage::<comp::Poise>();
         let uids = ecs.read_storage::<Uid>();
+        let character_classes = ecs.read_storage::<comp::CharacterClass>();
+        let spell_masteries = ecs.read_storage::<comp::SpellMastery>();
         let combos = ecs.read_storage::<comp::Combo>();
         let combo = combos.get(entity);
         let time = ecs.read_resource::<Time>();
         let stances = ecs.read_storage::<comp::Stance>();
         let char_states = ecs.read_storage::<comp::CharacterState>();
+        let buffs = ecs.read_storage::<comp::Buffs>();
+        let oracle_live = ecs.read_resource::<OracleLive>().0;
+
+        // Identify inspect card: only rendered while `self.show.identify_card`
+        // names a target AND that target still carries a `DetectDetail` the
+        // local player is currently permitted to see. `info.identified_entities`
+        // (built from the player's own owner-private `Detected` component) is
+        // the entire permission check -- an entry existing there at all already
+        // proves this client is the one who cast Identify on that entity, see
+        // `HudInfo::identified_entities`'s own doc comment.
+        if let Some(target) = self.show.identify_card {
+            match info.identified_entities.get(&target) {
+                Some(DetectDetail::Item) => {
+                    if let Some(pickup) = ecs.read_storage::<comp::PickupItem>().get(target) {
+                        let edge = &self.rot_imgs.tt_side;
+                        let corner = &self.rot_imgs.tt_corner;
+                        ItemTooltip::new(
+                            ImageFrame::new(
+                                [edge.cw180, edge.none, edge.cw270, edge.cw90],
+                                [corner.none, corner.cw270, corner.cw90, corner.cw180],
+                                Color::Rgba(0.08, 0.07, 0.04, 1.0),
+                                5.0,
+                            ),
+                            client,
+                            &info,
+                            &self.imgs,
+                            &self.item_imgs,
+                            self.pulse,
+                            &msm,
+                            &rbm,
+                            inventories.get(entity),
+                            i18n,
+                            &self.item_i18n,
+                        )
+                        .item(pickup.item())
+                        .title_font_size(self.fonts.cyri.scale(20))
+                        .desc_font_size(self.fonts.cyri.scale(12))
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .desc_text_color(TEXT_COLOR)
+                        .top_right_with_margins_on(ui_widgets.window, 80.0, 20.0)
+                        .set(self.ids.identify_item_tooltip, ui_widgets);
+                    } else {
+                        // The target stopped being a pickup item (picked up,
+                        // despawned, ...) -- close the stale card.
+                        self.show.identify_card = None;
+                    }
+                },
+                Some(DetectDetail::Creature { tier }) => {
+                    CreatureCard::new(client, target, *tier, &self.fonts, i18n)
+                        .set(self.ids.creature_card, ui_widgets);
+                },
+                None => {
+                    // The link expired, the target left `Detected` range, or
+                    // this client was never the caster to begin with --
+                    // close the stale card rather than leaving it stuck open.
+                    self.show.identify_card = None;
+                },
+            }
+        }
+
         // Combo floater stuffs
         self.floaters.combo_floater = self.floaters.combo_floater.map(|mut f| {
             f.timer -= dt.as_secs_f64();
@@ -3282,9 +3494,6 @@ impl Hud {
             skillsets.get(entity),
             bodies.get(entity),
         ) {
-            let stance = stances.get(entity);
-            let context = AbilityContext::from(stance, Some(inventory), combo);
-
             let skillbar_events = Skillbar::new(
                 client,
                 &info,
@@ -3300,6 +3509,7 @@ impl Hud {
                 skillset,
                 active_abilities.get(entity),
                 ability_pools.get(entity),
+                character_classes.get(entity),
                 body,
                 //&character_state,
                 self.pulse,
@@ -3314,13 +3524,14 @@ impl Hud {
                 &ability_map,
                 &rbm,
                 self.floaters.combo_floater,
-                &context,
                 combo,
                 char_states.get(entity),
-                stance,
+                stances.get(entity),
                 stats.get(entity),
                 ability_cooldowns_storage.get(entity),
                 time.0,
+                buffs.get(entity),
+                oracle_live,
             )
             .set(self.ids.skillbar, ui_widgets);
 
@@ -3548,20 +3759,10 @@ impl Hud {
 
         // Bag contents
         if self.show.bag
-            && let (
-                Some(player_stats),
-                Some(skill_set),
-                Some(health),
-                Some(energy),
-                Some(body),
-                Some(poise),
-            ) = (
+            && let (Some(player_stats), Some(health), Some(energy)) = (
                 stats.get(info.viewpoint_entity),
-                skill_sets.get(info.viewpoint_entity),
                 healths.get(entity),
                 energies.get(entity),
-                bodies.get(entity),
-                poises.get(entity),
             )
         {
             for event in Bag::new(
@@ -3579,14 +3780,12 @@ impl Hud {
                 i18n,
                 &self.item_i18n,
                 player_stats,
-                skill_set,
                 health,
                 energy,
                 &self.show,
-                body,
                 &msm,
                 &rbm,
-                poise,
+                &self.menu_events,
             )
             .set(self.ids.bag, ui_widgets)
             {
@@ -3602,6 +3801,10 @@ impl Hud {
                         } else {
                             self.force_ungrab = true
                         };
+                        // Also closes any open trade windows
+                        if self.show.trade {
+                            self.events.push(Event::TradeAction(TradeAction::Decline));
+                        }
                     },
                     bag::Event::ChangeInventorySortOrder(sort_order) => {
                         self.events
@@ -3769,12 +3972,6 @@ impl Hud {
 
         self.new_messages.clear();
         self.new_notifications.clear();
-
-        // Windows
-
-        // Char Window will always appear at the left side. Other Windows default to the
-        // left side, but when the Char Window is opened they will appear to the right
-        // of it.
 
         // Settings
         if let Windows::Settings = self.show.open_windows {
@@ -3945,7 +4142,6 @@ impl Hud {
                 Some(char_state),
                 Some(health),
                 Some(energy),
-                Some(body),
                 Some(poise),
                 Some(uid),
             ) = (
@@ -3954,11 +4150,9 @@ impl Hud {
                 char_states.get(entity),
                 healths.get(entity),
                 energies.get(entity),
-                bodies.get(entity),
                 poises.get(entity),
                 uids.get(entity),
             ) {
-                let context = AbilityContext::from(stances.get(entity), Some(inventory), combo);
                 for event in Diary::new(
                     &self.show,
                     client,
@@ -3971,9 +4165,7 @@ impl Hud {
                     health,
                     energy,
                     poise,
-                    body,
                     uid,
-                    &msm,
                     &self.imgs,
                     &self.item_imgs,
                     &self.fonts,
@@ -3983,8 +4175,12 @@ impl Hud {
                     tooltip_manager,
                     &mut self.slot_manager,
                     self.pulse,
-                    &context,
+                    stances.get(entity),
+                    combo,
                     stats.get(entity),
+                    buffs.get(entity),
+                    character_classes.get(entity),
+                    spell_masteries.get(entity),
                 )
                 .set(self.ids.diary, ui_widgets)
                 {
@@ -4003,6 +4199,9 @@ impl Hud {
                         },
                         diary::Event::SelectExpBar(xp_bar) => {
                             events.push(Event::SelectExpBar(xp_bar))
+                        },
+                        diary::Event::SetFutureLevelsToSecondary(value) => {
+                            events.push(Event::SetFutureLevelsToSecondary(value))
                         },
                     }
                 }
@@ -4217,6 +4416,36 @@ impl Hud {
                 .font_id(self.fonts.cyri.conrod_id)
                 .font_size(self.fonts.cyri.scale(20))
                 .set(self.ids.camera_clamp_txt, ui_widgets);
+            indicator_offset += 30.0;
+        }
+
+        // Remote-sensing indicator: persistent for the whole time a
+        // beast_sense/clairvoyance/arcane_eye/scrying spell has the player's
+        // viewpoint anchored away from their own body, since that body keeps
+        // taking damage unattended the entire time. Names the same cancel
+        // keybind session/mod.rs's `GameInput::CancelRemoteSense` handler
+        // acts on, mirroring the camera-clamp indicator above.
+        if let Some(cancel_key) = global_state
+            .settings
+            .controls
+            .get_binding(GameInput::CancelRemoteSense)
+            && self.show.remote_sensing
+        {
+            let msg = i18n.get_msg_ctx("hud-remote_sensing_indicator", &i18n::fluent_args! {
+                "key" => cancel_key.display_string(),
+            });
+            Text::new(&msg)
+                .color(TEXT_BG)
+                .mid_top_with_margin_on(ui_widgets.window, indicator_offset)
+                .font_id(self.fonts.cyri.conrod_id)
+                .font_size(self.fonts.cyri.scale(20))
+                .set(self.ids.remote_sensing_bg, ui_widgets);
+            Text::new(&msg)
+                .color(KILL_COLOR)
+                .top_left_with_margins_on(self.ids.remote_sensing_bg, -1.0, -1.0)
+                .font_id(self.fonts.cyri.conrod_id)
+                .font_size(self.fonts.cyri.scale(20))
+                .set(self.ids.remote_sensing_txt, ui_widgets);
         }
 
         // Maintain slot manager
@@ -4801,6 +5030,10 @@ impl Hud {
             }
         }
 
+        // if a menu is open, notify window so it can restrict GameInputs
+        global_state.window.menu_open = !self.show.focus.is_empty();
+
+        self.menu_events.clear(); // clear all menu inputs after they have been read
         events
     }
 
@@ -5069,11 +5302,35 @@ impl Hud {
                         self.slot_manager.idle();
                     }
                     self.show.toggle_windows(global_state);
+                    self.force_ungrab = false;
                 }
                 true
             },
 
             // Press key while not typing
+            // MenuInput
+            WinEvent::MenuInput(key, state) => {
+                if self.typing() {
+                    // Close an opened chat using MenuInputs
+                    if key == MenuInput::Back {
+                        self.ui.focus_widget(None);
+                        self.force_chat = false;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    // Pass MenuInputs along to the UI
+                    if state {
+                        self.menu_events.push(key);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            },
+
+            // GameInput
             WinEvent::InputUpdate(key, state) if !self.typing() => {
                 let gs_audio = &global_state.settings.audio;
                 let mut toggle_mute = |audio: Audio| {
@@ -5397,6 +5654,30 @@ impl Hud {
 
     pub fn camera_clamp(&mut self, camera_clamp: bool) { self.show.camera_clamp = camera_clamp; }
 
+    /// Toggles the persistent "you are remote-sensing" indicator, shown for
+    /// as long as a `beast_sense`/`clairvoyance`/`arcane_eye`/`scrying`
+    /// spell has the player's viewpoint anchored away from their own body
+    /// (see `SessionState`'s `viewpoint_source` in `voxygen/src/session`,
+    /// which drives every call site of this setter).
+    pub fn remote_sensing(&mut self, remote_sensing: bool) {
+        self.show.remote_sensing = remote_sensing;
+    }
+
+    /// Opens the Identify inspect card for `target`, or closes it if it was
+    /// already open for that same entity. Switches straight to a different
+    /// target if one was already open. The actual permission check ("does
+    /// this target carry a `DetectDetail` I'm allowed to see") happens every
+    /// frame at render time against `HudInfo::identified_entities`, not
+    /// here — this setter only tracks *which* entity the player asked to
+    /// inspect.
+    pub fn toggle_identify_card(&mut self, target: Option<specs::Entity>) {
+        self.show.identify_card = match (self.show.identify_card, target) {
+            (Some(current), Some(new)) if current == new => None,
+            (_, Some(new)) => Some(new),
+            (_, None) => None,
+        };
+    }
+
     /// Remind the player camera zoom is currently locked, for example if they
     /// are trying to zoom.
     pub fn zoom_lock_reminder(&mut self) {
@@ -5638,6 +5919,31 @@ pub fn get_quality_col(quality: Quality) -> Color {
     }
 }
 
+/// The i18n key for the compass point nearest to a horizontal world-space
+/// offset. World `+y` is north, so an offset straight along `+y` reads as `N`.
+/// A zero-length offset (we are standing on the thing) has no meaningful
+/// bearing and reports north.
+fn cardinal_direction_key(offset: Vec2<f32>) -> &'static str {
+    const KEYS: [&str; 8] = [
+        "hud-compass-north",
+        "hud-compass-northeast",
+        "hud-compass-east",
+        "hud-compass-southeast",
+        "hud-compass-south",
+        "hud-compass-southwest",
+        "hud-compass-west",
+        "hud-compass-northwest",
+    ];
+    if offset.magnitude_squared() < f32::EPSILON {
+        return KEYS[0];
+    }
+    // `atan2` measures counter-clockwise from east; rotate so 0 lands on north
+    // and each step of 45 degrees advances one compass point clockwise.
+    let clockwise_from_north = 90.0 - offset.y.atan2(offset.x).to_degrees();
+    let index = ((clockwise_from_north / 45.0).round() as i32).rem_euclid(8) as usize;
+    KEYS[index]
+}
+
 fn try_hotbar_slot_from_input(input: GameInput) -> Option<hotbar::Slot> {
     Some(match input {
         GameInput::Slot1 => hotbar::Slot::One,
@@ -5683,9 +5989,13 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         // star). Bloodfeast + Asleep keep their prior icons; Bleeding reuses the
         // BleedingMark drop.
         BuffKind::Agility => imgs.buff_agility,
+        // No dedicated art yet; reuses Enfeebled/Crippled's icon, the closest
+        // existing debuff (also a reduced-capability effect).
+        BuffKind::Agonized => imgs.debuff_crippled,
         BuffKind::Amnesia => imgs.debuff_confused,
         BuffKind::Anchored => imgs.debuff_anchored,
         BuffKind::Antimagic => imgs.debuff_antimagic,
+        BuffKind::ArdentHunt => imgs.buff_ardenthunt,
         BuffKind::ArdentHunted => imgs.debuff_ardent_hunted,
         BuffKind::ArdentHunter => imgs.buff_ardent_hunter,
         BuffKind::Asleep => imgs.debuff_asleep,
@@ -5696,18 +6006,54 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Bloodfeast => imgs.buff_bloodfeast,
         BuffKind::Burning => imgs.debuff_burning,
         BuffKind::Charmed => imgs.debuff_charmed,
+        // Reuse the closest existing icon by family until dedicated art
+        // exists: domination/madness share the mind-control icon, paralysis
+        // shares the incapacitation icon.
+        BuffKind::Dominated | BuffKind::Maddened => imgs.debuff_charmed,
+        BuffKind::Paralyzed => imgs.debuff_asleep,
+        // Placeholder icon reuse pending dedicated smite art: all seven
+        // share the same "next hit is empowered" shape as Fury.
+        BuffKind::BlindingSmite
+        | BuffKind::BrandingSmite
+        | BuffKind::DivineSmite
+        | BuffKind::SearingSmite
+        | BuffKind::StaggeringSmite
+        | BuffKind::ThunderousSmite
+        | BuffKind::WrathfulSmite
+        | BuffKind::CrusadersMantle => imgs.buff_fury,
+        // Placeholder icon reuse pending dedicated art.
+        BuffKind::Blessed => imgs.buff_fortitude,
+        // Same sleep iconography as Asleep -- distinguished from it only by
+        // the positive/negative classification and tooltip text.
+        BuffKind::RestfulSleep => imgs.debuff_asleep,
+        // Placeholder icon reuse pending dedicated art.
+        BuffKind::OtherworldlyWard => imgs.buff_protecting_ward,
+        BuffKind::Bane | BuffKind::FaerieFire => imgs.debuff_cursed,
+        BuffKind::Enfeebled => imgs.debuff_crippled,
+        // Same curse-family icon as Bane/FaerieFire pending dedicated art:
+        // Sickened folds Bane's own accuracy penalty into its shape, and
+        // Hexed is the third hex-mode aspect alongside them.
+        BuffKind::Sickened | BuffKind::Hexed => imgs.debuff_cursed,
         BuffKind::Chilled => imgs.debuff_chilled,
         BuffKind::ComboGeneration => imgs.buff_combo_generation,
         BuffKind::Crippled => imgs.debuff_crippled,
         BuffKind::Cursed => imgs.debuff_cursed,
         BuffKind::Defiance => imgs.buff_defiance,
+        // Detection senses: reuse the perception-themed icon until dedicated
+        // art ships with the spell content that grants these buffs.
+        BuffKind::Detecting => imgs.buff_eagle_eye,
         BuffKind::DifficultTerrain => imgs.debuff_difficult_terrain,
+        BuffKind::DrenchArrow => imgs.bow_drench_arrow,
         BuffKind::EagleEye => imgs.buff_eagle_eye,
         BuffKind::EnergyRegen => imgs.buff_energy_regen,
         BuffKind::Ensnared => imgs.debuff_ensnared,
         BuffKind::Flame => imgs.buff_flame,
         BuffKind::Fortitude => imgs.buff_fortitude,
         BuffKind::FreedomOfMovement => imgs.buff_freedom_of_movement,
+        // Reuse the crowd-control-resistance icon pending dedicated art:
+        // fear immunity is the same "warded against a CC effect" shape.
+        BuffKind::Fearless => imgs.buff_resilience,
+        BuffKind::FreezeArrow => imgs.bow_freeze_arrow,
         BuffKind::Frenzied => imgs.buff_frenzied,
         BuffKind::Frigid => imgs.buff_frigid,
         BuffKind::Frozen => imgs.debuff_frozen,
@@ -5717,10 +6063,12 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Heatstroke => imgs.debuff_heatstroke,
         BuffKind::HeavyNock => imgs.buff_heavy_nock,
         BuffKind::Hollowtouched => imgs.debuff_hollowtouched,
+        BuffKind::IgniteArrow => imgs.bow_ignite_arrow,
         BuffKind::ImminentCritical => imgs.buff_imminent_critical,
         BuffKind::IncreaseMaxEnergy => imgs.buff_increase_max_energy,
         BuffKind::IncreaseMaxHealth => imgs.buff_increase_max_health,
         BuffKind::Invulnerability => imgs.buff_invulnerability,
+        BuffKind::JoltArrow => imgs.bow_jolt_arrow,
         BuffKind::Lifesteal => imgs.buff_lifesteal,
         BuffKind::OffBalance => imgs.debuff_off_balance,
         BuffKind::OwlTalon => imgs.buff_owl_talon,
@@ -5737,12 +6085,42 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::Rooted => imgs.debuff_rooted,
         BuffKind::Saturation => imgs.buff_saturation,
         BuffKind::ScornfulTaunt => imgs.buff_scornful_taunt,
+        // Detection senses: reuse the perception-themed icon until dedicated
+        // art ships with the spell content that grants these buffs.
+        BuffKind::SeeInvisible => imgs.buff_eagle_eye,
         BuffKind::SepticShot => imgs.buff_septic_shot,
         BuffKind::Shielded => imgs.buff_shielded,
         BuffKind::Slowed => imgs.debuff_slowed,
+        BuffKind::StormChaser => imgs.buff_stormchaser,
         BuffKind::Sunderer => imgs.buff_sunderer,
         BuffKind::Tenacity => imgs.buff_tenacity,
         BuffKind::Terrified => imgs.debuff_terrified,
+        // Detection senses: reuse the perception-themed icon until dedicated
+        // art ships with the spell content that grants these buffs.
+        BuffKind::TrueSight => imgs.buff_eagle_eye,
+        // Reuse the perception-themed icon until dedicated art ships with the
+        // spells that grant this buff.
+        BuffKind::RemoteSensing => imgs.buff_eagle_eye,
+        // Reuse the perception-themed icon until dedicated art ships with the
+        // Identify spell.
+        BuffKind::Identifying => imgs.buff_eagle_eye,
+        // Reuse the polymorph icon (both are "your appearance has changed")
+        // until dedicated disguise art ships with the spells that grant this
+        // buff.
+        BuffKind::Disguised => imgs.debuff_polymorphed,
+        // Reuse the bag-panel stealth-rating icon (same concealment concept,
+        // already drawn) until dedicated aura-buff art ships with these
+        // spells.
+        BuffKind::PassWithoutTrace | BuffKind::Mooncloak => imgs.stealth_rating_ico,
+        // Anti-divination: reuse the same perception-themed icon
+        // RemoteSensing/TrueSight/SeeInvisible already reuse above -- these
+        // are the opposite pole of the same detection theme -- until
+        // dedicated art ships with these spells.
+        BuffKind::Nondetection | BuffKind::MagicAura => imgs.buff_eagle_eye,
+        // Combines Nondetection with a large stealth contribution; reuse the
+        // same concealment icon PassWithoutTrace/Mooncloak use above for the
+        // same reason.
+        BuffKind::Sequester => imgs.stealth_rating_ico,
         BuffKind::Wet => imgs.debuff_wet,
         BuffKind::Winded => imgs.debuff_winded,
     }
@@ -5843,7 +6221,7 @@ fn air_velocity(fluid: Option<comp::Fluid>) -> String {
 ///
 /// # Examples
 /// ```
-/// use veloren_voxygen::hud::multiplier_to_percentage;
+/// use xindeler_voxygen::hud::multiplier_to_percentage;
 ///
 /// let positive = multiplier_to_percentage(1.05);
 /// assert!((positive - 5.0).abs() < 0.0001);

@@ -5,7 +5,6 @@ use crate::{
 };
 use common::terrain::{Block, BlockKind};
 use enumset::EnumSet;
-use rand::prelude::*;
 use strum::IntoEnumIterator;
 use util::sprites::PainterSpriteExt;
 use vek::*;
@@ -36,7 +35,7 @@ impl RoadKind {
         let wood_corner = Fill::Brick(BlockKind::Wood, Rgb::new(86, 50, 50), 10);
         painter
             .column(pos.xy(), pos.z - 4..pos.z)
-            .sample_with_column(|p, col| p.z > col.riverless_alt as i32)
+            .sample_with_column(|p, col| p.z >= col.alt as i32)
             .fill(wood_corner);
         match self.lights {
             RoadLights::Default => painter.lanternpost_wood(pos, dir),
@@ -82,11 +81,15 @@ pub struct Road {
 }
 
 impl Structure for Road {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_road\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_road")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_road"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_road"))]
-    fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
+    fn render_ordering(&self) -> u32 { 2 }
+
+    fn render_inner(&self, site: &Site, _land: &Land, painter: &Painter) {
         let field = RandomField::new(76237);
 
         for p in self.path.iter() {
@@ -99,7 +102,7 @@ impl Structure for Road {
                 w,
                 a: this_a,
                 b: this_b,
-                ..
+                alt,
             } = current_tile.kind
             else {
                 continue;
@@ -138,12 +141,7 @@ impl Structure for Road {
 
             let wpos = light_wpos(dir);
 
-            // TODO: Not sure if this is always correct
-            let alt =
-                land.get_alt_approx(wpos)
-                    .max(land.get_interpolated(wpos, |c| c.water_alt) + 1.0) as i32
-                    + 1;
-            let wpos = wpos.with_z(alt);
+            let wpos = wpos.with_z(alt as i32);
             self.kind.place_light(wpos, -dir, painter);
         }
     }
@@ -152,11 +150,11 @@ impl Structure for Road {
         (col.riverless_alt as i32).max(col.water_level as i32 + 1)
     }
 
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         wpos: Vec2<i32>,
         old: Block,
-        _rng: &mut R,
+        _rng: &mut ChaCha8Rng,
         col: &ColumnSample,
         z_off: i32,
         site: &Site,
@@ -170,7 +168,7 @@ impl Structure for Road {
             let tpos = site.wpos_tile_pos(wpos);
             let mut near_roads = LOCALITY.iter().filter_map(|rpos| {
                 let tile = site.tiles.get(tpos + rpos);
-                if let TileKind::Road { a, b, w } = &tile.kind {
+                if let TileKind::Road { a, b, w, .. } = &tile.kind {
                     if let Some(PlotKind::Road(Road { path, .. })) =
                         tile.plot.map(|p| &site.plot(p).kind)
                     {
@@ -209,8 +207,12 @@ impl Structure for Road {
             if let Some((line, _)) =
                 near_roads.find(|(line, w)| line.distance_to_point(wposf) < *w as f32 * 2.0)
             {
-                let dir = Dir2::from_vec2((line.start - line.end).as_());
-                Some(self.kind.block(col, wpos.with_z(z), dir))
+                if z_off == 0 {
+                    Some(old.into_vacant())
+                } else {
+                    let dir = Dir2::from_vec2((line.start - line.end).as_());
+                    Some(self.kind.block(col, wpos.with_z(z), dir))
+                }
             } else {
                 None
             }

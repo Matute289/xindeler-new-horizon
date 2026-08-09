@@ -77,6 +77,7 @@ pub struct Plaza {
     pub aabr: Aabr<i32>,
     pub kind: RoadKind,
     corner_meta: EnumMap<Dir2, CornerMeta>,
+    pub alt: i32,
     pub hard_alt: Option<i32>,
     dir: Dir2,
     decoration: Option<PlazaKind>,
@@ -120,6 +121,7 @@ impl Plaza {
             .collect();
 
         let any_water = center.water() || corner_meta.values().any(|c| c.water());
+        let alt = land.get_alt_approx(aabr.center()) as i32;
 
         let hard_alt = if any_water {
             Some((land.get_alt_approx(aabr.center()) as i32).max(center.water_alt + 1))
@@ -136,7 +138,7 @@ impl Plaza {
 
         let min_size = aabr.size().reduce_min();
         // For now only generate plaza structures in woodland villages
-        let decoration = if land.get_gradient_approx(aabr.center()) < 0.4
+        let decoration = if land.get_gradient_approx(aabr.center()) < 1.5
             && min_size >= TILE_SIZE as i32 * 5
             && matches!(site.kind, Some(SiteKind::Refactor))
         {
@@ -359,6 +361,7 @@ impl Plaza {
             aabr,
             kind,
             corner_meta,
+            alt,
             hard_alt,
             dir: *RandomField::new(51)
                 .choose(aabr.center().with_z(center.alt), &Dir2::ALL)
@@ -371,10 +374,24 @@ impl Plaza {
 }
 
 impl Structure for Plaza {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_plaza\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_plaza")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_plaza"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_plaza"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        _wpos: Vec2<i32>,
+        weight: f32,
+    ) {
+        spawn_rules.prefer_alt(self.alt as f32, weight + weight.powi(1) * 45.0);
+    }
+
+    fn render_ordering(&self) -> u32 { 2 }
+
     fn render_inner(&self, site: &Site, land: &Land, painter: &Painter) {
         if let Some(alt) = self.hard_alt {
             let wood_corner = Fill::Brick(BlockKind::Wood, Rgb::new(86, 50, 50), 10);
@@ -427,10 +444,7 @@ impl Structure for Plaza {
                     let wpos = site.tile_center_wpos(tpos);
 
                     // TODO: Not sure if this is always correct
-                    let alt = self
-                        .hard_alt
-                        .unwrap_or_else(|| land.get_alt_approx(wpos) as i32)
-                        + 1;
+                    let alt = self.hard_alt.unwrap_or(self.alt) + 1;
                     let wpos = wpos.with_z(alt);
                     self.kind.place_light(wpos, -dir, painter);
                 }
@@ -438,20 +452,21 @@ impl Structure for Plaza {
         }
 
         let rng = &mut rand::rng();
-        if rng.random_bool(0.05) {
+        if rng.random_bool(0.5) {
             let spec = [
                 "common.entity.wild.peaceful.cat",
                 "common.entity.wild.peaceful.dog",
             ]
             .choose(rng)
             .unwrap();
-            let center = self.aabr.center();
+            let wpos_2d = Vec2::new(
+                rng.random_range(self.aabr.min.x..self.aabr.max.x),
+                rng.random_range(self.aabr.min.y..self.aabr.max.y),
+            );
             painter.spawn(
-                EntityInfo::at(
-                    Vec3::new(center.x, center.y, land.get_alt_approx(center) as i32).as_(),
-                )
-                .with_asset_expect(spec, rng, None)
-                .with_alignment(Alignment::Tame),
+                EntityInfo::at(wpos_2d.with_z(self.hard_alt.unwrap_or(self.alt)).as_())
+                    .with_asset_expect(spec, rng, None)
+                    .with_alignment(Alignment::Tame),
             );
         }
 
@@ -821,11 +836,11 @@ impl Structure for Plaza {
 
     fn rel_terrain_offset(&self, col: &ColumnSample) -> i32 { col.riverless_alt as i32 }
 
-    fn terrain_surface_at<R: Rng>(
+    fn terrain_surface_at_inner(
         &self,
         wpos: Vec2<i32>,
         old: Block,
-        _rng: &mut R,
+        _rng: &mut ChaCha8Rng,
         col: &ColumnSample,
         z_off: i32,
         _site: &Site,
@@ -834,7 +849,7 @@ impl Structure for Plaza {
         if col.water_level > col.alt || self.hard_alt.is_some_and(|alt| z < alt) {
             return None;
         };
-        if z_off <= 0 {
+        if z_off <= -1 {
             let block = self.kind.block(col, wpos.with_z(z), self.dir);
             if old.is_filled() {
                 if old.is_terrain() { Some(block) } else { None }

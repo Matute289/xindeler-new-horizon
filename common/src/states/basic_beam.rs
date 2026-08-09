@@ -1,10 +1,10 @@
 use crate::{
     combat::{
-        self, Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, Damage,
-        DamageKind, GroupTarget,
+        Attack, AttackDamage, AttackEffect, CombatEffect, CombatRequirement, Damage, DamageKind,
+        GroupTarget,
     },
     comp::{
-        Body, CharacterState, StateUpdate,
+        Body, CharacterState, DerivedStats, StateUpdate,
         ability::Dodgeable,
         beam,
         body::{biped_large, bird_large, golem},
@@ -136,8 +136,9 @@ impl CharacterBehavior for Data {
                         if let Some(effect) = &self.static_data.damage_effect {
                             damage = damage.with_effect(effect.clone());
                         }
-                        let precision_mult =
-                            combat::compute_precision_mult(data.inventory, data.msm);
+                        let precision_mult = data
+                            .derived
+                            .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                         Attack::new(Some(self.static_data.ability_info))
                             .with_damage(damage)
                             .with_precision(
@@ -208,11 +209,7 @@ impl CharacterBehavior for Data {
             StageSection::Recover => {
                 if self.timer < self.static_data.recover_duration {
                     if let CharacterState::BasicBeam(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

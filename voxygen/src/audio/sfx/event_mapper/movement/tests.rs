@@ -295,6 +295,7 @@ fn empty_ability_info() -> states::utils::AbilityInfo {
     states::utils::AbilityInfo {
         tool: None,
         hand: None,
+        role: None,
         input: InputKind::Primary,
         input_attr: None,
         ability_meta: Default::default(),

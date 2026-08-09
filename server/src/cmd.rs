@@ -15,11 +15,12 @@ use crate::{
         server_description::ServerDescription,
         server_physics::ServerPhysicsForceRecord,
     },
-    sys::terrain::SpawnEntityData,
+    sys::terrain::{NpcData, SpawnEntityData},
     wiring::{self, OutputFormula},
 };
 #[cfg(feature = "worldgen")]
 use common::{cmd::SPOT_PARSER, spot::Spot};
+use slotmap::Key as _;
 
 use assets::{AssetExt, Ron};
 use authc::Uuid;
@@ -29,13 +30,13 @@ use common::{
     assets,
     calendar::Calendar,
     cmd::{
-        AreaKind, BUFF_PACK, BUFF_PARSER, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
+        AreaKind, BUFF_PACK, BUFF_PARSER, CommandEnumArg, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
         PRESET_MANIFEST_PATH, ServerChatCommand,
     },
     combat,
     comp::{
-        self, AdminRole, Aura, AuraKind, BuffCategory, ChatType, Content, GizmoSubscriber,
-        Inventory, Item, LightEmitter, LocalizationArg, WaypointArea,
+        self, AdminRole, Aura, AuraKind, ChatType, Content, GizmoSubscriber, Inventory, Item,
+        LightEmitter, LocalizationArg, WaypointArea,
         agent::{FlightMode, PidControllers},
         aura::{AuraKindVariant, AuraTarget},
         buff::{Buff, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData},
@@ -58,8 +59,8 @@ use common::{
     npc::{self, get_npc_name},
     outcome::Outcome,
     parse_cmd_args,
-    resources::{BattleMode, ProgramTime, Secs, Time, TimeOfDay, TimeScale},
-    rtsim::{Actor, Role},
+    resources::{BattleMode, OracleLive, ProgramTime, Secs, Time, TimeOfDay, TimeScale},
+    rtsim::Role,
     spiral::Spiral2d,
     terrain::{Block, BlockKind, CoordinateConversions, SpriteKind, StructureSprite},
     tether::Tethered,
@@ -153,6 +154,7 @@ fn do_command(
         ServerChatCommand::Ban => handle_ban,
         ServerChatCommand::BanIp => handle_ban_ip,
         ServerChatCommand::BanLog => handle_ban_log,
+        ServerChatCommand::Banish => handle_banish,
         ServerChatCommand::BattleMode => handle_battlemode,
         ServerChatCommand::BattleModeForce => handle_battlemode_force,
         ServerChatCommand::Body => handle_body,
@@ -169,6 +171,7 @@ fn do_command(
         ServerChatCommand::Explosion => handle_explosion,
         ServerChatCommand::Faction => handle_faction,
         ServerChatCommand::GiveItem => handle_give_item,
+        ServerChatCommand::GiveItemQuality => handle_give_item_quality,
         ServerChatCommand::Gizmos => handle_gizmos,
         ServerChatCommand::GizmosRange => handle_gizmos_range,
         ServerChatCommand::Goto => handle_goto,
@@ -187,12 +190,16 @@ fn do_command(
         ServerChatCommand::KillNpcs => handle_kill_npcs,
         ServerChatCommand::Kit => handle_kit,
         ServerChatCommand::Lantern => handle_lantern,
+        ServerChatCommand::LearnSpells => handle_learn_spells,
         ServerChatCommand::Light => handle_light,
         ServerChatCommand::MakeBlock => handle_make_block,
         ServerChatCommand::MakeNpc => handle_make_npc,
+        ServerChatCommand::MakeParty => handle_make_party,
         ServerChatCommand::MakeSprite => handle_make_sprite,
         ServerChatCommand::Motd => handle_motd,
         ServerChatCommand::Object => handle_object,
+        ServerChatCommand::Oracle => handle_oracle,
+        ServerChatCommand::OracleTrigger => handle_oracle_trigger,
         ServerChatCommand::Outcome => handle_outcome,
         ServerChatCommand::PermitBuild => handle_permit_build,
         ServerChatCommand::Players => handle_players,
@@ -210,13 +217,17 @@ fn do_command(
         ServerChatCommand::ServerPhysics => handle_server_physics,
         ServerChatCommand::SetBodyType => handle_set_body_type,
         ServerChatCommand::SetClass => handle_set_class,
+        ServerChatCommand::SetClassLevel => handle_set_class_level,
         ServerChatCommand::SetEthos => handle_set_ethos,
         ServerChatCommand::SetLevel => handle_set_level,
+        ServerChatCommand::SetMastery => handle_set_mastery,
         ServerChatCommand::SetMotd => handle_set_motd,
         ServerChatCommand::SetWaypoint => handle_set_waypoint,
         ServerChatCommand::Ship => handle_spawn_ship,
         ServerChatCommand::Site => handle_site,
         ServerChatCommand::SkillPoint => handle_skill_point,
+        ServerChatCommand::TriggerSlot => handle_trigger_slot,
+        ServerChatCommand::TriggerReady => handle_trigger_ready,
         ServerChatCommand::SkillPreset => handle_skill_preset,
         ServerChatCommand::Spawn => handle_spawn,
         ServerChatCommand::Spot => handle_spot,
@@ -225,6 +236,7 @@ fn do_command(
         ServerChatCommand::Time => handle_time,
         ServerChatCommand::TimeScale => handle_time_scale,
         ServerChatCommand::Tp => handle_tp,
+        ServerChatCommand::TranscribeSpell => handle_transcribe_spell,
         ServerChatCommand::RtsimTp => handle_rtsim_tp,
         ServerChatCommand::RtsimInfo => handle_rtsim_info,
         ServerChatCommand::RtsimNpc => handle_rtsim_npc,
@@ -249,9 +261,21 @@ fn do_command(
         ServerChatCommand::DestroyTethers => handle_destroy_tethers,
         ServerChatCommand::Mount => handle_mount,
         ServerChatCommand::Dismount => handle_dismount,
+        ServerChatCommand::Multiclass => handle_multiclass,
     };
 
     handler(server, client, target, args, cmd)
+}
+
+fn key_matches(key: impl slotmap::Key, query: &str) -> bool {
+    let key = format!("{:?}", key.data());
+    if query.contains("v") {
+        key == query
+    } else if let Some((idx, _)) = key.split_once('v') {
+        idx == query
+    } else {
+        false
+    }
 }
 
 // Fallibly get position of entity with the given descriptor (used for error
@@ -707,6 +731,143 @@ fn handle_give_item(
     }
 }
 
+/// `/give_item_quality <item> <quality> [num]` — admin-only test tool (BL-82
+/// EM-5.18): spawns an item at a chosen [`Quality`] tier, so the equipment
+/// panel's rarity-tier slot border rendering can be compared side by side
+/// without needing a matching item to naturally drop/craft at every tier.
+/// Otherwise identical to `/give_item` (same asset loading, same
+/// non-stackable amount cap), plus a quality override applied via
+/// [`Item::set_quality_override`]. Server-authoritative: gated by
+/// `needs_role: Admin` AND re-checked here via `real_role(..) == Admin`, same
+/// pattern as `/set_level`.
+///
+/// NOTE: the quality override is a per-instance runtime property, not
+/// persisted to the database (see `Item::set_quality_override` doc) — an
+/// item given this way that survives a server restart reverts to its item
+/// definition's baseline quality on reload. Acceptable for its purpose
+/// (live-session visual comparison); not fixed here as it would require a
+/// DB schema change for a testing-only command.
+///
+/// NOTE: for a **stackable** asset (e.g. a potion), `quality_override` isn't
+/// part of `Item`'s `PartialEq`/stack-merge check, so giving it a tier that
+/// differs from an existing stack of the same item already in the target's
+/// inventory will silently merge into that stack (adopting whichever
+/// quality was already there) rather than showing the new tier. Harmless in
+/// practice: the intended use (comparing equipment slot-border rendering)
+/// targets non-stackable gear, which never takes this path (each unit lands
+/// in its own slot via the `duplicate()` loop below).
+fn handle_give_item_quality(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    // Defense in depth beyond `needs_role`: re-verify against the authoritative
+    // admin source (same pattern as `/set_level`/`/set_class`).
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /give_item_quality.".to_string(),
+        ));
+    }
+
+    if let (Some(item_name), Some(quality_str), give_amount_opt) =
+        parse_cmd_args!(args, String, String, u32)
+    {
+        let quality = Quality::from_str(quality_str.to_lowercase().as_str()).map_err(|_| {
+            Content::Plain(format!(
+                "Unknown quality '{quality_str}'. Options: {}.",
+                Quality::all_options().join(", ")
+            ))
+        })?;
+
+        let give_amount = give_amount_opt.unwrap_or(1);
+        if let Ok(item) = Item::new_from_asset(&item_name.replace(['/', '\\'], "."))
+            .inspect_err(|error| error!(?error, "Failed to parse item asset!"))
+        {
+            let mut item: Item = item;
+            item.set_quality_override(quality);
+            let mut res = Ok(());
+
+            const MAX_GIVE_AMOUNT: u32 = 2000;
+            // Cap give_amount for non-stackable items
+            let give_amount = if item.is_stackable() {
+                give_amount
+            } else {
+                give_amount.min(MAX_GIVE_AMOUNT)
+            };
+
+            if let Ok(()) = item.set_amount(give_amount) {
+                server
+                    .state
+                    .ecs()
+                    .write_storage::<Inventory>()
+                    .get_mut(target)
+                    .map(|mut inv| {
+                        // NOTE: Deliberately ignores items that couldn't be pushed.
+                        if inv.push(item).is_err() {
+                            res = Err(Content::localized_with_args(
+                                "command-give-inventory-full",
+                                [("total", give_amount as u64), ("given", 0)],
+                            ));
+                        }
+                    });
+            } else {
+                let ability_map = server.state.ecs().read_resource::<AbilityMap>();
+                let msm = server.state.ecs().read_resource::<MaterialStatManifest>();
+                // This item can't stack. Give each item in a loop. `duplicate`
+                // carries the quality override over to each copy.
+                server
+                    .state
+                    .ecs()
+                    .write_storage::<Inventory>()
+                    .get_mut(target)
+                    .map(|mut inv| {
+                        for i in 0..give_amount {
+                            // NOTE: Deliberately ignores items that couldn't be pushed.
+                            if inv.push(item.duplicate(&ability_map, &msm)).is_err() {
+                                res = Err(Content::localized_with_args(
+                                    "command-give-inventory-full",
+                                    [("total", give_amount as u64), ("given", i as u64)],
+                                ));
+                                break;
+                            }
+                        }
+                    });
+            }
+
+            if res.is_ok() {
+                let msg = ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::localized_with_args("command-give_item_quality-success", [
+                        ("total", LocalizationArg::from(give_amount as u64)),
+                        ("item", LocalizationArg::from(item_name)),
+                        ("quality", LocalizationArg::from(quality_str)),
+                    ]),
+                );
+                server.notify_client(client, msg);
+            }
+
+            let mut inventory_update_buffers = server
+                .state
+                .ecs_mut()
+                .write_storage::<comp::InventoryUpdateBuffer>();
+            if let Some(buf) = inventory_update_buffers.get_mut(target) {
+                buf.push(comp::InventoryUpdateEvent::Given);
+            }
+
+            res
+        } else {
+            Err(Content::localized_with_args("command-invalid-item", [(
+                "item", item_name,
+            )]))
+        }
+    } else {
+        Err(action.help_content())
+    }
+}
+
 fn handle_gizmos(
     server: &mut Server,
     _client: EcsEntity,
@@ -973,6 +1134,358 @@ fn handle_make_npc(
                 ("n", number.to_string()),
                 ("config", entity_config),
             ]),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/make_party <class1> <level1> <class2> <level2> <class3> <level3>` —
+/// admin-only test tool (BL-82): spawns 3 NPCs near the caller, each with a
+/// given class/level, a random name and race, and a moral alignment
+/// ([`Moral`]) compatible with the caller's own current `Ethos` (see
+/// [`Moral::compatible_npc_morals`] for the exact compatibility table), then
+/// groups all 3 with the caller as leader — a party of 4. Unblocks manual
+/// testing of the party-frames HUD (BL-82 EM-5.17) without needing 3 human
+/// players online.
+///
+/// Deliberately out of scope (BL-57, not started): class-specific starter
+/// gear — NPCs spawn with only the generic per-body default loadout, same as
+/// any other bare humanoid NPC.
+fn handle_make_party(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{
+        class::{CharacterClass, ClassKind},
+        ethos::{Ethos, Order},
+        group::GroupManager,
+        skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind},
+    };
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /make_party.".to_string(),
+        ));
+    }
+
+    let (class1, level1, class2, level2, class3, level3) =
+        parse_cmd_args!(args, String, u16, String, u16, String, u16);
+
+    let mut members = Vec::with_capacity(3);
+    for (class_arg, level) in [(class1, level1), (class2, level2), (class3, level3)] {
+        let class_arg = class_arg.ok_or_else(|| action.help_content())?;
+        let class =
+            ClassKind::from_keyword(class_arg.to_lowercase().as_str()).ok_or_else(|| {
+                Content::Plain(format!(
+                    "Unknown class '{class_arg}'. Options: {}.",
+                    ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+        let level = level.ok_or_else(|| action.help_content())?;
+        if !(1..=MAX_CHARACTER_LEVEL).contains(&level) {
+            return Err(Content::Plain(format!(
+                "Level must be between 1 and {MAX_CHARACTER_LEVEL}."
+            )));
+        }
+        members.push((class, level));
+    }
+
+    // The calling player's own moral alignment gates which NPCs can roll in
+    // (BL-33 `Ethos`; default = True Neutral for characters that never picked
+    // one).
+    let player_moral = server
+        .state
+        .ecs()
+        .read_storage::<Ethos>()
+        .get(target)
+        .copied()
+        .unwrap_or_default()
+        .moral();
+    let allowed_morals = player_moral.compatible_npc_morals();
+
+    let comp::Pos(spawn_pos) = position(server, target, "target")?;
+
+    let mut roll_rng = rng();
+    let mut npc_entities = Vec::with_capacity(members.len());
+    for (class, level) in members {
+        let order = match roll_rng.random_range(0..3usize) {
+            0 => Order::Lawful,
+            1 => Order::Neutral,
+            _ => Order::Chaotic,
+        };
+        let moral = allowed_morals[roll_rng.random_range(0..allowed_morals.len())];
+
+        // Random race + name: `EntityInfo::at` defaults to a random humanoid
+        // body, and `with_automatic_name` derives a name from that body (the
+        // same "random race + name" mechanism used by other auto-named entity
+        // configs, e.g. `assets/common/entity/dungeon/vampire/strigoi.ron`).
+        let entity_info = EntityInfo::at(spawn_pos)
+            .with_alignment(Alignment::Npc)
+            .with_automatic_name()
+            .with_ethos(Ethos::from_box(order, moral));
+        // Generic per-body default gear only — class starter kits are BL-57,
+        // not started; see the doc comment above.
+        let loadout = LoadoutBuilder::from_default(&entity_info.body);
+        let entity_info = entity_info.with_loadout(loadout);
+
+        let NpcData {
+            pos,
+            stats,
+            skill_set,
+            health,
+            poise,
+            inventory,
+            agent,
+            body,
+            alignment,
+            ethos,
+            scale,
+            ..
+        } = SpawnEntityData::from_entity_info(entity_info)
+            .into_npc_data_inner()
+            .expect("EntityInfo without special_entity always yields SpawnEntityData::Npc");
+
+        let npc_entity = server
+            .state
+            .create_npc(
+                pos,
+                comp::Ori::default(),
+                stats,
+                skill_set,
+                health,
+                poise,
+                inventory,
+                body,
+                scale,
+            )
+            .with(alignment)
+            .maybe_with(ethos)
+            .maybe_with(agent)
+            .build();
+
+        let _ = server
+            .state
+            .ecs_mut()
+            .write_storage::<CharacterClass>()
+            .insert(npc_entity, CharacterClass::single(class));
+        if let Some(mut skill_set) = server
+            .state
+            .ecs_mut()
+            .write_storage::<comp::SkillSet>()
+            .get_mut(npc_entity)
+        {
+            let class_group = SkillGroupKind::Class(class);
+            skill_set.unlock_skill_group(class_group);
+            skill_set.set_level(level);
+            // `set_level` only tops up the General group's earned exp — the
+            // freshly-unlocked Class group starts at 0 SP, so without this the
+            // `level` arg would leave the class tree totally inert (no
+            // signature/capstone/passives spendable at any level). Grant SP
+            // via the same exp-driven path `/skill_point` uses, so a levelled
+            // party member actually has a functioning class kit to test.
+            const SKILL_POINTS_PER_LEVEL: u16 = 1;
+            skill_set.add_skill_points(class_group, level * SKILL_POINTS_PER_LEVEL);
+        }
+
+        npc_entities.push(npc_entity);
+    }
+
+    // Group the 3 NPCs with the caller as leader — a party of 4. `target` (not
+    // one of the NPCs) leads, so this calls `GroupManager::add_group_member`
+    // directly rather than reusing `CreateNpcGroupEvent`/
+    // `handle_create_npc_group` (which always treats the first spawned NPC as
+    // leader). Mirrors `handle_invite_accept`'s notifier (`server/src/events/
+    // invite.rs`) so the caller's party-frames HUD updates immediately.
+    {
+        let ecs = server.state.ecs();
+        let entities = ecs.entities();
+        let uids = ecs.read_storage::<Uid>();
+        let alignments = ecs.read_storage::<Alignment>();
+        let clients = ecs.read_storage::<Client>();
+        let map_markers = ecs.read_storage::<comp::MapMarker>();
+        let mut groups = ecs.write_storage::<comp::Group>();
+        let mut group_manager = ecs.write_resource::<GroupManager>();
+
+        for npc_entity in &npc_entities {
+            group_manager.add_group_member(
+                target,
+                *npc_entity,
+                &entities,
+                &mut groups,
+                &alignments,
+                &uids,
+                |entity, group_change| {
+                    group_change
+                        .try_map_ref(|e| uids.get(*e).copied())
+                        .zip(clients.get(entity))
+                        .map(|(g, c)| {
+                            crate::events::shared::update_map_markers(
+                                &map_markers,
+                                &uids,
+                                c,
+                                &group_change,
+                            );
+                            c.send_fallible(ServerGeneral::GroupUpdate(g));
+                        });
+                },
+            );
+        }
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Party spawned: 3 NPCs (moral alignment compatible with {player_moral:?}) grouped \
+                 with you."
+            )),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/oracle on|off` — admin-only mid-session flip of PROJECT ORACLE's
+/// liveness. Writes the server's own `OracleLive` resource (the thing
+/// `AbilityRequirements::requirements_met` actually reads for cast authority)
+/// and broadcasts `ServerGeneral::OracleLive` so every connected client's HUD
+/// re-greys the affected abilities immediately, without waiting for a
+/// reconnect.
+fn handle_oracle(
+    server: &mut Server,
+    client: EcsEntity,
+    _target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain("Only admins may use /oracle.".to_string()));
+    }
+
+    let state = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let live = match state.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => return Err(action.help_content()),
+    };
+
+    server.state.ecs().write_resource::<OracleLive>().0 = live;
+    server.notify_players(ServerGeneral::OracleLive(live));
+
+    let status = if live { "live" } else { "not live" };
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("PROJECT ORACLE is now {status}.")),
+        ),
+    );
+
+    Ok(())
+}
+
+/// `/oracle_trigger <dmevent_id>` — admin-only manual trigger for a
+/// currently-loaded ORACLE `.dmevent.ron`/`.dmevent.json` (dropped into the
+/// watched events directory, see `crate::oracle::watcher`): resolves its
+/// `spawning_rules` against currently-loaded entity templates, spawns the
+/// resolved NPCs scattered around the caller's own position, appends its
+/// `world_rumor` to the chronicle, and greets the caller with its
+/// `on_enter_message`. Stands in for the real per-plano entry trigger there
+/// is no plano yet, so a human decides when and where.
+fn handle_oracle_trigger(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /oracle_trigger.".to_string(),
+        ));
+    }
+
+    let dmevent_id = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let comp::Pos(pos) = position(server, target, "target")?;
+
+    let dm_event = server
+        .state
+        .ecs()
+        .read_resource::<crate::oracle::OracleWatcher>()
+        .events()
+        .dm_events()
+        .find(|(path, _)| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name == format!("{dmevent_id}.dmevent.ron")
+                        || name == format!("{dmevent_id}.dmevent.json")
+                })
+        })
+        .map(|(_, event)| event.clone())
+        .ok_or_else(|| {
+            Content::Plain(format!(
+                "No loaded ORACLE event named '{dmevent_id}' (drop a .dmevent.ron/.json file in \
+                 the watched events directory first)."
+            ))
+        })?;
+
+    let templates: Vec<_> = server
+        .state
+        .ecs()
+        .read_resource::<crate::oracle::OracleWatcher>()
+        .events()
+        .entity_templates()
+        .map(|(_, template)| template.clone())
+        .collect();
+
+    let mut spawn_rng = rng();
+    let spawns = crate::oracle::factory::spawn_dm_event(
+        &dm_event.spawning_rules,
+        templates.iter(),
+        pos,
+        &mut spawn_rng,
+    );
+    let spawn_count = spawns.len();
+    for (pos, ori, npc) in spawns {
+        server
+            .state
+            .ecs()
+            .read_resource::<EventBus<CreateNpcEvent>>()
+            .emit_now(CreateNpcEvent { pos, ori, npc });
+    }
+
+    if let Some(rumor) = &dm_event.narrative.world_rumor {
+        server
+            .state
+            .ecs()
+            .write_resource::<crate::oracle::ChronicleLog>()
+            .push(rumor.clone());
+    }
+
+    if let Some(message) = &dm_event.narrative.on_enter_message {
+        crate::oracle::narrative::send_on_enter_message(server, client, message);
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Oracle event '{dmevent_id}' spawned {spawn_count} entities."
+            )),
         ),
     );
 
@@ -1369,10 +1882,6 @@ fn resolve_site(
     Option<common::store::Id<world::site::Plot>>,
 )> {
     if let Some(id) = key.strip_prefix("rtsim@") {
-        let id = id
-            .parse::<u64>()
-            .map_err(|_| Content::Plain(format!("Expected number after 'rtsim@', got {id}")))?;
-
         let ws = server
             .state
             .ecs()
@@ -1380,9 +1889,9 @@ fn resolve_site(
             .state()
             .data()
             .sites
-            .values()
-            .find(|site| site.uid == id)
-            .map(|site| site.world_site)
+            .iter()
+            .find(|(site_id, _)| key_matches(*site_id, id))
+            .map(|(_, site)| site.world_site)
             .ok_or(Content::Plain(format!(
                 "Could not find rtsim site with id {id}."
             )))?;
@@ -1795,6 +2304,7 @@ fn handle_health(
                 amount: hp - health.current(),
                 by: None,
                 cause: None,
+                magic_source: None,
                 precise: false,
                 time: *time,
                 instance: rand::random(),
@@ -1931,17 +2441,18 @@ fn handle_rtsim_tp(
     action: &ServerChatCommand,
 ) -> CmdResult<()> {
     use crate::rtsim::RtSim;
-    let (npc_id, dismount_volume) = parse_cmd_args!(args, u64, bool);
-    let pos = if let Some(id) = npc_id {
+    let (id, dismount_volume) = parse_cmd_args!(args, String, bool);
+    let pos = if let Some(id) = id {
         server
             .state
             .ecs()
             .read_resource::<RtSim>()
             .state()
             .data()
-            .npcs
-            .values()
-            .find(|npc| npc.uid == id)
+            .actors
+            .iter()
+            .find(|(actor_id, _)| key_matches(*actor_id, &id))
+            .map(|(_, actor)| actor)
             .ok_or_else(|| Content::Plain(format!("No NPC has the id {id}")))?
             .wpos
     } else {
@@ -1967,7 +2478,7 @@ fn handle_rtsim_info(
 ) -> CmdResult<()> {
     use crate::rtsim::RtSim;
     let rtsim = server.state.ecs().read_resource::<RtSim>();
-    let id = parse_cmd_args!(args.clone(), u64)
+    let id = parse_cmd_args!(args.clone(), String)
         .map(Ok)
         .or_else(|| {
             let entity = parse_cmd_args!(args, EntityTarget)?;
@@ -1976,53 +2487,58 @@ fn handle_rtsim_info(
                 Err(e) => return Some(Err(e)),
             };
 
-            let npc_id = *server
-                .state
-                .ecs()
-                .read_storage::<common::rtsim::RtSimEntity>()
-                .get(entity)?;
-
-            Some(Ok(rtsim.state().data().npcs.get(npc_id)?.uid))
+            Some(Ok(format!(
+                "{:?}",
+                server
+                    .state
+                    .ecs()
+                    .read_storage::<common::rtsim::ActorId>()
+                    .get(entity)?
+            )))
         })
         .transpose()?;
 
     if let Some(id) = id {
         let data = rtsim.state().data();
-        let (id, npc) = data
-            .npcs
+        let (id, actor) = data
+            .actors
             .iter()
-            .find(|(_, npc)| npc.uid == id)
-            .ok_or_else(|| Content::Plain(format!("No NPC has the id {id}")))?;
+            .min_by_key(|(actor_id, _)| key_matches(*actor_id, &id))
+            .ok_or_else(|| Content::Plain(format!("No actor has the id {id}")))?;
 
         let mut info = String::new();
 
         let _ = writeln!(&mut info, "-- General Information --");
-        let _ = writeln!(&mut info, "Seed: {}", npc.seed);
-        let _ = writeln!(&mut info, "Pos: {:?}", npc.wpos);
-        let _ = writeln!(&mut info, "Role: {:?}", npc.role);
-        let _ = writeln!(&mut info, "Home: {:?}", npc.home);
-        let _ = writeln!(&mut info, "Faction: {:?}", npc.faction);
-        let _ = writeln!(&mut info, "Personality: {:?}", npc.personality);
+        let _ = writeln!(&mut info, "Seed: {}", actor.seed);
+        let _ = writeln!(&mut info, "Pos: {:?}", actor.wpos);
+        let _ = writeln!(&mut info, "Role: {:?}", actor.role);
+        let _ = writeln!(&mut info, "Home: {:?}", actor.home);
+        let _ = writeln!(&mut info, "Faction: {:?}", actor.faction);
+        if let Some(npc) = actor.npc() {
+            let _ = writeln!(&mut info, "Personality: {:?}", npc.personality);
+        }
         let _ = writeln!(&mut info, "-- Status --");
-        let _ = writeln!(&mut info, "Current site: {:?}", npc.current_site);
-        let _ = writeln!(&mut info, "Current mode: {:?}", npc.mode);
+        let _ = writeln!(&mut info, "Current site: {:?}", actor.current_site);
+        let _ = writeln!(&mut info, "Current mode: {:?}", actor.mode);
         let _ = writeln!(
             &mut info,
             "Riding: {:?}",
-            data.npcs
+            data.actors
                 .mounts
                 .get_mount_link(id)
-                .map(|link| data.npcs.get(link.mount).map_or(0, |mount| mount.uid))
+                .map(|link| format!("{:?}", link.mount.data()))
         );
         let _ = writeln!(&mut info, "-- Action State --");
-        if let Some(brain) = &npc.brain {
+        if let Some(npc) = actor.npc()
+            && let Some(brain) = &npc.brain
+        {
             let mut bt = Vec::new();
             brain.action.backtrace(&mut bt);
             for (i, action) in bt.into_iter().enumerate() {
                 let _ = writeln!(&mut info, "[{}] {}", i, action);
             }
         } else {
-            let _ = writeln!(&mut info, "<NPC has no brain>");
+            let _ = writeln!(&mut info, "<actor has no brain>");
         }
 
         server.notify_client(
@@ -2053,28 +2569,31 @@ fn handle_rtsim_npc(
         let npc_names = &common::npc::NPC_NAMES.read();
         let rtsim = server.state.ecs().read_resource::<RtSim>();
         let data = rtsim.state().data();
-        let mut npcs = data
-            .npcs
-            .values()
-            .filter(|npc| {
+        let mut actors = data
+            .actors
+            .iter()
+            .filter(|(actor_id, actor)| {
                 let mut tags = vec![
-                    npc.profession()
+                    actor
+                        .profession()
                         .map(|p| format!("{:?}", p))
                         .unwrap_or_default(),
-                    match &npc.role {
+                    match &actor.role {
                         Role::Civilised(_) => "civilised".to_string(),
                         Role::Wild => "wild".to_string(),
                         Role::Monster => "monster".to_string(),
                         Role::Vehicle => "vehicle".to_string(),
                     },
-                    format!("{:?}", npc.mode),
-                    format!("{}", npc.uid),
-                    npc_names[&npc.body].keyword.clone(),
+                    format!("{:?}", actor.mode),
+                    format!("{:?}", actor_id.data()),
+                    npc_names[&actor.body].keyword.clone(),
                 ];
-                if let Some(species_meta) = npc_names.get_species_meta(&npc.body) {
+                if let Some(species_meta) = npc_names.get_species_meta(&actor.body) {
                     tags.push(species_meta.keyword.clone());
                 }
-                if let Some(brain) = &npc.brain {
+                if let Some(npc) = actor.npc()
+                    && let Some(brain) = &npc.brain
+                {
                     rtsim::ai::Action::backtrace(&brain.action, &mut tags);
                 }
                 terms.iter().all(|term| {
@@ -2084,26 +2603,26 @@ fn handle_rtsim_npc(
             })
             .collect::<Vec<_>>();
         if let Ok(pos) = position(server, target, "target") {
-            npcs.sort_by_key(|npc| (npc.wpos.distance_squared(pos.0) * 10.0) as u64);
+            actors.sort_by_key(|(_, actor)| (actor.wpos.distance_squared(pos.0) * 10.0) as u64);
         }
 
         let mut info = String::new();
 
         let _ = writeln!(&mut info, "-- NPCs matching [{}] --", terms.join(", "));
-        for npc in npcs.iter().take(count.unwrap_or(!0) as usize) {
+        for (actor_id, actor) in actors.iter().take(count.unwrap_or(!0) as usize) {
             let _ = write!(
                 &mut info,
-                "{} ({}), ",
-                npc.get_name().as_deref().unwrap_or("<unknown>"),
-                npc.uid
+                "{} ({:?}), ",
+                actor.get_name().as_deref().unwrap_or("<unknown>"),
+                actor_id.data(),
             );
         }
         let _ = writeln!(&mut info);
         let _ = writeln!(
             &mut info,
             "Showing {}/{} matching NPCs.",
-            count.unwrap_or(npcs.len() as u32),
-            npcs.len()
+            count.unwrap_or(actors.len() as u32),
+            actors.len()
         );
 
         server.notify_client(
@@ -3075,7 +3594,7 @@ fn handle_kill_npcs(
         let healths = ecs.write_storage::<comp::Health>();
         let players = ecs.read_storage::<comp::Player>();
         let alignments = ecs.read_storage::<Alignment>();
-        let rtsim_entities = ecs.read_storage::<common::rtsim::RtSimEntity>();
+        let rtsim_actors = ecs.read_storage::<common::rtsim::ActorId>();
         let mut rtsim = ecs.write_resource::<crate::rtsim::RtSim>();
         let spatial_grid;
 
@@ -3134,11 +3653,11 @@ fn handle_kill_npcs(
                 };
 
             if should_kill {
-                if let Some(rtsim_entity) = rtsim_entities.get(entity).copied() {
+                if let Some(actor) = rtsim_actors.get(entity).copied() {
                     rtsim.hook_rtsim_actor_death(
                         &ecs.read_resource::<Arc<world::World>>(),
                         ecs.read_resource::<world::IndexOwned>().as_index_ref(),
-                        Actor::Npc(rtsim_entity),
+                        actor,
                         Some(pos.0),
                         None,
                     );
@@ -3590,6 +4109,10 @@ fn handle_outcome(
             tool: None,
         },
         "SummonedCreature" => Outcome::SummonedCreature {
+            pos: pos_arg!(),
+            body: body_arg!()?,
+        },
+        "PhantasmDissipated" => Outcome::PhantasmDissipated {
             pos: pos_arg!(),
             body: body_arg!()?,
         },
@@ -4294,6 +4817,193 @@ fn handle_group_promote(
     }
 }
 
+/// `/learn_spells <common.items.spell_books.*>` — admin-only test tool:
+/// pushes a `SpellGroup` item straight into the target's spellbook, the state a
+/// completed transcription will later produce.
+///
+/// Rebuilds the target's `AbilityPool` so the new keys are castable
+/// immediately, and re-points any `Innate` hotbar binding by key so a slot
+/// keeps its ability across that rebuild.
+fn handle_learn_spells(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::item::ItemKind;
+
+    // Defense in depth beyond `needs_role`: re-verify against the
+    // authoritative admin source (same pattern as `/give_item_quality`).
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /learn_spells.".to_string(),
+        ));
+    }
+
+    let spec = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let spec = spec.replace(['/', '\\'], ".");
+    let item = Item::new_from_asset(&spec)
+        .map_err(|error| Content::Plain(format!("Failed to load {spec}: {error:?}")))?;
+    if !matches!(&*item.kind(), ItemKind::SpellGroup { .. }) {
+        return Err(Content::Plain(format!("{spec} is not a spell group.")));
+    }
+
+    let ecs = server.state.ecs();
+    let old_pool = ecs
+        .read_storage::<comp::AbilityPool>()
+        .get(target)
+        .cloned()
+        .unwrap_or_default();
+
+    let learned = {
+        let mut inventories = ecs.write_storage::<Inventory>();
+        let Some(mut inventory) = inventories.get_mut(target) else {
+            return Err(Content::Plain("Target has no inventory.".to_string()));
+        };
+        match inventory.push_spell_group(item) {
+            Ok(()) => inventory.learned_spells().clone(),
+            Err(_) => return Err(Content::Plain(format!("{spec} is already known."))),
+        }
+    };
+
+    // The pool is derived state; rebuild it now rather than waiting for a
+    // relog, which is what `load_character_data` would do anyway.
+    let rebuilt = match (
+        ecs.read_storage::<comp::Body>().get(target).copied(),
+        ecs.read_storage::<comp::CharacterClass>()
+            .get(target)
+            .copied(),
+    ) {
+        (Some(body), Some(character_class)) => Some(comp::AbilityPool::for_character(
+            &body,
+            &character_class,
+            &learned,
+        )),
+        _ => None,
+    };
+    if let Some(pool) = rebuilt {
+        if let Some(mut active) = ecs.write_storage::<comp::ActiveAbilities>().get_mut(target) {
+            comp::ability::remap_innate_bindings(&mut active, &old_pool, &pool);
+        }
+        // The hotbar is not the only thing holding raw pool indices: a live
+        // trigger slot does too, and a re-pointed one would mint its
+        // cooldown-bypass token for the wrong ability.
+        if let Some(mut slots) = ecs.write_storage::<comp::TriggerSlots>().get_mut(target) {
+            slots.remap_innate_bindings(&old_pool, &pool);
+        }
+        let _ = ecs
+            .write_storage::<comp::AbilityPool>()
+            .insert(target, pool);
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Learned the spells in {spec}.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/set_mastery <divine|primordial|psionic|ki> <pct>` — admin-only test
+/// tool: sets the target's raw source-XP directly to whatever value reaches
+/// `pct`% mastery in that source, bypassing `grant_source_mastery`'s
+/// combat-earned weighting entirely. For the persistence smoke test and for
+/// exercising the transcription tier gate without grinding real kills.
+fn handle_set_mastery(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{SpellMastery, ability::MagicSource, spell_mastery::MASTERY_XP_FULL};
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /set_mastery.".to_string(),
+        ));
+    }
+
+    let (source_arg, pct) = parse_cmd_args!(args, String, f32);
+    let source_arg = source_arg.ok_or_else(|| action.help_content())?;
+    let pct = pct.ok_or_else(|| action.help_content())?;
+
+    let source = match source_arg.to_lowercase().as_str() {
+        "divine" => MagicSource::Divine,
+        "primordial" => MagicSource::Primordial,
+        "psionic" => MagicSource::Psionic,
+        "ki" => MagicSource::Ki,
+        other => {
+            return Err(Content::Plain(format!(
+                "Unknown source '{other}'. Options: divine, primordial, psionic, ki."
+            )));
+        },
+    };
+    if !(0.0..=100.0).contains(&pct) {
+        return Err(Content::Plain(
+            "Percentage must be between 0 and 100.".to_string(),
+        ));
+    }
+    let xp = ((pct / 100.0) * MASTERY_XP_FULL as f32).round() as u32;
+
+    let mut masteries = server.state.ecs().write_storage::<SpellMastery>();
+    let mut mastery = match masteries.get_mut(target) {
+        Some(existing) => existing,
+        None => {
+            let _ = masteries.insert(target, SpellMastery::default());
+            masteries
+                .get_mut(target)
+                .ok_or_else(|| Content::Plain("Target cannot hold spell mastery.".to_string()))?
+        },
+    };
+    mastery.set_source_xp(source, xp);
+    drop(masteries);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Set {source_arg} mastery to {pct}% ({xp} xp).")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/transcribe_spell <page>` -- admin-only test tool: emits the same
+/// `TranscribeSpellEvent` a real player action would, so it exercises every
+/// gate (class, possession, mastery tier, cost) rather than bypassing them
+/// the way `/learn_spells` deliberately does.
+fn handle_transcribe_spell(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /transcribe_spell.".to_string(),
+        ));
+    }
+
+    let page = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let page = page.replace(['/', '\\'], ".");
+
+    server
+        .state
+        .emit_event_now(common::event::TranscribeSpellEvent {
+            entity: target,
+            page,
+        });
+    Ok(())
+}
+
 fn handle_reset_recipes(
     server: &mut Server,
     _client: EcsEntity,
@@ -4728,7 +5438,11 @@ fn handle_skill_point(
 }
 
 fn parse_skill_tree(skill_tree: &str) -> CmdResult<comp::skillset::SkillGroupKind> {
-    use comp::{class::ClassKind, item::tool::ToolKind, skillset::SkillGroupKind};
+    use comp::{
+        class::ClassKind,
+        item::tool::{ToolKind, WeaponRole},
+        skillset::SkillGroupKind,
+    };
     match skill_tree {
         "general" => Ok(SkillGroupKind::General),
         "sword" => Ok(SkillGroupKind::Weapon(ToolKind::Sword)),
@@ -4736,6 +5450,10 @@ fn parse_skill_tree(skill_tree: &str) -> CmdResult<comp::skillset::SkillGroupKin
         "hammer" => Ok(SkillGroupKind::Weapon(ToolKind::Hammer)),
         "bow" => Ok(SkillGroupKind::Weapon(ToolKind::Bow)),
         "staff" => Ok(SkillGroupKind::Weapon(ToolKind::Staff)),
+        "staff_martial" => Ok(SkillGroupKind::WeaponRoled(
+            ToolKind::Staff,
+            WeaponRole::Martial,
+        )),
         "sceptre" => Ok(SkillGroupKind::Weapon(ToolKind::Sceptre)),
         "mining" => Ok(SkillGroupKind::Weapon(ToolKind::Pick)),
         // BL-06 class trees (proof slice) — `/skill_point <class> <n>` for testing.
@@ -4912,15 +5630,15 @@ fn get_entity_target(entity_target: EntityTarget, server: &Server) -> CmdResult<
     match entity_target {
         EntityTarget::Player(alias) => Ok(find_alias(server.state.ecs(), &alias, true)?.0),
         EntityTarget::RtsimNpc(id) => {
-            let (npc_id, _) = server
+            let actor_id = server
                 .state
                 .ecs()
                 .read_resource::<crate::rtsim::RtSim>()
                 .state()
                 .data()
-                .npcs
-                .iter()
-                .find(|(_, npc)| npc.uid == id)
+                .actors
+                .keys()
+                .find(|actor_id| key_matches(*actor_id, &id))
                 .ok_or(Content::Plain(format!(
                     "Could not find rtsim npc with id {id}."
                 )))?;
@@ -4928,7 +5646,7 @@ fn get_entity_target(entity_target: EntityTarget, server: &Server) -> CmdResult<
                 .state()
                 .ecs()
                 .read_resource::<common::uid::IdMaps>()
-                .rtsim_entity(npc_id)
+                .rtsim_entity(actor_id)
                 .ok_or(Content::Plain(format!("Npc with id {id} isn't loaded.")))
         },
         EntityTarget::Uid(uid) => server
@@ -5294,7 +6012,7 @@ fn handle_aura(
             AuraKind::Buff {
                 kind: buffkind,
                 data: buffdata,
-                category: BuffCategory::Natural,
+                category: None,
                 source: if new_entity {
                     BuffSource::World
                 } else {
@@ -5303,10 +6021,14 @@ fn handle_aura(
                         tool_kind: None,
                     }
                 },
+                pool_split: None,
             }
         },
         AuraKindVariant::FriendlyFire => AuraKind::FriendlyFire,
         AuraKindVariant::ForcePvP => AuraKind::ForcePvP,
+        AuraKindVariant::TieredHealthEffect => {
+            return Err(Content::localized("command-aura-tiered-effect-unsupported"));
+        },
     };
     let aura_target = server
         .state
@@ -5637,6 +6359,58 @@ fn handle_ban_log(
     Ok(())
 }
 
+/// `/banish <secs>` — admin-only test seam: banishes `target` (self, or
+/// whoever `/sudo` redirected onto) for `secs` seconds instead of the
+/// authored 24-168 hour window, so the park -> invisible -> return ->
+/// fully-reset cycle can be walked in under a minute. Server-authoritative:
+/// gated by `needs_role: Admin` AND re-checked here via `real_role(..) ==
+/// Admin` so players can never invoke it (same pattern as `/set_level`).
+fn handle_banish(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain("Only admins may use /banish.".to_string()));
+    }
+
+    let secs = parse_cmd_args!(args, u64).unwrap_or(60);
+    let _ = action;
+
+    #[cfg(feature = "worldgen")]
+    {
+        match crate::banishment::banish_entity(server, target, secs) {
+            Some(id) => {
+                server.notify_client(
+                    client,
+                    ServerGeneral::server_msg(
+                        ChatType::CommandInfo,
+                        Content::Plain(format!(
+                            "Banished target (record {id}); it returns in {secs}s."
+                        )),
+                    ),
+                );
+                Ok(())
+            },
+            None => Err(Content::Plain(
+                "Target cannot be banished (already banished, is dead/dying, has no \
+                 position/body, or is a player)."
+                    .to_string(),
+            )),
+        }
+    }
+    #[cfg(not(feature = "worldgen"))]
+    {
+        let _ = (server, client, target, secs);
+        Err(Content::Plain(
+            "Banishment requires the `worldgen` feature.".to_string(),
+        ))
+    }
+}
+
 fn handle_battlemode(
     server: &mut Server,
     client: EcsEntity,
@@ -5718,13 +6492,13 @@ fn handle_set_class(
     {
         let mut classes = server.state.ecs_mut().write_storage::<CharacterClass>();
         let current = classes.get(target).copied().unwrap_or_default();
-        if current.0 != ClassKind::Adventurer {
+        if current.primary != ClassKind::Adventurer {
             return Err(Content::Plain(format!(
                 "Class is already {:?}; /set_class is a one-time pick for legacy characters.",
-                current.0
+                current.primary
             )));
         }
-        let _ = classes.insert(target, CharacterClass(class));
+        let _ = classes.insert(target, CharacterClass::single(class));
     }
 
     // Unlock the class skill tree on the live skill set; both the component
@@ -5743,6 +6517,320 @@ fn handle_set_class(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::Plain(format!("Class set to {class:?}.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/multiclass <class>` — admin-only: grants `class` as the target's
+/// secondary class (hard cap of 2). Reallocates half the character's
+/// already-earned levels to the new secondary (an admin-friendly default;
+/// `/set_class_level` fine-tunes the split afterward). A future in-world
+/// grant (a narrative event offering a second class) would call the same
+/// underlying `grant_second_class` and its guards (cap of 2, distinct from
+/// primary, primary must be a real class, minimum level).
+fn handle_multiclass(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{
+        CharacterClass,
+        class::{ClassKind, MULTICLASS_MIN_LEVEL, MulticlassError, grant_second_class},
+    };
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /multiclass.".to_string(),
+        ));
+    }
+
+    let class_arg = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let class = ClassKind::from_keyword(class_arg.to_lowercase().as_str())
+        .filter(|c| c.is_playable())
+        .ok_or_else(|| Content::Plain(format!("Unknown class '{class_arg}'.")))?;
+
+    let ecs = server.state.ecs();
+    let character_class = {
+        let mut character_classes = ecs.write_storage::<CharacterClass>();
+        let mut skill_sets = ecs.write_storage::<comp::SkillSet>();
+        let (Some(mut character_class), Some(mut skill_set)) = (
+            character_classes.get_mut(target),
+            skill_sets.get_mut(target),
+        ) else {
+            return Err(Content::Plain(
+                "Target has no class or skill set.".to_string(),
+            ));
+        };
+
+        let initial_secondary_level = skill_set.character_level() / 2;
+        grant_second_class(
+            &mut character_class,
+            &mut skill_set,
+            class,
+            initial_secondary_level,
+        )
+        .map_err(|err| {
+            Content::Plain(match err {
+                MulticlassError::AlreadyMulticlass => {
+                    "Character is already multiclass (hard cap of 2).".to_string()
+                },
+                MulticlassError::SameAsPrimary => {
+                    format!("{class:?} is already the primary class.")
+                },
+                MulticlassError::NoPrimaryClass => {
+                    "Character has no primary class yet.".to_string()
+                },
+                MulticlassError::BelowMinimumLevel => format!(
+                    "Character must be at least level {MULTICLASS_MIN_LEVEL} to multiclass."
+                ),
+            })
+        })?;
+        *character_class
+    };
+
+    // Rebuild the AbilityPool: union of both classes, with the new
+    // secondary's keys strictly appended after the racial innate so no
+    // persisted hotbar index shifts.
+    if let Some(body) = ecs.read_storage::<comp::Body>().get(target).copied() {
+        let learned = ecs
+            .read_storage::<Inventory>()
+            .get(target)
+            .map(|inv| inv.learned_spells().clone())
+            .unwrap_or_default();
+        let old_pool = ecs
+            .read_storage::<comp::AbilityPool>()
+            .get(target)
+            .cloned()
+            .unwrap_or_default();
+        let pool = comp::AbilityPool::for_character(&body, &character_class, &learned);
+        // The live `ActiveAbilities` still holds raw indices into the OLD
+        // pool. Re-point them by key before the pool is swapped, or the next
+        // save writes each slot under whatever key now sits at its old index.
+        if let Some(mut active) = ecs.write_storage::<comp::ActiveAbilities>().get_mut(target) {
+            comp::ability::remap_innate_bindings(&mut active, &old_pool, &pool);
+        }
+        // Same for the trigger slots, for the same reason — with a worse
+        // failure mode, since a re-pointed trigger authorises a cooldown bypass
+        // for an ability the player never bound.
+        if let Some(mut slots) = ecs.write_storage::<comp::TriggerSlots>().get_mut(target) {
+            slots.remap_innate_bindings(&old_pool, &pool);
+        }
+        let _ = ecs
+            .write_storage::<comp::AbilityPool>()
+            .insert(target, pool);
+    }
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Secondary class granted: {class:?}.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/trigger_slot <slot> <pool index> <condition> [threshold]` — configure a
+/// reactive trigger slot on the target.
+///
+/// The ability is named by its position in the target's `AbilityPool`, which is
+/// what a trigger slot ultimately stores; the pool's own ordering contract
+/// keeps those indices stable. A good first example is the Danari racial
+/// blink, which needs no target and already carries its own short cooldown, so
+/// it makes the "the trigger ignores the ability's cooldown, and does not touch
+/// it either" behaviour directly observable. A self-buff spell works equally
+/// well.
+///
+/// Setting a slot always leaves it ready: this is a test tool, and the point of
+/// it is to be able to fire the same slot repeatedly.
+fn handle_trigger_slot(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{TriggerCondition, TriggerSlot, TriggerSlots, trigger::MAX_TRIGGER_SLOTS};
+
+    let (slot, pool_index, condition_arg, threshold) = parse_cmd_args!(args, u32, u32, String, f32);
+    let (Some(slot), Some(pool_index), Some(condition_arg)) = (slot, pool_index, condition_arg)
+    else {
+        return Err(action.help_content());
+    };
+    let slot = slot as usize;
+    if slot >= MAX_TRIGGER_SLOTS {
+        return Err(Content::Plain(format!(
+            "Trigger slot must be 0-{}.",
+            MAX_TRIGGER_SLOTS - 1
+        )));
+    }
+
+    let threshold = threshold.unwrap_or(0.3);
+    if !(0.0..=1.0).contains(&threshold) {
+        return Err(Content::Plain(
+            "Threshold must be a fraction between 0 and 1.".to_string(),
+        ));
+    }
+    let condition = match condition_arg.to_lowercase().as_str() {
+        "health_below" => TriggerCondition::HealthBelow(threshold),
+        "damage_taken" => TriggerCondition::DamageTaken,
+        "energy_below" => TriggerCondition::EnergyBelow(threshold),
+        other => {
+            return Err(Content::Plain(format!(
+                "Unknown condition '{other}'. Options: health_below, damage_taken, energy_below."
+            )));
+        },
+    };
+
+    let pool_len = server
+        .state
+        .ecs()
+        .read_storage::<comp::AbilityPool>()
+        .get(target)
+        .map_or(0, |pool| pool.abilities.len());
+    if usize::try_from(pool_index).unwrap_or(usize::MAX) >= pool_len {
+        return Err(Content::Plain(format!(
+            "Ability pool index out of range (target has {pool_len} pool entries)."
+        )));
+    }
+
+    let mut trigger_slots = server.state.ecs().write_storage::<TriggerSlots>();
+    let mut entry = match trigger_slots.get_mut(target) {
+        Some(existing) => existing,
+        None => {
+            let _ = trigger_slots.insert(target, TriggerSlots::default());
+            trigger_slots
+                .get_mut(target)
+                .ok_or_else(|| Content::Plain("Target cannot hold trigger slots.".to_string()))?
+        },
+    };
+    entry.slots[slot] = Some(TriggerSlot::from_pool_index(pool_index as usize, condition));
+    drop(trigger_slots);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Trigger slot {slot} set to pool ability {pool_index} on {condition:?}."
+            )),
+        ),
+    );
+    Ok(())
+}
+
+/// `/trigger_ready <slot>` — clear a trigger slot's real-world cooldown.
+///
+/// A slot's wait runs from ten minutes to thirty-six real-world hours, which
+/// makes every test after the first one impossible to reach in a session. This
+/// is the escape hatch; it changes nothing else about the slot.
+fn handle_trigger_ready(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::{SlotState, TriggerSlots, trigger::MAX_TRIGGER_SLOTS};
+
+    let slot = parse_cmd_args!(args, u32).ok_or_else(|| action.help_content())? as usize;
+    if slot >= MAX_TRIGGER_SLOTS {
+        return Err(Content::Plain(format!(
+            "Trigger slot must be 0-{}.",
+            MAX_TRIGGER_SLOTS - 1
+        )));
+    }
+
+    let mut trigger_slots = server.state.ecs().write_storage::<TriggerSlots>();
+    let mut entry = trigger_slots
+        .get_mut(target)
+        .ok_or_else(|| Content::Plain("Target has no trigger slots.".to_string()))?;
+    let configured = entry
+        .get_mut(slot)
+        .ok_or_else(|| Content::Plain(format!("Trigger slot {slot} is not configured.")))?;
+    configured.state = SlotState::Ready;
+    drop(trigger_slots);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!("Trigger slot {slot} forced ready.")),
+        ),
+    );
+    Ok(())
+}
+
+/// `/set_class_level primary|secondary <n>` — admin-only test tool: overrides
+/// the split of already-banked levels between a multiclass character's two
+/// classes (e.g. after `/multiclass` picked an even default). Setting
+/// `primary` sets the secondary's level to `character_level - n` instead --
+/// there is no direct primary-level storage to write, by design (it is
+/// always derived).
+fn handle_set_class_level(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::CharacterClass;
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /set_class_level.".to_string(),
+        ));
+    }
+
+    let (slot_arg, level) = parse_cmd_args!(args, String, u16);
+    let slot_arg = slot_arg.ok_or_else(|| action.help_content())?;
+    let level = level.ok_or_else(|| action.help_content())?;
+
+    let ecs = server.state.ecs();
+    let mut character_classes = ecs.write_storage::<CharacterClass>();
+    let skill_sets = ecs.read_storage::<comp::SkillSet>();
+    let (Some(mut character_class), Some(skill_set)) =
+        (character_classes.get_mut(target), skill_sets.get(target))
+    else {
+        return Err(Content::Plain(
+            "Target has no class or skill set.".to_string(),
+        ));
+    };
+    if !character_class.is_multiclass() {
+        return Err(Content::Plain(
+            "Target is not multiclass -- /multiclass it first.".to_string(),
+        ));
+    }
+
+    let character_level = skill_set.character_level();
+    let secondary_level = match slot_arg.to_lowercase().as_str() {
+        "secondary" => level,
+        "primary" => character_level.saturating_sub(level),
+        _ => {
+            return Err(Content::Plain(
+                "Slot must be 'primary' or 'secondary'.".to_string(),
+            ));
+        },
+    };
+    character_class.set_secondary_level(secondary_level, character_level);
+    let resulting_primary_level = character_class.primary_level(character_level);
+    let resulting_secondary_level = character_class.secondary_level;
+    drop(character_classes);
+    drop(skill_sets);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Class levels set: primary {resulting_primary_level}, secondary \
+                 {resulting_secondary_level}."
+            )),
         ),
     );
     Ok(())
@@ -5895,8 +6983,13 @@ fn handle_make_test_char(
         return Err(Content::Plain("Target has no skill set.".to_string()));
     }
 
-    // 2. Class (optional) — force-set for testing (no one-time legacy guard) and
-    //    unlock its skill tree.
+    // 2. Class (optional) — force-set for testing (no one-time legacy guard, no
+    //    multiclass level/cap guards) and unlock its skill tree. A second call with
+    //    a different class becomes the SECONDARY (not a silent single-class
+    //    overwrite) so this doubles as the manual multiclass repro: two calls in a
+    //    row leave both CharacterClass and the two unlocked skill groups mutually
+    //    consistent, instead of the skill set silently accumulating a class the
+    //    component itself forgot about.
     let class = if let Some(class_arg) = class_arg {
         let class =
             ClassKind::from_keyword(class_arg.to_lowercase().as_str()).ok_or_else(|| {
@@ -5904,11 +6997,25 @@ fn handle_make_test_char(
                     "Unknown class '{class_arg}'. Options: warrior, mage, cleric, rogue."
                 ))
             })?;
+        let existing = server
+            .state
+            .ecs()
+            .read_storage::<CharacterClass>()
+            .get(target)
+            .copied();
+        let new_character_class = match existing {
+            Some(mut character_class) if character_class.primary != class => {
+                character_class.secondary = Some(class);
+                character_class.secondary_level = 0;
+                character_class
+            },
+            _ => CharacterClass::single(class),
+        };
         let _ = server
             .state
             .ecs_mut()
             .write_storage::<CharacterClass>()
-            .insert(target, CharacterClass(class));
+            .insert(target, new_character_class);
         if let Some(mut skill_set) = server
             .state
             .ecs_mut()
@@ -6182,7 +7289,12 @@ fn build_buff(
 
         // Explicit match to remember that this function exists
         let misc_data = match buff_kind {
-            BuffKind::Polymorphed => {
+            // Disguise reuses Polymorphed's exact body-spec parser: the RON
+            // authoring shape (and this admin-command shape) is identical —
+            // only the effect the buff produces differs (a `Disguise`
+            // component update instead of `ChangeBodyEvent`; see
+            // `common/src/comp/disguise.rs`).
+            BuffKind::Polymorphed | BuffKind::Disguised => {
                 let Ok(npc::NpcBody(_id, mut body)) = spec.parse() else {
                     return Err(Content::localized_with_args("command-buff-body-unknown", [
                         ("spec", spec.clone()),
@@ -6234,24 +7346,61 @@ fn build_buff(
             | BuffKind::OffBalance
             | BuffKind::Tenacity
             | BuffKind::Resilience
+            | BuffKind::StormChaser
+            | BuffKind::EagleEye
             | BuffKind::OwlTalon
             | BuffKind::HeavyNock
             | BuffKind::Heartseeker
-            | BuffKind::EagleEye
-            | BuffKind::Chilled
             | BuffKind::ArdentHunter
-            | BuffKind::ArdentHunted
             | BuffKind::SepticShot
+            | BuffKind::Chilled
+            | BuffKind::ArdentHunted
+            | BuffKind::ArdentHunt
+            | BuffKind::IgniteArrow
+            | BuffKind::FreezeArrow
+            | BuffKind::DrenchArrow
+            | BuffKind::JoltArrow
+            | BuffKind::BlindingSmite
+            | BuffKind::BrandingSmite
+            | BuffKind::DivineSmite
+            | BuffKind::SearingSmite
+            | BuffKind::StaggeringSmite
+            | BuffKind::ThunderousSmite
+            | BuffKind::WrathfulSmite
+            | BuffKind::Blessed
+            | BuffKind::CrusadersMantle
+            | BuffKind::RestfulSleep
+            | BuffKind::OtherworldlyWard
+            | BuffKind::Bane
+            | BuffKind::FaerieFire
+            | BuffKind::Enfeebled
+            | BuffKind::Sickened
+            | BuffKind::Hexed
             | BuffKind::Terrified
             | BuffKind::Charmed
+            | BuffKind::Dominated
+            | BuffKind::Maddened
+            | BuffKind::Paralyzed
             | BuffKind::Hollowtouched
             | BuffKind::DifficultTerrain
             | BuffKind::FreedomOfMovement
+            | BuffKind::Fearless
             | BuffKind::Antimagic
             | BuffKind::Anchored
             | BuffKind::Asleep
             | BuffKind::Blinded
-            | BuffKind::Slowed => {
+            | BuffKind::Slowed
+            | BuffKind::Agonized
+            | BuffKind::Detecting
+            | BuffKind::SeeInvisible
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing
+            | BuffKind::Identifying
+            | BuffKind::PassWithoutTrace
+            | BuffKind::Mooncloak
+            | BuffKind::Nondetection
+            | BuffKind::MagicAura
+            | BuffKind::Sequester => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {
@@ -6283,6 +7432,8 @@ fn cast_buff(buffkind: BuffKind, data: BuffData, server: &mut Server, target: Ec
                 BuffSource::Command,
                 *time,
                 dest_info,
+                None,
+                None,
                 None,
             ),
             *time,

@@ -1,0 +1,31 @@
+BasicAura(
+    buildup_duration: 1.0,
+    cast_duration: 0.3,
+    recover_duration: 0.6,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Shielded,
+            strength: 0.0,
+            duration: None,
+            category: Some(Magical),
+            pool_split: Some((
+                unlock_level: 42,
+                value_at_unlock: 120.0,
+                value_at_max_level: 240.0,
+                source_classes: [Mage, Sorcerer, Warlock, Bard],
+                max_targets: 6,
+            )),
+        ),
+    ],
+    aura_duration: Some(0.5),
+    range: 15.0,
+    energy_cost: 180.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        requirements: (min_level: Some(42)),
+    ),
+)

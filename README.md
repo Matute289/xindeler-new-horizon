@@ -68,6 +68,19 @@ It is recommended to use Airshipper, the current launcher solution inherited fro
 
 If you prefer to compile the game yourself, please refer to the project documentation.
 
+### A note on building from source
+
+Xindeler authenticates players against its own account service, and the client
+library for that service lives in a private repository. Building this project
+therefore requires read access to that repository, which is granted to the
+Xindeler team.
+
+If you clone this repository without that access, `cargo` will fail to fetch the
+`authc` dependency and the build will not start. Everything else in the tree
+builds normally; only the account integration is gated. Adapting the project to
+a different account service, or stubbing it out, is left to you.
+
+
 ## Contributing
 
 Xindeler welcomes contributions from developers, artists, writers, translators, content creators, and community members.

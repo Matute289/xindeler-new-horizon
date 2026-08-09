@@ -30,6 +30,7 @@ hud-chat-died_of_pvp_buff_msg =
  .curse = [{ $victim }] died of: curse caused by [{ $attacker }]
  .crippled = [{ $victim }] died of: crippled caused by [{ $attacker }]
  .frozen = [{ $victim }] died of: frozen caused by [{ $attacker }]
+ .sickened = [{ $victim }] died of: sickness caused by [{ $attacker }]
  .mysterious = [{ $victim }] died of: secret caused by [{ $attacker }]
 
 ## PvE Buff deaths, only $victim_gender is available
@@ -40,6 +41,7 @@ hud-chat-died_of_npc_buff_msg =
  .curse = [{ $victim }] died of: curse caused by { $attacker }
  .crippled = [{ $victim }] died of: crippled caused by { $attacker }
  .frozen = [{ $victim }] died of: frozen caused by { $attacker }
+ .sickened = [{ $victim }] died of: sickness caused by { $attacker }
  .mysterious = [{ $victim }] died of: secret caused by { $attacker }
 
 ## Random Buff deaths, only $victim_gender is available
@@ -50,6 +52,7 @@ hud-chat-died_of_buff_nonexistent_msg =
  .curse = [{ $victim }] died of: curse
  .crippled = [{ $victim }] died of: crippled
  .frozen = [{ $victim }] died of: frozen
+ .sickened = [{ $victim }] died of: sickness
  .mysterious = [{ $victim }] died of: secret
 
 ## Other PvP deaths, both $attacker_gender and $victim_gender are available

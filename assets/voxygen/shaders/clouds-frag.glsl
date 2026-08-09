@@ -49,12 +49,23 @@ layout(location = 0) in vec2 uv;
 layout(set = 2, binding = 5)
 uniform utexture2D t_src_mat;
 
+#ifdef SSAO_ENABLED
+layout(set = 2, binding = 6)
+uniform texture2D t_src_ao;
+
+// MAT_BLOCK / MAT_LOD already carry the mesher's own baked 1-bit corner AO
+// (`terrain-frag.glsl`, `sprite-frag.glsl`); weighting screen-space AO down
+// there avoids double-darkening the same corners. MAT_FIGURE (and anything
+// else not listed here, e.g. MAT_WATER / MAT_PUDDLE) has no baked AO at all
+// and gets full strength.
+const float SSAO_BAKED_AO_WEIGHT = 0.5;
+#endif
+
 layout(location = 0) out vec4 tgt_color;
 
 vec3 wpos_at(vec2 uv) {
     uvec2 sz = textureSize(sampler2D(t_src_depth, s_src_depth), 0);
     float buf_depth = texelFetch(sampler2D(t_src_depth, s_src_depth), clamp(ivec2(uv * sz), ivec2(0), ivec2(sz) - 1), 0).x;
-    //float buf_depth = texture(sampler2D(t_src_depth, s_src_depth), uv).x;
     vec4 clip_space = vec4((uv * 2.0 - 1.0) * vec2(1, -1), buf_depth, 1.0);
     vec4 view_space = all_mat_inv * clip_space;
     view_space /= view_space.w;
@@ -207,7 +218,6 @@ void main() {
                                 if (d < svpos.z * 0.8 && d > svpos.z * 0.999) {
                                     // Don't cast into water!
                                     if (texelFetch(sampler2D(t_src_color, s_src_color), clamp(ivec2(suv * col_sz), ivec2(0), ivec2(col_sz) - 1), 0).a >= 1.0) {
-                                        /* t -= 1.0 / float(MAIN_ITERS); */
                                         // Do a bit of extra iteration to try to refine the estimate
                                         const int ITERS = 8;
                                         float diff = 1.0 / float(MAIN_ITERS);
@@ -295,6 +305,23 @@ void main() {
                     cloud_blend = 1;
                 }
         }
+
+        #ifdef SSAO_ENABLED
+        // Ambient occlusion multiplies the shader's already-combined
+        // emitted + reflected radiance here, not an isolated ambient term,
+        // because this engine's forward shaders write those pre-combined
+        // and never keep them separate. Splitting them apart to make this
+        // "correct" would be a deferred-shading change to every opaque
+        // shader, which is out of scope here -- this approximation is
+        // accepted, and `mix`'s strength floor keeps it from ever fully
+        // blacking out direct light.
+        if (mat.a != MAT_SKY) {
+            float ao = texture(sampler2D(t_src_ao, s_src_color), uv).r;
+            float ao_weight = (mat.a == MAT_BLOCK || mat.a == MAT_LOD) ? SSAO_BAKED_AO_WEIGHT : 1.0;
+            color.rgb *= mix(1.0, ao, SSAO_STRENGTH * ao_weight);
+        }
+        #endif
+
         color.rgb = mix(color.rgb, get_cloud_color(color.rgb, dir, cam_pos.xyz, dist, 1.0), cloud_blend);
 
         #ifndef RAIN_ENABLED
@@ -310,7 +337,7 @@ void main() {
                 vec3 rpos = vec3(0.0);
                 float t = 0.0;
                 const float PLANCK = 0.01;
-                for (int i = 0; i < 14 /* log2(64) * 2 + 2 */; i ++) {
+                for (int i = 0; i < 14; i ++) {
                     float scale = min(pow(2, ceil(t / 2.0)), 32);
                     vec2 deltas = (step(vec2(0), dir2d) - fract(rpos.xy / scale + 100.0)) / dir2d;
                     float jump = max(min(deltas.x, deltas.y) * scale, PLANCK);

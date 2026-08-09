@@ -507,3 +507,44 @@ common-abilities-bow-death_volley_heavy_shot = Muerte en Abanico
     .desc = Lanza una ráfaga de flechas al aire que se dispersarán en una lluvia mortal.
 common-abilities-bow-fusillade = Ráfaga
     .desc = Prepara varias flechas a la vez para disparar una ráfaga corta de flechas a larga distancia.
+common-abilities-spells-abjuration-pass_without_trace = Rastro Esquivo
+    .desc = Una bruma de sombra fluye desde vos, silenciando pasos y aroma para que los aliados cercanos se muevan sin ser vistos ni oídos.
+common-abilities-spells-abjuration-mooncloak = Manto Lunar
+    .desc = Una luz de luna pálida brota a tu alrededor, envolviendo a los aliados cercanos en una penumbra plateada que oculta sus movimientos y debilita la magia hostil contra ellos.
+common-abilities-spells-abjuration-nondetection = No Detección
+    .desc = Tejés un velo protector sobre vos mismo para que la adivinación y la magia de largo alcance pasen de largo sin efecto. Mientras dure, no podés ser localizado ni percibido por medios adivinatorios.
+common-abilities-spells-illusion-magic_aura = Aura Mágica
+    .desc = Al envolverte en un velo sutil, hacés que quien te examine con magia de detección reciba lecturas falsas. El engaño oculta tu verdadera naturaleza o inventa una que nunca existió.
+common-abilities-spells-transmutation-sequester = Secuestro
+    .desc = Te envolvés en un velo de quietud, volviéndote invisible y protegiéndote de cualquier forma de detección a distancia.
+common-abilities-spells-illusion-minor_illusion_image = Ilusión Menor
+    .desc = Teje la forma de un pequeño objeto en un punto cercano. El engaño se sostiene hasta que se desvanece o conjurás otro en su lugar.
+common-abilities-spells-illusion-minor_illusion_sound = Ilusión Menor
+    .desc = Teje un sonido fantasma fugaz en un punto cercano, y dejá que el engaño se desvanezca.
+common-abilities-spells-illusion-silent_image = Imagen Silenciosa
+    .desc = Conjurá un espejismo puramente visual de un objeto, criatura o escena. No hace sonido, olor ni sensación alguna, y una mirada atenta revela el truco.
+common-abilities-spells-illusion-major_image = Imagen Mayor
+    .desc = Conjurá un fantasma vívido y realista de un objeto, criatura o escena de hasta un gran cubo de tamaño.
+common-abilities-spells-illusion-project_image = Imagen Proyectada
+    .desc = Conjurá un doble ilusorio estacionario de vos mismo cerca tuyo.
+common-abilities-spells-divination-beast_sense = Sentido Bestial
+    .desc = Tocá a una bestia vinculada o hechizada para ver y oír a través de sus sentidos; tu propio cuerpo queda ciego y sordo hasta que el vínculo termina.
+common-abilities-spells-divination-clairvoyance = Clarividencia
+    .desc = Plantá un sensor invisible en un punto dentro de tu propio campo de visión; ves y oís a través de él mientras tu cuerpo queda atrás, inmóvil y ciego.
+# "9 metros" acá debe mantenerse sincronizado a mano con el campo
+# `spawn_range` de
+# assets/common/abilities/spells/divination/arcane_eye.ron -- todavía no
+# hay una fuente de verdad compartida, ver el comentario de ese mismo
+# archivo RON sobre este acoplamiento.
+common-abilities-spells-divination-arcane_eye = Ojo Arcano
+    .desc = Conjurá un ojo invisible a 9 metros que flota y se desplaza a tu voluntad; ves y oís a través de él mientras tu cuerpo queda atrás, inmóvil y ciego.
+common-abilities-spells-divination-see_invisibility = Ver lo Invisible
+    .desc = Tus ojos se sintonizan con longitudes de onda más allá de la vista ordinaria, exponiendo como formas simples a las criaturas y objetos ocultos de la vista.
+common-abilities-spells-divination-true_seeing = Visión Verdadera
+    .desc = Una visión penetrante que despoja toda ilusión y disfraz, revelando las cosas en su forma verdadera. Percibís en la oscuridad, detectás pasajes ocultos por magia y ves con claridad a través de los límites entre mundos.
+common-abilities-spells-divination-scrying = Adivinación a Distancia
+    .desc = Fijás tu mente en una criatura específica y conjurás un sensor invisible que la sigue a dondequiera que vaya; ves y oís a través de él mientras tu cuerpo queda atrás, inmóvil y ciego. Una mente suficientemente protegida o poderosa puede resistir el vínculo, o sacudírselo más tarde.
+common-abilities-spells-illusion-disguise_self = Disfrazarse
+    .desc = El lanzador se envuelve en un destello de glamour tejido, cambiando cómo su rostro, complexión y ropas aparecen ante los observadores. El disfraz se mantiene hasta que se disipa o la magia se desvanece, aunque un toque atento revela la verdad.
+common-abilities-spells-illusion-seeming = Apariencia
+    .desc = El lanzador envuelve a cualquier cantidad de criaturas dispuestas a su alcance en un velo tejido de falsa forma, dando a cada una una apariencia distinta ante los observadores.

@@ -5,7 +5,7 @@ use crate::{
     calendar::Calendar,
     combat::{DeathEffects, RiderEffects, StatEffect},
     comp::{
-        Alignment, Body, Ethos, Item, Moral, Order, agent, humanoid,
+        Alignment, Body, CreatureKind, Ethos, Item, Moral, Order, agent, humanoid,
         inventory::loadout_builder::{LoadoutBuilder, LoadoutSpec},
         misc::PortalData,
     },
@@ -102,7 +102,7 @@ pub enum Meta {
 /// # Example
 /// ```
 /// use vek::Vec3;
-/// use veloren_common::generation::EntityInfo;
+/// use xindeler_common::generation::EntityInfo;
 ///
 /// // create new EntityInfo at dummy position
 /// // and fill it with template config
@@ -139,6 +139,15 @@ pub struct EntityConfig {
     /// from `alignment` (the AI faction) at spawn; non-humanoids get none.
     #[serde(default)]
     pub ethos: Option<(Order, Moral)>,
+
+    /// Authoring override for this entity's creature kind, e.g.
+    /// `creature_type: Fiend`. When unset, the kind defaults to
+    /// `body.creature_kind()` at spawn. This is the seam that lets a named
+    /// entity reuse an existing body `Species` as a pure-data reskin while
+    /// still classifying as a different kind than that body's own default
+    /// (a fiend spawned on a humanoid donor body, say).
+    #[serde(default)]
+    pub creature_type: Option<CreatureKind>,
 
     /// Parameterises agent behaviour
     #[serde(default)]
@@ -228,6 +237,9 @@ pub struct EntityInfo {
     pub aggro_range_multiplier: f32,
     // Stats
     pub body: Body,
+    /// Overrides `body.creature_kind()` at spawn when set; `None` uses the
+    /// body's own default.
+    pub creature_kind: Option<CreatureKind>,
     pub name: Option<Content>,
     pub scale: f32,
     // Loot
@@ -274,6 +286,7 @@ impl EntityInfo {
             aggro_range_multiplier: 1.0,
 
             body: Body::Humanoid(humanoid::Body::random()),
+            creature_kind: None,
             name: None,
             scale: 1.0,
             loot: LootSpec::Nothing,
@@ -324,6 +337,7 @@ impl EntityInfo {
             body,
             alignment,
             ethos,
+            creature_type,
             agent,
             inventory,
             loot,
@@ -370,6 +384,12 @@ impl EntityInfo {
         // BL-33: explicit per-config moral alignment; otherwise resolved at spawn.
         if let Some((order, moral)) = ethos {
             self = self.with_ethos(Ethos::from_box(order, moral));
+        }
+
+        // Explicit per-config creature kind override; otherwise defaults from
+        // the body at spawn (see `Stats::new`).
+        if let Some(creature_type) = creature_type {
+            self = self.with_creature_kind(creature_type);
         }
 
         self = self.with_loot_drop(loot);
@@ -513,6 +533,12 @@ impl EntityInfo {
     #[must_use]
     pub fn with_ethos(mut self, ethos: Ethos) -> Self {
         self.ethos = Some(ethos);
+        self
+    }
+
+    #[must_use]
+    pub fn with_creature_kind(mut self, creature_kind: CreatureKind) -> Self {
+        self.creature_kind = Some(creature_kind);
         self
     }
 
@@ -797,16 +823,15 @@ pub mod tests {
                     }
                 },
                 CombatEffect::Heal(_)
+                | CombatEffect::RemoveBuff(_)
                 | CombatEffect::Buff(_)
                 | CombatEffect::Knockback(_)
                 | CombatEffect::EnergyReward(_)
                 | CombatEffect::Lifesteal(_)
                 | CombatEffect::Poise(_)
                 | CombatEffect::Combo(_)
-                | CombatEffect::StageVulnerable(_, _)
+                | CombatEffect::AdditionalDamage(_)
                 | CombatEffect::RefreshBuff(_, _)
-                | CombatEffect::BuffsVulnerable(_, _)
-                | CombatEffect::StunnedVulnerable(_)
                 | CombatEffect::SelfBuff(_)
                 | CombatEffect::Energy(_)
                 | CombatEffect::DebuffsVulnerable { .. } => {},
@@ -835,6 +860,7 @@ pub mod tests {
             death_effects,
             alignment: _, // can't fail if serialized, it's a boring enum
             ethos: _,
+            creature_type: _, // a plain enum, can't fail if serialized
             rider_effects: _,
             scale,
             agent: _,

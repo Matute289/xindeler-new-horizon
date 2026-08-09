@@ -1,0 +1,45 @@
+// Commune with Nature: `BuffKind::Detecting` applied to `SenseKind::Nature`
+// -- the same "wide-radius fauna/flora/water summary sense" doc comment on
+// `SenseKind::Nature` describes almost verbatim. Reveals every beast/plant
+// creature in range as a one-shot flash, exactly like `locate_animals_or_
+// plants.ron`, which this spell shares its `SenseKind` with (one variant per
+// *presentation family*, not one per spell, per `SenseKind`'s own doc
+// comment). Simplified from the D&D original: no terrain-shape/water-body
+// readout exists to surface (`SenseKind::Nature`'s own comment: "the terrain
+// half... is not an entity reveal"), and no separate "unnatural presence"
+// signal exists either -- this is the living-creature half only.
+//
+// The D&D original's range is "for miles"; scaled down to 450 m, one tier
+// above the 300 m the "locate" family and `locate_animals_or_plants.ron`
+// use, reflecting this spell's higher level (5th vs. 2nd) and broader
+// "commune with the whole region" flavour -- still nowhere near the source
+// text's literal distance, the same bounded-spatial-query trade-off
+// `locate_animals_or_plants.ron` documents.
+//
+// Sheet duration is `Instant`; `duration: Some(1.0)` is the same plumbing
+// formality `identify.ron` and `locate_animals_or_plants.ron` both use.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(1.0),
+                misc_data: Some(Sense(Nature, 450.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 40,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Primordial),
+        // level 5 spell -> min_level 30, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(30)),
+    ),
+)

@@ -1,8 +1,8 @@
 use crate::{
     Explosion, RadiusEffect,
-    combat::{self, Attack, AttackDamage, Damage, DamageKind::Crushing, GroupTarget},
+    combat::{Attack, AttackDamage, Damage, DamageKind::Crushing, GroupTarget},
     comp::{
-        CharacterState, MeleeConstructor, StateUpdate, ability::Dodgeable,
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, ability::Dodgeable,
         character_state::OutputEvents, item::Reagent, melee::CustomCombo, tool::Stats,
     },
     event::{ExplosionEvent, LocalEvent},
@@ -149,8 +149,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::ComboMelee2(c) = &mut update.character {
                         c.timer = Duration::default();
                         c.stage_section = StageSection::Action;
-                        c.movement_modifier = strike_data.movement_modifier.swing;
-                        c.ori_modifier = strike_data.ori_modifier.swing;
+                        c.movement_modifier = strike_data.movement_modifier.action;
+                        c.ori_modifier = strike_data.ori_modifier.action;
                     }
                 }
                 if let Some(FrontendSpecifier::ClayGolemDash) = self.static_data.specifier {
@@ -181,7 +181,9 @@ impl CharacterBehavior for Data {
                         c.exhausted = true;
                     }
 
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
@@ -189,7 +191,7 @@ impl CharacterBehavior for Data {
                         strike_data
                             .melee_constructor
                             .clone()
-                            .custom_combo(strike_data.custom_combo)
+                            .custom_combo(strike_data.custom_combo.clone())
                             .create_melee(
                                 precision_mult,
                                 tool_stats,
@@ -254,11 +256,7 @@ impl CharacterBehavior for Data {
                 if self.timer < strike_data.recover_duration {
                     // Recovery
                     if let CharacterState::ComboMelee2(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Return to wielding

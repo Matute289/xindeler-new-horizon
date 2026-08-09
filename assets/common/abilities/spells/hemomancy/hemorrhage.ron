@@ -4,9 +4,10 @@ ChargedRanged(
     energy_drain: 0,
     idle_drain: 0,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((damage: 1,
-            buff: Some((kind: Bleeding, dur_secs: 12, strength: DamageFraction(0.4), chance: 1.0)),)),
+            buff: Some((kind: Bleeding, dur_secs: 12, strength: DamageFraction(0.4), chance: 1.0)),
+            damage_kind: Necrotic,)),
         scaled: Some((damage: 40, knockback: Some(5), energy: Some(5))),
     ),
     buildup_duration: 0.6,

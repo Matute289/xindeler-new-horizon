@@ -163,6 +163,11 @@ buff-reckless = Temerario
 buff-polymorphed = Polimorfismo
     .desc = La forma de tu cuerpo ha cambiado.
 
+## Disguised (cadenas provisorias; los hechizos de contenido llegan por separado)
+
+buff-disguised = Disfrazado
+    .desc = Aparentás ser otra cosa. Tu cuerpo, tu movimiento y tu alcance no cambian.
+
 ## Util
 
 buff-remove = Haz click para eliminar
@@ -252,3 +257,87 @@ buff-ardenthunted = Cazado con Fervor
     .desc = Un arquero ferviente te ha marcado como objetivo.
 buff-septicshot = Disparo séptico
     .desc = Tu próximo disparo provocará una infección en el objetivo, lo que aumentará su letalidad si este tiene alguna otra condición.
+buff-shielded = Protegido
+    .desc = Un escudo absorbe el daño entrante antes que tu salud.
+    .stat = { $duration ->
+        [1] Absorbe { $strength } de daño.
+            Dura por { $duration } segundo.
+        *[other] Absorbe { $strength } de daño.
+                 Dura por { $duration } segundos.
+    }
+buff-bleeding_mark = Marca de Sangre
+    .desc = Sangra con el tiempo, luego detona en una ráfaga cuando se agota - límpiala para detener la explosión.
+buff-difficult_terrain = Terreno Difícil
+    .desc = El suelo pelea cada paso - te mueves a velocidad reducida.
+buff-freedom_of_movement = Libertad de Movimiento
+    .desc = Te mueves sin obstáculos, ignorando terreno difícil.
+buff-antimagic = Antimagia
+    .desc = La magia falla aquí - no puedes lanzar hechizos y tus objetos mágicos están dormidos.
+buff-anchored = Anclado
+    .desc = Un ancla dimensional te mantiene en su lugar - no puedes teletransportarte o parpadear.
+buff-asleep = Dormido
+    .desc = Estás hundido en un sueño mágico - incapaz de moverte o actuar.
+buff-blinded = Cegado
+    .desc = No puedes ver para apuntar - tus ataques infligen daño reducido.
+buff-slowed = Ralentizado
+    .desc = Tu velocidad de movimiento está reducida.
+buff-agonized = Agonizante
+    .desc = Retorcido de dolor - tu movimiento y tus ataques están debilitados, y no podés usar habilidades auxiliares.
+buff-stormchaser = Perseguidor de Tormentas
+    .desc = Te regodeas en la violencia, cuando tus flechas dan en el blanco tus ataques y movimientos se vuelven más rápidos.
+buff-terrified = Aterrorizado
+    .desc = El terror inunda tus miembros, ralentizando cada paso.
+buff-fearless = Intrépido
+    .desc = Una oleada de coraje te blinda contra el miedo mismo.
+buff-charmed = Encantado
+    .desc = No puedes traicionarte a ti mismo hiriendo a quienquiera que hizo esto por ti.
+buff-dominated = Dominado
+    .desc = Tu voluntad ya no te pertenece; obedecés las órdenes de quien te domina.
+buff-maddened = Enloquecido
+    .desc = Te volviste hostil contra todos, hasta contra tus antiguos aliados.
+buff-paralyzed = Paralizado
+    .desc = No podés moverte, actuar, ni defenderte.
+buff-hollowtouched = Tocado por el Vacío
+    .desc = El Vacío te ha probado. La salud máxima reducida.
+buff-ardenthunt = Caza Apasionada
+    .desc = Tu fervor hace que tus flechas sean más letales contra un objetivo específico, al costo de ser más débiles contra otros.
+buff-ignitearrow = Flecha Incendiaria
+    .desc = Has encendido tu próxima flecha, lo que hará que queme al objetivo que golpee, y puede ser explosiva si se dispara de cierta manera.
+buff-freezearrow = Flecha Congelante
+    .desc = Has congelado tu próxima flecha, lo que hará que congele al objetivo que golpee, y puede explotar en una nube de escarcha si se dispara de cierta manera.
+buff-drencharrow = Flecha Envenenada
+    .desc = Has empapado tu próxima flecha en veneno, lo que hará que envenene al objetivo que golpee, y puede explotar en una nube de veneno si se dispara de cierta manera.
+buff-joltarrow = Flecha Eléctrica
+    .desc = Has cargado estáticamente tu próxima flecha, lo que creará arcos de electricidad desde el objetivo que golpee, y puede ser atraída a objetivos si se dispara de cierta manera.
+buff-blindingsmite = Golpe Cegador
+    .desc = Tu próximo golpe de arma arde con luz radiante, causando daño extra y cegando a tu enemigo.
+buff-brandingsmite = Golpe Marcador
+    .desc = Tu próximo golpe de arma arde con luz radiante, causando daño extra.
+buff-divinesmite = Golpe Divino
+    .desc = Tu próximo golpe de arma se carga con poder sagrado, causando daño extra considerable.
+buff-searingsmite = Golpe Abrasador
+    .desc = Tu próximo golpe de arma arde en llamas, causando daño extra y prendiendo fuego a tu enemigo.
+buff-staggeringsmite = Golpe Aturdidor
+    .desc = Tu próximo golpe de arma sacude los sentidos, causando daño extra y haciendo perder el equilibrio a tu enemigo.
+buff-thunderoussmite = Golpe Atronador
+    .desc = Tu próximo golpe de arma retumba como un trueno, causando daño extra y lanzando a tu enemigo hacia atrás.
+buff-wrathfulsmite = Golpe Iracundo
+    .desc = Tu próximo golpe de arma canaliza el terror, causando daño extra y llenando a tu enemigo de pavor.
+buff-blessed = Bendecido
+    .desc = Tus golpes y tu determinación están sutilmente afinados.
+buff-crusadersmantle = Manto del Cruzado
+    .desc = Un radio de luz consagrada refuerza tus golpes, envolviendo cada ataque en radiancia abrasadora.
+buff-restfulsleep = Sueño Reparador
+    .desc = Estás sumido en un sueño reparador y protegido — no podés moverte ni actuar, pero cualquier daño te despierta al instante.
+buff-otherworldlyward = Amparo Ultraterreno
+    .desc = Una luz radiante y protectora te rodea, amortiguando los golpes de tus atacantes mientras dure.
+buff-bane = Perdición
+    .desc = Tu concentración se resquebraja; tus golpes y tu determinación flaquean en los peores momentos.
+buff-faeriefire = Fuego Feérico
+    .desc = Un resplandor se te pega, dejándote incapaz de esconderte. Los ataques contra vos aciertan más fácilmente.
+buff-enfeebled = Debilitado
+    .desc = Tus golpes llegan débiles, causando solo una fracción de su fuerza habitual.
+buff-sickened = Enfermo
+    .desc = Una enfermedad maligna drena tu concentración y castiga tu cuerpo con dolor.
+buff-hexed = Hechizado
+    .desc = Una maldición embota tu precisión - tus golpes tienen menos probabilidad de acertar de lleno.

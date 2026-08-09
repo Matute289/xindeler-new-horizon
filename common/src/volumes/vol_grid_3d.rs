@@ -6,10 +6,10 @@ use hashbrown::{HashMap, hash_map};
 use std::{fmt::Debug, sync::Arc};
 use vek::*;
 
-#[derive(Debug)]
-pub enum VolGrid3dError<V: RasterableVol> {
+#[derive(Copy, Clone, Debug)]
+pub enum VolGrid3dError<E> {
     NoSuchChunk,
-    ChunkErr(V::Error),
+    ChunkErr(E),
     DynaError(DynaError),
     InvalidChunkSize,
 }
@@ -35,13 +35,13 @@ impl<V: RasterableVol> VolGrid3d<V> {
 }
 
 impl<V: RasterableVol + Debug> BaseVol for VolGrid3d<V> {
-    type Error = VolGrid3dError<V>;
+    type Error = VolGrid3dError<V::Error>;
     type Vox = V::Vox;
 }
 
 impl<V: RasterableVol + ReadVol + Debug> ReadVol for VolGrid3d<V> {
     #[inline(always)]
-    fn get(&self, pos: Vec3<i32>) -> Result<&V::Vox, VolGrid3dError<V>> {
+    fn get(&self, pos: Vec3<i32>) -> Result<&V::Vox, VolGrid3dError<V::Error>> {
         let ck = Self::chunk_key(pos);
         self.chunks
             .get(&ck)
@@ -63,7 +63,7 @@ impl<I: Into<Aabb<i32>>, V: RasterableVol + ReadVol + Debug> SampleVol<I> for Vo
     ///
     /// Note that the resultant volume does not carry forward metadata from the
     /// original chunks.
-    fn sample(&self, range: I) -> Result<Self::Sample, VolGrid3dError<V>> {
+    fn sample(&self, range: I) -> Result<Self::Sample, VolGrid3dError<V::Error>> {
         let range = range.into();
         let mut sample = VolGrid3d::new()?;
         let chunk_min = Self::chunk_key(range.min);
@@ -88,7 +88,7 @@ impl<I: Into<Aabb<i32>>, V: RasterableVol + ReadVol + Debug> SampleVol<I> for Vo
 
 impl<V: RasterableVol + WriteVol + Clone + Debug> WriteVol for VolGrid3d<V> {
     #[inline(always)]
-    fn set(&mut self, pos: Vec3<i32>, vox: V::Vox) -> Result<V::Vox, VolGrid3dError<V>> {
+    fn set(&mut self, pos: Vec3<i32>, vox: V::Vox) -> Result<V::Vox, VolGrid3dError<V::Error>> {
         let ck = Self::chunk_key(pos);
         self.chunks
             .get_mut(&ck)
@@ -103,7 +103,7 @@ impl<V: RasterableVol + WriteVol + Clone + Debug> WriteVol for VolGrid3d<V> {
 }
 
 impl<V: RasterableVol> VolGrid3d<V> {
-    pub fn new() -> Result<Self, VolGrid3dError<V>> {
+    pub fn new() -> Result<Self, VolGrid3dError<V::Error>> {
         if Self::chunk_size()
             .map(|e| e.is_power_of_two() && e > 0)
             .reduce_and()

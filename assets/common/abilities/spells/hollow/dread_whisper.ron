@@ -17,6 +17,7 @@ BasicRanged(
                 strength: Value(0.8),
                 chance: 1.0,
             )),
+            damage_kind: Psychic,
         )),
     ),
     projectile_body: Object(BoltFire),

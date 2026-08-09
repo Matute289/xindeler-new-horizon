@@ -1,7 +1,6 @@
 use crate::{
-    combat,
     comp::{
-        Body, CharacterState, FrontendMarker, LightEmitter, Pos, StateUpdate,
+        Body, CharacterState, DerivedStats, FrontendMarker, LightEmitter, Pos, StateUpdate,
         ability::Amount,
         character_state::OutputEvents,
         object::Body::{FireRing, GrenadeClay, LaserBeam, LaserBeamSmall},
@@ -135,12 +134,16 @@ impl CharacterBehavior for Data {
             StageSection::Recover => {
                 if !self.exhausted {
                     // Fire
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
-                    let projectile = self.static_data.projectile.clone().create_projectile(
-                        Some(*data.uid),
-                        precision_mult,
-                        Some(self.static_data.ability_info),
-                    );
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
+                    let (projectile, marker) =
+                        self.static_data.projectile.clone().create_projectile(
+                            Some(*data.uid),
+                            precision_mult,
+                            Some(self.static_data.ability_info),
+                            Some(data.stats),
+                        );
                     // Shoots all projectiles simultaneously
                     let num_projectiles = self
                         .static_data
@@ -155,8 +158,8 @@ impl CharacterBehavior for Data {
                         data.inputs.look_dir
                     };
 
-                    //Adds the vertical angle offset if present.
-                    //Unwrap clause fires if the cross product is degenerate.
+                    // Adds the vertical angle offset if present.
+                    // Unwrap clause fires if the cross product is degenerate.
                     let aim_dir = if self.static_data.vertical_angle_offset != 0.0 {
                         let cross = vek::Vec3::unit_z().cross(*aim_dir).normalized();
                         Dir::from_unnormalized(
@@ -215,9 +218,10 @@ impl CharacterBehavior for Data {
                             body: self.static_data.projectile_body,
                             projectile: projectile.clone(),
                             light: self.static_data.projectile_light,
-                            speed: self.static_data.projectile_speed,
+                            speed: self.static_data.projectile_speed
+                                * data.stats.projectile_speed_mult,
                             object: None,
-                            marker: self.static_data.marker,
+                            marker: self.static_data.marker.or(marker),
                         });
                     }
 
@@ -227,11 +231,7 @@ impl CharacterBehavior for Data {
                 } else if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::BasicRanged(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

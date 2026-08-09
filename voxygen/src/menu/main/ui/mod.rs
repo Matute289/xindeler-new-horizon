@@ -274,6 +274,10 @@ enum Message {
     #[cfg(feature = "singleplayer")]
     WorldConfirmation(world_selector::Confirmation),
     Multiplayer,
+    /// Opens the account-registration page in the system's default browser.
+    /// There is no in-client registration flow -- account creation always
+    /// needs email verification, which only the web landing can do.
+    CreateAccount,
     UnlockServerField,
     LanguageChanged(usize),
     OpenLanguageMenu,
@@ -300,7 +304,7 @@ impl Controls {
         settings: &Settings,
         server: Option<String>,
     ) -> Self {
-        let version = format!("Veloren {}", *common::util::DISPLAY_VERSION);
+        let version = format!("Xindeler {}", *common::util::DISPLAY_VERSION);
 
         let credits = Ron::<Credits>::load_expect_cloned("credits").into_inner();
 
@@ -484,6 +488,13 @@ impl Controls {
                 self.screen = Screen::Credits {
                     screen: credits::Screen::new(),
                 };
+            },
+            Message::CreateAccount => {
+                // Fire-and-forget: no in-client registration flow exists (it
+                // always needs email verification, which only the web
+                // landing can do), so this just hands off to the browser.
+                // Keep this URL in sync with `main-login_process`'s own text.
+                let _ = open::that_detached("https://xindeler.com/");
             },
             #[cfg(feature = "singleplayer")]
             Message::Singleplayer => {

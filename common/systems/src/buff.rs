@@ -1,10 +1,13 @@
 use common::{
-    Damage, DamageSource,
-    combat::{self, DamageContributor},
+    DamageSource,
+    assets::{AssetExt, Ron},
+    combat::{self, CombatTuning, DamageContributor},
     comp::{
-        Alignment, Energy, Group, Health, HealthChange, Inventory, LightEmitter, Mass,
-        ModifierKind, PhysicsState, Player, Pos, Stats,
+        ActiveSense, Alignment, AttunedItems, DerivedStats, Disguise, Energy, Ethos, Group, Health,
+        HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos,
+        Stats,
         agent::{Sound, SoundKind},
+        attunement::item_effects_active,
         aura::{Auras, EnteredAuras},
         body::{Body, object},
         buff::{
@@ -12,7 +15,7 @@ use common::{
             Buffs, DestInfo,
         },
         fluid_dynamics::{Fluid, LiquidKind},
-        item::MaterialStatManifest,
+        item_condition_buff_data,
     },
     event::{
         BuffEvent, ChangeBodyEvent, ComboChangeEvent, CreateSpriteEvent, EmitExt,
@@ -29,8 +32,7 @@ use common_ecs::{Job, Origin, ParMode, Phase, System};
 use rand::RngExt;
 use rayon::iter::ParallelIterator;
 use specs::{
-    Entities, Entity, LendJoin, ParJoin, Read, ReadExpect, ReadStorage, SystemData, WriteStorage,
-    shred,
+    Entities, Entity, LendJoin, ParJoin, Read, ReadStorage, SystemData, WriteStorage, shred,
 };
 use vek::Vec3;
 
@@ -38,6 +40,54 @@ use vek::Vec3;
 /// multiple of its bleed strength as a single burst. Placeholder magnitude —
 /// retune in the BL-52/BL-05 balance pass.
 const BLEED_DETONATE_MULT: f32 = 3.0;
+
+/// The net `BuffKind` add/remove diff needed to bring `bearer_buffs` in line
+/// with what every equipped item's `ItemCondition` currently says should be
+/// active on `body`. Pure and ECS-independent so it is cheaply
+/// unit-testable; `Sys::run` is a thin wrapper that turns the result into
+/// `BuffEvent`s.
+///
+/// An item whose `RequiresAttunement` flag is set but whose slot is not
+/// currently attuned contributes to neither list at all — it is fully inert,
+/// matching `item_effects_active`'s existing "an unattuned item's effects
+/// don't apply" rule.
+///
+/// A `BuffKind` already present on `bearer_buffs` is never re-added (so a
+/// held condition doesn't spam identical events every tick), and a kind that
+/// is requested `to_add` by one item always wins over another item
+/// requesting the same kind `to_remove` in the same pass.
+pub fn item_condition_buff_diff(
+    inventory: &Inventory,
+    body: &Body,
+    ethos: Option<&Ethos>,
+    attuned: Option<&AttunedItems>,
+    bearer_buffs: Option<&Buffs>,
+) -> (Vec<BuffKind>, Vec<BuffKind>) {
+    let mut to_add: Vec<BuffKind> = Vec::new();
+    let mut to_remove: Vec<BuffKind> = Vec::new();
+
+    for (slot, item) in inventory.equipped_items_with_slot() {
+        let Some(condition) = item.condition() else {
+            continue;
+        };
+        if !item_effects_active(slot, item.requires_attunement(), attuned) {
+            continue;
+        }
+        for kind in condition.active_buffs(ethos, body) {
+            if !bearer_buffs.is_some_and(|b| b.contains(*kind)) && !to_add.contains(kind) {
+                to_add.push(*kind);
+            }
+        }
+        for kind in condition.inactive_buffs(ethos, body) {
+            if bearer_buffs.is_some_and(|b| b.contains(*kind)) && !to_remove.contains(kind) {
+                to_remove.push(*kind);
+            }
+        }
+    }
+
+    to_remove.retain(|kind| !to_add.contains(kind));
+    (to_add, to_remove)
+}
 
 event_emitters! {
     struct Events[EventEmitters] {
@@ -59,14 +109,20 @@ pub struct ReadData<'a> {
     dt: Read<'a, DeltaTime>,
     events: Events<'a>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    attuned_items: ReadStorage<'a, AttunedItems>,
+    /// Every gear-derived aggregate this system needs, rebuilt only when the
+    /// entity's gear/skills/body actually changed.
+    derived_stats: ReadStorage<'a, DerivedStats>,
+    // Only fetched for an entity once it's known to have at least one
+    // equipped item declaring an `ItemCondition` (see `Sys::run`) — an
+    // entity with no such item never touches this storage.
+    ethos: ReadStorage<'a, Ethos>,
     healths: ReadStorage<'a, Health>,
     energies: ReadStorage<'a, Energy>,
     physics_states: ReadStorage<'a, PhysicsState>,
     groups: ReadStorage<'a, Group>,
     id_maps: Read<'a, IdMaps>,
     time: Read<'a, Time>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     buffs: ReadStorage<'a, Buffs>,
     auras: ReadStorage<'a, Auras>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
@@ -84,13 +140,17 @@ pub struct ReadData<'a> {
 #[derive(Default)]
 pub struct Sys;
 impl<'a> System<'a> for Sys {
-    type SystemData = (ReadData<'a>, WriteStorage<'a, Stats>);
+    type SystemData = (
+        ReadData<'a>,
+        WriteStorage<'a, Stats>,
+        WriteStorage<'a, Disguise>,
+    );
 
     const NAME: &'static str = "buff";
     const ORIGIN: Origin = Origin::Common;
     const PHASE: Phase = Phase::Create;
 
-    fn run(job: &mut Job<Self>, (read_data, mut stats): Self::SystemData) {
+    fn run(job: &mut Job<Self>, (read_data, mut stats, mut disguises): Self::SystemData) {
         let mut emitters = read_data.events.get_emitters();
         let dt = read_data.dt.0;
         // Set to false to avoid spamming server
@@ -162,6 +222,15 @@ impl<'a> System<'a> for Sys {
         let racial_traits = common::comp::class::racial_traits_manifest();
         // BL-01 per-class scaling manifest: one cache access per system run.
         let class_attributes = common::comp::class::class_attributes_manifest();
+        // Weapon-proficiency manifest: one cache access per system run,
+        // mirroring the manifest above.
+        let class_proficiencies = common::comp::class::class_proficiencies_manifest();
+        // Non-proficient damage multiplier: one cached read per system run
+        // (mirrors how `Attack::apply_attack` caches `combat_tuning` per
+        // attack rather than per damage instance).
+        let combat_tuning = &Ron::<CombatTuning>::load_expect("common.combat_tuning")
+            .read()
+            .0;
         let buff_join = (
             &read_data.entities,
             &read_data.buffs,
@@ -181,6 +250,23 @@ impl<'a> System<'a> for Sys {
             };
             // Apply buffs to entity based off of their current physics_state
             if let Some(physics_state) = physics_state {
+                let emit_terrain_buff = |emitters: &mut EventEmitters, kind, data| {
+                    emitters.emit(BuffEvent {
+                        entity,
+                        buff_change: BuffChange::Add(Buff::new(
+                            kind,
+                            data,
+                            vec![],
+                            BuffSource::World,
+                            *read_data.time,
+                            dest_info,
+                            None,
+                            // Terrain effects have no associated ability for there to be a target
+                            None,
+                            None,
+                        )),
+                    });
+                };
                 // Set nearby entities on fire if burning
                 if let Some((_, burning)) = buff_comp.iter_kind(BuffKind::Burning).next() {
                     for t_entity in physics_state.touch_entities.keys().filter_map(|te_uid| {
@@ -219,7 +305,7 @@ impl<'a> System<'a> for Sys {
                                 buff_change: BuffChange::Add(Buff::new(
                                     BuffKind::Burning,
                                     BuffData::new(burning.data.strength, duration),
-                                    vec![BuffCategory::Natural],
+                                    vec![],
                                     BuffSource::World,
                                     *read_data.time,
                                     DestInfo {
@@ -229,6 +315,10 @@ impl<'a> System<'a> for Sys {
                                         mass: read_data.masses.get(t_entity),
                                     },
                                     mass,
+                                    // There is no ability being cast that would cause there to be
+                                    // a target
+                                    None,
+                                    None,
                                 )),
                             });
                         }
@@ -239,54 +329,33 @@ impl<'a> System<'a> for Sys {
                     Some(SpriteKind::EnsnaringVines)
                 ) {
                     // If on ensnaring vines, apply partial ensnared debuff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Ensnared,
-                            BuffData::new(0.5, Some(Secs(0.1))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Ensnared,
+                        BuffData::new(0.5, Some(Secs(0.1))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::EnsnaringWeb)
                 ) {
                     // If on ensnaring web, apply ensnared debuff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Ensnared,
-                            BuffData::new(1.0, Some(Secs(1.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Ensnared,
+                        BuffData::new(1.0, Some(Secs(1.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::SeaUrchin)
                 ) {
                     // If touching Sea Urchin apply Bleeding buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Bleeding,
-                            BuffData::new(1.0, Some(Secs(6.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Bleeding,
+                        BuffData::new(1.0, Some(Secs(6.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
@@ -306,18 +375,11 @@ impl<'a> System<'a> for Sys {
                         });
                         emitters.emit(Outcome::Slash { pos: pos.0 });
 
-                        emitters.emit(BuffEvent {
-                            entity,
-                            buff_change: BuffChange::Add(Buff::new(
-                                BuffKind::Bleeding,
-                                BuffData::new(5.0, Some(Secs(3.0))),
-                                Vec::new(),
-                                BuffSource::World,
-                                *read_data.time,
-                                dest_info,
-                                None,
-                            )),
-                        });
+                        emit_terrain_buff(
+                            &mut emitters,
+                            BuffKind::Bleeding,
+                            BuffData::new(5.0, Some(Secs(3.0))),
+                        );
                     }
                 }
                 if matches!(
@@ -325,85 +387,42 @@ impl<'a> System<'a> for Sys {
                     Some(SpriteKind::IronSpike | SpriteKind::HaniwaTrapTriggered)
                 ) {
                     // If touching Iron Spike apply Bleeding buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Bleeding,
-                            BuffData::new(1.0, Some(Secs(4.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Bleeding,
+                        BuffData::new(1.0, Some(Secs(4.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::HotSurface)
                 ) {
                     // If touching a hot surface apply Burning buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Burning,
-                            BuffData::new(10.0, None),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(&mut emitters, BuffKind::Burning, BuffData::new(10.0, None));
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::IceSpike)
                 ) {
                     // When standing on IceSpike, apply bleeding
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Bleeding,
-                            BuffData::new(15.0, Some(Secs(0.1))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Bleeding,
+                        BuffData::new(15.0, Some(Secs(0.1))),
+                    );
                     // When standing on IceSpike also apply Frozen
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Frozen,
-                            BuffData::new(0.2, Some(Secs(3.0))),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(
+                        &mut emitters,
+                        BuffKind::Frozen,
+                        BuffData::new(0.2, Some(Secs(3.0))),
+                    );
                 }
                 if matches!(
                     physics_state.on_ground.and_then(|b| b.get_sprite()),
                     Some(SpriteKind::FireBlock)
                 ) {
                     // If on FireBlock vines, apply burning buff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Burning,
-                            BuffData::new(20.0, None),
-                            Vec::new(),
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(&mut emitters, BuffKind::Burning, BuffData::new(20.0, None));
                 }
                 if matches!(
                     physics_state.in_fluid,
@@ -414,18 +433,7 @@ impl<'a> System<'a> for Sys {
                 ) && !body.negates_buff(BuffKind::Burning)
                 {
                     // If in lava fluid, apply burning debuff
-                    emitters.emit(BuffEvent {
-                        entity,
-                        buff_change: BuffChange::Add(Buff::new(
-                            BuffKind::Burning,
-                            BuffData::new(20.0, None),
-                            vec![BuffCategory::Natural],
-                            BuffSource::World,
-                            *read_data.time,
-                            dest_info,
-                            None,
-                        )),
-                    });
+                    emit_terrain_buff(&mut emitters, BuffKind::Burning, BuffData::new(20.0, None));
                 } else if matches!(
                     physics_state.in_fluid,
                     Some(Fluid::Liquid {
@@ -496,8 +504,27 @@ impl<'a> System<'a> for Sys {
                             *read_data.time,
                             dest_info,
                             None,
+                            // If we ever need to transfer the "target" entity from an expired
+                            // aura, we'll have to store the target entity somewhere (maybe buff,
+                            // maybe aura)? Revisit if this causes issues.
+                            None,
+                            buff.magic_source,
                         )),
                     });
+                }
+            }
+
+            // A mind-altering buff whose caster entity no longer resolves
+            // (disconnected, died and despawned, etc.) is dropped rather than
+            // left running with nobody able to command or be excluded by it.
+            for (buff_key, buff) in &buff_comp.buffs {
+                if matches!(
+                    buff.kind,
+                    BuffKind::Charmed | BuffKind::Dominated | BuffKind::Maddened
+                ) && let BuffSource::Character { by, .. } = buff.source
+                    && read_data.id_maps.uid_entity(by).is_none()
+                {
+                    expired_buffs.push(buff_key);
                 }
             }
 
@@ -524,6 +551,7 @@ impl<'a> System<'a> for Sys {
                                 amount: -(buff.data.strength * BLEED_DETONATE_MULT),
                                 by: damage_contributor,
                                 cause: Some(DamageSource::Buff(BuffKind::BleedingMark)),
+                                magic_source: None,
                                 time: *read_data.time,
                                 precise: false,
                                 instance: rand::random(),
@@ -533,20 +561,86 @@ impl<'a> System<'a> for Sys {
                 }
             });
 
-            let infinite_damage_reduction = (Damage::compute_damage_reduction(
-                None,
-                read_data.inventories.get(entity),
-                read_data.attuned_items.get(entity),
-                Some(&stat),
-                &read_data.msm,
-            ) - 1.0)
-                .abs()
-                < f32::EPSILON;
+            // Total damage immunity, read straight off the cached gear
+            // aggregate instead of re-deriving it through the damage formula.
+            // The two sources are exactly the ones the formula caps at 100%:
+            // armour whose protection is `None` (invincible), and a 100%
+            // damage-reduction modifier (admin tabard, safezone buff).
+            //
+            // An antimagic field makes attuned magic-item effects mundane, so
+            // the attunement-blind protection is selected while
+            // `disable_magic` is set. Both the flag and the modifier are read
+            // from the pre-`reset_temp_modifiers` `Stats`, i.e. what the
+            // previous tick accumulated — the same values the formula saw.
+            // No cache means no inventory, which is `Some(0.0)` — never
+            // invincible — exactly as `DerivedStats::default()` records.
+            let protection = read_data
+                .derived_stats
+                .get(entity)
+                .map_or(Some(0.0), |derived| {
+                    if stat.disable_magic {
+                        derived.protection_unattuned
+                    } else {
+                        derived.protection
+                    }
+                });
+            let infinite_damage_reduction =
+                protection.is_none() || stat.damage_reduction.modifier() >= 1.0;
             if infinite_damage_reduction {
                 for (key, buff) in buff_comp.buffs.iter() {
                     if !buff.kind.is_buff() {
                         expired_buffs.push(key);
                     }
+                }
+            }
+
+            // Equipped-item `ItemCondition`s: short-circuits before touching
+            // `read_data.ethos`, re-fetching the inventory, or evaluating any
+            // predicate at all, unless the cached `DerivedStats::has_item_condition`
+            // flag says at least one equipped item actually declares a
+            // condition. That flag is recomputed only when `Inventory`
+            // changes (same trigger as every other `DerivedStats` field), so
+            // this no longer costs an `equipped_items()` scan every tick for
+            // every entity — no item in the game declares a condition yet
+            // (see `common/src/comp/item_condition.rs`'s module doc), so this
+            // check almost always short-circuits.
+            if read_data
+                .derived_stats
+                .get(entity)
+                .is_some_and(|derived| derived.has_item_condition)
+                && let Some(inventory) = read_data.inventories.get(entity)
+            {
+                let (to_add, to_remove) = item_condition_buff_diff(
+                    inventory,
+                    body,
+                    read_data.ethos.get(entity),
+                    read_data.attuned_items.get(entity),
+                    Some(buff_comp),
+                );
+                for kind in to_remove {
+                    emitters.emit(BuffEvent {
+                        entity,
+                        buff_change: BuffChange::RemoveByKind(kind),
+                    });
+                }
+                for kind in to_add {
+                    emitters.emit(BuffEvent {
+                        entity,
+                        buff_change: BuffChange::Add(Buff::new(
+                            kind,
+                            item_condition_buff_data(),
+                            vec![],
+                            BuffSource::Item,
+                            *read_data.time,
+                            DestInfo {
+                                stats: Some(&stat),
+                                mass,
+                            },
+                            mass,
+                            None,
+                            None,
+                        )),
+                    });
                 }
             }
 
@@ -569,12 +663,37 @@ impl<'a> System<'a> for Sys {
                     read_data.character_classes.get(entity),
                     read_data.skill_sets.get(entity),
                 ) {
-                    class_attributes
-                        .0
-                        .get(&character_class.0)
-                        .copied()
-                        .unwrap_or_default()
-                        .apply(&mut stat, skill_set.character_level());
+                    let character_level = skill_set.character_level();
+                    stat.character_level = character_level;
+
+                    // energy_reward_mult composes as the max across every
+                    // held class, not the product of applying each one --
+                    // computed once here rather than inside `apply` itself,
+                    // so it stays a single multiplication regardless of how
+                    // many classes are held (see `ClassAttributes::apply`'s
+                    // own doc comment for why).
+                    let energy_reward_mult = character_class
+                        .classes()
+                        .map(|class| {
+                            class_attributes
+                                .0
+                                .get(&class)
+                                .copied()
+                                .unwrap_or_default()
+                                .energy_reward_mult
+                        })
+                        .fold(f32::MIN, f32::max);
+                    stat.energy_reward_modifier *= energy_reward_mult;
+
+                    for (class, level, is_primary) in character_class.class_levels(character_level)
+                    {
+                        class_attributes
+                            .0
+                            .get(&class)
+                            .copied()
+                            .unwrap_or_default()
+                            .apply(&mut stat, level, is_primary);
+                    }
 
                     // BL-06: passive class-skill bonuses, same per-tick slot as
                     // the per-class attribute scaling (derived from purchased
@@ -583,7 +702,36 @@ impl<'a> System<'a> for Sys {
                     // BL-20: passive feat bonuses, same per-tick slot as the
                     // class-skill passives above.
                     skill_set.apply_feat_passives(&mut stat);
+
+                    // Weapon proficiency: union (bitwise OR) across every held
+                    // class, using the manifest hoisted once per system run
+                    // above. A class absent from the manifest resolves
+                    // permissive (`All`), not empty — see the manifest type's
+                    // own doc comment. Running this BEFORE the buff-effect
+                    // loop below is load-bearing: it lets a future buff/feat
+                    // widen the mask or restore the damage multiplier on top
+                    // of the class narrowing, rather than being clobbered by
+                    // it.
+                    stat.proficient_tools =
+                        character_class.proficient_tools_mask(&class_proficiencies.0);
+                    stat.non_proficient_damage_mult = combat_tuning.non_proficient_damage_mult;
                 }
+            }
+
+            // Gear → Stats: caster-role implements (Staff/Sceptre/Tome/
+            // HolySymbol/Focus in the Caster role) contribute their
+            // effect_power/buff_strength/energy_efficiency tool stats onto
+            // this tick's spell_power/heal_power/energy_regen_modifier. The
+            // per-item products are already folded in `DerivedStats`, so this
+            // is a handful of multiplications rather than a loadout walk.
+            // Deliberately not gated on holding a CharacterClass: gear should
+            // matter for any inventory-carrying entity (e.g. a spellcasting
+            // NPC), the same way the armour-derived aggregates don't require
+            // one either. Ordering relative to the class-passive block above
+            // is immaterial here — every contribution is a plain `*=`, and
+            // multiplication is commutative.
+            if let Some(derived) = read_data.derived_stats.get(entity) {
+                combat::apply_caster_gear_fold(&mut stat, &derived.caster);
             }
 
             // BL-65: every body contributes a combat-stat baseline by threat
@@ -596,6 +744,7 @@ impl<'a> System<'a> for Sys {
             stat.crit_chance += npc_crit;
 
             let mut body_override = None;
+            let mut disguise_override = None;
 
             // Iterator over the lists of buffs by kind
             let mut buff_kinds = buff_comp
@@ -642,6 +791,7 @@ impl<'a> System<'a> for Sys {
                                 &mut stat,
                                 body,
                                 &mut body_override,
+                                &mut disguise_override,
                                 health,
                                 energy,
                                 entity,
@@ -665,6 +815,26 @@ impl<'a> System<'a> for Sys {
                     new_body,
                     permanent_change: None,
                 });
+            }
+
+            // Update disguise if needed. Mirrors the body-override block
+            // above (same "only write when it actually changed" guard, for
+            // the same reason: `Disguise` is `Tracked` for net sync, so an
+            // unconditional `insert` every tick — even with an unchanged
+            // value — would mark it dirty and resync it to every nearby
+            // client every tick for no reason, exactly the thrash this
+            // component was split out of `Stats` to avoid).
+            match &disguise_override {
+                Some(disguise) => {
+                    if disguises.get(entity) != Some(disguise) {
+                        let _ = disguises.insert(entity, disguise.clone());
+                    }
+                },
+                None => {
+                    if disguises.contains(entity) {
+                        disguises.remove(entity);
+                    }
+                },
             }
 
             // Remove buffs that expire
@@ -703,6 +873,7 @@ fn execute_effect(
     stat: &mut Stats,
     current_body: &Body,
     body_override: &mut Option<Body>,
+    disguise_override: &mut Option<Disguise>,
     health: &Health,
     energy: &Energy,
     entity: Entity,
@@ -780,6 +951,7 @@ fn execute_effect(
                         amount,
                         by: damage_contributor,
                         cause,
+                        magic_source: None,
                         time: *read_data.time,
                         precise: false,
                         instance: *instance,
@@ -888,11 +1060,23 @@ fn execute_effect(
         BuffEffect::MovementSpeed(speed) => {
             stat.move_speed_modifier *= *speed;
         },
+        BuffEffect::ChargeMoveSpeed(speed) => {
+            stat.charge_move_speed_modifier *= *speed;
+        },
+        BuffEffect::BuildupMoveSpeed(speed) => {
+            stat.buildup_move_speed_modifier *= *speed;
+        },
         BuffEffect::AttackSpeed(speed) => {
             stat.attack_speed_modifier *= *speed;
         },
         BuffEffect::RecoverySpeed(speed) => {
             stat.recovery_speed_modifier *= *speed;
+        },
+        BuffEffect::ChargingSpeed(speed) => {
+            stat.charge_speed_modifier *= *speed;
+        },
+        BuffEffect::BuildupSpeed(speed) => {
+            stat.buildup_speed_modifier *= *speed;
         },
         BuffEffect::GroundFriction(gf) => {
             stat.friction_modifier *= *gf;
@@ -912,7 +1096,7 @@ fn execute_effect(
         },
         BuffEffect::PrecisionModifier(req, val, ovrd) => {
             stat.conditional_precision_modifiers
-                .push((*req, *val, *ovrd));
+                .push((req.clone(), *val, *ovrd));
         },
         BuffEffect::PrecisionVulnerabilityOverride(val) => {
             // Use higher of precision multiplier overrides
@@ -954,13 +1138,22 @@ fn execute_effect(
         BuffEffect::EnergyReward(er) => {
             stat.energy_reward_modifier *= er;
         },
+        BuffEffect::EnergyEfficiency(ef) => {
+            stat.energy_efficiency_modifier *= *ef;
+        },
         BuffEffect::DamagedEffect(effect) => stat.effects_on_damaged.push(effect.clone()),
         BuffEffect::DeathEffect(effect) => stat.effects_on_death.push(effect.clone()),
         BuffEffect::DisableAuxiliaryAbilities => stat.disable_auxiliary_abilities = true,
         BuffEffect::DisableMagic => stat.disable_magic = true,
         BuffEffect::DisableTeleport => stat.disable_teleport = true,
+        BuffEffect::PierceConcealment => stat.pierce_concealment = true,
+        BuffEffect::PierceIllusion => stat.pierce_illusion = true,
+        BuffEffect::PierceDarkness => stat.pierce_darkness = true,
+        BuffEffect::Nondetection => stat.nondetection = true,
+        BuffEffect::FalseAura(kind) => stat.false_aura = Some(*kind),
         BuffEffect::Accuracy(acc) => stat.accuracy += *acc,
         BuffEffect::Evasion(eva) => stat.evasion += *eva,
+        BuffEffect::Stealth(s) => stat.stealth += *s,
         BuffEffect::CritChance(cc) => stat.crit_chance += *cc,
         BuffEffect::Resistance(kind, amount) => stat.add_resistance(*kind, *amount),
         BuffEffect::CrowdControlResistance(ccr) => {
@@ -978,5 +1171,197 @@ fn execute_effect(
         BuffEffect::KnockbackMult(km) => {
             stat.knockback_mult *= km;
         },
+        BuffEffect::ProjectileSpeedMult(ps) => {
+            stat.projectile_speed_mult *= *ps;
+        },
+        BuffEffect::ProjectileConstructorEffect(pce) => {
+            stat.projectile_constructor_effects.push(pce.clone())
+        },
+        BuffEffect::MarkEntity(e) => {
+            stat.marked_entities.push(*e);
+        },
+        BuffEffect::Sense { kind, radius, mode } => {
+            stat.senses.push(ActiveSense {
+                kind: *kind,
+                radius: *radius,
+                mode: *mode,
+            });
+        },
+        // Deliberately a no-op here: this system is shared by the client and
+        // the server (dispatched in `add_local_systems`), and its only output
+        // channel is `Stats`, which is synced `SyncFrom::AnyEntity`. Writing
+        // the resolved anchor into anything reachable from here would leak
+        // it to every nearby client. The owner-private `RemoteSense`
+        // component is written directly by the server-only cast-resolution
+        // code that applies this buff, never derived from this effect.
+        BuffEffect::RemoteSense { .. } => {},
+        // Same accumulate-then-apply-once-per-entity shape as `BodyChange`
+        // above, deliberately kept on its own local var rather than folded
+        // into it: this must never reach `body_override` /
+        // `ChangeBodyEvent`, only the separate `Disguise` component.
+        BuffEffect::Disguise {
+            apparent_body,
+            caster,
+            cast_accuracy,
+        } => {
+            *disguise_override = Some(Disguise {
+                apparent_body: *apparent_body,
+                apparent_name: None,
+                caster: *caster,
+                cast_accuracy: *cast_accuracy,
+            });
+        },
     };
+}
+
+#[cfg(test)]
+mod item_condition_diff_tests {
+    use super::*;
+    use common::{
+        LoadoutBuilder,
+        comp::{
+            ConditionPredicate, ItemCondition,
+            body::humanoid,
+            inventory::item::{
+                AbilityMap, Hands, Item, ItemBase, ItemDef, ItemKind, ItemTag,
+                MaterialStatManifest, Tool, ToolKind, tool,
+            },
+            slot::EquipSlot,
+        },
+    };
+    use std::sync::Arc;
+
+    fn human_body() -> Body {
+        Body::Humanoid(humanoid::Body::random_with(
+            &mut rand::rng(),
+            &humanoid::Species::Human,
+        ))
+    }
+
+    /// A `Tome` item, optionally carrying `condition` and optionally tagged
+    /// `RequiresAttunement`.
+    fn tome_item(condition: Option<ItemCondition>, requires_attunement: bool) -> Item {
+        let mut item_def = ItemDef::create_test_itemdef_from_kind(ItemKind::Tool(Tool::new(
+            ToolKind::Tome,
+            Hands::One,
+            None,
+            tool::Stats::one(),
+        )));
+        if requires_attunement {
+            item_def.tags = vec![ItemTag::RequiresAttunement];
+        }
+        item_def.condition = condition;
+        Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(item_def)),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &MaterialStatManifest::load().read(),
+        )
+    }
+
+    fn inventory_with_mainhand(item: Item, body: Body) -> Inventory {
+        let loadout = LoadoutBuilder::empty().active_mainhand(Some(item)).build();
+        Inventory::with_loadout(loadout, body)
+    }
+
+    fn shielded_buff() -> Buff {
+        Buff::new(
+            BuffKind::Shielded,
+            item_condition_buff_data(),
+            vec![],
+            BuffSource::Item,
+            Time(0.0),
+            DestInfo {
+                stats: None,
+                mass: None,
+            },
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn no_conditioned_item_yields_no_diff() {
+        let body = human_body();
+        let inventory = inventory_with_mainhand(tome_item(None, false), body);
+        let (to_add, to_remove) = item_condition_buff_diff(&inventory, &body, None, None, None);
+        assert!(to_add.is_empty());
+        assert!(to_remove.is_empty());
+    }
+
+    #[test]
+    fn met_condition_grants_the_when_met_buff() {
+        let body = human_body();
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Human]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), false), body);
+        let (to_add, to_remove) = item_condition_buff_diff(&inventory, &body, None, None, None);
+        assert_eq!(to_add, vec![BuffKind::Shielded]);
+        assert!(to_remove.is_empty());
+    }
+
+    #[test]
+    fn a_buff_already_present_is_not_re_added() {
+        let body = human_body();
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Human]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), false), body);
+        let mut buffs = Buffs::default();
+        buffs.insert(shielded_buff(), Time(0.0));
+
+        let (to_add, _) = item_condition_buff_diff(&inventory, &body, None, None, Some(&buffs));
+        assert!(
+            to_add.is_empty(),
+            "a held condition must not spam re-add events every tick"
+        );
+    }
+
+    #[test]
+    fn a_condition_going_unmet_removes_its_previously_granted_buff() {
+        let body = human_body();
+        // Predicate never matches this bearer's species, so `when_unmet`
+        // (empty here) is what's active -> the previously-granted
+        // `when_met` buff must be removed.
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Draugr]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), false), body);
+        let mut buffs = Buffs::default();
+        buffs.insert(shielded_buff(), Time(0.0));
+
+        let (to_add, to_remove) =
+            item_condition_buff_diff(&inventory, &body, None, None, Some(&buffs));
+        assert!(to_add.is_empty());
+        assert_eq!(to_remove, vec![BuffKind::Shielded]);
+    }
+
+    #[test]
+    fn unattuned_requires_attunement_item_grants_no_buff_attuned_it_does() {
+        let body = human_body();
+        let condition = ItemCondition {
+            predicate: ConditionPredicate::Species(vec![humanoid::Species::Human]),
+            when_met: vec![BuffKind::Shielded],
+            when_unmet: vec![],
+        };
+        let inventory = inventory_with_mainhand(tome_item(Some(condition), true), body);
+
+        // Unattuned: the item's condition is fully inert.
+        let (to_add, to_remove) = item_condition_buff_diff(&inventory, &body, None, None, None);
+        assert!(to_add.is_empty());
+        assert!(to_remove.is_empty());
+
+        // Attuned: the when_met buff is granted.
+        let attuned = AttunedItems(vec![EquipSlot::ActiveMainhand]);
+        let (to_add, _) = item_condition_buff_diff(&inventory, &body, None, Some(&attuned), None);
+        assert_eq!(to_add, vec![BuffKind::Shielded]);
+    }
 }

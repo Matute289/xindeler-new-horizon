@@ -1,0 +1,38 @@
+// Detect Evil and Good: `BuffKind::Detecting` applied to
+// `SenseKind::Aberrant`. 🟡 Known gap: `reveals()`'s `SenseKind::Aberrant`
+// arm in `server/src/sys/detection.rs` is currently a documented stub that
+// always returns `false` -- it is waiting on a fiend/undead classification
+// helper that does not exist in the engine yet. This ability, its buff, and
+// its compendium entry are all real and complete; casting it compiles, costs
+// energy, and applies the buff correctly, but until that predicate is wired
+// up it will not actually reveal anything. Shipping the content now means it
+// starts working the moment the predicate lands, with no RON change needed.
+//
+// `SenseMode::Snapshot`: membership is frozen at cast and held for the
+// buff's `Concentration(60)` duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                // Sheet aoe: Sphere r6.
+                misc_data: Some(Sense(Aberrant, 6.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 15,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Divine),
+        // level 1 spell -> min_level 6, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(6)),
+    ),
+)

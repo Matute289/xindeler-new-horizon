@@ -43,21 +43,26 @@ impl TerracottaYard {
             }),
         }
     }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            waypoints: false,
-            trees: !within_distance(wpos, self.bounds.center(), 85),
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for TerracottaYard {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_terracotta_yard\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_terracottayard")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_terracottayard"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_terracotta_yard"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+        spawn_rules.trees &= !within_distance(wpos, self.bounds.center(), 85);
+        spawn_rules.waypoints = false;
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let base = self.alt + 4;
         let center = self.bounds.center();

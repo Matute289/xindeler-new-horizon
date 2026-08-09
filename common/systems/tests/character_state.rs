@@ -18,7 +18,7 @@ mod tests {
     use specs::{Builder, Entity, WorldExt};
     use std::{num::NonZeroU64, sync::Arc, time::Duration};
     use vek::{Vec2, Vec3, approx::AbsDiffEq};
-    use veloren_common_systems::character_behavior;
+    use xindeler_common_systems::character_behavior;
 
     const DEFAULT_WORLD_CHUNKS_LG: MapSizeLg =
         if let Ok(map_size_lg) = MapSizeLg::new(Vec2 { x: 1, y: 1 }) {
@@ -82,6 +82,7 @@ mod tests {
             None,
             &ServerConstants {
                 day_cycle_coefficient: 24.0,
+                oracle_live: false,
             },
             |_, _| {},
         );

@@ -35,6 +35,14 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y binutils
 
+      # The authc dependency lives in a private repository, so the runner needs
+      # a credential to fetch it. AUTH_REPO_SSH_KEY is a deploy key with
+      # read-only access to Matute289/xindeler-auth.
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -49,10 +57,10 @@ jobs:
         env:
           VELOREN_USERDATA_STRATEGY: executable
         run: |
-          cargo build --release --no-default-features --features default-publish -p veloren-server-cli
+          cargo build --release --no-default-features --features default-publish -p xindeler-server-cli
           objcopy --compress-debug-sections=zlib \
-            target/release/veloren-server-cli \
-            veloren-server-cli
+            target/release/xindeler-server-cli \
+            xindeler-server-cli
 
       - name: Determine Docker tag
         id: tag

@@ -4,7 +4,7 @@ BasicRanged(
     recover_duration: 0.35,
     projectile: (
         kind: Explosive(radius: 1.5, min_falloff: 0.5, reagent: Some(Red), terrain: None),
-        attack: Some((damage: 20, energy: Some(5))),
+        attack: Some((damage: 20, energy: Some(5), damage_kind: Necrotic)),
     ),
     projectile_body: Object(BoltFire),
     projectile_speed: 70.0,

@@ -7,3 +7,4 @@ hud-quest-desc-kill = Podrías ayudarme a matar a
 hud-quest-reward = Tu recompensa será:
 hud-dialogue = Diálogo
 hud-dialogue-ack = Presiona [{ $key }] para aceptar
+hud-dialogue-continue = Continuar

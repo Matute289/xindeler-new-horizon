@@ -4,6 +4,7 @@ ItemDef(
     kind: Tool((
         kind: Staff,
         hands: Two,
+        role: Some(Caster),
         stats: (
             equip_time_secs: 0.2,
             power: 0.5,
@@ -17,4 +18,13 @@ ItemDef(
     quality: Low,
     tags: [],
     ability_spec: None,
+    // Staff: the class whitelist below is the ONLY thing restricting who may
+    // wield it. Every legacy staff ability (firebomb, pyroclasm, ...) has no
+    // per-spell class filter of its own, so this is what stops e.g. a
+    // Warrior from casting fireball with a picked-up staff.
+    requirements: Some((
+        classes: Some([Mage, Sorcerer, Warlock, Druid]),
+        min_level: None,
+        races: None,
+    )),
 )

@@ -22,6 +22,12 @@ sprite-wood-item-wood = Wood Logs
 sprite-crafting_ing-abyssal_heart = Abyssal Heart
     .desc = Source of Dagons Power.
 
+sprite-crafting_ing-arcane_ink = High-Grade Arcane Ink
+    .desc = Leyline-charged ink, spent one measure per spell transcribed.
+
+sprite-crafting_ing-binding_sigil = Binding Sigil
+    .desc = A rune-etched clasp, ready to be worked into a spellbook's binding to deepen the leyline it channels.
+
 sprite-crafting_ing-bowl = Bowl
     .desc = A simple bowl for preparing meals.
 
@@ -219,6 +225,9 @@ object-v-coin = Coins
 
 object-collar = Collar
     .desc = Tames neutral wild animals within 5 blocks.
+
+object-scrying_crystal = Scrying Crystal
+    .desc = A palm-sized sphere of clouded quartz that clears like still water when a scrying working is drawn through it, sharpening the caster's grasp on a distant, watched mind.
 
 object-training_dummy = Training Dummy
     .desc = His name is William. Fire at will.

@@ -1,6 +1,7 @@
 main-username = Nombre de Usuario
 main-server = Servidor
 main-password = Contraseña
+main-create_account = Crear Cuenta
 main-connecting = Conectando
 main-creating_world = Creando mundo
 main-tip = Consejo:
@@ -28,7 +29,7 @@ main-login_process =
     Por favor, ten en cuenta que necesitas una cuenta para jugar en servidores con autenticación activada.
 
     Puedes crear una cuenta en:
-    https://veloren.net/account/
+    https://xindeler.com/
 main-login-server_not_found = Servidor no encontrado.
 main-login-authentication_error = Error de autenticación al servidor.
 main-login-internal_error = Error interno en el cliente. Consejo: puede ser que el personaje esté borrado.

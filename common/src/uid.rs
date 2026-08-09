@@ -1,7 +1,4 @@
-use crate::{
-    character::CharacterId,
-    rtsim::{Actor, RtSimEntity},
-};
+use crate::{character::CharacterId, rtsim};
 use core::hash::Hash;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
@@ -57,7 +54,7 @@ pub struct IdMaps {
     /// Character IDs.
     character_to_ecs: HashMap<CharacterId, Entity>,
     /// Rtsim Entities.
-    rtsim_to_ecs: HashMap<RtSimEntity, Entity>,
+    rtsim_to_ecs: HashMap<rtsim::ActorId, Entity>,
 }
 
 impl IdMaps {
@@ -71,16 +68,9 @@ impl IdMaps {
         self.character_to_ecs.get(&id).copied()
     }
 
-    /// Given a `RtSimEntity` retrieve the corresponding `Entity`.
-    pub fn rtsim_entity(&self, id: RtSimEntity) -> Option<Entity> {
+    /// Given a `rtsim::ActorId` retrieve the corresponding `Entity`.
+    pub fn rtsim_entity(&self, id: rtsim::ActorId) -> Option<Entity> {
         self.rtsim_to_ecs.get(&id).copied()
-    }
-
-    pub fn actor_entity(&self, actor: Actor) -> Option<Entity> {
-        match actor {
-            Actor::Character(character_id) => self.character_entity(character_id),
-            Actor::Npc(npc_id) => self.rtsim_entity(npc_id),
-        }
     }
 
     /// Removes mappings for the provided Id(s).
@@ -97,7 +87,7 @@ impl IdMaps {
         expected_entity: Option<Entity>,
         uid: Option<Uid>,
         cid: Option<CharacterId>,
-        rid: Option<RtSimEntity>,
+        rid: Option<rtsim::ActorId>,
     ) -> Option<Entity> {
         use std::fmt::Debug;
         #[cold]
@@ -158,7 +148,7 @@ impl IdMaps {
     }
 
     /// Only used on the server.
-    pub fn add_rtsim(&mut self, rid: RtSimEntity, entity: Entity) {
+    pub fn add_rtsim(&mut self, rid: rtsim::ActorId, entity: Entity) {
         Self::insert(&mut self.rtsim_to_ecs, rid, entity);
     }
 

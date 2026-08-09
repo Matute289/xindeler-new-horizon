@@ -33,7 +33,7 @@ Non-negotiable engineering rules:
 7. **AURORA/ORACLE boundary:** world-scale events are ORACLE's; per-NPC reactions are
    AURORA's. If your task crosses the boundary, implement the publishing side as typed
    world facts and the consuming side separately.
-8. **TDD:** failing test first (`cargo test -p veloren-rtsim` — confirm the crate's test
+8. **TDD:** failing test first (`cargo test -p xindeler-rtsim` — confirm the crate's test
    name via its Cargo.toml). Soak-style tests: run N ticks headless and assert invariants.
 
 After implementing: run the CI clippy line from the repository instructions, and recommend dispatching

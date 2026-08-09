@@ -1,5 +1,5 @@
 [package]
-name = "veloren-server"
+name = "xindeler-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,24 +19,26 @@ hot-site = ["world/use-dyn-lib"]
 default = ["worldgen", "plugins", "persistent_world", "simd"]
 
 [dependencies]
-common = { package = "veloren-common", path = "../common" }
-common-base = { package = "veloren-common-base", path = "../common/base" }
-veloren-query-server = { package = "veloren-query-server", path = "../common/query_server", default-features = false, features = [
+common = { package = "xindeler-common", path = "../common" }
+common-base = { package = "xindeler-common-base", path = "../common/base" }
+common-i18n = { package = "xindeler-common-i18n", path = "../common/i18n" }
+xindeler-query-server = { package = "xindeler-query-server", path = "../common/query_server", default-features = false, features = [
     "server",
 ] }
-common-ecs = { package = "veloren-common-ecs", path = "../common/ecs" }
-common-state = { package = "veloren-common-state", path = "../common/state" }
-common-systems = { package = "veloren-common-systems", path = "../common/systems" }
-common-net = { package = "veloren-common-net", path = "../common/net" }
-world = { package = "veloren-world", path = "../world" }
-rtsim = { package = "veloren-rtsim", path = "../rtsim" }
-network = { package = "veloren-network", path = "../network", features = [
+common-ecs = { package = "xindeler-common-ecs", path = "../common/ecs" }
+common-state = { package = "xindeler-common-state", path = "../common/state" }
+common-systems = { package = "xindeler-common-systems", path = "../common/systems" }
+common-net = { package = "xindeler-common-net", path = "../common/net" }
+world = { package = "xindeler-world", path = "../world" }
+rtsim = { package = "xindeler-rtsim", path = "../rtsim" }
+network = { package = "xindeler-network", path = "../network", features = [
     "metrics",
     "compression",
     "quic",
 ], default-features = false }
 
-server-agent = { package = "veloren-server-agent", path = "agent" }
+server-agent = { package = "xindeler-server-agent", path = "agent" }
+common-oracle = { package = "xindeler-common-oracle", path = "../common/oracle" }
 
 #inline_tweak = "1.0.8"
 
@@ -46,6 +48,7 @@ strum = { workspace = true }
 bincode = { workspace = true }
 num_cpus = "1.0"
 tracing = { workspace = true }
+notify = { version = "8.0.0" }
 vek = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
@@ -69,12 +72,21 @@ rayon = { workspace = true }
 crossbeam-channel = { workspace = true }
 prometheus = { workspace = true }
 portpicker = { git = "https://github.com/xMAC94x/portpicker-rs", rev = "e04e3a61d6c1645c865b36c57877f1f8e48e0cb7" }
-authc = { git = "https://gitlab.com/veloren/auth.git", rev = "ae0e16783a9f9041951296885f082308e155db79" }           # xMAC94x/current_master_till_refactored branch
+# Private repository. See the note in README.md before cloning.
+# Pinned to a rev, not a floating branch: this dependency performs
+# authentication, so a routine `cargo update` must never silently change its
+# behavior. Bump the rev deliberately when xindeler-auth ships something this
+# repo needs.
+authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "99afc8ff5ff43d5d69cf06e56117b25ca0623de3" }
 enum-map = { workspace = true }
 noise = { workspace = true }
 censor = "0.3"
+slotmap = { workspace = true }
 
 rusqlite = { workspace = true }
 refinery = { version = "0.9", features = ["rusqlite"] }
 
 schnellru = "0.2.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

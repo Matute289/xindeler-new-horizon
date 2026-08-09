@@ -1,7 +1,7 @@
 use crate::{
     astar::Astar,
     comp::{
-        Alignment, Body, CharacterState, Density, HealthChange, InputAttr, InputKind,
+        Alignment, Body, CharacterState, Density, HealthChange, InputAttr, InputKind, Inventory,
         InventoryAction, Melee, Ori, Pos, Scale, StateUpdate,
         ability::{
             AbilityInitEvent, AbilityMeta, AbilityRequirements, Capability, CharacterAbility,
@@ -10,16 +10,14 @@ use crate::{
         arthropod, biped_large, biped_small, bird_medium,
         buff::{Buff, BuffCategory, BuffChange, BuffData, BuffSource, DestInfo},
         character_state::OutputEvents,
+        class::{CharacterClass, ClassKind},
         controller::InventoryManip,
         crustacean, golem,
         inventory::slot::{ArmorSlot, EquipSlot, Slot},
-        item::{
-            Hands, ItemKind, ToolKind,
-            armor::Friction,
-            tool::{self, AbilityContext},
-        },
+        item::{Hands, ItemKind, ToolKind, WeaponRole, armor::Friction, tool},
         object, quadruped_low, quadruped_medium, quadruped_small, ship,
         skills::{SKILL_MODIFIERS, Skill, SwimSkill},
+        spell::spell_compendium_manifest,
         theropod,
     },
     consts::{FRIC_GROUND, GRAVITY, MAX_MOUNT_RANGE, MAX_PICKUP_RANGE},
@@ -315,7 +313,9 @@ impl Body {
                 Body::Dragon(_) => 50.0 * self.mass().0,
                 // Humanoids are a bit different: we try to give them thrusts that result in similar
                 // speeds for gameplay reasons
-                Body::Humanoid(_) => 1_500_000.0 / self.mass().0,
+                Body::Humanoid(body) => {
+                    return Some(6_500_000.0 / self.mass().0 * body.scaler().powi(2));
+                },
                 Body::Theropod(body) => match body.species {
                     theropod::Species::Sandraptor
                     | theropod::Species::Snowraptor
@@ -478,7 +478,15 @@ pub fn handle_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f3
 
 /// Updates components to move player as if theyre on ground or in air
 fn basic_move(data: &JoinData<'_>, update: &mut StateUpdate, efficiency: f32) {
-    let efficiency = efficiency * data.stats.move_speed_modifier * data.stats.friction_modifier;
+    let section_modifier = match data.character.stage_section() {
+        Some(StageSection::Buildup) => data.stats.buildup_move_speed_modifier,
+        Some(StageSection::Charge) => data.stats.charge_move_speed_modifier,
+        _ => 1.0,
+    };
+    let efficiency = efficiency
+        * data.stats.move_speed_modifier
+        * data.stats.friction_modifier
+        * section_modifier;
 
     let accel = if let Some(block) = data.physics.on_ground {
         // FRIC_GROUND temporarily used to normalize things around expected values
@@ -1436,13 +1444,36 @@ pub fn handle_walljump(
     true
 }
 
+/// The one-shot authorisation a firing trigger slot holds, if `input` names a
+/// slot that currently holds one.
+///
+/// The token is server-minted state living in `TriggerSlots`; nothing a client
+/// can send produces it. `InputKind::TriggerAbility(i)` says *which slot*,
+/// never *that it is permitted*.
+fn trigger_token<'a>(data: &'a JoinData<'_>, input: InputKind) -> Option<&'a str> {
+    match input {
+        InputKind::TriggerAbility(slot) => data
+            .trigger_slots
+            .and_then(|slots| slots.firing_token(usize::from(slot))),
+        _ => None,
+    }
+}
+
 fn handle_ability(
     data: &JoinData<'_>,
     update: &mut StateUpdate,
     output_events: &mut OutputEvents,
     input: InputKind,
 ) -> bool {
-    let context = AbilityContext::from(data.stance, data.inventory, data.combo);
+    // A `TriggerAbility` input is honoured only while its slot actually holds a
+    // live authorisation token. Any other one — a stale queued input left over
+    // after the slot went back to `Ready`, or a crafted packet that somehow got
+    // past the message-boundary deny — resolves to nothing at all.
+    let token = trigger_token(data, input);
+    if matches!(input, InputKind::TriggerAbility(_)) && token.is_none() {
+        return false;
+    }
+
     if let Some(ability_input) = input.into()
         && let Some((ability, from_offhand, spec_ability)) = data
             .active_abilities
@@ -1454,20 +1485,33 @@ fn handle_ability(
                     data.skill_set,
                     Some(data.body),
                     Some(data.character),
-                    &context,
+                    data.stance,
+                    data.combo,
                     Some(data.stats),
+                    data.buffs,
                     data.ability_pool,
+                    data.character_class,
+                    data.trigger_slots,
                     data.ability_map,
                 )
             })
             .map(|(mut a, f, s)| {
-                if let Some(contextual_stats) = a.ability_meta().contextual_stats {
-                    a = a.adjusted_by_stats(contextual_stats.equivalent_stats(data))
-                }
+                let mut contextual_stats =
+                    if let Some(contextual_stats) = a.ability_meta().contextual_stats {
+                        contextual_stats.equivalent_stats(data)
+                    } else {
+                        tool::Stats::one()
+                    };
+                contextual_stats.energy_efficiency *= data.stats.energy_efficiency_modifier;
+                a = a.adjusted_by_stats(contextual_stats);
                 (a, f, s)
             })
             .filter(|(ability, _, spec_ability)| {
-                cooldown_ready(data, ability, spec_ability)
+                // 🔴 The ONE privilege a trigger buys, and the only one:
+                // `cooldown_ready` is skipped. Everything below this line still
+                // runs, unmodified.
+                (cooldown_bypassed(data, token, spec_ability)
+                    || cooldown_ready(data, ability, spec_ability))
                     && hp_cost_affordable(
                         ability.ability_meta().hp_cost,
                         data.health.map(|h| h.current()),
@@ -1477,13 +1521,44 @@ fn handle_ability(
                     // BL-36: an antimagic field blocks magic abilities (those with a
                     // magic `source`); physical + innate abilities (source: None) pass.
                     && !(data.stats.disable_magic && ability.ability_meta().source.is_some())
+                    // Per-spell class filter: a spell is castable only by the
+                    // classes its own compendium `classes` list names. This is
+                    // the ONLY class-side restriction on casting — a spell's
+                    // `source` records where its magic comes from and never
+                    // narrows who may cast it. Uncatalogued abilities and
+                    // entities without a `CharacterClass` are exempt; see
+                    // `SpellCompendium::allows`'s own doc comment.
+                    && spec_ability
+                        .ability_id(Some(data.character), data.inventory, data.ability_pool)
+                        .is_none_or(|id| {
+                            spell_compendium_manifest().allows(id, data.character_class)
+                        })
+                    // Possession gate: independent of the class filter above
+                    // (both happen to do a compendium lookup, so they are
+                    // kept adjacent) -- casting a levelled spell additionally
+                    // requires a Tome in hand, regardless of who is
+                    // permitted to know it.
+                    && tome_possession_ok(
+                        data.inventory,
+                        data.character_class,
+                        spec_ability.ability_id(
+                            Some(data.character),
+                            data.inventory,
+                            data.ability_pool,
+                        ),
+                    )
             })
     {
         // TODO: Change requirements_paid to requirements_met, and then pay requirements
         // here (necessary after energy and combo moved to AbilityMeta)
         let ability_meta = ability.ability_meta();
         {
-            let AbilityRequirements { stance: _, item } = ability_meta.requirements;
+            let AbilityRequirements {
+                stance: _,
+                item,
+                oracle: _,
+                min_level: _,
+            } = ability_meta.requirements;
             let inv_slot = item.and_then(|item| {
                 data.inventory
                     .and_then(|inv| inv.get_slot_of_item_by_def_id(&item.item_def_id()))
@@ -1504,20 +1579,48 @@ fn handle_ability(
         )) {
             Ok(character_state) => {
                 let tool_kind = character_state.ability_info().and_then(|ai| ai.tool);
+                let target_uid = character_state
+                    .ability_info()
+                    .and_then(|ai| ai.input_attr)
+                    .and_then(|ia| ia.target_entity);
                 update.character = character_state;
 
-                if let Some(cooldown_secs) = ability_meta.cooldown
+                // 🔴 The bypass is symmetric — it skips the read AND the write:
+                //
+                //   A triggered cast neither reads nor writes the triggered
+                //   ability's `AbilityCooldowns` entry.
+                //
+                // It is as if, for that one cast, the ability had no cooldown at
+                // all. Writing the entry would grief the player (an automatic
+                // escape at 25 % HP would put his own manual escape on cooldown
+                // he never asked for); *clearing* it would be an outright
+                // exploit (fire the trigger, then manually recast the same spell
+                // for free). Both systems leave the other's state alone.
+                let bypassing_cooldown = cooldown_bypassed(data, token, &spec_ability_copy);
+                if !bypassing_cooldown
+                    && let Some(cooldown_secs) = ability_meta.cooldown
                     && let Some(id) = spec_ability_copy.ability_id(
                         Some(data.character),
                         data.inventory,
                         data.ability_pool,
                     )
                 {
+                    let cooldown_secs = apply_cooldown_reduction(
+                        cooldown_secs,
+                        data.stats.cooldown_reduction_modifier,
+                    );
                     output_events.emit_server(SetAbilityCooldownEvent {
                         entity: data.entity,
                         ability_id: id.to_string(),
                         cooldown_secs,
                     });
+                }
+
+                // The token was spent: tell the character-behavior system to
+                // move this slot from `Firing` to `CoolingDown`. Reached only
+                // on the success path, so a refused cast costs nothing.
+                if let InputKind::TriggerAbility(slot) = input {
+                    update.triggered_slot_cast = Some(slot);
                 }
 
                 // Hemomancy "blood price" (M4 / ENG-C1): casting spends the
@@ -1533,6 +1636,7 @@ fn handle_ability(
                             amount: -hp_cost,
                             by: None,
                             cause: None,
+                            magic_source: None,
                             time: *data.time,
                             precise: false,
                             instance: rand::random(),
@@ -1540,12 +1644,17 @@ fn handle_ability(
                     });
                 }
 
-                if let Some(init_event) = ability.ability_meta().init_event {
+                for init_event in ability
+                    .ability_meta()
+                    .init_event
+                    .iter()
+                    .chain(ability.ability_meta().init_event2.iter())
+                {
                     match init_event {
                         AbilityInitEvent::EnterStance(stance) => {
                             output_events.emit_server(ChangeStanceEvent {
                                 entity: data.entity,
-                                stance,
+                                stance: *stance,
                             });
                         },
                         AbilityInitEvent::GainBuff {
@@ -1560,8 +1669,8 @@ fn handle_ability(
                             output_events.emit_server(BuffEvent {
                                 entity: data.entity,
                                 buff_change: BuffChange::Add(Buff::new(
-                                    kind,
-                                    BuffData::new(strength, duration),
+                                    *kind,
+                                    BuffData::new(*strength, *duration),
                                     vec![BuffCategory::SelfBuff],
                                     BuffSource::Character {
                                         by: *data.uid,
@@ -1570,7 +1679,15 @@ fn handle_ability(
                                     *data.time,
                                     dest_info,
                                     Some(data.mass),
+                                    target_uid,
+                                    ability_meta.source,
                                 )),
+                            });
+                        },
+                        AbilityInitEvent::RemoveBuff(buff) => {
+                            output_events.emit_server(BuffEvent {
+                                entity: data.entity,
+                                buff_change: BuffChange::RemoveByKind(*buff),
                             });
                         },
                     }
@@ -1596,6 +1713,34 @@ fn handle_ability(
     false
 }
 
+/// Whether this cast may skip — and must also refrain from writing —
+/// `AbilityCooldowns`.
+///
+/// 🔴 All three conditions must hold, and the third is load-bearing rather than
+/// belt-and-braces:
+///
+/// 1. the input is `InputKind::TriggerAbility(i)` (otherwise `token` is
+///    `None`);
+/// 2. slot `i` currently holds an authorisation token, i.e. it is `Firing`;
+/// 3. the ability actually resolved has **exactly** the id the token names.
+///
+/// Without (3), a player pressing Primary on the same tick a trigger armed
+/// would win the input `BTreeMap` (lowest discriminant wins), consume the
+/// outstanding bypass and get a free cooldown-ignoring Primary. With it, the
+/// token is unusable by any input other than the exact slot and the exact
+/// ability it was minted for.
+fn cooldown_bypassed(
+    data: &JoinData<'_>,
+    token: Option<&str>,
+    spec_ability: &SpecifiedAbility,
+) -> bool {
+    token.is_some_and(|token| {
+        (*spec_ability)
+            .ability_id(Some(data.character), data.inventory, data.ability_pool)
+            .is_some_and(|id| id == token)
+    })
+}
+
 /// An ability with `meta.cooldown` may only fire when `AbilityCooldowns` says
 /// it is ready. Runs on client and server; the server-side check is
 /// authoritative (the event above is server-only), the client check uses the
@@ -1615,6 +1760,27 @@ fn cooldown_ready(
     })
 }
 
+/// The floor a reduced ability cooldown may never fall below: a reduction
+/// source may shrink `AbilityMeta.cooldown`, but never chase it to zero or
+/// below, which would remove the gate entirely and let the ability be spammed
+/// with no cost at all. Chosen well below the shortest cooldown any shipped
+/// ability declares today, so ordinary play (no reduction source equipped, or
+/// an identity `1.0` modifier) never comes close to it.
+pub(crate) const MIN_ABILITY_COOLDOWN_SECS: f32 = 0.05;
+
+/// Applies `Stats::cooldown_reduction_modifier` to a base `AbilityMeta`
+/// cooldown and floors the result at [`MIN_ABILITY_COOLDOWN_SECS`]. Pure and
+/// ECS-independent so the reduction/floor math is unit-testable without a
+/// full `JoinData`; `handle_ability` is a thin caller at the single call site
+/// that writes `AbilityCooldowns` (`cooldown_ready`, the read side, needs no
+/// change: it compares against whatever value was stored here, so the
+/// reduction is visible to it for free). A `reduction_modifier` of `1.0` (no
+/// source equipped) leaves any shipped cooldown untouched, since every one is
+/// well above the floor.
+fn apply_cooldown_reduction(cooldown_secs: f32, reduction_modifier: f32) -> f32 {
+    (cooldown_secs * reduction_modifier).max(MIN_ABILITY_COOLDOWN_SECS)
+}
+
 /// Whether an ability's optional HP cost (the Hemomancy "blood price", M4 /
 /// ENG-C1) can be paid right now.
 /// - **Normal** play keeps a **1-HP floor**: the caster needs `cost + 1`
@@ -1625,6 +1791,54 @@ fn cooldown_ready(
 /// Entities without a `Health` component (e.g. invulnerable) ignore the cost.
 fn hp_cost_affordable(hp_cost: Option<f32>, current_hp: Option<f32>, hardcore: bool) -> bool {
     hp_cost.is_none_or(|cost| hardcore || current_hp.is_none_or(|hp| hp >= cost + 1.0))
+}
+
+/// The possession gate for spellcasting: **for a Mage** (spec
+/// `2026-08-01-nh26-mage-mastery-percent-design.md` §1 gate 2 — the
+/// fragility payoff for the Mage's versatility, not a general caster rule),
+/// a spell of `SpellDef::level >= 1` may only be cast while a
+/// `ToolKind::Tome` is equipped in either active hand. Cantrips
+/// (`level == 0`) are exempt, and so is any `ability_id` that resolves to no
+/// compendium entry at all -- bespoke/legacy content that this gate does not
+/// govern; its own gating, if any, is authored elsewhere. Any caster who
+/// does not hold the Mage class (Sorcerer, Warlock, Cleric, Druid, an
+/// entity with no `CharacterClass` at all, ...) is exempt entirely --
+/// Sorcerer/Warlock cast without any implement by design, and
+/// Cleric/Druid's own implements (Sceptre/HolySymbol/Focus) are not Tomes.
+///
+/// `ability_id` is `None` for an activation that never resolved to any
+/// concrete ability id (e.g. a missing item-config ability set); that case
+/// passes for the same reason an uncatalogued id does.
+fn tome_possession_ok(
+    inventory: Option<&Inventory>,
+    character_class: Option<&CharacterClass>,
+    ability_id: Option<&str>,
+) -> bool {
+    if !character_class.is_some_and(|class| class.has(ClassKind::Mage)) {
+        return true;
+    }
+    let Some(ability_id) = ability_id else {
+        return true;
+    };
+    let level = match spell_compendium_manifest().resolve(ability_id) {
+        Some(spell) => spell.level,
+        // Uncatalogued: not governed by this gate.
+        None => return true,
+    };
+    if level == 0 {
+        // Cantrip: no Tome required.
+        return true;
+    }
+    let has_tome = |slot: EquipSlot| {
+        matches!(
+            inventory
+                .and_then(|inv| inv.equipped(slot))
+                .map(|item| item.kind())
+                .as_deref(),
+            Some(ItemKind::Tool(tool)) if tool.kind == ToolKind::Tome
+        )
+    };
+    has_tome(EquipSlot::ActiveMainhand) || has_tome(EquipSlot::ActiveOffhand)
 }
 
 pub fn handle_input(
@@ -1638,7 +1852,8 @@ pub fn handle_input(
         | InputKind::Secondary
         | InputKind::Ability(_)
         | InputKind::Block
-        | InputKind::Roll => {
+        | InputKind::Roll
+        | InputKind::TriggerAbility(_) => {
             handle_ability(data, update, output_events, input);
         },
         InputKind::Jump => {
@@ -1713,18 +1928,21 @@ pub fn is_strafing(data: &JoinData<'_>, update: &StateUpdate) -> bool {
     (update.character.is_aimed() || update.should_strafe) && data.body.can_strafe()
     // no strafe with music instruments equipped in ActiveMainhand
     && !matches!(unwrap_tool_data(data, EquipSlot::ActiveMainhand),
-        Some((ToolKind::Instrument, _)))
+        Some((ToolKind::Instrument, _, _)))
 }
 
-/// Returns tool and components
-pub fn unwrap_tool_data(data: &JoinData, equip_slot: EquipSlot) -> Option<(ToolKind, Hands)> {
+/// Returns tool kind, grip and [`WeaponRole`].
+pub fn unwrap_tool_data(
+    data: &JoinData,
+    equip_slot: EquipSlot,
+) -> Option<(ToolKind, Hands, WeaponRole)> {
     if let Some(ItemKind::Tool(tool)) = data
         .inventory
         .and_then(|inv| inv.equipped(equip_slot))
         .map(|i| i.kind())
         .as_deref()
     {
-        Some((tool.kind, tool.hands))
+        Some((tool.kind, tool.hands, tool.role()))
     } else {
         None
     }
@@ -1788,10 +2006,16 @@ fn checked_tick_attack(
     timer: Duration,
     other_modifier: Option<f32>,
 ) -> Option<Duration> {
+    let section_modifier = match data.character.stage_section() {
+        Some(StageSection::Buildup) => data.stats.buildup_speed_modifier,
+        Some(StageSection::Charge) => data.stats.charge_speed_modifier,
+        Some(StageSection::Recover) => data.stats.recovery_speed_modifier,
+        _ => 1.0,
+    };
     checked_tick(
         data,
         timer,
-        Some(data.stats.attack_speed_modifier * other_modifier.unwrap_or(1.0)),
+        Some(data.stats.attack_speed_modifier * section_modifier * other_modifier.unwrap_or(1.0)),
     )
 }
 
@@ -1892,6 +2116,11 @@ impl MovementDirection {
 pub struct AbilityInfo {
     pub tool: Option<ToolKind>,
     pub hand: Option<HandInfo>,
+    /// The equipped tool's [`WeaponRole`], mirroring `hand`: `None` when
+    /// `tool` is `None` (unarmed/natural/`Empty`-tool attacks), `Some`
+    /// otherwise. Threaded alongside `hand` so `Attack::proficiency_multiplier`
+    /// can narrow by role exactly as it already narrows by grip.
+    pub role: Option<WeaponRole>,
     pub input: InputKind,
     pub input_attr: Option<InputAttr>,
     pub ability_meta: AbilityMeta,
@@ -1911,16 +2140,18 @@ impl AbilityInfo {
         } else {
             unwrap_tool_data(data, EquipSlot::ActiveMainhand)
         };
-        let (tool, hand) = tool_data.map_or((None, None), |(kind, hands)| {
+        let (tool, hand, role) = tool_data.map_or((None, None, None), |(kind, hands, role)| {
             (
                 Some(kind),
                 Some(HandInfo::from_main_tool(hands, from_offhand)),
+                Some(role),
             )
         });
 
         Self {
             tool,
             hand,
+            role,
             input,
             input_attr: data.controller.queued_inputs.get(&input).copied(),
             ability_meta,
@@ -2037,7 +2268,7 @@ fn loadout_change_hook(data: &JoinData<'_>, output_events: &mut OutputEvents, cl
 #[serde(deny_unknown_fields)]
 pub struct MovementModifier {
     pub buildup: Option<f32>,
-    pub swing: Option<f32>,
+    pub action: Option<f32>,
     pub recover: Option<f32>,
 }
 
@@ -2045,7 +2276,7 @@ pub struct MovementModifier {
 #[serde(deny_unknown_fields)]
 pub struct OrientationModifier {
     pub buildup: Option<f32>,
-    pub swing: Option<f32>,
+    pub action: Option<f32>,
     pub recover: Option<f32>,
 }
 
@@ -2110,6 +2341,37 @@ impl ProjectileSpread {
 }
 
 #[cfg(test)]
+mod cooldown_reduction_tests {
+    use super::{MIN_ABILITY_COOLDOWN_SECS, apply_cooldown_reduction};
+
+    #[test]
+    fn identity_modifier_leaves_cooldown_untouched() {
+        assert_eq!(apply_cooldown_reduction(30.0, 1.0), 30.0);
+        assert_eq!(apply_cooldown_reduction(6.0, 1.0), 6.0);
+    }
+
+    #[test]
+    fn a_reduction_source_shortens_the_gate() {
+        assert!((apply_cooldown_reduction(30.0, 0.5) - 15.0).abs() < 1e-5);
+        assert!((apply_cooldown_reduction(10.0, 0.8) - 8.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_result_never_falls_below_the_floor() {
+        // An extreme reduction still leaves a small, non-zero gate.
+        assert_eq!(
+            apply_cooldown_reduction(30.0, 0.0),
+            MIN_ABILITY_COOLDOWN_SECS
+        );
+        assert_eq!(
+            apply_cooldown_reduction(30.0, -1.0),
+            MIN_ABILITY_COOLDOWN_SECS
+        );
+        assert!(apply_cooldown_reduction(6.0, 0.001) >= MIN_ABILITY_COOLDOWN_SECS);
+    }
+}
+
+#[cfg(test)]
 mod hp_cost_tests {
     use super::hp_cost_affordable;
 
@@ -2144,5 +2406,296 @@ mod hp_cost_tests {
     fn missing_health_skips_cost() {
         // entities without a Health component (e.g. invulnerable) ignore the cost
         assert!(hp_cost_affordable(Some(10.0), None, false));
+    }
+}
+
+#[cfg(test)]
+mod possession_gate_tests {
+    use super::tome_possession_ok;
+    use crate::{
+        comp::{
+            Inventory, Item,
+            class::{CharacterClass, ClassKind},
+            inventory::slot::EquipSlot,
+        },
+        resources::Time,
+    };
+
+    // Real compendium entries, chosen to cover a cantrip, a low spell level
+    // and the highest normal spell level.
+    const CANTRIP: &str = "spells.hemomancy.bloodlet"; // level 0
+    const LEVEL_ONE: &str = "spells.hemomancy.hemal_spike"; // level 1
+    const LEVEL_NINE: &str = "spells.hemomancy.the_last_vein"; // level 9
+    const UNCATALOGUED: &str = "spells.not_a_real_spell.made_up_for_this_test";
+
+    fn mage() -> CharacterClass { CharacterClass::single(ClassKind::Mage) }
+
+    fn inventory_with_tome_in(slot: EquipSlot) -> Inventory {
+        let mut inv = Inventory::with_empty();
+        inv.replace_loadout_item(
+            slot,
+            Some(Item::new_from_asset_expect(
+                "common.items.weapons.tome.apprentice_tome",
+            )),
+            Time(0.0),
+        );
+        inv
+    }
+
+    #[test]
+    fn cantrip_with_no_tome_is_allowed() {
+        assert!(tome_possession_ok(None, Some(&mage()), Some(CANTRIP)));
+        assert!(tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(&mage()),
+            Some(CANTRIP)
+        ));
+    }
+
+    #[test]
+    fn levelled_spell_with_no_tome_is_refused_for_a_mage() {
+        assert!(!tome_possession_ok(None, Some(&mage()), Some(LEVEL_ONE)));
+        assert!(!tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(&mage()),
+            Some(LEVEL_ONE)
+        ));
+    }
+
+    #[test]
+    fn levelled_spell_with_tome_in_mainhand_is_allowed() {
+        let inv = inventory_with_tome_in(EquipSlot::ActiveMainhand);
+        assert!(tome_possession_ok(
+            Some(&inv),
+            Some(&mage()),
+            Some(LEVEL_ONE)
+        ));
+    }
+
+    #[test]
+    fn levelled_spell_with_tome_in_offhand_is_allowed() {
+        let inv = inventory_with_tome_in(EquipSlot::ActiveOffhand);
+        assert!(tome_possession_ok(
+            Some(&inv),
+            Some(&mage()),
+            Some(LEVEL_ONE)
+        ));
+    }
+
+    #[test]
+    fn highest_spell_level_with_tome_is_allowed() {
+        let inv = inventory_with_tome_in(EquipSlot::ActiveMainhand);
+        assert!(tome_possession_ok(
+            Some(&inv),
+            Some(&mage()),
+            Some(LEVEL_NINE)
+        ));
+    }
+
+    #[test]
+    fn uncatalogued_ability_with_no_tome_is_allowed() {
+        // Bespoke/legacy content with no compendium entry is not governed by
+        // this gate at all.
+        assert!(tome_possession_ok(None, Some(&mage()), Some(UNCATALOGUED)));
+        assert!(tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(&mage()),
+            Some(UNCATALOGUED)
+        ));
+    }
+
+    #[test]
+    fn missing_ability_id_is_allowed() {
+        assert!(tome_possession_ok(None, Some(&mage()), None));
+        assert!(tome_possession_ok(
+            Some(&Inventory::with_empty()),
+            Some(&mage()),
+            None
+        ));
+    }
+
+    /// The bug this test guards against: the gate must never apply to a
+    /// caster who isn't a Mage. Sorcerer/Warlock cast without any implement
+    /// by design; Cleric/Druid's own implements (Sceptre/HolySymbol/Focus)
+    /// are not Tomes and were never meant to be gated by this rule.
+    #[test]
+    fn levelled_spell_with_no_tome_is_allowed_for_a_non_mage_caster() {
+        for class in [
+            ClassKind::Sorcerer,
+            ClassKind::Warlock,
+            ClassKind::Cleric,
+            ClassKind::Druid,
+        ] {
+            let character_class = CharacterClass::single(class);
+            assert!(
+                tome_possession_ok(None, Some(&character_class), Some(LEVEL_ONE)),
+                "{class:?} should not be gated by the Mage-specific Tome possession rule"
+            );
+        }
+    }
+
+    #[test]
+    fn levelled_spell_with_no_tome_is_allowed_with_no_character_class() {
+        // Entities with no CharacterClass at all (e.g. NPCs) are exempt,
+        // matching SpellCompendium::allows's own None-is-permissive rule.
+        assert!(tome_possession_ok(None, None, Some(LEVEL_ONE)));
+    }
+
+    #[test]
+    fn a_multiclass_mage_is_still_gated() {
+        let multiclass = CharacterClass {
+            primary: ClassKind::Warlock,
+            secondary: Some(ClassKind::Mage),
+            secondary_level: 5,
+            future_levels_to_secondary: false,
+        };
+        assert!(!tome_possession_ok(
+            None,
+            Some(&multiclass),
+            Some(LEVEL_ONE)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod cast_gate_asset_tests {
+    use crate::comp::{
+        class::{CharacterClass, ClassKind, class_proficiencies_manifest},
+        inventory::item::tool::{AbilityKind, AbilityMap, AbilitySpec, ToolKind},
+        spell::spell_compendium_manifest,
+    };
+
+    /// Every class proficient with `tool` (able to equip it), derived from
+    /// `class_proficiencies.ron` rather than hardcoded, so this test tracks
+    /// the manifest instead of needing a manual update whenever a class's
+    /// weapon list changes.
+    fn classes_proficient_with(tool: ToolKind) -> Vec<ClassKind> {
+        let manifest = class_proficiencies_manifest();
+        ClassKind::ALL
+            .into_iter()
+            .filter(|&class| {
+                CharacterClass::single(class)
+                    .proficient_tools_mask(&manifest.0)
+                    // `role: None` -- permissive across both roles, since
+                    // this helper asks "proficient with `tool` at all"
+                    // (either its caster or martial kit), not one role
+                    // specifically.
+                    .allows(tool, None, None)
+            })
+            .collect()
+    }
+
+    /// Every ability an implement's `primary`/`secondary`/`abilities`
+    /// resolves to (in `ability_set_manifest.ron`) must clear the per-spell
+    /// class filter for at least one class that can actually equip that
+    /// implement. A class-gated implement whose own attack no class holding
+    /// it can cast is unusable content; this test exists to keep that
+    /// caught.
+    ///
+    /// Includes `Staff`/`Sceptre`: their `primary`/`secondary`/`abilities`
+    /// resolve to the legacy fire/warding kit, which is wired directly into
+    /// these `Tool(ToolKind)` ability sets rather than the pool, so this is
+    /// the same class-filter check `Tome`/`HolySymbol`/`Focus` already get,
+    /// just reached through a different `ability_id` keying (see
+    /// `SpellCompendium::allows`'s `by_ability` doc comment).
+    #[test]
+    fn implement_abilities_are_castable_by_a_class_that_can_equip_them() {
+        let ability_map = AbilityMap::load().read();
+        let compendium = spell_compendium_manifest();
+
+        for tool in [
+            ToolKind::Tome,
+            ToolKind::HolySymbol,
+            ToolKind::Focus,
+            ToolKind::Staff,
+            ToolKind::Sceptre,
+        ] {
+            let proficient_classes = classes_proficient_with(tool);
+            assert!(
+                !proficient_classes.is_empty(),
+                "no class is proficient with {tool:?} — check class_proficiencies.ron"
+            );
+
+            let ability_set = ability_map
+                .get_ability_set(&AbilitySpec::Tool(tool))
+                .unwrap_or_else(|| {
+                    panic!("no ability set for {tool:?} in ability_set_manifest.ron")
+                });
+
+            let mut slots: Vec<(String, &AbilityKind<_>)> = vec![
+                ("primary".to_string(), &ability_set.primary),
+                ("secondary".to_string(), &ability_set.secondary),
+            ];
+            slots.extend(
+                ability_set
+                    .abilities
+                    .iter()
+                    .enumerate()
+                    .map(|(i, kind)| (format!("abilities[{i}]"), kind)),
+            );
+
+            for (slot, kind) in slots {
+                let AbilityKind::Simple(_, item) = kind else {
+                    panic!("{tool:?} {slot} is Contextualized; extend this test to walk it");
+                };
+                let castable_by_some_class = proficient_classes.iter().any(|&class| {
+                    compendium.allows(&item.id, Some(&CharacterClass::single(class)))
+                });
+
+                assert!(
+                    castable_by_some_class,
+                    "{tool:?} {slot} ability {:?} is not castable by any class proficient with \
+                     {tool:?} ({proficient_classes:?})",
+                    item.id,
+                );
+            }
+        }
+    }
+
+    /// The actual gap this catalogue closes, asserted from the exact
+    /// activation-independent angle: a class NOT proficient with `Staff`/
+    /// `Sceptre` at all (so it could never satisfy an equip gate on any
+    /// ItemDef, standard or modular) must be refused by every ability in
+    /// that tool's `Tool(ToolKind)` set. `Item::requirements()` now unions a
+    /// per-item `requirements:` block with the `equip_gates.ron` manifest for
+    /// modular weapons too, so a modular Staff/Sceptre also gets a real equip
+    /// gate -- but this check, driven purely by `SpellCompendium::allows`
+    /// (which never consults item requirements), is defense in depth: even a
+    /// hypothetical future item shape with no equip gate at all would still
+    /// be caught here.
+    #[test]
+    fn legacy_kit_refuses_a_class_with_no_staff_sceptre_proficiency_at_all() {
+        let ability_map = AbilityMap::load().read();
+        let compendium = spell_compendium_manifest();
+
+        for tool in [ToolKind::Staff, ToolKind::Sceptre] {
+            let proficient = classes_proficient_with(tool);
+            let outsider = ClassKind::ALL
+                .into_iter()
+                .find(|class| !proficient.contains(class))
+                .unwrap_or_else(|| panic!("every class is proficient with {tool:?}?"));
+
+            let ability_set = ability_map
+                .get_ability_set(&AbilitySpec::Tool(tool))
+                .unwrap_or_else(|| {
+                    panic!("no ability set for {tool:?} in ability_set_manifest.ron")
+                });
+
+            let mut kinds: Vec<&AbilityKind<_>> =
+                vec![&ability_set.primary, &ability_set.secondary];
+            kinds.extend(ability_set.abilities.iter());
+
+            for kind in kinds {
+                let AbilityKind::Simple(_, item) = kind else {
+                    continue;
+                };
+                assert!(
+                    !compendium.allows(&item.id, Some(&CharacterClass::single(outsider))),
+                    "{outsider:?} (not proficient with {tool:?}) can still cast {:?} — the \
+                     modular-weapon gap is not closed",
+                    item.id,
+                );
+            }
+        }
     }
 }

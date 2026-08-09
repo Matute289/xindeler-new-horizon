@@ -17,4 +17,5 @@ BasicBeam(
     move_efficiency: 0.4,
     ori_rate: 0.1,
     specifier: Flamethrower,
+    meta: (source: Some(Arcane)),
 )

@@ -8,7 +8,7 @@ use ron::ser::{PrettyConfig, to_string_pretty};
 use serde::Serialize;
 use std::{borrow::Cow, error::Error, fs::File, io::Write};
 
-use veloren_common::{
+use xindeler_common::{
     assets::ASSETS_PATH,
     comp::{
         self,
@@ -361,7 +361,7 @@ fn weapon_stats() -> Result<(), Box<dyn Error>> {
                     .parse()
                     .expect(&format!("Not a f32? {:?}", item.item_definition_id()));
 
-                let tool = comp::item::tool::Tool::new(kind, hands, Stats {
+                let tool = comp::item::tool::Tool::new(kind, hands, None, Stats {
                     equip_time_secs,
                     power,
                     effect_power,
@@ -369,6 +369,7 @@ fn weapon_stats() -> Result<(), Box<dyn Error>> {
                     range,
                     energy_efficiency,
                     buff_strength,
+                    cooldown_reduction: 1.0,
                 });
 
                 let quality = if let Some(quality_raw) = record.get(headers["Quality"]) {

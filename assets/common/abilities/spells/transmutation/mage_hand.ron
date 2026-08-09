@@ -1,0 +1,22 @@
+TelekineticGrip(
+    energy_cost: 5,
+    energy_drain: 3.0,
+    buildup_duration: 0.3,
+    charge_duration: 2.0,
+    // Never reached in practice — see the projectile note below. Kept
+    // moderate so a quick tap still reads as a gentle "place", not a throw.
+    place_threshold: 0.5,
+    recover_duration: 0.3,
+    range: 9.0,           // ~30 ft: D&D's mage_hand range
+    tether_length: 2.0,   // held close, "at arm's length"
+    initial_projectile_speed: 6.0,
+    scaled_projectile_speed: 4.0,
+    // Mage Hand can never attack (D&D restriction) — `attack: None` makes
+    // this structural rather than a tuning knob a future editor could "fix".
+    projectile: (
+        kind: Simple,
+        attack: None,
+        pierce_entities: true,
+    ),
+    move_speed: 0.8,
+)

@@ -1,7 +1,7 @@
 use super::{
     super::{
         consts::Consts,
-        pipelines::{bloom, clouds, postprocess},
+        pipelines::{bloom, clouds, postprocess, ssao},
     },
     Layouts,
 };
@@ -20,6 +20,10 @@ pub struct Locals {
 
     pub postprocess: Consts<postprocess::Locals>,
     pub postprocess_bind: postprocess::BindGroup,
+
+    pub ssao: Consts<ssao::Locals>,
+    pub ssao_bind: ssao::BindGroup,
+    pub ssao_blur_bind: ssao::BindGroup,
 }
 
 fn arr_zip_map<const N: usize, A, B, C>(a: [A; N], b: [B; N], f: impl Fn(A, B) -> C) -> [C; N] {
@@ -33,11 +37,18 @@ impl Locals {
         layouts: &Layouts,
         clouds_locals: Consts<clouds::Locals>,
         postprocess_locals: Consts<postprocess::Locals>,
+        ssao_locals: Consts<ssao::Locals>,
         tgt_color_view: &wgpu::TextureView,
         tgt_mat_view: &wgpu::TextureView,
         tgt_depth_view: &wgpu::TextureView,
         bloom: Option<BloomParams>,
         tgt_color_pp_view: &wgpu::TextureView,
+        // The blur pass's *source*: it reads the AO-generation pass's output.
+        tgt_ao_view: &wgpu::TextureView,
+        // The blur pass's *output* -- the final, denoised AO the clouds pass
+        // samples (when SSAO is enabled; `CloudsLayout::bind` drops this on
+        // the floor otherwise).
+        tgt_ao_blur_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         depth_sampler: &wgpu::Sampler,
     ) -> Self {
@@ -46,6 +57,7 @@ impl Locals {
             tgt_color_view,
             tgt_mat_view,
             tgt_depth_view,
+            Some(tgt_ao_blur_view),
             sampler,
             depth_sampler,
             &clouds_locals,
@@ -68,12 +80,27 @@ impl Locals {
             })
         });
 
+        let ssao_bind = layouts.ssao.bind(
+            device,
+            tgt_depth_view,
+            tgt_mat_view,
+            depth_sampler,
+            &ssao_locals,
+        );
+        let ssao_blur_bind =
+            layouts
+                .ssao_blur
+                .bind(device, tgt_ao_view, sampler, tgt_depth_view, depth_sampler);
+
         Self {
             clouds: clouds_locals,
             clouds_bind,
             bloom_binds,
             postprocess: postprocess_locals,
             postprocess_bind,
+            ssao: ssao_locals,
+            ssao_bind,
+            ssao_blur_bind,
         }
     }
 
@@ -88,6 +115,8 @@ impl Locals {
         tgt_depth_view: &wgpu::TextureView,
         bloom: Option<BloomParams>,
         tgt_color_pp_view: &wgpu::TextureView,
+        tgt_ao_view: &wgpu::TextureView,
+        tgt_ao_blur_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         depth_sampler: &wgpu::Sampler,
     ) {
@@ -96,6 +125,7 @@ impl Locals {
             tgt_color_view,
             tgt_mat_view,
             tgt_depth_view,
+            Some(tgt_ao_blur_view),
             sampler,
             depth_sampler,
             &self.clouds,
@@ -115,5 +145,16 @@ impl Locals {
                 layouts.bloom.bind(device, view, sampler, locals)
             })
         });
+        self.ssao_bind = layouts.ssao.bind(
+            device,
+            tgt_depth_view,
+            tgt_mat_view,
+            depth_sampler,
+            &self.ssao,
+        );
+        self.ssao_blur_bind =
+            layouts
+                .ssao_blur
+                .bind(device, tgt_ao_view, sampler, tgt_depth_view, depth_sampler);
     }
 }

@@ -2,8 +2,9 @@ use common::{
     Damage, DamageKind, Explosion, GroupTarget, RadiusEffect,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Body, Buffs, CharacterState, Combo, Content, Energy, Group, Health, Inventory,
-        Mass, Ori, PhysicsState, Player, Poise, Pos, Projectile, Stats, Vel,
+        Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Content, Energy, Group,
+        Health, Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Poise, Pos,
+        Projectile, Stats, Vel,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
         object,
@@ -12,9 +13,10 @@ use common::{
     effect,
     event::{
         ArcingEvent, BonkEvent, BuffEvent, ComboChangeEvent, CreateNpcEvent, CreatePoolEvent,
-        DeleteEvent, EmitExt, Emitter, EnergyChangeEvent, EntityAttackedHookEvent, EventBus,
-        ExplosionEvent, HealthChangeEvent, KnockbackEvent, NpcBuilder, ParryHookEvent,
-        PoiseChangeEvent, PossessEvent, ShootEvent, SoundEvent, TransformEvent,
+        DeleteEvent, DispelIllusionEvent, EmitExt, Emitter, EnergyChangeEvent,
+        EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent, KnockbackEvent,
+        NpcBuilder, ParryHookEvent, PoiseChangeEvent, PossessEvent, ShootEvent, SoundEvent,
+        TransformEvent,
     },
     event_emitters,
     outcome::Outcome,
@@ -59,6 +61,7 @@ event_emitters! {
         arc: ArcingEvent,
         create_pool: CreatePoolEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 }
 
@@ -75,7 +78,9 @@ pub struct ReadData<'a> {
     alignments: ReadStorage<'a, Alignment>,
     physics_states: ReadStorage<'a, PhysicsState>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    /// The target's cached gear aggregates, read instead of re-walking
+    /// its loadout once per damage instance.
+    derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     groups: ReadStorage<'a, Group>,
     energies: ReadStorage<'a, Energy>,
     stats: ReadStorage<'a, Stats>,
@@ -87,6 +92,8 @@ pub struct ReadData<'a> {
     buffs: ReadStorage<'a, Buffs>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for handling projectile effect triggers
@@ -605,17 +612,19 @@ fn dispatch_hit(
                         group: read_data.groups.get(entity),
                         energy: read_data.energies.get(entity),
                         combo: read_data.combos.get(entity),
-                        inventory: read_data.inventories.get(entity),
+                        derived: read_data.derived_stats.get(entity),
                         stats: read_data.stats.get(entity),
                         mass: read_data.masses.get(entity),
                         pos: read_data.positions.get(entity).map(|p| p.0),
+                        buffs: read_data.buffs.get(entity),
+                        character_class: read_data.character_classes.get(entity),
                     });
 
             let target_info = TargetInfo {
                 entity: target,
                 uid: target_uid,
                 inventory: read_data.inventories.get(target),
-                attuned: read_data.attuned_items.get(target),
+                derived: read_data.derived_stats.get(target),
                 stats: read_data.stats.get(target),
                 health: read_data.healths.get(target),
                 pos: target_pos,
@@ -625,6 +634,7 @@ fn dispatch_hit(
                 buffs: read_data.buffs.get(target),
                 mass: read_data.masses.get(target),
                 player: read_data.players.get(target),
+                phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
             };
 
             // TODO: Is it possible to have projectile without body??
@@ -810,7 +820,6 @@ fn dispatch_hit(
                 emitters.emit(PossessEvent(owner_uid, target_uid));
             }
         },
-        projectile::Effect::Stick => {},
         projectile::Effect::Firework(_) => {},
         projectile::Effect::SurpriseEgg => {
             let Pos(pos) = *projectile_info.pos;

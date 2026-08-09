@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use specs::{Builder, World, WorldExt};
 use std::hint::black_box;
 use vek::*;
-use veloren_common::util::SpatialGrid;
+use xindeler_common::util::SpatialGrid;
 
 /// Mirrors phys's per-tick full rebuild (`construct_spatial_grid`,
 /// common/systems/src/phys/mod.rs:324): same cell parameters, one insert per

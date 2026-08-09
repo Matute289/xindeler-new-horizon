@@ -8,7 +8,8 @@ use crate::{
     },
     render::{
         AaMode, BloomConfig, BloomFactor, BloomMode, CloudMode, FluidMode, LightingMode,
-        PresentMode, ReflectionMode, RenderMode, ShadowMapMode, ShadowMode, UpscaleMode,
+        PresentMode, ReflectionMode, RenderMode, ShadowMapMode, ShadowMode, SsaoConfig, SsaoMode,
+        UpscaleMode,
     },
     session::settings_change::Graphics as GraphicsChange,
     settings::{Fps, GraphicsSettings},
@@ -117,6 +118,8 @@ widget_ids! {
         flashing_lights_button,
         flashing_lights_label,
         flashing_lights_info_label,
+        ssao_button,
+        ssao_label,
         //
         fullscreen_button,
         fullscreen_label,
@@ -1072,7 +1075,7 @@ impl Widget for Video<'_> {
         .set(state.ids.cloud_mode_text, ui);
 
         let mode_list = [
-            CloudMode::None,
+            CloudMode::Flat,
             CloudMode::Minimal,
             CloudMode::Low,
             CloudMode::Medium,
@@ -1080,7 +1083,8 @@ impl Widget for Video<'_> {
             CloudMode::Ultra,
         ];
         let mode_label_list = [
-            self.localized_strings.get_msg("common-none"),
+            self.localized_strings
+                .get_msg("hud-settings-cloud_rendering_mode-flat"),
             self.localized_strings
                 .get_msg("hud-settings-cloud_rendering_mode-minimal"),
             self.localized_strings
@@ -1513,6 +1517,34 @@ impl Widget for Video<'_> {
         {
             events.push(GraphicsChange::ChangeRenderMode(Box::new(RenderMode {
                 flashing_lights_enabled,
+                ..render_mode.clone()
+            })));
+        }
+
+        // Screen-space ambient occlusion
+        Text::new(&self.localized_strings.get_msg("hud-settings-ssao"))
+            .font_size(self.fonts.cyri.scale(14))
+            .font_id(self.fonts.cyri.conrod_id)
+            .right_from(state.ids.flashing_lights_info_label, 64.0)
+            .color(TEXT_COLOR)
+            .set(state.ids.ssao_label, ui);
+
+        let ssao_enabled = matches!(render_mode.ssao, SsaoMode::On(_));
+        let ssao_toggled =
+            ToggleButton::new(ssao_enabled, self.imgs.checkbox, self.imgs.checkbox_checked)
+                .w_h(18.0, 18.0)
+                .right_from(state.ids.ssao_label, 10.0)
+                .hover_images(self.imgs.checkbox_mo, self.imgs.checkbox_checked_mo)
+                .press_images(self.imgs.checkbox_press, self.imgs.checkbox_checked)
+                .set(state.ids.ssao_button, ui);
+
+        if ssao_enabled != ssao_toggled {
+            events.push(GraphicsChange::ChangeRenderMode(Box::new(RenderMode {
+                ssao: if ssao_toggled {
+                    SsaoMode::On(SsaoConfig::default())
+                } else {
+                    SsaoMode::Off
+                },
                 ..render_mode.clone()
             })));
         }

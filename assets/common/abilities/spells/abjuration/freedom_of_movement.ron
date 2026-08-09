@@ -1,0 +1,20 @@
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.6,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: FreedomOfMovement,
+            strength: 1.0,
+            duration: Some(3600.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3600.0),
+    range: 2.0,
+    energy_cost: 50.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Primordial)),
+)

@@ -22,14 +22,16 @@ use client::{self, Client};
 use common::{
     combat,
     comp::{
-        self, AttunedItems, Body, CharacterState, ClassKind, Energy, Health, Inventory, Poise,
-        Stats,
-        ability::{Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT},
+        self, Buffs, CharacterClass, CharacterState, ClassKind, Combo, DerivedStats, Energy,
+        Health, Inventory, Poise, Stance, Stats,
+        ability::{
+            Ability, AbilityPool, ActiveAbilities, AuxiliaryAbility, BASE_ABILITY_LIMIT, SpellGate,
+        },
         inventory::{
             item::{
-                ItemI18n, ItemKind, MaterialStatManifest,
+                ItemI18n, ItemKind,
                 item_key::ItemKey,
-                tool::{AbilityContext, ToolKind},
+                tool::{ToolKind, WeaponRole},
             },
             slot::EquipSlot,
         },
@@ -159,6 +161,7 @@ widget_ids! {
         skill_general_tree_3,
         skill_general_tree_4,
         skill_general_tree_5,
+        skill_general_tree_6,
         skill_general_climb_0,
         skill_general_climb_1,
         skill_general_climb_2,
@@ -179,6 +182,31 @@ widget_ids! {
         abilities_dual[],
         ability_titles[],
         ability_descs[],
+        // Xindeler: spell selection. Deliberately a separate set of ids from the
+        // ability tab's rather than shared: the two tabs are mutually exclusive
+        // but have different parents, and reusing ids would reparent widgets.
+        spells_art,
+        sp_page_left_align,
+        sp_page_right_align,
+        spells_skills_bg,
+        spell_page_left,
+        spell_page_right,
+        spell_active_abilities[],
+        spell_active_abilities_keys[],
+        spell_slots[],
+        spell_locked_slots[],
+        spell_locks[],
+        spell_frames[],
+        spell_titles[],
+        spell_metas[],
+        spell_reqs[],
+        spell_empty_txt,
+        // Xindeler: per-source mastery header. `spell_mastery_labels` holds
+        // 5 entries (Arcane first, then the 4 bar sources); the bar arrays
+        // hold 4 (Arcane is known by default and never drawn as a bar).
+        spell_mastery_labels[],
+        spell_mastery_bar_bg[],
+        spell_mastery_bar_content[],
         // Stats
         stat_names[],
         stat_values[],
@@ -189,6 +217,11 @@ widget_ids! {
         class_tree_empty_txt,
         class_skills[],
         class_skill_lock_imgs[],
+        // Multiclass: in-tab primary/secondary toggle + future-levels routing
+        class_toggle_btn,
+        class_toggle_label,
+        future_levels_checkbox,
+        future_levels_label,
     }
 }
 
@@ -205,9 +238,7 @@ pub struct Diary<'a> {
     health: &'a Health,
     energy: &'a Energy,
     poise: &'a Poise,
-    body: &'a Body,
     uid: &'a Uid,
-    msm: &'a MaterialStatManifest,
     imgs: &'a Imgs,
     item_imgs: &'a ItemImgs,
     fonts: &'a Fonts,
@@ -217,8 +248,12 @@ pub struct Diary<'a> {
     tooltip_manager: &'a mut TooltipManager,
     slot_manager: &'a mut SlotManager,
     pulse: f32,
-    context: &'a AbilityContext,
+    stance: Option<&'a Stance>,
+    combo: Option<&'a Combo>,
     stats: Option<&'a Stats>,
+    buffs: Option<&'a Buffs>,
+    character_class: Option<&'a CharacterClass>,
+    spell_mastery: Option<&'a comp::SpellMastery>,
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -256,9 +291,7 @@ impl<'a> Diary<'a> {
         health: &'a Health,
         energy: &'a Energy,
         poise: &'a Poise,
-        body: &'a Body,
         uid: &'a Uid,
-        msm: &'a MaterialStatManifest,
         imgs: &'a Imgs,
         item_imgs: &'a ItemImgs,
         fonts: &'a Fonts,
@@ -268,8 +301,12 @@ impl<'a> Diary<'a> {
         tooltip_manager: &'a mut TooltipManager,
         slot_manager: &'a mut SlotManager,
         pulse: f32,
-        context: &'a AbilityContext,
+        stance: Option<&'a Stance>,
+        combo: Option<&'a Combo>,
         stats: Option<&'a Stats>,
+        buffs: Option<&'a Buffs>,
+        character_class: Option<&'a CharacterClass>,
+        spell_mastery: Option<&'a comp::SpellMastery>,
     ) -> Self {
         Self {
             show,
@@ -283,9 +320,7 @@ impl<'a> Diary<'a> {
             health,
             energy,
             poise,
-            body,
             uid,
-            msm,
             imgs,
             item_imgs,
             fonts,
@@ -295,8 +330,12 @@ impl<'a> Diary<'a> {
             tooltip_manager,
             slot_manager,
             pulse,
-            context,
+            stance,
+            combo,
             stats,
+            buffs,
+            character_class,
+            spell_mastery,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -314,6 +353,7 @@ pub enum Event {
     UnlockSkill(Skill),
     ChangeSection(DiarySection),
     SelectExpBar(Option<SkillGroupKind>),
+    SetFutureLevelsToSecondary(bool),
 }
 
 // Possible future sections: Bestiary ("Pokedex" of fought enemies), Weapon and
@@ -322,6 +362,8 @@ pub enum Event {
 pub enum DiarySection {
     SkillTrees,
     AbilitySelection,
+    /// Xindeler: the class+level-gated spell list.
+    Spells,
     Character,
     Recipes,
 }
@@ -331,6 +373,7 @@ impl DiarySection {
         match self {
             DiarySection::SkillTrees => "hud-diary-sections-skill_trees-title",
             DiarySection::AbilitySelection => "hud-diary-sections-abilities-title",
+            DiarySection::Spells => "hud-diary-sections-spells-title",
             DiarySection::Character => "hud-diary-sections-character-title",
             DiarySection::Recipes => "hud-diary-sections-recipes-title",
         }
@@ -347,6 +390,10 @@ pub enum DiarySkillTree {
     Hammer,
     Bow,
     Staff,
+    // The martial Staff's own tab, separate from `Staff` above (the caster
+    // fire tree) since the two are distinct `SkillGroupKind`s sharing a
+    // `ToolKind`.
+    StaffMartial,
     Sceptre,
     Pick,
     // BL-06 P3a: generic class skill-tree tab. The live ClassKind is
@@ -364,6 +411,7 @@ impl DiarySkillTree {
             DiarySkillTree::Hammer => "hud-skill_tree-hammer",
             DiarySkillTree::Bow => "hud-skill_tree-bow",
             DiarySkillTree::Staff => "hud-skill_tree-staff",
+            DiarySkillTree::StaffMartial => "hud-skill_tree-staff_martial",
             DiarySkillTree::Sceptre => "hud-skill_tree-sceptre",
             DiarySkillTree::Pick => "hud-skill_tree-mining",
             DiarySkillTree::Class => "hud-skill_tree-class",
@@ -378,6 +426,9 @@ impl DiarySkillTree {
             DiarySkillTree::Hammer => SkillGroupKind::Weapon(ToolKind::Hammer),
             DiarySkillTree::Bow => SkillGroupKind::Weapon(ToolKind::Bow),
             DiarySkillTree::Staff => SkillGroupKind::Weapon(ToolKind::Staff),
+            DiarySkillTree::StaffMartial => {
+                SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
+            },
             DiarySkillTree::Sceptre => SkillGroupKind::Weapon(ToolKind::Sceptre),
             DiarySkillTree::Pick => SkillGroupKind::Weapon(ToolKind::Pick),
             // For the Class variant the live group is resolved at render time via
@@ -391,6 +442,9 @@ impl DiarySkillTree {
 pub struct DiaryState {
     ids: Ids,
     ability_page: usize,
+    /// Xindeler: paging state of the spell tab, kept separate from
+    /// `ability_page` so the two tabs page independently.
+    spell_page: usize,
     recipe_page: usize,
 }
 
@@ -403,6 +457,7 @@ impl Widget for Diary<'_> {
         DiaryState {
             ids: Ids::new(id_gen),
             ability_page: 0,
+            spell_page: 0,
             recipe_page: 0,
         }
     }
@@ -503,6 +558,7 @@ impl Widget for Diary<'_> {
             let btn_img = {
                 let img = match section {
                     DiarySection::AbilitySelection => self.imgs.spellbook_ico,
+                    DiarySection::Spells => self.imgs.spellbook_ico0,
                     DiarySection::SkillTrees => self.imgs.skilltree_ico,
                     DiarySection::Character => self.imgs.stats_ico,
                     DiarySection::Recipes => self.imgs.crafting_ico,
@@ -609,6 +665,10 @@ impl Widget for Diary<'_> {
                             DiarySkillTree::Hammer => self.imgs.hammer,
                             DiarySkillTree::Bow => self.imgs.bow,
                             DiarySkillTree::Staff => self.imgs.staff,
+                            // Reuses the caster Staff tab's icon (no bespoke
+                            // martial-staff art yet); tooltip text still
+                            // disambiguates the two tabs.
+                            DiarySkillTree::StaffMartial => self.imgs.staff,
                             DiarySkillTree::Sceptre => self.imgs.sceptre,
                             DiarySkillTree::Pick => self.imgs.mining,
                             // Use the skilltree icon for the class tab (a
@@ -694,6 +754,90 @@ impl Widget for Diary<'_> {
                         .set(state.ids.weapon_btns[i], ui);
                     if wpn_button.was_clicked() {
                         events.push(Event::ChangeSkillTree(skill_group))
+                    }
+                }
+
+                // Multiclass: in-tab toggle between the primary's and the
+                // secondary's skill tree, plus the set-and-forget "future
+                // levels" routing preference. Both only ever shown while the
+                // Class tab is the active tab.
+                if let (Some(character_class), Some(class_group)) =
+                    (self.character_class, class_group)
+                    && character_class.is_multiclass()
+                    && *sel_tab == class_group
+                {
+                    let other_class =
+                        if class_group == SkillGroupKind::Class(character_class.primary) {
+                            character_class.secondary
+                        } else {
+                            Some(character_class.primary)
+                        };
+                    if let Some(other_class) = other_class {
+                        let other_class_key =
+                            format!("char_selection-class_{}", other_class.keyword());
+                        let other_class_name = self
+                            .localized_strings
+                            .get_msg(&other_class_key)
+                            .into_owned();
+                        let switch_label = self.localized_strings.get_msg_ctx(
+                            "hud-skill_tree-multiclass_switch_to",
+                            &i18n::fluent_args! {
+                                "class" => other_class_name.clone(),
+                            },
+                        );
+
+                        if Button::image(self.imgs.wpn_icon_border)
+                            .w_h(160.0, 30.0)
+                            .hover_image(self.imgs.wpn_icon_border_mo)
+                            .press_image(self.imgs.wpn_icon_border_press)
+                            .down_from(state.ids.weapon_imgs[skill_trees_len - 1], 15.0)
+                            .label(&switch_label)
+                            .label_font_size(self.fonts.cyri.scale(12))
+                            .label_font_id(self.fonts.cyri.conrod_id)
+                            .label_color(TEXT_COLOR)
+                            .set(state.ids.class_toggle_btn, ui)
+                            .was_clicked()
+                        {
+                            events.push(Event::ChangeSkillTree(SkillGroupKind::Class(other_class)));
+                        }
+
+                        let future_levels_checked = character_class.future_levels_to_secondary;
+                        if Button::image(if !future_levels_checked {
+                            self.imgs.checkbox
+                        } else {
+                            self.imgs.checkbox_checked
+                        })
+                        .w_h(18.0, 18.0)
+                        .hover_image(if !future_levels_checked {
+                            self.imgs.checkbox_mo
+                        } else {
+                            self.imgs.checkbox_checked_mo
+                        })
+                        .press_image(if !future_levels_checked {
+                            self.imgs.checkbox_press
+                        } else {
+                            self.imgs.checkbox_checked
+                        })
+                        .down_from(state.ids.class_toggle_btn, 10.0)
+                        .set(state.ids.future_levels_checkbox, ui)
+                        .was_clicked()
+                        {
+                            events.push(Event::SetFutureLevelsToSecondary(!future_levels_checked));
+                        }
+
+                        let future_levels_label = self.localized_strings.get_msg_ctx(
+                            "hud-skill_tree-multiclass_future_levels",
+                            &i18n::fluent_args! {
+                                "class" => other_class_name,
+                            },
+                        );
+                        Text::new(&future_levels_label)
+                            .right_from(state.ids.future_levels_checkbox, 10.0)
+                            .font_size(self.fonts.cyri.scale(12))
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .graphics_for(state.ids.future_levels_checkbox)
+                            .color(TEXT_COLOR)
+                            .set(state.ids.future_levels_label, ui);
                     }
                 }
 
@@ -841,6 +985,9 @@ impl Widget for Diary<'_> {
                     SelectedSkillTree::Weapon(ToolKind::Staff) => {
                         self.handle_staff_skills_window(&diary_tooltip, state, ui, events)
                     },
+                    SelectedSkillTree::WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => {
+                        self.handle_staff_martial_skills_window(&diary_tooltip, state, ui, events)
+                    },
                     SelectedSkillTree::Weapon(ToolKind::Sceptre) => {
                         self.handle_sceptre_skills_window(&diary_tooltip, state, ui, events)
                     },
@@ -888,6 +1035,7 @@ impl Widget for Diary<'_> {
 
                 let mut slot_maker = SlotMaker {
                     empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
                     filled_slot: self.imgs.inv_slot,
                     selected_slot: self.imgs.inv_slot_sel,
                     background_color: Some(UI_MAIN),
@@ -905,12 +1053,15 @@ impl Widget for Diary<'_> {
                         self.ability_pool,
                         self.inventory,
                         self.skill_set,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         Some(self.char_state),
                         self.stats,
+                        self.buffs,
                     ),
                     image_source: self.imgs,
                     slot_manager: Some(self.slot_manager),
+                    last_input: &self.global_state.window.last_input(),
                     pulse: 0.0,
                 };
 
@@ -928,7 +1079,9 @@ impl Widget for Diary<'_> {
                             Some(self.inventory),
                             Some(self.skill_set),
                             self.ability_pool,
-                            self.context,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
                         );
                     let (ability_title, ability_desc) = if let Some(ability_id) = ability_id {
                         util::ability_description(ability_id, self.localized_strings)
@@ -943,7 +1096,8 @@ impl Widget for Diary<'_> {
                     let image_offsets = 92.0 * i as f64;
 
                     let slot = AbilitySlot::Slot(i);
-                    let mut ability_slot = slot_maker.fabricate(slot, [image_size; 2]);
+                    let mut ability_slot =
+                        slot_maker.fabricate(slot, [image_size; 2], false, false);
 
                     if i == 0 {
                         ability_slot = ability_slot.top_left_with_margins_on(
@@ -1001,7 +1155,9 @@ impl Widget for Diary<'_> {
                             Some(self.inventory),
                             Some(self.skill_set),
                             self.ability_pool,
-                            self.context,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
                         ),
                         a,
                     )
@@ -1090,6 +1246,7 @@ impl Widget for Diary<'_> {
 
                 let mut slot_maker = SlotMaker {
                     empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
                     filled_slot: self.imgs.inv_slot,
                     selected_slot: self.imgs.inv_slot_sel,
                     background_color: Some(UI_MAIN),
@@ -1107,12 +1264,15 @@ impl Widget for Diary<'_> {
                         self.ability_pool,
                         self.inventory,
                         self.skill_set,
-                        self.context,
+                        self.stance,
+                        self.combo,
                         Some(self.char_state),
                         self.stats,
+                        self.buffs,
                     ),
                     image_source: self.imgs,
                     slot_manager: Some(self.slot_manager),
+                    last_input: &self.global_state.window.last_input(),
                     pulse: 0.0,
                 };
 
@@ -1157,7 +1317,7 @@ impl Widget for Diary<'_> {
 
                     let slot = AbilitySlot::Ability(*ability);
                     slot_maker
-                        .fabricate(slot, [100.0; 2])
+                        .fabricate(slot, [100.0; 2], false, false)
                         .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                         .set(state.ids.abilities[id_index], ui);
 
@@ -1166,7 +1326,7 @@ impl Widget for Diary<'_> {
 
                         let slot = AbilitySlot::Ability(ability);
                         slot_maker
-                            .fabricate(slot, [100.0; 2])
+                            .fabricate(slot, [100.0; 2], false, false)
                             .top_right_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                             .set(state.ids.abilities_dual[id_index], ui);
                     }
@@ -1201,6 +1361,549 @@ impl Widget for Diary<'_> {
 
                 events
             },
+            // Xindeler: the spell list. Structurally a sibling of the ability
+            // tab above — same book background, same five action-bar drop
+            // targets at the bottom, same paging — but its rows are driven by
+            // the spell compendium rather than by equipment, locked rows are
+            // shown greyed with their class+level requirement instead of being
+            // hidden, and there is no dual-wield twin slot (that is a
+            // weapon-only concept).
+            DiarySection::Spells => {
+                use common::assets::AssetExt;
+                use comp::{
+                    ability::{AbilityInput, MagicSource},
+                    spell::SpellCompendium,
+                };
+
+                /// Spell rows per column. Reduced from the ability tab's 6 to
+                /// leave `MASTERY_HEADER_HEIGHT` of clear space at the top of
+                /// each page for the per-source mastery header below, without
+                /// any row spilling past the book art's bottom edge.
+                const ROWS_PER_COL: usize = 5;
+                /// How many spell rows fit on one spread (two columns of
+                /// `ROWS_PER_COL`).
+                const SPELLS_PER_PAGE: usize = ROWS_PER_COL * 2;
+                /// Tint applied to a locked spell's empty slot.
+                const LOCKED_SLOT_COLOR: Color = Color::Rgba(0.35, 0.35, 0.35, 1.0);
+                /// Vertical space reserved at the top of each page for the
+                /// mastery header (labels at y=14, bars at y=34..48, leaving a
+                /// margin before the first spell row). The row loop below
+                /// folds this into `image_offsets` so it is the single place
+                /// that shifts every row's margins.
+                const MASTERY_HEADER_HEIGHT: f64 = 74.0;
+
+                // Background Art
+                Image::new(self.imgs.book_bg)
+                    .w_h(299.0 * 4.0, 184.0 * 4.0)
+                    .mid_top_with_margin_on(state.ids.content_align, 4.0)
+                    .set(state.ids.spells_art, ui);
+                Image::new(self.imgs.skills_bg)
+                    .w_h(240.0 * 2.0, 40.0 * 2.0)
+                    .mid_bottom_with_margin_on(state.ids.content_align, 8.0)
+                    .set(state.ids.spells_skills_bg, ui);
+
+                Rectangle::fill_with([299.0 * 2.0, 184.0 * 4.0], color::TRANSPARENT)
+                    .top_left_with_margins_on(state.ids.spells_art, 0.0, 0.0)
+                    .set(state.ids.sp_page_left_align, ui);
+                Rectangle::fill_with([299.0 * 2.0, 184.0 * 4.0], color::TRANSPARENT)
+                    .top_right_with_margins_on(state.ids.spells_art, 0.0, 0.0)
+                    .set(state.ids.sp_page_right_align, ui);
+
+                // Display all active abilities on bottom of window: a spell is
+                // dropped onto exactly the same action bar as any other
+                // ability.
+                state.update(|s| {
+                    s.ids
+                        .spell_active_abilities
+                        .resize(BASE_ABILITY_LIMIT, &mut ui.widget_id_generator())
+                });
+                state.update(|s| {
+                    s.ids
+                        .spell_active_abilities_keys
+                        .resize(BASE_ABILITY_LIMIT, &mut ui.widget_id_generator())
+                });
+
+                let mut slot_maker = SlotMaker {
+                    empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
+                    filled_slot: self.imgs.inv_slot,
+                    selected_slot: self.imgs.inv_slot_sel,
+                    background_color: Some(UI_MAIN),
+                    content_size: ContentSize {
+                        width_height_ratio: 1.0,
+                        max_fraction: 0.9,
+                    },
+                    selected_content_scale: 1.067,
+                    amount_font: self.fonts.cyri.conrod_id,
+                    amount_margins: Vec2::new(-4.0, 0.0),
+                    amount_font_size: self.fonts.cyri.scale(12),
+                    amount_text_color: TEXT_COLOR,
+                    content_source: &(
+                        self.active_abilities,
+                        self.ability_pool,
+                        self.inventory,
+                        self.skill_set,
+                        self.stance,
+                        self.combo,
+                        Some(self.char_state),
+                        self.stats,
+                        self.buffs,
+                    ),
+                    image_source: self.imgs,
+                    slot_manager: Some(self.slot_manager),
+                    last_input: &self.global_state.window.last_input(),
+                    pulse: 0.0,
+                };
+
+                for i in 0..BASE_ABILITY_LIMIT {
+                    let ability_id = self
+                        .active_abilities
+                        .get_ability(
+                            AbilityInput::Auxiliary(i),
+                            Some(self.inventory),
+                            Some(self.skill_set),
+                            self.stats,
+                        )
+                        .ability_id(
+                            Some(self.char_state),
+                            Some(self.inventory),
+                            Some(self.skill_set),
+                            self.ability_pool,
+                            self.stance,
+                            self.combo,
+                            self.buffs,
+                        );
+                    let (ability_title, ability_desc) = if let Some(ability_id) = ability_id {
+                        util::ability_description(ability_id, self.localized_strings)
+                    } else {
+                        (
+                            Cow::Borrowed("Drag an ability here to use it."),
+                            Cow::Borrowed(""),
+                        )
+                    };
+
+                    let image_size = 80.0;
+                    let image_offsets = 92.0 * i as f64;
+
+                    let slot = AbilitySlot::Slot(i);
+                    let mut ability_slot =
+                        slot_maker.fabricate(slot, [image_size; 2], false, false);
+
+                    if i == 0 {
+                        ability_slot = ability_slot.top_left_with_margins_on(
+                            state.ids.spells_skills_bg,
+                            0.0,
+                            32.0 + image_offsets,
+                        );
+                    } else {
+                        ability_slot =
+                            ability_slot.right_from(state.ids.spell_active_abilities[i - 1], 4.0)
+                    }
+                    ability_slot
+                        .with_tooltip(
+                            self.tooltip_manager,
+                            &ability_title,
+                            &ability_desc,
+                            &diary_tooltip,
+                            TEXT_COLOR,
+                        )
+                        .set(state.ids.spell_active_abilities[i], ui);
+
+                    // Display Slot Keybinding
+                    let keys = &self.global_state.settings.controls;
+                    let ability_key = [
+                        GameInput::Slot1,
+                        GameInput::Slot2,
+                        GameInput::Slot3,
+                        GameInput::Slot4,
+                        GameInput::Slot5,
+                    ]
+                    .get(i)
+                    .and_then(|input| keys.get_binding(*input))
+                    .map(|key| key.display_shortest())
+                    .unwrap_or_default();
+
+                    Text::new(&ability_key)
+                        .top_left_with_margins_on(state.ids.spell_active_abilities[i], 0.0, 4.0)
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .font_size(self.fonts.cyri.scale(20))
+                        .color(TEXT_COLOR)
+                        .graphics_for(state.ids.spell_active_abilities[i])
+                        .set(state.ids.spell_active_abilities_keys[i], ui);
+                }
+
+                // Every spell of every held class, locked ones included, in
+                // pool order — which is already ascending (level, id) per
+                // class, i.e. the right reading order, so it is NOT re-sorted
+                // here.
+                let spells = ActiveAbilities::all_available_spells(
+                    self.ability_pool,
+                    self.character_class,
+                    self.skill_set.character_level(),
+                );
+
+                if spells.is_empty() {
+                    // Warriors, rogues and the like genuinely have no spells;
+                    // say so rather than showing an empty spread.
+                    Text::new(&self.localized_strings.get_msg("hud-diary-spells-empty"))
+                        .mid_top_with_margin_on(state.ids.spells_art, 320.0)
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .font_size(self.fonts.cyri.scale(28))
+                        .color(TEXT_COLOR)
+                        .set(state.ids.spell_empty_txt, ui);
+
+                    return events;
+                }
+
+                let compendium = SpellCompendium::load_expect("common.spells.compendium");
+                let compendium = compendium.read();
+
+                // Per-source mastery header: Arcane is known by default and
+                // shown as a plain label; the other four sources each get a
+                // progress bar sourced from `SpellMastery::pct`. Positioned
+                // relative to `spells_art` directly (not a page-align
+                // rectangle) so it renders identically regardless of which
+                // page of the spell list is showing.
+                {
+                    const MASTERY_SOURCES: [MagicSource; 4] = [
+                        MagicSource::Divine,
+                        MagicSource::Primordial,
+                        MagicSource::Psionic,
+                        MagicSource::Ki,
+                    ];
+                    /// Width of one header column (label + bar).
+                    const COL_W: f64 = 224.0;
+                    /// Gap between header columns.
+                    const COL_GAP: f64 = 12.0;
+                    const BAR_W: f64 = 200.0;
+                    const BAR_H: f64 = 14.0;
+                    const LABEL_Y: f64 = 14.0;
+                    const BAR_Y: f64 = 34.0;
+                    const LEFT_MARGIN: f64 = 20.0;
+
+                    state.update(|s| {
+                        let id_gen = &mut ui.widget_id_generator();
+                        s.ids.spell_mastery_labels.resize(5, id_gen);
+                        s.ids
+                            .spell_mastery_bar_bg
+                            .resize(MASTERY_SOURCES.len(), id_gen);
+                        s.ids
+                            .spell_mastery_bar_content
+                            .resize(MASTERY_SOURCES.len(), id_gen);
+                    });
+
+                    let default_mastery = comp::SpellMastery::default();
+                    let mastery = self.spell_mastery.unwrap_or(&default_mastery);
+
+                    // Arcane column: always "known", never a bar (mastery
+                    // never applies to it — `SpellMastery::pct` hardcodes
+                    // 1.0 for it too).
+                    let arcane_label = format!(
+                        "{} — {}",
+                        magic_source_name(MagicSource::Arcane, self.localized_strings),
+                        self.localized_strings
+                            .get_msg("hud-diary-spells-mastery-arcane-known"),
+                    );
+                    Text::new(&arcane_label)
+                        .top_left_with_margins_on(state.ids.spells_art, LABEL_Y, LEFT_MARGIN)
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .font_size(self.fonts.cyri.scale(14))
+                        .color(TEXT_COLOR)
+                        .set(state.ids.spell_mastery_labels[0], ui);
+
+                    for (i, source) in MASTERY_SOURCES.into_iter().enumerate() {
+                        let pct = mastery.pct(source);
+                        // Whether the compendium carries any spell of this
+                        // source at all — distinct from whether the player
+                        // has UNLOCKED any of them. A source with none must
+                        // read as "nothing here yet", not a bare, unexplained
+                        // 0 % bar.
+                        let has_content = compendium.iter().any(|def| def.source == source);
+                        let x = LEFT_MARGIN + (i + 1) as f64 * (COL_W + COL_GAP);
+
+                        let label = if has_content {
+                            self.localized_strings.get_msg_ctx(
+                                "hud-diary-spells-mastery-pct",
+                                &i18n::fluent_args! {
+                                    "source" => magic_source_name(source, self.localized_strings).into_owned(),
+                                    "pct" => (pct * 100.0).round() as u32,
+                                },
+                            )
+                        } else {
+                            self.localized_strings.get_msg_ctx(
+                                "hud-diary-spells-mastery-empty-source",
+                                &i18n::fluent_args! {
+                                    "source" => magic_source_name(source, self.localized_strings).into_owned(),
+                                },
+                            )
+                        };
+                        Text::new(&label)
+                            .top_left_with_margins_on(state.ids.spells_art, LABEL_Y, x)
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .font_size(self.fonts.cyri.scale(14))
+                            .color(TEXT_COLOR)
+                            .set(state.ids.spell_mastery_labels[i + 1], ui);
+
+                        let tooltip_title = magic_source_name(source, self.localized_strings);
+                        let tooltip_body =
+                            mastery_tooltip_body(has_content, self.localized_strings);
+
+                        Rectangle::fill_with([BAR_W, BAR_H], Color::Rgba(0.0, 0.0, 0.0, 0.35))
+                            .top_left_with_margins_on(state.ids.spells_art, BAR_Y, x)
+                            .with_tooltip(
+                                self.tooltip_manager,
+                                &tooltip_title,
+                                &tooltip_body,
+                                &diary_tooltip,
+                                TEXT_COLOR,
+                            )
+                            .set(state.ids.spell_mastery_bar_bg[i], ui);
+
+                        Image::new(self.imgs.bar_content)
+                            .w_h((BAR_W * pct as f64).max(0.0), BAR_H)
+                            .top_left_with_margins_on(state.ids.spell_mastery_bar_bg[i], 0.0, 0.0)
+                            .color(Some(mastery_bar_color(source)))
+                            .graphics_for(state.ids.spell_mastery_bar_bg[i])
+                            .set(state.ids.spell_mastery_bar_content[i], ui);
+                    }
+                }
+
+                let page_indices = (spells.len().saturating_sub(1)) / SPELLS_PER_PAGE;
+
+                // Multiclassing mid-session changes the spell count, which can
+                // strand the view past the last page.
+                if state.spell_page > page_indices {
+                    state.update(|s| s.spell_page = 0);
+                }
+
+                state.update(|s| {
+                    let id_gen = &mut ui.widget_id_generator();
+                    s.ids.spell_slots.resize(SPELLS_PER_PAGE, id_gen);
+                    s.ids.spell_locked_slots.resize(SPELLS_PER_PAGE, id_gen);
+                    s.ids.spell_locks.resize(SPELLS_PER_PAGE, id_gen);
+                    s.ids.spell_frames.resize(SPELLS_PER_PAGE, id_gen);
+                    s.ids.spell_titles.resize(SPELLS_PER_PAGE, id_gen);
+                    s.ids.spell_metas.resize(SPELLS_PER_PAGE, id_gen);
+                    s.ids.spell_reqs.resize(SPELLS_PER_PAGE, id_gen);
+                });
+
+                // Page buttons
+                // Left Arrow
+                let left_arrow = Button::image(if state.spell_page > 0 {
+                    self.imgs.arrow_l
+                } else {
+                    self.imgs.arrow_l_inactive
+                })
+                .bottom_left_with_margins_on(state.ids.spells_art, -83.0, 10.0)
+                .w_h(48.0, 55.0);
+                // Grey out arrows when inactive
+                if state.spell_page > 0 {
+                    if left_arrow
+                        .hover_image(self.imgs.arrow_l_click)
+                        .press_image(self.imgs.arrow_l)
+                        .set(state.ids.spell_page_left, ui)
+                        .was_clicked()
+                    {
+                        state.update(|s| s.spell_page -= 1);
+                    }
+                } else {
+                    left_arrow.set(state.ids.spell_page_left, ui);
+                }
+                // Right Arrow
+                let right_arrow = Button::image(if state.spell_page < page_indices {
+                    self.imgs.arrow_r
+                } else {
+                    self.imgs.arrow_r_inactive
+                })
+                .bottom_right_with_margins_on(state.ids.spells_art, -83.0, 10.0)
+                .w_h(48.0, 55.0);
+                if state.spell_page < page_indices {
+                    // Only show right button if not on last page
+                    if right_arrow
+                        .hover_image(self.imgs.arrow_r_click)
+                        .press_image(self.imgs.arrow_r)
+                        .set(state.ids.spell_page_right, ui)
+                        .was_clicked()
+                    {
+                        state.update(|s| s.spell_page += 1);
+                    };
+                } else {
+                    right_arrow.set(state.ids.spell_page_right, ui);
+                }
+
+                let spell_start = state.spell_page * SPELLS_PER_PAGE;
+
+                let mut slot_maker = SlotMaker {
+                    empty_slot: self.imgs.inv_slot,
+                    hovered_slot: self.imgs.skillbar_index,
+                    filled_slot: self.imgs.inv_slot,
+                    selected_slot: self.imgs.inv_slot_sel,
+                    background_color: Some(UI_MAIN),
+                    content_size: ContentSize {
+                        width_height_ratio: 1.0,
+                        max_fraction: 1.0,
+                    },
+                    selected_content_scale: 1.067,
+                    amount_font: self.fonts.cyri.conrod_id,
+                    amount_margins: Vec2::new(-4.0, 0.0),
+                    amount_font_size: self.fonts.cyri.scale(12),
+                    amount_text_color: TEXT_COLOR,
+                    content_source: &(
+                        self.active_abilities,
+                        self.ability_pool,
+                        self.inventory,
+                        self.skill_set,
+                        self.stance,
+                        self.combo,
+                        Some(self.char_state),
+                        self.stats,
+                        self.buffs,
+                    ),
+                    image_source: self.imgs,
+                    slot_manager: Some(self.slot_manager),
+                    last_input: &self.global_state.window.last_input(),
+                    pulse: 0.0,
+                };
+
+                // A row's text column: the page width less the slot and its
+                // padding.
+                let text_width = 299.0 * 2.0 - (20.0 * 2.0 + 100.0);
+
+                for (id_index, (ability, unlocked)) in spells
+                    .iter()
+                    .skip(spell_start)
+                    .take(SPELLS_PER_PAGE)
+                    .enumerate()
+                {
+                    // Every entry `all_available_spells` yields is an `Innate`
+                    // pool index by construction; the pool key at that index is
+                    // the compendium id.
+                    let pool_index = match ability {
+                        AuxiliaryAbility::Innate(i) => Some(*i),
+                        _ => None,
+                    };
+                    let pool = self.ability_pool;
+                    let pool_key = pool_index
+                        .and_then(|i| pool.and_then(|p| p.abilities.get(i)))
+                        .map(String::as_str);
+                    let spell = pool_key.and_then(|key| compendium.get(key));
+
+                    let (align_state, image_offsets) = if id_index < ROWS_PER_COL {
+                        (
+                            state.ids.sp_page_left_align,
+                            MASTERY_HEADER_HEIGHT + 120.0 * id_index as f64,
+                        )
+                    } else {
+                        (
+                            state.ids.sp_page_right_align,
+                            MASTERY_HEADER_HEIGHT + 120.0 * (id_index - ROWS_PER_COL) as f64,
+                        )
+                    };
+
+                    Image::new(self.imgs.ability_frame)
+                        .w_h(566.0, 108.0)
+                        .top_left_with_margins_on(align_state, 16.0 + image_offsets, 16.0)
+                        .color(Some(UI_HIGHLIGHT_0))
+                        .set(state.ids.spell_frames[id_index], ui);
+
+                    // A gated pool key without a compendium entry cannot happen
+                    // today (the gate is derived from the entry), but show the
+                    // raw key rather than a blank row if content ever drifts.
+                    let title = match spell {
+                        Some(spell) => self.localized_strings.get_msg(&spell.name_i18n),
+                        None => Cow::Borrowed(pool_key.unwrap_or_default()),
+                    };
+                    // Most spells already have authored prose; a few do not, and
+                    // for those the tooltip is simply empty rather than showing a
+                    // raw i18n key.
+                    let description = spell
+                        .and_then(|spell| self.localized_strings.try_msg(&spell.description_i18n))
+                        .unwrap_or(Cow::Borrowed(""));
+
+                    // Locked spells are shown, but cannot be picked up: an
+                    // un-draggable tinted slot with a padlock stands in for the
+                    // real ability slot.
+                    let anchor_id = if *unlocked {
+                        let slot = AbilitySlot::Ability(*ability);
+                        slot_maker
+                            .fabricate(slot, [100.0; 2], false, false)
+                            .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
+                            .with_tooltip(
+                                self.tooltip_manager,
+                                &title,
+                                &description,
+                                &diary_tooltip,
+                                TEXT_COLOR,
+                            )
+                            .set(state.ids.spell_slots[id_index], ui);
+                        state.ids.spell_slots[id_index]
+                    } else {
+                        Image::new(self.imgs.inv_slot)
+                            .w_h(100.0, 100.0)
+                            .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
+                            .color(Some(LOCKED_SLOT_COLOR))
+                            .with_tooltip(
+                                self.tooltip_manager,
+                                &title,
+                                &description,
+                                &diary_tooltip,
+                                TEXT_COLOR,
+                            )
+                            .set(state.ids.spell_locked_slots[id_index], ui);
+                        Image::new(self.imgs.lock)
+                            .w_h(50.0, 50.0)
+                            .middle_of(state.ids.spell_locked_slots[id_index])
+                            .graphics_for(state.ids.spell_locked_slots[id_index])
+                            .set(state.ids.spell_locks[id_index], ui);
+                        state.ids.spell_locked_slots[id_index]
+                    };
+                    Text::new(&title)
+                        .top_left_with_margins_on(align_state, 25.0 + image_offsets, 130.0)
+                        .font_id(self.fonts.cyri.conrod_id)
+                        .font_size(self.fonts.cyri.scale(28))
+                        .color(TEXT_COLOR)
+                        .w(text_width)
+                        .graphics_for(anchor_id)
+                        .set(state.ids.spell_titles[id_index], ui);
+
+                    // The metadata line is what this tab carries instead of
+                    // prose: it is derived wholly from the compendium entry, so
+                    // it needs no per-spell text to be authored.
+                    if let Some(spell) = spell {
+                        let meta = spell_meta_line(spell, self.localized_strings);
+                        Text::new(&meta)
+                            .top_left_with_margins_on(align_state, 62.0 + image_offsets, 130.0)
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .font_size(self.fonts.cyri.scale(14))
+                            .color(TEXT_COLOR)
+                            .w(text_width)
+                            .graphics_for(anchor_id)
+                            .set(state.ids.spell_metas[id_index], ui);
+                    }
+
+                    if !*unlocked
+                        && let Some(gate) =
+                            pool_index.and_then(|i| pool.and_then(|p| p.spell_gate(i)))
+                    {
+                        let requirement = spell_requirement(
+                            gate,
+                            self.character_class,
+                            self.skill_set.character_level(),
+                            self.localized_strings,
+                        );
+                        Text::new(&requirement)
+                            .top_left_with_margins_on(align_state, 84.0 + image_offsets, 130.0)
+                            .font_id(self.fonts.cyri.conrod_id)
+                            .font_size(self.fonts.cyri.scale(14))
+                            .color(CRITICAL_HP_COLOR)
+                            .w(text_width)
+                            .graphics_for(anchor_id)
+                            .set(state.ids.spell_reqs[id_index], ui);
+                    }
+                }
+
+                events
+            },
             DiarySection::Character => {
                 // Background Art
                 Image::new(self.imgs.book_bg)
@@ -1218,6 +1921,12 @@ impl Widget for Diary<'_> {
                             .resize(STAT_COUNT, &mut ui.widget_id_generator());
                     });
                 }
+
+                // The viewer's own cached gear aggregates, fetched once for the
+                // whole sheet. Attunement gating (ENG-D2c) is already folded
+                // into `protection`.
+                let derived_stats = self.client.state().ecs().read_storage::<DerivedStats>();
+                let derived = derived_stats.get(self.client.entity());
 
                 for (i, stat) in CharacterStat::iter().enumerate() {
                     // Stat names
@@ -1274,7 +1983,25 @@ impl Widget for Diary<'_> {
                     let value = match stat {
                         CharacterStat::Name => name,
                         CharacterStat::Level => {
-                            format!("{}", self.skill_set.character_level())
+                            let character_level = self.skill_set.character_level();
+                            match self.character_class.filter(|cc| cc.is_multiclass()) {
+                                Some(character_class) => {
+                                    let class_name = |class: ClassKind| {
+                                        let key =
+                                            format!("char_selection-class_{}", class.keyword());
+                                        self.localized_strings.get_msg(&key).into_owned()
+                                    };
+                                    let levels = character_class
+                                        .class_levels(character_level)
+                                        .map(|(class, level, _)| {
+                                            format!("{} {level}", class_name(class))
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(" / ");
+                                    format!("{character_level} ({levels})")
+                                },
+                                None => format!("{character_level}"),
+                            }
                         },
                         CharacterStat::BattleMode => match battle_mode {
                             BattleMode::PvP => "PvP".to_string(),
@@ -1290,54 +2017,36 @@ impl Widget for Diary<'_> {
                         CharacterStat::Energy => format!("{}", self.energy.maximum() as u32),
                         CharacterStat::Poise => format!("{}", self.poise.maximum() as u32),
                         CharacterStat::CombatRating => {
-                            let cr = combat::combat_rating(
-                                self.inventory,
-                                self.health,
-                                self.energy,
-                                self.poise,
-                                self.skill_set,
-                                *self.body,
-                                self.msm,
-                            );
+                            let cr = derived.map_or(0.0, |d| d.combat_rating);
                             format!("{:.2}", cr * 10.0)
                         },
                         CharacterStat::Protection => {
-                            // Player's attuned set, so Protection reflects gating (ENG-D2c).
-                            let attuned_items =
-                                self.client.state().ecs().read_storage::<AttunedItems>();
-                            let attuned = attuned_items.get(self.client.entity());
-                            let protection =
-                                combat::compute_protection(Some(self.inventory), attuned, self.msm);
-                            match protection {
+                            match derived.map_or(Some(0.0), |d| d.protection) {
                                 Some(prot) => format!("{}", prot),
                                 None => String::from("Invincible"),
                             }
                         },
                         CharacterStat::StunResistance => {
-                            let stun_res = Poise::compute_poise_damage_reduction(
-                                Some(self.inventory),
-                                self.msm,
-                                None,
-                                self.stats,
-                            );
+                            let stun_res =
+                                Poise::compute_poise_damage_reduction(derived, None, self.stats);
                             format!("{:.2}%", stun_res * 100.0)
                         },
                         CharacterStat::PrecisionPower => {
-                            let precision_power =
-                                combat::compute_precision_mult(Some(self.inventory), self.msm);
+                            let precision_power = derived
+                                .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                             format!("x{:.2}", precision_power)
                         },
                         CharacterStat::EnergyReward => {
-                            let energy_rew =
-                                combat::compute_energy_reward_mod(Some(self.inventory), self.msm);
+                            let energy_rew = derived.map_or(1.0, |d| d.energy_reward_mod);
                             format!("{:+.0}%", (energy_rew - 1.0) * 100.0)
                         },
                         CharacterStat::Stealth => {
+                            // The player's own readout of their own concealment,
+                            // not an observer looking at them, so there is no
+                            // observer-side pierce-concealment to apply.
                             let stealth_perception_multiplier =
                                 combat::perception_dist_multiplier_from_stealth(
-                                    Some(self.inventory),
-                                    None,
-                                    self.msm,
+                                    derived, None, self.stats, None,
                                 );
                             let txt =
                                 format!("{:+.1}%", (1.0 - stealth_perception_multiplier) * 100.0);
@@ -1507,6 +2216,202 @@ impl Widget for Diary<'_> {
     }
 }
 
+/// Xindeler: the red "Requires &lt;class&gt; level N" line under a spell the
+/// character cannot cast yet.
+///
+/// THE ONE PLACE that turns a spell gate into a requirement string. A spell
+/// can be granted by more than one held class, so this names the grantor that
+/// unlocks it SOONEST for this character (the one already at the highest class
+/// level) rather than an arbitrary one — a Mage 1 / Cleric 40 reads "Requires
+/// Cleric level 42", never "Requires Mage level 42". Both the grantor choice
+/// and the required level come from the gate itself, so this only formats.
+fn spell_requirement(
+    gate: &SpellGate,
+    character_class: Option<&CharacterClass>,
+    character_level: u16,
+    i18n: &Localization,
+) -> Cow<'static, str> {
+    // Falls back to the first recorded grantor when the character holds none
+    // of them, so the line still names a class instead of rendering blank.
+    let class_name = gate
+        .nearest_grantor(character_class, character_level)
+        .map(|(class, _)| class)
+        .or_else(|| gate.classes().next())
+        .map(|class| {
+            i18n.get_msg(&format!("char_selection-class_{}", class.keyword()))
+                .into_owned()
+        })
+        .unwrap_or_default();
+    i18n.get_msg_ctx("hud-diary-spells-locked", &i18n::fluent_args! {
+        "class" => class_name,
+        "level" => gate.required_class_level(),
+    })
+}
+
+/// Xindeler: the one-line summary shown under a spell's name in the Diary
+/// spell tab, e.g. `Level 3 · Evocation · Arcane · Action · 30 m · Sphere 6 m ·
+/// Instant`.
+///
+/// Every part comes from the spell compendium entry, so the tab stays
+/// informative without any per-spell prose having been authored; the only
+/// strings it needs are the ~30 shared enum names in `hud/spells.ftl`.
+/// Optional dimensions (school, area of effect) are simply omitted when the
+/// spell has none.
+fn spell_meta_line(spell: &comp::spell::SpellDef, i18n: &Localization) -> String {
+    use comp::{
+        ability::{MagicSource, School},
+        spell::{CastTime, SpellAoe, SpellDuration, SpellRange},
+    };
+
+    // Distances and durations are authored as floats but are whole numbers in
+    // practice; render `30 m`, not `30.0 m`.
+    fn num(v: f32) -> String {
+        if v.fract() == 0.0 {
+            format!("{}", v as i64)
+        } else {
+            format!("{v}")
+        }
+    }
+
+    let mut parts: Vec<Cow<str>> = Vec::with_capacity(7);
+
+    parts.push(if spell.level == 0 {
+        i18n.get_msg("hud-diary-spells-cantrip")
+    } else {
+        i18n.get_msg_ctx("hud-diary-spells-level", &i18n::fluent_args! {
+            "level" => spell.level,
+        })
+    });
+
+    if let Some(school) = spell.school {
+        parts.push(i18n.get_msg(match school {
+            School::Abjuration => "hud-diary-spells-school-abjuration",
+            School::Conjuration => "hud-diary-spells-school-conjuration",
+            School::Divination => "hud-diary-spells-school-divination",
+            School::Enchantment => "hud-diary-spells-school-enchantment",
+            School::Evocation => "hud-diary-spells-school-evocation",
+            School::Illusion => "hud-diary-spells-school-illusion",
+            School::Necromancy => "hud-diary-spells-school-necromancy",
+            School::Transmutation => "hud-diary-spells-school-transmutation",
+            School::Axiomancy => "hud-diary-spells-school-axiomancy",
+            School::Hemomancy => "hud-diary-spells-school-hemomancy",
+        }));
+    }
+
+    parts.push(i18n.get_msg(match spell.source {
+        MagicSource::Arcane => "hud-diary-spells-source-arcane",
+        MagicSource::Divine => "hud-diary-spells-source-divine",
+        MagicSource::Primordial => "hud-diary-spells-source-primordial",
+        MagicSource::Psionic => "hud-diary-spells-source-psionic",
+        MagicSource::Ki => "hud-diary-spells-source-ki",
+    }));
+
+    parts.push(match spell.cast_time {
+        CastTime::Action => i18n.get_msg("hud-diary-spells-cast-action"),
+        CastTime::Bonus => i18n.get_msg("hud-diary-spells-cast-bonus"),
+        CastTime::Reaction => i18n.get_msg("hud-diary-spells-cast-reaction"),
+        CastTime::Minutes(minutes) => {
+            i18n.get_msg_ctx("hud-diary-spells-cast-minutes", &i18n::fluent_args! {
+                "minutes" => minutes,
+            })
+        },
+    });
+
+    parts.push(match spell.range {
+        SpellRange::SelfOnly => i18n.get_msg("hud-diary-spells-range-self"),
+        SpellRange::Touch => i18n.get_msg("hud-diary-spells-range-touch"),
+        SpellRange::Meters(m) => {
+            i18n.get_msg_ctx("hud-diary-spells-range-meters", &i18n::fluent_args! {
+                "meters" => num(m),
+            })
+        },
+    });
+
+    if let Some(aoe) = spell.aoe {
+        let (key, size) = match aoe {
+            SpellAoe::Sphere(size) => ("hud-diary-spells-aoe-sphere", size),
+            SpellAoe::Cone(size) => ("hud-diary-spells-aoe-cone", size),
+            SpellAoe::Line(size) => ("hud-diary-spells-aoe-line", size),
+            SpellAoe::Cube(size) => ("hud-diary-spells-aoe-cube", size),
+        };
+        parts.push(i18n.get_msg_ctx(key, &i18n::fluent_args! { "size" => num(size) }));
+    }
+
+    parts.push(match spell.duration {
+        SpellDuration::Instant => i18n.get_msg("hud-diary-spells-duration-instant"),
+        SpellDuration::Secs(secs) => {
+            i18n.get_msg_ctx("hud-diary-spells-duration-secs", &i18n::fluent_args! {
+                "secs" => num(secs),
+            })
+        },
+        SpellDuration::Concentration(secs) => i18n.get_msg_ctx(
+            "hud-diary-spells-duration-concentration",
+            &i18n::fluent_args! { "secs" => num(secs) },
+        ),
+    });
+
+    parts.join(" · ")
+}
+
+/// The localized display name of a magic source, shared by the spell
+/// metadata line and the mastery header.
+fn magic_source_name(source: comp::ability::MagicSource, i18n: &Localization) -> Cow<'_, str> {
+    use comp::ability::MagicSource;
+
+    i18n.get_msg(match source {
+        MagicSource::Arcane => "hud-diary-spells-source-arcane",
+        MagicSource::Divine => "hud-diary-spells-source-divine",
+        MagicSource::Primordial => "hud-diary-spells-source-primordial",
+        MagicSource::Psionic => "hud-diary-spells-source-psionic",
+        MagicSource::Ki => "hud-diary-spells-source-ki",
+    })
+}
+
+/// A stable, source-distinguishing tint for the mastery bars. Purely
+/// cosmetic — carries no gameplay meaning beyond "which source is this".
+/// `Arcane` is included for exhaustiveness but never actually drawn as a
+/// bar (it has no mastery bar at all).
+fn mastery_bar_color(source: comp::ability::MagicSource) -> Color {
+    use comp::ability::MagicSource;
+
+    match source {
+        MagicSource::Arcane => XP_COLOR,
+        MagicSource::Divine => Color::Rgba(0.85, 0.75, 0.35, 1.0),
+        MagicSource::Primordial => Color::Rgba(0.40, 0.68, 0.35, 1.0),
+        MagicSource::Psionic => Color::Rgba(0.58, 0.38, 0.78, 1.0),
+        MagicSource::Ki => Color::Rgba(0.80, 0.35, 0.25, 1.0),
+    }
+}
+
+/// The mastery bar's hover tooltip: what each tier of a source's mastery
+/// percentage unlocks for spell transcription (the copy-into-`SpellBook`
+/// mechanic; `common::comp::spell_mastery::mastery_tier_max_level` is the
+/// authoritative curve this describes). Deliberately a DIFFERENT message
+/// from `spell_requirement`'s red "Requires <class> level N" line under a
+/// locked spell row: that one explains a `SpellGate` cast-eligibility check,
+/// this one explains a mastery-tier copy-eligibility check. The two checks
+/// are independent (a spell needs both to ever be cast), so conflating
+/// their messages would read as one gate rather than two.
+fn mastery_tooltip_body(has_content: bool, i18n: &Localization) -> String {
+    let mut lines = vec![
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-2")
+            .into_owned(),
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-4")
+            .into_owned(),
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-6")
+            .into_owned(),
+        i18n.get_msg("hud-diary-spells-mastery-tooltip-tier-all")
+            .into_owned(),
+    ];
+    if !has_content {
+        lines.push(
+            i18n.get_msg("hud-diary-spells-mastery-tooltip-no-content")
+                .into_owned(),
+        );
+    }
+    lines.join("\n")
+}
+
 enum SkillIcon<'a> {
     Unlockable {
         skill: Skill,
@@ -1531,13 +2436,28 @@ enum SkillIcon<'a> {
 impl Diary<'_> {
     // --- BL-06 P3a helpers -------------------------------------------------
 
-    /// Returns the first Class skill group present in the skill set, or None
-    /// for Adventurer / unclassed characters.
+    /// Returns the class skill group currently shown in the (single) Class
+    /// tab: whichever of the held classes matches `sel_tab` (the in-tab
+    /// toggle picks between them by pushing `Event::ChangeSkillTree`, same
+    /// as every other tab), defaulting to the primary otherwise — including
+    /// on first open, before either has been explicitly selected. `None` for
+    /// Adventurer / unclassed characters.
     fn selected_class_group(&self) -> Option<SkillGroupKind> {
+        let character_class = self.character_class?;
+        if character_class.primary == ClassKind::Adventurer {
+            return None;
+        }
+        let sel_tab = self.show.diary_fields.skilltreetab;
+        let secondary_group = character_class.secondary.map(SkillGroupKind::Class);
+        let group = if secondary_group == Some(sel_tab) {
+            sel_tab
+        } else {
+            SkillGroupKind::Class(character_class.primary)
+        };
         self.skill_set
             .skill_groups()
-            .find(|sg| matches!(sg.skill_group_kind, SkillGroupKind::Class(_)))
-            .map(|sg| sg.skill_group_kind)
+            .any(|sg| sg.skill_group_kind == group)
+            .then_some(group)
     }
 
     /// Compute the tier (depth) of `skill` in the prerequisite DAG.
@@ -1598,7 +2518,9 @@ impl Diary<'_> {
             Some(PoiseDamage) => self.imgs.buff_frenzy_0,
             Some(MoveSpeed | RecoverySpeed) => self.imgs.utility_speed_skill,
             Some(EnergyReward) => self.imgs.magic_energy_regen_skill,
-            Some(BonusVsUndead) => self.imgs.buff_plus_0,
+            Some(EnergyEfficiency) => self.imgs.magic_cost_skill,
+            Some(EnergyRegen) => self.imgs.magic_energy_regen_skill,
+            Some(BonusVs(_)) => self.imgs.buff_plus_0,
             None => self.imgs.buff_cost_skill,
         }
     }
@@ -1781,7 +2703,7 @@ impl Diary<'_> {
 
         // Number of skills per rectangle per weapon, start counting at 0
         // Maximum of 9 skills/8 indices
-        let skills_top_l = 6;
+        let skills_top_l = 7;
         let skills_top_r = 0;
         let skills_bot_l = 0;
         let skills_bot_r = 5;
@@ -1862,6 +2784,12 @@ impl Diary<'_> {
                 image: self.imgs.unlock_sceptre_skill,
                 position: MidTopWithMarginOn(state.ids.skills_top_l[5], 3.0),
                 id: state.ids.skill_general_tree_5,
+            },
+            SkillIcon::Unlockable {
+                skill: Skill::UnlockGroup(WeaponRoled(Staff, WeaponRole::Martial)),
+                image: self.imgs.unlock_staff_skill0,
+                position: MidTopWithMarginOn(state.ids.skills_top_l[6], 3.0),
+                id: state.ids.skill_general_tree_6,
             },
             // Bottom right skills
             SkillIcon::Descriptive {
@@ -2680,8 +3608,8 @@ impl Diary<'_> {
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 310.0, 644.0),
             },
             SkillIcon::Ability {
-                skill: Skill::Bow(BowSkill::OwlTalon),
-                ability_id: "common.abilities.bow.owl_talon",
+                skill: Skill::Bow(BowSkill::StormChaser),
+                ability_id: "common.abilities.bow.storm_chaser",
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 154.0),
             },
             SkillIcon::Ability {
@@ -2705,8 +3633,8 @@ impl Diary<'_> {
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 594.0),
             },
             SkillIcon::Ability {
-                skill: Skill::Bow(BowSkill::Scatterburst),
-                ability_id: "common.abilities.bow.scatterburst",
+                skill: Skill::Bow(BowSkill::ThornStake),
+                ability_id: "common.abilities.bow.thorn_stake",
                 position: TopLeftWithMarginsOn(state.ids.bow_bg, 196.0, 694.0),
             },
             SkillIcon::Ability {
@@ -2802,6 +3730,71 @@ impl Diary<'_> {
                 skill: Skill::Staff(Pyroclasm),
                 ability_id: "common.abilities.staff.pyroclasm",
                 position: TopLeftWithMarginsOn(state.ids.staff_bg, 86.0, 422.0),
+            },
+        ];
+
+        state.update(|s| {
+            s.ids
+                .skills
+                .resize(skill_buttons.len(), &mut ui.widget_id_generator())
+        });
+        state.update(|s| {
+            s.ids
+                .skill_lock_imgs
+                .resize(skill_buttons.len(), &mut ui.widget_id_generator())
+        });
+
+        self.handle_skill_buttons(skill_buttons, ui, &mut events, diary_tooltip, state);
+        events
+    }
+
+    /// The martial-role Staff's own skill tree, kept separate from
+    /// `handle_staff_skills_window` (the caster/fire tree) above — the two
+    /// share a background asset (no bespoke art authored for this tree yet)
+    /// but resolve distinct `SkillGroupKind`s and never share progress.
+    /// Layout: two T1 roots (`Sweep`, `Brace`) each with a T2 follow-up,
+    /// converging on the `Avalanche` T3 capstone.
+    fn handle_staff_martial_skills_window(
+        &mut self,
+        diary_tooltip: &Tooltip,
+        state: &mut State<DiaryState>,
+        ui: &mut UiCell,
+        mut events: Vec<Event>,
+    ) -> Vec<Event> {
+        use skills::StaffMartialSkill::*;
+
+        Image::new(self.imgs.staff_bg)
+            .wh([924.0, 619.0])
+            .mid_top_with_margin_on(state.ids.content_align, 65.0)
+            .color(Some(Color::Rgba(1.0, 1.0, 1.0, 1.0)))
+            .set(state.ids.staff_bg, ui);
+
+        use PositionSpecifier::TopLeftWithMarginsOn;
+        let skill_buttons = &[
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(Sweep),
+                ability_id: "common.abilities.staff_martial.sweep",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 460.0, 100.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(Brace),
+                ability_id: "common.abilities.staff_martial.brace",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 160.0, 100.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(WhirlingGale),
+                ability_id: "common.abilities.staff_martial.whirling_gale",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 460.0, 350.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(GlacialThrust),
+                ability_id: "common.abilities.staff_martial.glacial_thrust",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 160.0, 350.0),
+            },
+            SkillIcon::Ability {
+                skill: Skill::StaffMartial(Avalanche),
+                ability_id: "common.abilities.staff_martial.avalanche",
+                position: TopLeftWithMarginsOn(state.ids.staff_bg, 310.0, 600.0),
             },
         ];
 
@@ -3336,6 +4329,22 @@ fn mage_skill_strings(skill: MageSkill) -> SkillStrings<'static> {
             "hud-skill-class-mage-mana_efficiency_title",
             "hud-skill-class-mage-mana_efficiency",
         ),
+        MageSkill::ManaRecover => SkillStrings::plain(
+            "hud-skill-class-mage-mana_recover_title",
+            "hud-skill-class-mage-mana_recover",
+        ),
+        MageSkill::ManaFlow => SkillStrings::plain(
+            "hud-skill-class-mage-mana_flow_title",
+            "hud-skill-class-mage-mana_flow",
+        ),
+        MageSkill::ArcaneVigor => SkillStrings::plain(
+            "hud-skill-class-mage-arcane_vigor_title",
+            "hud-skill-class-mage-arcane_vigor",
+        ),
+        MageSkill::Polyglot => SkillStrings::plain(
+            "hud-skill-class-mage-polyglot_title",
+            "hud-skill-class-mage-polyglot",
+        ),
         MageSkill::Overcharge => SkillStrings::plain(
             "hud-skill-class-mage-overcharge_title",
             "hud-skill-class-mage-overcharge",
@@ -3473,6 +4482,10 @@ fn unlock_skill_strings(group: SkillGroupKind) -> SkillStrings<'static> {
         SkillGroupKind::Weapon(ToolKind::Sceptre) => {
             SkillStrings::plain("hud-skill-unlck_sceptre_title", "hud-skill-unlck_sceptre")
         },
+        SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial) => SkillStrings::plain(
+            "hud-skill-unlck_staff_martial_title",
+            "hud-skill-unlck_staff_martial",
+        ),
         SkillGroupKind::General
         | SkillGroupKind::Class(_)
         | SkillGroupKind::Feats
@@ -3492,7 +4505,8 @@ fn unlock_skill_strings(group: SkillGroupKind) -> SkillStrings<'static> {
             | ToolKind::Tome
             | ToolKind::HolySymbol
             | ToolKind::Focus,
-        ) => {
+        )
+        | SkillGroupKind::WeaponRoled(_, _) => {
             tracing::warn!("Requesting title for unlocking unexpected skill group");
             SkillStrings::Empty
         },
@@ -3768,5 +4782,35 @@ fn sp<'loc>(i18n: &'loc Localization, skill_set: &SkillSet, skill: Skill) -> Cow
         i18n.get_msg_ctx("hud-skill-req_sp", &i18n::fluent_args! {
             "number" => skill_set.skill_cost(skill),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::comp::spell::SpellCompendium;
+    use i18n::{LocalizationHandle, REFERENCE_LANG};
+
+    /// Xindeler: every catalogued spell must have a display name in the
+    /// reference language, or its row in the Diary spell tab renders as a raw
+    /// i18n key. The cheap guard against a later content pass adding spells
+    /// and forgetting the strings.
+    #[test]
+    fn every_spell_has_a_name_string() {
+        let compendium = SpellCompendium::load_expect_cloned();
+        assert!(!compendium.is_empty(), "the spell compendium is empty");
+
+        let localization = LocalizationHandle::load_expect(REFERENCE_LANG);
+        let localization = localization.read();
+
+        let missing: Vec<&str> = compendium
+            .iter()
+            .filter(|spell| localization.try_msg(&spell.name_i18n).is_none())
+            .map(|spell| spell.name_i18n.as_str())
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "spells missing a name in {REFERENCE_LANG}/hud/spells.ftl: {missing:?}"
+        );
     }
 }

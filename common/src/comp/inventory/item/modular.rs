@@ -129,9 +129,13 @@ impl ModularBase {
             * durability_multiplier;
 
         match self {
+            // `role: None` -- modular weapons always resolve to `toolkind`'s
+            // default role; no modular martial-role weapons exist (only
+            // `Simple` items may declare a non-default role).
             ModularBase::Tool => Cow::Owned(ItemKind::Tool(Tool::new(
                 toolkind,
                 Self::resolve_hands(components),
+                None,
                 stats,
             ))),
         }

@@ -223,13 +223,13 @@ Expected: these files should not appear in the merge diff unless upstream explic
 
 ```bash
 # Common crate unit tests
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common
 
 # Physics tests (upstream often updates these with balance changes)
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common-systems -- phys
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common-systems -- phys
 
 # Voxygen clippy (publish profile, no hot-reload)
-cargo clippy -p veloren-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
+cargo clippy -p xindeler-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
 ```
 
 All three must pass. If a test fails:

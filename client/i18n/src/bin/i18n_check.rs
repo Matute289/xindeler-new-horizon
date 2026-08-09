@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 use common_assets::find_root;
-use veloren_client_i18n::{
+use xindeler_client_i18n::{
     REFERENCE_LANG,
     analysis::{Language, ReferenceLanguage},
 };

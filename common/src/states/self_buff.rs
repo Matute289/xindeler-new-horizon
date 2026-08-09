@@ -2,10 +2,14 @@ use crate::{
     combat::ScalingKind,
     comp::{
         CharacterState, StateUpdate,
-        buff::{Buff, BuffCategory, BuffChange, BuffData, BuffKind, BuffSource, DestInfo},
+        buff::{
+            Buff, BuffCategory, BuffChange, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData,
+        },
         character_state::OutputEvents,
     },
-    event::{BuffEvent, ComboChangeEvent, LocalEvent},
+    event::{
+        BuffEvent, ComboChangeEvent, LocalEvent, ResolveIdentifyEvent, ResolveRemoteSenseEvent,
+    },
     outcome::Outcome,
     states::{
         behavior::{CharacterBehavior, JoinData},
@@ -135,6 +139,20 @@ impl CharacterBehavior for Data {
                         let mut buff_data = buff_desc.data;
                         buff_data.strength *= scaling_factor;
 
+                        // A disguise's suspicion-roll accuracy must be the
+                        // caster's live `magic_accuracy` at the moment of
+                        // casting, snapshotted here (the only place this
+                        // state has the caster's own `Stats` in scope)
+                        // rather than re-derived later from a `Uid` lookup
+                        // that could point at a caster who has since left
+                        // the region or changed gear. Overrides rather than
+                        // scales: `strength` carries no authored meaning for
+                        // this buff kind, unlike every other user of this
+                        // loop.
+                        if buff_desc.kind == BuffKind::Disguised {
+                            buff_data.strength = data.stats.magic_accuracy;
+                        }
+
                         let buff = Buff::new(
                             buff_desc.kind,
                             buff_data,
@@ -146,11 +164,70 @@ impl CharacterBehavior for Data {
                             *data.time,
                             dest_info,
                             Some(data.mass),
+                            self.static_data
+                                .ability_info
+                                .input_attr
+                                .and_then(|ia| ia.target_entity),
+                            self.static_data.ability_info.ability_meta.source,
                         );
                         output_events.emit_server(BuffEvent {
                             entity: data.entity,
                             buff_change: BuffChange::Add(buff),
                         });
+
+                        // A remote-sensing buff declares the shape of its
+                        // link (anchor kind, free look, piloted) but
+                        // deliberately carries no target identity (see
+                        // `MiscBuffData::RemoteSense`'s doc comment) -- the
+                        // cast's target/position is only ever available here,
+                        // at cast time, so it must be forwarded now or it is
+                        // lost.
+                        if buff_desc.kind == BuffKind::RemoteSensing
+                            && let Some(MiscBuffData::RemoteSense {
+                                anchor_kind,
+                                free_look,
+                                piloted,
+                                spawn_range,
+                                flight_speed,
+                                behind_dist,
+                                above_dist,
+                            }) = buff_data.misc_data
+                        {
+                            output_events.emit_server(ResolveRemoteSenseEvent {
+                                entity: data.entity,
+                                target_entity: self
+                                    .static_data
+                                    .ability_info
+                                    .input_attr
+                                    .and_then(|ia| ia.target_entity),
+                                target_pos: self
+                                    .static_data
+                                    .ability_info
+                                    .input_attr
+                                    .and_then(|ia| ia.select_pos),
+                                anchor_kind,
+                                free_look,
+                                piloted,
+                                spawn_range,
+                                flight_speed,
+                                behind_dist,
+                                above_dist,
+                            });
+                        }
+
+                        // Same reasoning as `RemoteSensing` just above: the
+                        // cast's target is only available here, at cast
+                        // time, so it must be forwarded now or it is lost.
+                        if buff_desc.kind == BuffKind::Identifying {
+                            output_events.emit_server(ResolveIdentifyEvent {
+                                entity: data.entity,
+                                target_entity: self
+                                    .static_data
+                                    .ability_info
+                                    .input_attr
+                                    .and_then(|ia| ia.target_entity),
+                            });
+                        }
                     }
                     // Build up
                     if let CharacterState::SelfBuff(c) = &mut update.character {
@@ -179,11 +256,7 @@ impl CharacterBehavior for Data {
             StageSection::Recover => {
                 if self.timer < self.static_data.recover_duration {
                     if let CharacterState::SelfBuff(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

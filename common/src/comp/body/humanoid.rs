@@ -2,7 +2,9 @@ use crate::{make_case_elim, make_proj_elim};
 use rand::{RngExt, prelude::IndexedRandom, rng};
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
+use std::ops::Range;
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
+use vek::*;
 
 make_proj_elim!(
     body,
@@ -24,10 +26,18 @@ make_proj_elim!(
         pub skin: u8,
         #[typed(pure)]
         pub eye_color: u8,
+        // Scale applied on top of per-species height.
+        // 0 = Self::HEIGHT_SCALE_RANGE.start
+        // 255 = Self::HEIGHT_SCALE_RANGE.end
+        #[typed(pure)]
+        pub height_scale: u8,
     }
 );
 
 impl Body {
+    pub const BASE_HEIGHT: f32 = 20.0 / 9.0;
+    const HEIGHT_SCALE_RANGE: Range<f32> = 0.85..1.1;
+
     pub fn iter() -> impl Iterator<Item = Self> {
         // I'm too lazy to figure out decorations and I don't think we need that
         Species::iter().flat_map(move |species| {
@@ -41,6 +51,7 @@ impl Body {
                 skin: 0,
                 eye_color: 0,
                 eyes: 0,
+                height_scale: 0,
             })
         })
     }
@@ -66,6 +77,7 @@ impl Body {
             eyes: rng.random_range(0..1), /* TODO Add a way to set specific head-segments for
                                            * NPCs
                                            * with the default being a random one */
+            height_scale: rng.random(),
         }
     }
 
@@ -83,7 +95,15 @@ impl Body {
             .min(self.species.num_accessories(self.body_type) - 1);
     }
 
-    pub fn height(&self) -> f32 { (20.0 / 9.0) * self.scaler() }
+    pub fn height_scale(&self) -> f32 {
+        Lerp::lerp(
+            Self::HEIGHT_SCALE_RANGE.start,
+            Self::HEIGHT_SCALE_RANGE.end,
+            self.height_scale as f32 * (1.0 / 255.0),
+        )
+    }
+
+    pub fn height(&self) -> f32 { Self::BASE_HEIGHT * self.scaler() * self.height_scale() }
 
     pub fn scaler(&self) -> f32 {
         match (self.species, self.body_type) {

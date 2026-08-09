@@ -1,0 +1,29 @@
+// See Invisibility: not a reveal-set spell at all. Its entire job is to
+// ignore the concealment modifier on the observer side, so it grants only
+// the concealment-piercing flag and carries no `misc_data` -- there is no
+// sense declaration for it to make, and no `Detected` entry is ever created
+// for it.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.3,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(
+            kind: SeeInvisible,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(3600.0),
+            ),
+        ),
+    ],
+    energy_cost: 20,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // seeming.ron/disguise_self.ron derive from every other shipped
+        // spell that sets this field.
+        requirements: (min_level: Some(12)),
+    ),
+)

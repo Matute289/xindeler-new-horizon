@@ -72,9 +72,23 @@ impl ServerBattleMode {
     }
 }
 
-impl From<ServerBattleMode> for veloren_query_server::proto::ServerBattleMode {
+/// Whether PROJECT ORACLE is live on this server. Gates any ability whose
+/// `AbilityRequirements.oracle` is `true` (see `common::resources::OracleLive`
+/// and `AbilityRequirements::requirements_met`).
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
+pub enum OracleMode {
+    #[default]
+    Off,
+    On,
+}
+
+impl OracleMode {
+    pub fn is_live(&self) -> bool { matches!(self, OracleMode::On) }
+}
+
+impl From<ServerBattleMode> for xindeler_query_server::proto::ServerBattleMode {
     fn from(value: ServerBattleMode) -> Self {
-        use veloren_query_server::proto::ServerBattleMode as QueryBattleMode;
+        use xindeler_query_server::proto::ServerBattleMode as QueryBattleMode;
 
         match value {
             ServerBattleMode::Global(mode) => match mode {
@@ -105,6 +119,8 @@ pub struct GameplaySettings {
     #[serde(default)]
     // explosion_burn_marks by players
     pub explosion_burn_marks: bool,
+    #[serde(default)]
+    pub oracle: OracleMode,
 }
 
 impl Default for GameplaySettings {
@@ -112,6 +128,7 @@ impl Default for GameplaySettings {
         Self {
             battle_mode: ServerBattleMode::default(),
             explosion_burn_marks: true,
+            oracle: OracleMode::default(),
         }
     }
 }
@@ -178,7 +195,22 @@ impl CalendarMode {
 #[serde(default)]
 pub struct Settings {
     pub gameserver_protocols: Vec<Protocol>,
+    /// Advertised to every connecting client as the URL to authenticate
+    /// against (`ServerInfo::auth_provider`) -- must be a public, trusted
+    /// URL. NEVER a loopback address: `client/src/lib.rs` has every remote
+    /// player's own machine build an `AuthClient` from this exact string, so
+    /// a loopback value here would tell every player to authenticate against
+    /// their own computer.
     pub auth_server_address: Option<String>,
+    /// The URL THIS server itself calls to verify a login token
+    /// (`/verify`). Defaults to `auth_server_address` when unset (`None`),
+    /// which is the correct behaviour for a server not co-located with its
+    /// auth service. When the auth service runs on the same host, set this
+    /// to its loopback address (e.g. `http://127.0.0.1:19253`) to skip
+    /// DNS/TLS/nginx on the login hot path -- `xindeler-authc` only allows
+    /// plain `http://` against loopback hosts, so a non-loopback value here
+    /// still requires `https://`.
+    pub auth_service_address: Option<String>,
     pub query_address: Option<SocketAddr>,
     pub max_players: u16,
     pub world_seed: u32,
@@ -219,7 +251,8 @@ impl Default for Settings {
                     address: SocketAddr::from((Ipv4Addr::UNSPECIFIED, 14004)),
                 },
             ],
-            auth_server_address: Some("https://auth.veloren.net".into()),
+            auth_server_address: Some("https://auth.xindeler.com".into()),
+            auth_service_address: None,
             query_address: Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 14006))),
             world_seed: DEFAULT_WORLD_SEED,
             server_name: "Veloren Server".into(),
@@ -302,6 +335,7 @@ impl Settings {
                 )),
             }],
             auth_server_address: None,
+            auth_service_address: None,
             // If loading the default map file, make sure the seed is also default.
             world_seed: if load.map_file.is_some() {
                 load.world_seed
@@ -335,6 +369,27 @@ impl Settings {
                 INVALID_SETTING_MSG, self.day_length, default_values.day_length
             );
             self.day_length = default_values.day_length;
+        }
+
+        // `auth_service_address` without `auth_server_address` is a
+        // foot-gun, not a valid "auth partially enabled" state: nothing
+        // observes `auth_service_address` on its own to decide whether auth
+        // is on (that's still `auth_server_address.is_none()`, e.g. the
+        // startup log and `ServerInfo::auth_provider`), but `LoginProvider`
+        // *does* fall back to `auth_service_address` when constructing its
+        // auth client. Left alone, that combination would have the server
+        // advertise "no auth" to every client (who then send a bare
+        // username) while `LoginProvider` still tries to validate that
+        // username as a real auth token against the service address --
+        // every login fails silently.
+        if self.auth_service_address.is_some() && self.auth_server_address.is_none() {
+            warn!(
+                "{INVALID_SETTING_MSG} Setting: auth_service_address is set but \
+                 auth_server_address is not -- this would silently break every login. Clearing \
+                 auth_service_address. Help: auth_server_address must be set whenever \
+                 auth_service_address is."
+            );
+            self.auth_service_address = None;
         }
     }
 

@@ -88,13 +88,14 @@ impl GraphicsSettings {
             lod_detail: 80,
             render_mode: RenderMode {
                 aa: AaMode::FxUpscale,
-                cloud: CloudMode::Minimal,
+                cloud: CloudMode::Flat,
                 reflection: ReflectionMode::Low,
                 fluid: FluidMode::Low,
                 lighting: LightingMode::Lambertian,
                 shadow: ShadowMode::None,
                 rain_occlusion: ShadowMapMode { resolution: 0.25 },
                 bloom: BloomMode::Off,
+                ssao: SsaoMode::Off,
                 point_glow: 0.0,
                 upscale_mode: UpscaleMode { factor: 0.35 },
                 ..self.render_mode
@@ -121,6 +122,7 @@ impl GraphicsSettings {
                 shadow: ShadowMode::Cheap,
                 rain_occlusion: ShadowMapMode { resolution: 0.25 },
                 bloom: BloomMode::Off,
+                ssao: SsaoMode::Off,
                 point_glow: 0.2,
                 upscale_mode: UpscaleMode { factor: 0.65 },
                 ..self.render_mode
@@ -149,6 +151,10 @@ impl GraphicsSettings {
                 bloom: BloomMode::On(BloomConfig {
                     factor: BloomFactor::Medium,
                     uniform_blur: false,
+                }),
+                ssao: SsaoMode::On(SsaoConfig {
+                    quality: SsaoQuality::Low,
+                    strength: 0.6,
                 }),
                 point_glow: 0.2,
                 upscale_mode: UpscaleMode { factor: 0.85 },
@@ -179,6 +185,10 @@ impl GraphicsSettings {
                     factor: BloomFactor::Medium,
                     uniform_blur: true,
                 }),
+                ssao: SsaoMode::On(SsaoConfig {
+                    quality: SsaoQuality::Medium,
+                    strength: 0.6,
+                }),
                 point_glow: 0.2,
                 upscale_mode: UpscaleMode { factor: 1.0 },
                 ..self.render_mode
@@ -207,6 +217,10 @@ impl GraphicsSettings {
                 bloom: BloomMode::On(BloomConfig {
                     factor: BloomFactor::Medium,
                     uniform_blur: true,
+                }),
+                ssao: SsaoMode::On(SsaoConfig {
+                    quality: SsaoQuality::High,
+                    strength: 0.6,
                 }),
                 point_glow: 0.2,
                 upscale_mode: UpscaleMode { factor: 1.25 },

@@ -328,6 +328,7 @@ pub struct LoginBanner {
     multiplayer_button: button::State,
     #[cfg(feature = "singleplayer")]
     singleplayer_button: button::State,
+    create_account_button: button::State,
 
     unlock_server_field_button: button::State,
 }
@@ -447,6 +448,13 @@ impl LoginBanner {
                     FILL_FRAC_TWO,
                     button_style,
                     Some(Message::Singleplayer),
+                ),
+                neat_button(
+                    &mut self.create_account_button,
+                    i18n.get_msg("main-create_account"),
+                    FILL_FRAC_TWO,
+                    button_style,
+                    Some(Message::CreateAccount),
                 ),
             ])
             .max_width(170)

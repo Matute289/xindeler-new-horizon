@@ -7,10 +7,10 @@ use super::{
 use crate::ui::slot::{self, SlotKey, SumSlot};
 use common::{
     comp::{
-        AbilityPool, ActiveAbilities, Body, CharacterState, Combo, Energy, Inventory, Item,
-        ItemKey, SkillSet, Stance, Stats,
+        AbilityPool, ActiveAbilities, Body, Buffs, CharacterClass, CharacterState, Combo, Energy,
+        Inventory, Item, ItemKey, SkillSet, Stance, Stats,
         ability::{Ability, AbilityInput, AuxiliaryAbility},
-        item::tool::{AbilityContext, AbilityMap, ToolKind},
+        item::tool::{AbilityMap, ToolKind},
         slot::{InvSlotId, Slot},
     },
     recipe::ComponentRecipeBook,
@@ -130,12 +130,16 @@ type HotbarSource<'a> = (
     Option<&'a ActiveAbilities>,
     Option<&'a AbilityPool>,
     &'a Body,
-    &'a AbilityContext,
     Option<&'a Combo>,
     Option<&'a CharacterState>,
     Option<&'a Stance>,
     Option<&'a Stats>,
+    Option<&'a Buffs>,
     &'a AbilityMap,
+    bool,
+    // Xindeler: the character's class(es), so a hotbar slot holding a spell
+    // that is not yet unlocked greys out exactly as the server refuses it.
+    Option<&'a CharacterClass>,
 );
 type HotbarImageSource<'a> = (&'a ItemImgs, &'a img_ids::Imgs);
 
@@ -152,12 +156,14 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
             active_abilities,
             ability_pool,
             body,
-            contexts,
             combo,
             char_state,
             stance,
             stats,
+            buffs,
             ability_map,
+            oracle_live,
+            character_class,
         ): &HotbarSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         const GREYED_OUT: Color = Color::Rgba(0.3, 0.3, 0.3, 0.8);
@@ -179,7 +185,9 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                 Some(inventory),
                                 Some(skillset),
                                 *ability_pool,
-                                contexts,
+                                *stance,
+                                *combo,
+                                *buffs,
                             )
                         })
                 });
@@ -196,9 +204,15 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     skillset,
                                     Some(body),
                                     *char_state,
-                                    contexts,
+                                    *stance,
+                                    *combo,
                                     *stats,
+                                    *buffs,
                                     *ability_pool,
+                                    *character_class,
+                                    // UI display only: hotbar inputs never
+                                    // resolve against a trigger slot.
+                                    None,
                                     ability_map,
                                 )
                             })
@@ -208,10 +222,12 @@ impl<'a> SlotKey<HotbarSource<'a>, HotbarImageSource<'a>> for HotbarSlot {
                                     if energy.current() >= ability.energy_cost()
                                         && combo
                                             .is_some_and(|c| c.counter() >= ability.combo_cost())
-                                        && ability
-                                            .ability_meta()
-                                            .requirements
-                                            .requirements_met(*stance, Some(*inventory))
+                                        && ability.ability_meta().requirements.requirements_met(
+                                            *stance,
+                                            Some(*inventory),
+                                            *oracle_live,
+                                            skillset.character_level(),
+                                        )
                                     {
                                         Some(Color::Rgba(1.0, 1.0, 1.0, 1.0))
                                     } else {
@@ -257,9 +273,11 @@ type AbilitiesSource<'a> = (
     Option<&'a AbilityPool>,
     &'a Inventory,
     &'a SkillSet,
-    &'a AbilityContext,
+    Option<&'a Stance>,
+    Option<&'a Combo>,
     Option<&'a CharacterState>,
     Option<&'a Stats>,
+    Option<&'a Buffs>,
 );
 
 impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
@@ -267,7 +285,17 @@ impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
 
     fn image_key(
         &self,
-        (active_abilities, ability_pool, inventory, skillset, contexts, char_state, stats): &AbilitiesSource<'a>,
+        (
+            active_abilities,
+            ability_pool,
+            inventory,
+            skillset,
+            stance,
+            combo,
+            char_state,
+            stats,
+            buffs,
+        ): &AbilitiesSource<'a>,
     ) -> Option<(Self::ImageKey, Option<Color>)> {
         let ability_id = match self {
             Self::Slot(index) => active_abilities
@@ -282,14 +310,18 @@ impl<'a> SlotKey<AbilitiesSource<'a>, img_ids::Imgs> for AbilitySlot {
                     Some(inventory),
                     Some(skillset),
                     *ability_pool,
-                    contexts,
+                    *stance,
+                    *combo,
+                    *buffs,
                 ),
             Self::Ability(ability) => Ability::from(*ability).ability_id(
                 *char_state,
                 Some(inventory),
                 Some(skillset),
                 *ability_pool,
-                contexts,
+                *stance,
+                *combo,
+                *buffs,
             ),
         };
 

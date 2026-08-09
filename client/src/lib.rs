@@ -40,7 +40,7 @@ use common::{
     mounting::{Rider, VolumePos, VolumeRider},
     outcome::Outcome,
     recipe::{ComponentRecipeBook, RecipeBookManifest},
-    resources::{BattleMode, GameMode, PlayerEntity, Time, TimeOfDay},
+    resources::{BattleMode, GameMode, OracleLive, PlayerEntity, Time, TimeOfDay},
     rtsim,
     shared_server_config::ServerConstants,
     spiral::Spiral2d,
@@ -471,6 +471,8 @@ impl Client {
         client_type: ClientType,
     ) -> Result<Self, Error> {
         let _ = rustls::crypto::ring::default_provider().install_default(); // needs to be initialized before usage
+        // Use `usize::MAX` as the output limit: we implicitly trust servers to not send
+        // us too much data (TODO: should we?)
         let network = Network::new(Pid::new(), &runtime);
 
         init_stage_update(ClientInitStage::ConnectionEstablish);
@@ -756,6 +758,7 @@ impl Client {
             state.ecs_mut().insert(material_stats);
             state.ecs_mut().insert(ability_map);
             state.ecs_mut().insert(recipe_book);
+            *state.ecs_mut().write_resource() = OracleLive(server_constants.oracle_live);
 
             let map_size = map_size_lg.chunks();
             let max_height = world_map.max_height;
@@ -1303,25 +1306,25 @@ impl Client {
             Some(addr) => {
                 // Query whether this is a trusted auth server
                 if auth_trusted(addr) {
-                    let (scheme, authority) = match addr.split_once("://") {
-                        Some((s, a)) => (s, a),
-                        None => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
-                    };
-
-                    let scheme = match scheme.parse::<authc::Scheme>() {
-                        Ok(s) => s,
+                    // The client now takes the whole URL, and rejects plain
+                    // http for anything that is not loopback.
+                    let auth = match authc::AuthClient::new(addr.as_str()) {
+                        Ok(auth) => auth,
                         Err(_) => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
                     };
 
-                    let authority = match authority.parse::<authc::Authority>() {
-                        Ok(a) => a,
-                        Err(_) => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
-                    };
+                    // Signing in is blocking and expensive: it derives an
+                    // Argon2i prehash before the HTTPS round-trip. Running it
+                    // directly would stall every other task sharing this
+                    // reactor thread.
+                    let username = username.to_owned();
+                    let password = password.to_owned();
+                    let token =
+                        tokio::task::spawn_blocking(move || auth.sign_in(&username, &password))
+                            .await
+                            .map_err(|err| Error::AuthErr(err.to_string()))??;
 
-                    Ok(authc::AuthClient::new(scheme, authority)?
-                        .sign_in(username, password)
-                        .await?
-                        .serialize())
+                    Ok(token.serialize())
                 } else {
                     Err(Error::AuthServerNotTrusted)
                 }
@@ -1396,12 +1399,15 @@ impl Client {
                     | ClientGeneral::ExitInGame
                     | ClientGeneral::PlayerPhysics { .. }
                     | ClientGeneral::UnlockSkill(_)
+                    | ClientGeneral::TranscribeSpell(_)
+                    | ClientGeneral::SetFutureLevelsToSecondary(_)
                     | ClientGeneral::RequestSiteInfo(_)
                     | ClientGeneral::RequestPlayerPhysics { .. }
                     | ClientGeneral::RequestLossyTerrainCompression { .. }
                     | ClientGeneral::UpdateMapMarker(_)
                     | ClientGeneral::SpectatePosition(_)
                     | ClientGeneral::SpectateEntity(_)
+                    | ClientGeneral::CancelRemoteSense
                     | ClientGeneral::SetBattleMode(_) => {
                         #[cfg(feature = "tracy")]
                         {
@@ -1981,6 +1987,17 @@ impl Client {
         self.send_msg(ClientGeneral::UnlockSkill(skill));
     }
 
+    /// Request transcribing `page` (an item-definition id) from the player's
+    /// own equipped Tome into their spellbook. Every gate and the cost
+    /// deduction are re-checked authoritatively server-side.
+    pub fn transcribe_spell(&mut self, page: String) {
+        self.send_msg(ClientGeneral::TranscribeSpell(page));
+    }
+
+    pub fn set_future_levels_to_secondary(&mut self, value: bool) {
+        self.send_msg(ClientGeneral::SetFutureLevelsToSecondary(value));
+    }
+
     pub fn max_group_size(&self) -> u32 { self.max_group_size }
 
     pub fn invite(&self) -> Option<(Uid, Instant, Duration, InviteKind)> { self.invite }
@@ -2137,6 +2154,10 @@ impl Client {
     }
 
     pub fn stop_spectate_entity(&mut self) { self.send_msg(ClientGeneral::SpectateEntity(None)); }
+
+    /// Voluntarily ends the player's own active remote-sensing link before its
+    /// duration expires, returning them to their body.
+    pub fn cancel_remote_sense(&mut self) { self.send_msg(ClientGeneral::CancelRemoteSense); }
 
     /// Checks whether a player can swap their weapon+ability `Loadout` settings
     /// and sends the `ControlAction` event that signals to do the swap.
@@ -3249,6 +3270,12 @@ impl Client {
             ServerGeneral::MapMarker(event) => {
                 frontend_events.push(Event::MapMarker(event));
             },
+            ServerGeneral::OracleLive(live) => {
+                // Writes the same `OracleLive` resource the login-time
+                // `ServerConstants::oracle_live` push writes — one client-side
+                // reader, not two.
+                *self.state.ecs_mut().write_resource() = OracleLive(live);
+            },
             ServerGeneral::WeatherUpdate(weather) => {
                 self.weather.weather_update(weather);
             },
@@ -3769,8 +3796,8 @@ mod tests {
         let runtime2 = Arc::clone(&runtime);
         let username = "Foo";
         let password = "Bar";
-        let auth_server = "auth.veloren.net";
-        let veloren_client: Result<Client, Error> = runtime.block_on(Client::new(
+        let auth_server = "auth.xindeler.com";
+        let xindeler_client: Result<Client, Error> = runtime.block_on(Client::new(
             ConnectionArgs::Tcp {
                 hostname: "127.0.0.1:9000".to_owned(),
                 prefer_ipv6: false,
@@ -3788,7 +3815,7 @@ mod tests {
         ));
         let localisation = LocalizationHandle::load_expect("en");
 
-        let _ = veloren_client.map(|mut client| {
+        let _ = xindeler_client.map(|mut client| {
             //clock
             let mut clock = Clock::new(Duration::from_secs_f64(SPT));
 

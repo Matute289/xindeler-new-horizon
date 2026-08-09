@@ -94,6 +94,24 @@ common-items-testing-test_boots = Testing Boots
 common-items-testing-test_draugr_blade = Dhampir Test Blade
     .desc = Used for equipment-restriction tests, do not delete.
 
+common-items-testing-test_page_divine_l1 = Test Page (Divine, L1)
+    .desc = Used for transcription tests, do not delete.
+
+common-items-testing-test_page_divine_l2 = Test Page (Divine, L2)
+    .desc = Used for transcription tests, do not delete.
+
+common-items-testing-test_page_divine_l3 = Test Page (Divine, L3)
+    .desc = Used for transcription tests, do not delete.
+
+common-items-testing-test_page_divine_l7 = Test Page (Divine, L7)
+    .desc = Used for transcription tests, do not delete.
+
+common-items-testing-test_page_uncatalogued = Test Page (uncatalogued)
+    .desc = Used for transcription tests, do not delete.
+
+common-items-testing-test_tome_of_transcription = Test Tome of Transcription
+    .desc = Used for transcription tests, do not delete.
+
 common-items-weapons-empty-empty = Empty Item
     .desc = This item may grant abilities, but is invisible.
 

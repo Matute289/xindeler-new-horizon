@@ -84,6 +84,14 @@ pub struct MeleeConstructor {
     pub multi_target: Option<MultiTarget>,
     pub damage_effect: Option<CombatEffect>,
     pub attack_effect: Option<(CombatEffect, CombatRequirement)>,
+    /// Overrides the group this attack's `attack_effect` resolves against;
+    /// every weapon-damage/poise/knockback component of a melee attack
+    /// always targets `OutOfGroup` regardless of this field, so it exists
+    /// only to let a touch-range beneficial `attack_effect` (e.g. an ally
+    /// cleanse) reach `InGroup` instead. `None` keeps the historical
+    /// `OutOfGroup` default every existing melee ability relies on.
+    #[serde(default)]
+    pub attack_effect_target: Option<GroupTarget>,
     #[serde(default)]
     pub dodgeable: Dodgeable,
     #[serde(default = "default_true")]
@@ -98,7 +106,14 @@ pub struct MeleeConstructor {
     pub precision_flank_invert: bool,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Default, Deserialize)]
+/// Not `Copy`: it carries a `CombatRequirement`, which itself cannot be
+/// `Copy` because of `CombatRequirement::All(Vec<CombatRequirement>)` (used
+/// by shipped `power_word_kill`/`pain`/`stun` content) — a `Vec` can never be
+/// `Copy`, independent of anything done to `CombatRequirement`'s other
+/// variants. Call sites that need an owned value (e.g.
+/// `common/src/comp/ability.rs`'s `create_char_ability`) still `.clone()`
+/// one.
+#[derive(Clone, Debug, PartialEq, Serialize, Default, Deserialize)]
 pub struct CustomCombo {
     pub base: Option<i32>,
     pub conditional: Option<(i32, CombatRequirement)>,
@@ -427,8 +442,11 @@ impl MeleeConstructor {
         .with_blockable(self.blockable);
 
         let attack = if let Some((effect, requirement)) = self.attack_effect {
-            let effect = AttackEffect::new(Some(GroupTarget::OutOfGroup), effect)
-                .with_requirement(requirement);
+            let effect = AttackEffect::new(
+                Some(self.attack_effect_target.unwrap_or(GroupTarget::OutOfGroup)),
+                effect,
+            )
+            .with_requirement(requirement);
             attack.with_effect(effect)
         } else {
             attack

@@ -17,8 +17,7 @@ use crate::{
     state_ext::StateExt,
     sys::terrain::{NpcData, SAFE_ZONE_RADIUS, SpawnEntityData},
 };
-#[cfg(feature = "worldgen")]
-use common::rtsim::{Actor, RtSimEntity};
+#[cfg(feature = "worldgen")] use common::rtsim;
 use common::{
     CachedSpatialGrid, Damage, DamageKind, DamageSource, GroupTarget, RadiusEffect,
     assets::{AssetExt, Ron},
@@ -27,29 +26,35 @@ use common::{
         DeathEffects, StatEffect, StatEffectTarget,
     },
     comp::{
-        self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterState,
-        Energy, Group, Hardcore, Health, HealthChange, Inventory, Object, PickupItem, Player,
-        Poise, PoiseChange, Pos, Presence, PresenceKind, ProjectileConstructor, SkillSet, Stats,
-        ability::Dodgeable,
+        self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterClass,
+        CharacterState, Energy, Group, Hardcore, Health, HealthChange, Inventory, Object,
+        PhantomIllusion, PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind,
+        ProjectileConstructor, Skill, SkillSet, SpellMastery, Stats,
+        ability::{Dodgeable, MagicSource},
         aura::{self, EnteredAuras},
         buff,
         chat::{KillSource, KillType},
         inventory::item::{AbilityMap, MaterialStatManifest},
         item::flatten_counted_items,
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_SLOW},
-        projectile::{ProjectileAttack, ProjectileConstructorKind},
+        projectile::{ProjectileAttack, ProjectileConstructorKind, ProjectileExplosionTarget},
+        skills::MageSkill,
+        spell_mastery::{
+            NON_DAMAGE_WEIGHT, POLYGLOT_BONUS_PER_RANK, grant_source_mastery, level_delta_weight,
+        },
     },
     consts::TELEPORTER_RADIUS,
     event::{
-        AuraEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent, ChangeStanceEvent,
-        ChatEvent, ComboChangeEvent, CreateItemDropEvent, CreateNpcEvent, CreateObjectEvent,
-        DeleteEvent, DestroyEvent, DownedEvent, EmitExt, Emitter, EnergyChangeEvent,
-        EntityAttackedHookEvent, EventBus, ExplosionEvent, HealthChangeEvent, HelpDownedEvent,
-        KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent, ParryHookEvent,
-        PermanentChange, PoiseChangeEvent, RegrowHeadEvent, RemoveLightEmitterEvent, RespawnEvent,
+        AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
+        ChangeStanceEvent, ChatEvent, ComboChangeEvent, CreateItemDropEvent, CreateNpcEvent,
+        CreateObjectEvent, DeleteEvent, DestroyEvent, DispelIllusionEvent, DownedEvent, EmitExt,
+        Emitter, EnergyChangeEvent, EntityAttackedHookEvent, EventBus, ExplosionEvent,
+        HealthChangeEvent, HelpDownedEvent, KillEvent, KnockbackEvent, LandOnGroundEvent,
+        MakeAdminEvent, ParryHookEvent, PermanentChange, PoiseChangeEvent, RegrowHeadEvent,
+        RemoveLightEmitterEvent, ResolveIdentifyEvent, ResolveRemoteSenseEvent, RespawnEvent,
         SetAbilityCooldownEvent, ShootEvent, SoundEvent, StartInteractionEvent,
-        StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent, TransformEvent,
-        UpdateMapMarkerEvent,
+        StartTeleportingEvent, TeleportToEvent, TeleportToPositionEvent, TranscribeSpellEvent,
+        TransformEvent, UpdateMapMarkerEvent,
     },
     event_emitters,
     explosion::{ColorPreset, TerrainReplacementPreset},
@@ -92,7 +97,35 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<HelpDownedEvent>(builder, &[]);
     event_dispatch::<DownedEvent>(builder, &[&event_sys_name::<HealthChangeEvent>()]);
     event_dispatch::<KnockbackEvent>(builder, &[]);
-    event_dispatch::<DestroyEvent>(builder, &[&event_sys_name::<HealthChangeEvent>()]);
+    // 🔴 Ordering is load-bearing, in both directions.
+    //
+    // *After* every handler that writes `Health`. `BanishEvent` only reads it,
+    // so `shred` already refuses to run them concurrently — but which side it
+    // ran *first* was left to the scheduler, and the answer decided whether a
+    // creature banished and killed in the same tick left an orphaned registry
+    // record behind. With the edges, all of this tick's damage has landed
+    // before the saving throw is rolled, so `death_forestalls_banishment` sees
+    // the true health and a doomed creature is simply never banished. Costs no
+    // throughput: these were serialised against each other either way.
+    //
+    // `KillEvent` is unreachable for a banishable target today — it comes only
+    // from `ControlEvent::GiveUp`, which is gated on death protection, which is
+    // `Body::Humanoid`-only, and a humanoid is never a banishable
+    // `CreatureKind`. The edge is declared anyway rather than left as an
+    // argument the next reader has to re-derive.
+    //
+    // *Before* `DestroyEvent`: this handler raises the banishment's
+    // `DestroyEvent`, and that `DestroyEvent` must be consumed in the *same*
+    // tick. Otherwise `banishment::maintain` parks the entity (removing `Pos`)
+    // before the reward/loot block ever sees where to drop the loot.
+    event_dispatch::<BanishEvent>(builder, &[
+        &event_sys_name::<HealthChangeEvent>(),
+        &event_sys_name::<KillEvent>(),
+    ]);
+    event_dispatch::<DestroyEvent>(builder, &[
+        &event_sys_name::<HealthChangeEvent>(),
+        &event_sys_name::<BanishEvent>(),
+    ]);
     event_dispatch::<LandOnGroundEvent>(builder, &[]);
     event_dispatch::<RespawnEvent>(builder, &[]);
     event_dispatch::<ExplosionEvent>(builder, &[]);
@@ -114,6 +147,31 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<TeleportToPositionEvent>(builder, &[]);
     event_dispatch::<StartTeleportingEvent>(builder, &[]);
     event_dispatch::<RegrowHeadEvent>(builder, &[]);
+    event_dispatch::<TranscribeSpellEvent>(builder, &[]);
+    // *After* `BuffEvent`: `server/src/events/remote_sense.rs`'s
+    // `teardown_existing_anchor` (run from this handler, for a recast that
+    // supersedes an existing remote-sensing link) deliberately does not
+    // force-remove the superseded `BuffKind::RemoteSensing` buff, reasoning
+    // that the same tick's own `BuffEvent::Add` (emitted alongside this
+    // event by `common/src/states/self_buff.rs`) has *already* landed by
+    // the time this handler runs, so re-adding a removal here would only
+    // apply next tick and could kill the brand-new buff instead of the
+    // stale one. That reasoning is only true if `EventHandler<BuffEvent>`
+    // really does run first -- both handlers write-conflict on `Buffs`
+    // (`BuffEventData`/`ResolveRemoteSenseEventData`), so specs serialises
+    // them either way, but without this declared edge the *order* was only
+    // an insertion-order tie-break, exactly the hazard
+    // `common/systems/src/lib.rs`'s `pilot::Sys` → `interpolation::Sys`
+    // dependency (same PR) hardens elsewhere. This edge makes it a
+    // compiler-checked constraint instead.
+    event_dispatch::<ResolveRemoteSenseEvent>(builder, &[&event_sys_name::<BuffEvent>()]);
+    // *After* `BuffEvent` for the same reason as `ResolveRemoteSenseEvent`
+    // just above: `server/src/events/identify.rs`'s handler only needs the
+    // caster/target's already-current components, but ordering it after the
+    // buff add keeps the two `Identifying`/`RemoteSensing` cast-resolution
+    // events on the same, compiler-checked footing rather than an
+    // insertion-order coincidence.
+    event_dispatch::<ResolveIdentifyEvent>(builder, &[&event_sys_name::<BuffEvent>()]);
 }
 
 event_emitters! {
@@ -132,6 +190,7 @@ event_emitters! {
         outcome: Outcome,
         stance: ChangeStanceEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 
     struct ReadEntityAttackedHookEvents[EntityAttackedHookEmitters] {
@@ -204,30 +263,15 @@ impl ServerEvent for PoiseChangeEvent {
     }
 }
 
-#[cfg(feature = "worldgen")]
-pub fn entity_as_actor(
-    entity: Entity,
-    rtsim_entities: &ReadStorage<RtSimEntity>,
-    presences: &ReadStorage<Presence>,
-) -> Option<Actor> {
-    if let Some(rtsim_entity) = rtsim_entities.get(entity).copied() {
-        Some(Actor::Npc(rtsim_entity))
-    } else if let Some(PresenceKind::Character(character)) = presences.get(entity).map(|p| p.kind) {
-        Some(Actor::Character(character))
-    } else {
-        None
-    }
-}
-
 #[derive(SystemData)]
 pub struct HealthChangeEventData<'a> {
     entities: Entities<'a>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     #[cfg(feature = "worldgen")]
     rtsim: WriteExpect<'a, RtSim>,
     events: HealthChangeEvents<'a>,
     time: Read<'a, Time>,
-    #[cfg(feature = "worldgen")]
+    // Needed unconditionally (not just under `worldgen`) to resolve a heal's
+    // caster `Uid` back to an entity for `SpellMastery` crediting.
     id_maps: Read<'a, IdMaps>,
     #[cfg(feature = "worldgen")]
     world: ReadExpect<'a, Arc<World>>,
@@ -236,14 +280,18 @@ pub struct HealthChangeEventData<'a> {
     positions: ReadStorage<'a, Pos>,
     uids: ReadStorage<'a, Uid>,
     #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, Presence>,
-    #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
-    inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, comp::AttunedItems>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
+    /// The cached gear aggregates the invincibility check and the non-damage
+    /// mastery credit both read, instead of re-walking the target's loadout
+    /// per health change.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     agents: WriteStorage<'a, Agent>,
     healths: WriteStorage<'a, Health>,
     heads: WriteStorage<'a, Heads>,
+    /// The healer's Polyglot rank for non-damage mastery crediting (see the
+    /// `changed && ev.change.amount > 0.0` block below).
+    skill_sets: ReadStorage<'a, SkillSet>,
+    spell_masteries: WriteStorage<'a, SpellMastery>,
 }
 
 impl ServerEvent for HealthChangeEvent {
@@ -253,9 +301,8 @@ impl ServerEvent for HealthChangeEvent {
         let mut emitters = data.events.get_emitters();
         let mut rng = rand::rng();
         for ev in events {
-            if let Some((mut health, inventory, pos, uid, heads)) = (
+            if let Some((mut health, pos, uid, heads)) = (
                 &mut data.healths,
-                data.inventories.maybe(),
                 data.positions.maybe(),
                 data.uids.maybe(),
                 (&mut data.heads).maybe(),
@@ -263,11 +310,14 @@ impl ServerEvent for HealthChangeEvent {
                 .lend_join()
                 .get(ev.entity, &data.entities)
             {
-                // Skip damage if invincible.
-                if ev.change.amount < 0.0 &&
-                    // None indicates invincibility.
-                    combat::compute_protection(inventory, data.attuned_items.get(ev.entity), &data.msm)
-                        .is_none()
+                // Skip damage if invincible. `None` protection indicates
+                // invincibility; no cache at all means no `Inventory`, hence
+                // no armour, hence never invincible.
+                if ev.change.amount < 0.0
+                    && data
+                        .derived_stats
+                        .get(ev.entity)
+                        .is_some_and(|derived| derived.protection.is_none())
                 {
                     continue;
                 }
@@ -283,6 +333,53 @@ impl ServerEvent for HealthChangeEvent {
                         buff_change: buff::BuffChange::RemoveByKind(BuffKind::Shielded),
                     });
                 }
+
+                // Non-damage mastery credit: a heal (positive amount) that
+                // actually changed the target's HP, tagged with a magic
+                // source, from a resolvable caster who holds `SpellMastery`.
+                // The heal counterpart to the buff crediting in `BuffEvent`'s
+                // handler.
+                if changed
+                    && ev.change.amount > 0.0
+                    && let Some(source) = ev.change.magic_source
+                    && let Some(contributor) = ev.change.by
+                {
+                    let healer_uid = damage_contributor_uid(&contributor);
+                    if let Some(target_uid) = uid.copied()
+                        && let Some(healer_entity) = data.id_maps.uid_entity(healer_uid)
+                        && let Some(mut mastery) = data.spell_masteries.get_mut(healer_entity)
+                    {
+                        let target_in_combat = health
+                            .damaged_recently(ev.change.time, MASTERY_RECENT_COMBAT_WINDOW_SECS);
+                        // Finding B: the target's gear/skill/body five-tuple
+                        // existed only to re-fold this one number per landed
+                        // heal. No cache means no `Inventory`, hence
+                        // `DerivedStats::default()`'s rating, 0.0.
+                        let target_combat_rating = data
+                            .derived_stats
+                            .get(ev.entity)
+                            .map_or(0.0, |derived| derived.combat_rating);
+                        let polyglot_rank = data.skill_sets.get(healer_entity).map_or(0, |ss| {
+                            ss.skill_level(Skill::Mage(MageSkill::Polyglot))
+                                .unwrap_or(0)
+                        });
+                        grant_non_damage_mastery(
+                            &mut mastery,
+                            source,
+                            healer_uid,
+                            target_uid,
+                            target_in_combat,
+                            // Every actual HP change is its own real event
+                            // (there is no "refresh" concept for a heal the
+                            // way there is for a buff instance), so this is
+                            // always a fresh grant.
+                            true,
+                            target_combat_rating,
+                            polyglot_rank,
+                        );
+                    }
+                }
+
                 if let Some(mut heads) = heads {
                     // We want some hp to be left for a headless body, so we divide by (max amount
                     // of heads + 2)
@@ -304,8 +401,7 @@ impl ServerEvent for HealthChangeEvent {
 
                 #[cfg(feature = "worldgen")]
                 if changed {
-                    let entity_as_actor =
-                        |entity| entity_as_actor(entity, &data.rtsim_entities, &data.presences);
+                    let entity_as_actor = |entity| data.rtsim_actors.get(entity).copied();
                     if let Some(actor) = entity_as_actor(ev.entity) {
                         let cause = ev
                             .change
@@ -359,6 +455,7 @@ impl ServerEvent for HealthChangeEvent {
                         emitters.emit(DestroyEvent {
                             entity: ev.entity,
                             cause: ev.change,
+                            removal: combat::RemovalInfo::killed(),
                         });
                     }
                 }
@@ -401,6 +498,12 @@ impl ServerEvent for HealthChangeEvent {
                     entity: ev.entity,
                     buff_change: buff::BuffChange::RemoveByKind(BuffKind::Asleep),
                 });
+                // RestfulSleep (a voluntary nap granted to willing allies)
+                // shares the same wake-on-damage rule as Asleep.
+                emitters.emit(BuffEvent {
+                    entity: ev.entity,
+                    buff_change: buff::BuffChange::RemoveByKind(BuffKind::RestfulSleep),
+                });
             }
         }
     }
@@ -428,9 +531,7 @@ pub struct HelpDownedEventData<'a> {
     #[cfg(feature = "worldgen")]
     index: ReadExpect<'a, IndexOwned>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
-    #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, Presence>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     character_states: WriteStorage<'a, comp::CharacterState>,
     healths: WriteStorage<'a, comp::Health>,
 }
@@ -451,8 +552,7 @@ impl ServerEvent for HelpDownedEvent {
                 }
 
                 #[cfg(feature = "worldgen")]
-                let entity_as_actor =
-                    |entity| entity_as_actor(entity, &data.rtsim_entities, &data.presences);
+                let entity_as_actor = |entity| data.rtsim_actors.get(entity).copied();
                 #[cfg(feature = "worldgen")]
                 if let Some(actor) = entity_as_actor(entity) {
                     let saver = ev
@@ -552,38 +652,35 @@ fn handle_exp_gain(
     exp_reward: f32,
     inventory: &Inventory,
     skill_set: &mut SkillSet,
+    character_class: Option<&mut CharacterClass>,
     uid: &Uid,
     outcomes_emitter: &mut Emitter<Outcome>,
 ) {
     use comp::inventory::{item::ItemKind, slot::EquipSlot};
 
-    // Create hash set of xp pools to consider splitting xp amongst
+    // Create hash set of xp pools to consider splitting xp amongst. The class
+    // slice is handled separately below: it counts as ONE slot here
+    // regardless of how many `Class(_)` groups the character holds, so
+    // gaining a second class group (multiclass) never dilutes General or
+    // weapon XP, which have nothing to do with multiclassing.
     let mut xp_pools = HashSet::<SkillGroupKind>::new();
     // Insert general pool since it is always accessible
     xp_pools.insert(SkillGroupKind::General);
-    // BL-06: the character's class group is always-active (like General), so it
-    // earns combat XP from every kill — this is the source of class skill points
-    // (spec §1). Without it the class trees can never be unlocked.
-    if let Some(class_group) = skill_set
-        .skill_groups()
-        .map(|sg| sg.skill_group_kind)
-        .find(|kind| matches!(kind, SkillGroupKind::Class(_)))
-    {
-        xp_pools.insert(class_group);
-    }
     // Closure to add xp pool corresponding to weapon type equipped in a particular
     // EquipSlot
     let mut add_tool_from_slot = |equip_slot| {
-        let tool_kind = inventory
+        let skill_group = inventory
             .equipped(equip_slot)
             .and_then(|i| match &*i.kind() {
-                ItemKind::Tool(tool) if tool.kind.gains_combat_xp() => Some(tool.kind),
+                ItemKind::Tool(tool) if tool.kind.gains_combat_xp() => {
+                    Some(combat::skill_group_for_weapon(tool))
+                },
                 _ => None,
             });
-        if let Some(weapon) = tool_kind {
+        if let Some(skill_group) = skill_group {
             // Only adds to xp pools if entity has that skill group available
-            if skill_set.skill_group_accessible(SkillGroupKind::Weapon(weapon)) {
-                xp_pools.insert(SkillGroupKind::Weapon(weapon));
+            if skill_set.skill_group_accessible(skill_group) {
+                xp_pools.insert(skill_group);
             }
         }
     };
@@ -592,7 +689,21 @@ fn handle_exp_gain(
     add_tool_from_slot(EquipSlot::ActiveOffhand);
     add_tool_from_slot(EquipSlot::InactiveMainhand);
     add_tool_from_slot(EquipSlot::InactiveOffhand);
-    let num_pools = xp_pools.len() as f32;
+
+    // The character's class group(s) are always-active (like General), so they
+    // earn combat XP from every kill — this is the source of class skill
+    // points (spec §1). Without it the class trees can never be unlocked. A
+    // multiclass character holds up to 2 `Class(_)` groups; the class slice's
+    // reward is split evenly across however many are present (Model A: 50/50
+    // for two, unchanged for one).
+    let class_groups: Vec<SkillGroupKind> = skill_set
+        .skill_groups()
+        .map(|sg| sg.skill_group_kind)
+        .filter(|kind| matches!(kind, SkillGroupKind::Class(_)))
+        .collect();
+    let has_class_slice = !class_groups.is_empty();
+
+    let num_pools = xp_pools.len() as f32 + if has_class_slice { 1.0 } else { 0.0 };
     let level_before = skill_set.character_level();
     for pool in xp_pools.iter() {
         if let Some(level_outcome) =
@@ -603,6 +714,19 @@ fn handle_exp_gain(
                 skill_tree: *pool,
                 total_points: level_outcome,
             });
+        }
+    }
+    if has_class_slice {
+        let per_class_reward = ((exp_reward / num_pools) / class_groups.len() as f32).ceil() as u32;
+        for class_group in &class_groups {
+            if let Some(level_outcome) = skill_set.add_experience(*class_group, per_class_reward) {
+                outcomes_emitter.emit(Outcome::SkillPointGain {
+                    uid: *uid,
+                    skill_tree: *class_group,
+                    total_points: level_outcome,
+                });
+            }
+            xp_pools.insert(*class_group);
         }
     }
     let level_after = skill_set.character_level();
@@ -617,6 +741,11 @@ fn handle_exp_gain(
             uid = ?uid,
             new_level = level_after
         );
+        // Set-and-forget routing preference: a no-op unless the player has
+        // opted a multiclass character's future levels to the secondary.
+        if let Some(character_class) = character_class {
+            character_class.route_levels_gained(level_after - level_before, level_after);
+        }
     }
     // BL-20: 1 feat point per 10 character levels (15/25/35/45 — lore cadence,
     // max 4 total). Grants directly via `grant_skill_point` (exp-independent),
@@ -633,6 +762,898 @@ fn handle_exp_gain(
         exp: exp_reward as u32,
         xp_pools,
     });
+}
+
+/// The `Uid` of the entity that actually dealt this damage, regardless of
+/// whether it was recorded `Solo` or as part of a `Group` at the time --
+/// both variants uniquely identify one attacking entity. Used to key
+/// mastery crediting on the ATTACKER, never the group, since a group-XP
+/// award (below) can reach bystanders who dealt no damage at all.
+fn damage_contributor_uid(contributor: &DamageContributor) -> Uid {
+    match contributor {
+        DamageContributor::Solo(uid) => *uid,
+        DamageContributor::Group { entity_uid, .. } => *entity_uid,
+    }
+}
+
+/// Credits one attacker's `SpellMastery` for their own share of a kill.
+/// Called once per entry of `exp_awards` (spec §2a), i.e. only for an
+/// attacker who already cleared every existing XP-eligibility check --
+/// in-range, not the victim itself, not a PvP kill. This function takes no
+/// PvP/self-kill signal at all, because by the time it runs those cases
+/// already never call it: mastery has no separate anti-farm rule to write,
+/// it simply inherits the one XP already has.
+///
+/// `own_total_damage` / `own_damage_by_source` are THIS attacker's own
+/// entry in `Health::damage_contributors` -- never the group's summed total
+/// -- so mastery tracks personal spellcasting even when the group-XP split
+/// (spec-unrelated) divides the reward among bystanders who never cast
+/// anything. `exp_reward` is this attacker's already-computed share of the
+/// kill (post group-division), matching the currency `handle_exp_gain`
+/// itself spends.
+///
+/// A no-op if this attacker dealt no damage at all (nothing to attribute) or
+/// holds no `SpellMastery` component yet (an NPC, a pet, or any entity that
+/// predates the component).
+fn grant_kill_mastery(
+    mastery: &mut SpellMastery,
+    exp_reward: f32,
+    own_total_damage: u64,
+    own_damage_by_source: &[u64; MagicSource::COUNT],
+    target_level: u16,
+    caster_level: u16,
+    polyglot_rank: u16,
+) {
+    if own_total_damage == 0 {
+        return;
+    }
+    let delta = i32::from(target_level) - i32::from(caster_level);
+    let weight =
+        level_delta_weight(delta) * (1.0 + POLYGLOT_BONUS_PER_RANK * f32::from(polyglot_rank));
+    for source in MagicSource::ALL {
+        if matches!(source, MagicSource::Arcane) {
+            continue;
+        }
+        let source_damage = own_damage_by_source[source as usize];
+        if source_damage == 0 {
+            continue;
+        }
+        let share = source_damage as f32 / own_total_damage as f32;
+        grant_source_mastery(mastery, source, exp_reward * share, weight);
+    }
+}
+
+/// Credits mastery for a spell that landed a non-damage effect (a buff or a
+/// heal) on another entity. The single decision surface both the
+/// `HealthChangeEvent` (heal) and `BuffEvent` (buff) server handlers reduce
+/// their own ECS state down to and call, so the two anti-farm rules below
+/// are asserted exactly once rather than re-derived per handler.
+///
+/// How recently a target must have taken damage, relative to the moment a
+/// heal/buff lands on it, for that landing to be considered a real support
+/// moment rather than free credit. Deliberately much shorter than
+/// `Health`'s own 600s `damage_contributors` prune window -- that longer
+/// window exists to still award kill XP to whoever tapped a target minutes
+/// ago, which is the wrong question here: "is this target actively, still
+/// fighting right now." A single stray hit taken 9 minutes ago must not
+/// leave a 10-minute-wide farmable window for unthrottled non-damage
+/// mastery credit on that target.
+const MASTERY_RECENT_COMBAT_WINDOW_SECS: f64 = 20.0;
+
+/// A no-op when `caster_uid == target_uid` (a self-only buff or heal earns
+/// nothing -- there is no other entity to have landed on), when
+/// `target_in_combat` is `false` (nobody has damaged the target within
+/// [`MASTERY_RECENT_COMBAT_WINDOW_SECS`], so there is no real fight to
+/// credit against and a full-health, never-fought target is worth nothing),
+/// or when `is_fresh_grant` is `false` (the buff path only: re-casting an
+/// already-active matching buff on the same target is a refresh, not a new
+/// landed effect, and must not credit again every recast).
+///
+/// `target_combat_rating` is what the credit scales with once the gates
+/// above pass, mirroring `exp_reward`'s own `combat_rating(...) * 20.0` --
+/// there is no `reward_fraction` factor here since nothing died.
+/// `NON_DAMAGE_WEIGHT` and the `Mage(Polyglot)` bonus both apply the same
+/// way they do on the damage path; `level_delta_weight` deliberately does
+/// NOT -- it models a kill-specific overleveled/underleveled anti-farm
+/// curve with no natural reading for "how many levels above me is the ally
+/// I just healed", and the combat-rating scaling above already does the
+/// anti-farm job this path needs (a trivial target is worth ~nothing before
+/// this weight would even apply).
+fn grant_non_damage_mastery(
+    mastery: &mut SpellMastery,
+    source: MagicSource,
+    caster_uid: Uid,
+    target_uid: Uid,
+    target_in_combat: bool,
+    is_fresh_grant: bool,
+    target_combat_rating: f32,
+    polyglot_rank: u16,
+) {
+    if caster_uid == target_uid || !target_in_combat || !is_fresh_grant {
+        return;
+    }
+    let base_xp = target_combat_rating * 20.0;
+    let weight = NON_DAMAGE_WEIGHT * (1.0 + POLYGLOT_BONUS_PER_RANK * f32::from(polyglot_rank));
+    grant_source_mastery(mastery, source, base_xp, weight);
+}
+
+#[cfg(test)]
+mod handle_exp_gain_tests {
+    use super::*;
+    use common::{
+        comp::{Item, class::ClassKind, inventory::Inventory},
+        event::EventBus,
+    };
+    use core::num::NonZeroU64;
+
+    fn uid() -> Uid { Uid(NonZeroU64::new(1).unwrap()) }
+
+    fn earned_exp(skill_set: &SkillSet, kind: SkillGroupKind) -> u32 {
+        skill_set
+            .skill_groups()
+            .find(|sg| sg.skill_group_kind == kind)
+            .unwrap()
+            .earned_exp
+    }
+
+    fn gain_exp(skill_set: &mut SkillSet, exp_reward: f32) -> HashSet<SkillGroupKind> {
+        let inventory = Inventory::with_empty();
+        let bus = EventBus::<Outcome>::default();
+        let mut emitter = bus.emitter();
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        handle_exp_gain(
+            exp_reward,
+            &inventory,
+            skill_set,
+            Some(&mut character_class),
+            &uid(),
+            &mut emitter,
+        );
+        emitter
+            .events
+            .iter()
+            .find_map(|o| match o {
+                Outcome::ExpChange { xp_pools, .. } => Some(xp_pools.clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    /// The class slice must count as exactly one slot regardless of how many
+    /// `Class(_)` groups are held, so a single-class character's per-pool
+    /// split is byte-identical to the pre-multiclass behaviour (General +
+    /// one class group = 2 pools, no weapons equipped).
+    #[test]
+    fn single_class_xp_split_is_unaffected_by_the_class_slice_refactor() {
+        let mut skill_set = SkillSet::default();
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+
+        let xp_pools = gain_exp(&mut skill_set, 100.0);
+
+        assert_eq!(
+            xp_pools,
+            HashSet::from([
+                SkillGroupKind::General,
+                SkillGroupKind::Class(ClassKind::Warrior)
+            ])
+        );
+        // 2 pools (General + the one class slice) -> 50 exp each, exactly the
+        // pre-refactor split.
+        assert_eq!(
+            earned_exp(&skill_set, SkillGroupKind::Class(ClassKind::Warrior)),
+            50
+        );
+        assert_eq!(earned_exp(&skill_set, SkillGroupKind::General), 50);
+    }
+
+    /// A multiclass character's class slice is still ONE slot (so General
+    /// stays at half the reward, not a third) and is split deterministically
+    /// 50/50 across the two held class groups.
+    #[test]
+    fn multiclass_xp_split_shares_one_class_slice_deterministically() {
+        let mut skill_set = SkillSet::default();
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warlock));
+
+        let xp_pools = gain_exp(&mut skill_set, 100.0);
+
+        assert_eq!(
+            xp_pools,
+            HashSet::from([
+                SkillGroupKind::General,
+                SkillGroupKind::Class(ClassKind::Warrior),
+                SkillGroupKind::Class(ClassKind::Warlock)
+            ])
+        );
+        // Still 2 pools for the purpose of the top-level split (General +
+        // ONE class slice) -> General gets 50, same as the single-class
+        // case above, not 33.
+        assert_eq!(earned_exp(&skill_set, SkillGroupKind::General), 50);
+        // The 50-exp class slice splits 50/50 across the two class groups.
+        assert_eq!(
+            earned_exp(&skill_set, SkillGroupKind::Class(ClassKind::Warrior)),
+            25
+        );
+        assert_eq!(
+            earned_exp(&skill_set, SkillGroupKind::Class(ClassKind::Warlock)),
+            25
+        );
+    }
+
+    /// The banishment reward is the *same* generic `combat_rating`-derived XP
+    /// every kill uses, scaled by `RemovalInfo::reward_fraction` — not a
+    /// separate reward system. This pins the multiplier at the one point it is
+    /// applied, so a later refactor of the XP block cannot silently drop it.
+    #[test]
+    fn a_banishment_awards_a_quarter_of_the_kill_experience() {
+        const RAW_EXP: f32 = 400.0;
+        let killed = RAW_EXP * combat::RemovalInfo::killed().reward_fraction;
+        let banished = RAW_EXP * combat::RemovalInfo::banished(0.25).reward_fraction;
+        assert!((killed - 400.0).abs() < f32::EPSILON);
+        assert!((banished - 100.0).abs() < f32::EPSILON);
+
+        let mut killed_set = SkillSet::default();
+        killed_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        gain_exp(&mut killed_set, killed);
+
+        let mut banished_set = SkillSet::default();
+        banished_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        gain_exp(&mut banished_set, banished);
+
+        assert_eq!(
+            earned_exp(&killed_set, SkillGroupKind::General),
+            (killed / 2.0).ceil() as u32
+        );
+        assert_eq!(
+            earned_exp(&banished_set, SkillGroupKind::General),
+            (banished / 2.0).ceil() as u32
+        );
+        assert!(
+            earned_exp(&banished_set, SkillGroupKind::General)
+                < earned_exp(&killed_set, SkillGroupKind::General)
+        );
+    }
+
+    /// A martial-role Staff must route combat XP to its own `WeaponRoled`
+    /// skill group, not the caster `Weapon(Staff)` tree it shares a
+    /// `ToolKind` with -- otherwise a character who invested points in the
+    /// martial tree earns zero weapon-XP from every kill while wielding it,
+    /// and the `WeaponRoled` tree becomes permanently unpurchasable through
+    /// live play. Mirrors `combat::skill_group_for_weapon`'s own contract.
+    #[test]
+    fn martial_staff_routes_combat_xp_to_its_own_skill_group() {
+        use common::{comp::inventory::slot::EquipSlot, resources::Time};
+
+        let mut skill_set = SkillSet::default();
+        skill_set.unlock_skill_group(SkillGroupKind::Class(ClassKind::Warrior));
+        skill_set.unlock_skill_group(SkillGroupKind::WeaponRoled(
+            common::comp::inventory::item::tool::ToolKind::Staff,
+            common::comp::inventory::item::tool::WeaponRole::Martial,
+        ));
+
+        let mut inventory = Inventory::with_empty();
+        inventory.replace_loadout_item(
+            EquipSlot::ActiveMainhand,
+            Some(Item::new_from_asset_expect(
+                "common.items.weapons.staff.frostbound_quarterstaff",
+            )),
+            Time(0.0),
+        );
+
+        let bus = EventBus::<Outcome>::default();
+        let mut emitter = bus.emitter();
+        let mut character_class = CharacterClass::single(ClassKind::Warrior);
+        handle_exp_gain(
+            100.0,
+            &inventory,
+            &mut skill_set,
+            Some(&mut character_class),
+            &uid(),
+            &mut emitter,
+        );
+        let xp_pools = emitter
+            .events
+            .iter()
+            .find_map(|o| match o {
+                Outcome::ExpChange { xp_pools, .. } => Some(xp_pools.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert!(
+            xp_pools.contains(&SkillGroupKind::WeaponRoled(
+                common::comp::inventory::item::tool::ToolKind::Staff,
+                common::comp::inventory::item::tool::WeaponRole::Martial,
+            )),
+            "expected the martial-staff kill XP to land in WeaponRoled(Staff, Martial), got \
+             {xp_pools:?}"
+        );
+        assert!(
+            !xp_pools.contains(&SkillGroupKind::Weapon(
+                common::comp::inventory::item::tool::ToolKind::Staff
+            )),
+            "martial-staff kill XP must not be misrouted to the caster Weapon(Staff) tree, got \
+             {xp_pools:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod grant_kill_mastery_tests {
+    use super::*;
+
+    /// A kill done 70% Divine / 30% weapon credits Divine
+    /// `0.70 * exp_reward` (at Delta=0, W=1.0, no Polyglot) and nothing else.
+    #[test]
+    fn credits_only_the_source_actually_used_by_its_own_damage_share() {
+        let mut mastery = SpellMastery::default();
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Divine as usize] = 70;
+        // own_total_damage = 100: 70 Divine-tagged, 30 untagged (weapon).
+
+        grant_kill_mastery(&mut mastery, 1000.0, 100, &by_source, 20, 20, 0);
+
+        assert_eq!(mastery.source_xp(MagicSource::Divine), 700);
+        assert_eq!(mastery.source_xp(MagicSource::Primordial), 0);
+        assert_eq!(mastery.source_xp(MagicSource::Psionic), 0);
+        assert_eq!(mastery.source_xp(MagicSource::Ki), 0);
+        assert_eq!(mastery.source_xp(MagicSource::Arcane), 0);
+    }
+
+    /// A kill done entirely with a weapon (no magic source tagged on any of
+    /// the damage) credits zero mastery, even though `own_total_damage` is
+    /// nonzero -- there is nothing in `by_source` to attribute.
+    #[test]
+    fn a_kill_done_entirely_with_a_weapon_credits_zero_mastery() {
+        let mut mastery = SpellMastery::default();
+        let by_source = [0u64; MagicSource::COUNT];
+
+        grant_kill_mastery(&mut mastery, 1000.0, 100, &by_source, 20, 20, 0);
+
+        for source in MagicSource::ALL {
+            assert_eq!(mastery.source_xp(source), 0, "{source:?}");
+        }
+    }
+
+    /// `level_delta_weight` is actually applied: the same kill against a
+    /// target 10 levels below the caster yields 0.15x the at-level result.
+    #[test]
+    fn the_level_delta_weight_scales_the_credited_xp() {
+        let mut at_level = SpellMastery::default();
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Primordial as usize] = 100;
+        grant_kill_mastery(&mut at_level, 1000.0, 100, &by_source, 20, 20, 0);
+
+        let mut ten_below = SpellMastery::default();
+        grant_kill_mastery(&mut ten_below, 1000.0, 100, &by_source, 10, 20, 0);
+
+        assert_eq!(at_level.source_xp(MagicSource::Primordial), 1000);
+        assert_eq!(ten_below.source_xp(MagicSource::Primordial), 150);
+    }
+
+    /// A caster dealing no damage at all (present in `exp_awards` only
+    /// because a group kill split XP to a bystander) attributes nothing --
+    /// there is no own damage to derive a source share from.
+    #[test]
+    fn an_attacker_with_no_own_damage_credits_nothing() {
+        let mut mastery = SpellMastery::default();
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Divine as usize] = 0;
+
+        grant_kill_mastery(&mut mastery, 1000.0, 0, &by_source, 20, 20, 0);
+
+        for source in MagicSource::ALL {
+            assert_eq!(mastery.source_xp(source), 0, "{source:?}");
+        }
+    }
+
+    /// `Mage(Polyglot)` multiplies the credited XP: rank 3 -> x1.24.
+    #[test]
+    fn polyglot_rank_multiplies_the_credited_xp() {
+        let mut by_source = [0u64; MagicSource::COUNT];
+        by_source[MagicSource::Ki as usize] = 100;
+
+        let mut no_polyglot = SpellMastery::default();
+        grant_kill_mastery(&mut no_polyglot, 1000.0, 100, &by_source, 20, 20, 0);
+
+        let mut rank_three = SpellMastery::default();
+        grant_kill_mastery(&mut rank_three, 1000.0, 100, &by_source, 20, 20, 3);
+
+        assert_eq!(no_polyglot.source_xp(MagicSource::Ki), 1000);
+        assert_eq!(rank_three.source_xp(MagicSource::Ki), 1240);
+    }
+
+    /// `polyglot_rank` above is always a value read from
+    /// `skill_set.skill_level(...)`, itself bounded by
+    /// `skill_max_levels.ron` through `Skill::max_level`. This pins the
+    /// manifest's current cap so `POLYGLOT_BONUS_PER_RANK`'s "+24% at rank
+    /// 3" doc comment stays true if the manifest is ever retuned -- the
+    /// mistake a hardcoded `3` made elsewhere in this codebase before.
+    #[test]
+    fn mage_polyglot_max_rank_is_read_from_the_manifest() {
+        use common::comp::skills::MageSkill;
+        assert_eq!(Skill::Mage(MageSkill::Polyglot).max_level(), 3);
+    }
+}
+
+#[cfg(test)]
+mod grant_non_damage_mastery_tests {
+    use super::*;
+    use core::num::NonZeroU64;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// Spec's self-only exclusion: `caster_uid == target_uid` is exactly
+    /// what a self-buff or self-heal looks like once reduced to this
+    /// function's inputs -- it credits nothing. The same call against a
+    /// distinct target (a party member) credits.
+    #[test]
+    fn a_self_only_buff_credits_nothing_but_the_same_buff_on_a_party_member_credits() {
+        let caster = uid(1);
+
+        let mut self_cast = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut self_cast,
+            MagicSource::Divine,
+            caster,
+            caster,
+            true,
+            true, // is_fresh_grant
+            1000.0,
+            0,
+        );
+        assert_eq!(self_cast.source_xp(MagicSource::Divine), 0);
+
+        let mut party_member = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut party_member,
+            MagicSource::Divine,
+            caster,
+            uid(2),
+            true,
+            true, // is_fresh_grant
+            1000.0,
+            0,
+        );
+        assert!(party_member.source_xp(MagicSource::Divine) > 0);
+    }
+
+    /// A full-health, never-damaged target (empty damage-contributor ledger,
+    /// `target_in_combat == false`) credits zero no matter how high its
+    /// combat_rating is. A mid-fight ally (`target_in_combat == true`)
+    /// credits exactly `combat_rating * 20.0 * NON_DAMAGE_WEIGHT` at rank 0 --
+    /// the non-damage path's counterpart to `exp_reward`.
+    #[test]
+    fn healing_a_never_damaged_target_credits_zero_but_a_mid_fight_ally_credits_the_non_damage_weight()
+     {
+        let caster = uid(1);
+        let target = uid(2);
+
+        let mut never_damaged = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut never_damaged,
+            MagicSource::Divine,
+            caster,
+            target,
+            false,
+            true, // is_fresh_grant
+            1000.0,
+            0,
+        );
+        assert_eq!(never_damaged.source_xp(MagicSource::Divine), 0);
+
+        let mut mid_fight = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut mid_fight,
+            MagicSource::Divine,
+            caster,
+            target,
+            true,
+            true, // is_fresh_grant
+            1000.0,
+            0,
+        );
+        assert_eq!(
+            mid_fight.source_xp(MagicSource::Divine),
+            (1000.0 * 20.0 * NON_DAMAGE_WEIGHT).round() as u32
+        );
+    }
+
+    /// `Mage(Polyglot)` multiplies the non-damage credit the same way it
+    /// does the damage path: rank 3 -> x1.24 on top of `NON_DAMAGE_WEIGHT`.
+    #[test]
+    fn polyglot_rank_multiplies_the_non_damage_credit_too() {
+        let caster = uid(1);
+        let target = uid(2);
+
+        let mut no_polyglot = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut no_polyglot,
+            MagicSource::Primordial,
+            caster,
+            target,
+            true,
+            true, // is_fresh_grant
+            1000.0,
+            0,
+        );
+        let mut rank_three = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut rank_three,
+            MagicSource::Primordial,
+            caster,
+            target,
+            true,
+            true, // is_fresh_grant
+            1000.0,
+            3,
+        );
+
+        let no_polyglot_xp = no_polyglot.source_xp(MagicSource::Primordial);
+        let rank_three_xp = rank_three.source_xp(MagicSource::Primordial);
+        assert_eq!(no_polyglot_xp, 5_000);
+        assert_eq!(rank_three_xp, 6_200);
+    }
+
+    /// Arcane is never written on the non-damage path either -- a landed
+    /// Arcane buff/heal on a genuine in-combat ally still earns zero
+    /// source-XP for it, the same invariant `grant_kill_mastery` upholds on
+    /// the damage path.
+    #[test]
+    fn arcane_is_never_written_by_the_non_damage_path_either() {
+        let mut mastery = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut mastery,
+            MagicSource::Arcane,
+            uid(1),
+            uid(2),
+            true,
+            true, // is_fresh_grant
+            1000.0,
+            0,
+        );
+        assert_eq!(mastery.source_xp(MagicSource::Arcane), 0);
+    }
+
+    /// The named anti-farm failure mode: standing still and casting into
+    /// the air (or at nothing at all) never earns mastery. There is no
+    /// separate "cast" signal this function -- or its callers -- ever
+    /// consumes: the server only reaches a `HealthChangeEvent`/`BuffEvent`
+    /// handler when an effect actually landed on some entity, and
+    /// `grant_source_mastery` is the only place `SpellMastery.source_xp` is
+    /// ever written. A spell with no target in range emits neither event, so
+    /// nothing here is ever called and the ledger cannot move.
+    #[test]
+    fn standing_still_casting_into_the_air_earns_no_mastery() {
+        let mastery = SpellMastery::default();
+        for source in MagicSource::ALL {
+            assert_eq!(mastery.source_xp(source), 0, "{source:?}");
+        }
+    }
+
+    /// Re-casting an already-active matching buff on the same target (the
+    /// buff-spam farming vector this function's `is_fresh_grant` gate
+    /// closes) credits nothing, even though every other gate (distinct
+    /// target, in-combat) passes.
+    #[test]
+    fn a_refreshed_buff_credits_nothing_but_a_fresh_one_credits() {
+        let caster = uid(1);
+        let target = uid(2);
+
+        let mut refreshed = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut refreshed,
+            MagicSource::Divine,
+            caster,
+            target,
+            true,
+            false, // is_fresh_grant: a recast of an already-active buff
+            1000.0,
+            0,
+        );
+        assert_eq!(refreshed.source_xp(MagicSource::Divine), 0);
+
+        let mut fresh = SpellMastery::default();
+        grant_non_damage_mastery(
+            &mut fresh,
+            MagicSource::Divine,
+            caster,
+            target,
+            true,
+            true,
+            1000.0,
+            0,
+        );
+        assert!(fresh.source_xp(MagicSource::Divine) > 0);
+    }
+}
+
+/// The heal path's `target_combat_rating` now comes off the `DerivedStats`
+/// cache instead of being re-folded from the target's `(inventory, energy,
+/// poise, skill_set, body)` at every landed heal. This pins that the swap is
+/// value-preserving end to end: the rating the cache holds for a really-geared
+/// entity, run through the same `grant_non_damage_mastery` the handler calls,
+/// must credit the identical XP the direct-compute path credits.
+#[cfg(test)]
+mod non_damage_mastery_reads_the_cache_tests {
+    use super::*;
+    use common::{
+        comp::{
+            DerivedStats,
+            inventory::{
+                item::{
+                    Item, ItemBase, ItemDef, ItemKind,
+                    armor::{self, Armor, ArmorKind, Protection},
+                },
+                loadout_builder::LoadoutBuilder,
+            },
+        },
+        resources::GameMode,
+        shared_server_config::ServerConstants,
+        skillset_builder::SkillSetBuilder,
+        terrain::{MapSizeLg, TerrainChunk},
+    };
+    use core::num::NonZeroU64;
+    use specs::{Builder, WorldExt};
+    use std::{sync::Arc, time::Duration};
+    use vek::Vec2;
+
+    const WORLD_CHUNKS_LG: MapSizeLg =
+        if let Ok(map_size_lg) = MapSizeLg::new(Vec2 { x: 10, y: 10 }) {
+            map_size_lg
+        } else {
+            panic!("Default world chunk size does not satisfy required invariants.");
+        };
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    fn setup() -> common_state::State {
+        let pools = common_state::State::pools(GameMode::Server);
+        let mut state = common_state::State::new(
+            GameMode::Server,
+            pools,
+            WORLD_CHUNKS_LG,
+            Arc::new(TerrainChunk::water(0)),
+            |dispatch_builder| {
+                common_systems::add_local_systems(dispatch_builder);
+            },
+            #[cfg(feature = "plugins")]
+            common_state::plugin::PluginMgr::default(),
+        );
+        state
+            .ecs_mut()
+            .insert(MaterialStatManifest::load().cloned());
+        state.ecs_mut().insert(AbilityMap::load().cloned());
+        state
+    }
+
+    /// A chest piece with real, non-degenerate stats on every channel the
+    /// rating folds, so a cache read that silently returned the default would
+    /// visibly differ from the direct computation.
+    fn geared_loadout() -> Inventory {
+        let item = Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(ItemDef::create_test_itemdef_from_kind(
+                ItemKind::Armor(Armor::new(
+                    ArmorKind::Chest,
+                    armor::StatsSource::Direct(armor::Stats {
+                        protection: Some(Protection::Normal(12.5)),
+                        poise_resilience: Some(Protection::Normal(7.25)),
+                        energy_max: Some(13.0),
+                        energy_reward: Some(0.35),
+                        precision_power: Some(0.17),
+                        stealth: Some(0.9),
+                        ground_contact: Default::default(),
+                    }),
+                )),
+            ))),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &MaterialStatManifest::load().read(),
+        );
+        Inventory::with_loadout_humanoid(LoadoutBuilder::empty().chest(Some(item)).build())
+    }
+
+    #[test]
+    fn a_heal_on_a_geared_ally_credits_the_same_xp_from_the_cache_as_from_a_direct_computation() {
+        let mut state = setup();
+        let body = Body::Humanoid(common::comp::humanoid::Body::random());
+        let inventory = geared_loadout();
+        let mut skill_set = SkillSetBuilder::default().build();
+        skill_set.grant_skill_point(SkillGroupKind::General);
+
+        let ally = state
+            .ecs_mut()
+            .create_entity_synced()
+            .with(body)
+            .with(Health::new(body))
+            .with(Energy::new(body))
+            .with(Poise::new(body))
+            .with(Stats::empty(body))
+            .with(skill_set)
+            .with(inventory)
+            .build();
+
+        state.tick(
+            Duration::from_millis(16),
+            false,
+            None,
+            &ServerConstants {
+                day_cycle_coefficient: 24.0,
+                oracle_live: false,
+            },
+            |_, _| {},
+        );
+
+        let ecs = state.ecs();
+        let cached_rating = ecs
+            .read_storage::<DerivedStats>()
+            .get(ally)
+            .expect("a geared entity has a cache after one tick")
+            .combat_rating;
+        assert!(cached_rating > 0.0, "the fixture must be non-degenerate");
+
+        // The direct-compute path, with exactly the arguments the deleted
+        // `combat::combat_rating` free function used to pass: attunement-blind,
+        // and the three base maxima taken off the live components.
+        let healths = ecs.read_storage::<Health>();
+        let energies = ecs.read_storage::<Energy>();
+        let poises = ecs.read_storage::<Poise>();
+        let inventories = ecs.read_storage::<Inventory>();
+        let skill_sets = ecs.read_storage::<SkillSet>();
+        let direct_rating = DerivedStats::compute(
+            inventories.get(ally),
+            None,
+            skill_sets.get(ally),
+            Some(body),
+            healths.get(ally).map(|h| h.base_max()),
+            energies.get(ally).map(|e| e.base_max()),
+            poises.get(ally).map(|p| p.base_max()),
+            &ecs.read_resource::<MaterialStatManifest>(),
+        )
+        .combat_rating;
+        assert_eq!(cached_rating, direct_rating);
+
+        // …and the XP the healer actually banks is identical either way.
+        let credit = |rating| {
+            let mut mastery = SpellMastery::default();
+            grant_non_damage_mastery(
+                &mut mastery,
+                MagicSource::Divine,
+                uid(1),
+                uid(2),
+                true,
+                true,
+                rating,
+                0,
+            );
+            mastery.source_xp(MagicSource::Divine)
+        };
+        assert_eq!(credit(cached_rating), credit(direct_rating));
+        assert!(
+            credit(cached_rating) > 0,
+            "a real heal on a geared, mid-fight ally must credit something"
+        );
+    }
+}
+
+#[cfg(test)]
+mod death_supersedes_banishment_tests {
+    use super::*;
+    use common::combat::RemovalInfo;
+    use specs::{Builder, WorldExt};
+
+    fn removal_of(entity: EcsEntity, removal: RemovalInfo) -> DestroyEvent {
+        DestroyEvent {
+            entity,
+            cause: HealthChange {
+                amount: 0.0,
+                by: None,
+                cause: None,
+                magic_source: None,
+                time: Time(0.0),
+                precise: false,
+                instance: 0,
+            },
+            removal,
+        }
+    }
+
+    /// Drives the *production* filter — the same call `DestroyEvent::handle`
+    /// makes — rather than restating the rule in test code.
+    fn honoured(batch: Vec<DestroyEvent>) -> Vec<DestroyEvent> {
+        let deaths = DeathsInBatch::of(&batch);
+        deaths.honoured(batch).collect()
+    }
+
+    /// 🔴 The race. A `DestroyEvent{Killed}` can be raised by
+    /// `HealthChangeEvent`'s handler or, from outside the dispatcher entirely,
+    /// by `common/systems`' stats system during `State::tick`; a
+    /// `DestroyEvent{Banished}` is raised by `BanishEvent`'s handler. Nothing
+    /// orders all three against each other, so one creature can be banished
+    /// and killed inside a single tick and both removals land in this batch.
+    /// Which one was emitted first is the scheduler's choice; the outcome must
+    /// not be.
+    ///
+    /// Real death always wins: exactly one removal survives for that entity,
+    /// and it is the kill. Anything else is either ~125% XP (the banishment's
+    /// quarter *plus* the kill's whole) or a banishment record with no
+    /// creature behind it.
+    #[test]
+    fn a_death_supersedes_a_banishment_in_the_same_batch_whichever_arrives_first() {
+        let mut world = specs::World::new();
+        let doomed = world.create_entity().build();
+        let bystander = world.create_entity().build();
+
+        let kill_first = vec![
+            removal_of(doomed, RemovalInfo::killed()),
+            removal_of(doomed, RemovalInfo::banished(0.25)),
+            removal_of(bystander, RemovalInfo::banished(0.25)),
+        ];
+        let banish_first = vec![
+            removal_of(doomed, RemovalInfo::banished(0.25)),
+            removal_of(doomed, RemovalInfo::killed()),
+            removal_of(bystander, RemovalInfo::banished(0.25)),
+        ];
+
+        for batch in [kill_first, banish_first] {
+            let honoured = honoured(batch);
+            let for_doomed: Vec<_> = honoured.iter().filter(|ev| ev.entity == doomed).collect();
+            assert_eq!(
+                for_doomed.len(),
+                1,
+                "the doomed creature must be removed exactly once, so it is rewarded exactly once"
+            );
+            assert!(
+                for_doomed[0].removal.cause.counts_as_kill(),
+                "the surviving removal must be the death, not the banishment"
+            );
+            assert_eq!(
+                honoured.iter().filter(|ev| ev.entity == bystander).count(),
+                1,
+                "an unrelated banishment in the same batch is untouched"
+            );
+        }
+    }
+
+    /// The rule must not quietly swallow ordinary banishments: with no death
+    /// for that entity in the batch, the banishment is honoured exactly as
+    /// before.
+    #[test]
+    fn a_banishment_alone_in_its_batch_is_still_honoured() {
+        let mut world = specs::World::new();
+        let banished = world.create_entity().build();
+        let batch = vec![removal_of(banished, RemovalInfo::banished(0.25))];
+
+        assert_eq!(honoured(batch).len(), 1);
+    }
+
+    /// A creature killed while it is *already* in limbo arrives as a lone kill
+    /// in a later tick. Nothing supersedes it; revoking its record is the
+    /// handler's job, not this rule's.
+    #[test]
+    fn a_lone_death_is_never_superseded() {
+        let mut world = specs::World::new();
+        let slain = world.create_entity().build();
+        let batch = vec![removal_of(slain, RemovalInfo::killed())];
+
+        assert_eq!(honoured(batch).len(), 1);
+    }
+
+    /// Duplicate `Destroy{Killed}` events for one entity are a shipped
+    /// (TODO-flagged) reality. They are left to the existing `is_dead` latch —
+    /// this rule must not start dropping kills, or a double-kill batch would
+    /// remove the entity zero times.
+    #[test]
+    fn duplicate_deaths_are_left_to_the_is_dead_latch() {
+        let mut world = specs::World::new();
+        let slain = world.create_entity().build();
+        let batch = vec![
+            removal_of(slain, RemovalInfo::killed()),
+            removal_of(slain, RemovalInfo::killed()),
+        ];
+
+        assert_eq!(honoured(batch).len(), 2);
+    }
 }
 
 #[derive(SystemData)]
@@ -655,7 +1676,17 @@ pub struct DestroyEventData<'a> {
     melees: WriteStorage<'a, comp::Melee>,
     beams: WriteStorage<'a, comp::Beam>,
     skill_sets: WriteStorage<'a, SkillSet>,
+    /// Read here (not written -- crediting happens through a short-lived
+    /// `get_mut` per attacker inside the exp-award loop) so an attacker with
+    /// no `SpellMastery` yet (an NPC, a pet, or any entity that predates this
+    /// component) is simply skipped rather than gating the rest of their
+    /// combat-XP award on it.
+    spell_masteries: WriteStorage<'a, SpellMastery>,
+    character_classes: WriteStorage<'a, CharacterClass>,
     inventories: WriteStorage<'a, Inventory>,
+    /// The cached gear aggregates the death-effect energy/poise formulas read,
+    /// instead of re-walking the affected entity's loadout per effect.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     item_drops: WriteStorage<'a, comp::ItemDrops>,
     velocities: WriteStorage<'a, comp::Vel>,
     force_updates: WriteStorage<'a, comp::ForceUpdate>,
@@ -668,22 +1699,94 @@ pub struct DestroyEventData<'a> {
     positions: ReadStorage<'a, Pos>,
     healths: WriteStorage<'a, Health>,
     bodies: ReadStorage<'a, Body>,
-    poises: ReadStorage<'a, Poise>,
     groups: ReadStorage<'a, Group>,
     alignments: ReadStorage<'a, Alignment>,
     ethos: WriteStorage<'a, comp::Ethos>,
     stats: ReadStorage<'a, Stats>,
     agents: ReadStorage<'a, Agent>,
     #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, RtSimEntity>,
-    #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, Presence>,
+    rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     masses: ReadStorage<'a, comp::Mass>,
     event_buses: DestroyEvents<'a>,
     buffs: ReadStorage<'a, comp::Buffs>,
     orientations: ReadStorage<'a, comp::Ori>,
     combos: ReadStorage<'a, comp::Combo>,
     gameplay_metrics: ReadExpect<'a, GameplayMetrics>,
+    /// Written, not read: a genuine kill *revokes* the entity's banishment.
+    /// Only reachable with `worldgen`, since without rtsim nothing ever
+    /// inserts the marker in the first place.
+    #[cfg(feature = "worldgen")]
+    banished: WriteStorage<'a, comp::Banished>,
+}
+
+/// The entities that a **real death** claims inside one batch of
+/// [`DestroyEvent`]s.
+///
+/// A removal can reach this handler as a death or as a banishment, and both can
+/// be raised for the same creature in the same tick. Honouring both would pay
+/// the banishment's fractional reward *and* the kill's whole one — ~125% of a
+/// single creature's XP — and would leave a persisted banishment record behind
+/// for a creature that is about to be deleted.
+///
+/// So death wins, atomically: every removal that yields to death is dropped for
+/// an entity that also died in this batch, no matter which of the two was
+/// emitted first. The surviving kill is what pays out, exactly once, and it is
+/// also what revokes the banishment.
+///
+/// 🔴 This is not redundant with the guards that keep a doomed creature from
+/// being banished in the first place, because a `DestroyEvent{Killed}` can be
+/// raised from **outside** the event dispatcher entirely: `common/systems`'
+/// stats system emits one during `State::tick`, before any of these handlers
+/// run. A creature it condemned at zero HP that is then *healed* by a
+/// `HealthChangeEvent` in the same tick reads as perfectly alive by the time
+/// the banishment commits — and both removals still land in this batch.
+struct DeathsInBatch(HashSet<EcsEntity>);
+
+impl DeathsInBatch {
+    fn of(events: &[DestroyEvent]) -> Self {
+        // Nothing can be superseded unless some removal in this batch yields
+        // to death at all. The ordinary batch — a handful of creatures that
+        // simply died — takes this branch and hashes nothing.
+        if !events.iter().any(|ev| Self::yields_to_death(ev.removal)) {
+            return Self(HashSet::new());
+        }
+        Self(
+            events
+                .iter()
+                .filter(|ev| ev.removal.cause.counts_as_kill())
+                .map(|ev| ev.entity)
+                .collect(),
+        )
+    }
+
+    /// Whether a genuine death in the same tick voids this removal.
+    ///
+    /// Exhaustive on purpose. `RemovalCause`'s own contract invites new
+    /// variants ("Extend the enum rather than adding a parallel flag"), and a
+    /// new one must state whether death outranks it instead of silently
+    /// inheriting an answer from a negated `counts_as_kill()`.
+    fn yields_to_death(removal: combat::RemovalInfo) -> bool {
+        match removal.cause {
+            // A death cannot void itself. Duplicate `Destroy{Killed}` events
+            // are a separate, shipped concern handled by the `is_dead` latch
+            // below; dropping one here would remove the entity zero times.
+            combat::RemovalCause::Killed => false,
+            // The creature was to be taken away and brought back. It died
+            // instead, so there is nothing to take away and nothing to return.
+            combat::RemovalCause::Banished => true,
+        }
+    }
+
+    /// The removals that must actually be acted on: everything except a
+    /// yields-to-death removal for an entity this batch also killed.
+    ///
+    /// The production loop iterates exactly this, so a test that drives it is
+    /// driving the real filter rather than a restatement of it.
+    fn honoured(&self, events: Vec<DestroyEvent>) -> impl Iterator<Item = DestroyEvent> + '_ {
+        events
+            .into_iter()
+            .filter(|ev| !(Self::yields_to_death(ev.removal) && self.0.contains(&ev.entity)))
+    }
 }
 
 /// Handle an entity dying. If it is a player, it will send a message to all
@@ -699,16 +1802,60 @@ impl ServerEvent for DestroyEvent {
         let mut rng = rand::rng();
         data.entities_died_last_tick.0.clear();
 
-        for ev in events {
+        // Collected up front so the whole batch can be consulted before any of
+        // it is acted on — the only way "a real death always wins" can hold
+        // without depending on the order the scheduler happened to pick. The
+        // bus already hands over an owned `vec::IntoIter`, so re-collecting it
+        // reuses that allocation rather than making a second one.
+        let events: Vec<Self> = events.collect();
+        let deaths = DeathsInBatch::of(&events);
+
+        // A removal the batch's own deaths supersede never reaches the loop:
+        // the creature really died this tick, so its banishment never happened
+        // — no fractional reward, no partial loot roll. The surviving kill pays
+        // the whole reward once and revokes the banishment.
+        for ev in deaths.honoured(events) {
             // TODO: Investigate duplicate `Destroy` events (but don't remove this).
             // If the entity was already deleted, it can't be destroyed again.
             if !data.entities.is_alive(ev.entity) {
                 continue;
             }
 
+            // A genuine death voids any banishment the entity is carrying,
+            // whether it was granted moments ago this tick or a whole session
+            // ago while the creature sat in limbo — `HealthChangeEvent` joins
+            // `positions.maybe()`, so damage queued before the park pass
+            // stripped `Pos` still lands on a parked mob a tick later.
+            // Forgetting the record is what keeps a killed creature from ever
+            // returning *and* releases the worldgen spawn its chunk was holding
+            // for it.
+            //
+            // Deliberately outside the `is_dead` latch below: a duplicate kill
+            // for an already-flagged corpse must still leave no record behind.
+            #[cfg(feature = "worldgen")]
+            if ev.removal.cause.counts_as_kill() && data.banished.contains(ev.entity) {
+                let banished = &mut data.banished;
+                data.rtsim.with_banishments(|banishments| {
+                    crate::banishment::revoke_banishment(banished, banishments, ev.entity)
+                });
+            }
+
             let mut outcomes = data.outcomes.emitter();
+            // A banishment removes the creature *without killing it*: no death
+            // flag, no `entities_died_last_tick`, no ethos drift, no kill
+            // metrics, no `Outcome::Death`, no `effects_on_death`, no death
+            // chat line, no equipment-durability hit, and no deletion. It still
+            // runs the reward and loot paths below, scaled by
+            // `removal.reward_fraction` (spec §6).
+            let is_kill = ev.removal.cause.counts_as_kill();
             if let Some(mut health) = data.healths.get_mut(ev.entity) {
-                if !health.is_dead {
+                // A corpse is skipped whatever the removal cause: re-running
+                // the reward block for an entity that already paid out would
+                // double-award it.
+                if health.is_dead {
+                    continue;
+                }
+                if is_kill {
                     health.is_dead = true;
 
                     // BL-33 Phase 3: a player's deeds drift their moral
@@ -781,9 +1928,6 @@ impl ServerEvent for DestroyEvent {
                                 .inc();
                         }
                     }
-                } else {
-                    // Skip for entities that have already died
-                    continue;
                 }
             }
 
@@ -809,9 +1953,10 @@ impl ServerEvent for DestroyEvent {
 
             // Push an outcome if entity is has a character state (entities that don't have
             // one, we probably don't care about emitting death outcome)
-            if let Some((pos, _)) = (&data.positions, &data.character_states)
-                .lend_join()
-                .get(ev.entity, &data.entities)
+            if is_kill
+                && let Some((pos, _)) = (&data.positions, &data.character_states)
+                    .lend_join()
+                    .get(ev.entity, &data.entities)
             {
                 outcomes_emitter.emit(Outcome::Death { pos: pos.0 });
             }
@@ -819,7 +1964,7 @@ impl ServerEvent for DestroyEvent {
             let mut should_delete = true;
 
             // Handle any effects on death
-            if let Some(killed_stats) = data.stats.get(ev.entity) {
+            if is_kill && let Some(killed_stats) = data.stats.get(ev.entity) {
                 let attacker_entity = ev.cause.by.and_then(|x| data.id_maps.uid_entity(x.uid()));
                 let attacker_dir = attacker_entity
                     .and_then(|a| data.positions.get(a))
@@ -877,6 +2022,7 @@ impl ServerEvent for DestroyEvent {
                                 data.buffs.get(effect_target),
                                 data.character_states.get(effect_target),
                                 data.orientations.get(effect_target),
+                                data.uids.get(effect_target).copied(),
                             ),
                             (
                                 Some(ev.entity),
@@ -889,6 +2035,11 @@ impl ServerEvent for DestroyEvent {
                             dir,
                             attack_source,
                             None,
+                            &mut rng,
+                            attacker_entity
+                                .and_then(|a| data.stats.get(a))
+                                .map(|s| s.character_level),
+                            attacker_entity.and_then(|a| data.character_classes.get(a)),
                         )
                     });
 
@@ -922,10 +2073,10 @@ impl ServerEvent for DestroyEvent {
                                 emitters.emit(EnergyChangeEvent {
                                     entity: effect_target,
                                     change: ec
-                                        * combat::compute_energy_reward_mod(
-                                            data.inventories.get(effect_target),
-                                            &data.msm,
-                                        )
+                                        * data
+                                            .derived_stats
+                                            .get(effect_target)
+                                            .map_or(1.0, |d| d.energy_reward_mod)
                                         * strength_modifier
                                         * data
                                             .stats
@@ -943,7 +2094,6 @@ impl ServerEvent for DestroyEvent {
                                             (
                                                 data.uids.get(ev.entity).copied(),
                                                 data.masses.get(ev.entity),
-                                                None,
                                             ),
                                             (
                                                 data.stats.get(effect_target),
@@ -951,6 +2101,7 @@ impl ServerEvent for DestroyEvent {
                                             ),
                                             damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -960,6 +2111,7 @@ impl ServerEvent for DestroyEvent {
                                     amount: damage_dealt * l * strength_modifier,
                                     by: dmg_contrib,
                                     cause: None,
+                                    magic_source: None,
                                     time: *data.time,
                                     precise: false,
                                     instance: rand::random(),
@@ -974,8 +2126,7 @@ impl ServerEvent for DestroyEvent {
                             CombatEffect::Poise(p) => {
                                 let change = -Poise::apply_poise_reduction(
                                     *p,
-                                    data.inventories.get(effect_target),
-                                    &data.msm,
+                                    data.derived_stats.get(effect_target),
                                     data.character_states.get(effect_target),
                                     data.stats.get(effect_target),
                                 ) * strength_modifier
@@ -1002,6 +2153,7 @@ impl ServerEvent for DestroyEvent {
                                     amount: *h * strength_modifier,
                                     by: dmg_contrib,
                                     cause: None,
+                                    magic_source: None,
                                     time: *data.time,
                                     precise: false,
                                     instance: rand::random(),
@@ -1013,77 +2165,38 @@ impl ServerEvent for DestroyEvent {
                                     });
                                 }
                             },
+                            CombatEffect::RemoveBuff(buff_change) => {
+                                emitters.emit(BuffEvent {
+                                    entity: effect_target,
+                                    buff_change: buff_change.clone(),
+                                });
+                            },
                             CombatEffect::Combo(c) => {
                                 emitters.emit(ComboChangeEvent {
                                     entity: effect_target,
                                     change: (*c as f32 * strength_modifier).ceil() as i32,
                                 });
                             },
-                            CombatEffect::StageVulnerable(damage, section) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.stage_section() == Some(*section))
-                                {
-                                    let change = HealthChange {
-                                        amount: -damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
+                            CombatEffect::AdditionalDamage(damage) => {
+                                let change = HealthChange {
+                                    amount: -damage_dealt * damage * strength_modifier,
+                                    by: dmg_contrib,
+                                    cause: Some(DamageSource::Other),
+                                    magic_source: None,
+                                    time: *data.time,
+                                    precise: false,
+                                    instance: rand::random(),
+                                };
+                                emitters.emit(HealthChangeEvent {
+                                    entity: effect_target,
+                                    change,
+                                });
                             },
                             CombatEffect::RefreshBuff(chance, b) => {
                                 if rng.random::<f32>() < *chance {
                                     emitters.emit(BuffEvent {
                                         entity: effect_target,
                                         buff_change: buff::BuffChange::Refresh(*b),
-                                    });
-                                }
-                            },
-                            CombatEffect::BuffsVulnerable(damage, buff) => {
-                                if data
-                                    .buffs
-                                    .get(effect_target)
-                                    .is_some_and(|b| b.contains(*buff))
-                                {
-                                    let change = HealthChange {
-                                        amount: -damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
-                            },
-                            CombatEffect::StunnedVulnerable(damage) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.is_stunned())
-                                {
-                                    let change = HealthChange {
-                                        amount: -damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
                                     });
                                 }
                             },
@@ -1097,10 +2210,10 @@ impl ServerEvent for DestroyEvent {
                                                 data.uids.get(effect_target).copied(),
                                                 data.stats.get(effect_target),
                                                 data.masses.get(effect_target),
-                                                None,
                                             ),
                                             damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -1178,6 +2291,7 @@ impl ServerEvent for DestroyEvent {
                                                 * strength_modifier,
                                             by: dmg_contrib,
                                             cause: Some(DamageSource::Other),
+                                            magic_source: None,
                                             time: *data.time,
                                             precise: false,
                                             instance: rand::random(),
@@ -1196,9 +2310,10 @@ impl ServerEvent for DestroyEvent {
 
             // Chat message
             // If it was a player that died
-            if let Some((uid, _player)) = (&data.uids, &data.players)
-                .lend_join()
-                .get(ev.entity, &data.entities)
+            if is_kill
+                && let Some((uid, _player)) = (&data.uids, &data.players)
+                    .lend_join()
+                    .get(ev.entity, &data.entities)
             {
                 let kill_source = match (ev.cause.cause, ev.cause.by.map(|x| x.uid())) {
                     (Some(DamageSource::Attack(AttackSource::Melee)), Some(by)) => {
@@ -1243,41 +2358,50 @@ impl ServerEvent for DestroyEvent {
             // Award EXP to damage contributors
             //
             // NOTE: Debug logging is disabled by default for this module - to enable it add
-            // veloren_server::events::entity_manipulation=debug to RUST_LOG
+            // xindeler_server::events::entity_manipulation=debug to RUST_LOG
             'xp: {
-                let Some((
-                    entity_skill_set,
-                    entity_health,
-                    entity_energy,
-                    entity_inventory,
-                    entity_body,
-                    entity_poise,
-                    entity_pos,
-                )) = (
-                    &data.skill_sets,
-                    &data.healths,
-                    &data.energies,
-                    &data.inventories,
-                    &data.bodies,
-                    &data.poises,
-                    &data.positions,
-                )
-                    .lend_join()
-                    .get(ev.entity, &data.entities)
+                let Some((entity_skill_set, entity_health, entity_pos)) =
+                    (&data.skill_sets, &data.healths, &data.positions)
+                        .lend_join()
+                        .get(ev.entity, &data.entities)
                 else {
                     break 'xp;
                 };
 
-                // Calculate the total EXP award for the kill
-                let exp_reward = combat::combat_rating(
-                    entity_inventory,
-                    entity_health,
-                    entity_energy,
-                    entity_poise,
-                    entity_skill_set,
-                    *entity_body,
-                    &data.msm,
-                ) * 20.0;
+                // Calculate the total EXP award for the removal. A banishment
+                // pays `RemovalInfo::reward_fraction` of a kill's XP (spec §6)
+                // — the same generic `combat_rating`-derived number, scaled,
+                // never a separate reward table. No cache means no
+                // `Inventory`, hence `DerivedStats::default()`'s rating, 0.0.
+                let exp_reward = data
+                    .derived_stats
+                    .get(ev.entity)
+                    .map_or(0.0, |derived| derived.combat_rating)
+                    * 20.0
+                    * ev.removal.reward_fraction;
+
+                // Mastery's Delta = target_level - caster_level (spec §4);
+                // captured by value so the immutable borrow of
+                // `data.skill_sets` behind `entity_skill_set` ends here,
+                // before the exp-award loop below needs it mutably for each
+                // attacker in turn.
+                let target_level = entity_skill_set.character_level();
+
+                // Per-attacker (never per-group) damage totals and
+                // per-source splits, keyed by the attacking entity's own
+                // `Uid` -- mastery tracks personal casting, never the
+                // group-XP split below, which can spread the reward to
+                // bystanders who dealt no damage at all.
+                let mastery_totals: HashMap<Uid, u64> = entity_health
+                    .damage_contributions()
+                    .map(|(contributor, total)| (damage_contributor_uid(contributor), *total))
+                    .collect();
+                let mastery_by_source: HashMap<Uid, [u64; MagicSource::COUNT]> = entity_health
+                    .damage_contributions_by_source()
+                    .map(|(contributor, by_source)| {
+                        (damage_contributor_uid(contributor), *by_source)
+                    })
+                    .collect();
 
                 let mut damage_contributors = HashMap::<DamageContrib, (u64, f32)>::new();
                 for (damage_contributor, damage) in entity_health.damage_contributions() {
@@ -1307,6 +2431,26 @@ impl ServerEvent for DestroyEvent {
                                 .or_insert((0, 0.0));
                             entry.0 += damage;
                         },
+                    }
+                }
+
+                // A banishment is not gated on the target's current health, so
+                // it can land on a creature nobody ever hit. The
+                // damage-proportional split has nothing to divide in that case
+                // (`total_damage == 0` would make every percentage `NaN`), so
+                // credit the banisher with the whole already-scaled reward.
+                if !is_kill && damage_contributors.is_empty() {
+                    let contrib = match ev.cause.by {
+                        Some(DamageContributor::Solo(uid)) => {
+                            data.id_maps.uid_entity(uid).map(DamageContrib::Solo)
+                        },
+                        Some(DamageContributor::Group { group, .. }) => {
+                            Some(DamageContrib::Group(group))
+                        },
+                        None => None,
+                    };
+                    if let Some(contrib) = contrib {
+                        damage_contributors.insert(contrib, (1, 0.0));
                     }
                 }
 
@@ -1394,22 +2538,61 @@ impl ServerEvent for DestroyEvent {
 
                 exp_awards.iter().for_each(|(attacker, exp_reward, _)| {
                     // Process the calculated EXP rewards
-                    if let Some((mut attacker_skill_set, attacker_uid, attacker_inventory)) =
-                        (&mut data.skill_sets, &data.uids, &data.inventories)
-                            .lend_join()
-                            .get(*attacker, &data.entities)
+                    if let Some((
+                        mut attacker_skill_set,
+                        attacker_uid,
+                        attacker_inventory,
+                        mut attacker_character_class,
+                    )) = (
+                        &mut data.skill_sets,
+                        &data.uids,
+                        &data.inventories,
+                        (&mut data.character_classes).maybe(),
+                    )
+                        .lend_join()
+                        .get(*attacker, &data.entities)
                     {
                         handle_exp_gain(
                             *exp_reward,
                             attacker_inventory,
                             &mut attacker_skill_set,
+                            attacker_character_class.as_deref_mut(),
                             attacker_uid,
                             &mut outcomes,
                         );
+
+                        // Mastery crediting piggybacks on the same
+                        // already-filtered `exp_awards` entry: self-kills and
+                        // PvP never reach this closure at all (filtered
+                        // above), so mastery inherits that exclusion rather
+                        // than re-deriving it.
+                        if let (Some(&own_total), Some(own_by_source)) = (
+                            mastery_totals.get(attacker_uid),
+                            mastery_by_source.get(attacker_uid),
+                        ) && let Some(mut mastery) = data.spell_masteries.get_mut(*attacker)
+                        {
+                            let polyglot_rank = attacker_skill_set
+                                .skill_level(Skill::Mage(MageSkill::Polyglot))
+                                .unwrap_or(0);
+                            grant_kill_mastery(
+                                &mut mastery,
+                                *exp_reward,
+                                own_total,
+                                own_by_source,
+                                target_level,
+                                attacker_skill_set.character_level(),
+                                polyglot_rank,
+                            );
+                        }
                     }
                 });
             };
 
+            // A banished creature is never deleted — it is coming back, and the
+            // same ECS entity is what `banishment::maintain` parks and
+            // un-parks. `&=` (not `&&`) on purpose: the loot/reward branch
+            // below must still run.
+            should_delete &= is_kill;
             should_delete &= if data.clients.contains(ev.entity) {
                 if let Some(vel) = data.velocities.get_mut(ev.entity) {
                     vel.0 = Vec3::zero();
@@ -1438,10 +2621,41 @@ impl ServerEvent for DestroyEvent {
                     // Only drop loot if entity has agency (not a player),
                     // and if it is not owned by another entity (not a pet)
                     if !matches!(alignment, Some(Alignment::Owned(_)))
-                        && let Some(items) = data
-                            .item_drops
-                            .remove(ev.entity)
-                            .map(|comp::ItemDrops(item)| item)
+                        && let Some(items) = if is_kill {
+                            data.item_drops
+                                .remove(ev.entity)
+                                .map(|comp::ItemDrops(item)| item)
+                        } else if let Some(comp::ItemDrops(remaining)) =
+                            data.item_drops.get_mut(ev.entity)
+                        {
+                            // A banishment yields `reward_fraction` of the loot
+                            // entries and the creature keeps the rest — it is
+                            // coming back, and killing it later must still pay
+                            // out. Deliberately NOT `remove()`: dropping the
+                            // whole component would leave a returned creature
+                            // lootless forever.
+                            //
+                            // Per **entry**, chosen over per-item-count on
+                            // purpose. `ItemDrops(Vec<(u32, Item)>)` pairs a
+                            // stack count with an item; rolling each count down
+                            // by `reward_fraction` would round every 1–3-count
+                            // entry to zero, i.e. a quarter-reward would drop
+                            // *nothing* off most tables. Rolling per entry
+                            // keeps stacks intact and matches the shipped
+                            // contract on `RemovalInfo::reward_fraction`
+                            // ("applied to … each loot entry's chance to
+                            // drop"). The cost is variance: a single-entry
+                            // table pays everything or nothing. Expected value
+                            // is exactly `reward_fraction` either way.
+                            let fraction = ev.removal.reward_fraction;
+                            let (dropped, kept): (Vec<_>, Vec<_>) = remaining
+                                .drain(..)
+                                .partition(|_| rng.random::<f32>() < fraction);
+                            *remaining = kept;
+                            Some(dropped)
+                        } else {
+                            None
+                        }
                     {
                         // Remove entries where zero exp was awarded - this happens because some
                         // entities like Object bodies don't give EXP.
@@ -1534,8 +2748,11 @@ impl ServerEvent for DestroyEvent {
                                 .any(|(_, area)| area.contains_point(our_pos))
                         });
 
-                // Modify durability on all equipped items
-                if !resists_durability
+                // Modify durability on all equipped items. Not for a
+                // banishment: the creature did not die, so its gear takes no
+                // death penalty.
+                if is_kill
+                    && !resists_durability
                     && let Some(mut inventory) = data.inventories.get_mut(ev.entity)
                 {
                     inventory.damage_items(&data.ability_map, &data.msm, *data.time);
@@ -1543,33 +2760,31 @@ impl ServerEvent for DestroyEvent {
             }
 
             #[cfg(feature = "worldgen")]
-            let entity_as_actor =
-                |entity| entity_as_actor(entity, &data.rtsim_entities, &data.presences);
-
-            #[cfg(feature = "worldgen")]
-            if let Some(actor) = entity_as_actor(ev.entity)
-                // Skip the death hook for rtsim entities if they aren't deleted, otherwise
-                // we'll end up with rtsim respawning an entity that wasn't actually
-                // removed, producing 2 entities having the same RtsimEntityId.
-                // Additionally, the death of a player should trigger an event.
-                && (matches!(actor, Actor::Character(_)) || should_delete)
             {
-                data.rtsim.hook_rtsim_actor_death(
-                    &data.world,
-                    data.index.as_index_ref(),
-                    actor,
-                    data.positions.get(ev.entity).map(|p| p.0),
-                    ev.cause
-                        .by
-                        .as_ref()
-                        .and_then(
-                            |(DamageContributor::Solo(entity_uid)
-                             | DamageContributor::Group { entity_uid, .. })| {
-                                data.id_maps.uid_entity(*entity_uid)
-                            },
-                        )
-                        .and_then(entity_as_actor),
-                );
+                let entity_as_actor = |entity| data.rtsim_actors.get(entity).copied();
+                if let Some(actor) = entity_as_actor(ev.entity)
+                    // Skip the death hook for rtsim entities if they aren't deleted, otherwise
+                    // we'll end up with rtsim respawning an entity that wasn't actually
+                    // removed, producing 2 entities having the same ActorId.
+                    && should_delete
+                {
+                    data.rtsim.hook_rtsim_actor_death(
+                        &data.world,
+                        data.index.as_index_ref(),
+                        actor,
+                        data.positions.get(ev.entity).map(|p| p.0),
+                        ev.cause
+                            .by
+                            .as_ref()
+                            .and_then(
+                                |(DamageContributor::Solo(entity_uid)
+                                | DamageContributor::Group { entity_uid, .. })| {
+                                    data.id_maps.uid_entity(*entity_uid)
+                                },
+                            )
+                            .and_then(entity_as_actor),
+                    );
+                }
             }
 
             if should_delete {
@@ -1582,13 +2797,12 @@ impl ServerEvent for DestroyEvent {
 impl ServerEvent for LandOnGroundEvent {
     type SystemData<'a> = (
         Read<'a, Time>,
-        ReadExpect<'a, MaterialStatManifest>,
         Read<'a, EventBus<HealthChangeEvent>>,
         Read<'a, EventBus<PoiseChangeEvent>>,
         ReadStorage<'a, PhysicsState>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, comp::Mass>,
-        ReadStorage<'a, Inventory>,
+        ReadStorage<'a, comp::DerivedStats>,
         ReadStorage<'a, Stats>,
     );
 
@@ -1596,13 +2810,12 @@ impl ServerEvent for LandOnGroundEvent {
         events: impl ExactSizeIterator<Item = Self>,
         (
             time,
-            msm,
             health_change_events,
             poise_change_events,
             physic_states,
             character_states,
             masses,
-            inventories,
+            derived_stats,
             stats,
         ): Self::SystemData<'_>,
     ) {
@@ -1649,11 +2862,8 @@ impl ServerEvent for LandOnGroundEvent {
                 };
                 let damage_reduction = Damage::compute_damage_reduction(
                     Some(damage),
-                    inventories.get(ev.entity),
-                    // TODO(ENG-D2c): fall-damage protection is not attunement-gated yet.
-                    None,
+                    derived_stats.get(ev.entity),
                     stats.get(ev.entity),
-                    &msm,
                 );
                 let change = damage.calculate_health_change(
                     damage_reduction,
@@ -1677,8 +2887,7 @@ impl ServerEvent for LandOnGroundEvent {
                 let poise_damage = -(mass.0 * reduced_vel.powi(2) / 1500.0);
                 let poise_change = Poise::apply_poise_reduction(
                     poise_damage,
-                    inventories.get(ev.entity),
-                    &msm,
+                    derived_stats.get(ev.entity),
                     character_states.get(ev.entity),
                     stats.get(ev.entity),
                 );
@@ -1760,7 +2969,6 @@ pub struct ExplosionData<'a> {
     id_maps: Read<'a, IdMaps>,
     spatial_grid: Read<'a, CachedSpatialGrid>,
     terrain: ReadExpect<'a, TerrainGrid>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     event_busses: ReadExplosionEvents<'a>,
     outcomes: Read<'a, EventBus<Outcome>>,
     groups: ReadStorage<'a, Group>,
@@ -1770,7 +2978,9 @@ pub struct ExplosionData<'a> {
     energies: ReadStorage<'a, Energy>,
     combos: ReadStorage<'a, comp::Combo>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, comp::AttunedItems>,
+    /// The cached gear aggregates every damage/poise/evasion formula reads,
+    /// instead of re-walking the loadout once per damage instance.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     alignments: ReadStorage<'a, Alignment>,
     entered_auras: ReadStorage<'a, EnteredAuras>,
     buffs: ReadStorage<'a, comp::Buffs>,
@@ -1782,6 +2992,8 @@ pub struct ExplosionData<'a> {
     physics_states: ReadStorage<'a, PhysicsState>,
     uids: ReadStorage<'a, Uid>,
     masses: ReadStorage<'a, comp::Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 impl ServerEvent for ExplosionEvent {
@@ -2169,10 +3381,12 @@ impl ServerEvent for ExplosionEvent {
                                             group: data.groups.get(entity),
                                             energy: data.energies.get(entity),
                                             combo: data.combos.get(entity),
-                                            inventory: data.inventories.get(entity),
+                                            derived: data.derived_stats.get(entity),
                                             stats: data.stats.get(entity),
                                             mass: data.masses.get(entity),
                                             pos: data.positions.get(entity).map(|p| p.0),
+                                            buffs: data.buffs.get(entity),
+                                            character_class: data.character_classes.get(entity),
                                         }
                                     });
 
@@ -2180,7 +3394,7 @@ impl ServerEvent for ExplosionEvent {
                                     entity: entity_b,
                                     uid: *uid_b,
                                     inventory: data.inventories.get(entity_b),
-                                    attuned: data.attuned_items.get(entity_b),
+                                    derived: data.derived_stats.get(entity_b),
                                     stats: data.stats.get(entity_b),
                                     health: Some(health_b),
                                     pos: pos_b.0,
@@ -2190,6 +3404,10 @@ impl ServerEvent for ExplosionEvent {
                                     buffs: data.buffs.get(entity_b),
                                     mass: data.masses.get(entity_b),
                                     player: data.players.get(entity_b),
+                                    phantom_illusion: data
+                                        .phantom_illusions
+                                        .get(entity_b)
+                                        .is_some(),
                                 };
 
                                 // Check if entity is dodging
@@ -2240,6 +3458,115 @@ impl ServerEvent for ExplosionEvent {
                                     0,
                                 );
                             }
+                        }
+                    },
+                    RadiusEffect::PooledDebuff(combat::PooledDebuff {
+                        pool,
+                        buff,
+                        ability_info,
+                    }) => {
+                        // A pool-selected target is always affected -- see
+                        // `PooledDebuff::buff`'s own doc comment. `chance`
+                        // is never consulted below, so a future spell
+                        // reusing this primitive with `chance < 1.0`
+                        // (expecting an extra resist roll on top of the
+                        // pool) would silently always land instead.
+                        debug_assert!(
+                            buff.chance >= 1.0,
+                            "RadiusEffect::PooledDebuff ignores CombatBuff::chance; author it as \
+                             1.0 or add a roll before calling to_buff below"
+                        );
+                        // Gather every living, eligible target inside the
+                        // sphere first -- whether one target is affected
+                        // depends on which other targets already consumed
+                        // from the shared pool, so this can't be resolved
+                        // as each entity is visited independently the way
+                        // `Attack`/`Entity` above are. Containment check
+                        // mirrors `RadiusEffect::Entity` above (no LOS
+                        // raycast -- this isn't a directed attack).
+                        let mut candidates: Vec<(Entity, f32)> = Vec::new();
+                        for (entity_b, pos_b, health_b, body_b_maybe) in (
+                            &data.entities,
+                            &data.positions,
+                            &data.healths,
+                            data.bodies.maybe(),
+                        )
+                            .join()
+                            .filter(|(_, _, health, _)| !health.is_dead)
+                        {
+                            let strength = if let Some(body) = body_b_maybe {
+                                cylinder_sphere_strength(
+                                    ev.pos,
+                                    ev.explosion.radius,
+                                    ev.explosion.min_falloff,
+                                    pos_b.0,
+                                    *body,
+                                )
+                            } else {
+                                let dist_sqrd = ev.pos.distance_squared(pos_b.0);
+                                1.0 - dist_sqrd / ev.explosion.radius.powi(2)
+                            };
+                            // Unlike `RadiusEffect::Attack`/`Entity`, `strength` is used only as
+                            // a binary containment gate here, never threaded into a graduated
+                            // magnitude -- a "50%-applied" sleep debuff has no obvious meaning.
+                            // `min_falloff` still reshapes the containment boundary (a smaller
+                            // effective radius near the falloff edge), it just doesn't scale
+                            // anything past that.
+                            if strength <= 0.0 {
+                                continue;
+                            }
+
+                            // Same group/PvP gating a normal Attack would
+                            // apply -- a debuff this strong shouldn't
+                            // bypass friendly-fire rules just because it
+                            // isn't routed through `Attack`.
+                            let same_group = owner_entity
+                                .and_then(|e| data.groups.get(e))
+                                .map(|group_a| Some(group_a) == data.groups.get(entity_b))
+                                .unwrap_or(Some(entity_b) == owner_entity);
+                            let allow_friendly_fire = owner_entity.is_some_and(|owner_entity| {
+                                combat::allow_friendly_fire(
+                                    &data.entered_auras,
+                                    owner_entity,
+                                    entity_b,
+                                )
+                            });
+                            if same_group && !allow_friendly_fire {
+                                continue;
+                            }
+                            let permit_pvp = combat::permit_pvp(
+                                &data.alignments,
+                                &data.players,
+                                &data.entered_auras,
+                                &data.id_maps,
+                                owner_entity,
+                                entity_b,
+                            );
+                            if !permit_pvp {
+                                continue;
+                            }
+
+                            candidates.push((entity_b, health_b.current()));
+                        }
+
+                        for entity_b in combat::resolve_pooled_debuff_targets(candidates, pool) {
+                            emitters.emit(BuffEvent {
+                                entity: entity_b,
+                                buff_change: buff::BuffChange::Add(buff.to_buff(
+                                    *data.time,
+                                    (ev.owner, owner_entity.and_then(|e| data.masses.get(e))),
+                                    (data.stats.get(entity_b), data.masses.get(entity_b)),
+                                    // `damage` is a no-op for `CombatBuffStrength::Value` (what
+                                    // every `PooledDebuff` spell should author -- there's no
+                                    // damage roll here to scale off of). A future spell
+                                    // configured with `DamageFraction` would silently compute a
+                                    // strength of 0.0; that combination isn't supported by this
+                                    // resolution path.
+                                    0.0,
+                                    1.0,
+                                    ability_info,
+                                )),
+                            });
                         }
                     },
                     RadiusEffect::Entity(mut effect) => {
@@ -2300,9 +3627,7 @@ impl ServerEvent for ExplosionEvent {
                                                         .copied(),
                                                 )
                                             }),
-                                            data.inventories.get(entity_b),
-                                            data.attuned_items.get(entity_b),
-                                            &data.msm,
+                                            data.derived_stats.get(entity_b),
                                             data.character_states.get(entity_b),
                                             data.stats.get(entity_b),
                                             data.masses.get(entity_b),
@@ -2334,9 +3659,10 @@ pub fn emit_effect_events(
     entity: EcsEntity,
     effect: common::effect::Effect,
     source: Option<(Uid, Option<Group>)>,
-    inventory: Option<&Inventory>,
-    attuned: Option<&comp::AttunedItems>,
-    msm: &MaterialStatManifest,
+    // The affected entity's cached gear aggregates, supplying the armour
+    // protection and poise resilience this effect is mitigated by. `None`
+    // means the entity has no `Inventory`, i.e. no mitigation at all.
+    derived: Option<&comp::DerivedStats>,
     char_state: Option<&CharacterState>,
     stats: Option<&Stats>,
     tgt_mass: Option<&comp::Mass>,
@@ -2350,7 +3676,7 @@ pub fn emit_effect_events(
             emitters.emit(HealthChangeEvent { entity, change })
         },
         common::effect::Effect::Poise(amount) => {
-            let amount = Poise::apply_poise_reduction(amount, inventory, msm, char_state, stats);
+            let amount = Poise::apply_poise_reduction(amount, derived, char_state, stats);
             emitters.emit(PoiseChangeEvent {
                 entity,
                 change: comp::PoiseChange {
@@ -2364,13 +3690,7 @@ pub fn emit_effect_events(
         },
         common::effect::Effect::Damage(damage) => {
             let change = damage.calculate_health_change(
-                combat::Damage::compute_damage_reduction(
-                    Some(damage),
-                    inventory,
-                    attuned,
-                    stats,
-                    msm,
-                ),
+                combat::Damage::compute_damage_reduction(Some(damage), derived, stats),
                 0.0,
                 damage_contributor,
                 None,
@@ -2398,6 +3718,8 @@ pub fn emit_effect_events(
                     time,
                     dest_info,
                     source_mass,
+                    None,
+                    None,
                 )),
             });
         },
@@ -2481,6 +3803,39 @@ impl ServerEvent for BonkEvent {
                             };
 
                             if matches!(block.get_sprite(), Some(SpriteKind::Bomb)) {
+                                let (projectile, marker) = ProjectileConstructor {
+                                    kind: ProjectileConstructorKind::Explosive {
+                                        radius: 12.0,
+                                        min_falloff: 0.75,
+                                        reagent: None,
+                                        terrain: Some((4.0, ColorPreset::Black)),
+                                        target: ProjectileExplosionTarget::Both,
+                                    },
+                                    attack: Some(ProjectileAttack {
+                                        damage: 40.0,
+                                        poise: Some(100.0),
+                                        knockback: None,
+                                        energy: None,
+                                        buff: None,
+                                        friendly_fire: true,
+                                        blockable: true,
+                                        attack_effect: None,
+                                        damage_effect: None,
+                                        without_combo: false,
+                                        damage_kind: DamageKind::Energy,
+                                    }),
+                                    scaled: None,
+                                    homing_rate: None,
+                                    split: None,
+                                    lifetime_override: None,
+                                    limit_per_ability: false,
+                                    override_collider: None,
+                                    pierce_entities: false,
+                                    is_point: true,
+                                    is_sticky: true,
+                                    hazard: false,
+                                }
+                                .create_projectile(None, 1.0, None, None);
                                 shoot_emitter.emit(ShootEvent {
                                     entity: None,
                                     source_vel: None,
@@ -2488,36 +3843,10 @@ impl ServerEvent for BonkEvent {
                                     dir: Dir::from_unnormalized(vel.0).unwrap_or_default(),
                                     body: Body::Object(body),
                                     light: None,
-                                    projectile: ProjectileConstructor {
-                                        kind: ProjectileConstructorKind::Explosive {
-                                            radius: 12.0,
-                                            min_falloff: 0.75,
-                                            reagent: None,
-                                            terrain: Some((4.0, ColorPreset::Black)),
-                                        },
-                                        attack: Some(ProjectileAttack {
-                                            damage: 40.0,
-                                            poise: Some(100.0),
-                                            knockback: None,
-                                            energy: None,
-                                            buff: None,
-                                            friendly_fire: true,
-                                            blockable: true,
-                                            attack_effect: None,
-                                            damage_effect: None,
-                                            without_combo: false,
-                                        }),
-                                        scaled: None,
-                                        homing_rate: None,
-                                        split: None,
-                                        lifetime_override: None,
-                                        limit_per_ability: false,
-                                        override_collider: None,
-                                    }
-                                    .create_projectile(None, 1.0, None),
+                                    projectile,
                                     speed: vel.0.magnitude(),
                                     object: None,
-                                    marker: None,
+                                    marker,
                                 });
                             } else {
                                 create_object_emitter.emit(CreateObjectEvent {
@@ -2587,22 +3916,71 @@ impl ServerEvent for AuraEvent {
     }
 }
 
-impl ServerEvent for BuffEvent {
-    type SystemData<'a> = (
-        Read<'a, Time>,
-        WriteStorage<'a, comp::Buffs>,
-        ReadStorage<'a, Body>,
-        // BL-05 RD-6: Health is written here to grant/clear the temp-HP absorb
-        // pool when a `Shielded` buff is added/removed.
-        WriteStorage<'a, Health>,
-        ReadStorage<'a, Stats>,
-        ReadStorage<'a, comp::Mass>,
-    );
+#[derive(SystemData)]
+pub struct BuffEventData<'a> {
+    time: Read<'a, Time>,
+    buffs: WriteStorage<'a, comp::Buffs>,
+    bodies: ReadStorage<'a, Body>,
+    // Written here to grant/clear the temp-HP absorb pool when a `Shielded`
+    // buff is added/removed.
+    healths: WriteStorage<'a, Health>,
+    stats: ReadStorage<'a, Stats>,
+    masses: ReadStorage<'a, comp::Mass>,
+    id_maps: Read<'a, IdMaps>,
+    uids: ReadStorage<'a, Uid>,
+    positions: ReadStorage<'a, Pos>,
+    /// The cached `combat_rating` both the mind-altering saving throw and the
+    /// non-damage mastery credit read, instead of re-folding the target's
+    /// loadout, skillset and body per buff application.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
+    /// Presence-only, for the mind-altering saving throw's eligibility guard:
+    /// the pre-cache code required `Energy`/`Poise`/`Inventory` (the last
+    /// implied here by `derived_stats` -- see the rebuild system, which only
+    /// ever builds a cache for an `Inventory`-having entity) before a target
+    /// was even eligible to roll a save. Without this, a target missing any
+    /// of them would go from "no cache, so `combat_rating` is `0.0`" to
+    /// "guaranteed unresisted" silently swapping to "actually rolls a save
+    /// with near-zero evasion" -- a real behavior change, not just a
+    /// computation-location swap.
+    energies: ReadStorage<'a, Energy>,
+    poises: ReadStorage<'a, Poise>,
+    skill_sets: ReadStorage<'a, SkillSet>,
+    groups: ReadStorage<'a, Group>,
+    agents: ReadStorage<'a, Agent>,
+    outcomes: Read<'a, EventBus<Outcome>>,
+    // Read here (not written directly -- crediting happens through a
+    // short-lived `get_mut` per landed buff) so a caster with no
+    // `SpellMastery` yet (an NPC, a pet, or any entity that predates the
+    // component) is simply skipped.
+    spell_masteries: WriteStorage<'a, SpellMastery>,
+}
 
-    fn handle(
-        events: impl ExactSizeIterator<Item = Self>,
-        (time, mut buffs, bodies, mut healths, stats, masses): Self::SystemData<'_>,
-    ) {
+impl ServerEvent for BuffEvent {
+    type SystemData<'a> = BuffEventData<'a>;
+
+    fn handle(events: impl ExactSizeIterator<Item = Self>, data: Self::SystemData<'_>) {
+        let BuffEventData {
+            time,
+            mut buffs,
+            bodies,
+            mut healths,
+            stats,
+            masses,
+            id_maps,
+            uids,
+            positions,
+            derived_stats,
+            energies,
+            poises,
+            skill_sets,
+            groups,
+            agents,
+            outcomes,
+            mut spell_masteries,
+        } = data;
+        let mut outcomes_emitter = outcomes.emitter();
+        let mut rng = rand::rng();
+
         for ev in events {
             if let Some(mut buffs) = buffs.get_mut(ev.entity) {
                 use buff::BuffChange;
@@ -2617,27 +3995,120 @@ impl ServerEvent for BuffEvent {
                         let immunity_by_buff = buffs
                             .buffs
                             .values_mut()
-                            .flat_map(|b| {
-                                b.kind.effects(
-                                    &b.data,
-                                    if let BuffSource::Character { by, .. } = b.source {
-                                        Some(by)
-                                    } else {
-                                        None
-                                    },
-                                )
-                            })
+                            .flat_map(|b| b.kind.effects(&b.data, None, None))
                             .find(|b| match b {
                                 BuffEffect::BuffImmunity(kind) => new_buff.kind == *kind,
                                 _ => false,
                             });
 
-                        if !bodies
+                        let not_immune = !bodies
                             .get(ev.entity)
                             .is_some_and(|body| body.immune_to(new_buff.kind))
                             && immunity_by_buff.is_none()
-                            && healths.get(ev.entity).is_none_or(|h| !h.is_dead)
-                        {
+                            && healths.get(ev.entity).is_none_or(|h| !h.is_dead);
+
+                        // A resisted mind-altering effect (Charmed/Dominated/Maddened/
+                        // Paralyzed) rolls against the target's magic resistance once,
+                        // here, rather than being applied unconditionally. Any other
+                        // buff kind, or a source with no caster entity to roll against,
+                        // always hits.
+                        let resisted = not_immune
+                            && matches!(
+                                new_buff.kind,
+                                BuffKind::Charmed
+                                    | BuffKind::Dominated
+                                    | BuffKind::Maddened
+                                    | BuffKind::Paralyzed
+                            )
+                            && 'resist: {
+                                let buff::BuffSource::Character { by: caster_uid, .. } =
+                                    new_buff.source
+                                else {
+                                    break 'resist false;
+                                };
+                                let Some(caster) = id_maps.uid_entity(caster_uid) else {
+                                    break 'resist false;
+                                };
+                                let Some(caster_stats) = stats.get(caster) else {
+                                    break 'resist false;
+                                };
+                                let (
+                                    Some(target_uid),
+                                    Some(target_body),
+                                    Some(target_health),
+                                    Some(derived),
+                                    Some(_target_energy),
+                                    Some(_target_poise),
+                                    Some(_target_skill_set),
+                                ) = (
+                                    uids.get(ev.entity).copied(),
+                                    bodies.get(ev.entity).copied(),
+                                    healths.get(ev.entity),
+                                    derived_stats.get(ev.entity),
+                                    energies.get(ev.entity),
+                                    poises.get(ev.entity),
+                                    skill_sets.get(ev.entity),
+                                )
+                                else {
+                                    break 'resist false;
+                                };
+
+                                let tuning = Ron::<combat::CombatTuning>::load_expect(
+                                    "common.combat_tuning",
+                                )
+                                .read();
+                                let combat_rating = derived.combat_rating;
+                                let target_stats = stats.get(ev.entity);
+
+                                let caster_info = combat::SaveCasterInfo {
+                                    magic_accuracy: caster_stats.magic_accuracy,
+                                };
+                                let target_info = combat::SaveTargetInfo {
+                                    stats_magic_evasion: target_stats
+                                        .map_or(0.0, |s| s.magic_evasion),
+                                    crowd_control_resistance: target_stats
+                                        .map_or(0.0, |s| s.crowd_control_resistance),
+                                    stats_magic_resistance: target_stats
+                                        .map_or(0.0, |s| s.magic_resistance),
+                                    magic_resist_tier: target_body.magic_resist_tier(),
+                                    combat_rating,
+                                };
+                                let ctx = combat::SaveCombatContext {
+                                    caster_uid,
+                                    caster_group: groups.get(caster).copied(),
+                                    target_uid,
+                                    target_group: groups.get(ev.entity).copied(),
+                                    target_hostile_focus: agents
+                                        .get(ev.entity)
+                                        .and_then(|agent| agent.target)
+                                        .filter(|target| target.hostile)
+                                        .and_then(|target| {
+                                            uids.get(target.target).map(|uid| {
+                                                (*uid, groups.get(target.target).copied())
+                                            })
+                                        }),
+                                    target_last_change: Some(&target_health.last_change),
+                                    caster_last_change: healths.get(caster).map(|h| &h.last_change),
+                                    now: time.0,
+                                };
+                                let fighting_caster = combat::is_fighting_caster(&ctx);
+                                let chance = combat::saving_throw_chance(
+                                    &caster_info,
+                                    &target_info,
+                                    fighting_caster,
+                                    &tuning.0,
+                                );
+                                rng.random::<f32>() >= chance
+                            };
+
+                        if resisted {
+                            if let Some(target_uid) = uids.get(ev.entity).copied() {
+                                outcomes_emitter.emit(Outcome::Resisted {
+                                    pos: positions.get(ev.entity).map_or(Vec3::zero(), |pos| pos.0),
+                                    target: target_uid,
+                                });
+                            }
+                        } else if not_immune {
                             if let Some(strength) =
                                 new_buff.kind.resilience_ccr_strength(new_buff.data)
                             {
@@ -2661,6 +4132,9 @@ impl ServerEvent for BuffEvent {
                                     },
                                     // There is no source entity
                                     None,
+                                    // There is no target entity
+                                    None,
+                                    None,
                                 );
                                 buffs.insert(resilience_buff, *time);
                             }
@@ -2672,7 +4146,7 @@ impl ServerEvent for BuffEvent {
                                 new_buff.effects.clear();
                             }
 
-                            // One concentration at a time (ENG-C2 / M5): adding a
+                            // Only one concentration buff at a time: adding a new
                             // concentration buff removes any prior concentration.
                             if new_buff.cat_ids.contains(&BuffCategory::Concentration) {
                                 let prior: Vec<_> = buffs
@@ -2688,13 +4162,98 @@ impl ServerEvent for BuffEvent {
                                 }
                             }
 
-                            // BL-05 RD-6: granting a Shielded buff fills the
-                            // temp-HP absorb pool (take-higher: a re-cast refreshes
-                            // rather than stacks; a future shield *kind* would add).
+                            // Last dominator wins: adding a new Dominated buff
+                            // removes any prior one, so exactly one entity is
+                            // ever the acting dominator.
+                            if new_buff.kind == BuffKind::Dominated {
+                                let prior: Vec<_> = buffs
+                                    .buffs
+                                    .iter()
+                                    .filter(|(_, b)| b.kind == BuffKind::Dominated)
+                                    .map(|(key, _)| key)
+                                    .collect();
+                                for key in prior {
+                                    buffs.remove(key);
+                                }
+                            }
+
+                            // Granting a Shielded buff fills the temp-HP absorb pool
+                            // (take-higher: a re-cast refreshes rather than stacks; a
+                            // future shield *kind* would add).
                             if new_buff.kind == BuffKind::Shielded
                                 && let Some(mut health) = healths.get_mut(ev.entity)
                             {
                                 health.raise_absorb_to(new_buff.data.strength);
+                            }
+
+                            if new_buff.cat_ids.contains(&BuffCategory::WeaponCoating) {
+                                buffs.remove_by_category(
+                                    vec![BuffCategory::WeaponCoating],
+                                    Vec::new(),
+                                    Vec::new(),
+                                );
+                            }
+
+                            // Non-damage mastery credit: `new_buff` is about to
+                            // land on `ev.entity` for real (past the immunity
+                            // and resist checks above), so if it carries a
+                            // magic source and its caster is resolvable and
+                            // holds `SpellMastery`, credit it -- the buff
+                            // counterpart to `grant_kill_mastery`'s handling of
+                            // damage.
+                            if let buff::BuffSource::Character { by: caster_uid, .. } =
+                                new_buff.source
+                                && let Some(source) = new_buff.magic_source
+                                && let Some(target_uid) = uids.get(ev.entity).copied()
+                                && let Some(caster_entity) = id_maps.uid_entity(caster_uid)
+                                && let Some(mut mastery) = spell_masteries.get_mut(caster_entity)
+                                && let Some(target_health) = healths.get(ev.entity)
+                            {
+                                let target_in_combat = target_health
+                                    .damaged_recently(*time, MASTERY_RECENT_COMBAT_WINDOW_SECS);
+                                // A re-cast of an already-active matching buff
+                                // from the same caster is a refresh, not a
+                                // fresh landed effect -- spamming the same
+                                // short buff on an already-buffed target must
+                                // not credit mastery every recast. Computed
+                                // before `buffs.insert` below, against the
+                                // target's buff state as it stood before this
+                                // application.
+                                let is_fresh_grant = !buffs.kinds[new_buff.kind]
+                                    .as_ref()
+                                    .is_some_and(|(keys, _)| {
+                                        keys.iter().any(|key| {
+                                            buffs.buffs.get(*key).is_some_and(|existing| {
+                                                matches!(
+                                                    existing.source,
+                                                    buff::BuffSource::Character { by, .. }
+                                                        if by == caster_uid
+                                                )
+                                            })
+                                        })
+                                    });
+                                // Finding B: the target's gear/skill/body
+                                // five-tuple existed only to re-fold this one
+                                // number per landed buff. No cache means no
+                                // `Inventory`, hence
+                                // `DerivedStats::default()`'s rating, 0.0.
+                                let target_combat_rating = derived_stats
+                                    .get(ev.entity)
+                                    .map_or(0.0, |derived| derived.combat_rating);
+                                let polyglot_rank = skill_sets.get(caster_entity).map_or(0, |ss| {
+                                    ss.skill_level(Skill::Mage(MageSkill::Polyglot))
+                                        .unwrap_or(0)
+                                });
+                                grant_non_damage_mastery(
+                                    &mut mastery,
+                                    source,
+                                    caster_uid,
+                                    target_uid,
+                                    target_in_combat,
+                                    is_fresh_grant,
+                                    target_combat_rating,
+                                    polyglot_rank,
+                                );
                             }
 
                             buffs.insert(new_buff, *time);
@@ -2718,36 +4277,7 @@ impl ServerEvent for BuffEvent {
                         any_required,
                         none_required,
                     } => {
-                        let mut keys_to_remove = Vec::new();
-                        for (key, buff) in buffs.buffs.iter() {
-                            let mut required_met = true;
-                            for required in &all_required {
-                                if !buff.cat_ids.iter().any(|cat| cat == required) {
-                                    required_met = false;
-                                    break;
-                                }
-                            }
-                            let mut any_met = any_required.is_empty();
-                            for any in &any_required {
-                                if buff.cat_ids.iter().any(|cat| cat == any) {
-                                    any_met = true;
-                                    break;
-                                }
-                            }
-                            let mut none_met = true;
-                            for none in &none_required {
-                                if buff.cat_ids.iter().any(|cat| cat == none) {
-                                    none_met = false;
-                                    break;
-                                }
-                            }
-                            if required_met && any_met && none_met {
-                                keys_to_remove.push(key);
-                            }
-                        }
-                        for key in keys_to_remove {
-                            buffs.remove(key);
-                        }
+                        buffs.remove_by_category(all_required, any_required, none_required);
                     },
                     BuffChange::Refresh(kind) => {
                         buffs
@@ -2828,7 +4358,7 @@ impl ServerEvent for ParryHookEvent {
         ReadStorage<'a, Uid>,
         ReadStorage<'a, Stats>,
         ReadStorage<'a, comp::Mass>,
-        ReadStorage<'a, Inventory>,
+        ReadStorage<'a, comp::DerivedStats>,
     );
 
     fn handle(
@@ -2842,7 +4372,7 @@ impl ServerEvent for ParryHookEvent {
             uids,
             stats,
             masses,
-            inventories,
+            derived_stats,
         ): Self::SystemData<'_>,
     ) {
         let mut energy_change_emitter = energy_change_events.emitter();
@@ -2900,11 +4430,13 @@ impl ServerEvent for ParryHookEvent {
                 let buff = buff::Buff::new(
                     BuffKind::Parried,
                     data,
-                    vec![buff::BuffCategory::Physical],
+                    vec![],
                     source,
                     *time,
                     dest_info,
                     masses.get(ev.defender),
+                    ev.attacker.and_then(|a| uids.get(a).copied()),
+                    None,
                 );
                 buff_emitter.emit(BuffEvent {
                     entity: attacker,
@@ -2913,8 +4445,7 @@ impl ServerEvent for ParryHookEvent {
 
                 let attacker_poise_change = Poise::apply_poise_reduction(
                     ev.poise_multiplier.clamp(1.0, 2.0) * BASE_PARRIED_POISE_PUNISHMENT,
-                    inventories.get(attacker),
-                    &MaterialStatManifest::load().read(),
+                    derived_stats.get(attacker),
                     character_states.get(attacker),
                     stats.get(attacker),
                 );
@@ -2998,15 +4529,17 @@ pub struct EntityAttackedHookData<'a> {
     clients: ReadStorage<'a, Client>,
     stats: ReadStorage<'a, Stats>,
     healths: ReadStorage<'a, Health>,
-    inventories: ReadStorage<'a, Inventory>,
+    /// The cached gear aggregates the attacked-hook energy/poise formulas
+    /// read, instead of re-walking the affected entity's loadout per effect.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     buffs: ReadStorage<'a, comp::Buffs>,
     players: ReadStorage<'a, Player>,
-    msm: ReadExpect<'a, MaterialStatManifest>,
     masses: ReadStorage<'a, comp::Mass>,
     groups: ReadStorage<'a, Group>,
     orientations: ReadStorage<'a, comp::Ori>,
     combos: ReadStorage<'a, comp::Combo>,
     energies: ReadStorage<'a, comp::Energy>,
+    character_classes: ReadStorage<'a, CharacterClass>,
 }
 
 impl ServerEvent for EntityAttackedHookEvent {
@@ -3137,6 +4670,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                 data.buffs.get(effect_target),
                                 data.character_states.get(effect_target),
                                 data.orientations.get(effect_target),
+                                data.uids.get(effect_target).copied(),
                             ),
                             (
                                 Some(ev.entity),
@@ -3149,6 +4683,11 @@ impl ServerEvent for EntityAttackedHookEvent {
                             dir,
                             Some(ev.attack_source),
                             None,
+                            &mut rng,
+                            ev.attacker
+                                .and_then(|e| data.stats.get(e))
+                                .map(|s| s.character_level),
+                            ev.attacker.and_then(|e| data.character_classes.get(e)),
                         )
                     });
 
@@ -3182,10 +4721,10 @@ impl ServerEvent for EntityAttackedHookEvent {
                                 emitters.emit(EnergyChangeEvent {
                                     entity: effect_target,
                                     change: ec
-                                        * combat::compute_energy_reward_mod(
-                                            data.inventories.get(effect_target),
-                                            &data.msm,
-                                        )
+                                        * data
+                                            .derived_stats
+                                            .get(effect_target)
+                                            .map_or(1.0, |d| d.energy_reward_mod)
                                         * strength_modifier
                                         * data
                                             .stats
@@ -3203,7 +4742,6 @@ impl ServerEvent for EntityAttackedHookEvent {
                                             (
                                                 data.uids.get(ev.entity).copied(),
                                                 data.masses.get(ev.entity),
-                                                None,
                                             ),
                                             (
                                                 data.stats.get(effect_target),
@@ -3211,6 +4749,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                             ),
                                             ev.damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -3220,6 +4759,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                     amount: ev.damage_dealt * l * strength_modifier,
                                     by: dmg_contrib,
                                     cause: None,
+                                    magic_source: None,
                                     time: *data.time,
                                     precise: false,
                                     instance: rand::random(),
@@ -3234,8 +4774,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                             CombatEffect::Poise(p) => {
                                 let change = -Poise::apply_poise_reduction(
                                     *p,
-                                    data.inventories.get(effect_target),
-                                    &data.msm,
+                                    data.derived_stats.get(effect_target),
                                     data.character_states.get(effect_target),
                                     data.stats.get(effect_target),
                                 ) * strength_modifier
@@ -3262,6 +4801,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                     amount: *h * strength_modifier,
                                     by: dmg_contrib,
                                     cause: None,
+                                    magic_source: None,
                                     time: *data.time,
                                     precise: false,
                                     instance: rand::random(),
@@ -3273,77 +4813,38 @@ impl ServerEvent for EntityAttackedHookEvent {
                                     });
                                 }
                             },
+                            CombatEffect::RemoveBuff(buff_change) => {
+                                emitters.emit(BuffEvent {
+                                    entity: effect_target,
+                                    buff_change: buff_change.clone(),
+                                });
+                            },
                             CombatEffect::Combo(c) => {
                                 emitters.emit(ComboChangeEvent {
                                     entity: effect_target,
                                     change: (*c as f32 * strength_modifier).ceil() as i32,
                                 });
                             },
-                            CombatEffect::StageVulnerable(damage, section) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.stage_section() == Some(*section))
-                                {
-                                    let change = HealthChange {
-                                        amount: -ev.damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
+                            CombatEffect::AdditionalDamage(damage) => {
+                                let change = HealthChange {
+                                    amount: -ev.damage_dealt * damage * strength_modifier,
+                                    by: dmg_contrib,
+                                    cause: Some(DamageSource::Other),
+                                    magic_source: None,
+                                    time: *data.time,
+                                    precise: false,
+                                    instance: rand::random(),
+                                };
+                                emitters.emit(HealthChangeEvent {
+                                    entity: effect_target,
+                                    change,
+                                });
                             },
                             CombatEffect::RefreshBuff(chance, b) => {
                                 if rng.random::<f32>() < *chance {
                                     emitters.emit(BuffEvent {
                                         entity: effect_target,
                                         buff_change: buff::BuffChange::Refresh(*b),
-                                    });
-                                }
-                            },
-                            CombatEffect::BuffsVulnerable(damage, buff) => {
-                                if data
-                                    .buffs
-                                    .get(effect_target)
-                                    .is_some_and(|b| b.contains(*buff))
-                                {
-                                    let change = HealthChange {
-                                        amount: -ev.damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
-                                    });
-                                }
-                            },
-                            CombatEffect::StunnedVulnerable(damage) => {
-                                if data
-                                    .character_states
-                                    .get(effect_target)
-                                    .is_some_and(|cs| cs.is_stunned())
-                                {
-                                    let change = HealthChange {
-                                        amount: -ev.damage_dealt * damage * strength_modifier,
-                                        by: dmg_contrib,
-                                        cause: Some(DamageSource::Other),
-                                        time: *data.time,
-                                        precise: false,
-                                        instance: rand::random(),
-                                    };
-                                    emitters.emit(HealthChangeEvent {
-                                        entity: effect_target,
-                                        change,
                                     });
                                 }
                             },
@@ -3357,10 +4858,10 @@ impl ServerEvent for EntityAttackedHookEvent {
                                                 data.uids.get(effect_target).copied(),
                                                 data.stats.get(effect_target),
                                                 data.masses.get(effect_target),
-                                                None,
                                             ),
                                             ev.damage_dealt,
                                             strength_modifier,
+                                            None,
                                         )),
                                     });
                                 }
@@ -3435,6 +4936,7 @@ impl ServerEvent for EntityAttackedHookEvent {
                                                 * strength_modifier,
                                             by: dmg_contrib,
                                             cause: Some(DamageSource::Other),
+                                            magic_source: None,
                                             time: *data.time,
                                             precise: false,
                                             instance: rand::random(),
@@ -3459,13 +4961,31 @@ impl ServerEvent for ChangeAbilityEvent {
         WriteStorage<'a, comp::ActiveAbilities>,
         ReadStorage<'a, Inventory>,
         ReadStorage<'a, SkillSet>,
+        // Xindeler: needed to refuse binding a spell whose class-level band
+        // the character has not reached.
+        ReadStorage<'a, comp::AbilityPool>,
+        ReadStorage<'a, comp::CharacterClass>,
     );
 
     fn handle(
         events: impl ExactSizeIterator<Item = Self>,
-        (mut active_abilities, inventories, skill_sets): Self::SystemData<'_>,
+        (mut active_abilities, inventories, skill_sets, ability_pools, character_classes): Self::SystemData<'_>,
     ) {
         for ev in events {
+            // Xindeler: the client picks what goes on the action bar, so a
+            // modified one could otherwise bind a spell it cannot yet cast.
+            // Drop such a write silently — a well-behaved client never sends
+            // it (the Diary makes locked spells undraggable).
+            if !comp::ability::may_bind_ability(
+                ability_pools.get(ev.entity),
+                character_classes.get(ev.entity),
+                skill_sets
+                    .get(ev.entity)
+                    .map_or(1, |skill_set| skill_set.character_level()),
+                ev.new_ability,
+            ) {
+                continue;
+            }
             if let Some(mut active_abilities) = active_abilities.get_mut(ev.entity) {
                 active_abilities.change_ability(
                     ev.slot,
@@ -3740,6 +5260,7 @@ impl ServerEvent for RegrowHeadEvent {
                         amount,
                         by: None,
                         cause: Some(DamageSource::Other),
+                        magic_source: None,
                         time: *time,
                         precise: false,
                         instance: rand::random(),

@@ -1,5 +1,5 @@
 use crate::comp::{
-    Stats,
+    CreatureKind, Stats,
     skillset::{
         SKILL_GROUP_LOOKUP, SKILL_MAX_LEVEL, SKILL_PREREQUISITES, SkillGroupKind, SkillPrerequisite,
     },
@@ -20,6 +20,10 @@ pub enum Skill {
     Bow(BowSkill),
     Staff(StaffSkill),
     Sceptre(SceptreSkill),
+    /// The martial-role Staff's own skill tree, kept separate from
+    /// `Staff(StaffSkill)` (the caster/fire tree) because the two trees
+    /// share a `ToolKind` but not a `WeaponRole`.
+    StaffMartial(StaffMartialSkill),
     Climb(ClimbSkill),
     Swim(SwimSkill),
     Pick(MiningSkill),
@@ -71,6 +75,10 @@ pub enum MageSkill {
     PenetratingMagic,
     WardedSkin,
     ManaEfficiency,
+    ManaRecover,
+    ManaFlow,
+    ArcaneVigor,
+    Polyglot,
     // T3
     Overcharge,    // notable
     ArcaneMastery, // ACTIVE (capstone, synergy <- FocusedMind)
@@ -383,7 +391,7 @@ pub enum BowSkill {
     Foothold,
     HeavyNock,
     ArdentHunt,
-    OwlTalon,
+    StormChaser,
     EagleEye,
     Heartseeker,
     Hawkstrike,
@@ -394,7 +402,7 @@ pub enum BowSkill {
     JoltArrow,
     Barrage,
     PiercingGale,
-    Scatterburst,
+    ThornStake,
     Fusillade,
     DeathVolley,
 }
@@ -407,6 +415,20 @@ pub enum StaffSkill {
     FireDash,
     FireBreath,
     Pyroclasm,
+}
+
+/// A small, coherent starter tree for the martial (physical) Staff kit: two
+/// T1 roots (crowd-control `Sweep` vs. single-target `Brace`), each with a
+/// T2 follow-up, converging on a T3 capstone that requires both T2s. All
+/// nodes gate an active ability (see `ability_set_manifest.ron`'s
+/// `Custom("staff_martial")` entry); none carry a passive stat modifier.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+pub enum StaffMartialSkill {
+    Sweep,
+    Brace,
+    WhirlingGale,
+    GlacialThrust,
+    Avalanche,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
@@ -672,8 +694,19 @@ pub enum ClassPassiveStat {
     MoveSpeed,
     RecoverySpeed,
     EnergyReward,
-    /// BL-06 (Q4) extra damage vs undead targets (the Cleric smite).
-    BonusVsUndead,
+    /// Energy *cost* reduction (a divisor, see [`ClassPassiveStat::apply`]'s
+    /// match arm below) — distinct from `EnergyReward` (energy *gained back*
+    /// on hit). Reaches `Stats::energy_efficiency_modifier`, already consumed
+    /// at `states/utils.rs` and `ability.rs`'s `*energy_cost /=
+    /// stats.energy_efficiency` sites.
+    EnergyEfficiency,
+    /// Energy regeneration *rate* multiplier. Reaches
+    /// `Stats::energy_regen_modifier`, consumed by both `Energy::regen(..)`
+    /// call sites in `common/systems/src/stats.rs`.
+    EnergyRegen,
+    /// Extra damage vs targets of a given `CreatureKind` (the Cleric smite is
+    /// `BonusVs(Undead)`).
+    BonusVs(CreatureKind),
 }
 
 impl ClassPassiveStat {
@@ -704,7 +737,9 @@ impl ClassPassiveStat {
             ClassPassiveStat::MoveSpeed => stats.move_speed_modifier *= 1.0 + amount,
             ClassPassiveStat::RecoverySpeed => stats.recovery_speed_modifier *= 1.0 + amount,
             ClassPassiveStat::EnergyReward => stats.energy_reward_modifier *= 1.0 + amount,
-            ClassPassiveStat::BonusVsUndead => stats.bonus_damage_vs_undead += amount,
+            ClassPassiveStat::EnergyEfficiency => stats.energy_efficiency_modifier *= 1.0 + amount,
+            ClassPassiveStat::EnergyRegen => stats.energy_regen_modifier *= 1.0 + amount,
+            ClassPassiveStat::BonusVs(kind) => stats.bonus_damage_vs[kind as usize] += amount,
         }
     }
 }

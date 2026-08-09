@@ -45,7 +45,7 @@ VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-<crate> -- --nocapture
 
 For a specific test:
 ```bash
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common test_my_component -- --nocapture
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common test_my_component -- --nocapture
 ```
 
 ## Step 3: Implement

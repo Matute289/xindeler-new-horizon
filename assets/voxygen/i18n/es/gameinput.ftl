@@ -99,3 +99,4 @@ gamepad-dpad_left = Izquierda
 gamepad-dpad_right = Derecha
 gamepad-unknown = Desconocido
 gameinput-diary = Diario
+gameinput-inspect = Inspeccionar Objetivo

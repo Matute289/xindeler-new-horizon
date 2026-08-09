@@ -1,9 +1,6 @@
 use crate::{
-    combat::{DamageContributor, DamageSource, compute_poise_resilience},
-    comp::{
-        self, CharacterState, Inventory, Stats, ability::Capability,
-        inventory::item::MaterialStatManifest,
-    },
+    combat::{DamageContributor, DamageSource},
+    comp::{self, CharacterState, DerivedStats, Stats, ability::Capability},
     resources::Time,
     states,
     util::Dir,
@@ -272,14 +269,18 @@ impl Poise {
         }
     }
 
-    /// Returns the total poise damage reduction provided by all equipped items
+    /// Returns the total poise damage reduction provided by all equipped
+    /// items.
+    ///
+    /// Reads the cached armour resilience: `derived: None` means the entity has
+    /// no `Inventory`, which is `Some(0.0)` — never poise-invulnerable —
+    /// exactly as `DerivedStats::default()` records.
     pub fn compute_poise_damage_reduction(
-        inventory: Option<&Inventory>,
-        msm: &MaterialStatManifest,
+        derived: Option<&DerivedStats>,
         char_state: Option<&CharacterState>,
         stats: Option<&Stats>,
     ) -> f32 {
-        let protection = compute_poise_resilience(inventory, msm);
+        let protection = derived.map_or(Some(0.0), |derived| derived.poise_resilience);
         let from_inventory = match protection {
             Some(dr) => dr / (60.0 + dr.abs()),
             None => 1.0,
@@ -299,16 +300,16 @@ impl Poise {
         1.0 - (1.0 - from_inventory) * (1.0 - from_char) * (1.0 - from_stats)
     }
 
-    /// Modifies a poise change when optionally given an inventory and character
-    /// state to aid in calculation of poise damage reduction
+    /// Modifies a poise change when optionally given the target's cached gear
+    /// aggregates and character state to aid in calculation of poise damage
+    /// reduction
     pub fn apply_poise_reduction(
         value: f32,
-        inventory: Option<&Inventory>,
-        msm: &MaterialStatManifest,
+        derived: Option<&DerivedStats>,
         char_state: Option<&CharacterState>,
         stats: Option<&Stats>,
     ) -> f32 {
-        value * (1.0 - Poise::compute_poise_damage_reduction(inventory, msm, char_state, stats))
+        value * (1.0 - Poise::compute_poise_damage_reduction(derived, char_state, stats))
     }
 }
 

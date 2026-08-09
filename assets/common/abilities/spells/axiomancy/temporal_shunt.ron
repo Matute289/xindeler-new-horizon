@@ -4,8 +4,8 @@ ChargedRanged(
     energy_drain: 0,
     idle_drain: 0,
     projectile: (
-        kind: Pointed,
-        attack: Some((damage: 1)),
+        kind: Simple,
+        attack: Some((damage: 1, damage_kind: Force)),
         scaled: Some((damage: 40, knockback: Some(5), energy: Some(5))),
     ),
     buildup_duration: 0.9,

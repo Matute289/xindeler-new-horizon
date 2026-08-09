@@ -1,0 +1,42 @@
+// Project Image. L7, COPY-ONLY per this school's scope decision: builds only
+// the illusory-copy half (a stationary phantasm double that spawns near the
+// caster). The remote-viewpoint half (seeing/hearing through it at range,
+// moving it independently of the caster) is a different, not-yet-built
+// mechanism and is deliberately absent here -- this double does not move on
+// its own, is not piloted, and carries no sensing wiring.
+//
+// Scope note (body): the source spell's double is shaped exactly like the
+// caster. `SummonInfo::Npc.body` is a single value fixed at asset-load time,
+// with no way for a RON to say "copy whatever body summoned me" -- that
+// would need new Rust to substitute the caster's own `Body` into the summon
+// at cast time (the character-state code already has `data.body` in scope,
+// see `common/src/states/basic_summon.rs`, so it is a small addition, but
+// still a Rust change and out of scope for this pure-content pass).
+// `Object(TrainingDummy)` -- a still, human-shaped decoy figure -- stands in
+// as the closest honest data-only silhouette; it is not a likeness of the
+// specific caster.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.3,
+    recover_duration: 0.5,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: Object(TrainingDummy),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        // Matches the compendium entry's Concentration(60) cap.
+        duration: Some((
+            secs: 60,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

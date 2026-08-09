@@ -1,0 +1,17 @@
+// Dread Wolf — an aggressive wolf NPC template for PROJECT ORACLE's entity
+// factory (`xindeler_common_oracle::EntityTemplate`).
+//
+// `body` is an existing NPC/species keyword (`common::npc::NpcBody`'s
+// `FromStr` — the same vocabulary the in-game `/spawn` admin command already
+// parses), never a new naming scheme; `loot` is an existing loot-table asset
+// specifier.
+(
+    entity_template_id: "dread_wolf",
+    body: "wolf",
+    stats: (
+        name: Some("Dread Wolf"),
+    ),
+    faction: "enemy",
+    loot: Some("common.items.crafting_ing.hide.tough_hide"),
+    ai_behavior_override: "aggro",
+)

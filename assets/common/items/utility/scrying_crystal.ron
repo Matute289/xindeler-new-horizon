@@ -1,0 +1,18 @@
+// A carried divination focus, not an equip-slot item: `scrying` (and only
+// `scrying`) checks for its presence anywhere in the caster's inventory via
+// `Inventory::get_slot_of_item_by_def_id`, the same "does the caster hold
+// item X" idiom `AbilityRequirements.item`/`AbilityReqItem` already use for
+// consumables like `common.items.consumable.firedrop` -- see
+// `server/src/sys/remote_sense.rs`'s scrying resist-roll helper. Holding it
+// does not gate casting `scrying` at all; it only adds
+// `combat_tuning.ron`'s `scrying_focus_item_bonus_accuracy` to the resist
+// roll while held.
+ItemDef(
+    legacy_name: "Scrying Crystal",
+    legacy_description: "A palm-sized sphere of clouded quartz that clears like still water when a scrying working is drawn through it, sharpening the caster's grasp on a distant, watched mind.",
+    kind: Utility(
+        kind: AbilityReq,
+    ),
+    quality: High,
+    tags: [Utility],
+)

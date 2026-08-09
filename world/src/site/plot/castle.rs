@@ -42,10 +42,12 @@ impl Castle {
 }
 
 impl Structure for Castle {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_castle\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_castle")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_castle"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_castle"))]
     fn render_inner(&self, site: &Site, _land: &Land, painter: &Painter) {
         let wall_height = 24;
         let parapet_height = 2;

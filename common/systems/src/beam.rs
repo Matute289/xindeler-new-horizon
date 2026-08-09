@@ -4,8 +4,8 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Beam, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory,
-        Mass, Ori, PhysicsState, Player, Pos, Scale, Stats,
+        Alignment, Beam, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
+        Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Pos, Scale, Stats,
         ability::Dodgeable,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
@@ -38,6 +38,7 @@ event_emitters! {
         combo_change: event::ComboChangeEvent,
         buff: event::BuffEvent,
         transform: event::TransformEvent,
+        dispel_illusion: event::DispelIllusionEvent,
     }
 }
 
@@ -58,7 +59,9 @@ pub struct ReadData<'a> {
     bodies: ReadStorage<'a, Body>,
     healths: ReadStorage<'a, Health>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    /// The target's cached gear aggregates, read instead of re-walking
+    /// its loadout once per damage instance.
+    derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     groups: ReadStorage<'a, Group>,
     energies: ReadStorage<'a, Energy>,
     stats: ReadStorage<'a, Stats>,
@@ -70,6 +73,8 @@ pub struct ReadData<'a> {
     outcomes: Read<'a, EventBus<Outcome>>,
     events: ReadAttackEvents<'a>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for handling beams that heal or do damage
@@ -242,17 +247,19 @@ impl<'a> System<'a> for Sys {
                                 group: read_data.groups.get(entity),
                                 energy: read_data.energies.get(entity),
                                 combo: read_data.combos.get(entity),
-                                inventory: read_data.inventories.get(entity),
+                                derived: read_data.derived_stats.get(entity),
                                 stats: read_data.stats.get(entity),
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pos.0),
+                                buffs: read_data.buffs.get(entity),
+                                character_class: read_data.character_classes.get(entity),
                             });
 
                             let target_info = TargetInfo {
                                 entity: target,
                                 uid: *uid_b,
                                 inventory: read_data.inventories.get(target),
-                                attuned: read_data.attuned_items.get(target),
+                                derived: read_data.derived_stats.get(target),
                                 stats: read_data.stats.get(target),
                                 health: read_data.healths.get(target),
                                 pos: pos_b.0,
@@ -262,6 +269,7 @@ impl<'a> System<'a> for Sys {
                                 buffs: read_data.buffs.get(target),
                                 mass: read_data.masses.get(target),
                                 player: read_data.players.get(target),
+                                phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                             };
 
                             let target_dodging = match beam.dodgeable {

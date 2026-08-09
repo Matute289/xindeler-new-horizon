@@ -15,11 +15,11 @@ use common::{
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_FAST, ONWERSHIP_TIMEOUT_SLOW},
         slot::{self, Slot},
     },
-    consts::MAX_PICKUP_RANGE,
+    consts::{MAX_KNOCK_RANGE, MAX_PICKUP_RANGE},
     event::{
         BuffEvent, ChangeBodyEvent, ChangeStanceEvent, CreateItemDropEvent, CreateObjectEvent,
         DeleteEvent, EmitExt, HealthChangeEvent, InventoryManipEvent, PoiseChangeEvent,
-        TamePetEvent,
+        RemoteUnlockEvent, TamePetEvent,
     },
     event_emitters, match_some,
     mounting::VolumePos,
@@ -45,6 +45,140 @@ use super::{ServerEvent, entity_manipulation::emit_effect_events, event_dispatch
 
 pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<InventoryManipEvent>(builder, &[]);
+    event_dispatch::<RemoteUnlockEvent>(builder, &[]);
+}
+
+/// Given the [`SpriteKind`] of a keyhole/lock sprite that was just opened
+/// (whether via the melee key-item interaction or a ranged/keyless effect like
+/// the `knock` spell), returns the [`SpriteKind`] of the door blocks that
+/// opening it should destroy nearby, if any.
+///
+/// Shared by both [`comp::InventoryManip::Collect`] (the melee, key-item path)
+/// and [`RemoteUnlockEvent`] (the ranged, keyless path) so the two never drift
+/// out of sync.
+pub fn keyhole_swap_target(sprite_kind: SpriteKind) -> Option<SpriteKind> {
+    match sprite_kind {
+        SpriteKind::Keyhole => Some(SpriteKind::KeyDoor),
+        SpriteKind::BoneKeyhole => Some(SpriteKind::BoneKeyDoor),
+        SpriteKind::HaniwaKeyhole => Some(SpriteKind::HaniwaKeyDoor),
+        SpriteKind::SahaginKeyhole => Some(SpriteKind::SahaginKeyDoor),
+        SpriteKind::GlassKeyhole => Some(SpriteKind::GlassBarrier),
+        SpriteKind::KeyholeBars => Some(SpriteKind::DoorBars),
+        SpriteKind::TerracottaKeyhole => Some(SpriteKind::TerracottaKeyDoor),
+        SpriteKind::VampireKeyhole => Some(SpriteKind::VampireKeyDoor),
+        SpriteKind::MyrmidonKeyhole | SpriteKind::MinotaurKeyhole => {
+            Some(SpriteKind::MyrmidonKeyDoor)
+        },
+        _ => None,
+    }
+}
+
+/// Whether a [`RemoteUnlockEvent`] targeting a sprite of `sprite_kind` (with
+/// the given, possibly-unset [`SpriteCfg`](common::terrain::sprite::SpriteCfg))
+/// should proceed, and if so, which door [`SpriteKind`] it should destroy
+/// nearby.
+///
+/// Returns `None` both when the sprite isn't a keyhole/lock at all, and when it
+/// is one but carries `no_knock: true` — a progression-gated keyhole opting out
+/// of ranged/keyless unlocking. This flag is only ever consulted from this
+/// ranged path: the ordinary melee key-item interaction
+/// (`InventoryManip::Collect`) never checks it, so a character carrying
+/// the actual key can still open a `no_knock` door normally.
+pub fn remote_unlock_target(
+    sprite_kind: SpriteKind,
+    sprite_cfg: Option<&common::terrain::sprite::SpriteCfg>,
+) -> Option<SpriteKind> {
+    let kind_to_destroy = keyhole_swap_target(sprite_kind)?;
+    if sprite_cfg.is_some_and(|cfg| cfg.no_knock) {
+        return None;
+    }
+    Some(kind_to_destroy)
+}
+
+/// Flood-fills outward from `sprite_pos`, destroying any connected
+/// `kind_to_destroy` door blocks. Shared by both the melee key-unlock path and
+/// the ranged/keyless `knock` path.
+pub fn destroy_nearby_key_doors(
+    block_change: &mut common_state::BlockChange,
+    terrain: &common::terrain::TerrainGrid,
+    sprite_pos: Vec3<i32>,
+    kind_to_destroy: SpriteKind,
+) {
+    let dirs = [
+        Vec3::unit_x(),
+        -Vec3::unit_x(),
+        Vec3::unit_y(),
+        -Vec3::unit_y(),
+        Vec3::unit_z(),
+        -Vec3::unit_z(),
+    ];
+    let mut destroyed = HashSet::<Vec3<i32>>::default();
+    let mut pending = dirs
+        .into_iter()
+        .map(|dir| sprite_pos + dir)
+        .collect::<HashSet<_>>();
+    // TODO: Replace with `entry` eventually
+    while destroyed.len() < 450 {
+        if let Some(pos) = pending.iter().next().copied() {
+            pending.remove(&pos);
+
+            if !destroyed.contains(&pos)
+                && terrain.get(pos).ok().and_then(|b| b.get_sprite()) == Some(kind_to_destroy)
+            {
+                block_change.try_set(pos, Block::empty());
+                destroyed.insert(pos);
+                pending.extend(dirs.into_iter().map(|dir| pos + dir));
+            }
+        } else {
+            break;
+        }
+    }
+}
+
+impl ServerEvent for RemoteUnlockEvent {
+    type SystemData<'a> = (
+        Write<'a, common_state::BlockChange>,
+        ReadExpect<'a, common::terrain::TerrainGrid>,
+        ReadStorage<'a, comp::Pos>,
+    );
+
+    fn handle(
+        events: impl ExactSizeIterator<Item = Self>,
+        (mut block_change, terrain, positions): Self::SystemData<'_>,
+    ) {
+        for ev in events {
+            // Defense-in-depth range re-check: the `knock` CharacterState already validates
+            // range against its own (data-driven) ability range before ever emitting this
+            // event, but a caster's `Pos` is authoritative server data, so it costs nothing
+            // to check again here, mirroring `ToggleSpriteLightEvent`'s handler.
+            let Some(caster_pos) = positions.get(ev.entity) else {
+                continue;
+            };
+            if caster_pos.0.distance_squared(ev.pos.as_()) > MAX_KNOCK_RANGE.powi(2) {
+                continue;
+            }
+
+            if !block_change.can_set_block(ev.pos) {
+                continue;
+            }
+
+            let Ok(block) = terrain.get(ev.pos) else {
+                continue;
+            };
+            let Some(sprite_kind) = block.get_sprite() else {
+                continue;
+            };
+            let Some(kind_to_destroy) =
+                remote_unlock_target(sprite_kind, terrain.sprite_cfg_at(ev.pos))
+            else {
+                // Either not a keyhole/lock sprite at all, or one flagged `no_knock`.
+                continue;
+            };
+
+            block_change.set(ev.pos, block.into_collected());
+            destroy_nearby_key_doors(&mut block_change, &terrain, ev.pos, kind_to_destroy);
+        }
+    }
 }
 
 pub fn swap_lantern(
@@ -69,12 +203,14 @@ pub fn snuff_lantern(storage: &mut WriteStorage<LightEmitter>, entity: EcsEntity
 /// pass through `InventoryManip`, so they bypass this by design.
 fn entity_meets_item_requirements(
     item: &comp::Item,
-    class: Option<comp::class::ClassKind>,
+    character_class: Option<&comp::CharacterClass>,
     skill_set: Option<&comp::SkillSet>,
     body: Option<&comp::Body>,
 ) -> bool {
     match (skill_set, body) {
-        (Some(skill_set), Some(body)) => item.meets_requirements_with_class(class, skill_set, body),
+        (Some(skill_set), Some(body)) => {
+            item.meets_requirements_with_class(character_class, skill_set, body)
+        },
         _ => true,
     }
 }
@@ -122,6 +258,9 @@ pub struct InventoryManipData<'a> {
     msm: ReadExpect<'a, MaterialStatManifest>,
     rbm: ReadExpect<'a, RecipeBookManifest>,
     inventories: WriteStorage<'a, comp::Inventory>,
+    /// The consumer's cached gear aggregates, supplying the mitigation a
+    /// consumable's own effect is reduced by.
+    derived_stats: ReadStorage<'a, comp::DerivedStats>,
     items: WriteStorage<'a, comp::PickupItem>,
     inventory_update_buffers: WriteStorage<'a, comp::InventoryUpdateBuffer>,
     light_emitters: WriteStorage<'a, comp::LightEmitter>,
@@ -145,9 +284,7 @@ pub struct InventoryManipData<'a> {
     pets: ReadStorage<'a, comp::Pet>,
     masses: ReadStorage<'a, comp::Mass>,
     #[cfg(feature = "worldgen")]
-    presences: ReadStorage<'a, comp::Presence>,
-    #[cfg(feature = "worldgen")]
-    rtsim_entities: ReadStorage<'a, common::rtsim::RtSimEntity>,
+    rtsim_actors: ReadStorage<'a, common::rtsim::ActorId>,
 }
 
 impl ServerEvent for InventoryManipEvent {
@@ -396,11 +533,7 @@ impl ServerEvent for InventoryManipEvent {
                             // Send event to rtsim if something was stolen.
                             #[cfg(feature = "worldgen")]
                             if block.is_owned()
-                                && let Some(actor) = super::entity_manipulation::entity_as_actor(
-                                    entity,
-                                    &data.rtsim_entities,
-                                    &data.presences,
-                                )
+                                && let Some(actor) = data.rtsim_actors.get(entity).copied()
                             {
                                 data.rtsim.hook_pickup_owned_sprite(
                                     &data.world,
@@ -468,61 +601,15 @@ impl ServerEvent for InventoryManipEvent {
                             data.block_change.set(sprite_pos, block.into_collected());
 
                             // If the block was a keyhole, remove nearby door blocks
-                            // TODO: Abstract this code into a generalised way to do block updates?
-                            if let Some(kind_to_destroy) = match block.get_sprite() {
-                                Some(SpriteKind::Keyhole) => Some(SpriteKind::KeyDoor),
-                                Some(SpriteKind::BoneKeyhole) => Some(SpriteKind::BoneKeyDoor),
-                                Some(SpriteKind::HaniwaKeyhole) => Some(SpriteKind::HaniwaKeyDoor),
-                                Some(SpriteKind::SahaginKeyhole) => {
-                                    Some(SpriteKind::SahaginKeyDoor)
-                                },
-                                Some(SpriteKind::GlassKeyhole) => Some(SpriteKind::GlassBarrier),
-                                Some(SpriteKind::KeyholeBars) => Some(SpriteKind::DoorBars),
-                                Some(SpriteKind::TerracottaKeyhole) => {
-                                    Some(SpriteKind::TerracottaKeyDoor)
-                                },
-                                Some(SpriteKind::VampireKeyhole) => {
-                                    Some(SpriteKind::VampireKeyDoor)
-                                },
-                                Some(SpriteKind::MyrmidonKeyhole | SpriteKind::MinotaurKeyhole) => {
-                                    Some(SpriteKind::MyrmidonKeyDoor)
-                                },
-                                _ => None,
-                            } {
-                                let dirs = [
-                                    Vec3::unit_x(),
-                                    -Vec3::unit_x(),
-                                    Vec3::unit_y(),
-                                    -Vec3::unit_y(),
-                                    Vec3::unit_z(),
-                                    -Vec3::unit_z(),
-                                ];
-                                let mut destroyed = HashSet::<Vec3<i32>>::default();
-                                let mut pending = dirs
-                                    .into_iter()
-                                    .map(|dir| sprite_pos + dir)
-                                    .collect::<HashSet<_>>();
-                                // TODO: Replace with `entry` eventually
-                                while destroyed.len() < 450 {
-                                    if let Some(pos) = pending.iter().next().copied() {
-                                        pending.remove(&pos);
-
-                                        if !destroyed.contains(&pos)
-                                            && data
-                                                .terrain
-                                                .get(pos)
-                                                .ok()
-                                                .and_then(|b| b.get_sprite())
-                                                == Some(kind_to_destroy)
-                                        {
-                                            data.block_change.try_set(pos, Block::empty());
-                                            destroyed.insert(pos);
-                                            pending.extend(dirs.into_iter().map(|dir| pos + dir));
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
+                            if let Some(kind_to_destroy) =
+                                block.get_sprite().and_then(keyhole_swap_target)
+                            {
+                                destroy_nearby_key_doors(
+                                    &mut data.block_change,
+                                    &data.terrain,
+                                    sprite_pos,
+                                    kind_to_destroy,
+                                );
                             }
                         } else {
                             debug!(
@@ -577,11 +664,11 @@ impl ServerEvent for InventoryManipEvent {
                                     (is_equippable, lantern_info)
                                 });
                             if is_equippable {
-                                let class = data.character_classes.get(entity).map(|c| c.0);
+                                let character_class = data.character_classes.get(entity);
                                 let requirements_ok = inventory.get(slot).is_none_or(|item| {
                                     entity_meets_item_requirements(
                                         item,
-                                        class,
+                                        character_class,
                                         data.skill_sets.get(entity),
                                         data.bodies.get(entity),
                                     )
@@ -797,10 +884,7 @@ impl ServerEvent for InventoryManipEvent {
                                         entity,
                                         effect,
                                         None,
-                                        data.inventories.get(entity),
-                                        None, /* consumable self-effect: not attunement-gated
-                                               * (ENG-D2c) */
-                                        &data.msm,
+                                        data.derived_stats.get(entity),
                                         data.character_states.get(entity),
                                         data.stats.get(entity),
                                         data.masses.get(entity),
@@ -818,10 +902,7 @@ impl ServerEvent for InventoryManipEvent {
                                         entity,
                                         effect,
                                         None,
-                                        data.inventories.get(entity),
-                                        None, /* consumable self-effect: not attunement-gated
-                                               * (ENG-D2c) */
-                                        &data.msm,
+                                        data.derived_stats.get(entity),
                                         data.character_states.get(entity),
                                         data.stats.get(entity),
                                         data.masses.get(entity),
@@ -838,9 +919,7 @@ impl ServerEvent for InventoryManipEvent {
                                     entity,
                                     effect,
                                     None,
-                                    data.inventories.get(entity),
-                                    None, // consumable self-effect: not attunement-gated (ENG-D2c)
-                                    &data.msm,
+                                    data.derived_stats.get(entity),
                                     data.character_states.get(entity),
                                     data.stats.get(entity),
                                     data.masses.get(entity),
@@ -876,7 +955,7 @@ impl ServerEvent for InventoryManipEvent {
 
                     // Equip gate: reject when either side of the swap would
                     // mount a gated item into a loadout slot.
-                    let swap_class = data.character_classes.get(entity).map(|c| c.0);
+                    let swap_class = data.character_classes.get(entity);
                     let violates_requirements = [(a, b), (b, a)].into_iter().any(|(src, dst)| {
                         matches!(dst, Slot::Equip(_))
                             && inventory.get_slot(src).is_some_and(|item| {
@@ -1213,7 +1292,33 @@ impl ServerEvent for InventoryManipEvent {
                     inventory.sort(sort_order);
                 },
                 comp::InventoryManip::SwapEquippedWeapons => {
-                    inventory.swap_equipped_weapons(*data.time);
+                    // The inactive weapon set is about to become active — re-check
+                    // requirements for whatever's sitting there, the same gate
+                    // direct-equip already applies. Without this, a gated item that
+                    // somehow ended up in the inactive set (e.g. legacy save data
+                    // predating this gating feature) reaches the active slot with
+                    // zero re-validation.
+                    let character_class = data.character_classes.get(entity);
+                    let requirements_ok = [
+                        slot::EquipSlot::InactiveMainhand,
+                        slot::EquipSlot::InactiveOffhand,
+                    ]
+                    .into_iter()
+                    .all(|slot| {
+                        inventory.equipped(slot).is_none_or(|item| {
+                            entity_meets_item_requirements(
+                                item,
+                                character_class,
+                                data.skill_sets.get(entity),
+                                data.bodies.get(entity),
+                            )
+                        })
+                    });
+                    if requirements_ok {
+                        inventory.swap_equipped_weapons(*data.time);
+                    } else {
+                        notify_requirements_not_met(&data.clients, entity);
+                    }
                 },
                 comp::InventoryManip::Delete(slot, amount) => {
                     let _ = inventory.take_amount(slot, amount, &data.ability_map, &data.msm);
@@ -1316,5 +1421,44 @@ mod tests {
         assert!(!within_pickup_range(test_cylinder(position), || {
             test_cylinder(item_position)
         },),);
+    }
+
+    #[test]
+    fn knock_opens_unflagged_ordinary_keyhole() {
+        // An ordinary keyhole with no `SpriteCfg` at all (the common case) opens
+        // normally.
+        assert_eq!(
+            remote_unlock_target(SpriteKind::HaniwaKeyhole, None),
+            Some(SpriteKind::HaniwaKeyDoor)
+        );
+        // Also true with an explicit but unflagged `SpriteCfg` (e.g. one with an
+        // unrelated `loot_table` set, matching the shape of `jungle_ruin`'s
+        // chests).
+        let unflagged = common::terrain::sprite::SpriteCfg::default();
+        assert_eq!(
+            remote_unlock_target(SpriteKind::HaniwaKeyhole, Some(&unflagged)),
+            Some(SpriteKind::HaniwaKeyDoor)
+        );
+    }
+
+    #[test]
+    fn knock_refuses_no_knock_flagged_keyhole() {
+        // The Haniwa dungeon's keyhole (world/src/site/plot/haniwa.rs) is flagged
+        // `no_knock: true` as a worked example of a progression-gated keyhole: `knock`
+        // must not be able to open it.
+        let no_knock_cfg = common::terrain::sprite::SpriteCfg {
+            no_knock: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            remote_unlock_target(SpriteKind::HaniwaKeyhole, Some(&no_knock_cfg)),
+            None
+        );
+    }
+
+    #[test]
+    fn knock_ignores_non_keyhole_sprites() {
+        // Sprites unrelated to locks are never affected by `knock`, flagged or not.
+        assert_eq!(remote_unlock_target(SpriteKind::Apple, None), None);
     }
 }

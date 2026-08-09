@@ -2,8 +2,10 @@ use crate::{
     assets::{AssetCombined, Ron},
     combat::GroupTarget,
     comp::{
-        self, AdminRole as Role, Skill, aura::AuraKindVariant, buff::BuffKind,
-        inventory::item::try_all_item_defs,
+        self, AdminRole as Role, Skill,
+        aura::AuraKindVariant,
+        buff::BuffKind,
+        inventory::item::{Quality, try_all_item_defs},
     },
     generation::try_all_entity_configs,
     npc, outcome,
@@ -180,24 +182,62 @@ lazy_static! {
             BuffKind::OffBalance => "off_balance",
             BuffKind::Tenacity => "tenacity",
             BuffKind::Resilience => "resilience",
+            BuffKind::StormChaser => "storm_chaser",
+            BuffKind::EagleEye => "eagle_eye",
             BuffKind::OwlTalon => "owl_talon",
             BuffKind::HeavyNock => "heavy_nock",
             BuffKind::Heartseeker => "heartseeker",
-            BuffKind::EagleEye => "eagle_eye",
-            BuffKind::Chilled => "chilled",
             BuffKind::ArdentHunter => "ardent_hunter",
-            BuffKind::ArdentHunted => "ardent_hunted",
             BuffKind::SepticShot => "septic_shot",
+            BuffKind::Chilled => "chilled",
+            BuffKind::ArdentHunted => "ardent_hunted",
+            BuffKind::ArdentHunt => "ardent_hunt",
+            BuffKind::IgniteArrow => "ignite_arrow",
+            BuffKind::FreezeArrow => "freeze_arrow",
+            BuffKind::DrenchArrow => "drench_arrow",
+            BuffKind::JoltArrow => "jolt_arrow",
+            BuffKind::BlindingSmite => "blinding_smite",
+            BuffKind::BrandingSmite => "branding_smite",
+            BuffKind::DivineSmite => "divine_smite",
+            BuffKind::SearingSmite => "searing_smite",
+            BuffKind::StaggeringSmite => "staggering_smite",
+            BuffKind::ThunderousSmite => "thunderous_smite",
+            BuffKind::WrathfulSmite => "wrathful_smite",
+            BuffKind::Blessed => "blessed",
+            BuffKind::CrusadersMantle => "crusaders_mantle",
+            BuffKind::RestfulSleep => "restful_sleep",
+            BuffKind::OtherworldlyWard => "otherworldly_ward",
+            BuffKind::Bane => "bane",
+            BuffKind::FaerieFire => "faerie_fire",
+            BuffKind::Enfeebled => "enfeebled",
+            BuffKind::Sickened => "sickened",
+            BuffKind::Hexed => "hexed",
             BuffKind::Terrified => "terrified",
             BuffKind::Charmed => "charmed",
+            BuffKind::Dominated => "dominated",
+            BuffKind::Maddened => "maddened",
+            BuffKind::Paralyzed => "paralyzed",
             BuffKind::Hollowtouched => "hollowtouched",
             BuffKind::DifficultTerrain => "difficult_terrain",
             BuffKind::FreedomOfMovement => "freedom_of_movement",
+            BuffKind::Fearless => "fearless",
             BuffKind::Antimagic => "antimagic",
             BuffKind::Anchored => "anchored",
             BuffKind::Asleep => "asleep",
             BuffKind::Blinded => "blinded",
             BuffKind::Slowed => "slowed",
+            BuffKind::Agonized => "agonized",
+            BuffKind::Detecting => "detecting",
+            BuffKind::SeeInvisible => "see_invisible",
+            BuffKind::TrueSight => "true_sight",
+            BuffKind::RemoteSensing => "remote_sensing",
+            BuffKind::Identifying => "identifying",
+            BuffKind::Disguised => "disguised",
+            BuffKind::PassWithoutTrace => "pass_without_trace",
+            BuffKind::Mooncloak => "mooncloak",
+            BuffKind::Nondetection => "nondetection",
+            BuffKind::MagicAura => "magic_aura",
+            BuffKind::Sequester => "sequester",
         };
         let mut buff_parser = HashMap::new();
         for kind in BuffKind::iter() {
@@ -250,6 +290,16 @@ lazy_static! {
         items.sort();
         items
     };
+
+    /// Xindeler: the subset of [`ITEM_SPECS`] that lives under
+    /// `common.items.spell_books`, for tab-completing `/learn_spells`. Filtered
+    /// by path rather than by `ItemKind` so it costs nothing to build: every
+    /// item under that directory is a `SpellGroup`, which a unit test enforces.
+    pub static ref SPELL_BOOK_SPECS: Vec<String> = ITEM_SPECS
+        .iter()
+        .filter(|spec| spec.starts_with("common.items.spell_books."))
+        .cloned()
+        .collect();
 
     /// List of all entity configs. Useful for tab completing
     pub static ref ENTITY_CONFIGS: Vec<String> = {
@@ -339,7 +389,7 @@ lazy_static! {
 
 pub enum EntityTarget {
     Player(String),
-    RtsimNpc(u64),
+    RtsimNpc(String),
     Uid(crate::uid::Uid),
 }
 
@@ -350,9 +400,7 @@ impl FromStr for EntityTarget {
         // NOTE: `@` is an invalid character in usernames, so we can use it here.
         if let Some((spec, data)) = s.split_once('@') {
             match spec {
-                "rtsim" => Ok(EntityTarget::RtsimNpc(u64::from_str(data).map_err(
-                    |_| format!("Expected a valid number after 'rtsim@' but found {data}."),
-                )?)),
+                "rtsim" => Ok(EntityTarget::RtsimNpc(data.to_string())),
                 "uid" => {
                     let raw = u64::from_str(data).map_err(|_| {
                         format!("Expected a valid number after 'uid@' but found {data}.")
@@ -384,6 +432,7 @@ pub enum ServerChatCommand {
     Ban,
     BanIp,
     BanLog,
+    Banish,
     BattleMode,
     BattleModeForce,
     Body,
@@ -404,6 +453,7 @@ pub enum ServerChatCommand {
     Explosion,
     Faction,
     GiveItem,
+    GiveItemQuality,
     Gizmos,
     GizmosRange,
     Goto,
@@ -422,17 +472,22 @@ pub enum ServerChatCommand {
     KillNpcs,
     Kit,
     Lantern,
+    LearnSpells,
     Light,
     Lightning,
     Location,
     MakeBlock,
     MakeNpc,
+    MakeParty,
     MakeSprite,
     MakeTestChar,
     MakeVolume,
     Motd,
     Mount,
+    Multiclass,
     Object,
+    Oracle,
+    OracleTrigger,
     Outcome,
     PermitBuild,
     Players,
@@ -457,8 +512,10 @@ pub enum ServerChatCommand {
     ServerPhysics,
     SetBodyType,
     SetClass,
+    SetClassLevel,
     SetEthos,
     SetLevel,
+    SetMastery,
     SetMotd,
     SetWaypoint,
     Ship,
@@ -473,6 +530,9 @@ pub enum ServerChatCommand {
     Time,
     TimeScale,
     Tp,
+    TranscribeSpell,
+    TriggerReady,
+    TriggerSlot,
     Unban,
     UnbanIp,
     Version,
@@ -561,6 +621,11 @@ impl ServerChatCommand {
                 vec![PlayerName(Required), Integer("max entries", 10, Optional)],
                 Content::localized("command-ban-ip-desc"),
                 Some(Moderator),
+            ),
+            ServerChatCommand::Banish => cmd(
+                vec![Integer("secs", 60, Optional)],
+                Content::localized("command-banish-desc"),
+                Some(Admin),
             ),
             #[rustfmt::skip]
             ServerChatCommand::BattleMode => cmd(
@@ -694,6 +759,15 @@ impl ServerChatCommand {
                 Content::localized("command-give_item-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::GiveItemQuality => cmd(
+                vec![
+                    AssetPath("item", "common.items.", ITEM_SPECS.clone(), Required),
+                    Enum("quality", Quality::all_options(), Required),
+                    Integer("num", 1, Optional),
+                ],
+                Content::localized("command-give_item_quality-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::Gizmos => cmd(
                 vec![
                     Enum(
@@ -806,6 +880,16 @@ impl ServerChatCommand {
                 Content::localized("command-lantern-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::LearnSpells => cmd(
+                vec![AssetPath(
+                    "spell_book",
+                    "common.items.spell_books.",
+                    SPELL_BOOK_SPECS.clone(),
+                    Required,
+                )],
+                Content::localized("command-learn_spells-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::Light => cmd(
                 vec![
                     Float("r", 1.0, Optional),
@@ -842,6 +926,27 @@ impl ServerChatCommand {
                 Content::localized("command-make_npc-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::MakeParty => {
+                let class_kinds = || {
+                    // Single source of truth — don't hardcode the class list.
+                    crate::comp::class::ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword().to_owned())
+                        .collect::<Vec<_>>()
+                };
+                cmd(
+                    vec![
+                        Enum("class1", class_kinds(), Required),
+                        Integer("level1", 1, Required),
+                        Enum("class2", class_kinds(), Required),
+                        Integer("level2", 1, Required),
+                        Enum("class3", class_kinds(), Required),
+                        Integer("level3", 1, Required),
+                    ],
+                    Content::localized("command-make_party-desc"),
+                    Some(Admin),
+                )
+            },
             ServerChatCommand::MakeSprite => cmd(
                 vec![Enum("sprite", SPRITE_KINDS.clone(), Required)],
                 Content::localized("command-make_sprite-desc"),
@@ -851,6 +956,20 @@ impl ServerChatCommand {
             ServerChatCommand::Object => cmd(
                 vec![Enum("object", OBJECTS.clone(), Required)],
                 Content::localized("command-object-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::Oracle => cmd(
+                vec![Enum(
+                    "state",
+                    vec!["on".to_string(), "off".to_string()],
+                    Required,
+                )],
+                Content::localized("command-oracle-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::OracleTrigger => cmd(
+                vec![Any("dmevent_id", Required)],
+                Content::localized("command-oracle_trigger-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::Outcome => cmd(
@@ -973,6 +1092,23 @@ impl ServerChatCommand {
                 Content::localized("command-set_level-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::SetMastery => cmd(
+                vec![
+                    Enum(
+                        "source",
+                        vec![
+                            "divine".to_string(),
+                            "primordial".to_string(),
+                            "psionic".to_string(),
+                            "ki".to_string(),
+                        ],
+                        Required,
+                    ),
+                    Float("pct", 0.0, Required),
+                ],
+                Content::localized("command-set_mastery-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::SetMotd => cmd(
                 vec![Any("locale", Optional), Message(Optional)],
                 Content::localized("command-set_motd-desc"),
@@ -1077,6 +1213,11 @@ impl ServerChatCommand {
                 ],
                 Content::localized("command-tp-desc"),
                 Some(Moderator),
+            ),
+            ServerChatCommand::TranscribeSpell => cmd(
+                vec![Any("page", Required)],
+                Content::localized("command-transcribe_spell-desc"),
+                Some(Admin),
             ),
             ServerChatCommand::RtsimTp => cmd(
                 vec![
@@ -1234,6 +1375,56 @@ impl ServerChatCommand {
                 Content::localized("command-dismount-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::Multiclass => cmd(
+                vec![Enum(
+                    "class",
+                    comp::class::ClassKind::PLAYABLE
+                        .iter()
+                        .map(|c| c.keyword().to_string())
+                        .collect(),
+                    Required,
+                )],
+                Content::localized("command-multiclass-desc"),
+                Some(Admin),
+            ),
+            // Configuring a trigger has no UI yet, and a slot's wait runs from
+            // ten minutes to thirty-six real-world hours -- without these two
+            // commands the feature is untestable in a single session.
+            ServerChatCommand::TriggerSlot => cmd(
+                vec![
+                    Integer("slot", 0, Required),
+                    Integer("ability pool index", 0, Required),
+                    Enum(
+                        "condition",
+                        vec![
+                            "health_below".to_owned(),
+                            "damage_taken".to_owned(),
+                            "energy_below".to_owned(),
+                        ],
+                        Required,
+                    ),
+                    Float("threshold", 0.3, Optional),
+                ],
+                Content::localized("command-trigger_slot-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::TriggerReady => cmd(
+                vec![Integer("slot", 0, Required)],
+                Content::localized("command-trigger_ready-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::SetClassLevel => cmd(
+                vec![
+                    Enum(
+                        "class",
+                        vec!["primary".to_owned(), "secondary".to_owned()],
+                        Required,
+                    ),
+                    Integer("level", 1, Required),
+                ],
+                Content::localized("command-set_class_level-desc"),
+                Some(Admin),
+            ),
         }
     }
 
@@ -1250,6 +1441,7 @@ impl ServerChatCommand {
             ServerChatCommand::Ban => "ban",
             ServerChatCommand::BanIp => "ban_ip",
             ServerChatCommand::BanLog => "ban_log",
+            ServerChatCommand::Banish => "banish",
             ServerChatCommand::BattleMode => "battlemode",
             ServerChatCommand::BattleModeForce => "battlemode_force",
             ServerChatCommand::Body => "body",
@@ -1266,6 +1458,7 @@ impl ServerChatCommand {
             ServerChatCommand::Explosion => "explosion",
             ServerChatCommand::Faction => "faction",
             ServerChatCommand::GiveItem => "give_item",
+            ServerChatCommand::GiveItemQuality => "give_item_quality",
             ServerChatCommand::Gizmos => "gizmos",
             ServerChatCommand::GizmosRange => "gizmos_range",
             ServerChatCommand::Goto => "goto",
@@ -1284,13 +1477,17 @@ impl ServerChatCommand {
             ServerChatCommand::KillNpcs => "kill_npcs",
             ServerChatCommand::Kit => "kit",
             ServerChatCommand::Lantern => "lantern",
+            ServerChatCommand::LearnSpells => "learn_spells",
             ServerChatCommand::Respawn => "respawn",
             ServerChatCommand::Light => "light",
             ServerChatCommand::MakeBlock => "make_block",
             ServerChatCommand::MakeNpc => "make_npc",
+            ServerChatCommand::MakeParty => "make_party",
             ServerChatCommand::MakeSprite => "make_sprite",
             ServerChatCommand::Motd => "motd",
             ServerChatCommand::Object => "object",
+            ServerChatCommand::Oracle => "oracle",
+            ServerChatCommand::OracleTrigger => "oracle_trigger",
             ServerChatCommand::Outcome => "outcome",
             ServerChatCommand::PermitBuild => "permit_build",
             ServerChatCommand::Players => "players",
@@ -1306,8 +1503,10 @@ impl ServerChatCommand {
             ServerChatCommand::Say => "say",
             ServerChatCommand::ServerPhysics => "server_physics",
             ServerChatCommand::SetClass => "set_class",
+            ServerChatCommand::SetClassLevel => "set_class_level",
             ServerChatCommand::SetEthos => "set_ethos",
             ServerChatCommand::SetLevel => "set_level",
+            ServerChatCommand::SetMastery => "set_mastery",
             ServerChatCommand::SetMotd => "set_motd",
             ServerChatCommand::SetBodyType => "set_body_type",
             ServerChatCommand::Ship => "ship",
@@ -1321,6 +1520,7 @@ impl ServerChatCommand {
             ServerChatCommand::Time => "time",
             ServerChatCommand::TimeScale => "time_scale",
             ServerChatCommand::Tp => "tp",
+            ServerChatCommand::TranscribeSpell => "transcribe_spell",
             ServerChatCommand::RtsimTp => "rtsim_tp",
             ServerChatCommand::RtsimInfo => "rtsim_info",
             ServerChatCommand::RtsimNpc => "rtsim_npc",
@@ -1346,6 +1546,9 @@ impl ServerChatCommand {
             ServerChatCommand::DestroyTethers => "destroy_tethers",
             ServerChatCommand::Mount => "mount",
             ServerChatCommand::Dismount => "dismount",
+            ServerChatCommand::Multiclass => "multiclass",
+            ServerChatCommand::TriggerSlot => "trigger_slot",
+            ServerChatCommand::TriggerReady => "trigger_ready",
         }
     }
 
@@ -1629,6 +1832,17 @@ impl_from_to_str_cmd!(AuraKindVariant, (
     Buff => "buff",
     FriendlyFire => "friendly_fire",
     ForcePvP => "force_pvp"
+));
+
+impl_from_to_str_cmd!(Quality, (
+    Low => "low",
+    Common => "common",
+    Moderate => "moderate",
+    High => "high",
+    Epic => "epic",
+    Legendary => "legendary",
+    Artifact => "artifact",
+    Debug => "debug"
 ));
 
 impl_from_to_str_cmd!(GroupTarget, (

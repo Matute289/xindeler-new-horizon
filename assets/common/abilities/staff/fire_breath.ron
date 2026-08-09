@@ -18,6 +18,7 @@ BasicRanged(
                 strength: DamageFraction(0.1),
                 chance: 0.8,
             )),
+            damage_kind: Fire,
         )),
         override_collider: Some((
                 p0: (x: 0.0, y: 0.0),
@@ -35,4 +36,5 @@ BasicRanged(
         buildup: Some(0.3),
         recover: Some(0.5),
     ),
+    meta: (source: Some(Arcane)),
 )

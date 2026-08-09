@@ -380,8 +380,12 @@ impl<'a> System<'a> for Sys {
             // cause the client to log errors, and those changes will be missed
             // by the spectating entity.
             //
-            // Additionally, when we stop spectating we don't delete the components that are
-            // synced for spectators. Leaving stale components on the client.
+            // Note: this server never sends a removal package for the
+            // components it additionally syncs while spectating (`Combo`,
+            // `ActiveAbilities`, `IsInteractor`, `Interactors`) when
+            // spectating stops. That's handled client-side instead —
+            // `clear_stale_spectator_components` in `voxygen/src/session/mod.rs`
+            // drops the client's local copies at every point spectating ends.
             let comp_sync_package = trackers.create_sync_from_spectated_entity_package(
                 &tracked_storages,
                 entity,

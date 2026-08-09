@@ -6,35 +6,36 @@ use common::{
     CachedSpatialGrid,
     combat::AttackTarget,
     comp::{
-        self, Alignment, BehaviorCapability, Body, Group, Inventory, ItemDrops, LightEmitter,
-        Object, Ori, Pos, ThrownItem, TradingBehavior, Vel, WaypointArea,
+        self, Alignment, BehaviorCapability, Body, Collider, Density, Group, Inventory, ItemDrops,
+        LightEmitter, Mass, Object, Ori, Pos, ThrownItem, TradingBehavior, Vel, WaypointArea,
         aura::{Aura, AuraKind, AuraTarget},
         body,
-        buff::{BuffCategory, BuffData, BuffKind, BuffSource},
+        buff::{BuffCategory, BuffChange, BuffData, BuffKind, BuffSource},
         item::MaterialStatManifest,
-        ship::figuredata::VOXEL_COLLIDER_MANIFEST,
+        ship,
+        ship::figuredata::{VOXEL_COLLIDER_MANIFEST, VoxelCollider},
         tool::AbilityMap,
     },
-    consts::MAX_CAMPFIRE_RANGE,
+    consts::{AIR_DENSITY, MAX_CAMPFIRE_RANGE},
     event::{
-        ArcingEvent, CreateAuraEntityEvent, CreateItemDropEvent, CreateNpcEvent,
-        CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent, CreateShipEvent,
-        CreateSpecialEntityEvent, EventBus, InitializeCharacterEvent, InitializeSpectatorEvent,
-        NpcBuilder, ShockwaveEvent, ShootEvent, SummonBeamPillarsEvent, ThrowEvent,
-        UpdateCharacterDataEvent,
+        ArcingEvent, BuffEvent, CreateAuraEntityEvent, CreateFloatingDiskEvent,
+        CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent, CreateObjectEvent,
+        CreatePoolEvent, CreateShipEvent, CreateSpecialEntityEvent, DeleteEvent, EventBus,
+        InitializeCharacterEvent, InitializeSpectatorEvent, NpcBuilder, ShockwaveEvent, ShootEvent,
+        SummonBeamPillarsEvent, ThrowEvent, UpdateCharacterDataEvent,
     },
     generation::SpecialEntity,
     mounting::{Mounting, Volume, VolumeMounting, VolumePos},
     outcome::Outcome,
     resources::{Secs, Time},
-    terrain::TerrainGrid,
+    terrain::{Block, BlockKind, TerrainGrid},
     uid::{IdMaps, Uid},
     util::Dir,
     vol::IntoFullVolIterator,
 };
 use common_net::{msg::ServerGeneral, sync::WorldSyncExt};
-use specs::{Builder, Entity as EcsEntity, WorldExt};
-use std::time::Duration;
+use specs::{Builder, Entity as EcsEntity, Join, WorldExt};
+use std::{sync::Arc, time::Duration};
 use vek::{Rgb, Vec3};
 
 use super::group_manip::update_map_markers;
@@ -90,6 +91,8 @@ pub fn handle_loaded_character_data(server: &mut Server, ev: UpdateCharacterData
         map_marker: ev.components.9,
         ethos: ev.components.10,
         background: ev.components.11,
+        trigger_slots: ev.components.12,
+        spell_mastery: ev.components.13,
     };
     if let Some(marker) = loaded_components.map_marker {
         server.notify_client(
@@ -115,6 +118,9 @@ pub fn handle_loaded_character_data(server: &mut Server, ev: UpdateCharacterData
 }
 
 pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
+    // Read before `create_npc` below takes an exclusive borrow of the ecs
+    // `World` for the rest of the builder chain.
+    let time = *server.state.ecs().read_resource::<Time>();
     // Destruct the builder to ensure all fields are exhaustive
     let NpcBuilder {
         stats,
@@ -130,12 +136,15 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         anchor,
         loot,
         pets,
-        rtsim_entity,
+        rtsim_actor,
         projectile,
         heads,
         death_effects,
         rider_effects,
         rider,
+        incorporeal,
+        phantom_illusion,
+        delete_after,
     } = ev.npc;
     let entity = server
         .state
@@ -145,6 +154,25 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         .maybe_with(heads)
         .maybe_with(death_effects)
         .maybe_with(rider_effects);
+    // Overrides the `body.collider()` `create_npc` already inserted --
+    // `WriteStorage::insert` replaces rather than panics on a second `.with`
+    // for the same component, the same pattern `alignment` below relies on.
+    let entity = if incorporeal {
+        entity.with(Collider::Point)
+    } else {
+        entity
+    };
+
+    let entity = if phantom_illusion {
+        entity.with(comp::PhantomIllusion)
+    } else {
+        entity
+    };
+
+    let entity = entity.maybe_with(delete_after.map(|timeout| Object::DeleteAfter {
+        spawned_at: time,
+        timeout,
+    }));
 
     if let Some(agent) = &mut agent
         && let Alignment::Owned(_) = &alignment
@@ -182,8 +210,8 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
     };
 
     // Rtsim entity added to IdMaps below.
-    let entity = if let Some(rtsim_entity) = rtsim_entity {
-        entity.with(rtsim_entity).with(RepositionToFreeSpace {
+    let entity = if let Some(rtsim_actor) = rtsim_actor {
+        entity.with(rtsim_actor).with(RepositionToFreeSpace {
             needs_ground: false,
             modify_waypoints: true,
         })
@@ -199,12 +227,12 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
 
     let new_entity = entity.build();
 
-    if let Some(rtsim_entity) = rtsim_entity {
+    if let Some(rtsim_actor) = rtsim_actor {
         server
             .state()
             .ecs()
             .write_resource::<IdMaps>()
-            .add_rtsim(rtsim_entity, new_entity);
+            .add_rtsim(rtsim_actor, new_entity);
     }
 
     // Add to group system if a pet
@@ -341,17 +369,17 @@ pub fn handle_create_ship(server: &mut Server, ev: CreateShipEvent) {
         entity = entity.with(agent);
     }
     */
-    if let Some(rtsim_vehicle) = ev.rtsim_entity {
+    if let Some(rtsim_vehicle) = ev.rtsim_actor {
         entity = entity.with(rtsim_vehicle);
     }
     let entity = entity.build();
 
-    if let Some(rtsim_entity) = ev.rtsim_entity {
+    if let Some(rtsim_actor) = ev.rtsim_actor {
         server
             .state()
             .ecs()
             .write_resource::<IdMaps>()
-            .add_rtsim(rtsim_entity, entity);
+            .add_rtsim(rtsim_actor, entity);
     }
 
     if let Some(driver) = ev.driver {
@@ -441,6 +469,20 @@ pub fn handle_shoot(server: &mut Server, ev: ShootEvent) {
             body: ev.body,
             vel,
         });
+
+    if let Some(owner) = ev.entity {
+        state
+            .ecs()
+            .read_resource::<EventBus<BuffEvent>>()
+            .emit_now(BuffEvent {
+                entity: owner,
+                buff_change: BuffChange::RemoveByCategory {
+                    all_required: vec![BuffCategory::WeaponCoating],
+                    any_required: Vec::new(),
+                    none_required: Vec::new(),
+                },
+            });
+    }
 
     state
         .create_projectile(Pos(pos), Vel(vel), ev.body, ev.projectile)
@@ -557,8 +599,9 @@ pub fn handle_create_special_entity(server: &mut Server, ev: CreateSpecialEntity
                         AuraKind::Buff {
                             kind: BuffKind::RestingHeal,
                             data: BuffData::new(0.02, Some(Secs(1.0))),
-                            category: BuffCategory::Natural,
+                            category: None,
                             source: BuffSource::World,
+                            pool_split: None,
                         },
                         MAX_CAMPFIRE_RANGE,
                         None,
@@ -570,8 +613,9 @@ pub fn handle_create_special_entity(server: &mut Server, ev: CreateSpecialEntity
                         AuraKind::Buff {
                             kind: BuffKind::Burning,
                             data: BuffData::new(2.0, Some(Secs(10.0))),
-                            category: BuffCategory::Natural,
+                            category: None,
                             source: BuffSource::World,
+                            pool_split: None,
                         },
                         0.7,
                         None,
@@ -677,8 +721,9 @@ pub fn handle_create_object(
                             secondary_duration: None,
                             misc_data: None,
                         },
-                        category: BuffCategory::Magical,
+                        category: None,
                         source: BuffSource::World,
+                        pool_split: None,
                     },
                     range,
                     None,
@@ -714,6 +759,72 @@ pub fn handle_create_object(
                 .build();
         },
     }
+}
+
+/// Spawns a `floating_disk`: a `Body::Ship(ship::Body::Volume)` prop with a
+/// procedurally-built flat-disk collider, driven each tick by
+/// `Object::FloatingDisk`'s arm in `server/src/sys/object.rs`. Built directly
+/// rather than through `create_ship`/`create_object` — neither can express
+/// this shape, and `create_ship` adds a Controller/Inventory/CharacterState/
+/// Energy/Stats set this prop deliberately does not carry (no nameplate, no
+/// health bar, never persisted).
+pub fn handle_create_floating_disk(server: &mut Server, ev: CreateFloatingDiskEvent) {
+    let state = server.state_mut();
+    let time = *state.ecs().read_resource::<Time>();
+
+    // One disk per caster: recasting dismisses any disk this caster already
+    // has (also papers over the disabled voxel-voxel collision gap between
+    // two disks).
+    let existing: Vec<EcsEntity> = {
+        let entities = state.ecs().entities();
+        let objects = state.ecs().read_storage::<Object>();
+        (&entities, &objects)
+            .join()
+            .filter_map(|(entity, object)| match object {
+                Object::FloatingDisk { owner, .. } if *owner == ev.owner => Some(entity),
+                _ => None,
+            })
+            .collect()
+    };
+    if !existing.is_empty() {
+        let delete_events = state.ecs().read_resource::<EventBus<DeleteEvent>>();
+        for entity in existing {
+            delete_events.emit_now(DeleteEvent(entity));
+        }
+    }
+
+    let radius = ev.radius;
+    let sz = Vec3::new(5u32, 5, 1);
+    let half = sz.map(|e| e as i32) / 2;
+    let collider = Collider::Volume(Arc::new(VoxelCollider::from_fn(sz, move |rpos| {
+        let offset = (rpos.xy() - half.xy()).map(|e| e as f32);
+        if offset.magnitude_squared() <= radius * radius {
+            Block::new(BlockKind::Misc, Rgb::new(130, 110, 80))
+        } else {
+            Block::empty()
+        }
+    })));
+
+    state
+        .ecs_mut()
+        .create_entity_synced()
+        .with(Pos(ev.pos.0 + Vec3::unit_z() * ev.hover_height))
+        .with(Vel(Vec3::zero()))
+        .with(Ori::default())
+        .with(Mass(40.0))
+        .with(Density(AIR_DENSITY))
+        .with(collider)
+        .with(Body::Ship(ship::Body::Volume))
+        .with(Object::FloatingDisk {
+            owner: ev.owner,
+            spawned_at: time,
+            timeout: ev.timeout,
+            follow_distance: ev.follow_distance,
+            hover_height: ev.hover_height,
+            max_owner_distance: ev.max_owner_distance,
+        })
+        .with(Alignment::Owned(ev.owner))
+        .build();
 }
 
 pub fn handle_create_aura_entity(server: &mut Server, ev: CreateAuraEntityEvent) {

@@ -22,7 +22,7 @@ use common::{ViewDistances, clock::Clock, comp};
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
-use veloren_client::{Client, ClientType, addr::ConnectionArgs};
+use xindeler_client::{Client, ClientType, addr::ConnectionArgs};
 
 /// Safety cap on ticks spent waiting for any single step (~20 s at 30 Hz).
 const STEP_TICK_LIMIT: u32 = 600;
@@ -90,6 +90,7 @@ fn humanoid_body(species: comp::body::humanoid::Species) -> comp::Body {
         hair_color: 0,
         skin: 0,
         eye_color: 0,
+        height_scale: 0,
     }
     .into()
 }

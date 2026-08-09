@@ -11,8 +11,8 @@ use std::{
 };
 use tokio::runtime::Runtime;
 use tracing::{error, info};
-use veloren_client::{Client, ClientType, Event, addr::ConnectionArgs};
 use voxygen_i18n_helpers::localize_chat_message;
+use xindeler_client::{Client, ClientType, Event, addr::ConnectionArgs};
 
 const TPS: u64 = 10; // Low value is okay, just reading messages.
 
@@ -64,7 +64,7 @@ fn main() {
             &username,
             &password,
             None,
-            |provider| provider == "https://auth.veloren.net",
+            |provider| provider == "https://auth.xindeler.com",
             &|_| {},
             |_| {},
             Default::default(),

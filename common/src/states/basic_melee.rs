@@ -1,7 +1,6 @@
 use crate::{
-    combat,
     comp::{
-        CharacterState, MeleeConstructor, StateUpdate, character_state::OutputEvents,
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, character_state::OutputEvents,
         tool::ToolKind,
     },
     event::LocalEvent,
@@ -77,8 +76,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::BasicMelee(c) = &mut update.character {
                         c.timer = Duration::default();
                         c.stage_section = StageSection::Action;
-                        c.movement_modifier = self.static_data.movement_modifier.swing;
-                        c.ori_modifier = self.static_data.ori_modifier.swing;
+                        c.movement_modifier = self.static_data.movement_modifier.action;
+                        c.ori_modifier = self.static_data.ori_modifier.action;
                     }
                 }
             },
@@ -93,7 +92,9 @@ impl CharacterBehavior for Data {
                         c.exhausted = true;
                     }
 
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
@@ -141,11 +142,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovery
                     if let CharacterState::BasicMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                         c.movement_modifier = self.static_data.movement_modifier.recover;
                         c.ori_modifier = self.static_data.ori_modifier.recover;
                     }

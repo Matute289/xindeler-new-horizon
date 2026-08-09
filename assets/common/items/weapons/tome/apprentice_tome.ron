@@ -17,4 +17,12 @@ ItemDef(
     quality: Low,
     tags: [],
     ability_spec: None,
+    // Tome is Mage-only: no other class's kit uses this implement. Widen this
+    // whitelist only by adding a class whose kit actually wants a tome --
+    // never by reasoning from the arcane flavor, which carries no rule.
+    requirements: Some((
+        classes: Some([Mage]),
+        min_level: None,
+        races: None,
+    )),
 )

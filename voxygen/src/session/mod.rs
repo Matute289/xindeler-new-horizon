@@ -16,14 +16,16 @@ use client::{self, Client};
 use common::{
     CachedSpatialGrid,
     comp::{
-        self, CharacterActivity, CharacterState, ChatType, Content, Fluid, InputKind,
-        InventoryUpdateEvent, Pos, PresenceKind, Stats, UtteranceKind, Vel,
+        self, ActiveAbilities, CharacterActivity, CharacterState, ChatType, Combo, Content,
+        DetectDetail, Detected, Fluid, InputKind, InventoryUpdateEvent, Pos, PresenceKind,
+        RemoteSense, SenseKind, Stats, UtteranceKind, Vel,
         inventory::slot::{EquipSlot, Slot},
         invite::InviteKind,
         item::{ItemDesc, tool::ToolKind},
     },
     consts::MAX_MOUNT_RANGE,
     event::UpdateCharacterMetadata,
+    interaction::{Interactor, Interactors},
     link::Is,
     mounting::{Mount, VolumePos},
     outcome::Outcome,
@@ -96,6 +98,35 @@ pub struct PlayerDebugLines {
     pub vel: Option<DebugShapeId>,
 }
 
+/// Who set the current `viewpoint_entity`. Distinguishes a moderator's own
+/// manual debug toggle (`GameInput::SpectateViewpoint`) from a remote-sensing
+/// spell's automatic enter/leave transition, so casting one of these spells as
+/// a moderator doesn't strand your manually-set camera, and ending a spell
+/// doesn't clear a moderator's unrelated manual viewpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewpointSource {
+    Moderator,
+    Spell,
+}
+
+/// Drops the client's local copy of the four components the shipped
+/// spectator sync additionally sends for a spectated entity (`Combo`,
+/// `ActiveAbilities`, `IsInteractor`, `Interactors`). The server only sends
+/// these while actively spectating and never pushes a removal when
+/// spectating stops, so without this the (formerly) spectated entity's
+/// combo/ability/interaction state stays stale on the client's HUD —
+/// invisible for a moderator's occasional debug toggle, but a visible defect
+/// once every remote-sensing spell caster hits this path.
+fn clear_stale_spectator_components(client: &Client, spectated_entity: specs::Entity) {
+    let ecs = client.state().ecs();
+    ecs.write_storage::<Combo>().remove(spectated_entity);
+    ecs.write_storage::<ActiveAbilities>()
+        .remove(spectated_entity);
+    ecs.write_storage::<Is<Interactor>>()
+        .remove(spectated_entity);
+    ecs.write_storage::<Interactors>().remove(spectated_entity);
+}
+
 pub struct SessionState {
     scene: Scene,
     pub(crate) client: Rc<RefCell<Client>>,
@@ -117,7 +148,31 @@ pub struct SessionState {
     pub(crate) target_entity: Option<specs::Entity>,
     pub(crate) selected_entity: Option<(specs::Entity, std::time::Instant)>,
     pub(crate) viewpoint_entity: Option<specs::Entity>,
+    /// Who currently owns `viewpoint_entity`, so a moderator's own manual
+    /// spectate toggle and a remote-sensing spell's enter/leave transition
+    /// never stomp each other.
+    viewpoint_source: Option<ViewpointSource>,
+    /// Whether the current `ViewpointSource::Spell` viewpoint is `arcane_eye`
+    /// specifically (`RemoteSense.piloted`, mirrored here at the same
+    /// transition that sets `viewpoint_source`). `viewpoint_entity()`'s own
+    /// `mutable_viewpoint` flag means "can the client freely reposition this
+    /// viewpoint locally" (false here -- the eye's `Pos`/`Ori` are server
+    /// truth), which is a different question from "should the player's own
+    /// WASD/mouse still produce a `move_dir`/`look_dir` input to send" (true
+    /// here -- that input is what `pilot::Sys` forwards to the eye). This
+    /// flag disambiguates the two in the movement-input block below.
+    viewpoint_piloted: bool,
     interactables: interactable::Interactables,
+    /// The local player's own reveal set, resolved from the owner-private
+    /// `Detected` component's `Uid`s into local `specs::Entity` handles once
+    /// per tick so the figure renderer and the HUD can both consume it
+    /// cheaply.
+    revealed_entities: HashMap<specs::Entity, SenseKind>,
+    /// The subset of `revealed_entities` carrying an Identify `detail` --
+    /// resolved from the same owner-private `Detected` component, in the
+    /// same pass. See `HudInfo::identified_entities`'s own doc comment for
+    /// why this doubles as the "am I the caster" permission check.
+    identified_entities: HashMap<specs::Entity, DetectDetail>,
     #[cfg(not(target_os = "macos"))]
     mumble_link: SharedLink,
     hitboxes: HashMap<specs::Entity, DebugShapeId>,
@@ -150,7 +205,7 @@ impl SessionState {
             .borrow_mut()
             .set_lod_distance(global_state.settings.graphics.lod_distance);
         #[cfg(not(target_os = "macos"))]
-        let mut mumble_link = SharedLink::new("veloren", "veloren-voxygen");
+        let mut mumble_link = SharedLink::new("veloren", "xindeler-voxygen");
         {
             let mut client = client.borrow_mut();
             client.request_player_physics(global_state.settings.networking.player_physics_behavior);
@@ -192,7 +247,11 @@ impl SessionState {
             target_entity: None,
             selected_entity: None,
             viewpoint_entity: None,
+            viewpoint_source: None,
+            viewpoint_piloted: false,
             interactables: Default::default(),
+            revealed_entities: HashMap::new(),
+            identified_entities: HashMap::new(),
             #[cfg(not(target_os = "macos"))]
             mumble_link,
             hitboxes: HashMap::new(),
@@ -696,7 +755,6 @@ impl PlayState for SessionState {
                 collect_target,
                 entity_target,
                 mine_target,
-                terrain_target,
                 &self.scene,
             ) {
                 Ok(input_map) => {
@@ -725,6 +783,35 @@ impl PlayState for SessionState {
                 },
             }
 
+            // Resolve our own reveal set (`Detected`, synced only to its owner) from
+            // `Uid`s into local entity handles. Rebuilt wholesale each tick, mirroring
+            // how the server rebuilds the component itself.
+            self.revealed_entities.clear();
+            self.identified_entities.clear();
+            {
+                let ecs = client.state().ecs();
+                let detected = ecs.read_storage::<Detected>();
+                if let Some(detected) = detected.get(player_entity) {
+                    let id_maps = ecs.read_resource::<common::uid::IdMaps>();
+                    self.revealed_entities.extend(
+                        detected
+                            .entities
+                            .iter()
+                            .filter_map(|d| id_maps.uid_entity(d.uid).map(|e| (e, d.sense))),
+                    );
+                    // A `detail` is only ever written into *my own*
+                    // `Detected` when I am the one who cast Identify on that
+                    // entity (see `HudInfo::identified_entities`'s doc
+                    // comment) -- this filter is the entire permission
+                    // check, no further server round-trip needed.
+                    self.identified_entities
+                        .extend(detected.entities.iter().filter_map(|d| {
+                            d.detail
+                                .and_then(|detail| id_maps.uid_entity(d.uid).map(|e| (e, detail)))
+                        }));
+                }
+            }
+
             drop(client);
 
             self.maybe_auto_zoom_lock(
@@ -743,34 +830,14 @@ impl PlayState for SessionState {
                 }
             }
 
-            // Nearest block to consider with GameInput primary or secondary key.
-            let nearest_block_dist = find_shortest_distance(&[
-                mine_target
-                    .filter(|_| active_mine_tool.is_some())
-                    .map(|t| t.distance),
-                build_target.filter(|_| can_build).map(|t| t.distance),
-            ]);
-            // Nearest block to be highlighted in the scene (self.scene.set_select_pos).
-            let nearest_scene_dist = find_shortest_distance(&[
-                nearest_block_dist,
-                collect_target
-                    .filter(|_| active_mine_tool.is_none())
-                    .map(|t| t.distance),
-            ]);
-            // Set break_block_pos only if mining is closest.
-            self.inputs.break_block_pos = if let Some(mt) = mine_target
-                .filter(|mt| active_mine_tool.is_some() && nearest_scene_dist == Some(mt.distance))
-            {
+            // Set break_block_pos based on currently selected block
+            self.inputs.break_block_pos = if let Some(mt) = mine_target {
                 self.scene.set_select_pos(Some(mt.position_int()));
                 Some(mt.position)
-            } else if let Some(bt) =
-                build_target.filter(|bt| can_build && nearest_scene_dist == Some(bt.distance))
-            {
+            } else if let Some(bt) = build_target {
                 self.scene.set_select_pos(Some(bt.position_int()));
                 None
-            } else if let Some(ct) =
-                collect_target.filter(|ct| nearest_scene_dist == Some(ct.distance))
-            {
+            } else if let Some(ct) = collect_target {
                 self.scene.set_select_pos(Some(ct.position_int()));
                 None
             } else {
@@ -814,12 +881,9 @@ impl PlayState for SessionState {
                             GameInput::Primary => {
                                 self.walking_speed = false;
                                 let mut client = self.client.borrow_mut();
-                                // Mine and build targets can be the same block. make building
-                                // take precedence.
-                                // Order of precedence: build, then mining, then attack.
-                                if let Some(build_target) = build_target.filter(|bt| {
-                                    state && can_build && nearest_block_dist == Some(bt.distance)
-                                }) {
+                                // Building inputs take precedence... but only if there's an active
+                                // building target.
+                                if let Some(build_target) = build_target.filter(|_| state) {
                                     client.remove_block(build_target.position_int());
                                 } else {
                                     client.handle_input(
@@ -833,9 +897,7 @@ impl PlayState for SessionState {
                             GameInput::Secondary => {
                                 self.walking_speed = false;
                                 let mut client = self.client.borrow_mut();
-                                if let Some(build_target) = build_target.filter(|bt| {
-                                    state && can_build && nearest_block_dist == Some(bt.distance)
-                                }) {
+                                if let Some(build_target) = build_target.filter(|_| state) {
                                     let selected_pos = build_target.kind.0;
                                     client.place_block(
                                         selected_pos.map(|p| p.floor() as i32),
@@ -1333,9 +1395,15 @@ impl PlayState for SessionState {
                             },
                             GameInput::SpectateViewpoint if state => {
                                 let mut client = self.client.borrow_mut();
-                                if self.viewpoint_entity.is_some() {
+                                if let Some(spectated_entity) = self.viewpoint_entity {
                                     client.stop_spectate_entity();
+                                    clear_stale_spectator_components(&client, spectated_entity);
                                     self.viewpoint_entity = None;
+                                    if self.viewpoint_source.take() == Some(ViewpointSource::Spell)
+                                    {
+                                        self.hud.remote_sensing(false);
+                                    }
+                                    self.viewpoint_piloted = false;
                                     self.scene.camera_mut().set_mode(CameraMode::Freefly);
                                     let mut ori = self.scene.camera().get_orientation();
                                     // Remove any roll that could have possibly been set to the
@@ -1350,8 +1418,30 @@ impl PlayState for SessionState {
                                     client.start_spectate_entity(target_entity.kind.0);
 
                                     self.viewpoint_entity = Some(target_entity.kind.0);
+                                    self.viewpoint_source = Some(ViewpointSource::Moderator);
                                     self.scene.camera_mut().set_mode(CameraMode::FirstPerson);
                                 }
+                            },
+                            GameInput::CancelRemoteSense if state => {
+                                // Voluntarily end an active remote-sensing
+                                // spell early. Only meaningful while a spell
+                                // (not a moderator's manual toggle) owns the
+                                // viewpoint; the actual transition back to the
+                                // body happens once the server clears
+                                // `RemoteSense` in response, handled above
+                                // alongside every other end-of-link path.
+                                if self.viewpoint_source == Some(ViewpointSource::Spell) {
+                                    self.client.borrow_mut().cancel_remote_sense();
+                                }
+                            },
+                            GameInput::Inspect if state => {
+                                // A pure client-local UI action: whether an
+                                // inspect card actually opens is decided at
+                                // render time against `identified_entities`
+                                // (built from the player's own owner-private
+                                // `Detected` component), never here -- this
+                                // only records which target was asked for.
+                                self.hud.toggle_identify_card(self.target_entity);
                             },
                             GameInput::ToggleWalk if state => {
                                 global_state
@@ -1429,9 +1519,94 @@ impl PlayState for SessionState {
                     .read_storage::<Pos>()
                     .contains(viewpoint_entity)
             {
-                self.client.borrow_mut().stop_spectate_entity();
+                {
+                    let mut client = self.client.borrow_mut();
+                    client.stop_spectate_entity();
+                    clear_stale_spectator_components(&client, viewpoint_entity);
+                }
                 self.viewpoint_entity = None;
-                self.scene.camera_mut().set_mode(CameraMode::Freefly);
+                self.viewpoint_piloted = false;
+                // A spell-owned viewpoint returns the player to third-person
+                // (matching every other end-of-link path below); a
+                // moderator's manual debug toggle keeps its existing
+                // freefly fallback.
+                let was_spell = self.viewpoint_source.take() == Some(ViewpointSource::Spell);
+                self.scene.camera_mut().set_mode(if was_spell {
+                    CameraMode::ThirdPerson
+                } else {
+                    CameraMode::Freefly
+                });
+                if was_spell {
+                    let mut ori = self.scene.camera().get_orientation();
+                    ori.z = 0.0;
+                    self.scene.camera_mut().set_orientation(ori);
+                    self.hud.remote_sensing(false);
+                }
+            }
+
+            // Remote-sensing spell enter/leave: driven entirely by the
+            // presence/absence of the player's own `RemoteSense` component --
+            // there is no keybind for this half, so a player can never get
+            // stuck in it (the voluntary early-exit keybind just asks the
+            // server to remove the sustaining buff, which removes the
+            // component in turn). Left alone while a moderator's own manual
+            // spectate toggle currently owns the viewpoint, so casting one of
+            // these spells doesn't strand a moderator's debug camera.
+            if self.viewpoint_source != Some(ViewpointSource::Moderator) {
+                let remote_sense = {
+                    let client = self.client.borrow();
+                    client
+                        .state()
+                        .ecs()
+                        .read_storage::<RemoteSense>()
+                        .get(client.entity())
+                        .copied()
+                };
+                match remote_sense {
+                    Some(remote_sense)
+                        if self.viewpoint_source != Some(ViewpointSource::Spell)
+                            || self.viewpoint_entity.is_none() =>
+                    {
+                        let mut client = self.client.borrow_mut();
+                        if let Some(anchor_entity) = client
+                            .state()
+                            .ecs()
+                            .entity_from_uid(remote_sense.anchor_uid())
+                        {
+                            // Notify the server once, on the transition,
+                            // exactly like the moderator keybind does.
+                            client.start_spectate_entity(anchor_entity);
+                            self.viewpoint_entity = Some(anchor_entity);
+                            self.viewpoint_source = Some(ViewpointSource::Spell);
+                            self.viewpoint_piloted = remote_sense.piloted;
+                            self.scene.camera_mut().set_mode(if remote_sense.free_look {
+                                CameraMode::Freefly
+                            } else {
+                                CameraMode::FirstPerson
+                            });
+                            self.hud.remote_sensing(true);
+                        }
+                    },
+                    None if self.viewpoint_source == Some(ViewpointSource::Spell) => {
+                        // The link ended (duration expiry, concentration
+                        // break, or the voluntary cancel key) -- return to
+                        // the body.
+                        if let Some(spectated_entity) = self.viewpoint_entity {
+                            let mut client = self.client.borrow_mut();
+                            client.stop_spectate_entity();
+                            clear_stale_spectator_components(&client, spectated_entity);
+                        }
+                        self.viewpoint_entity = None;
+                        self.viewpoint_source = None;
+                        self.viewpoint_piloted = false;
+                        self.scene.camera_mut().set_mode(CameraMode::ThirdPerson);
+                        let mut ori = self.scene.camera().get_orientation();
+                        ori.z = 0.0;
+                        self.scene.camera_mut().set_orientation(ori);
+                        self.hud.remote_sensing(false);
+                    },
+                    _ => {},
+                }
             }
 
             let (viewpoint_entity, mutable_viewpoint) = self.viewpoint_entity();
@@ -1600,14 +1775,34 @@ impl PlayState for SessionState {
 
                 self.inputs.move_z =
                     self.key_state.swim_up as i32 as f32 - self.key_state.swim_down as i32 as f32;
+            } else if self.viewpoint_piloted {
+                // Piloting an eye: `mutable_viewpoint` is false (its Pos/Ori
+                // are server truth, not locally editable), but WASD/mouse
+                // must still produce a move_dir/look_dir input -- otherwise
+                // it would stay permanently at whatever stale value it last
+                // had, and the eye would never move despite pilot::Sys
+                // faithfully forwarding whatever it receives. None of the
+                // `mutable_viewpoint` block above applies: the eye holds no
+                // weapon to aim (no ranged-aim raycasting), and its camera
+                // orientation already comes straight from the eye's own Ori
+                // (`scene/mod.rs`'s `viewpoint_look_ori`), fed back from the
+                // server each tick -- so a plain camera-relative basis and a
+                // plain look_dir suffice.
+                self.walk_forward_dir = self.scene.camera().forward_xy();
+                self.walk_right_dir = self.scene.camera().right_xy();
+                self.inputs.look_dir = Dir::from_unnormalized(cam_dir).unwrap_or_default();
+                self.inputs.strafing = false;
+                self.inputs.move_z =
+                    self.key_state.swim_up as i32 as f32 - self.key_state.swim_down as i32 as f32;
             }
 
             match self.scene.camera().get_mode() {
                 CameraMode::FirstPerson | CameraMode::ThirdPerson => {
-                    if mutable_viewpoint {
-                        // Move the player character based on their walking direction.
-                        // This could be different from the camera direction if free look is
-                        // enabled.
+                    if mutable_viewpoint || self.viewpoint_piloted {
+                        // Move the player character (or, while piloting, the
+                        // eye) based on their walking direction. This could
+                        // be different from the camera direction if free
+                        // look is enabled.
                         self.inputs.move_dir =
                             self.walk_right_dir * axis_right + self.walk_forward_dir * axis_up;
                     }
@@ -1763,6 +1958,8 @@ impl PlayState for SessionState {
                     mutable_viewpoint,
                     target_entity: self.target_entity,
                     selected_entity: self.selected_entity,
+                    revealed_entities: &self.revealed_entities,
+                    identified_entities: &self.identified_entities,
                     persistence_load_error: self.metadata.skill_set_persistence_load_error,
                     key_state: &self.key_state,
                 },
@@ -1840,6 +2037,11 @@ impl PlayState for SessionState {
                     HudEvent::LeaveStance => self.client.borrow_mut().leave_stance(),
                     HudEvent::UnlockSkill(skill) => {
                         self.client.borrow_mut().unlock_skill(skill);
+                    },
+                    HudEvent::SetFutureLevelsToSecondary(value) => {
+                        self.client
+                            .borrow_mut()
+                            .set_future_levels_to_secondary(value);
                     },
                     HudEvent::UseSlot {
                         slot,
@@ -2239,6 +2441,7 @@ impl PlayState for SessionState {
                     mutable_viewpoint: mutable_viewpoint || self.free_look,
                     // Only highlight if interactable
                     target_entities: &self.interactables.entities,
+                    revealed_entities: &self.revealed_entities,
                     loaded_distance: client.loaded_distance(),
                     terrain_view_distance: client.view_distance().unwrap_or(1),
                     entity_view_distance: client
@@ -2335,6 +2538,7 @@ impl PlayState for SessionState {
             mutable_viewpoint,
             // Only highlight if interactable
             target_entities: &self.interactables.entities,
+            revealed_entities: &self.revealed_entities,
             loaded_distance: client.loaded_distance(),
             terrain_view_distance: client.view_distance().unwrap_or(1),
             entity_view_distance: client
@@ -2365,6 +2569,11 @@ impl PlayState for SessionState {
             &scene_data,
         );
 
+        // SSAO (does nothing visible yet -- see `Drawer::ssao_passes` docs)
+        {
+            prof_span!("ssao");
+            drawer.ssao_passes();
+        }
         if let Some(mut volumetric_pass) = drawer.volumetric_pass() {
             // Clouds
             prof_span!("clouds");
@@ -2398,12 +2607,6 @@ impl PlayState for SessionState {
     }
 
     fn egui_enabled(&self) -> bool { true }
-}
-
-fn find_shortest_distance(arr: &[Option<f32>]) -> Option<f32> {
-    arr.iter()
-        .filter_map(|x| *x)
-        .min_by(|d1, d2| OrderedFloat(*d1).cmp(&OrderedFloat(*d2)))
 }
 
 // TODO: Can probably be exported in some way for AI, somehow

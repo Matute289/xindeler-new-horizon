@@ -33,6 +33,15 @@ pub struct StateUpdate {
     pub queued_inputs: BTreeMap<InputKind, InputAttr>,
     pub removed_inputs: Vec<InputKind>,
     pub character_activity: CharacterActivity,
+    /// Set to `Some(slot)` when this update was produced by a trigger slot's
+    /// input actually entering a `CharacterState`, i.e. when the slot's
+    /// one-shot authorisation token was spent. The character-behavior system
+    /// reads it to move that slot from `Firing` to `CoolingDown`.
+    ///
+    /// 🔴 A cast that was *refused* (no energy, antimagic field, ...) must
+    /// leave this `None`, so a failed trigger never burns a cooldown measured
+    /// in hours.
+    pub triggered_slot_cast: Option<u8>,
 }
 
 event_emitters! {
@@ -51,6 +60,7 @@ event_emitters! {
         change_stance: event::ChangeStanceEvent,
         create_npc: event::CreateNpcEvent,
         create_object: event::CreateObjectEvent,
+        create_floating_disk: event::CreateFloatingDiskEvent,
         energy_change: event::EnergyChangeEvent,
         knockback: event::KnockbackEvent,
         sprite_light: event::ToggleSpriteLightEvent,
@@ -60,6 +70,9 @@ event_emitters! {
         help_downed: event::HelpDownedEvent,
         set_ability_cooldown: event::SetAbilityCooldownEvent,
         health_change: event::HealthChangeEvent,
+        remote_unlock: event::RemoteUnlockEvent,
+        resolve_remote_sense: event::ResolveRemoteSenseEvent,
+        resolve_identify: event::ResolveIdentifyEvent,
     }
 }
 
@@ -100,6 +113,7 @@ impl From<&JoinData<'_>> for StateUpdate {
             queued_inputs: BTreeMap::new(),
             removed_inputs: Vec::new(),
             character_activity: data.character_activity.clone(),
+            triggered_slot_cast: None,
         }
     }
 }
@@ -199,6 +213,12 @@ pub enum CharacterState {
     LeapRanged(leap_ranged::Data),
     /// Primarily intended for events to hook into (e.g. entering stances)
     Simple(simple::Data),
+    /// Grabs a loose dropped item at range, holds it via a `Tethered` link,
+    /// then places or throws it
+    TelekineticGrip(telekinetic_grip::Data),
+    /// A single-shot, ranged/keyless unlock effect targeted at a sprite
+    /// position (e.g. the `knock` spell)
+    Knock(knock::Data),
 }
 
 impl CharacterState {
@@ -237,7 +257,9 @@ impl CharacterState {
             | CharacterState::RapidMelee(_)
             | CharacterState::StaticAura(_)
             | CharacterState::LeapRanged(_)
-            | CharacterState::Simple(_) => true,
+            | CharacterState::Simple(_)
+            | CharacterState::TelekineticGrip(_)
+            | CharacterState::Knock(_) => true,
             CharacterState::Idle(_)
             | CharacterState::Crawl
             | CharacterState::Sit
@@ -262,6 +284,7 @@ impl CharacterState {
                 | CharacterState::Throw(_)
                 | CharacterState::ChargedRanged(_)
                 | CharacterState::RapidRanged(_)
+                | CharacterState::TelekineticGrip(_)
         )
     }
 
@@ -315,7 +338,9 @@ impl CharacterState {
             | CharacterState::Transform(_)
             | CharacterState::RegrowHead(_)
             | CharacterState::LeapRanged(_)
-            | CharacterState::Simple(_) => false,
+            | CharacterState::Simple(_)
+            | CharacterState::TelekineticGrip(_)
+            | CharacterState::Knock(_) => false,
         }
     }
 
@@ -368,7 +393,9 @@ impl CharacterState {
             | CharacterState::Transform(_)
             | CharacterState::RegrowHead(_)
             | CharacterState::LeapRanged(_)
-            | CharacterState::Simple(_) => false,
+            | CharacterState::Simple(_)
+            | CharacterState::TelekineticGrip(_)
+            | CharacterState::Knock(_) => false,
         }
     }
 
@@ -429,7 +456,9 @@ impl CharacterState {
                 | CharacterState::RapidMelee(_)
                 | CharacterState::StaticAura(_)
                 | CharacterState::LeapRanged(_)
+                | CharacterState::Knock(_)
                 | CharacterState::Simple(_)
+                | CharacterState::TelekineticGrip(_)
         )
     }
 
@@ -524,7 +553,9 @@ impl CharacterState {
             | CharacterState::Music(_)
             | CharacterState::Transform(_)
             | CharacterState::RegrowHead(_)
-            | CharacterState::Simple(_) => None,
+            | CharacterState::Simple(_)
+            | CharacterState::TelekineticGrip(_)
+            | CharacterState::Knock(_) => None,
         }
     }
 
@@ -552,6 +583,7 @@ impl CharacterState {
                 | CharacterState::RiposteMelee(_)
                 | CharacterState::RapidMelee(_)
                 | CharacterState::LeapRanged(_)
+                | CharacterState::TelekineticGrip(_)
         )
     }
 
@@ -798,6 +830,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => data.behavior(j, output_events),
             CharacterState::SelfBuff(data) => data.behavior(j, output_events),
             CharacterState::SpriteSummon(data) => data.behavior(j, output_events),
+            CharacterState::Knock(data) => data.behavior(j, output_events),
             CharacterState::UseItem(data) => data.behavior(j, output_events),
             CharacterState::Interact(data) => data.behavior(j, output_events),
             CharacterState::Skate(data) => data.behavior(j, output_events),
@@ -811,6 +844,7 @@ impl CharacterState {
             CharacterState::StaticAura(data) => data.behavior(j, output_events),
             CharacterState::LeapRanged(data) => data.behavior(j, output_events),
             CharacterState::Simple(data) => data.behavior(j, output_events),
+            CharacterState::TelekineticGrip(data) => data.behavior(j, output_events),
         }
     }
 
@@ -864,6 +898,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => data.handle_event(j, output_events, action),
             CharacterState::SelfBuff(data) => data.handle_event(j, output_events, action),
             CharacterState::SpriteSummon(data) => data.handle_event(j, output_events, action),
+            CharacterState::Knock(data) => data.handle_event(j, output_events, action),
             CharacterState::UseItem(data) => data.handle_event(j, output_events, action),
             CharacterState::Interact(data) => data.handle_event(j, output_events, action),
             CharacterState::Skate(data) => data.handle_event(j, output_events, action),
@@ -877,6 +912,7 @@ impl CharacterState {
             CharacterState::StaticAura(data) => data.handle_event(j, output_events, action),
             CharacterState::LeapRanged(data) => data.handle_event(j, output_events, action),
             CharacterState::Simple(data) => data.handle_event(j, output_events, action),
+            CharacterState::TelekineticGrip(data) => data.handle_event(j, output_events, action),
         }
     }
 
@@ -926,6 +962,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => Some(data.static_data.ability_info),
             CharacterState::SelfBuff(data) => Some(data.static_data.ability_info),
             CharacterState::SpriteSummon(data) => Some(data.static_data.ability_info),
+            CharacterState::Knock(data) => Some(data.static_data.ability_info),
             CharacterState::UseItem(_) => None,
             CharacterState::Interact(_) => None,
             CharacterState::FinisherMelee(data) => Some(data.static_data.ability_info),
@@ -938,6 +975,7 @@ impl CharacterState {
             CharacterState::StaticAura(data) => Some(data.static_data.ability_info),
             CharacterState::LeapRanged(data) => Some(data.static_data.ability_info),
             CharacterState::Simple(data) => Some(data.static_data.ability_info),
+            CharacterState::TelekineticGrip(data) => Some(data.static_data.ability_info),
         }
     }
 
@@ -979,6 +1017,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => Some(data.stage_section),
             CharacterState::SelfBuff(data) => Some(data.stage_section),
             CharacterState::SpriteSummon(data) => Some(data.stage_section),
+            CharacterState::Knock(data) => Some(data.stage_section),
             CharacterState::UseItem(data) => Some(data.stage_section),
             CharacterState::Interact(data) => Some(data.stage_section),
             CharacterState::FinisherMelee(data) => Some(data.stage_section),
@@ -991,6 +1030,7 @@ impl CharacterState {
             CharacterState::StaticAura(data) => Some(data.stage_section),
             CharacterState::LeapRanged(data) => Some(data.stage_section),
             CharacterState::Simple(data) => Some(data.stage_section),
+            CharacterState::TelekineticGrip(data) => Some(data.stage_section),
         }
     }
 
@@ -1156,6 +1196,12 @@ impl CharacterState {
                 recover: Some(data.static_data.recover_duration),
                 ..Default::default()
             }),
+            CharacterState::Knock(data) => Some(DurationsInfo {
+                buildup: Some(data.static_data.buildup_duration),
+                action: Some(data.static_data.cast_duration),
+                recover: Some(data.static_data.recover_duration),
+                ..Default::default()
+            }),
             CharacterState::UseItem(data) => Some(DurationsInfo {
                 buildup: Some(data.static_data.buildup_duration),
                 action: Some(data.static_data.use_duration),
@@ -1227,6 +1273,12 @@ impl CharacterState {
                 buildup: Some(data.static_data.buildup_duration),
                 ..Default::default()
             }),
+            CharacterState::TelekineticGrip(data) => Some(DurationsInfo {
+                buildup: Some(data.static_data.buildup_duration),
+                charge: Some(data.static_data.charge_duration),
+                recover: Some(data.static_data.recover_duration),
+                ..Default::default()
+            }),
         }
     }
 
@@ -1268,6 +1320,7 @@ impl CharacterState {
             CharacterState::BasicSummon(data) => Some(data.timer),
             CharacterState::SelfBuff(data) => Some(data.timer),
             CharacterState::SpriteSummon(data) => Some(data.timer),
+            CharacterState::Knock(data) => Some(data.timer),
             CharacterState::UseItem(data) => Some(data.timer),
             CharacterState::Interact(data) => Some(data.timer),
             CharacterState::FinisherMelee(data) => Some(data.timer),
@@ -1280,6 +1333,7 @@ impl CharacterState {
             CharacterState::StaticAura(data) => Some(data.timer),
             CharacterState::LeapRanged(data) => Some(data.timer),
             CharacterState::Simple(data) => Some(data.timer),
+            CharacterState::TelekineticGrip(data) => Some(data.timer),
         }
     }
 
@@ -1341,6 +1395,7 @@ impl CharacterState {
             CharacterState::BasicSummon(_) => &[],
             CharacterState::SelfBuff(_) => &[],
             CharacterState::SpriteSummon(_) => &[],
+            CharacterState::Knock(_) => &[],
             CharacterState::UseItem(_) => &[],
             CharacterState::Interact(_) => &[],
             CharacterState::FinisherMelee(_) => &[AttackSource::Melee],
@@ -1361,6 +1416,7 @@ impl CharacterState {
                 }
             },
             CharacterState::Simple(_) => &[],
+            CharacterState::TelekineticGrip(_) => &[AttackSource::Projectile],
         }
     }
 
@@ -1368,6 +1424,7 @@ impl CharacterState {
         let charge_frac = match self {
             CharacterState::ChargedRanged(c) => c.charge_frac(),
             CharacterState::ChargedMelee(c) => c.charge_frac(),
+            CharacterState::TelekineticGrip(c) => c.charge_frac(),
             _ => {
                 return None;
             },

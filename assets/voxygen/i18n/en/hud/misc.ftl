@@ -45,6 +45,7 @@ hud-free_look_indicator =
 }
 hud-camera_clamp_indicator = Camera vertical clamp active. Press { $key } to disable.
 hud-auto_walk_indicator = Auto walk/swim active
+hud-remote_sensing_indicator = Remote-sensing — your body is unattended. Press { $key } to return.
 hud-zoom_lock_indicator-remind = Zoom locked
 hud-zoom_lock_indicator-enable = Camera zoom locked
 hud-zoom_lock_indicator-disable = Camera zoom unlocked
@@ -115,3 +116,32 @@ hud-init-stage-client-starting-client = [{ -client }]: Preparing Client...
 hud-init-stage-render-pipeline = Creating render pipeline ({ $done }/{ $total })
 
 hud-tutorial-disable = Permanently disable tutorial hints
+
+hud-detected-path = Revealed Path
+hud-detected-point = Revealed Location
+hud-detected-bearing = { $bearing } · { $distance } m
+hud-compass-north = N
+hud-compass-northeast = NE
+hud-compass-east = E
+hud-compass-southeast = SE
+hud-compass-south = S
+hud-compass-southwest = SW
+hud-compass-west = W
+hud-compass-northwest = NW
+
+## Identify inspect card (creature half; the item half reuses the ordinary
+## item tooltip verbatim)
+hud-creature_card-level = Lvl { $level }
+hud-creature_card-health = Health: { $current } / { $max }
+hud-creature_card-energy = Energy: { $current } / { $max }
+hud-creature_card-poise = Poise: { $current } / { $max }
+hud-creature_card-buffs = Active Effects
+hud-creature_card-no_buffs = No active effects
+hud-creature_card-resistances = Resistances: Fire { $fire }% · Frost { $frost }% · Poison { $poison }% · Magic { $magic }%
+hud-creature_card-alignment_wild = Wild
+hud-creature_card-alignment_enemy = Hostile
+hud-creature_card-alignment_npc = Neutral
+hud-creature_card-alignment_tame = Tamed
+hud-creature_card-alignment_owned = Owned
+hud-creature_card-alignment_passive = Passive
+hud-creature_card-close_hint = Press the inspect key again to close

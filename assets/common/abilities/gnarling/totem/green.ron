@@ -8,13 +8,11 @@ BasicAura(
             kind: Regeneration,
             strength: 1,
             duration: Some(1),
-            category: Magical,
         ),
         (
             kind: ProtectingWard,
             strength: 0.5,
             duration: Some(1),
-            category: Magical,
         ),
     ],
     aura_duration: Some(1),

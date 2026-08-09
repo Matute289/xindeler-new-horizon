@@ -1,0 +1,45 @@
+// Wraps the caster in a veil of stillness, turning them unseen and shielding
+// them from every form of remote sensing. Combines both of this game's
+// anti-perception primitives: unconditional anti-divination (Nondetection)
+// plus a very large Stealth contribution meant to drive
+// combat::perception_dist_multiplier_from_stealth toward zero. strength:
+// 20.0 -> stealth_multiplier(20.0) = 1/(1+20) ~= 0.0476, comfortably under
+// the "functionally invisible" 0.05 bar for a level-7 capstone (compare
+// mooncloak's strength: 1.5 -> 0.4).
+//
+// Scope: only the anti-divination + concealment halves are modeled. The
+// source spell's stasis/suspended-animation half (target can't act or be
+// acted upon) is out of scope -- no such mechanic is built here.
+//
+// The source spell's real duration is "until a condition breaks it" (no
+// timer); this engine has no conditional-break mechanism, so this ships as a
+// very long fixed duration instead -- one game-week (604800s), clearly
+// longer than nondetection's 8-hour neighbor and functionally permanent for
+// any single play session, while staying bounded for buff-storage/save
+// sanity. Same narrowing spirit as seeming.ron's dropped
+// unwilling-target-resists clause.
+//
+// Self-only, same Touch-range-SelfBuff narrowing nondetection.ron documents.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(
+            kind: Sequester,
+            data: BuffData(
+                strength: 20.0,
+                duration: Some(604800.0),
+            ),
+        ),
+    ],
+    energy_cost: 180,
+    enforced_limit: false,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 7 spell -> min_level 42, same level*6 convention
+        // seeming.ron documents.
+        requirements: (min_level: Some(42)),
+    ),
+)

@@ -1,0 +1,41 @@
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: RemoteSensing,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                // anchor_kind: Tracking is the only anchor kind that reads
+                // the cast's own InputAttr.target_entity (the creature the
+                // caster had selected when casting) rather than a fixed
+                // point or an owned/charmed beast -- see
+                // `server/src/events/remote_sense.rs`'s `resolve_tracking`.
+                // spawn_range/flight_speed are meaningless here (never a
+                // Piloted anchor); forwarded anyway for the uniform
+                // RemoteSense construction shape every anchor kind shares.
+                // behind_dist/above_dist place the sensor relative to the
+                // scried target every tick (`scrying_follow_offset`) -- the
+                // only anchor kind that reads these two.
+                misc_data: Some(RemoteSense(
+                    anchor_kind: Tracking,
+                    free_look: true,
+                    piloted: false,
+                    behind_dist: 3.0,
+                    above_dist: 2.0,
+                )),
+            ),
+        ),
+    ],
+    energy_cost: 50,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, same `level * 6` convention
+        // `see_invisibility`/`true_seeing` already use.
+        requirements: (min_level: Some(30)),
+    ),
+)

@@ -1,8 +1,16 @@
-use crate::{DamageSource, combat::DamageContributor, comp, resources::Time, uid::Uid};
+use crate::{
+    DamageSource, combat::DamageContributor, comp, comp::ability::MagicSource, resources::Time,
+    uid::Uid,
+};
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 use std::{convert::TryFrom, ops::Mul};
+
+/// Number of `MagicSource` (`comp::ability::MagicSource`) variants. A local
+/// alias for `MagicSource::COUNT`, so every per-source fixed-size array in
+/// this module reads the same name rather than a literal.
+const MAGIC_SOURCE_COUNT: usize = MagicSource::COUNT;
 
 /// Specifies what and how much changed current health
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -15,6 +23,15 @@ pub struct HealthChange {
     pub by: Option<DamageContributor>,
     /// The category of action that resulted in the health change
     pub cause: Option<DamageSource>,
+    /// The magic source of the ability that caused this change, if any.
+    /// `None` for weapon swings, falls, environment, and sourceless
+    /// abilities. Deliberately **not** `#[serde(skip)]`: unlike
+    /// `Health.damage_contributors`, this struct is `Health.last_change`, a
+    /// public field on a net-synced component, and every other field on it
+    /// is kept in sync so a client's predicted `last_change` matches the
+    /// server's — skipping only this field would silently diverge that
+    /// invariant.
+    pub magic_source: Option<MagicSource>,
     /// The time that the health change occurred at
     pub time: Time,
     /// A boolean that tells you if the change was a precsie hit
@@ -27,6 +44,19 @@ impl HealthChange {
     pub fn damage_by(&self) -> Option<DamageContributor> {
         self.cause.is_some().then_some(self.by).flatten()
     }
+}
+
+/// A single damage contributor's running total, and the per-magic-source
+/// split of that total. `by_source` sums to at most `total` — weapon and
+/// other untagged damage counts toward `total` but has no source, so it is
+/// not represented in the array. Fixed-size and allocation-free so this can
+/// live inline inside the `damage_contributors` map entry with no extra
+/// hashing or heap traffic on the damage hot path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ContributorDamage {
+    total: u64,
+    last: Time,
+    by_source: [u64; MAGIC_SOURCE_COUNT],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,10 +93,11 @@ pub struct Health {
     /// the entity at 1 health.
     pub death_protection: bool,
 
-    /// Keeps track of damage per DamageContributor and the last time they
-    /// caused damage, used for EXP sharing
+    /// Keeps track of damage per DamageContributor (including its
+    /// per-magic-source split) and the last time they caused damage, used
+    /// for EXP sharing
     #[serde(skip)]
-    damage_contributors: HashMap<DamageContributor, (u64, Time)>,
+    damage_contributors: HashMap<DamageContributor, ContributorDamage>,
 }
 
 impl Health {
@@ -166,6 +197,7 @@ impl Health {
                 amount: 0.0,
                 by: None,
                 cause: None,
+                magic_source: None,
                 precise: false,
                 time: Time(0.0),
                 instance: rand::random(),
@@ -212,21 +244,33 @@ impl Health {
         // If damage is applied by an entity, update the damage contributors
         if delta < 0 {
             if let Some(attacker) = change.by {
+                let amount = u64::try_from(-delta).unwrap_or(0);
                 let entry = self
                     .damage_contributors
                     .entry(attacker)
-                    .or_insert((0, change.time));
-                entry.0 += u64::try_from(-delta).unwrap_or(0);
-                entry.1 = change.time
+                    .or_insert(ContributorDamage {
+                        total: 0,
+                        last: change.time,
+                        by_source: [0; MAGIC_SOURCE_COUNT],
+                    });
+                entry.total += amount;
+                entry.last = change.time;
+                // Split the same amount by the ability's magic source, if it
+                // has one. Untagged (weapon/environment) damage still counts
+                // toward `total` above but has no source bucket to add to.
+                if let Some(source) = change.magic_source {
+                    entry.by_source[source as usize] += amount;
+                }
             }
 
             // Prune any damage contributors who haven't contributed damage for over the
             // threshold - this enforces a maximum period that an entity will receive EXP
-            // for a kill after they last damaged the killed entity.
+            // for a kill after they last damaged the killed entity. The per-source split
+            // lives inside the same map entry, so it is pruned by this same retain with
+            // no separate timer.
             const DAMAGE_CONTRIB_PRUNE_SECS: f64 = 600.0;
-            self.damage_contributors.retain(|_, (_, last_damage_time)| {
-                (change.time.0 - last_damage_time.0) < DAMAGE_CONTRIB_PRUNE_SECS
-            });
+            self.damage_contributors
+                .retain(|_, entry| (change.time.0 - entry.last.0) < DAMAGE_CONTRIB_PRUNE_SECS);
         }
         delta != 0
     }
@@ -234,13 +278,40 @@ impl Health {
     pub fn damage_contributions(&self) -> impl Iterator<Item = (&DamageContributor, &u64)> {
         self.damage_contributors
             .iter()
-            .map(|(damage_contrib, (damage, _))| (damage_contrib, damage))
+            .map(|(damage_contrib, entry)| (damage_contrib, &entry.total))
+    }
+
+    /// Sibling of [`Self::damage_contributions`], exposing each
+    /// contributor's damage split by magic source instead of the flat
+    /// total. Index with a `MagicSource` cast to `usize`; entries with no
+    /// magic source (weapon/environment damage) are not represented and so
+    /// do not appear in any bucket.
+    pub fn damage_contributions_by_source(
+        &self,
+    ) -> impl Iterator<Item = (&DamageContributor, &[u64; MAGIC_SOURCE_COUNT])> {
+        self.damage_contributors
+            .iter()
+            .map(|(damage_contrib, entry)| (damage_contrib, &entry.by_source))
+    }
+
+    /// Whether any contributor has damaged this entity within `window_secs`
+    /// of `now`. Deliberately distinct from the 600s
+    /// `DAMAGE_CONTRIB_PRUNE_SECS` window `damage_contributors` itself is
+    /// pruned on -- that longer window exists so a kill's XP still credits
+    /// whoever tapped a target minutes ago, which is the wrong question for
+    /// "is this entity currently, actively fighting" (e.g. the non-damage
+    /// mastery-credit gate). A caller wanting the latter should use this,
+    /// not `damage_contributions().next().is_some()`.
+    pub fn damaged_recently(&self, now: Time, window_secs: f64) -> bool {
+        self.damage_contributors
+            .values()
+            .any(|entry| (now.0 - entry.last.0) < window_secs)
     }
 
     pub fn recent_damagers(&self) -> impl Iterator<Item = (Uid, Time)> + '_ {
         self.damage_contributors
             .iter()
-            .map(|(contrib, (_, time))| (contrib.uid(), *time))
+            .map(|(contrib, entry)| (contrib.uid(), entry.last))
     }
 
     pub fn should_die(&self) -> bool { self.current == 0 }
@@ -286,6 +357,7 @@ impl Health {
                 amount: 0.0,
                 by: None,
                 cause: None,
+                magic_source: None,
                 precise: false,
                 time: Time(0.0),
                 instance: rand::random(),
@@ -320,7 +392,7 @@ impl Component for Health {
 mod tests {
     use crate::{
         combat::DamageContributor,
-        comp::{Health, HealthChange},
+        comp::{Health, HealthChange, ability::MagicSource},
         resources::Time,
         uid::Uid,
     };
@@ -338,19 +410,49 @@ mod tests {
             time: Time(123.0),
             by: Some(damage_contrib),
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         };
 
         health.change_by(health_change);
 
-        let (damage, time) = health.damage_contributors.get(&damage_contrib).unwrap();
+        let entry = health.damage_contributors.get(&damage_contrib).unwrap();
 
         assert_eq!(
             health_change.amount.abs() as u64 * Health::SCALING_FACTOR_INT as u64,
-            *damage
+            entry.total
         );
-        assert_eq!(health_change.time, *time);
+        assert_eq!(health_change.time, entry.last);
+    }
+
+    /// `damaged_recently` uses its own caller-supplied window, distinct from
+    /// `damage_contributors`' own 600s prune window -- a hit 30s ago must
+    /// read as "not recent" under a 20s window even though the entry is
+    /// still fully present in the map (won't be pruned for another 570s).
+    #[test]
+    fn damaged_recently_uses_the_callers_window_not_the_600s_prune_window() {
+        let mut health = Health::empty();
+        health.current = 100 * Health::SCALING_FACTOR_INT;
+        health.maximum = health.current;
+
+        let damage_contrib = DamageContributor::Solo(Uid(NonZeroU64::new(1).unwrap()));
+        health.change_by(HealthChange {
+            amount: -5.0,
+            time: Time(1000.0),
+            by: Some(damage_contrib),
+            cause: None,
+            magic_source: None,
+            precise: false,
+            instance: rand::random(),
+        });
+
+        // Still present in the ledger (well inside the 600s prune window),
+        // but 30s later reads as "not recent" under a 20s window.
+        assert!(health.damaged_recently(Time(1000.0), 20.0));
+        assert!(health.damaged_recently(Time(1015.0), 20.0));
+        assert!(!health.damaged_recently(Time(1030.0), 20.0));
+        assert!(health.damage_contributors.contains_key(&damage_contrib));
     }
 
     #[test]
@@ -365,6 +467,7 @@ mod tests {
             time: Time(123.0),
             by: Some(damage_contrib),
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         };
@@ -386,17 +489,18 @@ mod tests {
             time: Time(123.0),
             by: Some(damage_contrib),
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         };
         health.change_by(health_change);
         health.change_by(health_change);
 
-        let (damage, _) = health.damage_contributors.get(&damage_contrib).unwrap();
+        let entry = health.damage_contributors.get(&damage_contrib).unwrap();
 
         assert_eq!(
             (health_change.amount.abs() * 2.0) as u64 * Health::SCALING_FACTOR_INT as u64,
-            *damage
+            entry.total
         );
         assert_eq!(1, health.damage_contributors.len());
     }
@@ -413,6 +517,7 @@ mod tests {
             time: Time(10.0),
             by: Some(damage_contrib1),
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         };
@@ -424,6 +529,7 @@ mod tests {
             time: Time(100.0),
             by: Some(damage_contrib2),
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         };
@@ -439,6 +545,7 @@ mod tests {
             time: Time(620.0),
             by: Some(damage_contrib2),
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         };
@@ -454,9 +561,131 @@ mod tests {
             time: Time(0.0),
             by: None,
             cause: None,
+            magic_source: None,
             precise: false,
             instance: rand::random(),
         }
+    }
+
+    /// A `HealthChange` carrying `magic_source` survives a serde round-trip
+    /// with the field intact, the same way every other field on it does —
+    /// this is the property the field's own doc comment promises by
+    /// deliberately not being `#[serde(skip)]`.
+    #[test]
+    fn health_change_magic_source_survives_serde_round_trip() {
+        let with_source = HealthChange {
+            amount: -12.0,
+            by: None,
+            cause: None,
+            magic_source: Some(MagicSource::Divine),
+            time: Time(1.0),
+            precise: false,
+            instance: 42,
+        };
+        let json = serde_json::to_string(&with_source).unwrap();
+        let round_tripped: HealthChange = serde_json::from_str(&json).unwrap();
+        assert_eq!(with_source, round_tripped);
+        assert_eq!(round_tripped.magic_source, Some(MagicSource::Divine));
+
+        let without_source = HealthChange {
+            magic_source: None,
+            ..with_source
+        };
+        let json = serde_json::to_string(&without_source).unwrap();
+        let round_tripped: HealthChange = serde_json::from_str(&json).unwrap();
+        assert_eq!(without_source.magic_source, round_tripped.magic_source);
+    }
+
+    /// Two damage instances from the same contributor, one attributed to a
+    /// magic source and one untagged (a weapon hit, `magic_source: None`),
+    /// accumulate into the same running `total` while only the tagged
+    /// portion lands in that source's `by_source` bucket; every other
+    /// bucket stays zero.
+    #[test]
+    fn per_source_split_accumulates_alongside_the_flat_total() {
+        let mut health = Health::empty();
+        health.current = 100 * Health::SCALING_FACTOR_INT;
+        health.maximum = health.current;
+
+        let damage_contrib = DamageContributor::Solo(Uid(NonZeroU64::new(1).unwrap()));
+        let divine_hit = HealthChange {
+            amount: -5.0,
+            time: Time(1.0),
+            by: Some(damage_contrib),
+            cause: None,
+            magic_source: Some(MagicSource::Divine),
+            precise: false,
+            instance: rand::random(),
+        };
+        let weapon_hit = HealthChange {
+            amount: -3.0,
+            time: Time(2.0),
+            by: Some(damage_contrib),
+            cause: None,
+            magic_source: None,
+            precise: false,
+            instance: rand::random(),
+        };
+        health.change_by(divine_hit);
+        health.change_by(weapon_hit);
+
+        let entry = health.damage_contributors.get(&damage_contrib).unwrap();
+        let divine_scaled = 5 * Health::SCALING_FACTOR_INT as u64;
+        let weapon_scaled = 3 * Health::SCALING_FACTOR_INT as u64;
+        assert_eq!(entry.total, divine_scaled + weapon_scaled);
+        assert_eq!(entry.by_source[MagicSource::Divine as usize], divine_scaled);
+        for (i, &bucket) in entry.by_source.iter().enumerate() {
+            if i != MagicSource::Divine as usize {
+                assert_eq!(bucket, 0, "source index {i} should carry no damage");
+            }
+        }
+
+        let (_, by_source) = health.damage_contributions_by_source().next().unwrap();
+        assert_eq!(by_source[MagicSource::Divine as usize], divine_scaled);
+    }
+
+    /// The per-source split lives inside the same map entry as the flat
+    /// total, so it is pruned by the exact same 600s retain — a contributor
+    /// whose last damage is older than the window is dropped entirely, not
+    /// merely zeroed.
+    #[test]
+    fn per_source_split_prunes_with_its_parent_entry() {
+        let mut health = Health::empty();
+        health.current = 100 * Health::SCALING_FACTOR_INT;
+        health.maximum = health.current;
+
+        let damage_contrib = DamageContributor::Solo(Uid(NonZeroU64::new(1).unwrap()));
+        let divine_hit = HealthChange {
+            amount: -5.0,
+            time: Time(10.0),
+            by: Some(damage_contrib),
+            cause: None,
+            magic_source: Some(MagicSource::Divine),
+            precise: false,
+            instance: rand::random(),
+        };
+        health.change_by(divine_hit);
+        assert!(health.damage_contributors.contains_key(&damage_contrib));
+
+        // A later, unrelated contributor's hit 610s after damage_contrib's
+        // last hit triggers the prune sweep and should drop it completely,
+        // `by_source` included.
+        let other_contrib = DamageContributor::Solo(Uid(NonZeroU64::new(2).unwrap()));
+        let later_hit = HealthChange {
+            amount: -5.0,
+            time: Time(620.0),
+            by: Some(other_contrib),
+            cause: None,
+            magic_source: None,
+            precise: false,
+            instance: rand::random(),
+        };
+        health.change_by(later_hit);
+
+        assert!(
+            !health.damage_contributors.contains_key(&damage_contrib),
+            "pruned contributor must be gone entirely, by_source included"
+        );
     }
 
     // BL-05 RD-6: damage is soaked by the absorb pool first; only the overflow
@@ -524,5 +753,44 @@ mod tests {
         assert_eq!(health.absorb(), 50.0);
         health.clear_absorb();
         assert_eq!(health.absorb(), 0.0);
+    }
+
+    /// Not a strict perf assertion (wall-clock varies by machine and load) —
+    /// this is a manually-run smoke measurement for a hot-path change:
+    /// `change_by`'s damage-contributor split is a fixed-size array write
+    /// inside an existing map entry, so 100k calls should stay in the
+    /// low-single-digit milliseconds with no allocation growth. Run with
+    /// `cargo test -p xindeler-common --lib -- --ignored
+    /// change_by_100k_calls_stay_cheap --nocapture` to see the printed
+    /// timing.
+    #[test]
+    #[ignore = "manual perf smoke, not a CI assertion"]
+    fn change_by_100k_calls_stay_cheap() {
+        use std::time::Instant;
+
+        let mut health = Health::empty();
+        health.maximum = u32::MAX / 2;
+        health.current = health.maximum;
+        let damage_contrib = DamageContributor::Solo(Uid(NonZeroU64::new(1).unwrap()));
+
+        let start = Instant::now();
+        for i in 0..100_000u32 {
+            let change = HealthChange {
+                amount: -1.0,
+                by: Some(damage_contrib),
+                cause: None,
+                magic_source: Some(if i % 2 == 0 {
+                    MagicSource::Divine
+                } else {
+                    MagicSource::Primordial
+                }),
+                time: Time(f64::from(i)),
+                precise: false,
+                instance: u64::from(i),
+            };
+            health.change_by(change);
+        }
+        let elapsed = start.elapsed();
+        println!("100_000 change_by calls (with per-source split): {elapsed:?}");
     }
 }

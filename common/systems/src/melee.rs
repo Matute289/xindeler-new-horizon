@@ -2,13 +2,14 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory, Mass,
-        Melee, Ori, PhysicsState, Player, Pos, Scale, Stats,
+        Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
+        Inventory, Mass, Melee, Ori, PhantomIllusion, PhysicsState, Player, Pos, Scale, Stats,
         ability::Dodgeable,
         agent::{Sound, SoundKind},
         aura::EnteredAuras,
         melee::MultiTarget,
     },
+    consts::MAX_PICKUP_RANGE,
     event::{self, EmitExt, EventBus},
     event_emitters,
     outcome::Outcome,
@@ -38,6 +39,7 @@ event_emitters! {
         combo_change: event::ComboChangeEvent,
         buff: event::BuffEvent,
         transform: event::TransformEvent,
+        dispel_illusion: event::DispelIllusionEvent,
     }
 }
 
@@ -57,7 +59,9 @@ pub struct ReadData<'a> {
     healths: ReadStorage<'a, Health>,
     energies: ReadStorage<'a, Energy>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    /// The target's cached gear aggregates, read instead of re-walking
+    /// its loadout once per damage instance.
+    derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     groups: ReadStorage<'a, Group>,
     char_states: ReadStorage<'a, CharacterState>,
     physic_states: ReadStorage<'a, PhysicsState>,
@@ -67,6 +71,8 @@ pub struct ReadData<'a> {
     entered_auras: ReadStorage<'a, EnteredAuras>,
     events: ReadAttackEvents<'a>,
     masses: ReadStorage<'a, Mass>,
+    character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 /// This system is responsible for handling accepted inputs like moving or
@@ -124,8 +130,10 @@ impl<'a> System<'a> for Sys {
             // Mine blocks broken by the attack
             if let Some((block_pos, tool)) = melee_attack.break_block {
                 // Check distance to block
+                // TODO: Should this use melee attack range instead? Make sure voxygen supports
+                // it!
                 if eye_pos.distance_squared(block_pos.map(|e| e as f32 + 0.5))
-                    < (rad + scale * melee_attack.range).powi(2)
+                    < MAX_PICKUP_RANGE.powi(2)
                 {
                     emitters.emit(event::MineBlockEvent {
                         entity: attacker,
@@ -136,10 +144,18 @@ impl<'a> System<'a> for Sys {
             }
 
             // Go through all other entities
+            //
+            // `healths.maybe()`, not a mandatory join member: a phantasm
+            // (`PhantomIllusion`) deliberately has no `Health` (its dispel
+            // trigger is the attack path itself, not damage), and melee is
+            // the primary way a player ever attacks one. A mandatory
+            // `&read_data.healths` here would silently filter every
+            // health-less entity out of melee's hit detection entirely,
+            // making a phantasm untouchable by the most common attack type.
             for (target, pos_b, health_b, body_b, uid_b) in (
                 &read_data.entities,
                 &read_data.positions,
-                &read_data.healths,
+                read_data.healths.maybe(),
                 &read_data.bodies,
                 &read_data.uids,
             )
@@ -187,7 +203,7 @@ impl<'a> System<'a> for Sys {
 
                 // Check if it is a hit
                 let hit = attacker != target
-                    && !health_b.is_dead
+                    && health_b.is_none_or(|h| !h.is_dead)
                     // Spherical wedge shaped attack field
                     && pos.0.distance_squared(pos_b.0) < (rad + rad_b + scale * melee_attack.range).powi(2)
                     && (melee_z_range.contains(&pos_b.0.z) || melee_z_range.contains(&(pos_b.0.z + body_b.height())) || (pos_b.0.z..(pos_b.0.z + body_b.height())).contains(&melee_z))
@@ -231,10 +247,12 @@ impl<'a> System<'a> for Sys {
                         group: read_data.groups.get(attacker),
                         energy: read_data.energies.get(attacker),
                         combo: read_data.combos.get(attacker),
-                        inventory: read_data.inventories.get(attacker),
+                        derived: read_data.derived_stats.get(attacker),
                         stats: read_data.stats.get(attacker),
                         mass: read_data.masses.get(attacker),
                         pos: Some(pos.0),
+                        buffs: read_data.buffs.get(attacker),
+                        character_class: read_data.character_classes.get(attacker),
                     });
 
                     let target_ori = read_data.orientations.get(target);
@@ -243,7 +261,7 @@ impl<'a> System<'a> for Sys {
                         entity: target,
                         uid: *uid_b,
                         inventory: read_data.inventories.get(target),
-                        attuned: read_data.attuned_items.get(target),
+                        derived: read_data.derived_stats.get(target),
                         stats: read_data.stats.get(target),
                         health: read_data.healths.get(target),
                         pos: pos_b.0,
@@ -253,6 +271,7 @@ impl<'a> System<'a> for Sys {
                         buffs: read_data.buffs.get(target),
                         mass: read_data.masses.get(target),
                         player: read_data.players.get(target),
+                        phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                     };
 
                     // PvP check
@@ -309,8 +328,19 @@ impl<'a> System<'a> for Sys {
                             1.0
                         };
 
+                    // A phantasm dispels in one hit and has no `Health` for a
+                    // second/third simultaneous hit to accumulate damage
+                    // into -- repeating `apply_attack` against it would just
+                    // re-run the dispel gate and emit a duplicate
+                    // `DispelIllusionEvent` for a target the first iteration
+                    // already resolved.
+                    let simultaneous_hits = if target_info.phantom_illusion {
+                        1
+                    } else {
+                        melee_attack.simultaneous_hits
+                    };
                     let mut is_applied = false;
-                    for offset in 0..melee_attack.simultaneous_hits {
+                    for offset in 0..simultaneous_hits {
                         is_applied = melee_attack.attack.apply_attack(
                             attacker_info,
                             &target_info,
@@ -416,4 +446,142 @@ fn is_blocked_by_wall(terrain: &TerrainGrid, attacker: Cylinder, target: Cylinde
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::{
+        combat::{Attack, AttackDamage, Damage, DamageKind, FlankMults},
+        comp::humanoid,
+        terrain::{MapSizeLg, SpriteKind, TerrainChunk, TerrainChunkMeta},
+    };
+    use specs::{Builder, WorldExt};
+    use std::{num::NonZeroU64, sync::Arc};
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// A single-chunk, all-air terrain grid -- large enough to keep the
+    /// attacker/target pair inside one chunk, unobstructed. Mirrors
+    /// `server/src/events/remote_sense.rs`'s `empty_terrain` helper.
+    fn empty_terrain() -> TerrainGrid {
+        let air = common::terrain::Block::air(SpriteKind::Empty);
+        let chunk = TerrainChunk::new(0, air, air, TerrainChunkMeta::void());
+        let mut terrain = TerrainGrid::new(
+            MapSizeLg::new(Vec2::new(1, 1)).unwrap(),
+            Arc::new(chunk.clone()),
+        )
+        .unwrap();
+        terrain.insert(Vec2::new(0, 0), Arc::new(chunk));
+        terrain
+    }
+
+    /// Registers every storage/resource `Sys::SystemData` needs to run,
+    /// mirroring `server/src/events/remote_sense.rs`'s `setup_world` idiom.
+    fn setup_world() -> specs::World {
+        let mut world = specs::World::new();
+        world.register::<Player>();
+        world.register::<Uid>();
+        world.register::<Pos>();
+        world.register::<Ori>();
+        world.register::<Alignment>();
+        world.register::<Scale>();
+        world.register::<Body>();
+        world.register::<Health>();
+        world.register::<Energy>();
+        world.register::<Inventory>();
+        world.register::<common::comp::DerivedStats>();
+        world.register::<Group>();
+        world.register::<CharacterState>();
+        world.register::<PhysicsState>();
+        world.register::<Stats>();
+        world.register::<Combo>();
+        world.register::<Buffs>();
+        world.register::<EnteredAuras>();
+        world.register::<Mass>();
+        world.register::<CharacterClass>();
+        world.register::<PhantomIllusion>();
+        world.register::<Melee>();
+
+        world.insert(Time(0.0));
+        world.insert(empty_terrain());
+        world.insert(IdMaps::default());
+        world.insert(EventBus::<Outcome>::default());
+        world.insert(EventBus::<event::DispelIllusionEvent>::default());
+        // `common_ecs::run_now`'s `Job<T>` wrapper records CPU-time metrics
+        // per system and expects this resource to already exist.
+        world.insert(common_ecs::SysMetrics::default());
+        world
+    }
+
+    fn basic_melee_attack() -> Melee {
+        Melee {
+            attack: Attack::new(None).with_damage(AttackDamage::new(
+                Damage {
+                    kind: DamageKind::Slashing,
+                    value: 10.0,
+                },
+                Some(GroupTarget::OutOfGroup),
+                0,
+            )),
+            range: 5.0,
+            max_angle: std::f32::consts::PI,
+            applied: false,
+            multi_target: None,
+            break_block: None,
+            simultaneous_hits: 1,
+            precision_flank_multipliers: FlankMults::default(),
+            precision_flank_invert: false,
+            dodgeable: Dodgeable::No,
+            sustained: false,
+            hit_entities: Vec::new(),
+        }
+    }
+
+    /// The exact regression the `healths.maybe()` fix guards: melee is the
+    /// primary way a player ever attacks a phantasm, and a phantasm
+    /// deliberately has no `Health` (it dispels via the attack path itself,
+    /// not damage). A `&read_data.healths` *mandatory* join member would
+    /// silently filter it out of melee's hit-detection loop entirely --
+    /// this drives the real `Sys::run` end to end (not just the
+    /// `apply_attack` gate in isolation, which `combat.rs`'s own tests
+    /// already cover) to prove a `Health`-less `PhantomIllusion` target is
+    /// still found and dispelled.
+    #[test]
+    fn melee_finds_and_dispels_a_health_less_phantasm() {
+        let mut world = setup_world();
+
+        let body = Body::Humanoid(humanoid::Body::random());
+
+        world
+            .create_entity()
+            .with(uid(1))
+            .with(Pos(Vec3::new(0.0, 0.0, 0.0)))
+            .with(Ori::from(Dir::new(Vec3::unit_x())))
+            .with(body)
+            .with(basic_melee_attack())
+            .build();
+
+        let target = world
+            .create_entity()
+            .with(uid(2))
+            .with(Pos(Vec3::new(1.0, 0.0, 0.0)))
+            .with(body)
+            // Deliberately no `Health` -- this is the whole point.
+            .with(PhantomIllusion)
+            .build();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<event::DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            dispels.len(),
+            1,
+            "melee must find and dispel a Health-less PhantomIllusion target"
+        );
+        assert_eq!(dispels[0].0, target);
+    }
 }

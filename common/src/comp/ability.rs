@@ -1,15 +1,16 @@
 use crate::{
     combat::{self, CombatEffect, DamageKind, Knockback, ScalingKind},
     comp::{
-        self, Body, CharacterState, LightEmitter, StateUpdate, aura, beam, buff,
+        self, Body, CharacterState, Combo, LightEmitter, StateUpdate, aura, beam,
+        buff::{self, BuffKind, Buffs},
         character_state::AttackFilters,
         inventory::{
             Inventory,
             item::{
-                ItemDefinitionIdOwned, ItemDesc, ItemKind, Tool,
+                ItemDefinitionIdOwned, ItemKind, Tool,
                 tool::{
-                    AbilityContext, AbilityItem, AbilityKind, AbilityMap, AbilitySpec,
-                    ContextualIndex, Stats, ToolKind,
+                    AbilityItem, AbilityKind, AbilityMap, AbilitySpec, ContextualIndex, Stats,
+                    ToolKind,
                 },
             },
             slot::EquipSlot,
@@ -21,6 +22,7 @@ use crate::{
             SkillSet,
             skills::{self, SKILL_MODIFIERS, Skill},
         },
+        trigger::TriggerSlots,
     },
     explosion::{ColorPreset, TerrainReplacementPreset},
     match_some,
@@ -36,7 +38,7 @@ use crate::{
     },
     terrain::SpriteKind,
 };
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 use std::{borrow::Cow, time::Duration};
@@ -114,15 +116,161 @@ impl Component for AbilityCooldowns {
 /// Each key's set `primary` is the granted ability; the key itself doubles as
 /// the frontend ability id (icon/i18n key), like Contextualized pseudo_ids.
 ///
-/// ORDERING CONTRACT (review M1): persisted hotbar slots store
-/// `Innate:index:N` positions into this Vec, so its order must be STABLE and
-/// append-only for a given character: producers must emit class abilities
-/// first (spec order), then racial innates, never reordering existing
-/// entries. Revisit key-based persistence before the pool producer ships
-/// (magic plan Phase 4) if this contract proves too fragile.
+/// ORDERING CONTRACT (review M1): a persisted hotbar slot names the pool
+/// *key* it is bound to (`Innate:key:<key>`), not its index, so an entry that
+/// moves no longer drags a hotbar slot with it. The legacy positional form
+/// (`Innate:index:N`) is still accepted on read for rows written before that
+/// change, and those rows DO resolve positionally — so the order must still be
+/// STABLE and append-only for a given character until every character has been
+/// saved at least once since: producers must emit class abilities first (spec
+/// order), then racial innates, never reordering existing entries.
+///
+/// Canonical order under multiclass:
+///
+/// ```text
+/// [primary class keys] [racial innate] [primary spells]
+///                      [secondary class keys] [secondary spells]
+///                      [learned spellbook keys]
+/// ```
+///
+/// Deduplicated by key, so a spell both held classes can cast appears exactly
+/// once — at the primary's position, but with BOTH grantor classes recorded in
+/// its gate, so either class's level can unlock it. A single-class character is
+/// `[P keys][innate][P spells]`; granting a second class appends
+/// `[S keys][S spells]` and shifts nothing that already existed — granting a
+/// second class to an existing single-class character must never shift the
+/// racial innate's index, or every legacy `Innate:index:N` hotbar slot
+/// silently re-points to something else on relog. Any future producer
+/// appending to this Vec must append after *all* of the above, in whatever
+/// order is agreed centrally — never insert into the middle.
+///
+/// The learned-spellbook keys are the last such producer: they append after
+/// everything above, sorted by key so the order is a pure function of the
+/// key set and never depends on `HashSet` iteration order.
+///
+/// Every spell of every held class is emitted whether or not its class-level
+/// band has been reached, exactly like the always-emitted class keys above:
+/// the gate lives in [`Self::spell_gates`], never in whether the key is
+/// present, so levelling up can never shift an index either.
+///
+/// Revisit key-based persistence before spell content grows large if this
+/// contract proves too fragile.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AbilityPool {
     pub abilities: Vec<String>,
+    /// Parallel to [`Self::abilities`] and ALWAYS the same length:
+    /// `Some(gate)` for a spell key, `None` for class-signature and
+    /// racial-innate keys (those are gated by `Skill` inside the ability
+    /// manifest instead). Kept as a parallel Vec rather than folded into
+    /// `abilities` so the index contract documented above, the wire format,
+    /// and every existing `abilities` reader stay exactly as they are.
+    #[serde(default)]
+    pub spell_gates: Vec<Option<SpellGate>>,
+}
+
+/// The class-level requirement a spell key in an [`AbilityPool`] carries.
+/// Baked in when the pool is built; evaluated live against the character's
+/// current `CharacterClass` + level, so it never goes stale and needs no
+/// invalidation when the character levels up or multiclasses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpellGate {
+    /// Every class the character HOLDS that lists this spell. A spell unlocks
+    /// as soon as ANY of them has reached the band, so a level-59 Cleric /
+    /// level-1 Mage casts a Cleric+Mage spell off the Cleric side. At most two
+    /// entries: `CharacterClass` holds at most two classes by design, and the
+    /// pool records only the held ones (a spell's compendium `classes` list
+    /// may be longer, but the classes the character does not hold could never
+    /// unlock it anyway).
+    ///
+    /// Private so the "at most two, no duplicates" invariant can only be
+    /// established through [`Self::new`] / [`Self::add_class`].
+    classes: [Option<crate::comp::ClassKind>; 2],
+    /// The spell's own level; 0 = cantrip.
+    pub spell_level: u8,
+}
+
+impl SpellGate {
+    /// A gate granted by a single class. Merge further grantors in with
+    /// [`Self::add_class`].
+    pub fn new(class: crate::comp::ClassKind, spell_level: u8) -> Self {
+        Self {
+            classes: [Some(class), None],
+            spell_level,
+        }
+    }
+
+    /// Record another held class that also grants this spell. A no-op when the
+    /// class is already recorded, or when both slots are taken — which cannot
+    /// happen for a real pool, since `CharacterClass` holds at most two
+    /// classes.
+    pub fn add_class(&mut self, class: crate::comp::ClassKind) {
+        if self.classes.contains(&Some(class)) {
+            return;
+        }
+        if let Some(slot) = self.classes.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(class);
+        }
+    }
+
+    /// The classes that grant this spell, in the order they were recorded
+    /// (primary first). Never empty.
+    pub fn classes(&self) -> impl Iterator<Item = crate::comp::ClassKind> + '_ {
+        self.classes.iter().copied().flatten()
+    }
+
+    /// Does `class` grant this spell?
+    pub fn granted_by(&self, class: crate::comp::ClassKind) -> bool {
+        self.classes.contains(&Some(class))
+    }
+
+    /// The class level any grantor class must reach to unlock this spell.
+    /// Floored at 1 because class levels start at 1 — a cantrip is available
+    /// from the first class level, not from a level 0 that cannot exist.
+    pub fn required_class_level(&self) -> u16 {
+        (crate::comp::spell::CLASS_LEVELS_PER_SPELL_LEVEL * u16::from(self.spell_level)).max(1)
+    }
+
+    /// `(class, its own level)` for the held grantor class that will unlock
+    /// this spell soonest — the one already at the highest class level, since
+    /// every grantor needs the same [`Self::required_class_level`]. `None`
+    /// when the character holds none of the grantor classes (or has no
+    /// `CharacterClass` at all).
+    ///
+    /// The UI renders "Requires &lt;class&gt; level N" off this, so a spell two
+    /// held classes grant names the one the player will actually reach first
+    /// rather than an arbitrary side.
+    pub fn nearest_grantor(
+        &self,
+        class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> Option<(crate::comp::ClassKind, u16)> {
+        class?
+            .class_levels(character_level)
+            .filter(|(class, _, _)| self.granted_by(*class))
+            .map(|(class, class_level, _)| (class, class_level))
+            .max_by_key(|(_, class_level)| *class_level)
+    }
+
+    /// `true` when ANY class the character holds that grants this spell has
+    /// reached the band unlocking [`Self::spell_level`]. Cantrips pass from
+    /// class level 1.
+    ///
+    /// Gates off each CLASS's own level via `CharacterClass::class_levels`,
+    /// never `character_level` directly: a Warrior 40 / Warlock 20 must be
+    /// capped at the Warlock's spell level 3, not the character's 60.
+    ///
+    /// Fails CLOSED: a character that holds none of the grantor classes — or
+    /// whose `CharacterClass` is missing entirely, e.g. an NPC — gets `false`.
+    pub fn is_unlocked(
+        &self,
+        class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> bool {
+        self.nearest_grantor(class, character_level)
+            .is_some_and(|(_, class_level)| {
+                u16::from(self.spell_level) <= crate::comp::spell::spell_level_unlocked(class_level)
+            })
+    }
 }
 
 impl Component for AbilityPool {
@@ -140,29 +288,159 @@ impl AbilityPool {
             Body::Humanoid(humanoid) => Some(Self::innate_set_key(humanoid.species)),
             _ => None,
         };
+        let abilities: Vec<String> = key.into_iter().map(String::from).collect();
         Self {
-            abilities: key.into_iter().map(String::from).collect(),
+            // A body-only pool never contains spells, but the parallel array
+            // must still be exactly as long as `abilities`.
+            spell_gates: vec![None; abilities.len()],
+            abilities,
         }
     }
 
-    /// Full ability pool for a player character: class active-ability keys
-    /// FIRST (spec order, stable indices for persisted hotbar slots — BL-06
-    /// P2a), then the racial innate key. Ordering contract: append-only;
-    /// never reorder.
+    /// Full ability pool for a player character: primary class active-ability
+    /// keys FIRST (spec order, stable indices for persisted hotbar slots),
+    /// then the racial innate key, then the primary's spells, then — if the
+    /// character is multiclass — the secondary class's keys and spells last
+    /// (see the ordering contract on [`Self::abilities`]'s doc comment for
+    /// why the secondary goes at the very end rather than after the primary).
     ///
-    /// ALL class-ability keys are always emitted regardless of whether the
-    /// player has unlocked the skill yet. The manifest `Simple(Some(skill), …)`
-    /// gate makes an un-unlocked key resolve to nothing at use-time — stable
-    /// pool indices are thereby guaranteed even for locked skills.
-    pub fn for_character(body: &crate::comp::Body, class: crate::comp::ClassKind) -> Self {
-        // Class keys first, then the racial innate — delegate the racial part to
-        // `for_body` so the species→key logic lives in exactly one place.
-        let abilities = Self::class_ability_keys(class)
-            .iter()
-            .map(|k| k.to_string())
-            .chain(Self::for_body(body).abilities)
-            .collect();
-        Self { abilities }
+    /// ALL class-ability keys and ALL spells of every held class are emitted
+    /// regardless of whether the player has unlocked them yet. The manifest
+    /// `Simple(Some(skill), …)` gate makes an un-unlocked class key resolve to
+    /// nothing at use-time, and a spell's class-level band is checked through
+    /// [`Self::is_unlocked`] — stable pool indices are thereby guaranteed even
+    /// for locked entries.
+    ///
+    /// `learned_spells` is the character's spellbook: pool keys acquired by
+    /// study rather than granted by class or species. They are appended AFTER
+    /// everything else and sorted by key, so the pool is a pure function of
+    /// its inputs and learning a new spell never moves an existing entry.
+    /// A learned key that a held class already grants is not duplicated;
+    /// instead its [`SpellGate`] is cleared, because having studied a spell is
+    /// unconditional knowledge of it — the class-level band that would
+    /// otherwise gate it no longer applies.
+    ///
+    /// Pass [`Self::no_learned_spells`] for an entity with no spellbook.
+    pub fn for_character(
+        body: &crate::comp::Body,
+        character_class: &crate::comp::CharacterClass,
+        learned_spells: &HashSet<String>,
+    ) -> Self {
+        let mut abilities: Vec<String> = Vec::new();
+        let mut spell_gates: Vec<Option<SpellGate>> = Vec::new();
+
+        // Appends a key unless it is already present, keeping the two arrays
+        // exactly parallel. Deduplication matters under multiclass, where a
+        // spell can be listed by both held classes: the key is emitted once,
+        // at the position the FIRST grantor put it (the ordering contract is
+        // append-only), but the second grantor is MERGED INTO the existing
+        // gate — a spell both held classes grant must unlock as soon as
+        // either of them reaches the band, not only the primary.
+        fn push_key(
+            abilities: &mut Vec<String>,
+            spell_gates: &mut Vec<Option<SpellGate>>,
+            key: String,
+            gate: Option<SpellGate>,
+        ) {
+            if let Some(existing) = abilities.iter().position(|existing| *existing == key) {
+                if let (Some(existing_gate), Some(incoming)) =
+                    (spell_gates[existing].as_mut(), gate)
+                {
+                    for class in incoming.classes() {
+                        existing_gate.add_class(class);
+                    }
+                }
+                return;
+            }
+            abilities.push(key);
+            spell_gates.push(gate);
+        }
+
+        // 1. Primary's class ability keys.
+        for key in Self::class_ability_keys(character_class.primary) {
+            push_key(&mut abilities, &mut spell_gates, key.to_string(), None);
+        }
+        // 2. The racial innate (delegated to `for_body` so the species->key logic lives
+        //    in exactly one place). Its index MUST stay put across a multiclass grant.
+        for key in Self::for_body(body).abilities {
+            push_key(&mut abilities, &mut spell_gates, key, None);
+        }
+        // 3. Primary's spells, then 4. the secondary's class keys, then
+        //    5. the secondary's spells.
+        use crate::assets::AssetExt;
+        let compendium =
+            crate::comp::spell::SpellCompendium::load_expect("common.spells.compendium");
+        let compendium = compendium.read();
+        let push_spells = |abilities: &mut Vec<String>,
+                           spell_gates: &mut Vec<Option<SpellGate>>,
+                           class: crate::comp::ClassKind| {
+            for spell in compendium.spells_for_class(class) {
+                push_key(
+                    abilities,
+                    spell_gates,
+                    spell.pool_key().to_string(),
+                    Some(SpellGate::new(class, spell.level)),
+                );
+            }
+        };
+        push_spells(&mut abilities, &mut spell_gates, character_class.primary);
+        if let Some(secondary) = character_class.secondary {
+            for key in Self::class_ability_keys(secondary) {
+                push_key(&mut abilities, &mut spell_gates, key.to_string(), None);
+            }
+            push_spells(&mut abilities, &mut spell_gates, secondary);
+        }
+
+        // 6. Learned spellbook keys, last and sorted. Sorting matters: the spellbook
+        //    hands over a `HashSet`, whose iteration order varies between processes,
+        //    and an order that varied between logins would silently re-point every
+        //    legacy positional hotbar slot.
+        let mut learned: Vec<&String> = learned_spells.iter().collect();
+        learned.sort_unstable();
+        for key in learned {
+            match abilities.iter().position(|existing| existing == key) {
+                // Already granted by a held class. Studying it removes the
+                // class-level gate rather than adding a second entry.
+                Some(existing) => spell_gates[existing] = None,
+                None => push_key(&mut abilities, &mut spell_gates, key.clone(), None),
+            }
+        }
+
+        debug_assert_eq!(abilities.len(), spell_gates.len());
+        Self {
+            abilities,
+            spell_gates,
+        }
+    }
+
+    /// The empty spellbook, for callers that have no [`Inventory`] to read one
+    /// from (NPCs, character creation, tests).
+    ///
+    /// [`Inventory`]: crate::comp::Inventory
+    pub fn no_learned_spells() -> &'static HashSet<String> {
+        static NONE: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+        NONE.get_or_init(HashSet::new)
+    }
+
+    /// `true` if index `i` may be used right now. Non-spell entries and
+    /// out-of-range indices answer `true`, preserving existing behaviour for
+    /// everything that is not a spell (weapon/class/racial gating is unchanged
+    /// and lives elsewhere).
+    pub fn is_unlocked(
+        &self,
+        index: usize,
+        class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> bool {
+        match self.spell_gates.get(index) {
+            Some(Some(gate)) => gate.is_unlocked(class, character_level),
+            _ => true,
+        }
+    }
+
+    /// `Some(gate)` iff index `index` is a spell.
+    pub fn spell_gate(&self, index: usize) -> Option<&SpellGate> {
+        self.spell_gates.get(index).and_then(Option::as_ref)
     }
 
     /// Manifest `Custom(...)` keys for a class's active abilities (BL-06
@@ -192,6 +470,74 @@ impl AbilityPool {
             Species::Orc => "innate.orc",
             Species::Danari => "innate.danari",
             Species::Draugr => "innate.draugr",
+        }
+    }
+}
+
+/// Xindeler: may this character legitimately *bind* `ability` to one of its
+/// auxiliary slots right now?
+///
+/// Extracted from the `ChangeAbilityEvent` handler so the rule is unit-testable
+/// on its own. Only spell keys are judged: an `Innate` index carrying a
+/// [`SpellGate`] must have its class-level band reached, and an entity with no
+/// [`AbilityPool`] at all has no innate abilities to bind, so it is refused.
+/// Every other binding — weapon, glider, empty, and gate-free innate keys —
+/// answers `true`, preserving the pre-existing (unvalidated) behaviour rather
+/// than silently taking on the whole client-trust problem here.
+///
+/// The authoritative check still lives at
+/// [`ActiveAbilities::activate_ability`]; this one only keeps the action bar
+/// honest.
+pub fn may_bind_ability(
+    ability_pool: Option<&AbilityPool>,
+    character_class: Option<&crate::comp::CharacterClass>,
+    character_level: u16,
+    ability: AuxiliaryAbility,
+) -> bool {
+    match ability {
+        AuxiliaryAbility::Innate(index) => ability_pool
+            .is_some_and(|pool| pool.is_unlocked(index, character_class, character_level)),
+        AuxiliaryAbility::MainWeapon(_)
+        | AuxiliaryAbility::OffWeapon(_)
+        | AuxiliaryAbility::Glider(_)
+        | AuxiliaryAbility::Empty => true,
+    }
+}
+
+/// Xindeler: re-point every `Innate` binding in `active` from its index in
+/// `old_pool` to the index of the SAME key in `new_pool`, emptying the slot
+/// when that key is gone.
+///
+/// Needed whenever an [`AbilityPool`] is rebuilt for a character that is
+/// already in the world — granting a second class, or learning a spell —
+/// because the bindings in [`ActiveAbilities`] hold raw indices while
+/// persistence holds keys. Without this, an in-session rebuild that reorders
+/// anything leaves the action bar pointing at the wrong ability until relog,
+/// at which point the persisted key silently wins and the bar changes again.
+///
+/// 🔴 **This covers the hotbar only.** Reactive trigger slots hold the same
+/// kind of raw index and need the same treatment — with worse consequences,
+/// since a re-pointed trigger mints its cooldown-bypass token for the wrong
+/// ability. Every site that calls this must also call the sibling
+/// [`TriggerSlots::remap_innate_bindings`](crate::comp::TriggerSlots::remap_innate_bindings).
+pub fn remap_innate_bindings(
+    active: &mut ActiveAbilities,
+    old_pool: &AbilityPool,
+    new_pool: &AbilityPool,
+) {
+    for set in active.auxiliary_sets.values_mut() {
+        for slot in set.iter_mut() {
+            let AuxiliaryAbility::Innate(index) = *slot else {
+                continue;
+            };
+            *slot = match old_pool
+                .abilities
+                .get(index)
+                .and_then(|key| new_pool.abilities.iter().position(|k| k == key))
+            {
+                Some(new_index) => AuxiliaryAbility::Innate(new_index),
+                None => AuxiliaryAbility::Empty,
+            };
         }
     }
 }
@@ -280,12 +626,35 @@ impl ActiveAbilities {
             .unwrap_or_else(|| Cow::Owned(Self::default_ability_set(inv, skill_set, self.limit)))
     }
 
+    /// Resolve an ability input against the hotbar. `AbilityInput::Trigger`
+    /// always resolves to [`Ability::Empty`] here because a trigger slot lives
+    /// in [`TriggerSlots`], not in the hotbar — use
+    /// [`Self::get_ability_with_triggers`] on any path that can see one.
     pub fn get_ability(
         &self,
         input: AbilityInput,
         inventory: Option<&Inventory>,
         skill_set: Option<&SkillSet>,
         stats: Option<&comp::Stats>,
+    ) -> Ability {
+        self.get_ability_with_triggers(input, inventory, skill_set, stats, None)
+    }
+
+    /// As [`Self::get_ability`], but able to resolve
+    /// [`AbilityInput::Trigger`] against the character's trigger slots.
+    ///
+    /// Trigger slots deliberately do **not** honour
+    /// `Stats::disable_auxiliary_abilities`: that flag disables the hotbar, and
+    /// a trigger is not a hotbar slot. Everything that gates a *cast* (energy,
+    /// antimagic, teleport suppression, castable sources) is applied later, on
+    /// the shared activation path.
+    pub fn get_ability_with_triggers(
+        &self,
+        input: AbilityInput,
+        inventory: Option<&Inventory>,
+        skill_set: Option<&SkillSet>,
+        stats: Option<&comp::Stats>,
+        trigger_slots: Option<&TriggerSlots>,
     ) -> Ability {
         match input {
             AbilityInput::Guard => self.guard.into(),
@@ -303,6 +672,9 @@ impl ActiveAbilities {
                         .unwrap_or(Ability::Empty)
                 }
             },
+            AbilityInput::Trigger(slot) => trigger_slots
+                .and_then(|slots| slots.configured_ability(usize::from(slot)))
+                .map_or(Ability::Empty, Ability::from),
         }
     }
 
@@ -316,13 +688,25 @@ impl ActiveAbilities {
         skill_set: &SkillSet,
         body: Option<&Body>,
         char_state: Option<&CharacterState>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        combo: Option<&Combo>,
         stats: Option<&comp::Stats>,
+        buffs: Option<&Buffs>,
         ability_pool: Option<&AbilityPool>,
+        // Xindeler: the caster's class(es), so a spell key in `ability_pool`
+        // can be checked against the class-level band that unlocks it. `None`
+        // means "no class", which refuses every gated key — correct for NPCs,
+        // whose pools hold no spells anyway.
+        character_class: Option<&crate::comp::CharacterClass>,
+        // The caster's reactive trigger slots, so `AbilityInput::Trigger` can
+        // name the ability the slot stores rather than a hotbar position.
+        // `None` on the UI paths that only ever ask about hotbar inputs.
+        trigger_slots: Option<&TriggerSlots>,
         ability_map: &AbilityMap,
         // bool is from_offhand
     ) -> Option<(CharacterAbility, bool, SpecifiedAbility)> {
-        let ability = self.get_ability(input, inv, Some(skill_set), stats);
+        let ability =
+            self.get_ability_with_triggers(input, inv, Some(skill_set), stats, trigger_slots);
 
         // ENG-D2c: a weapon that RequiresAttunement grants no abilities until its
         // slot is attuned (the item is inert).
@@ -366,11 +750,15 @@ impl ActiveAbilities {
                 //
                 // We could alternatively just take `ability`, but it works too.
                 let dispatched = match ability.try_ability_set_key()? {
-                    I::Guard => abilities.guard(Some(skill_set), context),
-                    I::Primary => abilities.primary(Some(skill_set), context),
-                    I::Secondary => abilities.secondary(Some(skill_set), context),
-                    I::Auxiliary(index) => abilities.auxiliary(index, Some(skill_set), context),
-                    I::Movement => return None,
+                    I::Guard => abilities.guard(Some(skill_set), stance, inv, combo, buffs),
+                    I::Primary => abilities.primary(Some(skill_set), stance, inv, combo, buffs),
+                    I::Secondary => abilities.secondary(Some(skill_set), stance, inv, combo, buffs),
+                    I::Auxiliary(index) => {
+                        abilities.auxiliary(index, Some(skill_set), stance, inv, combo, buffs)
+                    },
+                    // A trigger slot never names an equipment ability set;
+                    // `try_ability_set_key` cannot produce it.
+                    I::Movement | I::Trigger(_) => return None,
                 };
 
                 dispatched
@@ -402,11 +790,18 @@ impl ActiveAbilities {
             Ability::OffWeaponAux(_) => inst_ability(EquipSlot::ActiveOffhand, true),
             Ability::GliderAux(_) => inst_ability(EquipSlot::Glider, false),
             Ability::InnateAux(index) => ability_pool
+                // Xindeler: a spell key whose class-level band has not been
+                // reached yet is not castable. Non-spell keys keep their
+                // existing behaviour (`is_unlocked` answers `true` for them),
+                // so this is a no-op for class and racial innates.
+                .filter(|pool| {
+                    pool.is_unlocked(index, character_class, skill_set.character_level())
+                })
                 .and_then(|pool| pool.abilities.get(index))
                 .and_then(|key| {
                     ability_map
                         .get_ability_set(&AbilitySpec::Custom(key.clone()))
-                        .and_then(|set| set.primary(Some(skill_set), context))
+                        .and_then(|set| set.primary(Some(skill_set), stance, inv, combo, buffs))
                         .map(|(item, i)| {
                             (
                                 item.ability
@@ -456,6 +851,9 @@ impl ActiveAbilities {
             })
     }
 
+    /// Weapon, glider, and class/racial innate abilities. Spells are
+    /// EXCLUDED — they are listed separately by [`Self::all_available_spells`]
+    /// so the UI can present them on their own terms.
     pub fn all_available_abilities(
         inv: Option<&Inventory>,
         skill_set: Option<&SkillSet>,
@@ -493,14 +891,40 @@ impl ActiveAbilities {
             .map(AuxiliaryAbility::Glider)
             .for_each(|a| ability_buff.push(a));
 
-        // Push innate (class/racial) abilities
+        // Push innate (class/racial) abilities. Spell keys are skipped: they
+        // are listed by `all_available_spells` instead.
         if let Some(pool) = ability_pool {
             (0..pool.abilities.len())
+                .filter(|i| pool.spell_gate(*i).is_none())
                 .map(AuxiliaryAbility::Innate)
                 .for_each(|a| ability_buff.push(a));
         }
 
         ability_buff
+    }
+
+    /// Every spell key in the pool, unlocked or not, in pool order, paired
+    /// with whether it is currently castable. Locked entries are returned
+    /// rather than filtered out so the UI can show them greyed with their
+    /// requirement instead of hiding what is coming.
+    pub fn all_available_spells(
+        ability_pool: Option<&AbilityPool>,
+        character_class: Option<&crate::comp::CharacterClass>,
+        character_level: u16,
+    ) -> Vec<(AuxiliaryAbility, bool)> {
+        ability_pool
+            .into_iter()
+            .flat_map(|pool| {
+                (0..pool.abilities.len()).filter_map(move |i| {
+                    pool.spell_gate(i).map(|gate| {
+                        (
+                            AuxiliaryAbility::Innate(i),
+                            gate.is_unlocked(character_class, character_level),
+                        )
+                    })
+                })
+            })
+            .collect()
     }
 
     fn default_ability_set<'a>(
@@ -532,6 +956,9 @@ pub enum AbilityInput {
     Secondary,
     Movement,
     Auxiliary(usize),
+    /// A reactive trigger slot, resolved against [`TriggerSlots`] rather than
+    /// against the hotbar. Never produced by a hotbar key press.
+    Trigger(u8),
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -576,7 +1003,9 @@ impl Ability {
         inv: Option<&'a Inventory>,
         skill_set: Option<&'a SkillSet>,
         ability_pool: Option<&'a AbilityPool>,
-        context: &AbilityContext,
+        stance: Option<&Stance>,
+        combo: Option<&Combo>,
+        buffs: Option<&Buffs>,
     ) -> Option<&'a str> {
         let ability_set = |equip_slot| {
             inv.and_then(|inv| inv.equipped(equip_slot))
@@ -600,11 +1029,15 @@ impl Ability {
                 use AbilityInput as I;
 
                 let dispatched = match self.try_ability_set_key()? {
-                    I::Guard => abilities.guard(skill_set, context),
-                    I::Primary => abilities.primary(skill_set, context),
-                    I::Secondary => abilities.secondary(skill_set, context),
-                    I::Auxiliary(index) => abilities.auxiliary(index, skill_set, context),
-                    I::Movement => return None,
+                    I::Guard => abilities.guard(skill_set, stance, inv, combo, buffs),
+                    I::Primary => abilities.primary(skill_set, stance, inv, combo, buffs),
+                    I::Secondary => abilities.secondary(skill_set, stance, inv, combo, buffs),
+                    I::Auxiliary(index) => {
+                        abilities.auxiliary(index, skill_set, stance, inv, combo, buffs)
+                    },
+                    // A trigger slot never names an equipment ability set;
+                    // `try_ability_set_key` cannot produce it.
+                    I::Movement | I::Trigger(_) => return None,
                 };
 
                 dispatched.map(|(a, _)| a.id.as_str()).or_else(|| {
@@ -616,7 +1049,7 @@ impl Ability {
                         I::Primary => contextual_id(Some(&abilities.primary)),
                         I::Secondary => contextual_id(Some(&abilities.secondary)),
                         I::Auxiliary(index) => contextual_id(abilities.abilities.get(index)),
-                        I::Movement => None,
+                        I::Movement | I::Trigger(_) => None,
                     }
                 })
             })
@@ -725,7 +1158,9 @@ impl SpecifiedAbility {
                     I::Primary => Some(&abilities.primary),
                     I::Secondary => Some(&abilities.secondary),
                     I::Auxiliary(index) => abilities.abilities.get(index),
-                    I::Movement => return None,
+                    // A trigger slot never names an equipment ability set;
+                    // `try_ability_set_key` cannot produce it.
+                    I::Movement | I::Trigger(_) => return None,
                 };
                 dispatched.map(|a| ability_id(self, a))
             })
@@ -909,7 +1344,9 @@ impl From<&CharacterState> for CharacterAbilityType {
             | CharacterState::Explosion(_)
             | CharacterState::GroundAoe(_)
             | CharacterState::LeapRanged(_)
-            | CharacterState::Simple(_) => Self::Other,
+            | CharacterState::Simple(_)
+            | CharacterState::TelekineticGrip(_)
+            | CharacterState::Knock(_) => Self::Other,
         }
     }
 }
@@ -945,6 +1382,18 @@ impl Amount {
 
 impl Default for Amount {
     fn default() -> Self { Self::Value(1) }
+}
+
+/// RON-authored config for `CharacterAbility::GroundAoe::pooled_debuff`.
+/// `combat::PooledDebuff` (the runtime shape this expands into, carried by
+/// `ground_aoe::StaticData` and `RadiusEffect::PooledDebuff`) also has an
+/// `ability_info` field, but that's the caster's tool/hand/source info
+/// filled in per-cast from `AbilityInfo::new` -- not something a RON author
+/// supplies, so it has no place in this config struct.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PooledDebuffConfig {
+    pub pool: f32,
+    pub buff: combat::CombatBuff,
 }
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
@@ -986,7 +1435,6 @@ pub enum CharacterAbility {
         movement_modifier: MovementModifier,
         #[serde(default)]
         ori_modifier: OrientationModifier,
-        #[serde(default)]
         marker: Option<comp::FrontendMarker>,
         #[serde(default)]
         meta: AbilityMeta,
@@ -1204,6 +1652,22 @@ pub enum CharacterAbility {
         #[serde(default)]
         meta: AbilityMeta,
     },
+    TelekineticGrip {
+        energy_cost: f32,
+        energy_drain: f32,
+        buildup_duration: f32,
+        charge_duration: f32,
+        place_threshold: f32,
+        recover_duration: f32,
+        range: f32,
+        tether_length: f32,
+        initial_projectile_speed: f32,
+        scaled_projectile_speed: f32,
+        projectile: ProjectileConstructor,
+        move_speed: f32,
+        #[serde(default)]
+        meta: AbilityMeta,
+    },
     Shockwave {
         energy_cost: f32,
         buildup_duration: f32,
@@ -1276,6 +1740,18 @@ pub enum CharacterAbility {
         /// If true the caster cannot move during the telegraph
         #[serde(default)]
         rooted_cast: bool,
+        /// Shared HP-pool debuff resolution (e.g. `Sleep`): sorts every
+        /// target in the AoE ascending by current HP and consumes `pool`
+        /// from lowest to highest, applying `buff` to each until the pool
+        /// is exhausted -- see `combat::resolve_pooled_debuff_targets`.
+        /// When set, this ability's strike skips the normal `damage`/
+        /// `poise`/`knockback` attack entirely and emits only the pooled
+        /// debuff (those fields are otherwise unused -- keep them at 0/
+        /// no-op in RON for a pool-only cast). `#[serde(default)]` so
+        /// every existing GroundAoe RON (bloodboil, dark_star, ...) stays
+        /// byte-unchanged and keeps parsing as `None`.
+        #[serde(default)]
+        pooled_debuff: Option<PooledDebuffConfig>,
         #[serde(default)]
         meta: AbilityMeta,
     },
@@ -1306,6 +1782,12 @@ pub enum CharacterAbility {
         recover_duration: f32,
         targets: combat::GroupTarget,
         auras: Vec<aura::AuraBuffConstructor>,
+        /// Capped-nearest-N, per-target-tiered effects (see
+        /// `aura::AuraKind::TieredHealthEffect`) created alongside `auras`.
+        /// Kept as a separate list since these build a different `AuraKind`
+        /// variant entirely, not a `Buff`.
+        #[serde(default)]
+        tiered_health_effects: Vec<aura::TieredHealthEffectConstructor>,
         aura_duration: Option<Secs>,
         range: f32,
         energy_cost: f32,
@@ -1378,6 +1860,20 @@ pub enum CharacterAbility {
         anchor: SpriteSummonAnchor,
         #[serde(default)]
         move_efficiency: f32,
+        ori_modifier: f32,
+        #[serde(default)]
+        meta: AbilityMeta,
+    },
+    /// A single-shot, ranged/keyless unlock effect targeted at a sprite
+    /// position (e.g. the `knock` spell). See `common/src/states/knock.rs`.
+    Knock {
+        energy_cost: f32,
+        buildup_duration: f32,
+        cast_duration: f32,
+        recover_duration: f32,
+        /// Max range the targeted sprite position can be from the caster
+        range: f32,
+        #[serde(default)]
         ori_modifier: f32,
         #[serde(default)]
         meta: AbilityMeta,
@@ -1510,6 +2006,7 @@ impl Default for CharacterAbility {
                 multi_target: None,
                 damage_effect: None,
                 attack_effect: None,
+                attack_effect_target: None,
                 simultaneous_hits: 1,
                 custom_combo: CustomCombo {
                     base: None,
@@ -1534,7 +2031,12 @@ impl CharacterAbility {
     pub fn requirements_paid(&self, data: &JoinData, update: &mut StateUpdate) -> bool {
         let from_meta = {
             let AbilityMeta { requirements, .. } = self.ability_meta();
-            requirements.requirements_met(data.stance, data.inventory)
+            requirements.requirements_met(
+                data.stance,
+                data.inventory,
+                data.oracle_live.0,
+                data.skill_set.character_level(),
+            )
         };
         from_meta
             && match self {
@@ -1552,6 +2054,7 @@ impl CharacterAbility {
                 | CharacterAbility::BasicRanged { energy_cost, .. }
                 | CharacterAbility::ChargedRanged { energy_cost, .. }
                 | CharacterAbility::Throw { energy_cost, .. }
+                | CharacterAbility::TelekineticGrip { energy_cost, .. }
                 | CharacterAbility::ChargedMelee { energy_cost, .. }
                 | CharacterAbility::BasicBlock { energy_cost, .. }
                 | CharacterAbility::RiposteMelee { energy_cost, .. }
@@ -1627,6 +2130,9 @@ impl CharacterAbility {
                     update.energy.try_change_by(-*energy_cost).is_ok()
                 },
                 CharacterAbility::GroundAoe { energy_cost, .. } => {
+                    update.energy.try_change_by(-*energy_cost).is_ok()
+                },
+                CharacterAbility::Knock { energy_cost, .. } => {
                     update.energy.try_change_by(-*energy_cost).is_ok()
                 },
                 CharacterAbility::DiveMelee {
@@ -2034,6 +2540,33 @@ impl CharacterAbility {
                 *initial_projectile_speed *= stats.range;
                 *scaled_projectile_speed *= stats.range;
             },
+            TelekineticGrip {
+                ref mut energy_cost,
+                ref mut energy_drain,
+                ref mut buildup_duration,
+                ref mut charge_duration,
+                ref mut place_threshold,
+                ref mut recover_duration,
+                ref mut range,
+                ref mut tether_length,
+                ref mut initial_projectile_speed,
+                ref mut scaled_projectile_speed,
+                ref mut projectile,
+                move_speed: _,
+                meta: _,
+            } => {
+                *projectile = projectile.clone().adjusted_by_stats(stats);
+                *energy_cost /= stats.energy_efficiency;
+                *energy_drain *= stats.speed / stats.energy_efficiency;
+                *buildup_duration /= stats.speed;
+                *charge_duration /= stats.speed;
+                *place_threshold /= stats.speed;
+                *recover_duration /= stats.speed;
+                *range *= stats.range;
+                *tether_length *= stats.range;
+                *initial_projectile_speed *= stats.range;
+                *scaled_projectile_speed *= stats.range;
+            },
             Shockwave {
                 ref mut energy_cost,
                 ref mut buildup_duration,
@@ -2112,6 +2645,12 @@ impl CharacterAbility {
                 dodgeable: _,
                 reagent: _,
                 rooted_cast: _,
+                // Not stat-scaled for now: the pool is a flat, deterministic
+                // budget, not a per-hit damage/effect number the existing
+                // `stats.power`/`stats.effect_power` multipliers are meant
+                // for. Revisit if/when a "pool scales with caster level"
+                // design lands.
+                pooled_debuff: _,
                 meta: _,
             } => {
                 *energy_cost /= stats.energy_efficiency;
@@ -2160,6 +2699,7 @@ impl CharacterAbility {
                 ref mut recover_duration,
                 targets: _,
                 ref mut auras,
+                tiered_health_effects: _,
                 aura_duration: _,
                 ref mut range,
                 ref mut energy_cost,
@@ -2176,8 +2716,14 @@ impl CharacterAbility {
                          strength,
                          duration: _,
                          category: _,
+                         pool_split,
+                         misc_data: _,
                      }| {
                         *strength *= stats.diminished_buff_strength();
+                        if let Some(split) = pool_split {
+                            split.value_at_unlock *= stats.diminished_buff_strength();
+                            split.value_at_max_level *= stats.diminished_buff_strength();
+                        }
                     },
                 );
                 *range *= stats.range;
@@ -2204,8 +2750,14 @@ impl CharacterAbility {
                          strength,
                          duration: _,
                          category: _,
+                         pool_split,
+                         misc_data: _,
                      }| {
                         *strength *= stats.diminished_buff_strength();
+                        if let Some(split) = pool_split {
+                            split.value_at_unlock *= stats.diminished_buff_strength();
+                            split.value_at_max_level *= stats.diminished_buff_strength();
+                        }
                     },
                 );
                 *range *= stats.range;
@@ -2424,6 +2976,21 @@ impl CharacterAbility {
                 *energy_cost /= stats.energy_efficiency;
                 *buildup_duration /= stats.speed;
             },
+            Knock {
+                ref mut energy_cost,
+                ref mut buildup_duration,
+                ref mut cast_duration,
+                ref mut recover_duration,
+                ref mut range,
+                ori_modifier: _,
+                meta: _,
+            } => {
+                *energy_cost /= stats.energy_efficiency;
+                *buildup_duration /= stats.speed;
+                *cast_duration /= stats.speed;
+                *recover_duration /= stats.speed;
+                *range *= stats.range;
+            },
         }
         self
     }
@@ -2442,6 +3009,7 @@ impl CharacterAbility {
             | ChargedMelee { energy_cost, .. }
             | ChargedRanged { energy_cost, .. }
             | Throw { energy_cost, .. }
+            | TelekineticGrip { energy_cost, .. }
             | Shockwave { energy_cost, .. }
             | Explosion { energy_cost, .. }
             | GroundAoe { energy_cost, .. }
@@ -2459,6 +3027,7 @@ impl CharacterAbility {
             | StaticAura { energy_cost, .. }
             | RegrowHead { energy_cost, .. }
             | LeapRanged { energy_cost, .. }
+            | Knock { energy_cost, .. }
             | Simple { energy_cost, .. } => *energy_cost,
             BasicBeam { energy_drain, .. } => {
                 if *energy_drain > f32::EPSILON {
@@ -2521,6 +3090,7 @@ impl CharacterAbility {
             | ChargedMelee { .. }
             | ChargedRanged { .. }
             | Throw { .. }
+            | TelekineticGrip { .. }
             | BasicBlock { .. }
             | ComboMelee2 { .. }
             | DiveMelee { .. }
@@ -2535,7 +3105,8 @@ impl CharacterAbility {
             | Transform { .. }
             | StaticAura { .. }
             | RegrowHead { .. }
-            | LeapRanged { .. } => 0,
+            | LeapRanged { .. }
+            | Knock { .. } => 0,
         }
     }
 
@@ -2554,6 +3125,7 @@ impl CharacterAbility {
             | ChargedMelee { meta, .. }
             | ChargedRanged { meta, .. }
             | Throw { meta, .. }
+            | TelekineticGrip { meta, .. }
             | Shockwave { meta, .. }
             | Explosion { meta, .. }
             | GroundAoe { meta, .. }
@@ -2576,6 +3148,7 @@ impl CharacterAbility {
             | StaticAura { meta, .. }
             | RegrowHead { meta, .. }
             | LeapRanged { meta, .. }
+            | Knock { meta, .. }
             | Simple { meta, .. } => *meta,
         }
     }
@@ -3122,7 +3695,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     melee_constructor: melee_constructor.clone(),
                     ability_info,
                     specifier: *specifier,
-                    custom_combo: *custom_combo,
+                    custom_combo: custom_combo.clone(),
                     movement_modifier: *movement_modifier,
                     ori_modifier: *ori_modifier,
                 },
@@ -3272,6 +3845,40 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     exhausted: false,
                 })
             },
+            CharacterAbility::TelekineticGrip {
+                energy_cost: _,
+                energy_drain,
+                buildup_duration,
+                charge_duration,
+                place_threshold,
+                recover_duration,
+                range,
+                tether_length,
+                initial_projectile_speed,
+                scaled_projectile_speed,
+                projectile,
+                move_speed,
+                meta: _,
+            } => CharacterState::TelekineticGrip(telekinetic_grip::Data {
+                static_data: telekinetic_grip::StaticData {
+                    buildup_duration: Duration::from_secs_f32(*buildup_duration),
+                    charge_duration: Duration::from_secs_f32(*charge_duration),
+                    place_threshold: Duration::from_secs_f32(*place_threshold),
+                    recover_duration: Duration::from_secs_f32(*recover_duration),
+                    energy_drain: *energy_drain,
+                    range: *range,
+                    tether_length: *tether_length,
+                    initial_projectile_speed: *initial_projectile_speed,
+                    scaled_projectile_speed: *scaled_projectile_speed,
+                    projectile: projectile.clone(),
+                    move_speed: *move_speed,
+                    ability_info,
+                },
+                timer: Duration::default(),
+                stage_section: StageSection::Buildup,
+                item: None,
+                thrown: false,
+            }),
             CharacterAbility::Shockwave {
                 energy_cost: _,
                 buildup_duration,
@@ -3379,6 +3986,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 dodgeable,
                 reagent,
                 rooted_cast,
+                pooled_debuff,
                 meta: _,
             } => CharacterState::GroundAoe(ground_aoe::Data {
                 static_data: ground_aoe::StaticData {
@@ -3394,6 +4002,16 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     dodgeable: *dodgeable,
                     reagent: *reagent,
                     rooted_cast: *rooted_cast,
+                    // The RON-authored config carries no `ability_info` (see
+                    // `PooledDebuffConfig`'s doc comment) -- fill it in here
+                    // from this cast's own `ability_info`, same as
+                    // `Attack::new(Some(self.static_data.ability_info))`
+                    // does for the non-pooled damage path below.
+                    pooled_debuff: (*pooled_debuff).map(|pd| combat::PooledDebuff {
+                        pool: pd.pool,
+                        buff: pd.buff,
+                        ability_info: Some(ability_info),
+                    }),
                     ability_info,
                 },
                 timer: Duration::default(),
@@ -3447,6 +4065,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 recover_duration,
                 targets,
                 auras,
+                tiered_health_effects,
                 aura_duration,
                 range,
                 energy_cost: _,
@@ -3460,6 +4079,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     recover_duration: Duration::from_secs_f32(*recover_duration),
                     targets: *targets,
                     auras: auras.clone(),
+                    tiered_health_effects: tiered_health_effects.clone(),
                     aura_duration: *aura_duration,
                     range: *range,
                     ability_info,
@@ -3599,6 +4219,27 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 timer: Duration::default(),
                 stage_section: StageSection::Buildup,
                 achieved_radius: summon_distance.0.floor() as i32 - 1,
+            }),
+            CharacterAbility::Knock {
+                energy_cost: _,
+                buildup_duration,
+                cast_duration,
+                recover_duration,
+                range,
+                ori_modifier,
+                meta: _,
+            } => CharacterState::Knock(knock::Data {
+                static_data: knock::StaticData {
+                    buildup_duration: Duration::from_secs_f32(*buildup_duration),
+                    cast_duration: Duration::from_secs_f32(*cast_duration),
+                    recover_duration: Duration::from_secs_f32(*recover_duration),
+                    range: *range,
+                    ori_modifier: *ori_modifier,
+                    ability_info,
+                },
+                timer: Duration::default(),
+                stage_section: StageSection::Buildup,
+                target_pos: None,
             }),
             CharacterAbility::Music {
                 play_duration,
@@ -3860,12 +4501,49 @@ pub enum MagicSource {
     Arcane,
     /// The gods' channel through the Veil — faith and oaths.
     Divine,
-    /// The Song still singing in the world — nature and elements.
-    Primal,
+    /// The Song still singing in the world — nature and elements, shaped by
+    /// the Primordials.
+    Primordial,
     /// Leakage from the Beyond — the mind as an unlicensed gate.
     Psionic,
     /// The Song flowing through a living body — discipline and ki.
     Ki,
+}
+
+impl MagicSource {
+    /// Every variant, including Arcane. Same shape as the `ClassKind::ALL`
+    /// precedent (`common/src/comp/class.rs`): persistence round-trips and
+    /// per-source arrays iterate this, so a new source added here cannot
+    /// silently fall out of any converter or leave a stale hardcoded `5`.
+    pub const ALL: [MagicSource; 5] = [
+        MagicSource::Arcane,
+        MagicSource::Divine,
+        MagicSource::Primordial,
+        MagicSource::Psionic,
+        MagicSource::Ki,
+    ];
+    /// Number of variants. Single source of truth for anything that sizes or
+    /// indexes a fixed-size per-source array — see [`Self::ALL`]'s doc
+    /// comment for why this exists rather than a literal `5` scattered
+    /// across callers.
+    pub const COUNT: usize = Self::ALL.len();
+    /// Alias for [`Self::COUNT`], kept for callers already written against
+    /// this name. Prefer `COUNT` in new code.
+    pub const NUM_SOURCES: usize = Self::COUNT;
+
+    /// Stable array index for this source, matching
+    /// `comp::Stats::spell_power_by_source`. Exhaustive (no `_` arm) so a
+    /// future `MagicSource` variant fails the build here instead of
+    /// silently aliasing an existing slot.
+    pub fn index(self) -> usize {
+        match self {
+            MagicSource::Arcane => 0,
+            MagicSource::Divine => 1,
+            MagicSource::Primordial => 2,
+            MagicSource::Psionic => 3,
+            MagicSource::Ki => 4,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -3876,6 +4554,8 @@ pub struct AbilityMeta {
     #[serde(default)]
     /// This is an event that gets emitted when the ability is first activated
     pub init_event: Option<AbilityInitEvent>,
+    // TODO: Evaluate if we want this to be a vec if we need more? Would lose copy though...
+    pub init_event2: Option<AbilityInitEvent>,
     #[serde(default)]
     pub requirements: AbilityRequirements,
     /// Adjusts stats of ability when activated based on context.
@@ -3917,11 +4597,13 @@ impl StatAdj {
         let mut stats = Stats::one();
         let add = match self.context {
             StatContext::PoiseResilience(base) => {
-                let poise_res = combat::compute_poise_resilience(data.inventory, data.msm);
+                // `None` resilience means poise-invulnerable armour, which
+                // contributes no *scaling* term — same as the no-gear case.
+                let poise_res = data.derived.and_then(|d| d.poise_resilience);
                 poise_res.unwrap_or(0.0) / base.max(0.1)
             },
             StatContext::Stealth(base) => {
-                let stealth = combat::compute_stealth(data.inventory, data.msm);
+                let stealth = data.derived.map_or(0.0, |d| d.stealth);
                 stealth / base.max(0.1)
             },
         };
@@ -3993,13 +4675,34 @@ impl AbilityReqItem {
 pub struct AbilityRequirements {
     pub stance: Option<Stance>,
     pub item: Option<AbilityReqItem>,
+    /// Whether this ability only exists while PROJECT ORACLE is live.
+    /// Greyed-out in every ability picker and refused server-side when it is
+    /// not — see `common::resources::OracleLive` and
+    /// `CharacterAbility::requirements_paid`. Generic and reusable by any
+    /// future ability; not specific to any one spell.
+    #[serde(default)]
+    pub oracle: bool,
+    /// Minimum derived character level (`SkillSet::character_level`) to use
+    /// this ability. Greyed out in every picker and refused server-side below
+    /// it. Generic and reusable by any ability — the ability-side twin of
+    /// `ItemRequirements.min_level`.
+    #[serde(default)]
+    pub min_level: Option<u16>,
 }
 
 impl AbilityRequirements {
-    pub fn requirements_met(&self, stance: Option<&Stance>, inv: Option<&Inventory>) -> bool {
+    pub fn requirements_met(
+        &self,
+        stance: Option<&Stance>,
+        inv: Option<&Inventory>,
+        oracle_live: bool,
+        character_level: u16,
+    ) -> bool {
         let AbilityRequirements {
             stance: req_stance,
             item,
+            oracle,
+            min_level,
         } = self;
         let stance_met = req_stance
             .is_none_or(|req_stance| stance.is_some_and(|char_stance| req_stance == *char_stance));
@@ -4009,7 +4712,9 @@ impl AbilityRequirements {
                     .is_some()
             })
         });
-        stance_met && item_met
+        let oracle_met = !oracle || oracle_live;
+        let level_met = min_level.is_none_or(|l| character_level >= l);
+        stance_met && item_met && oracle_met && level_met
     }
 }
 
@@ -4057,15 +4762,8 @@ impl Stance {
                 "veloren.core.pseudo_abilities.sword.cleaving_stance"
             },
             Stance::Bow(BowStance::Barrage) => "common.abilities.bow.barrage",
-            Stance::Bow(BowStance::Scatterburst) => "common.abilities.bow.scatterburst",
-            Stance::Bow(BowStance::IgniteArrow) => "common.abilities.bow.ignite_arrow",
-            Stance::Bow(BowStance::DrenchArrow) => "common.abilities.bow.drench_arrow",
-            Stance::Bow(BowStance::FreezeArrow) => "common.abilities.bow.freeze_arrow",
-            Stance::Bow(BowStance::JoltArrow) => "common.abilities.bow.jolt_arrow",
-            Stance::Bow(BowStance::PiercingGale) => "common.abilities.bow.piercing_gale",
             Stance::Bow(BowStance::Hawkstrike) => "common.abilities.bow.hawkstrike",
-            Stance::Bow(BowStance::Fusillade) => "common.abilities.bow.fusillade",
-            Stance::Bow(BowStance::DeathVolley) => "common.abilities.bow.death_volley",
+            Stance::Bow(BowStance::Heartseeker) => "common.abilities.bow.heartseeker",
             Stance::None => "veloren.core.pseudo_abilities.no_stance",
         }
     }
@@ -4083,15 +4781,8 @@ pub enum SwordStance {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash, PartialOrd, Ord)]
 pub enum BowStance {
     Barrage,
-    Scatterburst,
-    IgniteArrow,
-    DrenchArrow,
-    FreezeArrow,
-    JoltArrow,
-    PiercingGale,
+    Heartseeker,
     Hawkstrike,
-    Fusillade,
-    DeathVolley,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -4102,6 +4793,7 @@ pub enum AbilityInitEvent {
         strength: f32,
         duration: Option<Secs>,
     },
+    RemoveBuff(BuffKind),
 }
 
 impl Component for Stance {
@@ -4188,6 +4880,87 @@ mod ability_meta_tag_tests {
 }
 
 #[cfg(test)]
+mod oracle_gate_tests {
+    use super::*;
+
+    // The 5 oracle-flavored spells (augury, divination, commune,
+    // contact_other_plane, legend_lore) don't exist yet, so this synthesizes
+    // an `AbilityRequirements { oracle: true, .. }` directly instead of
+    // loading a real spell RON. Proves the gate itself works before any
+    // content depends on it.
+
+    #[test]
+    fn oracle_ability_refused_when_not_live() {
+        let req = AbilityRequirements {
+            oracle: true,
+            ..Default::default()
+        };
+        assert!(!req.requirements_met(None, None, false, 1));
+    }
+
+    #[test]
+    fn oracle_ability_accepted_when_live() {
+        let req = AbilityRequirements {
+            oracle: true,
+            ..Default::default()
+        };
+        assert!(req.requirements_met(None, None, true, 1));
+    }
+
+    #[test]
+    fn non_oracle_ability_ignores_oracle_liveness() {
+        let req = AbilityRequirements::default();
+        assert!(req.requirements_met(None, None, false, 1));
+        assert!(req.requirements_met(None, None, true, 1));
+    }
+}
+
+#[cfg(test)]
+mod min_level_gate_tests {
+    use super::*;
+
+    #[test]
+    fn no_min_level_is_met_at_level_one() {
+        let req = AbilityRequirements::default();
+        assert!(req.requirements_met(None, None, false, 1));
+    }
+
+    #[test]
+    fn min_level_refused_below_threshold() {
+        let req = AbilityRequirements {
+            min_level: Some(20),
+            ..Default::default()
+        };
+        assert!(!req.requirements_met(None, None, false, 19));
+    }
+
+    #[test]
+    fn min_level_accepted_at_and_above_threshold() {
+        let req = AbilityRequirements {
+            min_level: Some(20),
+            ..Default::default()
+        };
+        assert!(req.requirements_met(None, None, false, 20));
+        assert!(req.requirements_met(None, None, false, 21));
+    }
+
+    #[test]
+    fn min_level_and_oracle_gates_are_independent() {
+        let req = AbilityRequirements {
+            oracle: true,
+            min_level: Some(20),
+            ..Default::default()
+        };
+        // Level requirement met, but ORACLE is down: still refused.
+        assert!(!req.requirements_met(None, None, false, 20));
+        // Both requirements met: accepted.
+        assert!(req.requirements_met(None, None, true, 20));
+        // ORACLE live, but level requirement not met: still refused.
+        assert!(!req.requirements_met(None, None, true, 19));
+    }
+}
+
+#[cfg(test)]
 mod ground_aoe_tests {
     // JoinData is impractical to construct in isolation; behaviour is covered
     // by the deserialization test below and the in-game check. Here we pin
@@ -4220,9 +4993,141 @@ mod ground_aoe_tests {
         for id in [
             "common.abilities.spells.arcane.cinderbolt",
             "common.abilities.spells.divine.dawnmote",
-            "common.abilities.spells.primal.thornspit",
+            "common.abilities.spells.primordial.thornspit",
         ] {
             crate::assets::Ron::<CharacterAbility>::load_expect(id).read();
+        }
+    }
+
+    #[test]
+    fn remote_sensing_spells_deserialize() {
+        for id in [
+            "common.abilities.spells.divination.beast_sense",
+            "common.abilities.spells.divination.clairvoyance",
+            "common.abilities.spells.divination.arcane_eye",
+        ] {
+            let ability = crate::assets::Ron::<CharacterAbility>::load_expect(id)
+                .read()
+                .0
+                .clone();
+            assert!(
+                matches!(ability, CharacterAbility::SelfBuff { .. }),
+                "{id} must cast via SelfBuff, the shape every remote-sensing spell shares"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod hold_spell_rebalance_tests {
+    // hold_person/hold_monster/irresistible_dance grant Paralyzed at 100%
+    // chance with no caster-side fail-roll gate and a flat 60-second
+    // duration for all three, independent of each spell's own level. Pins
+    // the fix: each of the 3 now carries the same CasterLevelRoll curve as
+    // the other Paralyzed-granting spells, and each has its own duration
+    // scaled to its own spell level (unlock_level == spell_level * 6, the
+    // class-level-unlock table's `floor(class_level / 6)` formula inverted).
+    use crate::{
+        assets::AssetExt,
+        combat::{CombatEffect, CombatRequirement},
+        comp::{CharacterAbility, ClassKind},
+    };
+
+    struct Case {
+        id: &'static str,
+        // spell level (compendium.ron) * 6, per the spell-level-unlock table
+        expected_unlock_level: u16,
+        expected_dur_secs: f64,
+    }
+
+    #[test]
+    fn hold_and_dance_spells_gain_caster_level_roll_and_level_scaled_duration() {
+        let cases = [
+            Case {
+                id: "common.abilities.spells.arcane.hold_person",
+                expected_unlock_level: 12, // spell level 2 * 6
+                expected_dur_secs: 7.0,
+            },
+            Case {
+                id: "common.abilities.spells.arcane.hold_monster",
+                expected_unlock_level: 30, // spell level 5 * 6
+                expected_dur_secs: 21.0,
+            },
+            Case {
+                id: "common.abilities.spells.arcane.irresistible_dance",
+                expected_unlock_level: 36, // spell level 6 * 6
+                expected_dur_secs: 25.0,
+            },
+        ];
+
+        for case in cases {
+            let ability = crate::assets::Ron::<CharacterAbility>::load_expect(case.id)
+                .read()
+                .0
+                .clone();
+            let CharacterAbility::BasicRanged {
+                projectile, meta, ..
+            } = ability
+            else {
+                panic!(
+                    "{} did not deserialize as BasicRanged: {ability:?}",
+                    case.id
+                );
+            };
+            let attack = projectile
+                .attack
+                .unwrap_or_else(|| panic!("{} has no projectile attack", case.id));
+            let (effect, requirement) = attack.attack_effect.unwrap_or_else(|| {
+                panic!(
+                    "{} has no attack_effect -- still using an inline `buff:` with no \
+                     CasterLevelRoll gate?",
+                    case.id
+                )
+            });
+            let CombatEffect::Buff(buff) = effect else {
+                panic!("{} attack_effect is not a Buff: {effect:?}", case.id);
+            };
+            assert_eq!(
+                buff.dur_secs.0, case.expected_dur_secs,
+                "{} Paralyzed dur_secs",
+                case.id
+            );
+            assert_eq!(buff.chance, 1.0, "{} buff chance", case.id);
+
+            let CombatRequirement::CasterLevelRoll(curve) = requirement else {
+                panic!(
+                    "{} attack_effect requirement is not CasterLevelRoll: {requirement:?}",
+                    case.id
+                );
+            };
+            assert_eq!(
+                curve.unlock_level, case.expected_unlock_level,
+                "{} unlock_level",
+                case.id
+            );
+            assert_eq!(
+                curve.fail_chance_at_unlock, 0.25,
+                "{} fail_chance_at_unlock",
+                case.id
+            );
+            assert_eq!(
+                curve.fail_chance_at_max_level, 0.05,
+                "{} fail_chance_at_max_level",
+                case.id
+            );
+            assert_eq!(
+                curve.source_classes,
+                vec![ClassKind::Mage],
+                "{} source_classes",
+                case.id
+            );
+
+            assert_eq!(
+                meta.requirements.min_level,
+                Some(case.expected_unlock_level),
+                "{} ability-level min_level gate",
+                case.id
+            );
         }
     }
 }
@@ -4298,15 +5203,20 @@ mod class_ability_pool_tests {
             skin: 0,
             eye_color: 0,
             eyes: 0,
+            height_scale: 0,
         })
     }
 
-    /// `for_character` emits class keys BEFORE the racial innate key, in spec
-    /// order (BL-06 P2a ordering contract).
+    /// `for_character` emits class keys BEFORE the racial innate key, in
+    /// spec order.
     #[test]
     fn warrior_pool_order_is_class_then_racial() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, ClassKind::Warrior);
+        let pool = AbilityPool::for_character(
+            &body,
+            &crate::comp::CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
+        );
         // First two entries are the Warrior class keys (signature, capstone).
         assert_eq!(
             pool.abilities.first().map(String::as_str),
@@ -4324,12 +5234,57 @@ mod class_ability_pool_tests {
         assert_eq!(pool.abilities.len(), 3);
     }
 
+    /// A multiclass character's secondary keys go strictly at the end,
+    /// after the racial innate — never between the primary's keys and the
+    /// racial innate, so granting a second class to an existing character
+    /// never shifts the racial innate's index.
+    #[test]
+    fn multiclass_pool_appends_secondary_keys_after_racial() {
+        let body = human_body();
+        let character_class = crate::comp::CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Mage),
+            secondary_level: 20,
+            future_levels_to_secondary: false,
+        };
+        let pool =
+            AbilityPool::for_character(&body, &character_class, AbilityPool::no_learned_spells());
+        // The Warrior has no spells, so its keys, the racial innate, and the
+        // Mage's keys are still the first five entries in that exact order;
+        // the Mage's spells follow.
+        assert_eq!(pool.abilities[..5], [
+            "class.warrior.rally",
+            "class.warrior.onslaught",
+            "innate.human",
+            "class.mage.arcanesurge",
+            "class.mage.arcanemastery",
+        ]);
+        assert!(pool.abilities[5..].iter().all(|k| k.starts_with("spells.")));
+
+        // A single-class Warrior's pool is an exact prefix of this one -- the
+        // primary+racial portion never changes shape when a second class is
+        // granted; only the tail grows.
+        let single = AbilityPool::for_character(
+            &body,
+            &crate::comp::CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
+        );
+        assert_eq!(
+            &pool.abilities[..single.abilities.len()],
+            &single.abilities[..]
+        );
+    }
+
     /// A non-proof class (e.g. Adventurer) gets only the racial innate — no
     /// class keys — preserving the legacy/empty-tree behaviour.
     #[test]
     fn adventurer_pool_has_only_racial_innate() {
         let body = human_body();
-        let pool = AbilityPool::for_character(&body, ClassKind::Adventurer);
+        let pool = AbilityPool::for_character(
+            &body,
+            &crate::comp::CharacterClass::single(ClassKind::Adventurer),
+            AbilityPool::no_learned_spells(),
+        );
         assert_eq!(pool.abilities.len(), 1);
         assert_eq!(pool.abilities[0], "innate.human");
     }
@@ -4348,7 +5303,11 @@ mod class_ability_pool_tests {
         ];
         let body = human_body();
         for class in proof_classes {
-            let pool = AbilityPool::for_character(&body, class);
+            let pool = AbilityPool::for_character(
+                &body,
+                &crate::comp::CharacterClass::single(class),
+                AbilityPool::no_learned_spells(),
+            );
             for key in &pool.abilities {
                 // Skip the trailing racial innate (already covered by innate tests).
                 if key.starts_with("innate.") {
@@ -4391,5 +5350,887 @@ mod class_ability_pool_tests {
         for id in ids {
             crate::assets::Ron::<CharacterAbility>::load_expect(id).read();
         }
+    }
+}
+
+#[cfg(test)]
+mod spell_gate_tests {
+    use super::{
+        AbilityInput, AbilityPool, ActiveAbilities, AuxiliaryAbility, SpellGate, may_bind_ability,
+    };
+    use crate::comp::{
+        Body, CharacterClass, ClassKind, SkillSet, humanoid, item::tool::AbilityMap,
+        spell::SpellCompendium,
+    };
+    use hashbrown::{HashMap, HashSet};
+
+    /// Build a minimal Human body for deterministic testing.
+    fn human_body() -> Body {
+        Body::Humanoid(humanoid::Body {
+            species: humanoid::Species::Human,
+            body_type: humanoid::BodyType::Male,
+            hair_style: 0,
+            beard: 0,
+            accessory: 0,
+            hair_color: 0,
+            skin: 0,
+            eye_color: 0,
+            eyes: 0,
+            height_scale: 0,
+        })
+    }
+
+    /// A skill set whose derived character level is exactly `level`.
+    fn skill_set_at_level(level: u16) -> SkillSet {
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(level);
+        assert_eq!(skill_set.character_level(), level, "test setup");
+        skill_set
+    }
+
+    /// An `ActiveAbilities` whose auxiliary slot 0 holds pool index `index`,
+    /// under the empty-handed auxiliary key so no equipped weapon is needed.
+    fn bound_to_pool_index(index: usize) -> ActiveAbilities {
+        let mut sets = hashbrown::HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(index)]);
+        ActiveAbilities::from_auxiliary(sets, None)
+    }
+
+    /// The first pool index holding a spell of exactly `spell_level`.
+    fn spell_index_of_level(pool: &AbilityPool, spell_level: u8) -> usize {
+        (0..pool.abilities.len())
+            .find(|i| {
+                pool.spell_gate(*i)
+                    .is_some_and(|gate| gate.spell_level == spell_level)
+            })
+            .unwrap_or_else(|| panic!("the compendium has a Mage spell of level {spell_level}"))
+    }
+
+    #[test]
+    fn pool_appends_spells_after_the_racial_innate() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            AbilityPool::no_learned_spells(),
+        );
+
+        // Class signature + capstone first, then the racial innate, then spells.
+        assert_eq!(pool.abilities[0], "class.mage.arcanesurge");
+        assert_eq!(pool.abilities[1], "class.mage.arcanemastery");
+        assert_eq!(pool.abilities[2], "innate.human");
+        assert!(pool.abilities[3..].iter().all(|k| k.starts_with("spells.")));
+        assert!(
+            pool.abilities.len() > 3,
+            "the Mage has spells in the compendium"
+        );
+        // The parallel invariant, everywhere.
+        assert_eq!(pool.abilities.len(), pool.spell_gates.len());
+        assert!(pool.spell_gates[..3].iter().all(Option::is_none));
+        assert!(pool.spell_gates[3..].iter().all(Option::is_some));
+    }
+
+    fn learned(keys: &[&str]) -> HashSet<String> { keys.iter().map(|k| (*k).to_string()).collect() }
+
+    /// Learned keys land after EVERYTHING else — after the secondary class's
+    /// spells, which are themselves last among the class-derived entries.
+    #[test]
+    fn learned_spells_append_after_every_class_derived_key() {
+        let body = human_body();
+        // Neither of these is granted by Mage or Cleric, so both are purely
+        // additive.
+        let keys = learned(&[
+            "spells.transmutation.plant_growth",
+            "spells.transmutation.magic_stone",
+        ]);
+        let without = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new());
+        let with = AbilityPool::for_character(&body, &mage_cleric(), &keys);
+
+        assert_eq!(
+            &with.abilities[..without.abilities.len()],
+            &without.abilities[..],
+            "learned keys must not disturb any class-derived index"
+        );
+        assert_eq!(with.abilities.len(), without.abilities.len() + 2);
+        assert_eq!(with.abilities.len(), with.spell_gates.len());
+        // Learned keys carry no gate: study is unconditional knowledge.
+        assert!(
+            with.spell_gates[without.abilities.len()..]
+                .iter()
+                .all(Option::is_none)
+        );
+    }
+
+    /// The appended block is sorted by key, so it is a pure function of the
+    /// key set — the same spellbook always produces the same pool, whatever
+    /// order the `HashSet` happens to iterate in this process.
+    #[test]
+    fn learned_spells_are_appended_in_sorted_order() {
+        let body = human_body();
+        let keys = [
+            "spells.transmutation.plant_growth",
+            "spells.transmutation.magic_stone",
+            "spells.evocation.crusaders_mantle",
+        ];
+        let base_len = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new())
+            .abilities
+            .len();
+
+        let pool = AbilityPool::for_character(&body, &mage_cleric(), &learned(&keys));
+        let mut expected: Vec<&str> = keys.to_vec();
+        expected.sort_unstable();
+        assert_eq!(&pool.abilities[base_len..], &expected[..]);
+
+        // Inserting in a different order changes nothing.
+        let mut reversed = keys;
+        reversed.reverse();
+        let other = AbilityPool::for_character(&body, &mage_cleric(), &learned(&reversed));
+        assert_eq!(pool.abilities, other.abilities);
+    }
+
+    /// Learning a spell the character's own class already grants must not
+    /// duplicate the entry — and must clear its class-level gate, since the
+    /// character has now studied it outright.
+    #[test]
+    fn learning_a_class_spell_clears_its_gate_without_duplicating_it() {
+        let body = human_body();
+        let plain = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            &HashSet::new(),
+        );
+        let key = plain
+            .abilities
+            .iter()
+            .enumerate()
+            .find(|(i, _)| plain.spell_gate(*i).is_some_and(|g| g.spell_level > 0))
+            .map(|(_, k)| k.clone())
+            .expect("the Mage has a gated spell");
+
+        let studied = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            &learned(&[key.as_str()]),
+        );
+        assert_eq!(
+            studied.abilities, plain.abilities,
+            "no key is added, so no index moves"
+        );
+        let index = studied
+            .abilities
+            .iter()
+            .position(|k| *k == key)
+            .expect("still present");
+        assert!(studied.spell_gate(index).is_none(), "the gate is lifted");
+        assert!(studied.is_unlocked(index, None, 1));
+    }
+
+    /// Learning MORE spells later must disturb nothing a class granted, and
+    /// must never DROP a previously learned key.
+    ///
+    /// Within the learned block itself a later, alphabetically-earlier key
+    /// does shift the ones after it — sorting is what makes the pool a pure
+    /// function of the key set, and a `HashSet` carries no insertion order to
+    /// preserve instead. That is safe because hotbar slots persist by key, and
+    /// [`super::remap_innate_bindings`] follows keys across an in-session
+    /// rebuild.
+    #[test]
+    fn learning_another_spell_disturbs_no_class_key_and_drops_nothing() {
+        let body = human_body();
+        let class_only = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new());
+        let before = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            // Sorts AFTER the key added below: the adversarial case.
+            &learned(&["spells.transmutation.plant_growth"]),
+        );
+        let after = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&[
+                "spells.transmutation.plant_growth",
+                "spells.evocation.crusaders_mantle",
+            ]),
+        );
+
+        assert_eq!(after.abilities.len(), before.abilities.len() + 1);
+        // Every class-derived index is untouched.
+        assert_eq!(
+            &after.abilities[..class_only.abilities.len()],
+            &class_only.abilities[..]
+        );
+        // Nothing already known is lost.
+        for key in before.abilities.iter() {
+            assert!(
+                after.abilities.contains(key),
+                "{key} vanished from the pool after learning another spell"
+            );
+        }
+        assert_eq!(after.abilities.len(), after.spell_gates.len());
+    }
+
+    /// Rebuilding the pool in-session and remapping by key leaves every bound
+    /// slot on the same ability, even when the new pool ordered things
+    /// differently.
+    #[test]
+    fn remapping_by_key_survives_a_reordering_rebuild() {
+        let body = human_body();
+        let before = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&["spells.transmutation.plant_growth"]),
+        );
+        let bound = before
+            .abilities
+            .iter()
+            .position(|k| k == "spells.transmutation.plant_growth")
+            .expect("the learned key is in the pool");
+
+        let after = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&[
+                "spells.transmutation.plant_growth",
+                "spells.evocation.crusaders_mantle",
+            ]),
+        );
+
+        let mut sets = HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(bound)]);
+        let mut active = ActiveAbilities::from_auxiliary(sets, None);
+        super::remap_innate_bindings(&mut active, &before, &after);
+
+        let remapped = active
+            .auxiliary_sets
+            .get(&(None, None))
+            .and_then(|set| set.first())
+            .copied()
+            .expect("the set survives");
+        let AuxiliaryAbility::Innate(index) = remapped else {
+            panic!("the binding must still be an innate slot")
+        };
+        assert_eq!(
+            after.abilities[index], "spells.transmutation.plant_growth",
+            "the slot must follow its ability, not its old index"
+        );
+    }
+
+    /// A key that leaves the pool entirely empties the slot rather than
+    /// silently pointing it at whatever now occupies that index.
+    #[test]
+    fn remapping_clears_a_binding_whose_key_left_the_pool() {
+        let body = human_body();
+        let before = AbilityPool::for_character(
+            &body,
+            &mage_cleric(),
+            &learned(&["spells.transmutation.plant_growth"]),
+        );
+        let bound = before
+            .abilities
+            .iter()
+            .position(|k| k == "spells.transmutation.plant_growth")
+            .expect("present");
+        let after = AbilityPool::for_character(&body, &mage_cleric(), &HashSet::new());
+
+        let mut sets = HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(bound)]);
+        let mut active = ActiveAbilities::from_auxiliary(sets, None);
+        super::remap_innate_bindings(&mut active, &before, &after);
+
+        assert_eq!(
+            active
+                .auxiliary_sets
+                .get(&(None, None))
+                .map(|s| s.as_slice()),
+            Some(&[AuxiliaryAbility::Empty][..])
+        );
+    }
+
+    /// The ordering contract: legacy persisted hotbar slots store
+    /// `Innate:index:N` positions, so granting a second class must APPEND only
+    /// — every index that already existed must still name the same key
+    /// afterwards.
+    ///
+    /// A gate may legitimately gain a grantor class in place (a spell both
+    /// held classes list), which changes no index; that is asserted here as
+    /// the only permitted difference.
+    #[test]
+    fn granting_a_second_class_shifts_no_existing_index() {
+        let body = human_body();
+        let before = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            AbilityPool::no_learned_spells(),
+        );
+        let after =
+            AbilityPool::for_character(&body, &mage_cleric(), AbilityPool::no_learned_spells());
+
+        assert!(after.abilities.len() > before.abilities.len());
+        assert_eq!(
+            &after.abilities[..before.abilities.len()],
+            &before.abilities[..],
+            "every pre-existing index must still name the same key"
+        );
+
+        for (index, before_gate) in before.spell_gates.iter().enumerate() {
+            let after_gate = &after.spell_gates[index];
+            match (before_gate, after_gate) {
+                (None, None) => {},
+                (Some(before_gate), Some(after_gate)) => {
+                    assert_eq!(
+                        before_gate.spell_level, after_gate.spell_level,
+                        "index {index} changed spell level"
+                    );
+                    // The Mage was and remains the first grantor; the Cleric
+                    // may have been merged in beside it, never in front.
+                    assert_eq!(
+                        after_gate.classes().next(),
+                        before_gate.classes().next(),
+                        "index {index} changed its primary grantor"
+                    );
+                    for class in before_gate.classes() {
+                        assert!(
+                            after_gate.granted_by(class),
+                            "index {index} lost grantor {class:?}"
+                        );
+                    }
+                },
+                _ => panic!("index {index} changed between spell and non-spell"),
+            }
+        }
+    }
+
+    /// A Mage(primary)/Cleric(secondary) character.
+    fn mage_cleric() -> CharacterClass {
+        let mut multi = CharacterClass::single(ClassKind::Mage);
+        multi.secondary = Some(ClassKind::Cleric);
+        multi
+    }
+
+    /// The key and level of a compendium spell BOTH `Mage` and `Cleric` can
+    /// cast, above cantrip level so there is a band to be locked out of.
+    /// Derived from the compendium rather than named, so re-authoring content
+    /// cannot silently make this suite vacuous.
+    fn shared_mage_cleric_spell() -> (String, u8) {
+        let book = SpellCompendium::load_expect_cloned();
+        let def = book
+            .iter()
+            .find(|s| {
+                s.level > 0
+                    && s.classes.contains(&ClassKind::Mage)
+                    && s.classes.contains(&ClassKind::Cleric)
+            })
+            .expect("the compendium has a non-cantrip spell listed for both Cleric and Mage");
+        (def.id.clone(), def.level)
+    }
+
+    fn gate_for<'a>(pool: &'a AbilityPool, key: &str) -> &'a SpellGate {
+        let index = pool
+            .abilities
+            .iter()
+            .position(|k| k == key)
+            .unwrap_or_else(|| panic!("'{key}' is not in the pool"));
+        pool.spell_gate(index)
+            .unwrap_or_else(|| panic!("'{key}' carries no spell gate"))
+    }
+
+    #[test]
+    fn a_spell_both_held_classes_grant_appears_once_and_records_both() {
+        let body = human_body();
+        let pool =
+            AbilityPool::for_character(&body, &mage_cleric(), AbilityPool::no_learned_spells());
+        let (key, _) = shared_mage_cleric_spell();
+
+        // Emitted once, and the parallel-array invariant survives the merge.
+        assert_eq!(
+            pool.abilities.iter().filter(|k| *k == &key).count(),
+            1,
+            "'{key}' must be emitted exactly once"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for k in &pool.abilities {
+            assert!(seen.insert(k.clone()), "duplicate pool key: {k}");
+        }
+        assert_eq!(pool.abilities.len(), pool.spell_gates.len());
+
+        // ... but its gate names BOTH grantors, primary first.
+        let classes: Vec<ClassKind> = gate_for(&pool, &key).classes().collect();
+        assert_eq!(classes, vec![ClassKind::Mage, ClassKind::Cleric]);
+    }
+
+    #[test]
+    fn a_shared_spell_unlocks_off_whichever_held_class_reached_the_band() {
+        let body = human_body();
+        let multi = mage_cleric();
+        let pool = AbilityPool::for_character(&body, &multi, AbilityPool::no_learned_spells());
+        let (key, spell_level) = shared_mage_cleric_spell();
+        let gate = gate_for(&pool, &key);
+        assert_eq!(gate.spell_level, spell_level);
+
+        // Mage 1 / Cleric 59: the Cleric side is far past the band. Before the
+        // gate recorded both grantors this read the Mage's level 1 and locked
+        // a spell the character's level-59 Cleric plainly knows.
+        let mut mage_1_cleric_59 = multi;
+        mage_1_cleric_59.set_secondary_level(59, 60);
+        assert!(
+            gate.is_unlocked(Some(&mage_1_cleric_59), 60),
+            "the Cleric side must unlock it"
+        );
+
+        // Mage 59 / Cleric 1: the same spell off the other side.
+        let mut mage_59_cleric_1 = multi;
+        mage_59_cleric_1.set_secondary_level(1, 60);
+        assert!(
+            gate.is_unlocked(Some(&mage_59_cleric_1), 60),
+            "the Mage side must unlock it"
+        );
+
+        // Mage 1 / Cleric 1: neither side has reached the band.
+        let mut both_at_1 = multi;
+        both_at_1.set_secondary_level(1, 2);
+        assert!(
+            !gate.is_unlocked(Some(&both_at_1), 2),
+            "neither side has reached the band"
+        );
+    }
+
+    /// The concrete case that exposed the single-grantor gate: a level-7
+    /// `[Cleric, Mage]` spell on a Mage(1)/Cleric(59) character. Reading only
+    /// the primary's level locked a spell the character's level-59 Cleric
+    /// plainly knows.
+    #[test]
+    fn a_level_59_secondary_unlocks_its_own_high_level_shared_spell() {
+        const KEY: &str = "spells.transmutation.regenerate";
+
+        let book = SpellCompendium::load_expect_cloned();
+        let def = book.get(KEY).expect("'{KEY}' is in the compendium");
+        assert_eq!(def.level, 7);
+        assert!(def.classes.contains(&ClassKind::Cleric) && def.classes.contains(&ClassKind::Mage));
+
+        let pool = AbilityPool::for_character(
+            &human_body(),
+            &mage_cleric(),
+            AbilityPool::no_learned_spells(),
+        );
+        let gate = gate_for(&pool, KEY);
+
+        let mut mage_1_cleric_59 = mage_cleric();
+        mage_1_cleric_59.set_secondary_level(59, 60);
+        assert_eq!(
+            gate.nearest_grantor(Some(&mage_1_cleric_59), 60),
+            Some((ClassKind::Cleric, 59))
+        );
+        assert!(gate.is_unlocked(Some(&mage_1_cleric_59), 60));
+    }
+
+    #[test]
+    fn a_single_class_character_gates_a_shared_spell_on_that_class_alone() {
+        let body = human_body();
+        let (key, _) = shared_mage_cleric_spell();
+
+        for class in [ClassKind::Mage, ClassKind::Cleric] {
+            let single = CharacterClass::single(class);
+            let pool = AbilityPool::for_character(&body, &single, AbilityPool::no_learned_spells());
+            let gate = gate_for(&pool, &key);
+            assert_eq!(
+                gate.classes().collect::<Vec<_>>(),
+                vec![class],
+                "a single-class {class:?} records only its own class"
+            );
+            // The class the character does NOT hold can never unlock it.
+            let other = if class == ClassKind::Mage {
+                ClassKind::Cleric
+            } else {
+                ClassKind::Mage
+            };
+            assert!(
+                !gate.is_unlocked(Some(&CharacterClass::single(other)), 60),
+                "a {other:?} must not unlock a gate recorded for {class:?} only"
+            );
+        }
+    }
+
+    #[test]
+    fn the_nearest_grantor_is_the_class_that_will_reach_the_band_first() {
+        let body = human_body();
+        let multi = mage_cleric();
+        let pool = AbilityPool::for_character(&body, &multi, AbilityPool::no_learned_spells());
+        let (key, spell_level) = shared_mage_cleric_spell();
+        let gate = gate_for(&pool, &key);
+
+        // Cleric is further along, so it is the class the UI must name.
+        let mut mage_20_cleric_40 = multi;
+        mage_20_cleric_40.set_secondary_level(40, 60);
+        assert_eq!(
+            gate.nearest_grantor(Some(&mage_20_cleric_40), 60),
+            Some((ClassKind::Cleric, 40))
+        );
+
+        // With the split reversed it names the Mage instead.
+        let mut mage_40_cleric_20 = multi;
+        mage_40_cleric_20.set_secondary_level(20, 60);
+        assert_eq!(
+            gate.nearest_grantor(Some(&mage_40_cleric_20), 60),
+            Some((ClassKind::Mage, 40))
+        );
+
+        // A character holding neither grantor, or none at all, has no answer.
+        assert!(
+            gate.nearest_grantor(Some(&CharacterClass::single(ClassKind::Warrior)), 60)
+                .is_none()
+        );
+        assert!(gate.nearest_grantor(None, 60).is_none());
+
+        // The requirement the UI prints alongside it.
+        assert_eq!(
+            gate.required_class_level(),
+            6 * u16::from(spell_level),
+            "six class levels per spell level"
+        );
+    }
+
+    #[test]
+    fn a_cantrips_requirement_is_class_level_one_not_zero() {
+        // Class levels start at 1, so a cantrip's requirement must not read 0.
+        assert_eq!(SpellGate::new(ClassKind::Mage, 0).required_class_level(), 1);
+    }
+
+    #[test]
+    fn add_class_is_idempotent_and_capped_at_two() {
+        let mut gate = SpellGate::new(ClassKind::Mage, 3);
+        gate.add_class(ClassKind::Mage);
+        assert_eq!(gate.classes().collect::<Vec<_>>(), vec![ClassKind::Mage]);
+
+        gate.add_class(ClassKind::Cleric);
+        assert_eq!(gate.classes().collect::<Vec<_>>(), vec![
+            ClassKind::Mage,
+            ClassKind::Cleric
+        ]);
+        assert!(gate.granted_by(ClassKind::Cleric));
+        assert!(!gate.granted_by(ClassKind::Warlock));
+
+        // `CharacterClass` holds at most two classes, so a third can never
+        // arrive from a real pool; if one ever did it must not corrupt the
+        // gate.
+        gate.add_class(ClassKind::Warlock);
+        assert_eq!(gate.classes().collect::<Vec<_>>(), vec![
+            ClassKind::Mage,
+            ClassKind::Cleric
+        ]);
+    }
+
+    #[test]
+    fn cantrips_unlock_at_class_level_one_and_level_one_spells_at_six() {
+        let cantrip = SpellGate::new(ClassKind::Mage, 0);
+        let lvl1 = SpellGate::new(ClassKind::Mage, 1);
+        let cc = CharacterClass::single(ClassKind::Mage);
+
+        assert!(cantrip.is_unlocked(Some(&cc), 1));
+        assert!(!lvl1.is_unlocked(Some(&cc), 5));
+        assert!(lvl1.is_unlocked(Some(&cc), 6));
+    }
+
+    #[test]
+    fn multiclass_gates_off_the_classs_own_level_not_the_characters() {
+        // Warrior 40 / Warlock 20, character level 60.
+        let mut cc = CharacterClass::single(ClassKind::Warrior);
+        cc.secondary = Some(ClassKind::Warlock);
+        cc.set_secondary_level(20, 60);
+
+        let lvl3 = SpellGate::new(ClassKind::Warlock, 3);
+        let lvl4 = SpellGate::new(ClassKind::Warlock, 4);
+        // Warlock class level 20 -> floor(20/6) = 3.
+        assert!(lvl3.is_unlocked(Some(&cc), 60));
+        assert!(
+            !lvl4.is_unlocked(Some(&cc), 60),
+            "60 char levels must NOT grant level 4"
+        );
+    }
+
+    #[test]
+    fn a_gate_for_a_class_the_character_does_not_hold_fails_closed() {
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let cleric_cantrip = SpellGate::new(ClassKind::Cleric, 0);
+        assert!(!cleric_cantrip.is_unlocked(Some(&cc), 60));
+        assert!(
+            !cleric_cantrip.is_unlocked(None, 60),
+            "no CharacterClass means refuse"
+        );
+    }
+
+    #[test]
+    fn is_unlocked_defaults_open_for_non_spell_and_out_of_range_indices() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
+        );
+        assert!(
+            pool.is_unlocked(0, None, 1),
+            "class keys keep their old behaviour"
+        );
+        assert!(
+            pool.is_unlocked(9_999, None, 1),
+            "out of range must not panic"
+        );
+        assert!(pool.spell_gate(0).is_none());
+        assert!(pool.spell_gate(9_999).is_none());
+    }
+
+    #[test]
+    fn npc_pools_from_for_body_carry_no_spell_gates() {
+        let body = human_body();
+        let pool = AbilityPool::for_body(&body);
+        assert_eq!(pool.abilities.len(), pool.spell_gates.len());
+        assert!(pool.spell_gates.iter().all(Option::is_none));
+    }
+
+    /// A class with no authored spells keeps exactly the pool it had before
+    /// spells entered it.
+    #[test]
+    fn a_spell_less_class_pool_is_unchanged() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Warrior),
+            AbilityPool::no_learned_spells(),
+        );
+        assert_eq!(pool.abilities, vec![
+            "class.warrior.rally",
+            "class.warrior.onslaught",
+            "innate.human",
+        ]);
+        assert_eq!(pool.spell_gates, vec![None, None, None]);
+    }
+
+    #[test]
+    fn all_available_abilities_excludes_spells() {
+        let body = human_body();
+        let pool = AbilityPool::for_character(
+            &body,
+            &CharacterClass::single(ClassKind::Mage),
+            AbilityPool::no_learned_spells(),
+        );
+        let listed = ActiveAbilities::all_available_abilities(None, None, Some(&pool));
+        let innate: Vec<usize> = listed
+            .iter()
+            .filter_map(|a| match a {
+                AuxiliaryAbility::Innate(i) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(innate, vec![0, 1, 2], "only the class + racial keys");
+    }
+
+    #[test]
+    fn all_available_spells_lists_every_spell_with_its_unlocked_flag() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+        let spell_count = pool.spell_gates.iter().filter(|g| g.is_some()).count();
+
+        // At class level 1 every spell is listed, but only the cantrips are
+        // castable.
+        let at_1 = ActiveAbilities::all_available_spells(Some(&pool), Some(&cc), 1);
+        assert_eq!(at_1.len(), spell_count);
+        for (ability, unlocked) in &at_1 {
+            let AuxiliaryAbility::Innate(i) = ability else {
+                panic!("all_available_spells must only yield Innate entries")
+            };
+            let gate = pool.spell_gate(*i).expect("spell index");
+            assert_eq!(*unlocked, gate.spell_level == 0);
+        }
+        assert!(at_1.iter().any(|(_, unlocked)| *unlocked), "cantrips");
+        assert!(at_1.iter().any(|(_, unlocked)| !*unlocked), "higher levels");
+
+        // At level 60 everything the compendium holds (levels 0-9) is open.
+        let at_60 = ActiveAbilities::all_available_spells(Some(&pool), Some(&cc), 60);
+        assert_eq!(at_60.len(), spell_count);
+        assert!(at_60.iter().all(|(_, unlocked)| *unlocked));
+
+        // No pool, no spells.
+        assert!(ActiveAbilities::all_available_spells(None, Some(&cc), 60).is_empty());
+    }
+
+    /// Bind pool `index` to auxiliary slot 0 and try to activate it at
+    /// `character_level`; `true` when the activation produced an ability.
+    fn activates(
+        body: &Body,
+        pool: &AbilityPool,
+        character_class: Option<&CharacterClass>,
+        index: usize,
+        character_level: u16,
+        ability_map: &AbilityMap,
+    ) -> bool {
+        bound_to_pool_index(index)
+            .activate_ability(
+                AbilityInput::Auxiliary(0),
+                None,
+                None,
+                &skill_set_at_level(character_level),
+                Some(body),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(pool),
+                character_class,
+                None,
+                ability_map,
+            )
+            .is_some()
+    }
+
+    #[test]
+    fn activate_ability_refuses_a_locked_spell_and_allows_an_unlocked_one() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let index = spell_index_of_level(&pool, 1);
+
+        assert!(
+            !activates(&body, &pool, Some(&cc), index, 1, &ability_map),
+            "a class-level-1 Mage must not cast a level-1 spell"
+        );
+        assert!(
+            activates(&body, &pool, Some(&cc), index, 6, &ability_map),
+            "the same character at class level 6 must cast it"
+        );
+    }
+
+    #[test]
+    fn a_cantrip_activates_at_class_level_one() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let index = spell_index_of_level(&pool, 0);
+
+        assert!(activates(&body, &pool, Some(&cc), index, 1, &ability_map));
+    }
+
+    #[test]
+    fn a_spell_of_a_class_the_character_does_not_hold_never_activates() {
+        // A Mage carrying a Cleric-gated key (only reachable by hand-crafting
+        // the pool) must be refused at every level: the gate fails closed.
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let mut pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+        let index = spell_index_of_level(&pool, 0);
+        pool.spell_gates[index] = Some(SpellGate::new(ClassKind::Cleric, 0));
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+
+        assert!(!activates(&body, &pool, Some(&cc), index, 60, &ability_map));
+    }
+
+    #[test]
+    fn npc_innate_activation_is_unaffected_by_the_gate() {
+        // An NPC pool (`for_body`) carries no gates and no `CharacterClass`,
+        // so its racial innate activates exactly as it did before the gate
+        // existed.
+        let body = human_body();
+        let pool = AbilityPool::for_body(&body);
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        assert_eq!(pool.abilities, vec!["innate.human"]);
+
+        assert!(
+            activates(&body, &pool, None, 0, 1, &ability_map),
+            "a gate-free pool entry stays castable with no CharacterClass"
+        );
+    }
+
+    #[test]
+    fn may_bind_rejects_a_locked_spell_and_accepts_an_unlocked_one() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+        let locked = spell_index_of_level(&pool, 1);
+        let cantrip = spell_index_of_level(&pool, 0);
+
+        assert!(!may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(locked)
+        ));
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            6,
+            AuxiliaryAbility::Innate(locked)
+        ));
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(cantrip)
+        ));
+    }
+
+    #[test]
+    fn may_bind_accepts_non_spell_abilities_unconditionally() {
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+
+        // A class-signature key: an `Innate` index carrying no gate.
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(0)
+        ));
+        // Weapon / glider / empty bindings are outside this predicate's remit
+        // and keep their (unvalidated) behaviour, pool or no pool.
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::MainWeapon(99)
+        ));
+        assert!(may_bind_ability(None, None, 1, AuxiliaryAbility::Empty));
+        assert!(may_bind_ability(None, None, 1, AuxiliaryAbility::Glider(0)));
+    }
+
+    #[test]
+    fn may_bind_refuses_an_innate_binding_when_the_entity_has_no_pool() {
+        // An entity with no `AbilityPool` has no innate abilities to bind, so
+        // every `Innate(_)` write from such a client is dropped.
+        let cc = CharacterClass::single(ClassKind::Mage);
+        assert!(!may_bind_ability(
+            None,
+            Some(&cc),
+            60,
+            AuxiliaryAbility::Innate(0)
+        ));
+        assert!(!may_bind_ability(
+            None,
+            None,
+            60,
+            AuxiliaryAbility::Innate(0)
+        ));
+    }
+
+    #[test]
+    fn may_bind_refuses_an_out_of_range_innate_index_only_when_gated() {
+        // Out-of-range indices answer `true` (they resolve to nothing at use
+        // time, exactly as before this change) — the predicate narrows the
+        // hole for spells, it does not become a general bounds check.
+        let body = human_body();
+        let cc = CharacterClass::single(ClassKind::Mage);
+        let pool = AbilityPool::for_character(&body, &cc, AbilityPool::no_learned_spells());
+        assert!(may_bind_ability(
+            Some(&pool),
+            Some(&cc),
+            1,
+            AuxiliaryAbility::Innate(9_999)
+        ));
     }
 }

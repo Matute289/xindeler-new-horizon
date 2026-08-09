@@ -4,7 +4,7 @@ use crate::data::quest::{
 };
 use common::{
     comp::{Item, item::ItemBase},
-    rtsim::NpcId,
+    rtsim::ActorId,
     spot::Spot,
 };
 use std::num::NonZeroU32;
@@ -19,7 +19,7 @@ pub fn create_deposit<S: State, T: Action<S, bool>>(
     amount: f32,
     then: T,
 ) -> Option<impl Action<S, bool> + use<S, T>> {
-    if let Some(npc_entity) = ctx.system_data.id_maps.rtsim_entity(ctx.npc_id)
+    if let Some(npc_entity) = ctx.system_data.id_maps.rtsim_entity(ctx.actor_id)
         && ctx
             .system_data
             .inventories
@@ -34,7 +34,7 @@ pub fn create_deposit<S: State, T: Action<S, bool>>(
             just(move |ctx, _| {
                 if !should_proceed {
                     false
-                } else if let Some(npc_entity) = ctx.system_data.id_maps.rtsim_entity(ctx.npc_id)
+                } else if let Some(npc_entity) = ctx.system_data.id_maps.rtsim_entity(ctx.actor_id)
                     && ctx
                         .system_data
                         .inventories
@@ -72,11 +72,11 @@ pub fn resolve_take_deposit(
         .data
         .quests
         .get(quest_id)
-        .and_then(|q| q.resolve(ctx.npc_id, success))
+        .and_then(|q| q.resolve(ctx.actor_id, success))
     {
         // ...take the deposit back into our own inventory...
         if let Some((item, amount)) = &outcome.deposit
-            && let Some(npc_entity) = ctx.system_data.id_maps.rtsim_entity(ctx.npc_id)
+            && let Some(npc_entity) = ctx.system_data.id_maps.rtsim_entity(ctx.actor_id)
             && let Some(mut inv) = ctx
                 .system_data
                 .inventories
@@ -130,12 +130,7 @@ pub fn finalize_courier_task(ctx: &mut NpcCtx, quest_id: QuestId, read_only: boo
 
     if let Some(quest) = ctx.data.quests.get(quest_id)
         && let QuestKind::Courier { instance } = &quest.kind
-        && let Some(entity) = match instance.messenger {
-            Actor::Character(character_id) => {
-                ctx.system_data.id_maps.character_entity(character_id)
-            },
-            Actor::Npc(npc_id) => ctx.system_data.id_maps.rtsim_entity(npc_id),
-        }
+        && let Some(entity) = ctx.system_data.id_maps.rtsim_entity(instance.messenger)
         && let Ok(mut inventories) = ctx.system_data.inventories.lock()
         && let Some(mut inv) = inventories.get_mut(entity)
         && let Ok(required_items) = instance.get_required_items()
@@ -182,15 +177,15 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
         // Escortable NPCs must have no existing job
         if ctx.npc.job.is_none()
             // They must be a merchant
-            && matches!(ctx.npc.profession(), Some(Profession::Merchant))
+            && matches!(ctx.actor.profession(), Some(Profession::Merchant))
             // Choose an appropriate target site
             && let Some((dst_site_id, dst_site, dist)) = ctx.data
                 .sites
                 .iter()
                 // Find the distance to the site
-                .map(|(site_id, site)| (site_id, site, site.wpos.as_().distance(ctx.npc.wpos.xy())))
+                .map(|(site_id, site)| (site_id, site, site.wpos.as_().distance(ctx.actor.wpos.xy())))
                 // Don't try to be escorted to the site we're currently in, and ensure it's a reasonable distance away
-                .filter(|(site_id, _, dist)| Some(*site_id) != ctx.npc.current_site && (1000.0..5_000.0).contains(dist))
+                .filter(|(site_id, _, dist)| Some(*site_id) != ctx.actor.current_site && (1000.0..5_000.0).contains(dist))
                 // Temporarily, try to choose the same target site for 15 minutes to avoid players asking many times
                 // TODO: Don't do this
                 .choose(&mut ChaChaRng::from_seed([(ctx.time.0 / (60.0 * 15.0)) as u8; 32]))
@@ -211,7 +206,7 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
                         now(move |ctx, _| {
                             if yes {
                                 let quest =
-                                    Quest::escort(ctx.npc_id.into(), session.target, dst_site_id)
+                                    Quest::escort(ctx.actor_id, session.target, dst_site_id)
                                         .with_deposit(ESCORT_REWARD_ITEM, escort_reward_amount)
                                         .with_timeout(ctx.time.add_minutes(time_limit));
                                 create_quest(quest.clone())
@@ -225,9 +220,11 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
                                                         Content::localized("hud-map-escort-label")
                                                             .with_arg(
                                                                 "name",
-                                                                ctx.npc.get_name().unwrap_or_else(
-                                                                    || "<unknown>".to_string(),
-                                                                ),
+                                                                ctx.actor
+                                                                    .get_name()
+                                                                    .unwrap_or_else(|| {
+                                                                        "<unknown>".to_string()
+                                                                    }),
                                                             )
                                                             .with_arg(
                                                                 "place",
@@ -257,17 +254,16 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
 
         // Kill monster quest
         const SLAY_REWARD_ITEM: ItemResource = ItemResource::Coin;
-        if let Some((monster_id, monster)) = ctx.data
-            .npcs
+        if let Some((monster_id, monster)) = ctx.data.actors
             .iter()
             // Ensure the NPC is a monster
             .filter(|(_, npc)| matches!(&npc.role, Role::Monster))
             // Try to filter out monsters that are tied up in another quest (imperfect: race conditions)
             .filter(|(id, _)| ctx.data.quests.related_to(*id).count() == 0)
             // Filter out monsters that are too far away
-            .filter(|(_, npc)| npc.wpos.xy().distance(ctx.npc.wpos.xy()) < 2500.0)
+            .filter(|(_, npc)| npc.wpos.xy().distance(ctx.actor.wpos.xy()) < 2500.0)
             // Find the closest
-            .min_by_key(|(_, npc)| npc.wpos.xy().distance_squared(ctx.npc.wpos.xy()) as i64)
+            .min_by_key(|(_, npc)| npc.wpos.xy().distance_squared(ctx.actor.wpos.xy()) as i64)
             && let monster_pos = monster.wpos
             && let monster_body = monster.body
             && let slay_reward_amount = 1000.0
@@ -287,18 +283,14 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
                     .and_then(move |yes| {
                         now(move |ctx, _| {
                             if yes {
-                                let quest = Quest::slay(
-                                    ctx.npc_id.into(),
-                                    monster_id.into(),
-                                    session.target,
-                                )
-                                .with_deposit(ESCORT_REWARD_ITEM, slay_reward_amount)
-                                .with_timeout(ctx.time.add_minutes(60.0));
+                                let quest = Quest::slay(ctx.actor_id, monster_id, session.target)
+                                    .with_deposit(ESCORT_REWARD_ITEM, slay_reward_amount)
+                                    .with_timeout(ctx.time.add_minutes(60.0));
                                 create_quest(quest.clone())
                                     .then(
                                         session.give_marker(
                                             Marker::at(monster_pos.xy())
-                                                .with_id(Actor::from(monster_id))
+                                                .with_id(monster_id)
                                                 .with_label(
                                                     Content::localized("hud-map-creature-label")
                                                         .with_arg(
@@ -337,12 +329,7 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
 
         const COURIER_REWARD_ITEM: ItemResource = ItemResource::Coin;
         if let Some(courier_quest) = roll_courier_quest(ctx, session.target)
-            && let Some(quest_tgt) = match courier_quest.target_actor {
-                Actor::Npc(tgt_npc_id) => ctx.data.npcs.npcs.get(tgt_npc_id),
-                // Courier quests between players is not supported right now,
-                // but here's the scaffolding for it
-                Actor::Character(_) => None,
-            }
+            && let Some(quest_tgt) = ctx.data.actors.get(courier_quest.target_actor)
             && let Some(tgt_site_name) = courier_quest
                 .target_site
                 .and_then(|tgt_site_id| ctx.data.sites.get(tgt_site_id))
@@ -470,7 +457,7 @@ pub fn quest_request<S: State>(session: DialogueSession) -> impl Action<S> {
 }
 
 pub fn check_for_timeouts<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> + use<S>> {
-    for quest_id in ctx.data.quests.related_to(ctx.npc_id) {
+    for quest_id in ctx.data.quests.related_to(ctx.actor_id) {
         let Some(quest) = ctx.data.quests.get(quest_id) else {
             continue;
         };
@@ -505,12 +492,16 @@ pub fn check_for_timeouts<S: State>(ctx: &mut NpcCtx) -> Option<impl Action<S> +
     None
 }
 
-pub fn escorted<S: State>(quest_id: QuestId, escorter: Actor, dst_site: SiteId) -> impl Action<S> {
+pub fn escorted<S: State>(
+    quest_id: QuestId,
+    escorter: ActorId,
+    dst_site: SiteId,
+) -> impl Action<S> {
     follow_actor(escorter, 5.0)
         .stop_if(move |ctx: &mut NpcCtx| {
             // Occasionally, tell the escoter to wait if we're lagging far behind
             if let Some(escorter_pos) = util::locate_actor(ctx, escorter)
-                && ctx.npc.wpos.xy().distance_squared(escorter_pos.xy()) > 20.0f32.powi(2)
+                && ctx.actor.wpos.xy().distance_squared(escorter_pos.xy()) > 20.0f32.powi(2)
                 && ctx.rng.random_bool(ctx.dt as f64 / 30.0)
             {
                 ctx.controller
@@ -520,7 +511,7 @@ pub fn escorted<S: State>(quest_id: QuestId, escorter: Actor, dst_site: SiteId) 
             ctx.data
                 .sites
                 .get(dst_site)
-                .is_none_or(|site| site.wpos.as_().distance_squared(ctx.npc.wpos.xy()) < 150.0f32.powi(2))
+                .is_none_or(|site| site.wpos.as_().distance_squared(ctx.actor.wpos.xy()) < 150.0f32.powi(2))
         })
         .then(goto_actor(escorter, 2.0))
         .then(do_dialogue(escorter, move |session| {
@@ -779,7 +770,7 @@ impl CourierQuestInstance {
         self,
         npc_name: &str,
         at: Vec2<f32>,
-        target: Actor,
+        target: ActorId,
     ) -> (Content, Marker, Content) {
         (
             Content::localized("dialogue-question-quest-courier-where").with_arg("name", npc_name),
@@ -821,24 +812,24 @@ impl CourierQuestInstance {
 
     /// Generates a map marker that represents the position of the courier
     /// quest's target entity.
-    pub fn get_quest_npc_target_marker(
+    pub fn get_quest_actor_target_marker(
         self,
         at: Vec2<f32>,
-        tgt_npc_name: &str,
-        target_npc_id: NpcId,
+        tgt_actor_name: &str,
+        target_actor_id: ActorId,
     ) -> Marker {
         Marker::at(at)
-            .with_id(target_npc_id)
+            .with_id(target_actor_id)
             .with_kind(MarkerKind::Character)
             .with_quest_flag(true)
             .with_label(
-                Content::localized("hud-map-character-label").with_arg("name", tgt_npc_name),
+                Content::localized("hud-map-character-label").with_arg("name", tgt_actor_name),
             )
     }
 }
 
 /// Attempts to build a valid courier quest.
-fn roll_courier_quest(ctx: &mut NpcCtx, messenger: Actor) -> Option<CourierQuestInstance> {
+fn roll_courier_quest(ctx: &mut NpcCtx, messenger: ActorId) -> Option<CourierQuestInstance> {
     let kind = COURIER_QUEST_VARIANTS
         .choose(&mut ctx.rng)
         .copied()
@@ -849,7 +840,7 @@ fn roll_courier_quest(ctx: &mut NpcCtx, messenger: Actor) -> Option<CourierQuest
         CourierQuest::Deliver {
             recipient: Recipient::Giver,
             ..
-        } => (ctx.npc.current_site, Actor::from(ctx.npc_id), 0.0),
+        } => (ctx.actor.current_site, ctx.actor_id, 0.0),
         // target npc differs from source npc for these kinds of courier quests,
         // so find a target npc and the npc's site
         CourierQuest::Deliver {
@@ -858,8 +849,9 @@ fn roll_courier_quest(ctx: &mut NpcCtx, messenger: Actor) -> Option<CourierQuest
         }
         | CourierQuest::Message => ctx
             .data
-            .npcs
+            .actors
             .iter()
+            .filter(|(_, actor)| actor.npc().is_some())
             .filter_map(|(npc_id, npc)| match &npc.role {
                 Role::Civilised(Some(Profession::Hunter))
                 | Role::Civilised(Some(Profession::Farmer))
@@ -868,7 +860,7 @@ fn roll_courier_quest(ctx: &mut NpcCtx, messenger: Actor) -> Option<CourierQuest
                 | Role::Civilised(Some(Profession::Chef))
                 | Role::Civilised(Some(Profession::Herbalist))
                 | Role::Civilised(Some(Profession::Guard)) => {
-                    let distance = ctx.npc.wpos.xy().distance(npc.wpos.xy());
+                    let distance = ctx.actor.wpos.xy().distance(npc.wpos.xy());
                     (distance <= MAX_COURIER_QUEST_DISTANCE).then_some((npc_id, npc, distance))
                 },
                 _ => None,
@@ -882,11 +874,11 @@ fn roll_courier_quest(ctx: &mut NpcCtx, messenger: Actor) -> Option<CourierQuest
                         (tgt_npc.wpos.xy().distance(site.wpos.as_()) <= 512.0).then_some(site_id)
                     })
                     .choose(&mut ctx.rng)
-                    .map(|site_id| (Some(site_id), Actor::from(tgt_npc_id), distance))
+                    .map(|site_id| (Some(site_id), tgt_npc_id, distance))
             })?,
     };
 
-    let spot = get_nearest_spot(ctx, kind, ctx.npc.wpos.xy().wpos_to_cpos().as_());
+    let spot = get_nearest_spot(ctx, kind, ctx.actor.wpos.xy().wpos_to_cpos().as_());
 
     // check if the payload necessitates visiting a spot. Make sure to add more
     // here later (the compiler will guide you), and avoid using `_` match arms
@@ -902,8 +894,8 @@ fn roll_courier_quest(ctx: &mut NpcCtx, messenger: Actor) -> Option<CourierQuest
     Some(CourierQuestInstance {
         kind,
         spot,
-        source_site: ctx.npc.current_site,
-        source_actor: Actor::from(ctx.npc_id),
+        source_site: ctx.actor.current_site,
+        source_actor: ctx.actor_id,
         target_actor,
         target_site,
         messenger,

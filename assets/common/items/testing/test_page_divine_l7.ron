@@ -1,0 +1,14 @@
+// Test fixture: a single-spell transcription page, level 7 Divine (the
+// highest catalogued Divine level as of authoring -- stands in for "the
+// mastery tier's Some(u8::MAX) ceiling admits a high level too").
+ItemDef(
+    legacy_name: "Test Page (Divine, L7)",
+    legacy_description: "Transcription test fixture.",
+    kind: SpellGroup(
+        spells: [
+            "spells.transmutation.regenerate",
+        ],
+    ),
+    quality: Common,
+    tags: [],
+)

@@ -571,12 +571,13 @@ impl FileAsset for AuthoredF32Layer {
     const EXTENSION: &'static str = "f32le";
 
     fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
-        let chunks = bytes.chunks_exact(4);
-        if !chunks.remainder().is_empty() {
+        let (chunks, remainder) = bytes.as_chunks::<4>();
+        if !remainder.is_empty() {
             return Err("authored f32 layer length was not a multiple of 4".into());
         }
         let values = chunks
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .iter()
+            .map(|chunk| f32::from_le_bytes(*chunk))
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Ok(Self { values })
@@ -2725,12 +2726,11 @@ impl SimChunk {
         const HUMID_WEIGHTS: [f32; 3] = [1.0, 1.0, 0.75];
         let mut humidity = cdf_irwin_hall(&HUMID_WEIGHTS, [humid_uniform, flux_uniform, 1.0]);
         // Moisture evaporates more in hot places
-        humidity = humidity
-            * (1.0
-                - (temp - CONFIG.tropical_temp)
-                    .max(0.0)
-                    .div(1.0 - CONFIG.tropical_temp))
-            .max(0.0);
+        humidity *= (1.0
+            - (temp - CONFIG.tropical_temp)
+                .max(0.0)
+                .div(1.0 - CONFIG.tropical_temp))
+        .max(0.0);
 
         let mut alt = CONFIG.sea_level.add(alt_pre);
         let basement = CONFIG.sea_level.add(basement_pre);
@@ -2787,10 +2787,10 @@ impl SimChunk {
                         vegetation * altitude_tree_factor
                     }
                 });
-        if let Some(vegetation_density) = authored_vegetation_density {
-            if temp >= 0.0 {
-                humidity = humidity.max((0.25 + vegetation_density * 0.72).min(1.0));
-            }
+        if let Some(vegetation_density) = authored_vegetation_density
+            && temp >= 0.0
+        {
+            humidity = humidity.max((0.25 + vegetation_density * 0.72).min(1.0));
         }
         let river_xy = Vec2::new(river.velocity.x, river.velocity.y).magnitude();
         let river_slope = river.velocity.z / river_xy;

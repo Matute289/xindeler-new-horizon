@@ -1,0 +1,22 @@
+BasicRanged(
+    energy_cost: 35.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 3,
+            buff: Some((
+                kind: Blinded,
+                dur_secs: 60,
+                strength: Value(1.0),
+                chance: 1.0,
+            )),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

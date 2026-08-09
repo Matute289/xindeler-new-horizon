@@ -16,7 +16,7 @@ use std::{
 use tokio::runtime::Runtime;
 use tracing::*;
 use tracing_subscriber::EnvFilter;
-use veloren_network::{ConnectAddr, ListenAddr, Message, Network, Pid, Promises};
+use xindeler_network::{ConnectAddr, ListenAddr, Message, Network, Pid, Promises};
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Msg {
@@ -30,7 +30,7 @@ fn main() {
     let matches = Command::new("Veloren Speed Test Utility")
         .version("0.1.0")
         .author("Marcel Märtens <marcel.cochem@googlemail.com>")
-        .about("Runs speedtests regarding different parameter to benchmark veloren-network")
+        .about("Runs speedtests regarding different parameter to benchmark xindeler-network")
         .arg(
             Arg::new("mode")
                 .short('m')
@@ -79,12 +79,12 @@ fn main() {
     let filter = EnvFilter::from_default_env()
         .add_directive(trace.parse().unwrap())
         .add_directive("network_speed=debug".parse().unwrap())
-        .add_directive("veloren_network::participant=trace".parse().unwrap())
-        .add_directive("veloren_network::protocol=trace".parse().unwrap())
-        .add_directive("veloren_network::scheduler=trace".parse().unwrap())
-        .add_directive("veloren_network::api=trace".parse().unwrap())
+        .add_directive("xindeler_network::participant=trace".parse().unwrap())
+        .add_directive("xindeler_network::protocol=trace".parse().unwrap())
+        .add_directive("xindeler_network::scheduler=trace".parse().unwrap())
+        .add_directive("xindeler_network::api=trace".parse().unwrap())
         /*
-    .add_directive("veloren_network::participant=debug".parse().unwrap()).add_directive("veloren_network::api=debug".parse().unwrap())*/;
+    .add_directive("xindeler_network::participant=debug".parse().unwrap()).add_directive("xindeler_network::api=debug".parse().unwrap())*/;
     tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(Level::ERROR)
         .with_env_filter(filter)
@@ -125,7 +125,7 @@ fn main() {
 
 fn server(address: ListenAddr, runtime: Arc<Runtime>) {
     let registry = Arc::new(Registry::new());
-    let mut server = Network::new_with_registry(Pid::new(), &runtime, &registry);
+    let mut server = Network::new_with_registry(Pid::new(), &runtime, &registry, usize::MAX);
     runtime.spawn(Server::run(
         Arc::clone(&registry),
         SocketAddr::from(([0; 4], 59112)),
@@ -157,7 +157,7 @@ fn server(address: ListenAddr, runtime: Arc<Runtime>) {
 
 fn client(address: ConnectAddr, runtime: Arc<Runtime>) {
     let registry = Arc::new(Registry::new());
-    let client = Network::new_with_registry(Pid::new(), &runtime, &registry);
+    let client = Network::new_with_registry(Pid::new(), &runtime, &registry, usize::MAX);
     runtime.spawn(Server::run(
         Arc::clone(&registry),
         SocketAddr::from(([0; 4], 59111)),

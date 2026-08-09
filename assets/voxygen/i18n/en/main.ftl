@@ -1,6 +1,7 @@
 main-username = Username
 main-server = Server
 main-password = Password
+main-create_account = Create Account
 main-connecting = Connecting
 main-creating_world = Creating world
 main-tip = Tip:
@@ -28,7 +29,7 @@ main-login_process =
     Please note that you need an account to play on servers with authentication enabled.
 
     You can create an account at:
-    https://veloren.net/account/
+    https://xindeler.com/
 main-singleplayer-new = New
 main-singleplayer-delete = Delete
 main-singleplayer-regenerate = Regenerate

@@ -1,3 +1,10 @@
+[net]
+# The authc dependency lives in a private repository. libgit2, which cargo uses
+# by default, cannot use an ssh-agent identity reliably, so delegate fetching to
+# the git CLI — that picks up whatever credentials the developer or CI already
+# has configured.
+git-fetch-with-cli = true
+
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
@@ -26,17 +33,17 @@ dot-recipes = "run --manifest-path common/Cargo.toml --features=bin_graphviz --b
 dot-skills = "run --manifest-path common/Cargo.toml --features=bin_graphviz --bin skill_graphviz"
 img-export = "run --manifest-path voxygen/Cargo.toml --features=bin_img-export --bin img-export"
 # server-cli
-server = "run --bin veloren-server-cli"
-test-server = "run --bin veloren-server-cli --no-default-features --features simd"
-tracy-server = "run --bin veloren-server-cli --features tracy,simd --profile no_overflow"
-tracy-server-debuginfo = "run --bin veloren-server-cli --features tracy,simd --profile no_overflow_debuginfo"
-tracy-server-releasedebuginfo = "run --bin veloren-server-cli --features tracy,simd --profile releasedebuginfo"
-tracy-test-server = "run --bin veloren-server-cli --no-default-features --features tracy,simd --profile no_overflow"
+server = "run --bin xindeler-server-cli"
+test-server = "run --bin xindeler-server-cli --no-default-features --features simd"
+tracy-server = "run --bin xindeler-server-cli --features tracy,simd --profile no_overflow"
+tracy-server-debuginfo = "run --bin xindeler-server-cli --features tracy,simd --profile no_overflow_debuginfo"
+tracy-server-releasedebuginfo = "run --bin xindeler-server-cli --features tracy,simd --profile releasedebuginfo"
+tracy-test-server = "run --bin xindeler-server-cli --no-default-features --features tracy,simd --profile no_overflow"
 # voxygen
-test-voxygen = "run --bin veloren-voxygen --no-default-features --features simd,egui-ui,shaderc-from-source,hot-reloading"
-tracy-voxygen = "run --bin veloren-voxygen --no-default-features --features tracy,simd,egui-ui,shaderc-from-source --profile no_overflow"
-dbg-voxygen = "run --bin veloren-voxygen --profile debuginfo"
+test-voxygen = "run --bin xindeler-voxygen --no-default-features --features simd,egui-ui,shaderc-from-source,hot-reloading"
+tracy-voxygen = "run --bin xindeler-voxygen --no-default-features --features tracy,simd,egui-ui,shaderc-from-source --profile no_overflow"
+dbg-voxygen = "run --bin xindeler-voxygen --profile debuginfo"
 # misc
 swarm = "run --bin swarm --features client/bin_bot,client/tick_network --"
 ci-clippy = "clippy --all-targets --locked --features=bin_cmd_doc_gen,bin_compression,bin_csv,bin_graphviz,bin_bot,bin_asset_migrate,bin,stat"
-ci-clippy2 = "clippy -p veloren-voxygen --locked --no-default-features --features=default-publish"
+ci-clippy2 = "clippy -p xindeler-voxygen --locked --no-default-features --features=default-publish"

@@ -22,6 +22,7 @@ RapidRanged(
         attack: Some((
             damage: 15,
             knockback: Some(3),
+            damage_kind: Fire,
         )),
     ),
     projectile_body: Object(PyroclasmBolt),
@@ -37,4 +38,5 @@ RapidRanged(
     )),
     projectile_speed: 60.0,
     specifier: Some(PyroclasmCharge(height: 3.5, radius: 1.5)),
+    meta: (source: Some(Arcane)),
 )

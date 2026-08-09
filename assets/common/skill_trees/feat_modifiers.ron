@@ -109,8 +109,8 @@
     // OrdersResilience: "advantage on CON saves, +1 exhaustion recovery" ->
     // CrowdControlResistance.
     Feat(OrdersResilience): [(CrowdControlResistance, 0.05)],
-    // VampireHunter: "+10% damage vs undead" -> BonusVsUndead (exact match).
-    Feat(VampireHunter): [(BonusVsUndead, 0.10)],
+    // VampireHunter: "+10% damage vs undead" -> BonusVs(Undead) (exact match).
+    Feat(VampireHunter): [(BonusVs(Undead), 0.10)],
     // Dragonscarred (PASSIVE half): "one elemental resistance" -> ResistFire
     // chosen as the representative element for V1.
     Feat(Dragonscarred): [(ResistFire, 0.05)],

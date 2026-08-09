@@ -44,6 +44,8 @@ macro_rules! synced_components {
             volume_riders: VolumeRiders,
             is_leader: IsLeader,
             is_follower: IsFollower,
+            is_pilot: IsPilot,
+            is_piloted: IsPiloted,
             mass: Mass,
             density: Density,
             collider: Collider,
@@ -58,6 +60,18 @@ macro_rules! synced_components {
             object: Object,
             frontend_marker: FrontendMarker,
             arcing: Arcing,
+            // A property of the entity itself (like `Body`/`Pos`), not a
+            // secret about who is observing it — see its own doc comment.
+            concealed_unless_true_sight: ConcealedUnlessTrueSight,
+            // A cast disguise's cosmetic lie about which `Body`/name an
+            // entity appears to have. Visible to everyone nearby on purpose
+            // — a disguise being *seen* (as a disguise) is the entire point
+            // of casting one, unlike the owner-private components below.
+            disguise: Disguise,
+            // A phantasm (shared-illusion decoy) is a real entity everyone
+            // sees — same "no per-observer secret" reasoning as `Disguise`
+            // just above.
+            phantom_illusion: PhantomIllusion,
             // TODO: change this to `SyncFrom::ClientEntity` and sync the bare minimum
             // from other entities (e.g. just keys needed to show appearance
             // based on their loadout). Also, it looks like this actually has
@@ -77,10 +91,37 @@ macro_rules! synced_components {
             active_abilities: ActiveAbilities,
             ability_cooldowns: AbilityCooldowns,
             ability_pool: AbilityPool,
+            // Reactive trigger slots. Owner-private: nobody else's business
+            // which spell a player has armed, and the wall-clock half of a
+            // cooling slot never crosses the wire at all (it is `serde(skip)`);
+            // the client only ever sees the in-game `Time` projection the
+            // server computed for it.
+            trigger_slots: TriggerSlots,
+            // Per-`MagicSource` mastery progress. Owner-private, same
+            // reasoning as `trigger_slots`: nobody else's business how far
+            // along a Mage is on any source.
+            spell_mastery: SpellMastery,
             // The attuned-item set (ENG-D2). `Attuning` (in-progress channels) is
             // NOT synced — it carries absolute server `Time`, a different epoch
             // than the client's, so a finish timestamp would be meaningless there.
             attuned_items: AttunedItems,
+            // The active remote-sensing link (a spell-granted detached
+            // viewpoint). Owner-private on purpose: broadcasting *who* is
+            // currently watching through *what* would be a PvP information
+            // leak, exactly like `detected` below. NEVER `AnyEntity`.
+            remote_sense: RemoteSense,
+            // The detection reveal set. Owner-private on purpose: a
+            // concealment-piercing reveal broadcast to every nearby client
+            // (like `Stats`) would leak the concealed entity's position to
+            // everyone in range, not just the caster. A SECOND, independent
+            // reason this must stay owner-private: `DetectDetail` (see that
+            // type's own doc comment, `common/src/comp/detection.rs`) doubles
+            // as the Identify UI's entire permission check -- a
+            // `detail: Some(...)` entry existing on a client's own copy of
+            // this component is itself the proof that client cast Identify
+            // on that target. If this ever becomes `AnyEntity`, that check
+            // breaks along with the PvP-leak concern above.
+            detected: Detected,
             can_build: CanBuild,
             is_interactor: IsInteractor,
             interactors: Interactors,
@@ -99,6 +140,7 @@ macro_rules! reexport_comps {
                 mounting::{Mount, Rider, VolumeRider},
                 tether::{Leader, Follower},
                 interaction::{Interactor},
+                piloting::{Pilot, Piloted},
             };
 
             // We alias these because the identifier used for the
@@ -113,6 +155,8 @@ macro_rules! reexport_comps {
             pub type IsLeader = Is<Leader>;
             pub type IsFollower = Is<Follower>;
             pub type IsInteractor = Is<Interactor>;
+            pub type IsPilot = Is<Pilot>;
+            pub type IsPiloted = Is<Piloted>;
         }
 
         // Re-export all the component types. So that uses of `synced_components!` outside this
@@ -249,6 +293,18 @@ impl NetSync for IsFollower {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 
+// A property of the pilot/eye relationship itself (like `IsMount`/`IsRider`),
+// not a secret about who is observing what -- the eye entity's own existence
+// and position are already `SyncFrom::AnyEntity` (`ConcealedUnlessTrueSight`
+// only hides it client-side), so this reveals nothing further.
+impl NetSync for IsPilot {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for IsPiloted {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
 impl NetSync for Mass {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
@@ -313,6 +369,23 @@ impl NetSync for Arcing {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 
+impl NetSync for ConcealedUnlessTrueSight {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+// A disguise's whole purpose is to be seen (as a disguise) by everyone
+// nearby — unlike `RemoteSense`/`Detected` below, there is no "who is
+// watching what" leak to protect against here.
+impl NetSync for Disguise {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+// A phantasm's whole purpose is to be seen by everyone nearby — same
+// reasoning as `Disguise` immediately above.
+impl NetSync for PhantomIllusion {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
 // These are synced only from the client's own entity.
 
 impl NetSync for Admin {
@@ -331,7 +404,33 @@ impl NetSync for AbilityCooldowns {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 
+// Owner-private, and deliberately not `ClientSpectatorEntity`: an armed
+// trigger is information a PvP opponent would pay for.
+impl NetSync for TriggerSlots {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
+// Owner-private, same reasoning as `TriggerSlots` above.
+impl NetSync for SpellMastery {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
 impl NetSync for AttunedItems {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
+// Owner-private: see the comment on `remote_sense` in `synced_components!`
+// above for why this must never become `SyncFrom::AnyEntity` (a PvP
+// information leak) nor `SyncFrom::ClientSpectatorEntity` (the opposite sync
+// direction — that scope sends the *spectated* entity's own components to the
+// spectator, not who is spectating it).
+impl NetSync for RemoteSense {
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
+}
+
+// Owner-private: see the comment on `detected` in `synced_components!` above
+// for why this must never become `SyncFrom::AnyEntity`.
+impl NetSync for Detected {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 

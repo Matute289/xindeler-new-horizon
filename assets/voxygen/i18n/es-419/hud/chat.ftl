@@ -11,6 +11,7 @@ hud-chat-died_of_pvp_buff_msg =
     .curse = { $victim } murió de: una maldición causada por { $attacker }
     .crippled = { $victim } murió de: heridas graves causadas por { $attacker }
     .frozen = { $victim } murió de: congelado causado por { $attacker }
+    .sickened = { $victim } murió de: una enfermedad causada por { $attacker }
     .mysterious = { $victim } murió de: manera misteriosa causado por { $attacker }
 hud-chat-died_of_buff_nonexistent_msg =
     .burning = { $victim } murió de: quemado
@@ -18,6 +19,7 @@ hud-chat-died_of_buff_nonexistent_msg =
     .curse = { $victim } murió de: una maldición
     .crippled = { $victim } murió de: heridas graves
     .frozen = { $victim } murió de: congelado
+    .sickened = { $victim } murió de: una enfermedad
     .mysterious = { $victim } murió de: manera misteriosa
 hud-chat-died_of_npc_buff_msg =
     .burning = { "[" }{ $victim }] murió de: quemado causado por { $attacker }
@@ -25,6 +27,7 @@ hud-chat-died_of_npc_buff_msg =
     .curse = { "[" }{ $victim }] murió de: una maldición causada por { $attacker }
     .crippled = { "[" }{ $victim }] murió de: heridas graves causadas por { $attacker }
     .frozen = { "[" }{ $victim }] murió de: congelado causado por { $attacker }
+    .sickened = { "[" }{ $victim }] murió de: una enfermedad causada por { $attacker }
     .mysterious = { "[" }{ $victim }] murió de: manera misteriosa causado por { $attacker }
 
 ## PvP deaths
@@ -55,8 +58,8 @@ hud-chat-all = Global
 hud-chat-chat_tab_hover_tooltip = Click derecho para opciones
 hud-loot-pickup-msg =
     { $amount ->
-        [1] { $actor } picked up { $item }
-       *[other] { $actor } picked up { $amount }x { $item }
+        [1] { $actor } recogió { $item }
+       *[other] { $actor } recogió { $amount }x { $item }
     }
 hud-chat-goodbye = ¡Adiós!
 hud-chat-connection_lost = Conexión perdida. Saliendo en { $time } segundos.
@@ -70,8 +73,9 @@ hud-chat-message-in-group = ({ $group }) [{ $alias }]: { $msg }
 hud-chat-message-in-group-with-name = ({ $group }) [{ $alias }] { $name }: { $msg }
 hud-loot-pickup-msg-you =
     { $amount ->
-        [1] { $item }
-       *[other] { $amount }x { $item }
+        [1] Recogiste { $item }
+       *[other] Recogiste { $amount }x { $item }
     }
 hud-chat-singleplayer-motd1 = ¡Todo un mundo para ti! Hora de estirar...
 hud-chat-singleplayer-motd2 = ¿Qué tal la serenidad?
+hud-chat-tab_whisper = Susurro

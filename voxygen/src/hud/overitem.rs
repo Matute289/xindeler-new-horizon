@@ -162,7 +162,7 @@ impl Widget for Overitem<'_> {
 
             // get the display text based on input method
             let texts: Vec<(String, &Color)> = match self.global_state.window.last_input() {
-                LastInput::KeyboardMouse => self
+                LastInput::Keyboard | LastInput::Mouse => self
                     .interaction_options
                     .iter()
                     .map(|(input, action, color)| {

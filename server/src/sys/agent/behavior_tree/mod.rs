@@ -12,7 +12,7 @@ use common::{
     consts::MAX_INTERACT_RANGE,
     interaction::InteractionKind,
     path::TraversalConfig,
-    rtsim::{NpcAction, RtSimEntity},
+    rtsim::{self, NpcAction},
 };
 use rand::{RngExt, prelude::ThreadRng};
 use server_agent::{data::AgentEmitters, util::is_steering};
@@ -328,7 +328,7 @@ fn target_if_attacked(bdata: &mut BehaviorData) -> bool {
                     // Remember this attack if we're an RtSim entity
                     /*
                     if let Some(attacker_stats) =
-                        bdata.rtsim_entity.and(bdata.read_data.stats.get(attacker))
+                        bdata.rtsim_actor.and(bdata.read_data.stats.get(attacker))
                     {
                         bdata
                             .agent
@@ -377,7 +377,7 @@ fn untarget_if_dead(bdata: &mut BehaviorData) -> bool {
                 .is_none_or(|tgt_health| tgt_health.is_dead)
         {
             /*
-            if let Some(tgt_stats) = bdata.rtsim_entity.and(bdata.read_data.stats.get(target)) {
+            if let Some(tgt_stats) = bdata.rtsim_actor.and(bdata.read_data.stats.get(target)) {
                 bdata.agent.forget_enemy(&tgt_stats.name);
             }
             */
@@ -612,7 +612,7 @@ fn handle_rtsim_actions(bdata: &mut BehaviorData) -> bool {
                 if bdata.agent.allowed_to_speak() {
                     // Aim the speech toward a target
                     if let Some(target) =
-                        target.and_then(|tgt| bdata.read_data.id_maps.actor_entity(tgt))
+                        target.and_then(|tgt| bdata.read_data.id_maps.rtsim_entity(tgt))
                     {
                         bdata.agent.target = Some(Target::new(
                             target,
@@ -641,7 +641,7 @@ fn handle_rtsim_actions(bdata: &mut BehaviorData) -> bool {
                 }
             },
             NpcAction::Attack(target) => {
-                if let Some(target) = bdata.read_data.id_maps.actor_entity(target) {
+                if let Some(target) = bdata.read_data.id_maps.rtsim_entity(target) {
                     bdata.agent.target = Some(Target::new(
                         target,
                         true,
@@ -653,7 +653,7 @@ fn handle_rtsim_actions(bdata: &mut BehaviorData) -> bool {
                 }
             },
             NpcAction::Dialogue(target, dialogue) => {
-                if let Some(target) = bdata.read_data.id_maps.actor_entity(target)
+                if let Some(target) = bdata.read_data.id_maps.rtsim_entity(target)
                     && let Some(target_uid) = bdata.read_data.uids.get(target)
                 {
                     bdata
@@ -710,6 +710,7 @@ fn handle_timed_events(bdata: &mut BehaviorData) -> bool {
                     bdata.controller,
                     bdata.read_data,
                     AgentData::is_enemy,
+                    bdata.rng,
                 );
             } else {
                 bdata.agent_data.handle_sounds_heard(
@@ -811,7 +812,7 @@ fn update_target_awareness(bdata: &mut BehaviorData) -> bool {
     if let (Some(target), Some(tgt_pos)) = (target, tgt_pos) {
         if agent_data.can_see_entity(agent, controller, target, tgt_pos, tgt_scale, read_data) {
             agent.awareness.change_by(1.75 * read_data.dt.0);
-        } else if agent_data.can_sense_directly_near(tgt_pos) {
+        } else if agent_data.can_sense_directly_near(target, tgt_pos, read_data) {
             agent.awareness.change_by(0.25);
         } else {
             agent
@@ -981,7 +982,13 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                     read_data.time.0 - selected_at > RETARGETING_THRESHOLD_SECONDS;
 
                 if (!agent.psyche.should_stop_pursuing || !in_aggro_range) && is_time_to_retarget {
-                    agent_data.choose_target(agent, controller, read_data, AgentData::is_enemy);
+                    agent_data.choose_target(
+                        agent,
+                        controller,
+                        read_data,
+                        AgentData::is_enemy,
+                        rng,
+                    );
                 }
 
                 let target_data = TargetData::new(tgt_pos, target, read_data);
@@ -1001,10 +1008,10 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
                         &target_data,
                         read_data,
                         emitters,
-                        remembers_fight_with(agent_data.rtsim_entity, read_data, target),
+                        remembers_fight_with(agent_data.rtsim_actor, read_data, target),
                     );
                     // TODO: Reimplement in rtsim2
-                    // remember_fight(agent_data.rtsim_entity, read_data, agent,
+                    // remember_fight(agent_data.rtsim_actor, read_data, agent,
                     // target);
                 }
             }
@@ -1018,16 +1025,16 @@ fn do_combat(bdata: &mut BehaviorData) -> bool {
 }
 
 fn remembers_fight_with(
-    _rtsim_entity: Option<&RtSimEntity>,
+    _rtsim_actor: Option<&rtsim::ActorId>,
     _read_data: &ReadData,
     _other: EcsEntity,
 ) -> bool {
     // TODO: implement for rtsim2
     // let name = || read_data.stats.get(other).map(|stats| stats.name.clone());
 
-    // rtsim_entity.map_or(false, |rtsim_entity| {
+    // rtsim_actor.map_or(false, |rtsim_actor| {
     //     name().map_or(false, |name| {
-    //         rtsim_entity.brain.remembers_fight_with_character(&name)
+    //         rtsim_actor.brain.remembers_fight_with_character(&name)
     //     })
     // })
     false
@@ -1035,11 +1042,11 @@ fn remembers_fight_with(
 
 // /// Remember target.
 // fn remember_fight(
-//     rtsim_entity: Option<&RtSimEntity>,
+//     rtsim_actor: Option<&rtsim::ActorId>,
 //     read_data: &ReadData,
 //     agent: &mut Agent,
 //     target: EcsEntity,
-// ) { rtsim_entity.is_some().then(|| { read_data .stats .get(target)
+// ) { rtsim_actor.is_some().then(|| { read_data .stats .get(target)
 //   .map(|stats| agent.add_fight_to_memory(&stats.name,
 // read_data.time.0))     });
 // }

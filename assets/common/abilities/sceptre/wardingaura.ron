@@ -8,7 +8,6 @@ BasicAura(
             kind: ProtectingWard,
             strength: 0.25,
             duration: Some(8),
-            category: Magical,
         ),
     ],
     aura_duration: Some(1.0),
@@ -16,4 +15,5 @@ BasicAura(
     energy_cost: 35.0,
     scales_with_combo: false,
     specifier: Some(WardingAura),
+    meta: (source: Some(Divine)),
 )

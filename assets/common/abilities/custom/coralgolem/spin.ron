@@ -15,12 +15,12 @@ BasicMelee(
         angle: 360.0,
     ),
     movement_modifier: (
-        swing: Some(0.35),
+        action: Some(0.35),
         recover: Some(0.0),
     ),
     ori_modifier: (
         buildup: Some(0.75),
-        swing: Some(0.25),
+        action: Some(0.25),
         recover: Some(0.0),
     ),
 )

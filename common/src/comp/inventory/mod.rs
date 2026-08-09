@@ -1,5 +1,5 @@
 use core::ops::Not;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage};
 use std::{cmp::Ordering, convert::TryFrom, mem, num::NonZeroU32, ops::Range};
@@ -19,6 +19,7 @@ use crate::{
             loadout::Loadout,
             recipe_book::RecipeBook,
             slot::{EquipSlot, Slot, SlotError},
+            spell_book::SpellBook,
         },
         loot_owner::LootOwnerKind,
         slot::{InvSlotId, SlotId},
@@ -36,12 +37,47 @@ pub mod loadout;
 pub mod loadout_builder;
 pub mod recipe_book;
 pub mod slot;
+pub mod spell_book;
 #[cfg(test)] mod test;
 #[cfg(test)] mod test_helpers;
 pub mod trade_pricing;
 
 pub type InvSlot = Option<Item>;
 const DEFAULT_INVENTORY_SLOTS: usize = 36;
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only tally of how many loadout walks this thread has started —
+    /// one per [`Inventory::equipped_items`] / [`Inventory::equipped_items_with_slot`]
+    /// call.
+    ///
+    /// Thread-local rather than a global, so the count is naturally isolated:
+    /// the test harness gives every `#[test]` its own thread, and a shared
+    /// counter would be raced by every other test walking a loadout in
+    /// parallel.
+    ///
+    /// It exists so a test can assert that a code path performs **zero** walks
+    /// — the property the `DerivedStats` cache is for. Compiled out entirely
+    /// outside `cfg(test)`: `note_loadout_walk` is an empty function there, so
+    /// there is no cost on any real path.
+    static LOADOUT_WALKS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_loadout_walk() { LOADOUT_WALKS.with(|walks| walks.set(walks.get() + 1)); }
+
+#[cfg(not(test))]
+#[inline(always)]
+fn note_loadout_walk() {}
+
+/// How many loadout walks this thread has performed since the last
+/// [`reset_loadout_walks`].
+#[cfg(test)]
+pub fn loadout_walks() -> usize { LOADOUT_WALKS.with(core::cell::Cell::get) }
+
+/// Zeroes this thread's loadout-walk tally.
+#[cfg(test)]
+pub fn reset_loadout_walks() { LOADOUT_WALKS.with(|walks| walks.set(0)); }
 
 /// NOTE: Do not add a PartialEq instance for Inventory; that's broken!
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,6 +93,10 @@ pub struct Inventory {
     overflow_items: Vec<Item>,
     /// Recipes that are available for use
     recipe_book: RecipeBook,
+    /// Xindeler: spells this character has learned. Persisted through its own
+    /// pseudo-container exactly like `recipe_book`, and read back out at login
+    /// to extend the character's `AbilityPool`.
+    spell_book: SpellBook,
 }
 
 /// Errors which the methods on `Inventory` produce
@@ -136,6 +176,7 @@ impl Inventory {
             slots: vec![None; DEFAULT_INVENTORY_SLOTS],
             overflow_items: Vec::new(),
             recipe_book: RecipeBook::default(),
+            spell_book: SpellBook::default(),
         }
     }
 
@@ -145,11 +186,17 @@ impl Inventory {
             slots: vec![None; 1],
             overflow_items: Vec::new(),
             recipe_book: RecipeBook::default(),
+            spell_book: SpellBook::default(),
         }
     }
 
     pub fn with_recipe_book(mut self, recipe_book: RecipeBook) -> Inventory {
         self.recipe_book = recipe_book;
+        self
+    }
+
+    pub fn with_spell_book(mut self, spell_book: SpellBook) -> Inventory {
+        self.spell_book = spell_book;
         self
     }
 
@@ -849,9 +896,13 @@ impl Inventory {
         }
     }
 
-    pub fn equipped_items(&self) -> impl Iterator<Item = &Item> { self.loadout.items() }
+    pub fn equipped_items(&self) -> impl Iterator<Item = &Item> {
+        note_loadout_walk();
+        self.loadout.items()
+    }
 
     pub fn equipped_items_with_slot(&self) -> impl Iterator<Item = (EquipSlot, &Item)> {
+        note_loadout_walk();
         self.loadout.items_with_slot()
     }
 
@@ -1303,6 +1354,32 @@ impl Inventory {
 
     pub fn persistence_recipes_iter_with_index(&self) -> impl Iterator<Item = (usize, &Item)> {
         self.recipe_book.persistence_recipes_iter_with_index()
+    }
+
+    // --- Xindeler: spell book. Mirrors the recipe-book accessors above. ---
+
+    pub fn spells_iter(&self) -> impl ExactSizeIterator<Item = &String> { self.spell_book.iter() }
+
+    pub fn spell_groups_iter(&self) -> impl ExactSizeIterator<Item = &Item> {
+        self.spell_book.iter_groups()
+    }
+
+    pub fn spell_book_len(&self) -> usize { self.spell_book.len() }
+
+    /// The flattened set of learned spell keys, for
+    /// `AbilityPool::for_character`.
+    pub fn learned_spells(&self) -> &HashSet<String> { self.spell_book.spells() }
+
+    pub fn push_spell_group(&mut self, spell_group: Item) -> Result<(), Item> {
+        self.spell_book.push_group(spell_group)
+    }
+
+    pub fn spell_is_known(&self, spell_key: &str) -> bool { self.spell_book.is_known(spell_key) }
+
+    pub fn reset_spells(&mut self) { self.spell_book.reset(); }
+
+    pub fn persistence_spells_iter_with_index(&self) -> impl Iterator<Item = (usize, &Item)> {
+        self.spell_book.persistence_spells_iter_with_index()
     }
 }
 

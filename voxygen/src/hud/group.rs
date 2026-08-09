@@ -15,8 +15,7 @@ use crate::{
 };
 use client::{self, Client};
 use common::{
-    combat,
-    comp::{Stats, group::Role, inventory::item::MaterialStatManifest, invite::InviteKind},
+    comp::{Stats, group::Role, invite::InviteKind},
     resources::Time,
     uid::{IdMaps, Uid},
 };
@@ -84,7 +83,6 @@ pub struct Group<'a> {
     pulse: f32,
     global_state: &'a GlobalState,
     tooltip_manager: &'a mut TooltipManager,
-    msm: &'a MaterialStatManifest,
     time: &'a Time,
 
     #[conrod(common_builder)]
@@ -103,7 +101,6 @@ impl<'a> Group<'a> {
         pulse: f32,
         global_state: &'a GlobalState,
         tooltip_manager: &'a mut TooltipManager,
-        msm: &'a MaterialStatManifest,
         time: &'a Time,
     ) -> Self {
         Self {
@@ -117,7 +114,6 @@ impl<'a> Group<'a> {
             pulse,
             global_state,
             tooltip_manager,
-            msm,
             time,
             common: widget::CommonBuilder::default(),
         }
@@ -367,14 +363,15 @@ impl Widget for Group<'_> {
             };
             let client_state = self.client.state();
             let stats = client_state.ecs().read_storage::<Stats>();
-            let skill_sets = client_state.ecs().read_storage::<common::comp::SkillSet>();
             let healths = client_state.ecs().read_storage::<common::comp::Health>();
             let energy = client_state.ecs().read_storage::<common::comp::Energy>();
             let buffs = client_state.ecs().read_storage::<common::comp::Buffs>();
-            let inventory = client_state.ecs().read_storage::<common::comp::Inventory>();
+            // The group panel's CR indicator, read off the cache instead of
+            // re-folding each member's loadout every frame.
+            let derived_stats = client_state
+                .ecs()
+                .read_storage::<common::comp::DerivedStats>();
             let id_maps = client_state.ecs().read_resource::<IdMaps>();
-            let bodies = client_state.ecs().read_storage::<common::comp::Body>();
-            let poises = client_state.ecs().read_storage::<common::comp::Poise>();
             let stances = client_state.ecs().read_storage::<common::comp::Stance>();
             let hardcore = client_state.ecs().read_storage::<common::comp::Hardcore>();
 
@@ -384,30 +381,18 @@ impl Widget for Group<'_> {
                 self.show.group = true;
                 let entity = id_maps.uid_entity(uid);
                 let stats = entity.and_then(|entity| stats.get(entity));
-                let skill_set = entity.and_then(|entity| skill_sets.get(entity));
                 let health = entity.and_then(|entity| healths.get(entity));
                 let energy = entity.and_then(|entity| energy.get(entity));
                 let buffs = entity.and_then(|entity| buffs.get(entity));
-                let inventory = entity.and_then(|entity| inventory.get(entity));
+                let derived = entity.and_then(|entity| derived_stats.get(entity));
                 let is_leader = uid == leader;
-                let body = entity.and_then(|entity| bodies.get(entity));
-                let poise = entity.and_then(|entity| poises.get(entity));
                 let stance = entity.and_then(|entity| stances.get(entity));
                 let hardcore = entity.and_then(|entity| hardcore.get(entity));
 
-                if let (
-                    Some(stats),
-                    Some(skill_set),
-                    Some(inventory),
-                    Some(health),
-                    Some(energy),
-                    Some(body),
-                    Some(poise),
-                ) = (stats, skill_set, inventory, health, energy, body, poise)
+                if let (Some(stats), Some(derived), Some(health), Some(energy)) =
+                    (stats, derived, health, energy)
                 {
-                    let combat_rating = combat::combat_rating(
-                        inventory, health, energy, poise, skill_set, *body, self.msm,
-                    );
+                    let combat_rating = derived.combat_rating;
                     let char_name = self.localized_strings.get_content(&stats.name);
                     let health_perc = health.current() / health.base_max().max(health.maximum());
                     // change panel positions when debug info is shown
@@ -847,7 +832,7 @@ impl Widget for Group<'_> {
                     self.global_state.window.controller_type(),
                 )
                 .unwrap_or_else(|| icon_utils::UNBOUND_KEY.to_string()),
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     let key_text = self
                         .settings
                         .controls
@@ -893,7 +878,7 @@ impl Widget for Group<'_> {
                     self.global_state.window.controller_type(),
                 )
                 .unwrap_or_else(|| icon_utils::UNBOUND_KEY.to_string()),
-                LastInput::KeyboardMouse => {
+                LastInput::Keyboard | LastInput::Mouse => {
                     let key_text = self
                         .settings
                         .controls

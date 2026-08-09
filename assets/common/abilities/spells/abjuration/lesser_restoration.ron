@@ -1,0 +1,23 @@
+// A touch-range single-condition cleanse: one effect per cast (D&D's "cure one of
+// several ailments" is not modeled — matches the Charm of Absolution/Reliquary item
+// precedent's own Poisoned/Cursed translation table). Zero-value Stab keeps the melee
+// hitbox's default OutOfGroup damage/poise/knockback inert against an ally target;
+// only attack_effect_target overrides the effect itself to InGroup.
+BasicMelee(
+    energy_cost: 40.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            RemoveBuff(RemoveByKind(Poisoned)),
+            TargetHasBuff(Poisoned),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

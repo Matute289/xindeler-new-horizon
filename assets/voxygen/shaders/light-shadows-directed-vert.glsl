@@ -21,8 +21,6 @@
 
 // Currently, we only need globals for focus_off.
 #include <globals.glsl>
-// For shadow locals.
-// #include <shadows.glsl>
 
 layout (std140, set = 0, binding = 9)
 uniform u_light_shadows {
@@ -37,9 +35,6 @@ uniform u_light_shadows {
  * */
 
 layout(location = 0) in uint v_pos_norm;
-// in uint v_col_light;
-// in vec4 v_pos;
-// layout(location = 1) in uint v_atlas_pos;
 
 // Light projection matrices.
 layout (std140, set = 1,  binding = 0)
@@ -49,18 +44,11 @@ uniform u_locals {
     float load_time;
 };
 
-// out vec4 shadowMapCoord;
-
 const float EXTRA_NEG_Z = 32768.0;
 
 void main() {
     vec3 f_chunk_pos = vec3(v_pos_norm & 0x3Fu, (v_pos_norm >> 6) & 0x3Fu, float((v_pos_norm >> 12) & 0xFFFFu) - EXTRA_NEG_Z);
     vec3 f_pos = (model_mat * vec4(f_chunk_pos, 1.0)).xyz - focus_off.xyz;
-    // f_pos = v_pos;
 
-    gl_Position = /*all_mat * */shadowMatrices * vec4(f_pos/*, 1.0*/, /*float(((f_pos_norm >> 29) & 0x7u) ^ 0x1)*//*uintBitsToFloat(v_pos_norm)*/1.0);
-    // gl_Position.z = -gl_Position.z;
-    // gl_Position.z = clamp(gl_Position.z, -abs(gl_Position.w), abs(gl_Position.w));
-    // shadowMapCoord = lights[gl_InstanceID].light_pos * gl_Vertex;
-    // vec4(v_pos, 0.0, 1.0);
+    gl_Position = shadowMatrices * vec4(f_pos, 1.0);
 }

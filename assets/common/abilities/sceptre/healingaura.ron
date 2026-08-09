@@ -8,7 +8,6 @@ BasicAura(
             kind: Regeneration,
             strength: 0.4,
             duration: Some(8),
-            category: Magical,
         ),
     ],
     aura_duration: Some(1.0),
@@ -16,4 +15,5 @@ BasicAura(
     energy_cost: 20.0,
     scales_with_combo: true,
     specifier: Some(HealingAura),
+    meta: (source: Some(Divine)),
 )

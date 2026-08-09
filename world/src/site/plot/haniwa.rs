@@ -7,7 +7,7 @@ use crate::{
 };
 use common::{
     generation::EntityInfo,
-    terrain::{Structure as PrefabStructure, StructuresGroup},
+    terrain::{Structure as PrefabStructure, StructuresGroup, sprite::SpriteCfg},
 };
 use lazy_static::lazy_static;
 use rand::prelude::*;
@@ -90,21 +90,26 @@ impl Haniwa {
             mini_boss_room_positions,
         }
     }
-
-    pub fn spawn_rules(&self, wpos: Vec2<i32>) -> SpawnRules {
-        SpawnRules {
-            waypoints: false,
-            trees: !within_distance(wpos, self.center, self.diameter),
-            ..SpawnRules::default()
-        }
-    }
 }
 
 impl Structure for Haniwa {
-    #[cfg(feature = "use-dyn-lib")]
-    const UPDATE_FN: &'static [u8] = b"render_haniwa\0";
+    #[cfg(feature = "dyn-lib")]
+    #[unsafe(export_name = "as_dyn_structure_haniwa")]
+    fn as_dyn_outer(&self) -> Option<(&dyn Structure, &'static str)> {
+        Some((Self::as_dyn_impl(self), "as_dyn_structure_haniwa"))
+    }
 
-    #[cfg_attr(feature = "be-dyn-lib", unsafe(export_name = "render_haniwa"))]
+    fn spawn_rules_inner(
+        &self,
+        spawn_rules: &mut SpawnRules,
+        _land: &Land,
+        wpos: Vec2<i32>,
+        _weight: f32,
+    ) {
+        spawn_rules.trees &= !within_distance(wpos, self.center, self.diameter);
+        spawn_rules.waypoints = false;
+    }
+
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let center = self.center;
         let base = self.base;
@@ -113,7 +118,14 @@ impl Structure for Haniwa {
         let mut rng = rand::rng();
         let rock = Fill::Brick(BlockKind::Rock, Rgb::new(96, 123, 131), 24);
         let key_door = Fill::Block(Block::air(SpriteKind::HaniwaKeyDoor));
-        let key_hole = Fill::Block(Block::air(SpriteKind::HaniwaKeyhole));
+        // Progression-gated: the Haniwa dungeon's whole point is requiring the physical
+        // `haniwa_key` to pass this door, so its keyhole opts out of ranged/keyless
+        // unlocking (e.g. the `knock` spell) via `no_knock`. Melee key-item
+        // unlocking is unaffected.
+        let key_hole = Fill::sprite_ori_cfg(SpriteKind::HaniwaKeyhole, 0, SpriteCfg {
+            no_knock: true,
+            ..Default::default()
+        });
         let trap = Fill::Block(Block::air(SpriteKind::HaniwaTrap));
         let rock_broken = Fill::Sampling(Arc::new(|center| {
             Some(match (RandomField::new(0).get(center)) % 48 {

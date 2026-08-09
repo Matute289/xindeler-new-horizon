@@ -46,13 +46,22 @@ weapon-staff-firestaff_humble_stick = Humble Stick
 weapon-staff-firestaff_starter = Gnarled Rod
     .desc = Smells like resin and magic.
 
+weapon-staff-frostbound_quarterstaff = Frostbound Quarterstaff
+    .desc = A weighted length of ashwood, its tip rimed with a frost that never quite melts.
+
 weapon-tome-apprentice_tome = Apprentice Tome
     .desc = Margins crowded with a student's frantic leyline notes.
+
+weapon-tome-the_dark_log = The Dark Log
+    .desc = Bound in flayed void-hide, quilted with cold-iron diamonds around a single golden eye. It wants to be read by the wicked, and dreads every other hand.
+
+weapon-tome-the_wicked_darkness = The Wicked Darkness
+    .desc = A chained, warded black book that corrupts whoever lays hands on it and grows only more terrible with every owner who adds to it.
 
 weapon-holy_symbol-initiate_symbol = Initiate's Symbol
     .desc = A carved wooden pendant blessed at a roadside shrine.
 
-weapon-focus-wanderer_focus = Wanderer's Focus
+weapon-focus-primordial_focus = Primordial Focus
     .desc = A smooth river stone worn as a channel for wild spirits.
 
 weapon-sword-caladbolg = Caladbolg
@@ -70,7 +79,7 @@ weapon-sword-frost-1 = Frost Saw
 weapon-sword-starter = Damaged Greatsword
     .desc = The blade could snap at any moment, but you hope it will endure future fights.
 
-weapon-sceptre-amethyst = Amethyst Staff
+weapon-sceptre-amethyst = Amethyst Sceptre
     .desc = Its stone is the closest thing from perfection.
 
 weapon-sceptre-caduceus = Caduceus

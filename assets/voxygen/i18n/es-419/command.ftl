@@ -24,6 +24,7 @@ command-buff-desc = Aplica un potenciador al jugador
 command-build-desc = Activa y desactiva el modo de construcción
 command-ban-desc = Bloquea a un jugador con un determinado nombre de usuario, por un periodo determinado (si se proporciona). Indique "true for overwrite" para modificar un bloqueo existente.
 command-ban-ip-desc = Bloquea a un determinado jugador, por un periodo de tiempo determinado (si es provisto). A diferencia de un bloqueo normal, este también bloquea la dirección IP asociada con este usuario. Indique "true for overwrite" para modificar un bloqueo existente.
+command-banish-desc = (Administrador) Destierra temporalmente al objetivo por N segundos (herramienta de prueba para el destierro real de 1 a 7 días)
 command-battlemode-desc =
     Configura tu modo de batalla a:
     + pvp (jugador vs jugador)
@@ -208,3 +209,270 @@ command-chunk-not-loaded = Bloque { $x }, { $y } no cargado
 command-chunk-out-of-bounds = El fragmento { $x }, { $y } no se encuentra dentro de los límites del mapa
 command-spawned-entity = Se ha creado la entidad con el ID: { $id }
 command-spawned-dummy = Generado un maniquí de entrenamiento
+
+command-adminify-already-has-no-role = ¡El jugador ya no tiene ningún rol!
+
+command-adminify-already-has-role = ¡El jugador ya tiene ese rol!
+
+command-adminify-assign-higher-than-own = No se puede asignar a alguien un rol temporal más alto que el rol permanente propio.
+
+command-adminify-cannot-find-player = ¡No se puede encontrar la entidad del jugador!
+
+command-adminify-reassign-to-above = No se puede reasignar un rol a nadie con tu rol o superior.
+
+command-adminify-removed-role = Rol eliminado del jugador { $player }: { $role }
+
+command-adminify-role-downgraded = Rol del jugador { $player } degradado a { $role }
+
+command-adminify-role-upgraded = Rol del jugador { $player } ascendido a { $role }
+
+command-aura-invalid-buff-parameters = Parámetros de potenciador inválidos para aura
+
+command-aura-tiered-effect-unsupported = No se pueden generar auras de efecto por escalones de vida con este comando
+
+command-aura-spawn = Se generó un nuevo aura adjunto a la entidad
+
+command-aura-spawn-new-entity = Se generó un nuevo aura
+
+command-ban-added = Se añadió { $player } a la lista de bloqueos con razón: { $reason }
+
+command-ban-already-added = { $player } ya está en la lista de bloqueos
+
+command-ban-ip-added = Se añadió { $player } a la lista de bloqueos normal y de IP con razón: { $reason }
+
+command-ban-ip-queued = Se añadió { $player } a la lista de bloqueos normal y se puso en cola un bloqueo de IP con razón: { $reason }
+
+command-battlemode-available-modes = Modos disponibles: pvp, pve
+
+command-battlemode-cooldown = Período de enfriamiento activo. Intenta de nuevo en { $cooldown } segundos
+
+command-battlemode-intown = ¡Necesitas estar en la ciudad para cambiar el modo de batalla!
+
+command-battlemode-same = Se intentó establecer el mismo modo de batalla
+
+command-battlemode-updated = Nuevo modo de batalla: { $battlemode }
+
+command-buff-body-unknown = Especificación de cuerpo desconocida: { $spec }
+
+command-buff-data = El argumento de potenciador '{ $buff }' requiere datos adicionales
+
+command-buff-unknown = Potenciador desconocido: { $buff }
+
+command-cannot-send-message-hidden = No se pueden enviar mensajes como espectador oculto.
+
+command-client-has-no-socketaddr = No se puede obtener la dirección de socket (conectado a través de conexión mpsc) para { $target }
+
+command-death_effect-unknown = Efecto de muerte desconocido { $effect }.
+
+command-destroyed-no-tethers = No estás conectado a ningún lazo
+
+command-destroyed-tethers = ¡Se destruyeron todos los lazos! Ahora eres libre
+
+command-disabled-by-settings = Comando deshabilitado en la configuración del servidor
+
+command-disconnectall-confirm = Por favor, ejecuta el comando nuevamente con el segundo argumento "confirm" para confirmar que
+  realmente quieres desconectar a todos los jugadores del servidor
+
+command-dismounted = Desmontado
+
+command-entity-has-no-client = El jugador no tiene componente de cliente: { $target }
+
+command-experimental-shaders-not-supported = { $shader } no es compatible con esta compilación del juego
+
+command-experimental-terrain-persistence-disabled = La persistencia de terreno experimental está deshabilitada
+
+command-explosion-power-too-high = La potencia de la explosión no debe ser más de { $power }
+
+command-explosion-power-too-low = La potencia de la explosión debe ser más de { $power }
+
+command-faction-join = Por favor, únete a una facción con /join_faction
+
+command-give_item_quality-desc = (Administrador) Date a ti mismo un objeto en un nivel de rareza elegido, para comparar la representación de niveles de rareza: item quality [num]
+
+command-give_item_quality-success = Se añadieron { $total } x { $item } (calidad { $quality }) al inventario.
+
+command-group_invite-invited-to-group = Se invitó a { $player } al grupo.
+
+command-group_invite-invited-to-your-group = { $player } ha sido invitado a tu grupo.
+
+command-group-join = Por favor, crea un grupo primero
+
+command-into_npc-warning = ¡Espero que no lo estés abusando!
+
+command-invalid-alignment = Alineamiento inválido: { $alignment }
+
+command-invalid-skill-group = ¡{ $group } no es un grupo de habilidades!
+
+command-inventory-cant-fit-item = No se puede ajustar el objeto al inventario
+
+command-kick-higher-role = No se puede expulsar a jugadores con roles más altos que el tuyo.
+
+command-kit-inventory-unavailable = No se pudo obtener el inventario
+
+command-kit-not-enough-slots = El inventario no tiene suficientes espacios
+
+command-lantern-adjusted-strength = Ajustaste la intensidad de la llama.
+
+command-lantern-adjusted-strength-color = Ajustaste la intensidad y el color de la llama.
+
+command-lantern-unequiped = Por favor, equipa una linterna primero
+
+command-location-created = Se creó la ubicación '{ $location }'
+
+command-location-deleted = Se eliminó la ubicación '{ $location }'
+
+command-location-duplicate = La ubicación '{ $location }' ya existe, considera eliminarla primero
+
+command-location-invalid = El nombre de ubicación '{ $location }' no es válido. Los nombres solo pueden contener ASCII minúscula e
+  guiones bajos
+
+command-location-not-found = La ubicación '{ $location }' no existe
+
+command-locations-empty = No hay ubicaciones actualmente existentes
+
+command-locations-list = Ubicaciones disponibles: { $locations }
+
+command-make_party-desc = (Administrador) Genera 3 NPCs cerca de ti, cada uno con una clase y nivel dados, con un nombre/raza aleatorio y una alineación moral compatible con la tuya, luego agrúpalos contigo: class1 level1 class2 level2 class3 level3
+
+command-make_test_char-desc = (Administrador) Configura un personaje de prueba de una sola vez: level [class] [kit]
+
+command-message-group-missing = Estás usando el chat de grupo pero no perteneces a ningún grupo. Usa /world o
+  /region para cambiar el chat.
+
+command-no-buid-perms = No tienes permiso para construir.
+
+command-no-dismount = No estás montando ni siendo montado
+
+command-outcome-expected_body_arg = Se esperaba argumento de cuerpo
+
+command-outcome-expected_entity_arg = Se esperaba argumento de entidad
+
+command-outcome-expected_frontent_specifier = Se esperaba especificador de interfaz
+
+command-outcome-expected_integer = Se esperaba número entero
+
+command-outcome-expected_skill_group_kind = Se esperaba un SkillGroupKind válido en ron
+
+command-outcome-expected_sprite_kind = Se esperaba SpriteKind
+
+command-outcome-invalid_outcome = { $outcome } no es un resultado válido
+
+command-outcome-variant_expected = Se esperaba variante de resultado
+
+command-parse-duration-error = No se pudo analizar la duración: { $error }
+
+command-permit-build-given = Ahora tienes permiso para construir en '{ $area }'
+
+command-permit-build-granted = Se otorgó permiso para construir en '{ $area }'
+
+command-player-info-unavailable = No se puede obtener la información del jugador para { $target }
+
+command-reloaded-chunks = Se recargaron { $reloaded } fragmentos
+
+command-repaired-inventory_items = Se repararon todos los objetos
+
+command-repaired-items = Se repararon todos los objetos equipados
+
+command-respawn-no-waypoint = No hay punto de ruta establecido
+
+command-revoke-build = Se revocó el permiso para construir en '{ $area }'
+
+command-revoke-build-all = Se han revocado todos tus permisos de construcción.
+
+command-revoke-build-recv = Tu permiso para construir en '{ $area }' ha sido revocado
+
+command-revoked-all-build = Todos los permisos de construcción revocados.
+
+command-scale-set = Se estableció la escala a { $scale }
+
+command-server-no-experimental-terrain-persistence = El servidor fue compilado sin persistencia de terreno habilitada
+
+command-set_class-desc = Selección de clase única para personajes heredados: warrior, mage, cleric o rogue
+
+command-set_class_level-desc = (Administrador) Establece el nivel de clase primaria o secundaria de un personaje multiclase, para pruebas
+
+command-set_ethos-desc = (Administrador) Establece el alineamiento moral del objetivo: <good|neutral|evil> <lawful|neutral|chaotic>
+
+command-set_level-desc = (Administrador) Establece el nivel de personaje del objetivo (1-60) para pruebas, sin molienda
+
+command-multiclass-desc = (Administrador) Otorga una segunda clase al objetivo (tope de 2), para pruebas
+
+command-trigger_slot-desc = (Administrador) Configura un slot de trigger: <slot 0-3> <índice del pool de habilidades> <health_below|damage_taken|energy_below> [umbral 0-1]
+
+command-trigger_ready-desc = (Administrador) Fuerza un slot de trigger a listo, borrando su cooldown de tiempo real
+
+command-set_motd-message-added = Se estableció el mensaje del servidor del día a { $message }
+
+command-set_motd-message-not-set = Esta configuración regional no tenía ningún motd establecido
+
+command-set_motd-message-removed = Se eliminó el mensaje del servidor del día
+
+command-set-build-mode-off = Se desactivó el modo de construcción.
+
+command-set-build-mode-on-persistent = Se activó el modo de construcción. La persistencia de terreno experimental está habilitada. El servidor intentará persistir los cambios, pero esto no está garantizado.
+
+command-set-build-mode-on-unpersistent = Se activó el modo de construcción. Los cambios no se persistirán cuando se descargue un fragmento.
+
+command-set-waypoint-result = ¡Punto de ruta establecido!
+
+command-site-not-found = Sitio no encontrado
+
+command-skillpreset-broken = La preconfiguración de habilidades está rota
+
+command-skillpreset-load-error = Error al cargar preconfigurations
+
+command-skillpreset-missing = La preconfiguración no existe: { $preset }
+
+command-spawned-campfire = Se generó una hoguera
+
+command-spawned-safezone = Se generó una zona segura
+
+command-spot-spot_not_found = No se encontró ningún lugar de ese tipo en este mundo.
+
+command-spot-world_feature = La característica `worldgen` tiene que estar habilitada para ejecutar este comando.
+
+command-sudo-higher-role = No se puede sudo a jugadores con roles más altos que el tuyo.
+
+command-sudo-no-permission-for-non-players = No tienes permiso para hacer sudo en no-jugadores.
+
+command-tell-to-yourself = No puedes /tell a ti mismo.
+
+command-time_scale-changed = Se estableció la escala de tiempo a { $scale }.
+
+command-time_scale-current = La escala de tiempo actual es { $scale }.
+
+command-transform-invalid-presence = No se puede transformar en la presencia actual
+
+command-unban-already-unbanned = { $player } ya había sido desbloqueado.
+
+command-unban-ip-successful = La IP bloqueada a través del usuario "{ $player }" fue desbloqueada exitosamente (este usuario seguirá siendo bloqueado)
+
+command-unban-successful = { $player } fue desbloqueado exitosamente.
+
+command-unimplemented-spawn-special = No está implementada la generación de entidades especiales
+
+command-unknown = Comando desconocido
+
+command-version-current = El servidor está ejecutando { $version }
+
+command-volume-created = Se creó un volumen
+
+command-volume-size-incorrect = El tamaño debe estar entre 1 y 127.
+
+command-waypoint-error = No se pudo encontrar tu punto de ruta.
+
+command-waypoint-result = Tu punto de ruta actual está en { $waypoint };
+
+command-weather-valid-values = Los valores válidos son 'clear', 'rain', 'wind' y 'storm'.
+
+command-whitelist-added = Se añadió a la lista blanca: { $username }
+
+command-whitelist-already-added = ¡Ya está en la lista blanca: { $username }!
+
+command-whitelist-permission-denied = Permiso denegado para eliminar usuario: { $username }
+
+command-whitelist-removed = Se eliminó de la lista blanca: { $username }
+
+command-whitelist-unlisted = No forma parte de la lista blanca: { $username }
+
+command-you-dont-exist = No existes, por lo que no puedes usar este comando

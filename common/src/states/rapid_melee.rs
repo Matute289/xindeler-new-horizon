@@ -1,8 +1,8 @@
 use crate::{
     Explosion, RadiusEffect,
-    combat::{self, Attack, AttackDamage, Damage, DamageKind::Crushing, GroupTarget},
+    combat::{Attack, AttackDamage, Damage, DamageKind::Crushing, GroupTarget},
     comp::{
-        CharacterState, MeleeConstructor, StateUpdate, ability::Dodgeable,
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, ability::Dodgeable,
         character_state::OutputEvents, item::Reagent,
     },
     event::{ComboChangeEvent, ExplosionEvent},
@@ -85,7 +85,9 @@ impl CharacterBehavior for Data {
                         c.exhausted = true;
                     }
 
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let tool_stats = get_tool_stats(data, self.static_data.ability_info);
 
                     data.updater.insert(
@@ -166,11 +168,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recover
                     if let CharacterState::RapidMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

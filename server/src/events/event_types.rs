@@ -1,19 +1,21 @@
 pub use common::event::{
-    ArcingEvent, AuraEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
+    ArcingEvent, AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
     ChangeStanceEvent, ChatEvent, ClientDisconnectEvent, ClientDisconnectWithoutPersistenceEvent,
-    ComboChangeEvent, CommandEvent, CreateAuraEntityEvent, CreateItemDropEvent, CreateNpcEvent,
-    CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent, CreateShipEvent,
-    CreateSpecialEntityEvent, CreateSpriteEvent, DeleteCharacterEvent, DeleteEvent, DestroyEvent,
-    DialogueEvent, DownedEvent, EnergyChangeEvent, EntityAttackedHookEvent, EventBus,
-    ExitIngameEvent, ExplosionEvent, GroupManipEvent, HealthChangeEvent, HelpDownedEvent,
-    InitializeCharacterEvent, InitializeSpectatorEvent, InitiateInviteEvent, InventoryManipEvent,
-    InviteResponseEvent, KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent,
-    MineBlockEvent, MountEvent, NpcInteractEvent, ParryHookEvent, PoiseChangeEvent, PossessEvent,
-    ProcessTradeActionEvent, RegrowHeadEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent,
-    RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent, SetLanternEvent, SetPetStayEvent,
-    ShockwaveEvent, ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent,
-    SummonBeamPillarsEvent, TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent,
-    ToggleSpriteLightEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
+    ComboChangeEvent, CommandEvent, CreateAuraEntityEvent, CreateFloatingDiskEvent,
+    CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent,
+    CreateShipEvent, CreateSpecialEntityEvent, CreateSpriteEvent, DeleteCharacterEvent,
+    DeleteEvent, DestroyEvent, DialogueEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
+    EntityAttackedHookEvent, EventBus, ExitIngameEvent, ExplosionEvent, GroupManipEvent,
+    HealthChangeEvent, HelpDownedEvent, InitializeCharacterEvent, InitializeSpectatorEvent,
+    InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
+    LandOnGroundEvent, MakeAdminEvent, MineBlockEvent, MountEvent, NpcInteractEvent,
+    ParryHookEvent, PoiseChangeEvent, PossessEvent, ProcessTradeActionEvent, RegrowHeadEvent,
+    RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, ResolveIdentifyEvent,
+    ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent,
+    SetLanternEvent, SetPetStayEvent, ShockwaveEvent, ShootEvent, SoundEvent,
+    StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent, TamePetEvent,
+    TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent,
+    TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
 };
 
 #[cfg(feature = "plugins")]
@@ -34,6 +36,7 @@ macro_rules! server_events {
             CreateShipEvent
             CreateItemDropEvent
             CreateObjectEvent
+            CreateFloatingDiskEvent
             ExplosionEvent
             BonkEvent
             HealthChangeEvent
@@ -42,8 +45,10 @@ macro_rules! server_events {
             DownedEvent
             PoiseChangeEvent
             DeleteEvent
+            BanishEvent
             DestroyEvent
             InventoryManipEvent
+            RemoteUnlockEvent
             GroupManipEvent
             RespawnEvent
             ShootEvent
@@ -95,6 +100,10 @@ macro_rules! server_events {
             SummonBeamPillarsEvent
             ArcingEvent
             CreatePoolEvent
+            TranscribeSpellEvent
+            ResolveRemoteSenseEvent
+            ResolveIdentifyEvent
+            DispelIllusionEvent
         }
 
         #[cfg(feature = "plugins")]

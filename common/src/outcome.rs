@@ -85,6 +85,13 @@ pub enum Outcome {
         pos: Vec3<f32>,
         body: comp::Body,
     },
+    /// A `comp::PhantomIllusion` was dispelled (the first single-target
+    /// hostile attack resolved against it) and despawned. Drives the
+    /// "the illusion dissipates" VFX at its last known position/body.
+    PhantasmDissipated {
+        pos: Vec3<f32>,
+        body: comp::Body,
+    },
     HealthChange {
         pos: Vec3<f32>,
         info: HealthChangeInfo,
@@ -101,6 +108,13 @@ pub enum Outcome {
     /// roll failed). Drives a floating "Miss" indicator over the target.
     /// Carries no damage — it is the visible counterpart of a whiff.
     Miss {
+        pos: Vec3<f32>,
+        target: Uid,
+    },
+    /// A mind-altering buff (Charmed/Dominated/Maddened/Paralyzed) was
+    /// resisted by the target's magic resistance roll. Drives a floating
+    /// "Resisted" indicator, the mind-altering counterpart of `Miss`.
+    Resisted {
         pos: Vec3<f32>,
         target: Uid,
     },
@@ -231,10 +245,12 @@ impl Outcome {
             | Outcome::ProjectileHit { pos, .. }
             | Outcome::Beam { pos, .. }
             | Outcome::SummonedCreature { pos, .. }
+            | Outcome::PhantasmDissipated { pos, .. }
             | Outcome::HealthChange { pos, .. }
             | Outcome::Death { pos, .. }
             | Outcome::Block { pos, .. }
             | Outcome::Miss { pos, .. }
+            | Outcome::Resisted { pos, .. }
             | Outcome::PoiseChange { pos, .. }
             | Outcome::GroundSlam { pos }
             | Outcome::FlashFreeze { pos }

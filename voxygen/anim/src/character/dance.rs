@@ -66,7 +66,7 @@ impl Animation for DanceAnimation {
         next.hand_l.position = Vec3::new(
             1.0 - s_a.hand.0,
             2.0 + s_a.hand.1 + shortealt * -3.0,
-            s_a.hand.2 + shortealt * -0.75,
+            s_a.hand.2 + 2.0 + shortealt * -0.75,
         );
         next.hand_l.orientation =
             Quaternion::rotation_x(1.4 + foot * 0.15) * Quaternion::rotation_y(0.2);
@@ -74,7 +74,7 @@ impl Animation for DanceAnimation {
         next.hand_r.position = Vec3::new(
             -1.0 + s_a.hand.0,
             2.0 + s_a.hand.1 + shortealt * 3.0,
-            s_a.hand.2 + shortealt * 0.75,
+            s_a.hand.2 + 2.0 + shortealt * 0.75,
         );
         next.hand_r.orientation =
             Quaternion::rotation_x(1.4 + foot * -0.15) * Quaternion::rotation_y(-0.2);
@@ -95,14 +95,14 @@ impl Animation for DanceAnimation {
         next.foot_r.orientation =
             Quaternion::rotation_x(foot * 0.3) * Quaternion::rotation_z(short * 0.15);
 
-        next.shoulder_l.position = Vec3::new(-s_a.shoulder.0, s_a.shoulder.1, s_a.shoulder.2);
+        next.shoulder_l.position = Vec3::new(-s_a.shoulder.0, s_a.shoulder.1, s_a.shoulder.2 + 2.0);
         next.shoulder_l.orientation = Quaternion::rotation_x(shorte * 0.15);
 
-        next.shoulder_r.position = Vec3::new(s_a.shoulder.0, s_a.shoulder.1, s_a.shoulder.2);
+        next.shoulder_r.position = Vec3::new(s_a.shoulder.0, s_a.shoulder.1, s_a.shoulder.2 + 2.0);
         next.shoulder_r.orientation = Quaternion::rotation_x(shorte * -0.15);
 
         next.lantern.orientation =
-            Quaternion::rotation_x(shorte * 0.7 + 0.4) * Quaternion::rotation_y(shorte * 0.4);
+            Quaternion::rotation_x(shorte * 0.35 - 1.3) * Quaternion::rotation_y(shorte * 0.4);
 
         next.torso.position = Vec3::new(0.0, -3.3, 0.0);
         next.torso.orientation = Quaternion::rotation_z(short * -0.2);

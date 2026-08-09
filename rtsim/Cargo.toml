@@ -1,5 +1,5 @@
 [package]
-name = "veloren-rtsim"
+name = "xindeler-rtsim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-common = { package = "veloren-common", path = "../common" }
-world = { package = "veloren-world", path = "../world" }
+common = { package = "xindeler-common", path = "../common" }
+world = { package = "xindeler-world", path = "../world" }
 serde = { workspace = true }
 hashbrown = { workspace = true }
 enum-map = { workspace = true, features = ["serde"] }
@@ -18,7 +18,7 @@ rmp-serde = "1.1.0"
 anymap2 = "0.13"
 tracing = { workspace = true }
 atomic_refcell = { workspace = true }
-slotmap = { version = "1.0.6", features = ["serde"] }
+slotmap = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 fxhash = { workspace = true }

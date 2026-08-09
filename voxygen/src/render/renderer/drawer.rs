@@ -238,10 +238,6 @@ impl<'frame> Drawer<'frame> {
     /// Returns None if the rain occlusion renderer is not enabled at some
     /// level, the pipelines are not available yet or clouds are disabled.
     pub fn rain_occlusion_pass(&mut self) -> Option<RainOcclusionPassDrawer<'_>> {
-        if !self.borrow.pipeline_modes.cloud.is_enabled() {
-            return None;
-        }
-
         if let RainOcclusionMap::Enabled(ref rain_occlusion_renderer) = self.borrow.shadow?.rain_map
         {
             let mut render_pass = self.encoder.scoped_render_pass(
@@ -532,6 +528,77 @@ impl<'frame> Drawer<'frame> {
                 },
             );
         });
+    }
+
+    /// To be ran between `first_pass` and `volumetric_pass`.
+    /// Does nothing if the ingame pipelines are not yet ready, or if SSAO is
+    /// currently off.
+    ///
+    /// Writes real occlusion into `tgt_ao` (AO-generation pass) and a
+    /// depth-aware blurred copy into `tgt_ao_blur` (blur pass). The
+    /// volumetric (clouds) pass samples `tgt_ao_blur` when SSAO is enabled
+    /// (`SSAO_ENABLED`, gated on `SsaoMode`) -- see `VolumetricPassDrawer`.
+    /// Skipped entirely when `SsaoMode::Off`, so the setting actually saves
+    /// the generation+blur cost it exists to let players shed, not just the
+    /// visual effect.
+    pub fn ssao_passes(&mut self) {
+        if !self.borrow.pipeline_modes.ssao_is_on() {
+            return;
+        }
+        let Some(pipelines) = self.borrow.pipelines.all() else {
+            return;
+        };
+        let locals = &self.borrow.locals;
+        let views = &self.borrow.views;
+
+        {
+            let mut render_pass =
+                self.encoder
+                    .scoped_render_pass("ssao", wgpu::RenderPassDescriptor {
+                        label: Some("ssao pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &views.tgt_ao,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+            render_pass.set_pipeline(&pipelines.ssao.ssao);
+            render_pass.set_bind_group(0, &self.globals.bind_group, &[]);
+            render_pass.set_bind_group(1, &locals.ssao_bind.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        {
+            let mut render_pass =
+                self.encoder
+                    .scoped_render_pass("ssao blur", wgpu::RenderPassDescriptor {
+                        label: Some("ssao blur pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &views.tgt_ao_blur,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+            render_pass.set_pipeline(&pipelines.ssao.blur);
+            render_pass.set_bind_group(0, &locals.ssao_blur_bind.bind_group, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
     }
 
     /// Runs render passes with alpha premultiplication pipeline to complete any

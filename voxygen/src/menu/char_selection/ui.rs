@@ -70,6 +70,9 @@ const STARTER_STAFF: &str = "common.items.weapons.staff.starter_staff";
 const STARTER_SWORD: &str = "common.items.weapons.sword.starter";
 const STARTER_SWORDS: &str = "common.items.weapons.sword_1h.starter";
 const STARTER_SCEPTRE: &str = "common.items.weapons.sceptre.starter_sceptre";
+const STARTER_TOME: &str = "common.items.weapons.tome.apprentice_tome";
+const STARTER_HOLY_SYMBOL: &str = "common.items.weapons.holy_symbol.initiate_symbol";
+const STARTER_FOCUS: &str = "common.items.weapons.focus.primordial_focus";
 
 /// Default starter weapon shown when a class is picked; must be a member of
 /// the server-side whitelist in server/src/character_creator.rs.
@@ -79,16 +82,21 @@ fn default_starter_for_class(class: ClassKind) -> (Option<&'static str>, Option<
         // the server's empty whitelist).
         ClassKind::Adventurer => (None, None),
         ClassKind::Warrior => (Some(STARTER_SWORD), None),
-        ClassKind::Mage => (Some(STARTER_STAFF), None),
+        // Mage's only starter kit is a plain Tome -- no staff.
+        ClassKind::Mage => (Some(STARTER_TOME), None),
+        // Cleric's first alternative is the Sceptre; Holy Symbol is picked
+        // explicitly via the second button.
         ClassKind::Cleric => (Some(STARTER_SCEPTRE), None),
         ClassKind::Rogue => (Some(STARTER_SWORDS), Some(STARTER_SWORDS)),
-        // Classes-wave (BL-04): the default mirrors the first server whitelist entry.
+        // Classes-wave: the default mirrors the first server whitelist entry.
         ClassKind::Barbarian => (Some(STARTER_AXE), None),
-        ClassKind::Sorcerer
-        | ClassKind::Warlock
-        | ClassKind::Bard
-        | ClassKind::Druid
-        | ClassKind::Artificer => (Some(STARTER_STAFF), None),
+        // Sorcerer and Warlock cast with nothing equipped -- there is no
+        // implement to default to.
+        ClassKind::Sorcerer | ClassKind::Warlock => (None, None),
+        ClassKind::Bard | ClassKind::Artificer => (Some(STARTER_STAFF), None),
+        // Druid's first alternative is the Staff; Sceptre/Focus are picked
+        // explicitly via the second/third buttons.
+        ClassKind::Druid => (Some(STARTER_STAFF), None),
         ClassKind::Paladin | ClassKind::BloodSlayer => (Some(STARTER_SWORD), None),
         ClassKind::Ranger => (Some(STARTER_BOW), None),
         ClassKind::Monk => (Some(STARTER_SWORDS), None),
@@ -465,6 +473,9 @@ image_ids_ice! {
         bow: "voxygen.element.weapons.bow",
         staff: "voxygen.element.weapons.staff",
         sceptre: "voxygen.element.weapons.sceptre",
+        tome: "voxygen.element.weapons.tome",
+        holy_symbol: "voxygen.element.weapons.holy_symbol",
+        focus: "voxygen.element.weapons.focus",
 
         // Hardcore icon
         hardcore: "voxygen.element.ui.map.icons.dif_map_icon",
@@ -570,8 +581,16 @@ enum Mode {
 
         body_type_buttons: [button::State; 2],
         species_buttons: [button::State; 6],
-        class_buttons: [button::State; 4],
-        tool_buttons: [button::State; 6],
+        /// One button per `ClassKind::PLAYABLE` entry, same order: all
+        /// playable classes are selectable at creation.
+        class_buttons: [button::State; 14],
+        /// Named slots reused across the per-class tool picker match arms
+        /// below (only one arm renders per frame, so distinct classes may
+        /// share a slot's interaction state when they never render
+        /// simultaneously). Sized for the widest single arm today (Druid's
+        /// three-way Staff/Sceptre/Focus choice) plus the remaining named
+        /// slots destructured alongside it.
+        tool_buttons: [button::State; 10],
         ethos_moral_buttons: [button::State; 3],
         ethos_order_buttons: [button::State; 3],
         /// BL-31: one button per `BackgroundKind::ALL` entry, resized on
@@ -837,6 +856,7 @@ enum Message {
     EyeColor(u8),
     Accessory(u8),
     Beard(u8),
+    HeightScale(u8),
     StartingSite(usize),
     PrevStartingSite,
     NextStartingSite,
@@ -859,7 +879,7 @@ impl Controls {
         world_sz: Vec2<u32>,
         has_rules: bool,
     ) -> Self {
-        let version = format!("Veloren {}", *common::util::DISPLAY_VERSION);
+        let version = format!("Xindeler {}", *common::util::DISPLAY_VERSION);
         let server_mismatched_version = (*common::util::GIT_HASH != server_info.git_hash
             || *common::util::GIT_TIMESTAMP != server_info.git_timestamp)
             .then(|| {
@@ -1633,12 +1653,23 @@ impl Controls {
                         .into(),
                     ])
                     .spacing(1);
-                    // Class picker: four text buttons, one per playable class.
+                    // Class picker: one text button per playable class, in
+                    // `ClassKind::PLAYABLE` order.
                     let [
                         warrior_class_button,
                         mage_class_button,
                         cleric_class_button,
                         rogue_class_button,
+                        barbarian_class_button,
+                        sorcerer_class_button,
+                        warlock_class_button,
+                        bard_class_button,
+                        paladin_class_button,
+                        druid_class_button,
+                        ranger_class_button,
+                        monk_class_button,
+                        artificer_class_button,
+                        blood_slayer_class_button,
                     ] = class_buttons;
                     // Selection is signalled ONLY by text color: every state
                     // shares the same button images, so the geometry never
@@ -1694,6 +1725,102 @@ impl Controls {
                         .height(Length::Units(26))
                         .spacing(2)
                         .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                barbarian_class_button,
+                                i18n.get_msg("char_selection-class_barbarian").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Barbarian),
+                                Some(Message::Class(ClassKind::Barbarian)),
+                            ),
+                            neat_button(
+                                sorcerer_class_button,
+                                i18n.get_msg("char_selection-class_sorcerer").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Sorcerer),
+                                Some(Message::Class(ClassKind::Sorcerer)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                warlock_class_button,
+                                i18n.get_msg("char_selection-class_warlock").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Warlock),
+                                Some(Message::Class(ClassKind::Warlock)),
+                            ),
+                            neat_button(
+                                bard_class_button,
+                                i18n.get_msg("char_selection-class_bard").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Bard),
+                                Some(Message::Class(ClassKind::Bard)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                paladin_class_button,
+                                i18n.get_msg("char_selection-class_paladin").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Paladin),
+                                Some(Message::Class(ClassKind::Paladin)),
+                            ),
+                            neat_button(
+                                druid_class_button,
+                                i18n.get_msg("char_selection-class_druid").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Druid),
+                                Some(Message::Class(ClassKind::Druid)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                ranger_class_button,
+                                i18n.get_msg("char_selection-class_ranger").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Ranger),
+                                Some(Message::Class(ClassKind::Ranger)),
+                            ),
+                            neat_button(
+                                monk_class_button,
+                                i18n.get_msg("char_selection-class_monk").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Monk),
+                                Some(Message::Class(ClassKind::Monk)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
+                        Row::with_children(vec![
+                            neat_button(
+                                artificer_class_button,
+                                i18n.get_msg("char_selection-class_artificer").into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::Artificer),
+                                Some(Message::Class(ClassKind::Artificer)),
+                            ),
+                            neat_button(
+                                blood_slayer_class_button,
+                                i18n.get_msg("char_selection-class_blood_slayer")
+                                    .into_owned(),
+                                FILL_FRAC_ONE,
+                                class_button_style(*class == ClassKind::BloodSlayer),
+                                Some(Message::Class(ClassKind::BloodSlayer)),
+                            ),
+                        ])
+                        .height(Length::Units(26))
+                        .spacing(2)
+                        .into(),
                     ])
                     .align_items(Align::Center)
                     .spacing(2);
@@ -1737,6 +1864,10 @@ impl Controls {
                         hammer_button,
                         bow_button,
                         staff_button,
+                        tome_button,
+                        sceptre_button,
+                        holy_symbol_button,
+                        focus_button,
                     ] = tool_buttons;
                     let tool = match *class {
                         ClassKind::Warrior | ClassKind::Adventurer => Column::with_children(vec![
@@ -1769,13 +1900,26 @@ impl Controls {
                             .spacing(1)
                             .into(),
                         ]),
-                        // BL-04: all staff-starter casters share the staff picker.
-                        ClassKind::Mage
-                        | ClassKind::Sorcerer
-                        | ClassKind::Warlock
-                        | ClassKind::Bard
-                        | ClassKind::Druid
-                        | ClassKind::Artificer => Column::with_children(vec![
+                        // Mage's only starter kit is a plain Tome -- no staff.
+                        ClassKind::Mage => Column::with_children(vec![
+                            icon_button_tooltip_opt(
+                                tome_button,
+                                *mainhand == Some(STARTER_TOME),
+                                Some(Message::Tool((Some(STARTER_TOME), None))),
+                                imgs.tome,
+                                "common-weapons-tome",
+                            )
+                            .into(),
+                        ]),
+                        // Sorcerer and Warlock cast with nothing equipped --
+                        // no implement to pick, so no button is rendered.
+                        ClassKind::Sorcerer | ClassKind::Warlock => {
+                            Column::with_children(Vec::new())
+                        },
+                        // Bard/Artificer still default to the shared staff
+                        // picker (a pre-existing mismatch against their
+                        // server-side whitelists, tracked separately).
+                        ClassKind::Bard | ClassKind::Artificer => Column::with_children(vec![
                             icon_button_tooltip_opt(
                                 staff_button,
                                 *mainhand == Some(STARTER_STAFF),
@@ -1785,14 +1929,58 @@ impl Controls {
                             )
                             .into(),
                         ]),
+                        // Cleric picks between a Sceptre and a Holy Symbol.
                         ClassKind::Cleric => Column::with_children(vec![
-                            icon_button_tooltip_opt(
-                                staff_button,
-                                *mainhand == Some(STARTER_SCEPTRE),
-                                Some(Message::Tool((Some(STARTER_SCEPTRE), None))),
-                                imgs.sceptre,
-                                "common-weapons-sceptre",
-                            )
+                            Row::with_children(vec![
+                                icon_button_tooltip_opt(
+                                    sceptre_button,
+                                    *mainhand == Some(STARTER_SCEPTRE),
+                                    Some(Message::Tool((Some(STARTER_SCEPTRE), None))),
+                                    imgs.sceptre,
+                                    "common-weapons-sceptre",
+                                )
+                                .into(),
+                                icon_button_tooltip_opt(
+                                    holy_symbol_button,
+                                    *mainhand == Some(STARTER_HOLY_SYMBOL),
+                                    Some(Message::Tool((Some(STARTER_HOLY_SYMBOL), None))),
+                                    imgs.holy_symbol,
+                                    "common-weapons-holy_symbol",
+                                )
+                                .into(),
+                            ])
+                            .spacing(1)
+                            .into(),
+                        ]),
+                        // Druid picks between a Staff, a Sceptre, or a Focus.
+                        ClassKind::Druid => Column::with_children(vec![
+                            Row::with_children(vec![
+                                icon_button_tooltip_opt(
+                                    staff_button,
+                                    *mainhand == Some(STARTER_STAFF),
+                                    Some(Message::Tool((Some(STARTER_STAFF), None))),
+                                    imgs.staff,
+                                    "common-weapons-staff",
+                                )
+                                .into(),
+                                icon_button_tooltip_opt(
+                                    sceptre_button,
+                                    *mainhand == Some(STARTER_SCEPTRE),
+                                    Some(Message::Tool((Some(STARTER_SCEPTRE), None))),
+                                    imgs.sceptre,
+                                    "common-weapons-sceptre",
+                                )
+                                .into(),
+                                icon_button_tooltip_opt(
+                                    focus_button,
+                                    *mainhand == Some(STARTER_FOCUS),
+                                    Some(Message::Tool((Some(STARTER_FOCUS), None))),
+                                    imgs.focus,
+                                    "common-weapons-focus",
+                                )
+                                .into(),
+                            ])
+                            .spacing(1)
                             .into(),
                         ]),
                         ClassKind::Rogue => Column::with_children(vec![
@@ -2034,6 +2222,14 @@ impl Controls {
                         body.species.num_beards(body.body_type) - 1,
                         body.beard,
                         Message::Beard,
+                        (fonts, imgs),
+                    ),
+                    char_slider(
+                        i18n.get_msg("char_selection-height_scale").into_owned(),
+                        &mut sliders.height_scale,
+                        255,
+                        body.height_scale,
+                        Message::HeightScale,
                         (fonts, imgs),
                     ),
                 ])
@@ -2282,14 +2478,12 @@ impl Controls {
                         } else {
                             format!("{} {}", i18n.get_msg(order_key), i18n.get_msg(moral_key))
                         };
-                    // Creation only offers these four classes (the class step).
-                    let class_key = match class {
-                        ClassKind::Mage => "char_selection-class_mage",
-                        ClassKind::Cleric => "char_selection-class_cleric",
-                        ClassKind::Rogue => "char_selection-class_rogue",
-                        _ => "char_selection-class_warrior",
-                    };
-                    let class_name = i18n.get_msg(class_key).into_owned();
+                    // `ClassKind::keyword()` already returns the lowercase,
+                    // underscore-separated suffix used by every
+                    // `char_selection-class_*` key, so build the lookup
+                    // directly instead of hand-listing all playable classes.
+                    let class_key = format!("char_selection-class_{}", class.keyword());
+                    let class_name = i18n.get_msg(&class_key).into_owned();
                     // A tidy key/value row: a muted, right-aligned label in a
                     // fixed-width column so the values line up, then the value.
                     let kv = |label_key: &str, value: String| -> Element<Message> {
@@ -3116,6 +3310,7 @@ impl Controls {
                     body.skin = rng.random_range(0..species.num_skin_colors());
                     body.eye_color = rng.random_range(0..species.num_eye_colors());
                     body.eyes = rng.random_range(0..species.num_eyes(body_type));
+                    body.height_scale = rng.random();
                 }
             },
             Message::HardcoreEnabled(checked) => {
@@ -3175,6 +3370,12 @@ impl Controls {
             Message::Beard(value) => {
                 if let Mode::CreateOrEdit { body, .. } = &mut self.mode {
                     body.beard = value;
+                    body.validate();
+                }
+            },
+            Message::HeightScale(value) => {
+                if let Mode::CreateOrEdit { body, .. } = &mut self.mode {
+                    body.height_scale = value;
                     body.validate();
                 }
             },
@@ -3388,6 +3589,8 @@ impl CharSelectionUi {
     }
 
     pub fn render<'a>(&'a self, drawer: &mut UiDrawer<'_, 'a>) { self.ui.render(drawer); }
+
+    pub fn is_edit(&self) -> bool { matches!(&self.controls.mode, Mode::CreateOrEdit { .. }) }
 }
 
 #[derive(Default)]
@@ -3399,6 +3602,7 @@ struct Sliders {
     eye_color: slider::State,
     accessory: slider::State,
     beard: slider::State,
+    height_scale: slider::State,
     starting_site: slider::State,
 }
 
@@ -3433,5 +3637,57 @@ mod background_ui_tests {
                 "{kind:?} has an empty starter kit description"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod starter_tool_picker_tests {
+    use super::*;
+
+    /// Every playable class must resolve to a definite default starter pick
+    /// so the tool picker never opens on a class in an inconsistent state.
+    /// Sorcerer and Warlock are the only exception: they cast with nothing
+    /// equipped, so there is no implement to default to.
+    #[test]
+    fn default_starter_for_class_is_empty_handed_only_for_sorcerer_and_warlock() {
+        for class in ClassKind::PLAYABLE {
+            let (mainhand, offhand) = default_starter_for_class(class);
+            match class {
+                ClassKind::Sorcerer | ClassKind::Warlock => {
+                    assert_eq!(
+                        (mainhand, offhand),
+                        (None, None),
+                        "{class:?} should default to no implement"
+                    );
+                },
+                _ => assert!(
+                    mainhand.is_some(),
+                    "{class:?} should default to a starter implement"
+                ),
+            }
+        }
+    }
+
+    /// Mage's default starter is the Tome, never the legacy staff.
+    #[test]
+    fn mage_default_starter_is_the_tome() {
+        assert_eq!(
+            default_starter_for_class(ClassKind::Mage),
+            (Some(STARTER_TOME), None)
+        );
+    }
+
+    /// Cleric and Druid's default is their first chargen alternative, not
+    /// an accidentally-empty pick.
+    #[test]
+    fn cleric_and_druid_default_to_their_first_alternative() {
+        assert_eq!(
+            default_starter_for_class(ClassKind::Cleric),
+            (Some(STARTER_SCEPTRE), None)
+        );
+        assert_eq!(
+            default_starter_for_class(ClassKind::Druid),
+            (Some(STARTER_STAFF), None)
+        );
     }
 }

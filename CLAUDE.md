@@ -33,6 +33,59 @@ Rules (full spec + canonical example: `docs/design/conventions/fill-in-worksheet
 
 This is the default for any multi-decision / bulk request (`AskUserQuestion` only for 1–4 quick structural forks).
 
+**Sibling convention — in-game smoke-test checklists:** when what you need from Matias is not a
+decision but a **manual test/QA pass** (build it, run the client, check boxes for pass/fail), use
+the different shape documented in the same file's "Sibling convention" section — plain Markdown
+(not one big fenced block), a `## Cómo correrlo / Setup` section with the exact build/run
+commands, lettered `## A. <topic>` sections of `- [ ] **A1 · name** — ...` checkboxes, and a
+closing `## Reportá así` legend (`✅`/`❌`/`🤷`, screenshots for failures, partial completion OK).
+For a single small feature/PR, the lighter variant embeds this directly in that feature's
+task-board doc instead of a standalone file.
+
+## Delegation — worktrees + parallel subagents (Matias, 2026-07-24)
+
+Ported from how `xindeler` (the sibling Bevy-port repo) actually worked in practice (never
+formally written there either — this is the first time it's documented): for any task large
+enough to split into independent pieces, don't implement everything serially yourself. Instead:
+
+- **You are the orchestrator, verifier, and reviewer** — stay free to keep talking with Matias
+  while subagents work in the background. Author each subagent's brief yourself: exact files,
+  exact desired end-state, referencing the relevant plan/spec section — never "figure out task
+  N4-C" with no other context.
+- **Dispatch implementation subagents into isolated git worktrees** (`Agent` tool,
+  `isolation: "worktree"`) whenever more than one subagent could touch overlapping files
+  concurrently, or a feature needs isolation from the current workspace. Skip the worktree only
+  for a single, clearly-scoped, no-conflict-risk piece.
+- **Run the existing specialist reviewer subagents** (`ecs-design-reviewer`,
+  `game-architecture-reviewer`, `game-balance-designer`, `rust-perf-reviewer`,
+  `sim-design-reviewer`, etc. — see the agent list) against each diff before it ships, not just
+  `cargo clippy`.
+- **One PR per phase/task, off freshly-synced `development`.** You own git and the PR; you never
+  merge (branch-protection rule above still applies to every subagent-produced commit too).
+- For genuinely large or ambiguous new scope (a new subsystem, a cross-cutting content pass), have
+  an **Opus** agent investigate and write the plan + task board first (same pattern already used
+  for NH-4/NH-19) — implementation dispatch only starts once that plan exists.
+
+This is the default approach for multi-part work going forward, not just a one-off request.
+
+## Comunicación asíncrona con Mati
+
+Si necesitás input y Mati no está disponible (no está en la app, o el mensaje puede tardar):
+
+```bash
+MSG_ID=$(python /Users/mgrinberg/MyXindeler/Discord/scripts/discord_api.py notify \
+  --project "xindeler-new-horizon" \
+  --session "descripción corta de esta tarea" \
+  --type blocked \
+  --message "Qué necesitás decidir y por qué estás bloqueado")
+
+# Polling hasta que responda (cada ~5 min)
+python /Users/mgrinberg/MyXindeler/Discord/scripts/discord_api.py poll --after $MSG_ID
+```
+
+Tipos: `blocked` | `question` | `done` | `info` | `error`. Usalo también para avisar cuando una PR
+queda lista para mergear, no solo cuando estás bloqueado — Mati no siempre está mirando el chat.
+
 ## Toolchain
 
 Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024 edition. The `specs` ECS crate requires nightly.
@@ -41,16 +94,16 @@ Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024
 
 ```bash
 # Run the game client (hot-reloading enabled by default in dev builds)
-cargo run --bin veloren-voxygen
+cargo run --bin xindeler-voxygen
 
 # Run the server
-cargo run --bin veloren-server-cli
+cargo run --bin xindeler-server-cli
 
 # Tests require the assets path
 VELOREN_ASSETS="$(pwd)/assets" cargo test
 
 # Single crate test
-VELOREN_ASSETS="$(pwd)/assets" cargo test -p veloren-common
+VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common
 
 # Lint (matches CI exactly)
 cargo clippy --all-targets --locked \
@@ -58,7 +111,7 @@ cargo clippy --all-targets --locked \
   -- -D warnings
 
 # Clippy for voxygen publish profile (no hot-reloading)
-cargo clippy -p veloren-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
+cargo clippy -p xindeler-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
 
 # Format check
 cargo fmt --all -- --check
@@ -125,6 +178,28 @@ In dev builds, `voxygen-anim` and `server-agent` are compiled as `cdylib` crates
 - `.superpowers/` (brainstorm scratch) and `graphify-out/` are local-only and gitignored; never commit them anywhere. Brainstorm conclusions belong as a spec/plan in `docs/design/`.
 - The `gitlab` remote is the fetch-only upstream (push disabled); never push to it.
 
+**Always `git pull` inside `docs/design/` immediately before reading OR writing anything there —
+every time, not just at session start.** Matías works in `docs/design/` heavily and often
+concurrently with agent sessions in this repo: another session may have pushed new commits, left a
+branch with an open PR, or be mid-edit on an uncommitted change. Before reading a spec/plan/task
+board to inform a decision, and before every `cd docs/design && git ...` write, run `git status` +
+`git pull` first (on whatever branch you're on — check `git branch --show-current`, don't assume
+`main`). If `git status` shows uncommitted changes or a branch that isn't yours, treat it as another
+session's in-progress work per the general git-safety rules — do not discard, stash, or commit over
+it; read around it or ask if it's genuinely blocking.
+
+**Writes to `docs/design/` also go through a branch + PR, never a direct commit to `main` there**
+(Matías, 2026-08-06) — the same discipline this repo already uses for code, applied to the nested
+private repo too. `docs/design/` is a single shared working-tree checkout other sessions actively
+read and write concurrently; committing straight to `main` risks colliding with another session
+mid-checkout (observed directly: a concurrent session's branch switch mid-edit, twice in one
+session). Concretely: `cd docs/design && git checkout main && git pull`, then
+`git checkout -b <descriptive-branch-name>`, make the edit, commit, push, `gh pr create --base main
+--head <branch>` (same repo, same `gh`, just pointed at `Matute289/xindeler-design`), then switch
+back to `main` locally and stop — do not merge. If the shared checkout shows another session's
+uncommitted work when you arrive, don't even create your branch yet: wait or ask, the same as the
+read/write rule above.
+
 **Branch protection (public repo `Matute289/xindeler-new-horizon`):**
 - `main` and `development` require a PR + 1 approval, block force-pushes and deletion — but **`enforce_admins` is OFF**: Matias (as repo admin) can merge or push directly when he chooses to, unlike the sibling Bevy-port repo where even admins are hard-blocked. This is deliberate for this project.
 - AI agents must still NEVER merge or approve PRs, push to `main`/`development`, or touch branch-protection settings themselves — the admin-bypass exists for Matias, not for the agent. Workflow: branch off `development` → commit → push branch → open PR with base `development` → stop and report. Only Matias reviews and merges (or bypasses, at his own discretion).
@@ -153,7 +228,7 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 **Where each build runs:**
 - **Code CI** (build / check / test / lint on PRs) → **GitHub Actions** (public repo = free, unlimited minutes). It must **not** pull LFS — compilation and tests don't need the binary assets.
 - **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`. **TODO before first use**: this script was written for the sibling repos and needs to be checked/adapted server-side to build from `xindeler-new-horizon` (checkout path, binary name, output path) before a real `v*` tag push is made here.
-- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `veloren-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
+- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
 - **Client release** (voxygen desktop installer + Airshipper) → **deferred**, same as the sibling repo.
 - **Repo secrets**: this is a brand-new repo — `secrets.VPS_SSH_KEY` has NOT been configured yet (`gh secret set VPS_SSH_KEY < path/to/key`, or via the GitHub UI). CI that needs VPS SSH will fail until this is added.
 

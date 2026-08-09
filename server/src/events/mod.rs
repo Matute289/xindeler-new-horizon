@@ -16,10 +16,11 @@ use specs::{
 
 use self::{
     entity_creation::{
-        handle_arc, handle_create_aura_entity, handle_create_item_drop, handle_create_npc,
-        handle_create_object, handle_create_pool, handle_create_ship, handle_create_special_entity,
-        handle_initialize_character, handle_initialize_spectator, handle_loaded_character_data,
-        handle_shockwave, handle_shoot, handle_throw,
+        handle_arc, handle_create_aura_entity, handle_create_floating_disk,
+        handle_create_item_drop, handle_create_npc, handle_create_object, handle_create_pool,
+        handle_create_ship, handle_create_special_entity, handle_initialize_character,
+        handle_initialize_spectator, handle_loaded_character_data, handle_shockwave, handle_shoot,
+        handle_throw,
     },
     entity_manipulation::{handle_delete, handle_start_interaction, handle_transform},
     interaction::handle_tame_pet,
@@ -30,21 +31,30 @@ use self::{
     trade::handle_process_trade_action,
 };
 
+mod banishment;
 mod entity_creation;
 mod entity_manipulation;
 mod event_types;
 mod group_manip;
+mod identify;
 mod information;
 mod interaction;
 mod inventory_manip;
 mod invite;
 mod mounting;
 mod player;
+mod remote_sense;
 mod trade;
+mod transcription;
 
 pub(crate) use event_types::register_event_busses;
 /// Shared utilities used by other code **in this crate**
 pub(crate) mod shared {
+    /// `crate::banishment`'s rehydration pass is the only consumer, and it is
+    /// itself `worldgen`-only (no rtsim means no persisted registry to
+    /// rehydrate from).
+    #[cfg(feature = "worldgen")]
+    pub(crate) use super::entity_creation::handle_create_npc;
     pub(crate) use super::{
         entity_manipulation::{TransformEntityError, transform_entity},
         group_manip::update_map_markers,
@@ -164,6 +174,7 @@ impl Server {
         self.handle_serial_events(handle_create_special_entity);
         self.handle_serial_events(handle_create_item_drop);
         self.handle_serial_events(handle_create_object);
+        self.handle_serial_events(handle_create_floating_disk);
         self.handle_serial_events(handle_create_aura_entity);
         self.handle_serial_events(handle_summon_beam_pillars);
         self.handle_serial_events(handle_delete);
@@ -239,5 +250,35 @@ impl Server {
             .try_into_sendable()
             .ok()
             .expect("This should be sendable")
+    }
+}
+
+#[cfg(test)]
+mod dispatcher_tests {
+    use super::*;
+
+    /// Every ordering guarantee in the event dispatcher is declared as a
+    /// *string* (`event_sys_name`) resolved against the systems registered
+    /// before it, and `shred` panics on one it cannot resolve. Several of those
+    /// edges are load-bearing correctness, not tuning — `BanishEvent` after
+    /// every `Health` writer so a creature that died this tick can never be
+    /// banished, `DestroyEvent` after both so the banishment's reward is paid
+    /// while the creature still has a position — and reordering
+    /// `register_event_systems` would break them at server start-up rather than
+    /// at compile time. Building the real dispatcher is the only thing that
+    /// resolves them all.
+    ///
+    /// Scope, stated plainly: this proves every declared edge *resolves* and
+    /// that the graph is acyclic. It does not prove any particular edge is
+    /// declared — deleting one still builds fine.
+    #[test]
+    fn every_declared_ordering_edge_resolves() {
+        let pools = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("thread pool"),
+        );
+        let _ = Server::create_event_dispatcher(pools);
     }
 }

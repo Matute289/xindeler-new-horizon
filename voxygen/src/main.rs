@@ -18,8 +18,8 @@ static GLOBAL: common_base::tracy_client::ProfiledAllocator<std::alloc::System> 
 
 use i18n::{self, LocalizationHandle};
 #[cfg(feature = "singleplayer")]
-use veloren_voxygen::singleplayer::SingleplayerState;
-use veloren_voxygen::{
+use xindeler_voxygen::singleplayer::SingleplayerState;
+use xindeler_voxygen::{
     GlobalState,
     audio::AudioFrontend,
     cli, panic_handler,
@@ -33,9 +33,9 @@ use veloren_voxygen::{
 use common::clock::Clock;
 use std::{panic, path::PathBuf};
 use tracing::{info, warn};
-#[cfg(feature = "egui-ui")]
-use veloren_voxygen::ui::egui::EguiState;
 use wgpu::{Backends, Instance};
+#[cfg(feature = "egui-ui")]
+use xindeler_voxygen::ui::egui::EguiState;
 
 fn main() {
     // Process CLI arguments
@@ -124,7 +124,7 @@ fn main() {
         });
         if let Some(adapter) = best {
             settings.graphics =
-                veloren_voxygen::settings::GraphicsSettings::auto_detect(&adapter.get_info());
+                xindeler_voxygen::settings::GraphicsSettings::auto_detect(&adapter.get_info());
             settings.save_to_file_warn(&config_dir);
         }
     }
@@ -187,6 +187,7 @@ fn main() {
     audio.set_master_volume(settings.audio.master_volume.get_checked());
     audio.set_music_volume(settings.audio.music_volume.get_checked());
     audio.set_sfx_volume(settings.audio.sfx_volume.get_checked());
+    audio.set_instrument_volume(settings.audio.instrument_volume.get_checked());
     audio.set_ambience_volume(settings.audio.ambience_volume.get_checked());
     audio.set_music_spacing(settings.audio.music_spacing);
 
@@ -207,7 +208,7 @@ fn main() {
     i18n.set_english_fallback(settings.language.use_english_fallback);
 
     // Create window
-    use veloren_voxygen::{error::Error, render::RenderError};
+    use xindeler_voxygen::{error::Error, render::RenderError};
     let (mut window, event_loop) = match Window::new(&settings, &tokio_runtime) {
         Ok(ok) => ok,
         // Custom panic message when a graphics backend could not be found
@@ -232,7 +233,7 @@ fn main() {
         Err(error) => panic!("Failed to create window!: {:?}", error),
     };
 
-    let clipboard = veloren_voxygen::ui::ice::Clipboard::connect(window.window());
+    let clipboard = xindeler_voxygen::ui::ice::Clipboard::connect(window.window());
 
     let lazy_init = SpriteRenderContext::new(window.renderer_mut());
 
@@ -241,9 +242,9 @@ fn main() {
 
     #[cfg(feature = "discord")]
     let discord = if settings.networking.enable_discord_integration {
-        veloren_voxygen::discord::Discord::start(&tokio_runtime)
+        xindeler_voxygen::discord::Discord::start(&tokio_runtime)
     } else {
-        veloren_voxygen::discord::Discord::Inactive
+        xindeler_voxygen::discord::Discord::Inactive
     };
 
     let global_state = GlobalState {

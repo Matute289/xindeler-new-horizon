@@ -3,8 +3,10 @@ use crate::TerrainPersistence;
 use crate::{EditableSettings, Settings, client::Client};
 use common::{
     comp::{
-        Admin, AdminRole, Body, CanBuild, ControlEvent, Controller, ForceUpdate, Health, Ori,
-        Player, Pos, Presence, PresenceKind, Scale, SkillSet, SpectatingEntity, Vel,
+        Admin, AdminRole, Body, CanBuild, CharacterClass, ControlAction, ControlEvent, Controller,
+        ForceUpdate, Health, InputKind, Ori, Player, Pos, Presence, PresenceKind, RemoteSense,
+        Scale, SkillSet, SpectatingEntity, Vel,
+        buff::{BuffChange, BuffKind},
     },
     event::{self, EmitExt},
     event_emitters,
@@ -13,7 +15,7 @@ use common::{
     resources::{DeltaTime, PlayerPhysicsSetting, PlayerPhysicsSettings},
     slowjob::SlowJobPool,
     terrain::TerrainGrid,
-    uid::IdMaps,
+    uid::{IdMaps, Uid},
     vol::ReadVol,
 };
 use common_ecs::{Job, Origin, Phase, System};
@@ -48,9 +50,11 @@ event_emitters! {
     struct Events[Emitters] {
         exit_ingame: event::ExitIngameEvent,
         request_site_info: event::RequestSiteInfoEvent,
+        transcribe_spell: event::TranscribeSpellEvent,
         update_map_marker: event::UpdateMapMarkerEvent,
         client_disconnect: event::ClientDisconnectEvent,
         set_battle_mode: event::SetBattleModeEvent,
+        buff: event::BuffEvent,
     }
 }
 
@@ -67,6 +71,7 @@ impl Sys {
         is_volume_rider: &ReadStorage<'_, Is<VolumeRider>>,
         force_update: Option<&&mut ForceUpdate>,
         skill_set: &mut Option<Cow<'_, SkillSet>>,
+        character_class: &mut Option<CharacterClass>,
         healths: &ReadStorage<'_, Health>,
         rare_writes: &parking_lot::Mutex<RareWrites<'_, '_>>,
         position: Option<&mut Pos>,
@@ -77,6 +82,7 @@ impl Sys {
         player_physics_setting: Option<&mut PlayerPhysicsSetting>,
         server_physics_forced: bool,
         maybe_admin: &Option<&Admin>,
+        maybe_remote_sense: &Option<&RemoteSense>,
         time_for_vd_changes: Instant,
         msg: ClientGeneral,
         player_physics: &mut Option<(Pos, Vel, Ori)>,
@@ -132,7 +138,25 @@ impl Sys {
                 }
             },
             ClientGeneral::ControlAction(event) => {
+                // 🔴 ORIGIN GATE — the only content filter on this arm, and it
+                // exists for one reason.
+                //
+                // `InputKind::TriggerAbility(i)` is what authorises a reactive
+                // trigger slot's cast to skip the ability's own cooldown. Its
+                // only legitimate producer is the server's own trigger
+                // evaluator, writing into `Controller` directly. A modified
+                // client that could send one would get unlimited,
+                // cooldown-free casts of whatever sits in the slot — including
+                // a top-circle spell whose entire cost model is a 36-hour
+                // real-world timer.
+                //
+                // The authorisation itself is a separate server-minted,
+                // ability-bound token, so this deny is defence in depth rather
+                // than the only lock — but it is the cheapest place to stop the
+                // message, and dropping it silently matches how this arm
+                // already treats a non-controlling presence.
                 if presence.kind.controlling_char()
+                    && control_action_permitted_from_client(&event)
                     && let Some(controller) = controller
                 {
                     controller.push_action(event);
@@ -222,8 +246,16 @@ impl Sys {
                     })
                     .transpose();
             },
+            ClientGeneral::SetFutureLevelsToSecondary(value) => {
+                if let Some(character_class) = character_class.as_mut() {
+                    character_class.set_future_levels_to_secondary(value);
+                }
+            },
             ClientGeneral::RequestSiteInfo(id) => {
                 emitters.emit(event::RequestSiteInfoEvent { entity, id });
+            },
+            ClientGeneral::TranscribeSpell(page) => {
+                emitters.emit(event::TranscribeSpellEvent { entity, page });
             },
             ClientGeneral::RequestPlayerPhysics {
                 server_authoritative,
@@ -250,9 +282,11 @@ impl Sys {
                 }
             },
             ClientGeneral::SpectateEntity(uid) => {
-                if let Some(admin) = maybe_admin
-                    && admin.0 >= AdminRole::Moderator
-                {
+                // This reads the SERVER's own `RemoteSense` storage, never
+                // anything the client sent — the client cannot grant itself
+                // a viewpoint by lying about its own copy of this component.
+                let is_moderator = maybe_admin.is_some_and(|admin| admin.0 >= AdminRole::Moderator);
+                if spectate_entity_permitted(is_moderator, uid, *maybe_remote_sense) {
                     *spectating_entity = Some(uid);
                 }
             },
@@ -260,6 +294,18 @@ impl Sys {
                 emitters.emit(event::SetBattleModeEvent {
                     entity,
                     battle_mode,
+                });
+            },
+            ClientGeneral::CancelRemoteSense => {
+                // A voluntary early end of the sender's own remote-sensing
+                // link. Only ever removes the sender's own buff — the actual
+                // cleanup (clearing `RemoteSense`/`SpectatingEntity`) happens
+                // next tick in `server::sys::remote_sense::Sys` once it
+                // notices the sustaining buff is gone, exactly like a
+                // duration-expiry or a concentration-breaking hit.
+                emitters.emit(event::BuffEvent {
+                    entity,
+                    buff_change: BuffChange::RemoveByKind(BuffKind::RemoteSensing),
                 });
             },
             ClientGeneral::RequestCharacterList
@@ -308,6 +354,7 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, Is<Rider>>,
         ReadStorage<'a, Is<VolumeRider>>,
         WriteStorage<'a, SkillSet>,
+        WriteStorage<'a, CharacterClass>,
         ReadStorage<'a, Health>,
         ReadStorage<'a, Body>,
         ReadStorage<'a, Scale>,
@@ -323,6 +370,7 @@ impl<'a> System<'a> for Sys {
         TerrainPersistenceData<'a>,
         ReadStorage<'a, Player>,
         ReadStorage<'a, Admin>,
+        ReadStorage<'a, RemoteSense>,
     );
 
     const NAME: &'static str = "msg::in_game";
@@ -341,6 +389,7 @@ impl<'a> System<'a> for Sys {
             is_rider,
             is_volume_rider,
             mut skill_sets,
+            mut character_classes,
             healths,
             bodies,
             scales,
@@ -356,6 +405,7 @@ impl<'a> System<'a> for Sys {
             mut terrain_persistence,
             players,
             admins,
+            remote_senses,
         ): Self::SystemData,
     ) {
         let time_for_vd_changes = Instant::now();
@@ -374,7 +424,9 @@ impl<'a> System<'a> for Sys {
             (&mut presences).maybe(),
             players.maybe(),
             admins.maybe(),
+            remote_senses.maybe(),
             (&skill_sets).maybe(),
+            (&character_classes).maybe(),
             (&mut positions).maybe(),
             (&mut velocities).maybe(),
             (&mut orientations).maybe(),
@@ -392,7 +444,9 @@ impl<'a> System<'a> for Sys {
                     mut maybe_presence,
                     maybe_player,
                     maybe_admin,
+                    maybe_remote_sense,
                     skill_set,
+                    character_class,
                     ref mut pos,
                     ref mut vel,
                     ref mut ori,
@@ -412,6 +466,7 @@ impl<'a> System<'a> for Sys {
                     // ingame messages to be ignored.
                     let mut clearable_maybe_presence = maybe_presence.as_deref_mut();
                     let mut skill_set = skill_set.map(Cow::Borrowed);
+                    let mut character_class_owned = character_class.copied();
                     let mut player_physics = None;
                     let mut spectating_entity = None;
                     let _ = super::try_recv_all(client, 2, |client, msg| {
@@ -426,6 +481,7 @@ impl<'a> System<'a> for Sys {
                             &is_volume_rider,
                             force_update.as_ref(),
                             &mut skill_set,
+                            &mut character_class_owned,
                             &healths,
                             &rare_writes,
                             pos.as_deref_mut(),
@@ -436,6 +492,7 @@ impl<'a> System<'a> for Sys {
                             new_player_physics_setting.as_mut(),
                             is_server_physics_forced,
                             &maybe_admin,
+                            &maybe_remote_sense,
                             time_for_vd_changes,
                             msg,
                             &mut player_physics,
@@ -564,12 +621,19 @@ impl<'a> System<'a> for Sys {
                         .zip(new_player_physics_setting
                              .filter(|_| old_player_physics_setting != new_player_physics_setting));
                      let spectating_entity_update = spectating_entity.map(|e| (entity, e));
-                    (skill_set_update, spectating_entity_update, physics_update)
+                    // Only a real, rarely-toggled preference change, never a per-tick write —
+                    // compared against the borrowed pre-message value so an untouched message
+                    // batch never produces a spurious deferred write.
+                    let character_class_update = character_class_owned
+                        .zip(character_class.copied())
+                        .filter(|(new, old)| new != old)
+                        .map(|(new, _)| (entity, new));
+                    (skill_set_update, spectating_entity_update, physics_update, character_class_update)
                 },
             )
             // NOTE: Would be nice to combine this with the map_init somehow, but I'm not sure if
             // that's possible.
-            .filter(|(x, y, z)| x.is_some() || y.is_some() || z.is_some())
+            .filter(|(x, y, z, w)| x.is_some() || y.is_some() || z.is_some() || w.is_some())
             // NOTE: I feel like we shouldn't actually need to allocate here, but hopefully this
             // doesn't turn out to be important as there shouldn't be that many connected clients.
             // The reason we can't just use unzip is that the two sides might be different lengths.
@@ -583,7 +647,12 @@ impl<'a> System<'a> for Sys {
         // order, even though we're not updating directly by entity or uid (note that
         // for a given entity, we process messages serially).
         deferred_updates.iter_mut().for_each(
-            |(skill_set_update, spectating_entity_update, physics_update)| {
+            |(
+                skill_set_update,
+                spectating_entity_update,
+                physics_update,
+                character_class_update,
+            )| {
                 if let Some((entity, new_skill_set)) = skill_set_update {
                     // We know this exists, because we already iterated over it with the skillset
                     // lock taken, so we can ignore the error.
@@ -613,11 +682,171 @@ impl<'a> System<'a> for Sys {
                         .settings
                         .insert(uuid, player_physics_setting);
                 }
+                if let &mut Some((entity, new_character_class)) = character_class_update {
+                    // We know this exists, for the same reason as the skillset case above.
+                    character_classes
+                        .get_mut(entity)
+                        .map(|mut cc| *cc = new_character_class);
+                }
             },
         );
         // Finally, drop the deferred updates in another thread.
         slow_jobs.spawn("CHUNK_DROP", move || {
             drop(deferred_updates);
         });
+    }
+}
+
+/// Whether a `ClientGeneral::SpectateEntity(requested)` message should be
+/// honoured.
+///
+/// Moderators may spectate anything, and stopping (`requested == None`) is
+/// always allowed. Everyone else may spectate ONLY the entity their own
+/// active `RemoteSense` link is anchored to — `remote_sense` here must always
+/// be read from the SERVER's own component storage for the sending entity,
+/// never anything the client claims about itself, or this check is a
+/// wall-hack.
+///
+/// Pulled out as its own pure function (rather than left inline in the
+/// message match) so this security property is directly unit-testable
+/// without needing a full ECS/network fixture.
+fn spectate_entity_permitted(
+    is_moderator: bool,
+    requested: Option<Uid>,
+    remote_sense: Option<&RemoteSense>,
+) -> bool {
+    is_moderator
+        || requested.is_none()
+        || requested.is_some_and(|target| remote_sense.is_some_and(|rs| rs.anchor_uid() == target))
+}
+
+/// Whether a `ControlAction` that arrived over the wire may be pushed onto the
+/// player's `Controller`.
+///
+/// 🔴 The only content filter on that message, and it exists for one reason:
+/// `InputKind::TriggerAbility(i)` is the input a reactive trigger slot's cast
+/// travels on, and the authorisation to skip the ability's own cooldown is
+/// looked up from that input's slot. Its only legitimate producer is the
+/// server's own trigger evaluator, writing into `Controller` directly. A
+/// modified client able to send one would be asking for unlimited,
+/// cooldown-free casts of whatever sits in the slot — including a top-circle
+/// spell whose entire cost model is a thirty-six-hour real-world timer.
+///
+/// The authorisation itself is a separate server-minted, ability-bound token,
+/// so this is defence in depth rather than the only lock — but it is the
+/// cheapest place to stop the message, and dropping it silently matches how
+/// this arm already treats a non-controlling presence.
+fn control_action_permitted_from_client(event: &ControlAction) -> bool {
+    !matches!(
+        event,
+        ControlAction::StartInput {
+            input: InputKind::TriggerAbility(_),
+            ..
+        } | ControlAction::CancelInput {
+            input: InputKind::TriggerAbility(_),
+        }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::comp::remote_sense::SenseAnchor;
+    use std::num::NonZeroU64;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    fn remote_sense_anchored_to(target: Uid) -> RemoteSense {
+        RemoteSense {
+            anchor: SenseAnchor::Sensor(target),
+            free_look: true,
+            piloted: false,
+            caster: uid(1),
+            flight_speed: 0.0,
+        }
+    }
+
+    #[test]
+    fn moderator_may_spectate_anything() {
+        assert!(spectate_entity_permitted(true, Some(uid(99)), None));
+    }
+
+    #[test]
+    fn stopping_is_always_allowed() {
+        assert!(spectate_entity_permitted(false, None, None));
+        let rs = remote_sense_anchored_to(uid(5));
+        assert!(spectate_entity_permitted(false, None, Some(&rs)));
+    }
+
+    #[test]
+    fn non_moderator_with_no_remote_sense_is_refused() {
+        assert!(!spectate_entity_permitted(false, Some(uid(5)), None));
+    }
+
+    #[test]
+    fn non_moderator_targeting_an_entity_their_remote_sense_does_not_name_is_refused() {
+        // The link is anchored to entity 5, but the client is asking to
+        // spectate entity 6: this is exactly what a hacked client spamming
+        // `SpectateEntity` with an arbitrary `Uid` would send, and it must be
+        // refused even though a (mismatched) `RemoteSense` link exists.
+        let rs = remote_sense_anchored_to(uid(5));
+        assert!(!spectate_entity_permitted(false, Some(uid(6)), Some(&rs)));
+    }
+
+    #[test]
+    fn non_moderator_with_a_matching_remote_sense_is_accepted() {
+        let rs = remote_sense_anchored_to(uid(5));
+        assert!(spectate_entity_permitted(false, Some(uid(5)), Some(&rs)));
+    }
+
+    /// A crafted packet naming a trigger slot is dropped outright, in both
+    /// directions. This is the message a modified client would send to claim a
+    /// free, cooldown-ignoring cast.
+    #[test]
+    fn a_client_may_not_start_or_cancel_a_trigger_input() {
+        for slot in 0..4u8 {
+            assert!(!control_action_permitted_from_client(
+                &ControlAction::StartInput {
+                    input: InputKind::TriggerAbility(slot),
+                    target_entity: None,
+                    select_pos: None,
+                }
+            ));
+            assert!(!control_action_permitted_from_client(
+                &ControlAction::CancelInput {
+                    input: InputKind::TriggerAbility(slot),
+                }
+            ));
+        }
+    }
+
+    /// Every other control action a client can send is untouched — this filter
+    /// must not become a general-purpose input firewall by accident.
+    #[test]
+    fn every_other_control_action_still_passes() {
+        for input in [
+            InputKind::Primary,
+            InputKind::Secondary,
+            InputKind::Block,
+            InputKind::Ability(0),
+            InputKind::Ability(4),
+            InputKind::Roll,
+            InputKind::Jump,
+            InputKind::Fly,
+            InputKind::WallJump,
+        ] {
+            assert!(control_action_permitted_from_client(
+                &ControlAction::StartInput {
+                    input,
+                    target_entity: None,
+                    select_pos: None,
+                }
+            ));
+            assert!(control_action_permitted_from_client(
+                &ControlAction::CancelInput { input }
+            ));
+        }
+        assert!(control_action_permitted_from_client(&ControlAction::Wield));
+        assert!(control_action_permitted_from_client(&ControlAction::Sit));
     }
 }

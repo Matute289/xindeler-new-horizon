@@ -1,6 +1,7 @@
 use crate::{
-    combat,
-    comp::{CharacterState, MeleeConstructor, StateUpdate, character_state::OutputEvents},
+    comp::{
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, character_state::OutputEvents,
+    },
     states::{
         behavior::{CharacterBehavior, JoinData},
         utils::*,
@@ -59,7 +60,9 @@ impl CharacterBehavior for Data {
         handle_move(data, &mut update, 0.1);
 
         let create_melee = |charge_frac: f32| {
-            let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+            let precision_mult = data
+                .derived
+                .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
             let tool_stats = get_tool_stats(data, self.static_data.ability_info);
             let mut melee = self
                 .static_data
@@ -172,11 +175,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recover
                     if let CharacterState::DashMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

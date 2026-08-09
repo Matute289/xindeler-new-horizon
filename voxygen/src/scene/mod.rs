@@ -33,7 +33,7 @@ use crate::{
     render::{
         CloudsLocals, Consts, CullingMode, Drawer, GlobalModel, Globals, GlobalsBindGroup, Light,
         Model, PointLightMatrix, PostProcessLocals, RainOcclusionLocals, Renderer, Shadow,
-        ShadowLocals, SkyboxVertex, create_skybox_mesh,
+        ShadowLocals, SkyboxVertex, SsaoLocals, create_skybox_mesh,
     },
     session::PlayerDebugLines,
     settings::Settings,
@@ -43,7 +43,7 @@ use client::Client;
 use common::{
     calendar::Calendar,
     comp::{
-        self, CapsulePrism, CharacterState, item::ItemDesc,
+        self, CapsulePrism, CharacterState, SenseKind, item::ItemDesc,
         ship::figuredata::VOXEL_COLLIDER_MANIFEST, slot::EquipSlot, tool::ToolKind,
     },
     outcome::Outcome,
@@ -145,6 +145,9 @@ pub struct SceneData<'a> {
     pub viewpoint_entity: specs::Entity,
     pub mutable_viewpoint: bool,
     pub target_entities: &'a HashSet<specs::Entity>,
+    /// Entities the viewpoint entity currently perceives through a magical
+    /// sense, each tagged with the sense that revealed it.
+    pub revealed_entities: &'a HashMap<specs::Entity, SenseKind>,
     pub loaded_distance: f32,
     pub terrain_view_distance: u32, // not used currently
     pub entity_view_distance: u32,
@@ -497,39 +500,42 @@ impl Scene {
                 is_attack,
                 reagent,
                 ..
-            } => self.event_lights.push(EventLight {
-                light: Light::new(
-                    *pos,
-                    match reagent {
-                        Some(Reagent::Blue) => Rgb::new(0.15, 0.4, 1.0),
-                        Some(Reagent::Green) => Rgb::new(0.0, 1.0, 0.0),
-                        Some(Reagent::Purple) => Rgb::new(0.7, 0.0, 1.0),
-                        Some(Reagent::Red) => {
-                            if *is_attack {
-                                Rgb::new(1.0, 0.5, 0.0)
+            } => match reagent {
+                Some(Reagent::Earth) => {},
+                _ => self.event_lights.push(EventLight {
+                    light: Light::new(
+                        *pos,
+                        match reagent {
+                            Some(Reagent::Blue) => Rgb::new(0.15, 0.4, 1.0),
+                            Some(Reagent::Green) => Rgb::new(0.0, 1.0, 0.0),
+                            Some(Reagent::Purple) => Rgb::new(0.7, 0.0, 1.0),
+                            Some(Reagent::Red) => {
+                                if *is_attack {
+                                    Rgb::new(1.0, 0.5, 0.0)
+                                } else {
+                                    Rgb::new(1.0, 0.0, 0.0)
+                                }
+                            },
+                            Some(Reagent::White) => Rgb::new(1.0, 1.0, 1.0),
+                            Some(Reagent::Yellow) => Rgb::new(1.0, 1.0, 0.0),
+                            Some(Reagent::FireRain) => Rgb::new(1.0, 0.8, 0.3),
+                            Some(Reagent::FireGigas) => Rgb::new(1.0, 0.6, 0.2),
+                            Some(Reagent::Earth) | None => Rgb::new(1.0, 0.5, 0.0),
+                        },
+                        power
+                            * if *is_attack || reagent.is_none() {
+                                25.0
                             } else {
-                                Rgb::new(1.0, 0.0, 0.0)
-                            }
-                        },
-                        Some(Reagent::White) => Rgb::new(1.0, 1.0, 1.0),
-                        Some(Reagent::Yellow) => Rgb::new(1.0, 1.0, 0.0),
-                        Some(Reagent::FireRain) => Rgb::new(1.0, 0.8, 0.3),
-                        Some(Reagent::FireGigas) => Rgb::new(1.0, 0.6, 0.2),
-                        None => Rgb::new(1.0, 0.5, 0.0),
+                                100.0
+                            },
+                    ),
+                    timeout: match reagent {
+                        Some(_) => 0.8,
+                        None => 0.25,
                     },
-                    power
-                        * if *is_attack || reagent.is_none() {
-                            25.0
-                        } else {
-                            100.0
-                        },
-                ),
-                timeout: match reagent {
-                    Some(_) => 0.8,
-                    None => 0.25,
-                },
-                fadeout: |timeout| timeout * 2.0,
-            }),
+                    fadeout: |timeout| timeout * 2.0,
+                }),
+            },
             Outcome::ProjectileShot { .. } => {},
             _ => {},
         }
@@ -984,6 +990,7 @@ impl Scene {
             scene_data.state.get_time(),
             self.local_time,
             renderer.resolution().as_(),
+            renderer.internal_resolution().as_(),
             Vec2::new(SHADOW_NEAR, SHADOW_FAR),
             lights.len(),
             shadows.len(),
@@ -1010,6 +1017,7 @@ impl Scene {
         )]);
         renderer.update_clouds_locals(CloudsLocals::new(proj_mat_inv, view_mat_inv));
         renderer.update_postprocess_locals(PostProcessLocals::new(proj_mat_inv, view_mat_inv));
+        renderer.update_ssao_locals(SsaoLocals::new(proj_mat_inv, view_mat_inv));
 
         // Maintain LoD.
         self.lod.maintain(renderer, client, focus_pos, &self.camera);
@@ -1543,6 +1551,7 @@ impl Scene {
                 state,
                 viewpoint_entity,
                 tick,
+                scene_data.revealed_entities,
                 camera_data,
             );
 
@@ -1552,8 +1561,10 @@ impl Scene {
             self.figure_mgr.render(
                 &mut first_pass.draw_figures(),
                 state,
+                scene_data.client.entity(),
                 viewpoint_entity,
                 tick,
+                scene_data.revealed_entities,
                 camera_data,
             );
 

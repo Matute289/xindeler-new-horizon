@@ -1,31 +1,34 @@
 use crate::{
     assets::{AssetExt, Ron},
     comp::{
-        Alignment, AttunedItems, Body, Buffs, CharacterState, Combo, Energy, Group, Health,
-        HealthChange, InputKind, Inventory, Mass, Ori, Player, Poise, PoiseChange, SkillSet, Stats,
+        Alignment, AttunedItems, Buffs, CasterGearFold, CharacterClass, CharacterState, Combo,
+        DerivedStats, Energy, Group, Health, HealthChange, InputKind, Inventory, MagicSource, Mass,
+        Ori, Player, Poise, PoiseChange, Stats,
         ability::Capability,
         attunement::item_effects_active,
         aura::{AuraKindVariant, EnteredAuras},
+        body::MagicResistTier,
         buff::{Buff, BuffChange, BuffData, BuffDescriptor, BuffKind, BuffSource, DestInfo},
+        class::ClassKind,
         inventory::{
             item::{
-                ItemDesc, ItemKind, MaterialStatManifest,
-                armor::Protection,
-                tool::{self, ToolKind},
+                ItemKind,
+                tool::{self, Hands, Tool, ToolKind, WeaponRole},
             },
             slot::EquipSlot,
         },
-        skillset::SkillGroupKind,
+        skillset::{MAX_CHARACTER_LEVEL, SkillGroupKind},
     },
     effect::BuffEffect,
     event::{
-        BuffEvent, ComboChangeEvent, EmitExt, EnergyChangeEvent, EntityAttackedHookEvent,
-        HealthChangeEvent, KnockbackEvent, ParryHookEvent, PoiseChangeEvent, TransformEvent,
+        BuffEvent, ComboChangeEvent, DispelIllusionEvent, EmitExt, EnergyChangeEvent,
+        EntityAttackedHookEvent, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
+        PoiseChangeEvent, TransformEvent,
     },
     generation::{EntityConfig, EntityInfo},
     outcome::Outcome,
     resources::{Secs, Time},
-    states::utils::{AbilityInfo, StageSection},
+    states::utils::{AbilityInfo, HandInfo, StageSection},
     uid::{IdMaps, Uid},
     util::Dir,
 };
@@ -101,7 +104,116 @@ pub struct CombatTuning {
     /// Flat evasion penalty while a shield is equipped — a shield pays off via
     /// block/mitigation, not dodge.
     pub shield_evasion_penalty: f32,
+    /// Chance for a resisted magical effect (charm / domination / compulsion /
+    /// banishment) to land when the caster's magic accuracy exactly equals the
+    /// target's *effective* magic evasion. Deliberately below `base_hit` so
+    /// these effects can be tuned without touching the damage curve.
+    pub save_base_hit: f32,
+    /// Minimum landing chance for a resisted magical effect, for a caster that
+    /// is merely at a disadvantage rather than hard-walled by
+    /// `save_outclassed_wall` — such an attempt is unlikely, never impossible.
+    pub save_hit_floor: f32,
+    /// Maximum landing chance for a resisted magical effect. Deliberately
+    /// below `hit_ceil`: damage may become guaranteed, a save never may, so
+    /// every target keeps an escape roll no matter the level gap.
+    pub save_hit_ceil: f32,
+    /// Hard cap on the combined magic-resistance + crowd-control-resistance
+    /// subtraction, mirroring `resist_soft_cap`. Stacked resistances can never
+    /// reach immunity — only `Body::immune_to` grants that.
+    pub save_mr_soft_cap: f32,
+    /// Points of effective magic evasion granted per point of the target's
+    /// `combat_rating`. Creatures carry no class attributes, so their
+    /// `Stats::magic_evasion` is 0.0; without this term a world boss would be
+    /// as charmable as a rabbit.
+    pub save_cr_to_evasion: f32,
+    /// Flat penalty subtracted when the target is already fighting the caster
+    /// or the caster's group, which makes a resisted effect an opener rather
+    /// than a mid-duel button. Applies identically in PvE and PvP.
+    pub save_in_combat_penalty: f32,
+    /// Resistance fraction each `MagicResistTier` above `None` is worth. The
+    /// tier *taxonomy* lives in code (`Body::magic_resist_tier`); only these
+    /// numbers are data.
+    pub magic_resist_minor: f32,
+    pub magic_resist_major: f32,
+    pub magic_resist_legendary: f32,
+    /// Hard wall on the level term, expressed in the same post-`hit_k` units
+    /// the level term itself uses (not raw accuracy/evasion points). A caster
+    /// whose accuracy deficit against the target's effective magic evasion
+    /// reaches this magnitude always fails outright, bypassing
+    /// `save_hit_floor` entirely: being sufficiently outclassed removes the
+    /// rescue roll, while a merely unfavourable matchup keeps it.
+    pub save_outclassed_wall: f32,
+    /// The disguise-suspicion roll's own tuning instance for the same shared
+    /// formula ([`magic_effect_success_chance`]) the `save_*` fields above
+    /// feed via [`CombatTuning::save_tuning`]. A second named instance of
+    /// [`MagicEffectTuning`], not a second formula — see that type's doc
+    /// comment. `#[serde(default)]` (struct-level, above) means an asset
+    /// predating this field still loads and gets the tuned disguise numbers
+    /// from [`CombatTuning::default`], not zeroes.
+    pub disguise: MagicEffectTuning,
+    /// How often, in real seconds, an observer that has not yet seen through
+    /// a disguise gets another periodic suspicion roll against it (the
+    /// disguise-roll's own "T1" trigger). A genuine gameplay-balance cadence,
+    /// not an engine constant, so it lives here rather than as a Rust
+    /// literal in `server/agent/src/action_nodes.rs`.
+    pub disguise_suspicion_reroll_secs: f32,
+    /// `scrying`'s own tuning instance for the same shared formula
+    /// ([`magic_effect_success_chance`]) — a third named [`MagicEffectTuning`]
+    /// alongside `save_*`/`disguise` above, not a third formula. `scrying`
+    /// does not use this struct's own `situational_penalty` field (it always
+    /// calls the formula with `situational: false` — every field must still
+    /// be present or the whole `scrying:` section fails to load, see
+    /// [`MagicEffectTuning`]'s own doc comment): the roll's context-dependent
+    /// terms are additive *bonuses*, not a subtracted penalty, expressed
+    /// instead via `scrying_party_bonus_accuracy`/
+    /// `scrying_focus_item_bonus_accuracy` below.
+    pub scrying: MagicEffectTuning,
+    /// Flat bonus added to the caster's `magic_accuracy` before the scrying
+    /// resist roll (both the cast-time roll and every periodic re-roll) when
+    /// the scried target shares the caster's own party/group — watching an
+    /// ally is easier than watching a stranger. Expressed in
+    /// magic-accuracy-equivalent points (scaled through `hit_k` by
+    /// [`magic_effect_success_chance`] exactly like the caster's own base
+    /// `magic_accuracy`), so it composes additively with the base roll and
+    /// with `scrying_focus_item_bonus_accuracy` below — both may apply to
+    /// the same roll at once, neither overrides the other or the base term.
+    pub scrying_party_bonus_accuracy: f32,
+    /// Flat bonus applied the same way as `scrying_party_bonus_accuracy`
+    /// when the caster holds a divination-focus item (a scrying crystal) —
+    /// see that field's own doc comment for why the two stack rather than
+    /// picking one.
+    pub scrying_focus_item_bonus_accuracy: f32,
+    /// How often, in real seconds, an active `scrying` link gets another
+    /// periodic resist re-roll against the scried target — the per-link
+    /// counterpart of `disguise_suspicion_reroll_secs`'s per-observer
+    /// cadence (server/src/sys/remote_sense.rs`).
+    pub scrying_reroll_secs: f32,
+    /// Multiplier applied to physical damage, poise/knockback and crit when
+    /// the swung weapon is not in the wielder's proficiency set (a soft
+    /// weapon-proficiency gate). 1.0 = no penalty.
+    pub non_proficient_damage_mult: f32,
+    /// Trigger-slot cooldown in **real-world seconds**, indexed by the spell
+    /// circle (0 = cantrip … 9) of the ability sitting in the slot.
+    ///
+    /// Deliberately a **table, not a formula**. Circles 1–9 are the exponential
+    /// curve `1800 · 72^((C−1)/8)` — every circle multiplies the wait by ≈1.707
+    /// — rounded to values a player can read off a tooltip; the rounded values
+    /// *are* the design intent, and computing the curve at runtime would
+    /// silently un-round them. Circle 0 is an explicit floor, not a curve
+    /// output: cantrips are basic tricks and get a short, generous wait.
+    ///
+    /// Anything that is not a catalogued spell (a racial innate, a weapon
+    /// ability) has no circle and falls back to index 0. A circle past the end
+    /// of the list clamps to the last entry, so the list may be shortened or
+    /// extended without a code change.
+    pub trigger_slot_cooldown_secs: Vec<f32>,
 }
+
+/// The shipped trigger-slot cooldown ladder, in real-world seconds by spell
+/// circle. Also the fallback if the asset ever ships an empty list.
+const DEFAULT_TRIGGER_SLOT_COOLDOWNS: [f32; 10] = [
+    600.0, 1800.0, 3000.0, 5400.0, 9000.0, 15300.0, 26100.0, 44400.0, 75600.0, 129600.0,
+];
 
 impl Default for CombatTuning {
     fn default() -> Self {
@@ -119,8 +231,413 @@ impl Default for CombatTuning {
             gear_evasion_floor: -10.0,
             armor_evasion_per_protection: 0.3,
             shield_evasion_penalty: 2.0,
+            save_base_hit: 0.70,
+            save_hit_floor: 0.05,
+            save_hit_ceil: 0.95,
+            save_mr_soft_cap: 0.75,
+            save_cr_to_evasion: 2.0,
+            save_in_combat_penalty: 0.20,
+            magic_resist_minor: 0.15,
+            magic_resist_major: 0.30,
+            magic_resist_legendary: 0.50,
+            save_outclassed_wall: 0.30,
+            disguise: MagicEffectTuning {
+                base_hit: 0.85,
+                hit_floor: 0.05,
+                hit_ceil: 0.95,
+                mr_soft_cap: 0.75,
+                cr_to_evasion: 2.0,
+                situational_penalty: 0.25,
+                outclassed_wall: None,
+            },
+            disguise_suspicion_reroll_secs: 8.0,
+            scrying: MagicEffectTuning {
+                base_hit: 0.75,
+                hit_floor: 0.05,
+                hit_ceil: 0.90,
+                mr_soft_cap: 0.75,
+                cr_to_evasion: 2.0,
+                situational_penalty: 0.0,
+                outclassed_wall: Some(0.30),
+            },
+            scrying_party_bonus_accuracy: 8.0,
+            scrying_focus_item_bonus_accuracy: 10.0,
+            scrying_reroll_secs: 15.0,
+            non_proficient_damage_mult: 0.40,
+            trigger_slot_cooldown_secs: DEFAULT_TRIGGER_SLOT_COOLDOWNS.to_vec(),
         }
     }
+}
+
+impl CombatTuning {
+    /// The trigger-slot cooldown, in real-world seconds, for an ability of
+    /// spell circle `circle`. Circles beyond the table clamp to its last entry.
+    pub fn trigger_slot_cooldown(&self, circle: u8) -> f32 {
+        let table = if self.trigger_slot_cooldown_secs.is_empty() {
+            &DEFAULT_TRIGGER_SLOT_COOLDOWNS[..]
+        } else {
+            &self.trigger_slot_cooldown_secs[..]
+        };
+        table[usize::from(circle).min(table.len() - 1)]
+    }
+
+    /// The resistance fraction a creature's innate [`MagicResistTier`] is
+    /// worth. `None` is always exactly 0.0 and therefore needs no constant.
+    pub fn magic_resist_tier_value(&self, tier: MagicResistTier) -> f32 {
+        match tier {
+            MagicResistTier::None => 0.0,
+            MagicResistTier::Minor => self.magic_resist_minor,
+            MagicResistTier::Major => self.magic_resist_major,
+            MagicResistTier::Legendary => self.magic_resist_legendary,
+        }
+    }
+
+    /// Packages the flat `save_*` fields above into a [`MagicEffectTuning`]
+    /// slice, so [`saving_throw_chance`] can be implemented in terms of the
+    /// same shared formula ([`magic_effect_success_chance`]) every other
+    /// resisted-magic-effect consumer uses, without changing its own public
+    /// signature, its RON keys, or a single byte of its callers' behaviour.
+    fn save_tuning(&self) -> MagicEffectTuning {
+        MagicEffectTuning {
+            base_hit: self.save_base_hit,
+            hit_floor: self.save_hit_floor,
+            hit_ceil: self.save_hit_ceil,
+            mr_soft_cap: self.save_mr_soft_cap,
+            cr_to_evasion: self.save_cr_to_evasion,
+            situational_penalty: self.save_in_combat_penalty,
+            outclassed_wall: Some(self.save_outclassed_wall),
+        }
+    }
+}
+
+/// Balance numbers for one "does a mind/perception effect land?" family — a
+/// resisted magical roll evaluated by the shared
+/// [`magic_effect_success_chance`] formula. Three instances exist today: the
+/// charm/domination/banishment family (built from [`CombatTuning`]'s flat
+/// `save_*` fields via [`CombatTuning::save_tuning`], so its RON shape is
+/// unchanged), the disguise-suspicion family (`CombatTuning::disguise`, its
+/// own `disguise:` section in `assets/common/combat_tuning.ron`), and the
+/// scrying resist-roll family (`CombatTuning::scrying`, its own `scrying:`
+/// section). A future resisted-perception effect adds a fourth instance here,
+/// never a new formula.
+///
+/// 🔴 Deliberately **not** `#[serde(default)]`: unlike `CombatTuning` (whose
+/// flat fields are never renamed and are additive-only), a `disguise:`
+/// section that only specifies *some* of these fields would silently pull
+/// the rest from [`MagicEffectTuning::default`] — reintroducing, for this
+/// struct specifically, the exact "partial edit silently reverts other
+/// numbers" footgun
+/// `saving_throw_tests::partial_asset_falls_back_to_tuned_defaults`
+/// documents as the reason the original `save_*` fields were kept flat. A
+/// `disguise:` (or any future instance's) section must specify every field
+/// or fail to deserialize.
+#[derive(Copy, Clone, Debug, Deserialize)]
+pub struct MagicEffectTuning {
+    /// Landing chance when the caster's magic accuracy exactly equals the
+    /// target's effective magic evasion.
+    pub base_hit: f32,
+    /// Minimum landing chance for a caster merely at a disadvantage, rather
+    /// than hard-walled by `outclassed_wall`.
+    pub hit_floor: f32,
+    /// Maximum landing chance. Deliberately below `1.0`: unlike raw damage,
+    /// a resisted effect never becomes a guaranteed hit.
+    pub hit_ceil: f32,
+    /// Hard cap on the combined magic-resistance + crowd-control-resistance
+    /// subtraction. Stacked resistances can never reach immunity.
+    pub mr_soft_cap: f32,
+    /// Points of effective magic evasion granted per point of the target's
+    /// `combat_rating`, so a creature with no class attributes still scales
+    /// in difficulty with how tough it otherwise is.
+    pub cr_to_evasion: f32,
+    /// Flat penalty subtracted when the roll's situational condition holds —
+    /// "already fighting the caster" for charm/domination, "inspecting the
+    /// disguise up close" for disguise.
+    pub situational_penalty: f32,
+    /// Hard wall on the level term (post-`hit_k` units): a caster whose
+    /// accuracy deficit reaches this magnitude always fails outright,
+    /// bypassing `hit_floor` entirely. `Some(0.30)` for charm/save
+    /// (unchanged). `None` for disguise: per the calibration table, a badly
+    /// outclassed disguise caster still lands the floor chance rather than
+    /// failing unconditionally — nobody's disguise should be *certain* to be
+    /// seen through purely from a level gap, unlike an overpowering target
+    /// shrugging off a charm attempt entirely. `None` encodes "no wall" as a
+    /// structural fact, independent of `hit_k` ever being retuned.
+    pub outclassed_wall: Option<f32>,
+}
+
+impl Default for MagicEffectTuning {
+    fn default() -> Self {
+        // The charm/save family's shipped numbers. Only consulted when a
+        // `MagicEffectTuning` value is built directly in Rust without going
+        // through RON at all (every RON-sourced instance today,
+        // `CombatTuning::disguise` included, is fully specified — see this
+        // struct's own doc comment on why partial RON sections are rejected
+        // rather than defaulted).
+        Self {
+            base_hit: 0.70,
+            hit_floor: 0.05,
+            hit_ceil: 0.95,
+            mr_soft_cap: 0.75,
+            cr_to_evasion: 2.0,
+            situational_penalty: 0.20,
+            outclassed_wall: Some(0.30),
+        }
+    }
+}
+
+/// The caster side of a resisted magical roll.
+#[derive(Copy, Clone, Debug)]
+pub struct SaveCasterInfo {
+    /// `Stats::magic_accuracy` of the caster.
+    pub magic_accuracy: f32,
+}
+
+/// The target side of a resisted magical roll, gathered once from shipped
+/// components at application time.
+#[derive(Copy, Clone, Debug)]
+pub struct SaveTargetInfo {
+    /// `Stats::magic_evasion` — class/level derived, so 0.0 for a plain
+    /// creature.
+    pub stats_magic_evasion: f32,
+    /// `Stats::crowd_control_resistance`.
+    pub crowd_control_resistance: f32,
+    /// `Stats::magic_resistance` — the additive contribution from racial
+    /// passives and buffs, on top of the innate creature tier below.
+    pub stats_magic_resistance: f32,
+    /// `Body::magic_resist_tier()` — the innate per-creature tier.
+    pub magic_resist_tier: MagicResistTier,
+    /// `combat_rating` for this target: the difficulty axis that stands in for
+    /// a character level on creatures that have no class attributes.
+    pub combat_rating: f32,
+}
+
+impl SaveTargetInfo {
+    /// Total magic resistance: the innate creature tier plus whatever has
+    /// already accumulated on `Stats`.
+    pub fn magic_resistance(&self, tuning: &CombatTuning) -> f32 {
+        tuning.magic_resist_tier_value(self.magic_resist_tier) + self.stats_magic_resistance
+    }
+}
+
+/// The shared arithmetic behind [`effective_magic_evasion`] (charm/save's own
+/// `tuning.save_cr_to_evasion`) and [`magic_effect_success_chance`] (every
+/// tuning instance's own `t.cr_to_evasion`), so the two can never silently
+/// diverge into two different evasion formulas.
+fn evasion_with_cr_scaling(target: &SaveTargetInfo, cr_to_evasion: f32) -> f32 {
+    target.stats_magic_evasion + target.combat_rating * cr_to_evasion
+}
+
+/// The evasion a resisted magical roll is made against: the target's
+/// class/level magic evasion plus a contribution derived from its
+/// `combat_rating`, which is the only difficulty signal a creature without
+/// class attributes has.
+///
+/// Kept as its own function, with this exact signature, for
+/// `saving_throw_tests` (which call it directly against a `CombatTuning`);
+/// [`magic_effect_success_chance`] does not call this — it can't, since it
+/// takes a `&MagicEffectTuning`'s `cr_to_evasion` rather than `tuning`'s own
+/// `save_cr_to_evasion` — but both route through
+/// [`evasion_with_cr_scaling`] so there is exactly one evasion formula.
+pub fn effective_magic_evasion(target: &SaveTargetInfo, tuning: &CombatTuning) -> f32 {
+    evasion_with_cr_scaling(target, tuning.save_cr_to_evasion)
+}
+
+/// Probability in `0.0..=1.0` that a resisted magical effect lands on
+/// `target` — the engine's single saving-throw roll, shared by charm /
+/// domination and by `power_word_divine_word`'s banishment. Any future
+/// resisted effect uses [`magic_effect_success_chance`] (of which this is now
+/// one named instance) rather than inventing a second curve.
+///
+/// `fighting_caster` is the [`is_fighting_caster`] predicate: a target already
+/// in a fight with the caster (or the caster's group) is harder to affect.
+///
+/// A thin wrapper around [`magic_effect_success_chance`] with the
+/// charm/save tuning slice ([`CombatTuning::save_tuning`]) — its public
+/// signature, its RON keys and its numeric behaviour are all unchanged from
+/// before that formula was generalized to serve a second consumer.
+pub fn saving_throw_chance(
+    caster: &SaveCasterInfo,
+    target: &SaveTargetInfo,
+    fighting_caster: bool,
+    tuning: &CombatTuning,
+) -> f32 {
+    magic_effect_success_chance(
+        caster,
+        target,
+        fighting_caster,
+        &tuning.save_tuning(),
+        tuning,
+    )
+}
+
+/// Probability in `0.0..=1.0` that a `scrying` link is established (at cast
+/// time) or survives one periodic resist re-roll (thereafter) against
+/// `target` -- `scrying`'s own named consumer of
+/// [`magic_effect_success_chance`], parallel to [`saving_throw_chance`].
+///
+/// Unlike `saving_throw_chance`'s single `situational` bool, this roll's
+/// context-dependent terms are three additive contributions rather than one
+/// true/false pick: (A) the unconditional base roll (caster accuracy vs.
+/// target evasion/resistance -- just calling [`magic_effect_success_chance`]
+/// normally), (B) a free bonus when the scried target shares the caster's
+/// own party/group, and (C) a bonus when the caster holds a
+/// divination-focus item. `magic_effect_success_chance` has no lever for
+/// three independent bonuses (its one `situational` term is a single
+/// subtracted penalty, not a sum of bonuses) -- so B and C are folded in
+/// *before* the call, as flat bonuses to the caster's own `magic_accuracy`
+/// (`tuning.scrying_party_bonus_accuracy` /
+/// `tuning.scrying_focus_item_bonus_accuracy`). Because
+/// `magic_effect_success_chance`'s `level_term` is linear in
+/// `caster.magic_accuracy`, this makes each bonus scale through `hit_k`
+/// exactly like the caster's own base accuracy does and land as its own
+/// separate additive term in the final chance -- both may apply to the same
+/// roll at once, and neither ever overrides the base term or the other:
+///
+/// `chance = A(base_hit + base_level_term - resist) + B(party_bonus*hit_k, if
+/// in_group) + C(item_bonus*hit_k, if holding focus)`
+///
+/// `situational` is always passed as `false`:
+/// `tuning.scrying.situational_penalty` is unused by this roll (see that
+/// field's own doc comment on `CombatTuning::scrying`).
+pub fn scrying_success_chance(
+    caster: &SaveCasterInfo,
+    target: &SaveTargetInfo,
+    target_in_casters_group: bool,
+    caster_holds_focus_item: bool,
+    tuning: &CombatTuning,
+) -> f32 {
+    let mut magic_accuracy = caster.magic_accuracy;
+    if target_in_casters_group {
+        magic_accuracy += tuning.scrying_party_bonus_accuracy;
+    }
+    if caster_holds_focus_item {
+        magic_accuracy += tuning.scrying_focus_item_bonus_accuracy;
+    }
+    magic_effect_success_chance(
+        &SaveCasterInfo { magic_accuracy },
+        target,
+        false,
+        &tuning.scrying,
+        tuning,
+    )
+}
+
+/// Probability in `0.0..=1.0` that a resisted "mind or perception" magical
+/// effect lands on `target` — the engine's single shared roll for every such
+/// effect. `saving_throw_chance` (charm / domination / banishment) and the
+/// disguise suspicion roll both call this with their own [`MagicEffectTuning`]
+/// slice `t`; neither authors an independent formula.
+///
+/// `situational` is the roll's one context-dependent penalty:
+/// [`is_fighting_caster`] for charm/save, "the observer is inspecting the
+/// disguise up close" for disguise.
+///
+/// A caster far enough below the target's effective magic evasion returns
+/// exactly `0.0` when `t.outclassed_wall` is `Some` and reached — the wall is
+/// checked *before* the clamp, which is what distinguishes it from one more
+/// subtracted term and is why it can produce a result below `t.hit_floor`. A
+/// tuning instance with `outclassed_wall: None` never hard-fails this way,
+/// however outclassed the caster is.
+pub fn magic_effect_success_chance(
+    caster: &SaveCasterInfo,
+    target: &SaveTargetInfo,
+    situational: bool,
+    t: &MagicEffectTuning,
+    tuning: &CombatTuning,
+) -> f32 {
+    let effective_evasion = evasion_with_cr_scaling(target, t.cr_to_evasion);
+    let level_term = (caster.magic_accuracy - effective_evasion) * tuning.hit_k;
+
+    if let Some(wall) = t.outclassed_wall
+        && level_term <= -wall
+    {
+        return 0.0;
+    }
+
+    let resist = (target.magic_resistance(tuning) + target.crowd_control_resistance)
+        .clamp(0.0, t.mr_soft_cap);
+    let situational_penalty = if situational {
+        t.situational_penalty
+    } else {
+        0.0
+    };
+    (t.base_hit + level_term - resist - situational_penalty).clamp(t.hit_floor, t.hit_ceil)
+}
+
+/// How recent a hostile health change must be to still count as "currently
+/// fighting", matching the window the pet behaviour tree already uses to decide
+/// that its owner was attacked.
+pub const SAVE_RECENT_COMBAT_SECS: f64 = 5.0;
+
+/// Everything [`is_fighting_caster`] needs, read once from already-shipped
+/// components at application time — no new component, no timer, no per-tick
+/// scan.
+pub struct SaveCombatContext<'a> {
+    pub caster_uid: Uid,
+    pub caster_group: Option<Group>,
+    pub target_uid: Uid,
+    pub target_group: Option<Group>,
+    /// `(uid, group)` of the entity the target's `Agent` is currently *hostile*
+    /// towards, when the target is a creature with such a target at all. `None`
+    /// for a player, which has no `Agent`.
+    pub target_hostile_focus: Option<(Uid, Option<Group>)>,
+    /// The target's most recent `Health::last_change` — the fallback signal for
+    /// player targets.
+    pub target_last_change: Option<&'a HealthChange>,
+    /// The caster's most recent `Health::last_change`, so the check fires
+    /// whether the caster hit the target or the target hit the caster.
+    pub caster_last_change: Option<&'a HealthChange>,
+    /// Current `Time`.
+    pub now: f64,
+}
+
+/// Whether the target of a resisted magical effect already counts as fighting
+/// the caster or the caster's group, which costs the caster
+/// `save_in_combat_penalty`.
+///
+/// Creature targets answer this from their existing hostile agent target;
+/// players, having no agent, fall back to recent attributable damage in *both*
+/// directions.
+pub fn is_fighting_caster(ctx: &SaveCombatContext<'_>) -> bool {
+    if let Some((focus_uid, focus_group)) = ctx.target_hostile_focus
+        && (focus_uid == ctx.caster_uid
+            || (focus_group.is_some() && focus_group == ctx.caster_group))
+    {
+        return true;
+    }
+    recent_hostile_change_by(
+        ctx.target_last_change,
+        ctx.now,
+        ctx.caster_uid,
+        ctx.caster_group,
+    ) || recent_hostile_change_by(
+        ctx.caster_last_change,
+        ctx.now,
+        ctx.target_uid,
+        ctx.target_group,
+    )
+}
+
+/// Whether `change` is a damaging health change taken within
+/// [`SAVE_RECENT_COMBAT_SECS`] and attributable to `uid` or to `group`.
+fn recent_hostile_change_by(
+    change: Option<&HealthChange>,
+    now: f64,
+    uid: Uid,
+    group: Option<Group>,
+) -> bool {
+    change.is_some_and(|change| {
+        change.amount < 0.0
+            && now - change.time.0 < SAVE_RECENT_COMBAT_SECS
+            && match change.damage_by() {
+                Some(DamageContributor::Solo(by)) => by == uid,
+                Some(DamageContributor::Group {
+                    entity_uid,
+                    group: by_group,
+                }) => entity_uid == uid || group == Some(by_group),
+                None => false,
+            }
+    })
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -163,20 +680,32 @@ pub struct AttackerInfo<'a> {
     pub group: Option<&'a Group>,
     pub energy: Option<&'a Energy>,
     pub combo: Option<&'a Combo>,
-    pub inventory: Option<&'a Inventory>,
+    /// The attacker's cached gear/skill/body aggregates. `None` means the
+    /// entity has no `Inventory`, and every read site falls back to
+    /// [`DerivedStats::default()`] — which is exactly the no-inventory result
+    /// of the arithmetic this cache replaced.
+    pub derived: Option<&'a DerivedStats>,
     pub stats: Option<&'a Stats>,
     pub mass: Option<&'a Mass>,
     pub pos: Option<Vec3<f32>>,
+    pub buffs: Option<&'a Buffs>,
+    /// The attacker's held class(es), so `CasterLevelFailChance` can resolve
+    /// the caster's own class level instead of the raw character level for
+    /// a multiclass character. `None` for non-caster entities.
+    pub character_class: Option<&'a CharacterClass>,
 }
 
 #[derive(Copy, Clone)]
 pub struct TargetInfo<'a> {
     pub entity: EcsEntity,
     pub uid: Uid,
+    /// Still needed for the block/parry strength read, which is a shield
+    /// lookup rather than one of the cached aggregates.
     pub inventory: Option<&'a Inventory>,
-    /// The target's attuned-item set, so unattuned gear grants no defense
-    /// (ENG-D2c). `None` is treated as "nothing attuned".
-    pub attuned: Option<&'a AttunedItems>,
+    /// The target's cached gear/skill/body aggregates — see
+    /// [`AttackerInfo::derived`]. Attunement gating (ENG-D2c) is already
+    /// folded into them, so no separate attuned-item set is threaded here.
+    pub derived: Option<&'a DerivedStats>,
     pub stats: Option<&'a Stats>,
     pub health: Option<&'a Health>,
     pub pos: Vec3<f32>,
@@ -186,6 +715,12 @@ pub struct TargetInfo<'a> {
     pub buffs: Option<&'a Buffs>,
     pub mass: Option<&'a Mass>,
     pub player: Option<&'a Player>,
+    /// Whether the target carries `comp::PhantomIllusion` (a shared-illusion
+    /// decoy). Cheap to populate at every call site -- a single `.get(target)`
+    /// storage lookup, not a scan -- and read unconditionally by
+    /// `Attack::apply_attack`'s dispel gate, which itself only acts on it
+    /// when `is_single_target`.
+    pub phantom_illusion: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -218,6 +753,15 @@ impl Attack {
             blockable: true,
             ability_info,
         }
+    }
+
+    /// The magic source to attribute to any `HealthChange` this attack
+    /// causes, read once from `ability_info.ability_meta.source`. Threaded
+    /// into every damage-emitting `HealthChange` this attack constructs.
+    /// `None` for weapon swings, falls, environment, and sourceless
+    /// abilities.
+    fn magic_source(&self) -> Option<MagicSource> {
+        self.ability_info.and_then(|ai| ai.ability_meta.source)
     }
 
     #[must_use]
@@ -268,7 +812,6 @@ impl Attack {
         source: AttackSource,
         dir: Dir,
         damage: Damage,
-        msm: &MaterialStatManifest,
         time: Time,
         emitters: &mut (impl EmitExt<ParryHookEvent> + EmitExt<PoiseChangeEvent>),
         mut emit_outcome: impl FnMut(Outcome),
@@ -301,8 +844,7 @@ impl Attack {
 
                     let poise_change = Poise::apply_poise_reduction(
                         poise_cost,
-                        target.inventory,
-                        msm,
+                        target.derived,
                         target.char_state,
                         target.stats,
                     );
@@ -339,20 +881,14 @@ impl Attack {
         attacker: Option<&AttackerInfo>,
         target: &TargetInfo,
         damage: Damage,
-        msm: &MaterialStatManifest,
     ) -> f32 {
         if damage.value > 0.0 {
             let attacker_penetration = attacker
                 .and_then(|a| a.stats)
                 .map_or(0.0, |s| s.mitigations_penetration)
                 .clamp(0.0, 1.0);
-            let raw_damage_reduction = Damage::compute_damage_reduction(
-                Some(damage),
-                target.inventory,
-                target.attuned,
-                target.stats,
-                msm,
-            );
+            let raw_damage_reduction =
+                Damage::compute_damage_reduction(Some(damage), target.derived, target.stats);
 
             if raw_damage_reduction >= 1.0 {
                 raw_damage_reduction
@@ -361,6 +897,42 @@ impl Attack {
             }
         } else {
             0.0
+        }
+    }
+
+    /// A weapon outside the wielder's trained set lands clumsily: physical
+    /// output (damage, poise, knockback, crit chance) is scaled down.
+    /// Spells are never affected — a caster's magic does not care what is in
+    /// their hands. `tool: None` (unarmed strikes, natural weapons, an NPC
+    /// `Empty`-tool attack) is always treated as proficient, and an attacker
+    /// with no `Stats` (or one whose class leaves `proficient_tools`
+    /// permissive) is unaffected. Narrowed by [`WeaponRole`] exactly like
+    /// grip: a class proficient with a `Staff`'s caster role but not its
+    /// martial role (or vice versa) is non-proficient when wielding the
+    /// other role's kit, even though both share the same `ToolKind`.
+    pub fn proficiency_multiplier(
+        stats: Option<&Stats>,
+        ability_info: Option<AbilityInfo>,
+        is_magic: bool,
+    ) -> f32 {
+        if is_magic {
+            return 1.0;
+        }
+        let Some(stats) = stats else {
+            return 1.0;
+        };
+        let Some(tool) = ability_info.and_then(|ai| ai.tool) else {
+            return 1.0;
+        };
+        let hands = ability_info.and_then(|ai| ai.hand).map(|hand| match hand {
+            HandInfo::TwoHanded => Hands::Two,
+            HandInfo::MainHand | HandInfo::OffHand => Hands::One,
+        });
+        let role = ability_info.and_then(|ai| ai.role);
+        if stats.proficient_tools.allows(tool, hands, role) {
+            1.0
+        } else {
+            stats.non_proficient_damage_mult
         }
     }
 
@@ -385,15 +957,17 @@ impl Attack {
                  + EmitExt<ComboChangeEvent>
                  + EmitExt<EntityAttackedHookEvent>
                  + EmitExt<TransformEvent>
+                 + EmitExt<DispelIllusionEvent>
              ),
         mut emit_outcome: impl FnMut(Outcome),
         rng: &mut rand::rngs::ThreadRng,
         damage_instance_offset: u64,
     ) -> bool {
-        // TODO: Maybe move this higher and pass it as argument into this function?
-        let msm = &MaterialStatManifest::load().read();
-        // BL-52 combat-resolution tuning — one cached read per attack (mirrors
-        // `msm` above), reused by the to-hit and crit rolls below.
+        // Combat-resolution tuning — one cached asset read per attack, reused
+        // by the to-hit and crit rolls below. The `MaterialStatManifest` this
+        // function used to load alongside it is gone: every gear-derived
+        // number it fed is now read off the attacker's/target's cache, which
+        // is where the manifest is consulted instead.
         let combat_tuning = &Ron::<CombatTuning>::load_expect("common.combat_tuning")
             .read()
             .0;
@@ -423,7 +997,27 @@ impl Attack {
             attack_source,
             AttackSource::Melee | AttackSource::Projectile
         );
-        // BL-52 P3: a magic ability (one carrying an `AbilityMeta` `source`, the
+        // A phantasm (`comp::PhantomIllusion`) has no `Health`, so there is no
+        // `HealthChangeEvent` for the rest of this function to ever produce
+        // against it -- attacking one is instead a dedicated reveal trigger:
+        // dispel outright, skipping the to-hit roll, damage and every other
+        // effect below. Gated on `is_single_target` (mirrors the
+        // `charmed_by_target` gate a little further down) so the AoE path
+        // (Explosion/Beam/Shockwave/Pool/Arc) never acts on the flag, and on
+        // `target_group == OutOfGroup` so a friendly/in-group effect that
+        // happens to route through a single-target attack (e.g. an ally heal)
+        // cannot dispel a phantasm it was never meant to harm. `target.
+        // phantom_illusion` is a plain bool the caller already resolved via
+        // one `.get(target)` storage lookup -- reading it here is O(1), not a
+        // scan.
+        if is_single_target
+            && matches!(target_group, GroupTarget::OutOfGroup)
+            && target.phantom_illusion
+        {
+            emitters.emit(DispelIllusionEvent(target.entity));
+            return false;
+        }
+        // A magic ability (one carrying an `AbilityMeta` `source`, the
         // same signal the BL-36 antimagic gate uses) rolls the caster's *magic*
         // accuracy against the target's *magic* evasion; physical attacks use the
         // physical pair. A missed single-target spell fizzles — the same no-op as
@@ -432,6 +1026,15 @@ impl Attack {
         let is_magic = self
             .ability_info
             .is_some_and(|ai| ai.ability_meta.source.is_some());
+        // A weapon outside the wielder's proficiency set (see `ClassProficiencies`)
+        // deals reduced physical output. Resolved once here and folded into
+        // damage, poise, knockback and crit chance below; never applied to
+        // `is_magic` attacks.
+        let proficiency_mult = Self::proficiency_multiplier(
+            attacker.and_then(|a| a.stats),
+            self.ability_info,
+            is_magic,
+        );
         let attack_missed = is_single_target && {
             let (accuracy, evasion) = if is_magic {
                 (
@@ -443,13 +1046,11 @@ impl Attack {
             } else {
                 // BL-52 P5: physical evasion = class/level + buffs (on `Stats`)
                 // plus the gear contribution derived from armor weight/shield.
-                let armor_evasion = compute_armor_evasion(
-                    target.inventory,
-                    target.attuned,
-                    target.stats,
-                    msm,
-                    combat_tuning,
-                );
+                // No cache means no `Inventory`, i.e. no gear to evade with —
+                // the same `0.0` the no-inventory early return used to give.
+                let armor_evasion = target.derived.map_or(0.0, |derived| {
+                    compute_armor_evasion(derived, target.stats, combat_tuning)
+                });
                 (
                     attacker.and_then(|a| a.stats).map_or(0.0, |s| s.accuracy),
                     target.stats.map_or(0.0, |s| s.evasion) + armor_evasion,
@@ -459,8 +1060,19 @@ impl Attack {
                 .clamp(combat_tuning.hit_floor, combat_tuning.hit_ceil);
             rng.random::<f32>() >= hit_chance
         };
-        // BL-52 P4: surface the whiff with a floating "Miss" over the target —
-        // but never over an in-group ally (mirrors the `avoid_effect` beneficial
+        // A charmed/dominated attacker's hostile attack on its charmer is a
+        // no-op — the same no-op a whiff already is, so it folds into
+        // `attack_missed` and every downstream gate (damage, harmful
+        // effects, crit, the Miss floater) falls out for free. Gated behind
+        // `is_single_target` so the AoE path stays scan-free; the
+        // `charmed_by` scan itself is a no-alloc `iter_kind` walk.
+        let charmed_by_target = is_single_target
+            && attacker
+                .and_then(|a| a.buffs)
+                .is_some_and(|buffs| buffs.charmed_by(target.uid));
+        let attack_missed = attack_missed || charmed_by_target;
+        // Surface the whiff with a floating "Miss" over the target — but
+        // never over an in-group ally (mirrors the `avoid_effect` beneficial
         // exemption, so a future single-target ally ability can't show a
         // contradictory "Miss" while its beneficial effect still lands).
         if attack_missed && !matches!(target_group, GroupTarget::InGroup) {
@@ -495,23 +1107,33 @@ impl Attack {
                 s.conditional_precision_modifiers
                     .iter()
                     .filter_map(|(req, mult, ovrd)| {
-                        req.is_none_or(|r| {
-                            r.requirement_met(
-                                (target.health, target.buffs, target.char_state, target.ori),
-                                (
-                                    attacker.map(|a| a.entity),
-                                    attacker.and_then(|a| a.energy),
-                                    attacker.and_then(|a| a.combo),
-                                ),
-                                attacker.map(|a| a.uid),
-                                0.0,
-                                emitters,
-                                dir,
-                                Some(attack_source),
-                                self.ability_info,
-                            )
-                        })
-                        .then_some((*mult, *ovrd))
+                        req.as_ref()
+                            .is_none_or(|r| {
+                                r.requirement_met(
+                                    (
+                                        target.health,
+                                        target.buffs,
+                                        target.char_state,
+                                        target.ori,
+                                        Some(target.uid),
+                                    ),
+                                    (
+                                        attacker.map(|a| a.entity),
+                                        attacker.and_then(|a| a.energy),
+                                        attacker.and_then(|a| a.combo),
+                                    ),
+                                    attacker.map(|a| a.uid),
+                                    0.0,
+                                    emitters,
+                                    dir,
+                                    Some(attack_source),
+                                    self.ability_info,
+                                    rng,
+                                    attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                                    attacker.and_then(|a| a.character_class),
+                                )
+                            })
+                            .then_some((*mult, *ovrd))
                     })
                     .chain(precision_mult.iter().map(|val| (*val, false)))
                     .reduce(|(val_a, ovrd_a), (val_b, ovrd_b)| {
@@ -534,24 +1156,24 @@ impl Attack {
             (None, None) => None,
         };
 
-        // BL-52 unified critical. Positional/conditional precision (flank,
+        // Unified critical roll: positional/conditional precision (flank,
         // backstab, target poised, `ImminentCritical`, precision-vulnerability)
         // already fired above and folds in as a guaranteed crit. If none did,
         // roll the attacker's `crit_chance` for a random crit. Magnitude reuses
-        // the existing precision system (`precision_power`), per the locked Q4
-        // decision. Single-target only and only on a landed blow — keeping the
-        // AoE hot path RNG-free (AoE crit would re-add per-target rolls). The
-        // `crit_chance_floor` gives every attacker a small baseline crit (no dead
-        // stat); the cap bounds rolled crits (guaranteed positional crits bypass
-        // it as today). NOTE: the finer "side-flank = +chance / backstab =
-        // guaranteed" split (balance note §5) is deferred — positional precision
-        // stays deterministic here to avoid refactoring the shared upstream
-        // precision path.
+        // the existing precision system (`precision_power`). Single-target only
+        // and only on a landed blow — keeping the AoE hot path RNG-free (AoE
+        // crit would re-add per-target rolls). The `crit_chance_floor` gives
+        // every attacker a small baseline crit chance (no dead stat); the cap
+        // bounds rolled crits (guaranteed positional crits bypass it). The
+        // finer "side-flank = +chance / backstab = guaranteed" split is
+        // deferred — positional precision stays deterministic here to avoid
+        // refactoring the shared upstream precision path.
         let precision_mult = precision_mult.or_else(|| {
             if is_single_target && !attack_missed {
-                let crit_chance = attacker
+                let crit_chance = (attacker
                     .and_then(|a| a.stats)
                     .map_or(0.0, |s| s.crit_chance)
+                    * proficiency_mult)
                     .clamp(
                         combat_tuning.crit_chance_floor,
                         combat_tuning.crit_chance_cap,
@@ -562,10 +1184,11 @@ impl Attack {
             }
         });
 
-        let precision_power = self.precision_multiplier
-            * attacker
-                .and_then(|a| a.stats)
-                .map_or(1.0, |s| s.precision_power_mult);
+        let precision_power = 1.0
+            + ((self.precision_multiplier - 1.0)
+                * attacker
+                    .and_then(|a| a.stats)
+                    .map_or(1.0, |s| s.precision_power_mult));
 
         let attacked_modifiers = AttackedModification::attacked_modifiers(
             target,
@@ -574,6 +1197,7 @@ impl Attack {
             dir,
             Some(attack_source),
             self.ability_info,
+            rng,
         );
 
         let mut is_applied = false;
@@ -585,24 +1209,28 @@ impl Attack {
         // `attack_damage_modifier` alone.
         let damage_modifier = attacker.and_then(|a| a.stats).map_or(1.0, |s| {
             if is_magic {
-                s.attack_damage_modifier * s.spell_power
+                s.attack_damage_modifier * s.spell_power_for(self.magic_source())
             } else {
-                s.attack_damage_modifier
+                s.attack_damage_modifier * proficiency_mult
             }
         });
-        // BL-06 (Q4): conditional "vs undead" bonus — the Cleric smite. The
-        // target is fixed for the whole attack, so resolve it once and fold the
-        // attacker's `bonus_damage_vs_undead` into the modifier when the target
-        // has an undead body. `original_body` is the target's true body (Stats is
-        // always present on combat entities), so no signature change is needed.
+        // Conditional "vs creature kind" bonus — the Cleric smite (and any
+        // future slayer-style conditional) is one slot in the attacker's
+        // `bonus_damage_vs` array, indexed by the target's `creature_kind`.
+        // The target's kind is fixed for the whole attack, so resolve it once.
+        // Reads `Stats.creature_kind`, not `original_body.creature_kind()`
+        // directly, so an `EntityConfig`-authored override on the target is
+        // honored. This is an array index, strictly cheaper than the previous
+        // per-hit nested match.
         let damage_modifier = damage_modifier
-            * if target.stats.is_some_and(|s| s.original_body.is_undead()) {
-                1.0 + attacker
-                    .and_then(|a| a.stats)
-                    .map_or(0.0, |s| s.bonus_damage_vs_undead)
-            } else {
-                1.0
-            };
+            * target
+                .stats
+                .and_then(|s| s.creature_kind)
+                .map_or(1.0, |kind| {
+                    1.0 + attacker
+                        .and_then(|a| a.stats)
+                        .map_or(0.0, |s| s.bonus_damage_vs[kind as usize])
+                });
         // BL-06 (Q2): the heal *source's* `heal_power` scales `CombatEffect::Heal`
         // output (the target is usually an ally). Buff/aura regen (a separate path
         // in common-systems) is deliberately NOT scaled yet — a follow-up if a
@@ -622,7 +1250,7 @@ impl Attack {
             is_applied = true;
 
             let damage_reduction =
-                Attack::compute_damage_reduction(attacker.as_ref(), target, damage.damage, msm);
+                Attack::compute_damage_reduction(attacker.as_ref(), target, damage.damage);
 
             // BL-52 P3: AoE damage is mitigated passively by the target's typed
             // elemental resistance — the AoE counterpart to single-target evasion
@@ -653,13 +1281,12 @@ impl Attack {
                 attack_source,
                 dir,
                 damage.damage,
-                msm,
                 time,
                 emitters,
                 &mut emit_outcome,
             );
 
-            let change = damage.damage.calculate_health_change(
+            let mut change = damage.damage.calculate_health_change(
                 damage_reduction,
                 block_damage_decrement,
                 attacker.map(|x| x.into()),
@@ -671,6 +1298,10 @@ impl Attack {
                 damage_instance,
                 DamageSource::from(attack_source),
             );
+            // `calculate_health_change` is a method on `Damage`, which does not
+            // carry the ability that caused it, so the source is attributed here
+            // instead of threading a new parameter through that function.
+            change.magic_source = self.magic_source();
             let applied_damage = -change.amount;
             accumulated_damage += applied_damage;
 
@@ -693,6 +1324,7 @@ impl Attack {
                                     amount: -health_damage,
                                     by: attacker.map(|x| x.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: precision_mult.is_some(),
                                     instance: damage_instance,
@@ -720,11 +1352,11 @@ impl Attack {
                             * CRUSHING_POISE_FRACTION
                             * attacker
                                 .and_then(|a| a.stats)
-                                .map_or(1.0, |s| s.poise_damage_modifier);
+                                .map_or(1.0, |s| s.poise_damage_modifier)
+                            * proficiency_mult;
                         let change = -Poise::apply_poise_reduction(
                             poise,
-                            target.inventory,
-                            msm,
+                            target.derived,
                             target.char_state,
                             target.stats,
                         );
@@ -745,10 +1377,12 @@ impl Attack {
                                     amount: health_change,
                                     by: attacker.map(|x| x.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     instance: damage_instance,
                                     precise: precision_mult.is_some(),
                                     time,
                                 };
+                                accumulated_damage -= health_change.amount;
                                 emitters.emit(HealthChangeEvent {
                                     entity: target.entity,
                                     change: health_change,
@@ -781,7 +1415,7 @@ impl Attack {
                 for effect in damage.effects.iter() {
                     match effect {
                         CombatEffect::Knockback(kb) => {
-                            let impulse = kb.calculate_impulse(
+                            let impulse = kb.modify_strength(proficiency_mult).calculate_impulse(
                                 dir,
                                 target.char_state,
                                 attacker.and_then(|a| a.stats),
@@ -798,7 +1432,7 @@ impl Attack {
                                 emitters.emit(EnergyChangeEvent {
                                     entity: attacker.entity,
                                     change: *ec
-                                        * compute_energy_reward_mod(attacker.inventory, msm)
+                                        * attacker.derived.map_or(1.0, |d| d.energy_reward_mod)
                                         * strength_modifier
                                         * attacker.stats.map_or(1.0, |s| s.energy_reward_modifier)
                                         * attacked_modifiers.energy_reward,
@@ -812,14 +1446,11 @@ impl Attack {
                                     entity: target.entity,
                                     buff_change: BuffChange::Add(b.to_buff(
                                         time,
-                                        (
-                                            attacker.map(|a| a.uid),
-                                            attacker.and_then(|a| a.mass),
-                                            self.ability_info.and_then(|ai| ai.tool),
-                                        ),
+                                        (attacker.map(|a| a.uid), attacker.and_then(|a| a.mass)),
                                         (target.stats, target.mass),
                                         applied_damage,
                                         strength_modifier,
+                                        self.ability_info,
                                     )),
                                 });
                             }
@@ -830,6 +1461,7 @@ impl Attack {
                                     amount: applied_damage * l * strength_modifier,
                                     by: attacker.map(|a| a.into()),
                                     cause: None,
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: false,
                                     instance: rand::random(),
@@ -845,14 +1477,14 @@ impl Attack {
                         CombatEffect::Poise(p) => {
                             let change = -Poise::apply_poise_reduction(
                                 *p,
-                                target.inventory,
-                                msm,
+                                target.derived,
                                 target.char_state,
                                 target.stats,
                             ) * strength_modifier
                                 * attacker
                                     .and_then(|a| a.stats)
-                                    .map_or(1.0, |s| s.poise_damage_modifier);
+                                    .map_or(1.0, |s| s.poise_damage_modifier)
+                                * proficiency_mult;
                             if change.abs() > Poise::POISE_EPSILON {
                                 let poise_change = PoiseChange {
                                     amount: change,
@@ -872,6 +1504,7 @@ impl Attack {
                                 amount: *h * strength_modifier * heal_power,
                                 by: attacker.map(|a| a.into()),
                                 cause: None,
+                                magic_source: self.magic_source(),
                                 time,
                                 precise: false,
                                 instance: rand::random(),
@@ -883,6 +1516,12 @@ impl Attack {
                                 });
                             }
                         },
+                        CombatEffect::RemoveBuff(buff_change) => {
+                            emitters.emit(BuffEvent {
+                                entity: target.entity,
+                                buff_change: buff_change.clone(),
+                            });
+                        },
                         CombatEffect::Combo(c) => {
                             if let Some(attacker_entity) = attacker.map(|a| a.entity) {
                                 emitters.emit(ComboChangeEvent {
@@ -891,53 +1530,24 @@ impl Attack {
                                 });
                             }
                         },
-                        CombatEffect::StageVulnerable(damage, section) => {
-                            if target
-                                .char_state
-                                .is_some_and(|cs| cs.stage_section() == Some(*section))
-                            {
-                                let change = {
-                                    let mut change = change;
-                                    change.amount *= damage * strength_modifier;
-                                    change
-                                };
-                                emitters.emit(HealthChangeEvent {
-                                    entity: target.entity,
-                                    change,
-                                });
-                            }
+                        CombatEffect::AdditionalDamage(damage) => {
+                            let change = {
+                                let mut change = change;
+                                change.amount *= damage * strength_modifier;
+                                change.instance = rand::random();
+                                change
+                            };
+                            accumulated_damage -= change.amount;
+                            emitters.emit(HealthChangeEvent {
+                                entity: target.entity,
+                                change,
+                            });
                         },
                         CombatEffect::RefreshBuff(chance, b) => {
                             if rng.random::<f32>() < *chance {
                                 emitters.emit(BuffEvent {
                                     entity: target.entity,
                                     buff_change: BuffChange::Refresh(*b),
-                                });
-                            }
-                        },
-                        CombatEffect::BuffsVulnerable(damage, buff) => {
-                            if target.buffs.is_some_and(|b| b.contains(*buff)) {
-                                let change = {
-                                    let mut change = change;
-                                    change.amount *= damage * strength_modifier;
-                                    change
-                                };
-                                emitters.emit(HealthChangeEvent {
-                                    entity: target.entity,
-                                    change,
-                                });
-                            }
-                        },
-                        CombatEffect::StunnedVulnerable(damage) => {
-                            if target.char_state.is_some_and(|cs| cs.is_stunned()) {
-                                let change = {
-                                    let mut change = change;
-                                    change.amount *= damage * strength_modifier;
-                                    change
-                                };
-                                emitters.emit(HealthChangeEvent {
-                                    entity: target.entity,
-                                    change,
                                 });
                             }
                         },
@@ -949,14 +1559,10 @@ impl Attack {
                                     entity: attacker.entity,
                                     buff_change: BuffChange::Add(b.to_self_buff(
                                         time,
-                                        (
-                                            Some(attacker.uid),
-                                            attacker.stats,
-                                            attacker.mass,
-                                            self.ability_info.and_then(|ai| ai.tool),
-                                        ),
+                                        (Some(attacker.uid), attacker.stats, attacker.mass),
                                         applied_damage,
                                         strength_modifier,
+                                        self.ability_info,
                                     )),
                                 });
                             }
@@ -1021,8 +1627,10 @@ impl Attack {
                                         change.amount *= scaling.factor(num_debuffs as f32, 1.0)
                                             * mult
                                             * strength_modifier;
+                                        change.instance = rand::random();
                                         change
                                     };
+                                    accumulated_damage -= change.amount;
                                     emitters.emit(HealthChangeEvent {
                                         entity: target.entity,
                                         change,
@@ -1053,7 +1661,13 @@ impl Attack {
         {
             let requirements_met = effect.requirements.iter().all(|req| {
                 req.requirement_met(
-                    (target.health, target.buffs, target.char_state, target.ori),
+                    (
+                        target.health,
+                        target.buffs,
+                        target.char_state,
+                        target.ori,
+                        Some(target.uid),
+                    ),
                     (
                         attacker.map(|a| a.entity),
                         attacker.and_then(|a| a.energy),
@@ -1065,6 +1679,9 @@ impl Attack {
                     dir,
                     Some(attack_source),
                     self.ability_info,
+                    rng,
+                    attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                    attacker.and_then(|a| a.character_class),
                 )
             });
             if requirements_met {
@@ -1080,7 +1697,7 @@ impl Attack {
                 is_applied = true;
                 match &effect.effect {
                     CombatEffect::Knockback(kb) => {
-                        let impulse = kb.calculate_impulse(
+                        let impulse = kb.modify_strength(proficiency_mult).calculate_impulse(
                             dir,
                             target.char_state,
                             attacker.and_then(|a| a.stats),
@@ -1097,7 +1714,7 @@ impl Attack {
                             emitters.emit(EnergyChangeEvent {
                                 entity: attacker.entity,
                                 change: ec
-                                    * compute_energy_reward_mod(attacker.inventory, msm)
+                                    * attacker.derived.map_or(1.0, |d| d.energy_reward_mod)
                                     * strength_modifier
                                     * attacker.stats.map_or(1.0, |s| s.energy_reward_modifier)
                                     * attacked_modifiers.energy_reward,
@@ -1111,14 +1728,11 @@ impl Attack {
                                 entity: target.entity,
                                 buff_change: BuffChange::Add(b.to_buff(
                                     time,
-                                    (
-                                        attacker.map(|a| a.uid),
-                                        attacker.and_then(|a| a.mass),
-                                        self.ability_info.and_then(|ai| ai.tool),
-                                    ),
+                                    (attacker.map(|a| a.uid), attacker.and_then(|a| a.mass)),
                                     (target.stats, target.mass),
                                     accumulated_damage,
                                     strength_modifier,
+                                    self.ability_info,
                                 )),
                             });
                         }
@@ -1129,6 +1743,7 @@ impl Attack {
                                 amount: accumulated_damage * l * strength_modifier,
                                 by: attacker.map(|a| a.into()),
                                 cause: None,
+                                magic_source: self.magic_source(),
                                 time,
                                 precise: false,
                                 instance: rand::random(),
@@ -1144,14 +1759,14 @@ impl Attack {
                     CombatEffect::Poise(p) => {
                         let change = -Poise::apply_poise_reduction(
                             *p,
-                            target.inventory,
-                            msm,
+                            target.derived,
                             target.char_state,
                             target.stats,
                         ) * strength_modifier
                             * attacker
                                 .and_then(|a| a.stats)
-                                .map_or(1.0, |s| s.poise_damage_modifier);
+                                .map_or(1.0, |s| s.poise_damage_modifier)
+                            * proficiency_mult;
                         if change.abs() > Poise::POISE_EPSILON {
                             let poise_change = PoiseChange {
                                 amount: change,
@@ -1171,6 +1786,7 @@ impl Attack {
                             amount: h * strength_modifier,
                             by: attacker.map(|a| a.into()),
                             cause: None,
+                            magic_source: self.magic_source(),
                             time,
                             precise: false,
                             instance: rand::random(),
@@ -1182,6 +1798,12 @@ impl Attack {
                             });
                         }
                     },
+                    CombatEffect::RemoveBuff(buff_change) => {
+                        emitters.emit(BuffEvent {
+                            entity: target.entity,
+                            buff_change: buff_change.clone(),
+                        });
+                    },
                     CombatEffect::Combo(c) => {
                         if let Some(attacker_entity) = attacker.map(|a| a.entity) {
                             emitters.emit(ComboChangeEvent {
@@ -1190,24 +1812,21 @@ impl Attack {
                             });
                         }
                     },
-                    CombatEffect::StageVulnerable(damage, section) => {
-                        if target
-                            .char_state
-                            .is_some_and(|cs| cs.stage_section() == Some(*section))
-                        {
-                            let change = HealthChange {
-                                amount: -accumulated_damage * damage * strength_modifier,
-                                by: attacker.map(|a| a.into()),
-                                cause: Some(DamageSource::from(attack_source)),
-                                time,
-                                precise: precision_mult.is_some(),
-                                instance: rand::random(),
-                            };
-                            emitters.emit(HealthChangeEvent {
-                                entity: target.entity,
-                                change,
-                            });
-                        }
+                    CombatEffect::AdditionalDamage(damage) => {
+                        let change = HealthChange {
+                            amount: -accumulated_damage * damage * strength_modifier,
+                            by: attacker.map(|a| a.into()),
+                            cause: Some(DamageSource::from(attack_source)),
+                            magic_source: self.magic_source(),
+                            time,
+                            precise: precision_mult.is_some(),
+                            instance: rand::random(),
+                        };
+                        accumulated_damage -= change.amount;
+                        emitters.emit(HealthChangeEvent {
+                            entity: target.entity,
+                            change,
+                        });
                     },
                     CombatEffect::RefreshBuff(chance, b) => {
                         if rng.random::<f32>() < *chance {
@@ -1217,54 +1836,18 @@ impl Attack {
                             });
                         }
                     },
-                    CombatEffect::BuffsVulnerable(damage, buff) => {
-                        if target.buffs.is_some_and(|b| b.contains(*buff)) {
-                            let change = HealthChange {
-                                amount: -accumulated_damage * damage * strength_modifier,
-                                by: attacker.map(|a| a.into()),
-                                cause: Some(DamageSource::from(attack_source)),
-                                time,
-                                precise: precision_mult.is_some(),
-                                instance: rand::random(),
-                            };
-                            emitters.emit(HealthChangeEvent {
-                                entity: target.entity,
-                                change,
-                            });
-                        }
-                    },
-                    CombatEffect::StunnedVulnerable(damage) => {
-                        if target.char_state.is_some_and(|cs| cs.is_stunned()) {
-                            let change = HealthChange {
-                                amount: -accumulated_damage * damage * strength_modifier,
-                                by: attacker.map(|a| a.into()),
-                                cause: Some(DamageSource::from(attack_source)),
-                                time,
-                                precise: precision_mult.is_some(),
-                                instance: rand::random(),
-                            };
-                            emitters.emit(HealthChangeEvent {
-                                entity: target.entity,
-                                change,
-                            });
-                        }
-                    },
                     CombatEffect::SelfBuff(b) => {
                         if let Some(attacker) = attacker
                             && rng.random::<f32>() < b.chance
                         {
                             emitters.emit(BuffEvent {
-                                entity: target.entity,
+                                entity: attacker.entity,
                                 buff_change: BuffChange::Add(b.to_self_buff(
                                     time,
-                                    (
-                                        Some(attacker.uid),
-                                        attacker.stats,
-                                        attacker.mass,
-                                        self.ability_info.and_then(|ai| ai.tool),
-                                    ),
+                                    (Some(attacker.uid), attacker.stats, attacker.mass),
                                     accumulated_damage,
                                     strength_modifier,
+                                    self.ability_info,
                                 )),
                             });
                         }
@@ -1330,10 +1913,12 @@ impl Attack {
                                         * strength_modifier,
                                     by: attacker.map(|a| a.into()),
                                     cause: Some(DamageSource::from(attack_source)),
+                                    magic_source: self.magic_source(),
                                     time,
                                     precise: precision_mult.is_some(),
                                     instance: rand::random(),
                                 };
+                                accumulated_damage -= change.amount;
                                 emitters.emit(HealthChangeEvent {
                                     entity: target.entity,
                                     change,
@@ -1551,35 +2136,24 @@ impl StatEffect {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum CombatEffect {
     Heal(f32),
+    /// Removes a buff from the entity this effect resolves against — the
+    /// `RemoveBuff` sibling of `Heal`: same shape, same resolution sites, but
+    /// carries a `BuffChange` instead of a magnitude, so it has no
+    /// `mult`/`stats.effect_power` scaling (see `apply_multiplier`/
+    /// `adjusted_by_stats` below, both straight passthroughs for this
+    /// variant).
+    RemoveBuff(BuffChange),
     Buff(CombatBuff),
     Knockback(Knockback),
     EnergyReward(f32),
     Lifesteal(f32),
     Poise(f32),
     Combo(i32),
-    /// If the attack hits the target while they are in the buildup portion of a
-    /// character state, deal increased damage
-    /// Only has an effect when attached to a damage, otherwise does nothing if
-    /// only attached to the attack
-    // TODO: Maybe try to make it do something if tied to
-    // attack, not sure if it should double count in that instance?
-    StageVulnerable(f32, StageSection),
+    /// Intended to be used when gating additional damage behind some
+    /// requirement
+    AdditionalDamage(f32),
     /// Resets duration of all buffs of this buffkind, with some probability
     RefreshBuff(f32, BuffKind),
-    /// If the target hit by an attack has this buff, they will take increased
-    /// damage.
-    /// Only has an effect when attached to a damage, otherwise does nothing if
-    /// only attached to the attack
-    // TODO: Maybe try to make it do something if tied to attack, not sure if it should double
-    // count in that instance?
-    BuffsVulnerable(f32, BuffKind),
-    /// If the target hit by an attack is in a stunned state, they will take
-    /// increased damage.
-    /// Only has an effect when attached to a damage, otherwise does nothing if
-    /// only attached to the attack
-    // TODO: Maybe try to make it do something if tied to attack, not sure if it should double
-    // count in that instance?
-    StunnedVulnerable(f32),
     /// Applies buff to yourself after attack is applied
     SelfBuff(CombatBuff),
     /// Changes energy of target
@@ -1605,10 +2179,98 @@ pub enum CombatEffect {
     },
 }
 
+/// One rung of a capped-nearest-N, per-target-resolved tier ladder (see
+/// `aura::AuraKind::TieredHealthEffect`): checks the target's CURRENT health
+/// (never scaled by max health, unlike
+/// `CombatRequirement::TargetHealthAtOrBelow`) and applies only the single
+/// WORST tier the target qualifies for — a target under every threshold gets
+/// the worst one, not all of them. Tiers must be supplied most-severe (lowest
+/// `HealthTier::max_current_health`) first; resolution does not sort them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HealthTier {
+    /// This tier applies when the target's current health is at or below
+    /// this value.
+    pub max_current_health: f32,
+    pub effect: TierEffect,
+    /// An optional additional gate, checked *after* the health threshold
+    /// matches and *before* `effect` is applied. `None` (the default, and
+    /// what every tier authored before this field existed still resolves to)
+    /// always passes.
+    ///
+    /// Currently only meaningful with [`CombatRequirement::CasterLevelRoll`]
+    /// (optionally composed via [`CombatRequirement::All`] of more rolls) --
+    /// see [`HealthTier::requirement_met`] for why every other
+    /// `CombatRequirement` variant is out of scope on a health-tier ladder.
+    /// `power_word_divine_word`'s instant-death tier is the first (and so
+    /// far only) tier to set this: real 5e's instant death at 0 HP has no
+    /// caster-side margin for failure anywhere else in the spell, unlike
+    /// `power_word_kill`/`pain`/`stun`, which all gate their permanent
+    /// result behind the same roll.
+    #[serde(default)]
+    pub requirement: Option<CombatRequirement>,
+}
+
+impl HealthTier {
+    /// Whether this tier's optional [`HealthTier::requirement`] is satisfied
+    /// for a cast by `caster_level`/`character_class`. `None` always passes.
+    ///
+    /// Deliberately narrower than [`CombatRequirement::requirement_met`]: a
+    /// health tier already gates on the target's current health via
+    /// `max_current_health`, and the tick that resolves it
+    /// (`common-systems/src/aura.rs`'s `apply_tiered_health_effect`) has no
+    /// attack, target buffs/combo, stage-section, or direction to resolve
+    /// the attack-pipeline-only variants against. Only `CasterLevelRoll`
+    /// (and `All` composed purely of more `CasterLevelRoll`s, for forward
+    /// compatibility, though nothing authors that yet) is meaningful here;
+    /// anything else is an authoring error caught by the `debug_assert`
+    /// below rather than silently bypassed or silently always-failing in a
+    /// release build.
+    pub fn requirement_met(
+        &self,
+        caster_level: Option<u16>,
+        character_class: Option<&CharacterClass>,
+    ) -> bool {
+        fn met(
+            req: &CombatRequirement,
+            caster_level: Option<u16>,
+            character_class: Option<&CharacterClass>,
+        ) -> bool {
+            match req {
+                CombatRequirement::CasterLevelRoll(fail_chance) => fail_chance
+                    .effective_caster_level(caster_level, character_class)
+                    .is_some_and(|level| rand::random::<f32>() >= fail_chance.fail_chance(level)),
+                CombatRequirement::All(reqs) => reqs
+                    .iter()
+                    .all(|req| met(req, caster_level, character_class)),
+                _ => {
+                    debug_assert!(
+                        false,
+                        "HealthTier::requirement only supports CasterLevelRoll (optionally \
+                         wrapped in All) -- got {req:?}"
+                    );
+                    false
+                },
+            }
+        }
+        self.requirement
+            .as_ref()
+            .is_none_or(|req| met(req, caster_level, character_class))
+    }
+}
+
+/// What a [`HealthTier`] grants once its threshold is the worst one met.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum TierEffect {
+    Buff(CombatBuff),
+    /// Same semantics as [`CombatEffect::AdditionalDamage`].
+    AdditionalDamage(f32),
+}
+
 impl CombatEffect {
     pub fn apply_multiplier(self, mult: f32) -> Self {
         match self {
             CombatEffect::Heal(h) => CombatEffect::Heal(h * mult),
+            effect @ CombatEffect::RemoveBuff(_) => effect,
             CombatEffect::Buff(CombatBuff {
                 kind,
                 dur_secs,
@@ -1631,10 +2293,8 @@ impl CombatEffect {
             CombatEffect::Lifesteal(l) => CombatEffect::Lifesteal(l * mult),
             CombatEffect::Poise(p) => CombatEffect::Poise(p * mult),
             CombatEffect::Combo(c) => CombatEffect::Combo((c as f32 * mult).ceil() as i32),
-            CombatEffect::StageVulnerable(v, s) => CombatEffect::StageVulnerable(v * mult, s),
+            CombatEffect::AdditionalDamage(v) => CombatEffect::AdditionalDamage(v * mult),
             CombatEffect::RefreshBuff(c, b) => CombatEffect::RefreshBuff(c, b),
-            CombatEffect::BuffsVulnerable(v, b) => CombatEffect::BuffsVulnerable(v * mult, b),
-            CombatEffect::StunnedVulnerable(v) => CombatEffect::StunnedVulnerable(v * mult),
             CombatEffect::SelfBuff(CombatBuff {
                 kind,
                 dur_secs,
@@ -1665,6 +2325,7 @@ impl CombatEffect {
     pub fn adjusted_by_stats(self, stats: tool::Stats) -> Self {
         match self {
             CombatEffect::Heal(h) => CombatEffect::Heal(h * stats.effect_power),
+            effect @ CombatEffect::RemoveBuff(_) => effect,
             CombatEffect::Buff(CombatBuff {
                 kind,
                 dur_secs,
@@ -1687,16 +2348,10 @@ impl CombatEffect {
             CombatEffect::Lifesteal(l) => CombatEffect::Lifesteal(l * stats.effect_power),
             CombatEffect::Poise(p) => CombatEffect::Poise(p * stats.effect_power),
             CombatEffect::Combo(c) => CombatEffect::Combo(c),
-            CombatEffect::StageVulnerable(v, s) => {
-                CombatEffect::StageVulnerable(v * stats.effect_power, s)
+            CombatEffect::AdditionalDamage(v) => {
+                CombatEffect::AdditionalDamage(v * stats.effect_power)
             },
             CombatEffect::RefreshBuff(c, b) => CombatEffect::RefreshBuff(c, b),
-            CombatEffect::BuffsVulnerable(v, b) => {
-                CombatEffect::BuffsVulnerable(v * stats.effect_power, b)
-            },
-            CombatEffect::StunnedVulnerable(v) => {
-                CombatEffect::StunnedVulnerable(v * stats.effect_power)
-            },
             CombatEffect::SelfBuff(CombatBuff {
                 kind,
                 dur_secs,
@@ -1722,6 +2377,44 @@ impl CombatEffect {
                 filter_weapon,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod remove_buff_effect_tests {
+    use super::*;
+    use crate::comp::buff::BuffCategory;
+
+    fn stab_stats() -> tool::Stats {
+        tool::Stats {
+            equip_time_secs: 0.0,
+            power: 2.0,
+            effect_power: 2.0,
+            speed: 1.0,
+            range: 1.0,
+            energy_efficiency: 1.0,
+            buff_strength: 2.0,
+            cooldown_reduction: 1.0,
+        }
+    }
+
+    /// Unlike `Heal`, `RemoveBuff` carries no magnitude -- `apply_multiplier`
+    /// must pass it through unchanged rather than scaling anything.
+    #[test]
+    fn apply_multiplier_is_a_passthrough() {
+        let effect = CombatEffect::RemoveBuff(BuffChange::RemoveByKind(BuffKind::Poisoned));
+        assert_eq!(effect.clone().apply_multiplier(3.5), effect);
+    }
+
+    /// Same passthrough guarantee for the tool-stats scaling path.
+    #[test]
+    fn adjusted_by_stats_is_a_passthrough() {
+        let effect = CombatEffect::RemoveBuff(BuffChange::RemoveByCategory {
+            all_required: vec![BuffCategory::Magical],
+            any_required: vec![],
+            none_required: vec![],
+        });
+        assert_eq!(effect.clone().adjusted_by_stats(stab_stats()), effect);
     }
 }
 
@@ -1775,6 +2468,7 @@ impl AttackedModification {
         dir: Dir,
         attack_source: Option<AttackSource>,
         ability_info: Option<AbilityInfo>,
+        rng: &mut rand::rngs::ThreadRng,
     ) -> AttackedModifiers {
         if let Some(stats) = target.stats {
             stats.attacked_modifications.iter().fold(
@@ -1782,7 +2476,13 @@ impl AttackedModification {
                 |mut a_mods, a_mod| {
                     let requirements_met = a_mod.requirements.iter().all(|req| {
                         req.requirement_met(
-                            (target.health, target.buffs, target.char_state, target.ori),
+                            (
+                                target.health,
+                                target.buffs,
+                                target.char_state,
+                                target.ori,
+                                Some(target.uid),
+                            ),
                             (
                                 attacker.map(|a| a.entity),
                                 attacker.and_then(|a| a.energy),
@@ -1797,6 +2497,9 @@ impl AttackedModification {
                             dir,
                             attack_source,
                             ability_info,
+                            rng,
+                            attacker.and_then(|a| a.stats).map(|s| s.character_level),
+                            attacker.and_then(|a| a.character_class),
                         )
                     });
 
@@ -1836,7 +2539,86 @@ pub enum AttackedModifier {
     DamageMultiplier(f32),
 }
 
+/// A max-health-scaled absolute HP threshold: flat `base` up to `breakpoint`
+/// max health, then `base + scale * (max_health - breakpoint)` above it —
+/// continuous at the breakpoint by construction. Absolute HP, not a fraction
+/// (see [`CombatRequirement::TargetHealthBelow`] for that), for effects where
+/// the same flat pool of HP is always fatal regardless of the target's
+/// max-health, only scaling up gently for very tanky targets.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct HealthThreshold {
+    pub base: f32,
+    pub breakpoint: f32,
+    pub scale: f32,
+}
+
+impl HealthThreshold {
+    pub fn threshold(&self, max_health: f32) -> f32 {
+        self.base + self.scale * (max_health - self.breakpoint).max(0.0)
+    }
+}
+
+/// A caster-level-scaled chance to fail a cast outright: below
+/// `unlock_level` this always fails (pair with an ability-side `min_level`
+/// gate so the ability can't even be attempted that low); from
+/// `unlock_level` up to `MAX_CHARACTER_LEVEL` the fail chance falls linearly
+/// from `fail_chance_at_unlock` to `fail_chance_at_max_level`. This is a roll
+/// against the caster's own level, independent of the target — there is no
+/// target-side resistance to weigh against it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CasterLevelFailChance {
+    pub unlock_level: u16,
+    pub fail_chance_at_unlock: f32,
+    pub fail_chance_at_max_level: f32,
+    /// Classes this roll is keyed to. When the caster holds one or more of
+    /// these, the roll uses the max of those classes' own levels rather than
+    /// the raw character level -- a multiclass caster's fail chance tracks
+    /// how far they've progressed in the class that actually grants the
+    /// spell, not their unrelated total. Empty (the default) falls back to
+    /// the raw character level, for any non-spell use of this same curve.
+    #[serde(default)]
+    pub source_classes: Vec<ClassKind>,
+}
+
+impl CasterLevelFailChance {
+    pub fn fail_chance(&self, caster_level: u16) -> f32 {
+        if caster_level <= self.unlock_level {
+            return self.fail_chance_at_unlock;
+        }
+        let span = f32::from(MAX_CHARACTER_LEVEL.saturating_sub(self.unlock_level)).max(1.0);
+        let progress = (f32::from(caster_level.saturating_sub(self.unlock_level)) / span).min(1.0);
+        self.fail_chance_at_unlock
+            + (self.fail_chance_at_max_level - self.fail_chance_at_unlock) * progress
+    }
+
+    /// Resolves the level to roll `fail_chance` against: the highest level
+    /// among `source_classes` the caster actually holds, or the caster's raw
+    /// character level when `source_classes` is empty or the caster holds
+    /// none of them (the latter should not happen if the ability's own class
+    /// gate already checked -- this is a defensive fallback, not a design
+    /// path).
+    pub fn effective_caster_level(
+        &self,
+        character_level: Option<u16>,
+        character_class: Option<&CharacterClass>,
+    ) -> Option<u16> {
+        if self.source_classes.is_empty() {
+            return character_level;
+        }
+        character_level
+            .and_then(|level| {
+                character_class.and_then(|cc| {
+                    cc.class_levels(level)
+                        .filter(|(class, _, _)| self.source_classes.contains(class))
+                        .map(|(_, class_level, _)| class_level)
+                        .max()
+                })
+            })
+            .or(character_level)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum CombatRequirement {
     AnyDamage,
     Energy(f32),
@@ -1849,6 +2631,39 @@ pub enum CombatRequirement {
     AttackSource(AttackSource),
     AttackInput(InputKind),
     Attacker(Uid),
+    Target(Uid),
+    StageSection(StageSection),
+    /// Met when the target's remaining health fraction (`Health::fraction`,
+    /// `0.0..=1.0`) is strictly below the given threshold. A fraction rather
+    /// than an absolute HP value, so a single tuning number scales correctly
+    /// across creatures with very different max health pools.
+    TargetHealthBelow(f32),
+    /// Met when the target's absolute remaining HP is at or below a
+    /// max-health-scaled threshold (see [`HealthThreshold`]) — a
+    /// deterministic check, no roll on the target's side.
+    TargetHealthAtOrBelow(HealthThreshold),
+    /// Met by a random roll against the caster's own level (see
+    /// [`CasterLevelFailChance`]) — no target-side term at all.
+    ///
+    /// Boxed for the same reason `AuraKind::Buff::pool_split` and
+    /// `AuraKind::TieredHealthEffect::banishment` box `PoolSplit` /
+    /// `BanishmentEffect`: `CasterLevelFailChance` carries a
+    /// `Vec<ClassKind>`, which would otherwise make this the largest variant
+    /// and bloat every `CombatRequirement`, most of which never use it.
+    ///
+    /// This alone does not make `CombatRequirement` `Copy` — `All` below
+    /// already rules that out unconditionally (a `Vec` can never be `Copy`,
+    /// regardless of what this variant does), so call sites that need an
+    /// owned `CombatRequirement`/`CustomCombo` still `.clone()` one.
+    CasterLevelRoll(Box<CasterLevelFailChance>),
+    /// Met when every inner requirement is met — an AND combinator, for
+    /// composing more than one `CombatRequirement` where an ability's RON
+    /// shape only has room for a single requirement slot (e.g.
+    /// `attack_effect: Option<(CombatEffect, CombatRequirement)>`). Shipped
+    /// content (`power_word_kill`/`pain`/`stun`) already composes
+    /// `TargetHealthAtOrBelow` + `CasterLevelRoll` through this variant, so it
+    /// cannot be dropped to make room for `Copy`.
+    All(Vec<CombatRequirement>),
 }
 
 impl CombatRequirement {
@@ -1859,6 +2674,7 @@ impl CombatRequirement {
             Option<&Buffs>,
             Option<&CharacterState>,
             Option<&Ori>,
+            Option<Uid>,
         ),
         // originator refers to the cause of the effect that requirements are being checked for.
         // For combat effects on an attack this will be the attacker, for damaged and death effects
@@ -1870,11 +2686,22 @@ impl CombatRequirement {
         dir: Dir,
         attack_source: Option<AttackSource>,
         ability_info: Option<AbilityInfo>,
+        rng: &mut rand::rngs::ThreadRng,
+        // The caster's own derived character level, when known — distinct
+        // from `attacker` (a `Uid` used for identity checks). Only
+        // `CasterLevelRoll` and `All` (recursively) consume it.
+        caster_level: Option<u16>,
+        // The caster's held class(es), so `CasterLevelRoll` can resolve a
+        // class-specific level for entries with `source_classes` set. Only
+        // `CasterLevelRoll` and `All` (recursively) consume it.
+        character_class: Option<&CharacterClass>,
     ) -> bool {
+        let (target_health, target_buffs, target_char_state, target_ori, target_uid) = target;
+        let (originator_entity, originator_energy, originator_combo) = originator;
         match self {
-            CombatRequirement::AnyDamage => damage > 0.0 && target.0.is_some(),
+            CombatRequirement::AnyDamage => damage > 0.0 && target_health.is_some(),
             CombatRequirement::Energy(r) => {
-                if let (Some(entity), Some(energy)) = (originator.0, originator.1) {
+                if let (Some(entity), Some(energy)) = (originator_entity, originator_energy) {
                     let sufficient_energy = energy.current() >= *r;
                     if sufficient_energy {
                         emitters.emit(EnergyChangeEvent {
@@ -1890,7 +2717,7 @@ impl CombatRequirement {
                 }
             },
             CombatRequirement::Combo(r) => {
-                if let (Some(entity), Some(combo)) = (originator.0, originator.2) {
+                if let (Some(entity), Some(combo)) = (originator_entity, originator_combo) {
                     let sufficient_combo = combo.counter() >= *r;
                     if sufficient_combo {
                         emitters.emit(ComboChangeEvent {
@@ -1905,26 +2732,54 @@ impl CombatRequirement {
                 }
             },
             CombatRequirement::TargetHasBuff(buff) => {
-                target.1.is_some_and(|buffs| buffs.contains(*buff))
+                target_buffs.is_some_and(|buffs| buffs.contains(*buff))
             },
-            CombatRequirement::TargetPoised => target.2.is_some_and(|cs| cs.is_stunned()),
+            CombatRequirement::TargetPoised => target_char_state.is_some_and(|cs| cs.is_stunned()),
             CombatRequirement::BehindTarget => {
-                if let Some(ori) = target.3 {
+                if let Some(ori) = target_ori {
                     ori.look_vec().angle_between(dir.with_z(0.0)) < BEHIND_TARGET_ANGLE
                 } else {
                     false
                 }
             },
-            CombatRequirement::TargetBlocking => target
-                .2
+            CombatRequirement::TargetBlocking => target_char_state
                 .zip(attack_source)
                 .is_some_and(|(cs, attack)| cs.is_block(attack) || cs.is_parry(attack)),
-            CombatRequirement::TargetUnwielded => target.2.is_some_and(|cs| !cs.is_wield()),
+            CombatRequirement::TargetUnwielded => {
+                target_char_state.is_some_and(|cs| !cs.is_wield())
+            },
             CombatRequirement::AttackSource(source) => attack_source == Some(*source),
             CombatRequirement::AttackInput(input) => {
                 ability_info.is_some_and(|ai| ai.input == *input)
             },
             CombatRequirement::Attacker(uid) => Some(*uid) == attacker,
+            CombatRequirement::Target(uid) => Some(*uid) == target_uid,
+            CombatRequirement::StageSection(s) => {
+                Some(*s) == target_char_state.and_then(|cs| cs.stage_section())
+            },
+            CombatRequirement::TargetHealthBelow(threshold) => {
+                target_health.is_some_and(|h| h.fraction() < *threshold)
+            },
+            CombatRequirement::TargetHealthAtOrBelow(health_threshold) => target_health
+                .is_some_and(|h| h.current() <= health_threshold.threshold(h.maximum())),
+            CombatRequirement::CasterLevelRoll(fail_chance) => fail_chance
+                .effective_caster_level(caster_level, character_class)
+                .is_some_and(|level| rng.random::<f32>() >= fail_chance.fail_chance(level)),
+            CombatRequirement::All(reqs) => reqs.iter().all(|req| {
+                req.requirement_met(
+                    target,
+                    originator,
+                    attacker,
+                    damage,
+                    emitters,
+                    dir,
+                    attack_source,
+                    ability_info,
+                    rng,
+                    caster_level,
+                    character_class,
+                )
+            }),
         }
     }
 }
@@ -2032,16 +2887,75 @@ impl From<AttackSource> for DamageSource {
     fn from(attack: AttackSource) -> Self { DamageSource::Attack(attack) }
 }
 
+/// Why an entity left the world, threaded through
+/// [`crate::event::DestroyEvent`] so a removal that is *not* a kill can be
+/// told apart from one that is.
+///
+/// Nothing reads this for quest/achievement purposes yet —
+/// `QuestKind::Slay` (`rtsim/src/rule/npc_ai/quest.rs:487`) is still a no-op.
+/// It exists now, deliberately, so the eventual kill-tracking system has a
+/// signal to key off from day one instead of retrofitting death-cause
+/// tracking later (spec §7). Extend the enum rather than adding a parallel
+/// flag.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemovalCause {
+    /// Killed outright. The only cause that counts as a kill.
+    Killed,
+    /// Banished: temporarily removed, due to return later, and therefore
+    /// never a kill — see `aura::BanishmentEffect`.
+    Banished,
+}
+
+impl RemovalCause {
+    /// Whether this removal should be credited as a kill by any future
+    /// quest / achievement / statistics consumer.
+    pub fn counts_as_kill(self) -> bool { matches!(self, RemovalCause::Killed) }
+}
+
+/// A [`RemovalCause`] plus how much of the normal XP and loot the removal
+/// awards. The fraction is carried alongside the cause rather than derived
+/// from it so the number stays authored in RON
+/// (`aura::BanishmentEffect::reward_fraction`) instead of hardcoded here.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct RemovalInfo {
+    pub cause: RemovalCause,
+    /// Multiplier in `0.0..=1.0` applied to the XP award and to each loot
+    /// entry's chance to drop. `1.0` for an ordinary kill.
+    pub reward_fraction: f32,
+}
+
+impl Default for RemovalInfo {
+    fn default() -> Self {
+        Self {
+            cause: RemovalCause::Killed,
+            reward_fraction: 1.0,
+        }
+    }
+}
+
+impl RemovalInfo {
+    /// An ordinary kill: full rewards.
+    pub fn killed() -> Self { Self::default() }
+
+    /// A banishment awarding `reward_fraction` of the normal rewards.
+    pub fn banished(reward_fraction: f32) -> Self {
+        Self {
+            cause: RemovalCause::Banished,
+            reward_fraction: reward_fraction.clamp(0.0, 1.0),
+        }
+    }
+}
+
 /// DamageKind for the purpose of differentiating damage reduction.
 ///
 /// The three physical kinds (Piercing/Slashing/Crushing) carry distinct
 /// mitigation behaviour (see the apply-damage match in this file). The
-/// magical/elemental kinds are the content damage taxonomy (Matias 2026-06-20,
-/// content-adaptation §6.2 / ENG-A2); for now they share the generic
-/// (no special physical interaction) mitigation of the legacy `Energy`
-/// placeholder. **Radiant is the opposite of Necrotic** — the resist/affinity
-/// interplay (e.g. undead take bonus Radiant; Necrotic harms the living /
-/// spares undead) is a future balance task and is NOT wired here yet.
+/// magical/elemental kinds form the broader content damage taxonomy; for now
+/// they share the generic (no special physical interaction) mitigation of the
+/// legacy `Energy` placeholder. **Radiant is the opposite of Necrotic** — the
+/// resist/affinity interplay (e.g. undead take bonus Radiant; Necrotic harms
+/// the living / spares undead) is a future balance feature and is NOT wired
+/// here yet.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DamageKind {
     // --- physical ---
@@ -2088,26 +3002,30 @@ pub struct Damage {
 }
 
 impl Damage {
-    /// Returns the total damage reduction provided by all equipped items
+    /// Returns the total damage reduction provided by all equipped items.
+    ///
+    /// Reads the target's cached armour protection rather than walking its
+    /// loadout: `derived: None` means the entity has no `Inventory`, which is
+    /// `Some(0.0)` — never invincible — exactly as
+    /// [`DerivedStats::default()`] records.
     pub fn compute_damage_reduction(
         damage: Option<Self>,
-        inventory: Option<&Inventory>,
-        attuned: Option<&AttunedItems>,
+        derived: Option<&DerivedStats>,
         stats: Option<&Stats>,
-        msm: &MaterialStatManifest,
     ) -> f32 {
-        // BL-36: an antimagic field makes attuned magic-item effects mundane, so
-        // attuned protection is dropped while the target has `disable_magic`.
-        // This covers every damage path (all callers route here); the standalone
-        // `compute_protection` invincibility check is a rare attuned combo left to
-        // a follow-up. The 3rd attunement-gated path (item-granted abilities) is
-        // already covered — those are magic, so the cast gate blocks them.
-        let attuned = if stats.is_some_and(|s| s.disable_magic) {
-            None
-        } else {
-            attuned
-        };
-        let protection = compute_protection(inventory, attuned, msm);
+        // An antimagic field makes attuned magic-item effects mundane, so the
+        // attunement-blind protection is selected while the target has
+        // `disable_magic` — a pick between the two cached variants rather than
+        // a second loadout walk. This covers every damage path (all callers
+        // route here). The 3rd attunement-gated path (item-granted abilities)
+        // is already covered — those are magic, so the cast gate blocks them.
+        let protection = derived.map_or(Some(0.0), |derived| {
+            if stats.is_some_and(|s| s.disable_magic) {
+                derived.protection_unattuned
+            } else {
+                derived.protection
+            }
+        });
 
         let penetration = if let Some(damage) = damage {
             if let DamageKind::Piercing = damage.kind {
@@ -2168,6 +3086,9 @@ impl Damage {
             * precision_mult.unwrap_or(0.0)
             * ((crit_damage_mult - 1.0) + (precision_power - 1.0)))
             .max(0.0);
+        // `Self` (`Damage`) has no access to the `Attack`'s `ability_info`, so
+        // `magic_source` is left `None` here; the sole caller (`apply_attack`)
+        // overwrites it with the attributed source right after this returns.
         match damage_source {
             DamageSource::Attack(_) => {
                 // Precise hit
@@ -2181,6 +3102,7 @@ impl Damage {
                     amount: -damage,
                     by: damage_contributor,
                     cause: Some(damage_source),
+                    magic_source: None,
                     time,
                     precise: precision_mult.is_some(),
                     instance,
@@ -2195,6 +3117,7 @@ impl Damage {
                     amount: -damage,
                     by: None,
                     cause: Some(damage_source),
+                    magic_source: None,
                     time,
                     precise: false,
                     instance,
@@ -2204,6 +3127,7 @@ impl Damage {
                 amount: -damage,
                 by: None,
                 cause: Some(damage_source),
+                magic_source: None,
                 time,
                 precise: false,
                 instance,
@@ -2308,24 +3232,30 @@ impl CombatBuff {
     pub fn to_buff(
         self,
         time: Time,
-        attacker_info: (Option<Uid>, Option<&Mass>, Option<ToolKind>),
+        attacker_info: (Option<Uid>, Option<&Mass>),
         target_info: (Option<&Stats>, Option<&Mass>),
         damage: f32,
         strength_modifier: f32,
+        ability_info: Option<AbilityInfo>,
     ) -> Buff {
+        let (attacker_uid, attacker_mass) = attacker_info;
+        let (target_stats, target_mass) = target_info;
         // TODO: Generate BufCategoryId vec (probably requires damage overhaul?)
-        let source = if let Some(uid) = attacker_info.0 {
+        let source = if let Some(uid) = attacker_uid {
             BuffSource::Character {
                 by: uid,
-                tool_kind: attacker_info.2,
+                tool_kind: ability_info.and_then(|ai| ai.tool),
             }
         } else {
             BuffSource::Unknown
         };
         let dest_info = DestInfo {
-            stats: target_info.0,
-            mass: target_info.1,
+            stats: target_stats,
+            mass: target_mass,
         };
+        let target_uid = ability_info
+            .and_then(|ai| ai.input_attr)
+            .and_then(|ia| ia.target_entity);
         Buff::new(
             self.kind,
             BuffData::new(
@@ -2336,30 +3266,37 @@ impl CombatBuff {
             source,
             time,
             dest_info,
-            attacker_info.1,
+            attacker_mass,
+            target_uid,
+            ability_info.and_then(|ai| ai.ability_meta.source),
         )
     }
 
     pub fn to_self_buff(
         self,
         time: Time,
-        entity_info: (Option<Uid>, Option<&Stats>, Option<&Mass>, Option<ToolKind>),
+        entity_info: (Option<Uid>, Option<&Stats>, Option<&Mass>),
         damage: f32,
         strength_modifier: f32,
+        ability_info: Option<AbilityInfo>,
     ) -> Buff {
+        let (entity_uid, entity_stats, entity_mass) = entity_info;
         // TODO: Generate BufCategoryId vec (probably requires damage overhaul?)
-        let source = if let Some(uid) = entity_info.0 {
+        let source = if let Some(uid) = entity_uid {
             BuffSource::Character {
                 by: uid,
-                tool_kind: entity_info.3,
+                tool_kind: ability_info.and_then(|ai| ai.tool),
             }
         } else {
             BuffSource::Unknown
         };
         let dest_info = DestInfo {
-            stats: entity_info.1,
-            mass: entity_info.2,
+            stats: entity_stats,
+            mass: entity_mass,
         };
+        let target_uid = ability_info
+            .and_then(|ai| ai.input_attr)
+            .and_then(|ia| ia.target_entity);
         Buff::new(
             self.kind,
             BuffData::new(
@@ -2370,8 +3307,135 @@ impl CombatBuff {
             source,
             time,
             dest_info,
-            entity_info.2,
+            entity_mass,
+            target_uid,
+            ability_info.and_then(|ai| ai.ability_meta.source),
         )
+    }
+}
+
+/// Shared, dynamically-shrinking HP-pool debuff config (`Sleep`'s
+/// mechanism) -- unlike `CombatEffect`/`CombatRequirement`, which the
+/// surrounding `Attack::apply_attack` pipeline resolves independently per
+/// target with no visibility into any other target in the same volley,
+/// `resolve_pooled_debuff_targets` below is deliberately resolved in a
+/// pre-pass over the *entire* target list for one cast before any buff is
+/// applied -- the outcome for target N depends on which of targets 1..N-1
+/// already consumed from `pool`. Delivered via `RadiusEffect::PooledDebuff`
+/// (`explosion.rs`), which the `ExplosionEvent` handler resolves as a single
+/// block rather than folding it into the generic per-entity effect loop.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PooledDebuff {
+    /// Total shared HP budget for one cast. Ships with 30.0 as a first-pass
+    /// placeholder -- see the RON comment on
+    /// `assets/common/abilities/spells/arcane/sleep.ron` for the reasoning
+    /// and the explicit "tune later" caveat.
+    pub pool: f32,
+    /// Debuff granted to every target the pool ends up affecting. `chance`
+    /// is expected to stay at 1.0 for this use -- a target's odds of being
+    /// affected are entirely the deterministic pool math below, not an RNG
+    /// roll on top of it.
+    pub buff: CombatBuff,
+    /// Threaded through to `CombatBuff::to_buff` for `BuffSource`/
+    /// `magic_source` attribution (dispel/antimagic interactions, the caster
+    /// tool_kind, etc.) -- `RadiusEffect::PooledDebuff` bypasses the `Attack`
+    /// struct entirely (no damage/knockback/poise involved), so this is the
+    /// only path that information has left to travel through.
+    pub ability_info: Option<AbilityInfo>,
+}
+
+/// Resolves a shared, dynamically-shrinking HP pool against a list of
+/// candidates -- the classic "Sleep spell" algorithm: sort every candidate
+/// ascending by current HP, then walk the sorted list applying the debuff
+/// and subtracting that candidate's HP from `pool`, until the pool is
+/// exhausted or the list has been fully walked. A candidate whose HP is
+/// larger than what remains in `pool` is skipped outright -- not partially
+/// affected -- and resolution continues to the next-lowest candidate.
+///
+/// Because `pool` only ever shrinks and the list is sorted ascending, once a
+/// candidate is skipped every candidate after it (equal or higher HP) is
+/// mathematically guaranteed to be skipped too. This function still walks
+/// the whole list rather than breaking out on the first skip, matching the
+/// mechanic's own literal framing ("skipped entirely... the spell moves to
+/// the next-lowest creature instead, and so on until the pool runs out or
+/// the list is exhausted") rather than relying on a caller to trust that
+/// invariant forever.
+///
+/// Generic over the candidate identifier (`T`, e.g. `specs::Entity` in
+/// production, a plain `u32` in tests) so the pure pool-consumption logic
+/// can be unit-tested without any ECS machinery.
+pub fn resolve_pooled_debuff_targets<T: Copy>(mut candidates: Vec<(T, f32)>, pool: f32) -> Vec<T> {
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+    let mut remaining = pool;
+    let mut affected = Vec::with_capacity(candidates.len());
+    for (id, hp) in candidates {
+        if hp <= remaining {
+            remaining -= hp;
+            affected.push(id);
+        }
+    }
+    affected
+}
+
+#[cfg(test)]
+mod sleep_pool_tests {
+    use super::resolve_pooled_debuff_targets;
+
+    #[test]
+    fn affects_ascending_by_current_hp_regardless_of_input_order() {
+        // Input deliberately out of HP order -- the function must sort, not
+        // trust caller ordering.
+        let candidates = vec![(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
+        // Pool big enough for all three (5 + 12 + 40 = 57).
+        let affected = resolve_pooled_debuff_targets(candidates, 57.0);
+        assert_eq!(affected, vec![2, 3, 1], "must process lowest-HP first");
+    }
+
+    #[test]
+    fn stops_once_pool_is_exhausted() {
+        // 5 + 12 = 17 fits in a pool of 20; the last (40) does not.
+        let candidates = vec![(1u32, 40.0), (2u32, 5.0), (3u32, 12.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 20.0);
+        assert_eq!(affected, vec![2, 3]);
+    }
+
+    #[test]
+    fn skips_a_creature_bigger_than_the_remaining_pool_without_consuming_it() {
+        // Pool of 10: the 5-HP creature fits (remaining -> 5), but the next
+        // (8 HP) exceeds what's left and must be skipped entirely -- not
+        // partially applied, and its HP is not deducted from the pool.
+        let candidates = vec![(1u32, 5.0), (2u32, 8.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 10.0);
+        assert_eq!(
+            affected,
+            vec![1],
+            "the 8-HP creature must be skipped, not partially affected"
+        );
+    }
+
+    #[test]
+    fn exact_pool_match_is_affected() {
+        // hp <= remaining uses <=, so an exact match still affects.
+        let candidates = vec![(1u32, 30.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 30.0);
+        assert_eq!(affected, vec![1]);
+    }
+
+    #[test]
+    fn empty_candidate_list_returns_empty() {
+        let affected = resolve_pooled_debuff_targets::<u32>(vec![], 30.0);
+        assert!(affected.is_empty());
+    }
+
+    #[test]
+    fn zero_pool_affects_nothing_even_with_zero_hp_candidates_unlikely_in_practice() {
+        // Defensive: a 0.0 HP candidate would still be "affected" against a
+        // 0.0 pool (0.0 <= 0.0), but in production dead entities are always
+        // filtered out before this function ever sees them.
+        let candidates = vec![(1u32, 0.0), (2u32, 1.0)];
+        let affected = resolve_pooled_debuff_targets(candidates, 0.0);
+        assert_eq!(affected, vec![1]);
     }
 }
 
@@ -2409,267 +3473,305 @@ pub fn get_weapon_kinds(inv: &Inventory) -> (Option<ToolKind>, Option<ToolKind>)
     )
 }
 
-// TODO: Either remove msm or use it as argument in fn kind
-fn weapon_rating<T: ItemDesc>(item: &T, _msm: &MaterialStatManifest) -> f32 {
-    const POWER_WEIGHT: f32 = 2.0;
-    const SPEED_WEIGHT: f32 = 3.0;
-    const RANGE_WEIGHT: f32 = 0.8;
-    const EFFECT_WEIGHT: f32 = 1.5;
-    const EQUIP_TIME_WEIGHT: f32 = 0.0;
-    const ENERGY_EFFICIENCY_WEIGHT: f32 = 1.5;
-    const BUFF_STRENGTH_WEIGHT: f32 = 1.5;
-
-    let rating = if let ItemKind::Tool(tool) = &*item.kind() {
-        let stats = tool.stats(item.stats_durability_multiplier());
-
-        // TODO: Look into changing the 0.5 to reflect armor later maybe?
-        // Since it is only for weapon though, it probably makes sense to leave
-        // independent for now
-
-        let power_rating = stats.power;
-        let speed_rating = stats.speed - 1.0;
-        let range_rating = stats.range - 1.0;
-        let effect_rating = stats.effect_power - 1.0;
-        let equip_time_rating = 0.5 - stats.equip_time_secs;
-        let energy_efficiency_rating = stats.energy_efficiency - 1.0;
-        let buff_strength_rating = stats.buff_strength - 1.0;
-
-        power_rating * POWER_WEIGHT
-            + speed_rating * SPEED_WEIGHT
-            + range_rating * RANGE_WEIGHT
-            + effect_rating * EFFECT_WEIGHT
-            + equip_time_rating * EQUIP_TIME_WEIGHT
-            + energy_efficiency_rating * ENERGY_EFFICIENCY_WEIGHT
-            + buff_strength_rating * BUFF_STRENGTH_WEIGHT
+/// The `SkillGroupKind` whose earned points should count toward a given
+/// equipped tool. Usually just `Weapon(tool.kind)`, but a martial-role Staff
+/// has its own tree (`WeaponRoled`) kept deliberately separate from the
+/// caster `Weapon(Staff)` tree it shares a `ToolKind` with.
+///
+/// Every consumer of "which skill group does this equipped tool belong to"
+/// must go through this function, not a bare
+/// `SkillGroupKind::Weapon(tool.kind)` -- combat-rating display and combat-XP
+/// grant both need the same answer, and having only one of them special-case
+/// the martial/caster Staff split silently strands XP or points in the wrong
+/// pool.
+pub fn skill_group_for_weapon(tool: &Tool) -> SkillGroupKind {
+    if tool.kind == ToolKind::Staff && tool.role() == WeaponRole::Martial {
+        SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
     } else {
-        0.0
-    };
-    rating.max(0.0)
+        SkillGroupKind::Weapon(tool.kind)
+    }
 }
 
-fn weapon_skills(inventory: &Inventory, skill_set: &SkillSet) -> f32 {
-    let (mainhand, offhand) = get_weapon_kinds(inventory);
-    let mainhand_skills = if let Some(tool) = mainhand {
-        skill_set.earned_sp(SkillGroupKind::Weapon(tool)) as f32
-    } else {
-        0.0
-    };
-    let offhand_skills = if let Some(tool) = offhand {
-        skill_set.earned_sp(SkillGroupKind::Weapon(tool)) as f32
-    } else {
-        0.0
-    };
-    mainhand_skills.max(offhand_skills)
+#[cfg(test)]
+mod skill_group_for_weapon_tests {
+    use super::*;
+
+    fn test_stats() -> tool::Stats {
+        tool::Stats {
+            equip_time_secs: 0.0,
+            power: 1.0,
+            effect_power: 1.0,
+            speed: 1.0,
+            range: 1.0,
+            energy_efficiency: 1.0,
+            buff_strength: 1.0,
+            cooldown_reduction: 1.0,
+        }
+    }
+
+    /// A martial-role Staff must earn combat-rating credit from its own
+    /// tree, not the caster `Weapon(Staff)` tree it deliberately does not
+    /// share — otherwise a Monk who has spent points in the martial tree
+    /// would silently show 0 weapon-skill contribution to their combat
+    /// rating.
+    #[test]
+    fn martial_staff_resolves_its_own_group() {
+        let tool = Tool::new(
+            ToolKind::Staff,
+            Hands::Two,
+            Some(WeaponRole::Martial),
+            test_stats(),
+        );
+        assert_eq!(
+            skill_group_for_weapon(&tool),
+            SkillGroupKind::WeaponRoled(ToolKind::Staff, WeaponRole::Martial)
+        );
+    }
+
+    /// A caster-role Staff (the default for a bare `role: None`) still
+    /// resolves the original `Weapon(Staff)` tree, unaffected by the new
+    /// martial tree's existence.
+    #[test]
+    fn caster_staff_resolves_the_original_weapon_group() {
+        let tool = Tool::new(ToolKind::Staff, Hands::Two, None, test_stats());
+        assert_eq!(
+            skill_group_for_weapon(&tool),
+            SkillGroupKind::Weapon(ToolKind::Staff)
+        );
+    }
+
+    /// Roles are only meaningful for `Staff` today; every other `ToolKind`
+    /// resolves `Weapon(kind)` regardless of role, same as before this
+    /// function existed.
+    #[test]
+    fn non_staff_tools_are_unaffected_by_role() {
+        let tool = Tool::new(ToolKind::Sword, Hands::One, None, test_stats());
+        assert_eq!(
+            skill_group_for_weapon(&tool),
+            SkillGroupKind::Weapon(ToolKind::Sword)
+        );
+    }
 }
 
-fn get_weapon_rating(inventory: &Inventory, msm: &MaterialStatManifest) -> f32 {
-    let mainhand_rating = if let Some(item) = inventory.equipped(EquipSlot::ActiveMainhand) {
-        weapon_rating(item, msm)
-    } else {
-        0.0
-    };
-
-    let offhand_rating = if let Some(item) = inventory.equipped(EquipSlot::ActiveOffhand) {
-        weapon_rating(item, msm)
-    } else {
-        0.0
-    };
-
-    mainhand_rating.max(offhand_rating)
-}
-
-pub fn combat_rating(
-    inventory: &Inventory,
-    health: &Health,
-    energy: &Energy,
-    poise: &Poise,
-    skill_set: &SkillSet,
-    body: Body,
-    msm: &MaterialStatManifest,
-) -> f32 {
-    const WEAPON_WEIGHT: f32 = 1.0;
-    const HEALTH_WEIGHT: f32 = 1.5;
-    const ENERGY_WEIGHT: f32 = 0.5;
-    const SKILLS_WEIGHT: f32 = 1.0;
-    const POISE_WEIGHT: f32 = 0.5;
-    const PRECISION_WEIGHT: f32 = 0.5;
-    // Normalized with a standard max health of 100
-    let health_rating = health.base_max()
-        / 100.0
-        / (1.0 - Damage::compute_damage_reduction(None, Some(inventory), None, None, msm))
-            .max(0.00001);
-
-    // Normalized with a standard max energy of 100 and energy reward multiplier of
-    // x1
-    let energy_rating = (energy.base_max() + compute_max_energy_mod(Some(inventory), None, msm))
-        / 100.0
-        * compute_energy_reward_mod(Some(inventory), msm);
-
-    // Normalized with a standard max poise of 100
-    let poise_rating = poise.base_max()
-        / 100.0
-        / (1.0 - Poise::compute_poise_damage_reduction(Some(inventory), msm, None, None))
-            .max(0.00001);
-
-    // Normalized with a standard precision multiplier of 1.2
-    let precision_rating = compute_precision_mult(Some(inventory), msm) / 1.2;
-
-    // Assumes a standard person has earned 20 skill points in the general skill
-    // tree and 10 skill points for the weapon skill tree
-    let skills_rating = (skill_set.earned_sp(SkillGroupKind::General) as f32 / 20.0
-        + weapon_skills(inventory, skill_set) / 10.0)
-        / 2.0;
-
-    let weapon_rating = get_weapon_rating(inventory, msm);
-
-    let combined_rating = (health_rating * HEALTH_WEIGHT
-        + energy_rating * ENERGY_WEIGHT
-        + poise_rating * POISE_WEIGHT
-        + precision_rating * PRECISION_WEIGHT
-        + skills_rating * SKILLS_WEIGHT
-        + weapon_rating * WEAPON_WEIGHT)
-        / (HEALTH_WEIGHT
-            + ENERGY_WEIGHT
-            + POISE_WEIGHT
-            + PRECISION_WEIGHT
-            + SKILLS_WEIGHT
-            + WEAPON_WEIGHT);
-
-    // Body multiplier meant to account for an enemy being harder than equipment and
-    // skills would account for. It should only not be 1.0 for non-humanoids
-    combined_rating * body.combat_multiplier()
-}
-
-pub fn compute_precision_mult(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    // Starts with a value of 0.1 when summing the stats from each armor piece, and
-    // defaults to a value of 0.1 if no inventory is equipped. Precision multiplier
-    // cannot go below 1
-    1.0 + inventory
-        .map_or(0.1, |inv| {
-            inv.equipped_items()
-                .filter_map(|item| {
-                    if let ItemKind::Armor(armor) = &*item.kind() {
-                        armor
-                            .stats(msm, item.stats_durability_multiplier())
-                            .precision_power
-                    } else {
-                        None
-                    }
-                })
-                .fold(0.1, |a, b| a + b)
-        })
-        .max(0.0)
-}
-
-/// Computes the energy reward modifier from worn armor
-pub fn compute_energy_reward_mod(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    // Starts with a value of 1.0 when summing the stats from each armor piece, and
-    // defaults to a value of 1.0 if no inventory is present
-    inventory.map_or(1.0, |inv| {
-        inv.equipped_items()
-            .filter_map(|item| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .energy_reward
-                } else {
-                    None
-                }
-            })
-            .fold(1.0, |a, b| a + b)
-    })
-}
-
-/// Computes the additive modifier that should be applied to max energy from the
-/// currently equipped items
-pub fn compute_max_energy_mod(
+/// The gear → `comp::Stats` fold for the caster role. Every equipped `Tool`
+/// item whose [`tool::WeaponRole`] resolves to `Caster` — this covers not
+/// just `Staff`/`Sceptre` but every dedicated caster implement (`Tome`,
+/// `HolySymbol`, `Focus`), since `ToolKind::default_role` maps all five to
+/// `Caster` — folds its `effect_power`/`buff_strength`/`energy_efficiency`
+/// tool stats into the matching character-level channel, gated by the same
+/// attunement rule that already governs armor's item-effect contributions
+/// ([`item_effects_active`]).
+///
+/// Called from `buff::Sys`'s per-tick `Stats` rebuild (it already holds the
+/// `Inventory`/`AttunedItems` storages, so no `SystemData` widening is
+/// needed) rather than from any per-ability path — this is the ONLY
+/// mechanism that reaches **weaponless pool spells**, since
+/// `states::utils::get_tool_stats` falls back to `tool::Stats::one()` (i.e.
+/// contributes nothing) whenever no tool occupies the ability's hand.
+///
+/// `energy_efficiency_modifier` is deliberately left untouched here: it
+/// already composes with the SAME equipped weapon's own
+/// `tool::Stats.energy_efficiency` at ability-construction time
+/// (`contextual_stats.energy_efficiency *= stats.energy_efficiency_modifier`
+/// in `states/utils.rs`), so routing gear's `energy_efficiency` there too
+/// would double-apply it whenever that weapon casts its own abilities.
+/// `energy_regen_modifier` has no existing tool-stat consumer, so gear's mana
+/// axis lands there instead — new, and non-overlapping with the per-ability
+/// path.
+///
+/// Two further channels fold in the same way: `cooldown_reduction_modifier`
+/// always takes the item's `cooldown_reduction` tool stat (identity 1.0 for
+/// every item that doesn't declare one). `spell_power` is keyed by
+/// [`tool::Tool::spell_power_source`]: an item that names no source (every
+/// shipped item today) still contributes to the flat, unkeyed `spell_power`
+/// channel exactly as before; an item that DOES name one routes its
+/// `effect_power` into that source's `spell_power_by_source` slot ONLY,
+/// instead of boosting every source.
+pub fn apply_gear_caster_stats(
+    stats: &mut Stats,
     inventory: Option<&Inventory>,
     attuned: Option<&AttunedItems>,
-    msm: &MaterialStatManifest,
-) -> f32 {
-    // Defaults to a value of 0 if no inventory is present
-    inventory.map_or(0.0, |inv| {
-        inv.equipped_items_with_slot()
-            .filter(|(slot, item)| item_effects_active(*slot, item.requires_attunement(), attuned))
-            .filter_map(|(_, item)| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .energy_max
-                } else {
-                    None
-                }
-            })
-            .sum()
-    })
+) {
+    let Some(inventory) = inventory else {
+        return;
+    };
+    for (slot, item) in inventory.equipped_items_with_slot() {
+        if !item_effects_active(slot, item.requires_attunement(), attuned) {
+            continue;
+        }
+        let ItemKind::Tool(tool) = &*item.kind() else {
+            continue;
+        };
+        if tool.role() != tool::WeaponRole::Caster {
+            continue;
+        }
+        let tool_stats = tool.stats(item.stats_durability_multiplier());
+        match tool.spell_power_source() {
+            Some(source) => stats.spell_power_by_source[source.index()] *= tool_stats.effect_power,
+            None => stats.spell_power *= tool_stats.effect_power,
+        }
+        stats.heal_power *= tool_stats.buff_strength;
+        stats.energy_regen_modifier *= tool_stats.energy_efficiency;
+        stats.cooldown_reduction_modifier *= tool_stats.cooldown_reduction;
+    }
+}
+
+/// Applies an already-folded [`CasterGearFold`] onto `stats`.
+///
+/// Same channels, same multiplicative composition and same identities as
+/// [`apply_gear_caster_stats`], except that the per-item products have already
+/// been accumulated once (at cache-rebuild time) instead of being recomputed by
+/// walking the loadout on every tick. An entity with no cached fold is
+/// indistinguishable from one with the default fold: every channel's identity
+/// is `1.0`, so applying it is a no-op.
+pub fn apply_caster_gear_fold(stats: &mut Stats, fold: &CasterGearFold) {
+    stats.spell_power *= fold.spell_power;
+    for (channel, factor) in stats
+        .spell_power_by_source
+        .iter_mut()
+        .zip(fold.spell_power_by_source.iter())
+    {
+        *channel *= factor;
+    }
+    stats.heal_power *= fold.heal_power;
+    stats.energy_regen_modifier *= fold.energy_regen_modifier;
+    stats.cooldown_reduction_modifier *= fold.cooldown_reduction_modifier;
 }
 
 /// Returns a value to be included as a multiplicative factor in perception
 /// distance checks.
+///
+/// Folds the **target's** buff-sourced `Stats.stealth` (set by
+/// `BuffEffect::Stealth`, e.g. a concealment spell) into the exact same
+/// `1/(1+sum)` curve [`stealth_multiplier`] already applies to item-based
+/// stealth (`derived.stealth`) — one curve, not two multipliers stacked on
+/// top of each other, so gear and spells read as one coherent concealment
+/// value.
+///
+/// `pierce_concealment` is read off the **observer** — the entity doing the
+/// looking, never the target — because it is granted to whoever should be
+/// able to see through any amount of concealment regardless of how well
+/// hidden the target is. `target_stats` and `observer_stats` are both
+/// `Option<&Stats>`, the same type for two different entities; getting them
+/// backwards silently breaks concealment both ways, so callers must resolve
+/// each from the correct entity (the target's `Stats` vs. the observing
+/// entity's own `Stats`), never the same lookup twice.
 pub fn perception_dist_multiplier_from_stealth(
-    inventory: Option<&Inventory>,
+    derived: Option<&DerivedStats>,
     character_state: Option<&CharacterState>,
-    msm: &MaterialStatManifest,
+    target_stats: Option<&Stats>,
+    observer_stats: Option<&Stats>,
 ) -> f32 {
+    if observer_stats.is_some_and(|stats| stats.pierce_concealment) {
+        return 1.0;
+    }
+
     const SNEAK_MULTIPLIER: f32 = 0.7;
 
-    let item_stealth_multiplier = stealth_multiplier_from_items(inventory, msm);
+    let item_stealth = derived.map_or(0.0, |d| d.stealth);
+    let buff_stealth = target_stats.map_or(0.0, |s| s.stealth);
+    let combined_stealth_multiplier = stealth_multiplier(item_stealth + buff_stealth);
     let is_sneaking = character_state.is_some_and(|state| state.is_stealthy());
 
-    let multiplier = item_stealth_multiplier * if is_sneaking { SNEAK_MULTIPLIER } else { 1.0 };
+    let multiplier = combined_stealth_multiplier * if is_sneaking { SNEAK_MULTIPLIER } else { 1.0 };
 
     multiplier.clamp(0.0, 1.0)
 }
 
-pub fn compute_stealth(inventory: Option<&Inventory>, msm: &MaterialStatManifest) -> f32 {
-    inventory.map_or(0.0, |inv| {
-        inv.equipped_items()
-            .filter_map(|item| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor.stats(msm, item.stats_durability_multiplier()).stealth
-                } else {
-                    None
-                }
-            })
-            .sum()
-    })
-}
+/// Turns an entity's summed armour stealth stat into the multiplicative factor
+/// applied to perception distances. `0.0` (the no-gear sum) is the identity.
+pub fn stealth_multiplier(stealth_sum: f32) -> f32 { (1.0 / (1.0 + stealth_sum)).clamp(0.0, 1.0) }
 
-pub fn stealth_multiplier_from_items(
-    inventory: Option<&Inventory>,
-    msm: &MaterialStatManifest,
-) -> f32 {
-    let stealth_sum = compute_stealth(inventory, msm);
+#[cfg(test)]
+mod concealment_wire_tests {
+    use super::{DerivedStats, Stats, perception_dist_multiplier_from_stealth, stealth_multiplier};
+    use crate::comp::{Body, humanoid};
 
-    (1.0 / (1.0 + stealth_sum)).clamp(0.0, 1.0)
-}
+    fn test_body() -> Body { Body::Humanoid(humanoid::Body::random()) }
 
-/// Computes the total protection provided from armor. Is used to determine the
-/// damage reduction applied to damage received by an entity None indicates that
-/// the armor equipped makes the entity invulnerable
-pub fn compute_protection(
-    inventory: Option<&Inventory>,
-    attuned: Option<&AttunedItems>,
-    msm: &MaterialStatManifest,
-) -> Option<f32> {
-    inventory.map_or(Some(0.0), |inv| {
-        inv.equipped_items_with_slot()
-            .filter(|(slot, item)| item_effects_active(*slot, item.requires_attunement(), attuned))
-            .filter_map(|(_, item)| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .protection
-                } else {
-                    None
-                }
-            })
-            .map(|protection| match protection {
-                Protection::Normal(protection) => Some(protection),
-                Protection::Invincible => None,
-            })
-            .sum::<Option<f32>>()
-    })
+    fn stats_with(stealth: f32, pierce_concealment: bool) -> Stats {
+        let mut stats = Stats::empty(test_body());
+        stats.stealth = stealth;
+        stats.pierce_concealment = pierce_concealment;
+        stats
+    }
+
+    fn derived_with_item_stealth(stealth: f32) -> DerivedStats {
+        DerivedStats {
+            stealth,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn buff_only_stealth_reduces_the_multiplier() {
+        let target_stats = stats_with(0.5, false);
+
+        let mult = perception_dist_multiplier_from_stealth(None, None, Some(&target_stats), None);
+
+        assert_eq!(mult, stealth_multiplier(0.5));
+        assert!(mult < 1.0);
+    }
+
+    #[test]
+    fn item_and_buff_stealth_stack_on_the_same_curve() {
+        let derived = derived_with_item_stealth(0.5);
+        let target_stats = stats_with(0.3, false);
+
+        let mult = perception_dist_multiplier_from_stealth(
+            Some(&derived),
+            None,
+            Some(&target_stats),
+            None,
+        );
+
+        // One curve over the summed total, not two multipliers stacked: if
+        // this regresses to two separately-applied multipliers, the result
+        // changes (and would no longer equal `stealth_multiplier(0.8)`).
+        assert_eq!(mult, stealth_multiplier(0.8));
+        assert_ne!(mult, stealth_multiplier(0.5) * stealth_multiplier(0.3));
+    }
+
+    #[test]
+    fn observer_pierce_concealment_restores_full_multiplier_regardless_of_target_stealth() {
+        let derived = derived_with_item_stealth(5.0);
+        let target_stats = stats_with(5.0, false);
+        let observer_stats = stats_with(0.0, true);
+
+        let mult = perception_dist_multiplier_from_stealth(
+            Some(&derived),
+            None,
+            Some(&target_stats),
+            Some(&observer_stats),
+        );
+
+        assert_eq!(mult, 1.0);
+    }
+
+    #[test]
+    fn zero_buff_stealth_is_bit_identical_to_item_only_stealth() {
+        // Regression guard: every shipped armor piece only ever sets item
+        // stealth (`DerivedStats::stealth`), never `Stats.stealth`. This
+        // pins the wire's output, at zero buff stealth, to exactly the
+        // pre-wire item-only formula, `1.0 / (1.0 + item_stealth)`, with
+        // bit-for-bit `f32` equality rather than an epsilon.
+        for item_stealth in [0.0_f32, 0.04, 0.15, 0.5, 1.2] {
+            let derived = derived_with_item_stealth(item_stealth);
+            let legacy = (1.0_f32 / (1.0 + item_stealth)).clamp(0.0, 1.0);
+
+            let with_no_stats =
+                perception_dist_multiplier_from_stealth(Some(&derived), None, None, None);
+            let with_zero_buff_stats = perception_dist_multiplier_from_stealth(
+                Some(&derived),
+                None,
+                Some(&stats_with(0.0, false)),
+                None,
+            );
+
+            assert_eq!(with_no_stats, legacy);
+            assert_eq!(with_zero_buff_stats, legacy);
+        }
+    }
 }
 
 /// Combat resolution (BL-52 P5): the physical evasion contributed by worn gear.
@@ -2677,71 +3779,36 @@ pub fn compute_protection(
 /// heavier (more protective) armor lowers evasion, an unarmored entity gets the
 /// `gear_evasion_cap`. A shield adds a flat penalty (it pays off via block, not
 /// dodge). Result is clamped to `[gear_evasion_floor, gear_evasion_cap]`.
-/// Computed at attack time (like
-/// `compute_protection`/`compute_precision_mult`), and applied only to the
-/// **physical** to-hit roll — magic uses `magic_evasion`.
+/// Read from the target's cached gear aggregates (protection and weapon
+/// kinds), and applied only to the **physical** to-hit roll — magic uses
+/// `magic_evasion`. Callers with no cache (an entity with no `Inventory`) skip
+/// this entirely and contribute `0.0`.
 pub fn compute_armor_evasion(
-    inventory: Option<&Inventory>,
-    attuned: Option<&AttunedItems>,
+    derived: &DerivedStats,
     stats: Option<&Stats>,
-    msm: &MaterialStatManifest,
     tuning: &CombatTuning,
 ) -> f32 {
-    let Some(inventory) = inventory else {
-        return 0.0;
-    };
-    // BL-36: under an antimagic field attuned protection is mundane, so it counts
-    // toward neither DR (`compute_damage_reduction`) nor weight/evasion — keeps an
-    // attuned item's two defense layers coherent.
-    // TODO(perf): `compute_damage_reduction` also scans the target's gear (per
-    // damage instance); compute protection once per attack and thread it to both.
-    let attuned = if stats.is_some_and(|s| s.disable_magic) {
-        None
+    // Under an antimagic field attuned protection is mundane, so it counts
+    // toward neither DR (`compute_damage_reduction`) nor weight/evasion — keeps
+    // an attuned item's two defense layers coherent. Both layers now read the
+    // same cached pair, so the target's gear is walked once per gear change
+    // instead of once per damage instance.
+    let protection = if stats.is_some_and(|s| s.disable_magic) {
+        derived.protection_unattuned
     } else {
-        attuned
-    };
+        derived.protection
+    }
     // Invincible armor (admin) reads as infinitely heavy → floored evasion.
-    let protection = compute_protection(Some(inventory), attuned, msm).unwrap_or(f32::INFINITY);
+    .unwrap_or(f32::INFINITY);
     let from_protection =
         tuning.gear_evasion_cap - protection * tuning.armor_evasion_per_protection;
-    let (mainhand, offhand) = get_weapon_kinds(inventory);
+    let (mainhand, offhand) = derived.weapon_kinds;
     let shield = if mainhand == Some(ToolKind::Shield) || offhand == Some(ToolKind::Shield) {
         tuning.shield_evasion_penalty
     } else {
         0.0
     };
     (from_protection - shield).clamp(tuning.gear_evasion_floor, tuning.gear_evasion_cap)
-}
-
-/// Computes the total resilience provided from armor. Is used to determine the
-/// reduction applied to poise damage received by an entity. None indicates that
-/// the armor equipped makes the entity invulnerable to poise damage.
-// NOTE (ENG-D2c): poise resilience is intentionally NOT attunement-gated in v1.
-// It's a secondary (stagger) defense and gating it would ripple through
-// `Poise::compute_poise_damage_reduction` → `apply_poise_reduction` and all
-// their callers. HP-damage protection (`compute_protection`), max-energy and
-// weapon abilities ARE gated; poise gating is a possible follow-up.
-pub fn compute_poise_resilience(
-    inventory: Option<&Inventory>,
-    msm: &MaterialStatManifest,
-) -> Option<f32> {
-    inventory.map_or(Some(0.0), |inv| {
-        inv.equipped_items()
-            .filter_map(|item| {
-                if let ItemKind::Armor(armor) = &*item.kind() {
-                    armor
-                        .stats(msm, item.stats_durability_multiplier())
-                        .poise_resilience
-                } else {
-                    None
-                }
-            })
-            .map(|protection| match protection {
-                Protection::Normal(protection) => Some(protection),
-                Protection::Invincible => None,
-            })
-            .sum::<Option<f32>>()
-    })
 }
 
 /// Used to compute the precision multiplier achieved by flanking a target
@@ -2847,6 +3914,616 @@ pub fn get_equip_slot_by_block_priority(inventory: Option<&Inventory>) -> EquipS
                 (None, None) => EquipSlot::ActiveMainhand,
             },
         )
+}
+
+#[cfg(test)]
+mod power_word_kill_threshold_tests {
+    use super::{CasterLevelFailChance, ClassKind, HealthThreshold};
+    use crate::comp::CharacterClass;
+
+    // Base 100 HP up to 215 max health, then 100 + (1/3)(max_health - 215)
+    // above it — continuous at the breakpoint (no discontinuous jump that
+    // would favor tankier targets over less tanky ones).
+    const POWER_WORD_KILL: HealthThreshold = HealthThreshold {
+        base: 100.0,
+        breakpoint: 215.0,
+        scale: 1.0 / 3.0,
+    };
+
+    #[test]
+    fn flat_below_and_at_breakpoint() {
+        assert_eq!(POWER_WORD_KILL.threshold(50.0), 100.0);
+        assert_eq!(POWER_WORD_KILL.threshold(215.0), 100.0);
+    }
+
+    #[test]
+    fn continuous_and_scaled_above_breakpoint() {
+        assert!((POWER_WORD_KILL.threshold(1000.0) - 361.666_67).abs() < 0.01);
+        assert_eq!(POWER_WORD_KILL.threshold(2000.0), 695.0);
+    }
+
+    #[test]
+    fn caster_level_roll_clamps_below_unlock_and_interpolates_to_max_level() {
+        let curve = CasterLevelFailChance {
+            unlock_level: 54,
+            fail_chance_at_unlock: 0.25,
+            fail_chance_at_max_level: 0.05,
+            source_classes: vec![],
+        };
+        assert_eq!(curve.fail_chance(1), 0.25);
+        assert_eq!(curve.fail_chance(54), 0.25);
+        assert!((curve.fail_chance(60) - 0.05).abs() < 0.001);
+        // Halfway from L54 to L60 (L57) should be halfway from 25% to 5%.
+        assert!((curve.fail_chance(57) - 0.15).abs() < 0.001);
+    }
+
+    fn power_word_kill_curve() -> CasterLevelFailChance {
+        CasterLevelFailChance {
+            unlock_level: 54,
+            fail_chance_at_unlock: 0.25,
+            fail_chance_at_max_level: 0.05,
+            source_classes: vec![
+                ClassKind::Mage,
+                ClassKind::Sorcerer,
+                ClassKind::Warlock,
+                ClassKind::Bard,
+            ],
+        }
+    }
+
+    #[test]
+    fn effective_caster_level_falls_back_to_character_level_with_no_source_classes() {
+        let curve = CasterLevelFailChance {
+            unlock_level: 50,
+            fail_chance_at_unlock: 0.25,
+            fail_chance_at_max_level: 0.05,
+            source_classes: vec![],
+        };
+        assert_eq!(
+            curve.effective_caster_level(Some(60), None),
+            Some(60),
+            "no source_classes configured -> raw character level, unaffected by multiclass"
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_uses_the_eligible_class_own_level_for_a_single_class_caster() {
+        let curve = power_word_kill_curve();
+        let character_class = CharacterClass::single(ClassKind::Warlock);
+        // Single-class Warlock at character level 60 -> Warlock level 60 too.
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_uses_the_eligible_secondary_not_an_ineligible_primary() {
+        let curve = power_word_kill_curve();
+        // Warrior (not eligible for Power Word Kill) primary, Warlock (eligible)
+        // secondary at 20 of the 60 total -- the roll must use 20, not 60 or 40.
+        let character_class = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+            secondary_level: 20,
+            future_levels_to_secondary: false,
+        };
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(20)
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_takes_the_max_when_both_held_classes_are_eligible() {
+        let curve = power_word_kill_curve();
+        // Mage/Sorcerer split 40/20 -- both eligible, so the max (40) applies,
+        // same composition rule as `energy_reward_mult`.
+        let character_class = CharacterClass {
+            primary: ClassKind::Mage,
+            secondary: Some(ClassKind::Sorcerer),
+            secondary_level: 20,
+            future_levels_to_secondary: false,
+        };
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(40)
+        );
+    }
+
+    #[test]
+    fn effective_caster_level_falls_back_to_character_level_if_no_held_class_is_eligible() {
+        let curve = power_word_kill_curve();
+        // Defensive fallback only -- should not occur if the ability's own
+        // class gate already checked, but must not panic or return None.
+        let character_class = CharacterClass::single(ClassKind::Warrior);
+        assert_eq!(
+            curve.effective_caster_level(Some(60), Some(&character_class)),
+            Some(60)
+        );
+    }
+}
+
+/// Pins the authored RON content for the three `BasicRanged` Power Words
+/// (Kill/Pain/Stun) -- unlike `power_word_kill_threshold_tests` above (which
+/// exercises `CasterLevelFailChance`'s math in isolation with hand-built
+/// mock values), these tests load the actual shipped assets so a future edit
+/// to the RON that regresses the cooldown, the ability-side `min_level` gate,
+/// or the `CasterLevelRoll.unlock_level` fails here instead of shipping
+/// silently.
+#[cfg(test)]
+mod power_word_ron_content_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::{CombatEffect, CombatRequirement},
+        comp::{ability::CharacterAbility, buff::BuffKind},
+        resources::Secs,
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// Digs the Paralyzed `CombatBuff`'s `dur_secs` out of a `BasicRanged`
+    /// Power Word's `attack_effect` -- same nested shape `unlock_level_of`
+    /// digs the `CasterLevelRoll` out of.
+    fn paralyzed_dur_secs_of(ability: &CharacterAbility) -> Secs {
+        let CharacterAbility::BasicRanged { projectile, .. } = ability else {
+            panic!("expected a BasicRanged Power Word");
+        };
+        let attack = projectile
+            .attack
+            .as_ref()
+            .expect("Power Word projectile must carry an attack");
+        let (effect, _requirement) = attack
+            .attack_effect
+            .as_ref()
+            .expect("Power Word attack must carry an attack_effect");
+        let CombatEffect::Buff(buff) = effect else {
+            panic!("expected a Buff combat effect");
+        };
+        assert_eq!(buff.kind, BuffKind::Paralyzed, "expected a Paralyzed buff");
+        buff.dur_secs
+    }
+
+    /// Digs the `CasterLevelRoll` out of a `BasicRanged` Power Word's nested
+    /// `TargetHealthAtOrBelow` + `CasterLevelRoll` `All(..)` combinator --
+    /// same shape all three of Kill/Pain/Stun share.
+    fn unlock_level_of(ability: &CharacterAbility) -> u16 {
+        let CharacterAbility::BasicRanged { projectile, .. } = ability else {
+            panic!("expected a BasicRanged Power Word");
+        };
+        let attack = projectile
+            .attack
+            .as_ref()
+            .expect("Power Word projectile must carry an attack");
+        let (_effect, requirement) = attack
+            .attack_effect
+            .as_ref()
+            .expect("Power Word attack must carry an attack_effect");
+        let CombatRequirement::All(reqs) = requirement else {
+            panic!("expected an All(..) combinator");
+        };
+        reqs.iter()
+            .find_map(|r| match r {
+                CombatRequirement::CasterLevelRoll(curve) => Some(curve.unlock_level),
+                _ => None,
+            })
+            .expect("no CasterLevelRoll among the All(..) requirements")
+    }
+
+    #[test]
+    fn power_word_kill_unlocks_at_54_with_a_90s_cooldown() {
+        let ability = load("common.abilities.spells.arcane.power_word_kill");
+        let CharacterAbility::BasicRanged { meta, .. } = &ability else {
+            panic!("power_word_kill is not a BasicRanged");
+        };
+        assert_eq!(meta.requirements.min_level, Some(54));
+        assert_eq!(meta.cooldown, Some(90.0));
+        assert_eq!(unlock_level_of(&ability), 54);
+    }
+
+    #[test]
+    fn power_word_pain_has_a_60s_cooldown_and_unlocks_at_42() {
+        let ability = load("common.abilities.spells.arcane.power_word_pain");
+        let CharacterAbility::BasicRanged { meta, .. } = &ability else {
+            panic!("power_word_pain is not a BasicRanged");
+        };
+        assert_eq!(meta.requirements.min_level, Some(42));
+        assert_eq!(meta.cooldown, Some(60.0));
+        assert_eq!(unlock_level_of(&ability), 42);
+    }
+
+    #[test]
+    fn power_word_stun_has_a_75s_cooldown_and_unlocks_at_48() {
+        let ability = load("common.abilities.spells.arcane.power_word_stun");
+        let CharacterAbility::BasicRanged { meta, .. } = &ability else {
+            panic!("power_word_stun is not a BasicRanged");
+        };
+        assert_eq!(meta.requirements.min_level, Some(48));
+        assert_eq!(meta.cooldown, Some(75.0));
+        assert_eq!(unlock_level_of(&ability), 48);
+    }
+
+    /// Part of a wider reorder of the "Paralyzed" spell family (handled
+    /// elsewhere for `hold_person`/`hold_monster`/`irresistible_dance`) --
+    /// Stun's own Paralyzed duration goes from 15s to 60s.
+    #[test]
+    fn power_word_stun_paralyzes_for_60_seconds() {
+        let ability = load("common.abilities.spells.arcane.power_word_stun");
+        assert_eq!(paralyzed_dur_secs_of(&ability), Secs(60.0));
+    }
+}
+
+/// The content migration off the legacy `Energy` damage kind: `Energy` is a
+/// back-compat catch-all (still valid for third-party/NPC content), but every
+/// shipped ability RON that used it as a placeholder has been reassigned to
+/// its real physical/elemental kind. `Energy` itself is not removed from
+/// `DamageKind` -- only its usage is drained.
+#[cfg(test)]
+mod damage_kind_energy_migration_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::DamageKind,
+        comp::ability::CharacterAbility,
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// Digs the `DamageKind` out of whichever shape the ability's attack
+    /// takes -- a `ProjectileConstructor`'s nested `attack.damage_kind` for
+    /// the ranged/thrown variants, or a top-level `damage_kind` /
+    /// `shockwave_damage_kind` field for the shockwave variants. Every one of
+    /// the 65 migrated RONs loads through one of these shapes.
+    fn damage_kind_of(ability: &CharacterAbility) -> DamageKind {
+        match ability {
+            CharacterAbility::BasicRanged { projectile, .. }
+            | CharacterAbility::RapidRanged { projectile, .. }
+            | CharacterAbility::ChargedRanged { projectile, .. }
+            | CharacterAbility::Throw { projectile, .. } => {
+                projectile
+                    .attack
+                    .as_ref()
+                    .expect("expected the projectile to carry an attack")
+                    .damage_kind
+            },
+            CharacterAbility::Shockwave { damage_kind, .. }
+            | CharacterAbility::LeapShockwave { damage_kind, .. } => *damage_kind,
+            CharacterAbility::LeapExplosionShockwave {
+                shockwave_damage_kind,
+                ..
+            } => *shockwave_damage_kind,
+            other => panic!("unexpected ability shape for a damage-kind check: {other:?}"),
+        }
+    }
+
+    /// Pins the legacy caster-staff fire kit (plan
+    /// `2026-08-01-nh69-item-categories-per-class-plan.md` §6: "starting with
+    /// the legacy staff fire spells -- firebomb, fire_breath, fireshockwave,
+    /// napalm_strike, pyroclasm all deal `Energy` today, so `resist_fire`
+    /// does nothing against a fireball") to `Fire`. This is the flagship
+    /// regression this migration exists to fix.
+    #[test]
+    fn legacy_staff_fire_kit_deals_fire_damage() {
+        for asset in [
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.pyroclasm",
+        ] {
+            let ability = load(asset);
+            assert_eq!(
+                damage_kind_of(&ability),
+                DamageKind::Fire,
+                "{asset} should deal Fire damage, not the legacy Energy catch-all"
+            );
+        }
+    }
+
+    /// Every ability RON touched by the migration still parses as a valid
+    /// `CharacterAbility` -- if any of the 65 edits had introduced a RON
+    /// syntax error or a bad enum variant, `load` would panic here instead of
+    /// shipping silently.
+    #[test]
+    fn every_migrated_ability_still_loads() {
+        let migrated_assets = [
+            "common.abilities.bow.burning_broadhead",
+            "common.abilities.bow.burning_hawkstrike_shot",
+            "common.abilities.bow.burning_heartseeker_shot",
+            "common.abilities.bow.burning_thorn_stake",
+            "common.abilities.bow.freezing_broadhead",
+            "common.abilities.bow.freezing_hawkstrike_shot",
+            "common.abilities.bow.freezing_heartseeker_shot",
+            "common.abilities.bow.freezing_thorn_stake",
+            "common.abilities.bow.lightning_thorn_stake",
+            "common.abilities.bow.poison_broadhead",
+            "common.abilities.bow.poison_hawkstrike_shot",
+            "common.abilities.bow.poison_heartseeker_shot",
+            "common.abilities.bow.poison_thorn_stake",
+            "common.abilities.custom.ancienteffigy.blast",
+            "common.abilities.custom.arthropods.blackwidow.poisonball",
+            "common.abilities.custom.ashen_warrior.axe.flame_wave",
+            "common.abilities.custom.ashen_warrior.staff.fireball",
+            "common.abilities.custom.asp.firebomb",
+            "common.abilities.custom.biped_large_cultist.staff.firebomb",
+            "common.abilities.custom.birdlargebreathe.firebomb",
+            "common.abilities.custom.birdlargefire.firerain",
+            "common.abilities.custom.birdlargefire.fireshockwave",
+            "common.abilities.custom.cloudwyvern.lightningbomb",
+            "common.abilities.custom.cursekeeper.poisonbomb",
+            "common.abilities.custom.cyclops.optic_blast",
+            "common.abilities.custom.dagon.dagonbombs",
+            "common.abilities.custom.dwarves.flamekeeper.mines",
+            "common.abilities.custom.dwarves.forgemaster.lava_mortar",
+            "common.abilities.custom.dwarves.snaretongue.bombs",
+            "common.abilities.custom.flamewyvern.firebomb",
+            "common.abilities.custom.frostwyvern.frostbomb",
+            "common.abilities.custom.gigas_fire.lava_leap",
+            "common.abilities.custom.gigas_frost.ice_volley",
+            "common.abilities.custom.gravewarden.rocket",
+            "common.abilities.custom.harvester.explodingpumpkin",
+            "common.abilities.custom.hydra.poison_ball",
+            "common.abilities.custom.icedrake.icebombs",
+            "common.abilities.custom.irongolemfist.iron_pike_bomb",
+            "common.abilities.custom.irrwurz.magicball",
+            "common.abilities.custom.maneater.poisonball",
+            "common.abilities.custom.mindflayer.necroticsphere_blast",
+            "common.abilities.custom.mindflayer.necroticsphere_multiblast",
+            "common.abilities.custom.mindflayer.necroticsphere",
+            "common.abilities.custom.minotaur.axethrow",
+            "common.abilities.custom.ogre_staff.firebomb",
+            "common.abilities.custom.quadlowranged.firebomb",
+            "common.abilities.custom.seawyvern.inkbomb",
+            "common.abilities.custom.terracotta_demolisher.drop",
+            "common.abilities.custom.terracotta_demolisher.throw",
+            "common.abilities.custom.terracotta_statue.blast",
+            "common.abilities.custom.wealdwyvern.poisonbomb",
+            "common.abilities.custom.wendigomagic.frostbomb",
+            "common.abilities.custom.yeti.snowball",
+            "common.abilities.gnarling.chieftain.firebarrage",
+            "common.abilities.gnarling.chieftain.fireshockwave",
+            "common.abilities.haniwa.archer.explosive",
+            "common.abilities.innate.draugr",
+            "common.abilities.staff.fire_breath",
+            "common.abilities.staff.firebomb",
+            "common.abilities.staff.fireshockwave",
+            "common.abilities.staff.napalm_strike",
+            "common.abilities.staff.pyroclasm",
+            "common.abilities.staffsimple.firebomb",
+            "common.abilities.throw.bomb",
+            "common.abilities.vampire.vampire_bat.drop",
+        ];
+        assert_eq!(
+            migrated_assets.len(),
+            65,
+            "this list should track all 65 files the migration touched"
+        );
+        for asset in migrated_assets {
+            let ability = load(asset);
+            // None of the migrated RONs should still carry the legacy
+            // catch-all -- that's the entire point of the migration.
+            assert_ne!(
+                damage_kind_of(&ability),
+                DamageKind::Energy,
+                "{asset} should no longer deal the legacy Energy damage kind"
+            );
+        }
+    }
+
+    /// Count-based guard: this migration drained `Energy` usage in shipped
+    /// ability RONs from 65 to 0. `Energy` stays in `DamageKind` for
+    /// back-compat, so new content is still free to declare it deliberately
+    /// -- but this test fails loudly if usage grows past the ceiling below,
+    /// so a silent regression to the catch-all doesn't ship unnoticed. Raise
+    /// the ceiling (with justification in the PR) if new content genuinely
+    /// needs `Energy`.
+    #[test]
+    fn energy_damage_kind_usage_does_not_grow_past_the_post_migration_ceiling() {
+        const MAX_ENERGY_USERS: usize = 0;
+
+        let assets_root = std::path::Path::new(
+            &std::env::var("VELOREN_ASSETS").expect("VELOREN_ASSETS must be set for tests"),
+        )
+        .join("common/abilities");
+
+        fn count_energy_users(dir: &std::path::Path) -> usize {
+            let mut count = 0;
+            for entry in std::fs::read_dir(dir).expect("abilities dir should be readable") {
+                let entry = entry.expect("dir entry should be readable");
+                let path = entry.path();
+                if path.is_dir() {
+                    count += count_energy_users(&path);
+                } else if path.extension().is_some_and(|ext| ext == "ron") {
+                    let contents =
+                        std::fs::read_to_string(&path).expect("ability RON should be readable");
+                    if contents.contains("damage_kind: Energy")
+                        || contents.contains("shockwave_damage_kind: Energy")
+                    {
+                        count += 1;
+                    }
+                }
+            }
+            count
+        }
+
+        let energy_users = count_energy_users(&assets_root);
+        // The ceiling is 0 today (this migration drained every user), but the
+        // constant is written as a ceiling rather than an exact match so a
+        // future PR that deliberately raises it only has to edit the
+        // constant, not this comparison.
+        #[allow(clippy::absurd_extreme_comparisons)]
+        let within_ceiling = energy_users <= MAX_ENERGY_USERS;
+        assert!(
+            within_ceiling,
+            "expected at most {MAX_ENERGY_USERS} ability RON(s) still using the legacy Energy \
+             damage kind, found {energy_users} -- new content should declare a specific \
+             DamageKind instead of regressing to the catch-all"
+        );
+    }
+}
+
+/// Pins the authored RON content for the martial staff's `staff_martial` kit
+/// (the item categories per class content pass) -- loads the actual shipped
+/// assets so a future edit that drops the baked-in elemental proc, or
+/// reintroduces a class filter on a kit that must stay whitelist-free, fails
+/// here instead of shipping silently.
+#[cfg(test)]
+mod martial_staff_ron_content_tests {
+    use crate::{
+        assets::{AssetExt, Ron},
+        combat::CombatEffect,
+        comp::{ability::CharacterAbility, buff::BuffKind, melee::MeleeConstructorKind},
+    };
+
+    fn load(asset: &str) -> CharacterAbility { Ron::load_expect_cloned(asset).into_inner() }
+
+    /// The on-hit elemental proc (Q5a) is baked directly into the strike via
+    /// `MeleeConstructor::damage_effect`, not a `BuffKind::Frigid` self-buff
+    /// (that kind is reserved for the deferred passive-buff system).
+    #[test]
+    fn frost_strike_procs_the_frozen_debuff_on_hit() {
+        let ability = load("common.abilities.staff_martial.frost_strike");
+        let CharacterAbility::BasicMelee {
+            melee_constructor, ..
+        } = &ability
+        else {
+            panic!("frost_strike is not a BasicMelee");
+        };
+        let effect = melee_constructor
+            .damage_effect
+            .as_ref()
+            .expect("frost_strike must carry a damage_effect to proc anything");
+        let CombatEffect::Buff(buff) = effect else {
+            panic!("expected a Buff combat effect, got {effect:?}");
+        };
+        assert_eq!(
+            buff.kind,
+            BuffKind::Frozen,
+            "the martial staff's proc must be the Frozen debuff, not a self-buff kind"
+        );
+        assert!(buff.chance > 0.0, "a proc with zero chance never fires");
+        // A plain Bash strike so the physical damage is Crushing, independent
+        // of the proc riding along on top of it.
+        assert!(matches!(
+            melee_constructor.kind,
+            MeleeConstructorKind::Bash { .. }
+        ));
+    }
+
+    /// The primary combo is a plain physical strike with no elemental proc
+    /// riding along -- only the secondary carries the Frozen proc.
+    #[test]
+    fn quarterstaff_strikes_primary_is_purely_physical() {
+        let ability = load("common.abilities.staff_martial.quarterstaff_strikes");
+        let CharacterAbility::ComboMelee2 { strikes, .. } = &ability else {
+            panic!("quarterstaff_strikes is not a ComboMelee2");
+        };
+        assert!(!strikes.is_empty());
+        for strike in strikes {
+            assert!(
+                strike.melee_constructor.damage_effect.is_none(),
+                "the primary combo should not itself carry the elemental proc"
+            );
+            assert!(matches!(
+                strike.melee_constructor.kind,
+                MeleeConstructorKind::Bash { .. }
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod health_tier_requirement_tests {
+    use super::{CasterLevelFailChance, ClassKind, CombatRequirement, HealthTier, TierEffect};
+    use crate::comp::CharacterClass;
+
+    fn tier_with_requirement(requirement: CombatRequirement) -> HealthTier {
+        HealthTier {
+            max_current_health: 35.0,
+            effect: TierEffect::AdditionalDamage(2000.0),
+            requirement: Some(requirement),
+        }
+    }
+
+    fn cleric_roll(fail_chance_at_unlock: f32, fail_chance_at_max_level: f32) -> CombatRequirement {
+        CombatRequirement::CasterLevelRoll(Box::new(CasterLevelFailChance {
+            unlock_level: 42,
+            fail_chance_at_unlock,
+            fail_chance_at_max_level,
+            source_classes: vec![ClassKind::Cleric],
+        }))
+    }
+
+    /// Tiers 1-3 (and any other future tier) never authored a `requirement`
+    /// at all -- `#[serde(default)]` must mean "always applies", identical to
+    /// the shipped behaviour before this field existed.
+    #[test]
+    fn no_requirement_always_passes() {
+        let tier = HealthTier {
+            max_current_health: 45.0,
+            effect: TierEffect::AdditionalDamage(1.0),
+            requirement: None,
+        };
+        assert!(tier.requirement_met(Some(60), None));
+        assert!(tier.requirement_met(None, None));
+    }
+
+    /// A fail chance of exactly 1.0 is a deterministic "never" -- `rng.random`
+    /// draws in `0.0..1.0`, so `roll >= 1.0` can never be true regardless of
+    /// the actual random draw. Picking this edge keeps the test free of any
+    /// dependency on RNG seeding.
+    #[test]
+    fn a_guaranteed_fail_curve_never_passes() {
+        let tier = tier_with_requirement(cleric_roll(1.0, 1.0));
+        let character_class = CharacterClass::single(ClassKind::Cleric);
+        for _ in 0..100 {
+            assert!(!tier.requirement_met(Some(60), Some(&character_class)));
+        }
+    }
+
+    /// A fail chance of exactly 0.0 is a deterministic "always" -- `roll >=
+    /// 0.0` is true for every possible draw in `0.0..1.0`.
+    #[test]
+    fn a_guaranteed_pass_curve_always_passes() {
+        let tier = tier_with_requirement(cleric_roll(0.0, 0.0));
+        let character_class = CharacterClass::single(ClassKind::Cleric);
+        for _ in 0..100 {
+            assert!(tier.requirement_met(Some(60), Some(&character_class)));
+        }
+    }
+
+    /// The roll must resolve against the caster's own *Cleric* level, not
+    /// their raw multiclass character level -- a Warrior/Cleric multiclass
+    /// whose Cleric secondary hasn't reached `unlock_level` yet must still
+    /// fail the roll even though their combined character level is far above
+    /// it.
+    #[test]
+    fn resolves_the_casters_class_level_not_the_raw_character_level() {
+        let tier = tier_with_requirement(CombatRequirement::CasterLevelRoll(Box::new(
+            CasterLevelFailChance {
+                unlock_level: 42,
+                fail_chance_at_unlock: 1.0,
+                fail_chance_at_max_level: 0.0,
+                source_classes: vec![ClassKind::Cleric],
+            },
+        )));
+        let character_class = CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Cleric),
+            secondary_level: 10,
+            future_levels_to_secondary: false,
+        };
+        assert!(!tier.requirement_met(Some(60), Some(&character_class)));
+    }
+
+    /// No resolvable caster level at all (e.g. a non-player source) must not
+    /// panic, and is treated as failing the roll -- the same conservative
+    /// default `CombatRequirement::CasterLevelRoll` already uses via
+    /// `is_some_and`.
+    #[test]
+    fn an_unresolvable_caster_level_fails_closed() {
+        let tier = tier_with_requirement(cleric_roll(0.0, 0.0));
+        assert!(!tier.requirement_met(None, None));
+    }
 }
 
 #[cfg(test)]
@@ -2976,6 +4653,10 @@ mod combat_resolution_tests {
         assert!(t.shield_evasion_penalty >= 0.0);
         // P6 crit-damage floor present + meaningful (>1.0).
         assert!(t.crit_damage_mult > 1.0);
+        // Weapon-proficiency penalty: pinned so a typo'd RON key can't
+        // silently fall back to `CombatTuning::default()`'s identical 0.40
+        // and read as a no-op retune.
+        assert!((t.non_proficient_damage_mult - 0.40).abs() < 1e-6);
     }
 
     // BL-52 P6: a full crit deals at least crit_damage_mult× at base gear and
@@ -3073,5 +4754,1813 @@ mod combat_resolution_tests {
         assert!((combine(0.0, 0.95) - cap).abs() < 1e-6);
         // Negative resist is floored at 0 — never amplifies AoE damage.
         assert!((combine(0.25, -0.5) - 0.25).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod weapon_proficiency_tests {
+    use super::{AbilityInfo, Attack, CombatTuning, HandInfo, InputKind, Stats, tool::WeaponRole};
+    use crate::comp::{
+        Body,
+        ability::AbilityMeta,
+        class::{ClassKind, class_proficiencies},
+        humanoid,
+        inventory::item::tool::{ToolKind, ToolKindMask},
+    };
+
+    fn test_body() -> Body { Body::Humanoid(humanoid::Body::random()) }
+
+    fn stats_with_mask(mask: ToolKindMask) -> Stats {
+        let mut stats = Stats::empty(test_body());
+        stats.proficient_tools = mask;
+        stats.non_proficient_damage_mult = 0.40;
+        stats
+    }
+
+    fn ability_info(tool: ToolKind, hand: HandInfo) -> AbilityInfo {
+        // `role: None` -- permissive on the role axis; only the tests that
+        // specifically exercise WeaponRole narrowing use
+        // `ability_info_with_role` below.
+        AbilityInfo {
+            tool: Some(tool),
+            hand: Some(hand),
+            role: None,
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta::default(),
+            ability: None,
+        }
+    }
+
+    fn ability_info_with_role(tool: ToolKind, hand: HandInfo, role: WeaponRole) -> AbilityInfo {
+        AbilityInfo {
+            role: Some(role),
+            ..ability_info(tool, hand)
+        }
+    }
+
+    #[test]
+    fn non_proficient_weapon_deals_forty_percent_physical_output() {
+        let proficient = stats_with_mask(ToolKindMask::DAGGER);
+        let non_proficient = stats_with_mask(ToolKindMask::SWORD_1H | ToolKindMask::SWORD_2H);
+        let ai = ability_info(ToolKind::Dagger, HandInfo::MainHand);
+
+        let proficient_mult = Attack::proficiency_multiplier(Some(&proficient), Some(ai), false);
+        let non_proficient_mult =
+            Attack::proficiency_multiplier(Some(&non_proficient), Some(ai), false);
+
+        assert!((proficient_mult - 1.0).abs() < 1e-6);
+        assert!((non_proficient_mult - 0.40).abs() < 1e-6);
+        // The proficient attacker deals 2.5x the non-proficient one's damage,
+        // all else equal (1.0 / 0.40).
+        assert!((proficient_mult / non_proficient_mult - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn magic_attacks_are_never_penalised() {
+        let non_proficient = stats_with_mask(ToolKindMask::DAGGER);
+        let ai = ability_info(ToolKind::Sword, HandInfo::TwoHanded);
+        let mult = Attack::proficiency_multiplier(Some(&non_proficient), Some(ai), true);
+        assert!((mult - 1.0).abs() < 1e-6);
+
+        let proficient = stats_with_mask(ToolKindMask::all());
+        let mult = Attack::proficiency_multiplier(Some(&proficient), Some(ai), true);
+        assert!((mult - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn permissive_classes_and_classless_entities_take_no_penalty() {
+        let adventurer = class_proficiencies(ClassKind::Adventurer).mask();
+        assert_eq!(adventurer, ToolKindMask::all());
+        let stats = stats_with_mask(adventurer);
+        let ai = ability_info(ToolKind::Staff, HandInfo::TwoHanded);
+        assert!((Attack::proficiency_multiplier(Some(&stats), Some(ai), false) - 1.0).abs() < 1e-6);
+
+        // An entity with no `CharacterClass` (every NPC/summon/boss) keeps
+        // `Stats::empty`'s permissive default untouched.
+        let empty = Stats::empty(test_body());
+        assert!((Attack::proficiency_multiplier(Some(&empty), Some(ai), false) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_tool_is_always_proficient() {
+        let non_proficient = stats_with_mask(ToolKindMask::empty());
+
+        // `ability_info: None` (e.g. a bare `AttackSource` with no ability
+        // behind it).
+        let mult = Attack::proficiency_multiplier(Some(&non_proficient), None, false);
+        assert!((mult - 1.0).abs() < 1e-6);
+
+        // `ability_info: Some(_)` but `tool: None` — unarmed strikes, natural
+        // weapons, NPC `Empty`-tool attacks.
+        let ai = AbilityInfo {
+            tool: None,
+            hand: None,
+            role: None,
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta::default(),
+            ability: None,
+        };
+        let mult = Attack::proficiency_multiplier(Some(&non_proficient), Some(ai), false);
+        assert!((mult - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn main_hand_and_off_hand_are_judged_independently() {
+        // Proficient with Dagger, not with Sword.
+        let stats = stats_with_mask(ToolKindMask::DAGGER);
+        let dagger_main_hand = ability_info(ToolKind::Dagger, HandInfo::MainHand);
+        let sword_off_hand = ability_info(ToolKind::Sword, HandInfo::OffHand);
+
+        assert!(
+            (Attack::proficiency_multiplier(Some(&stats), Some(dagger_main_hand), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&stats), Some(sword_off_hand), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn sword_grip_split_follows_the_class_manifest() {
+        let one_handed = ability_info(ToolKind::Sword, HandInfo::MainHand);
+        let two_handed = ability_info(ToolKind::Sword, HandInfo::TwoHanded);
+
+        // Rogue: 1h swords (gladii) only, per class_proficiencies.ron.
+        let rogue_stats = stats_with_mask(class_proficiencies(ClassKind::Rogue).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&rogue_stats), Some(one_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&rogue_stats), Some(two_handed), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+
+        // Warrior: both grips.
+        let warrior_stats = stats_with_mask(class_proficiencies(ClassKind::Warrior).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&warrior_stats), Some(one_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&warrior_stats), Some(two_handed), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    /// Mirrors `sword_grip_split_follows_the_class_manifest` for the
+    /// `WeaponRole` axis: the role travels end to end from `AbilityInfo`
+    /// through `proficiency_multiplier`, not just through the `ToolKindMask`
+    /// tested directly in `class.rs`.
+    #[test]
+    fn staff_role_split_follows_the_class_manifest() {
+        let caster_kit =
+            ability_info_with_role(ToolKind::Staff, HandInfo::TwoHanded, WeaponRole::Caster);
+        let martial_kit =
+            ability_info_with_role(ToolKind::Staff, HandInfo::TwoHanded, WeaponRole::Martial);
+
+        // Mage: caster kit only, per class_proficiencies.ron.
+        let mage_stats = stats_with_mask(class_proficiencies(ClassKind::Mage).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&mage_stats), Some(caster_kit), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&mage_stats), Some(martial_kit), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+
+        // Monk: martial kit only.
+        let monk_stats = stats_with_mask(class_proficiencies(ClassKind::Monk).mask());
+        assert!(
+            (Attack::proficiency_multiplier(Some(&monk_stats), Some(martial_kit), false) - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (Attack::proficiency_multiplier(Some(&monk_stats), Some(caster_kit), false) - 0.40)
+                .abs()
+                < 1e-6
+        );
+    }
+
+    // Mirrors the pre-clamp scaling in `Attack::apply_attack`'s rolled-crit
+    // branch: the proficiency multiplier applies to `crit_chance` before the
+    // existing floor/cap clamp, so a scaled-down value can still be rescued
+    // by the floor.
+    #[test]
+    fn crit_chance_scales_by_proficiency_before_the_floor_clamp() {
+        let t = CombatTuning::default();
+        let scaled_crit_chance =
+            |base: f32, mult: f32| (base * mult).clamp(t.crit_chance_floor, t.crit_chance_cap);
+
+        // A typical build (0.30 base): scaling to 0.12 still clears the floor.
+        assert!((scaled_crit_chance(0.30, 0.40) - 0.12).abs() < 1e-6);
+
+        // A low-crit build (0.05 base) whose scaled value (0.02) would fall
+        // under the floor: the floor still guarantees a baseline chance.
+        assert!((0.05_f32 * 0.40 - t.crit_chance_floor).abs() > 1e-6);
+        assert!((scaled_crit_chance(0.05, 0.40) - t.crit_chance_floor).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod magic_source_attribution_tests {
+    use super::{AbilityInfo, Attack, HandInfo, InputKind, MagicSource};
+    use crate::comp::ability::AbilityMeta;
+
+    fn ability_info_with_source(source: Option<MagicSource>) -> AbilityInfo {
+        AbilityInfo {
+            tool: None,
+            hand: Some(HandInfo::MainHand),
+            role: None,
+            input: InputKind::Primary,
+            input_attr: None,
+            ability_meta: AbilityMeta {
+                source,
+                ..Default::default()
+            },
+            ability: None,
+        }
+    }
+
+    /// An attack carrying an ability whose `ability_meta.source` is set
+    /// reports that source; a bare attack with no ability behind it (a
+    /// plain weapon swing, fall damage, etc.) reports `None`.
+    #[test]
+    fn magic_source_reads_from_ability_meta() {
+        let sourced = Attack::new(Some(ability_info_with_source(Some(
+            MagicSource::Primordial,
+        ))));
+        assert_eq!(sourced.magic_source(), Some(MagicSource::Primordial));
+
+        let sourceless_ability = Attack::new(Some(ability_info_with_source(None)));
+        assert_eq!(sourceless_ability.magic_source(), None);
+
+        let no_ability = Attack::new(None);
+        assert_eq!(no_ability.magic_source(), None);
+    }
+}
+
+#[cfg(test)]
+mod saving_throw_tests {
+    use super::{
+        AttackSource, CombatTuning, DamageContributor, DamageSource, SaveCasterInfo,
+        SaveCombatContext, SaveTargetInfo, effective_magic_evasion, is_fighting_caster,
+        saving_throw_chance,
+    };
+    use crate::{
+        assets::{AssetExt, Ron},
+        comp::{Health, HealthChange, body::MagicResistTier, group},
+        resources::Time,
+        uid::Uid,
+    };
+    use std::num::NonZeroU64;
+
+    const EPS: f32 = 1e-4;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// A creature target: no class attributes, so its whole magic evasion comes
+    /// from the `combat_rating` term.
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: tier,
+            combat_rating,
+        }
+    }
+
+    /// A player-character target, whose magic evasion is class/level derived.
+    /// The calibration table quotes a PC's `magic_evasion` directly and gives
+    /// it no `combat_rating`, so that term is held at 0 here to reproduce the
+    /// table's stated accuracy differences exactly.
+    fn player(magic_evasion: f32, magic_resistance: f32) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: magic_evasion,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: magic_resistance,
+            magic_resist_tier: MagicResistTier::None,
+            combat_rating: 0.0,
+        }
+    }
+
+    fn chance(t: &CombatTuning, accuracy: f32, target: &SaveTargetInfo, fighting: bool) -> f32 {
+        saving_throw_chance(
+            &SaveCasterInfo {
+                magic_accuracy: accuracy,
+            },
+            target,
+            fighting,
+            t,
+        )
+    }
+
+    /// The creature's `combat_rating` term is the only difficulty signal a
+    /// non-class body has, and it is what puts a world boss out of reach.
+    #[test]
+    fn effective_evasion_folds_combat_rating() {
+        let t = CombatTuning::default();
+        // A rabbit-tier creature contributes almost nothing.
+        assert!((effective_magic_evasion(&creature(1.0, MagicResistTier::None), &t) - 2.0) < EPS);
+        // A boss-tier one contributes more evasion than any caster has accuracy.
+        assert!(effective_magic_evasion(&creature(36.0, MagicResistTier::None), &t) > 70.0);
+        // A player's class evasion is used as-is, added to (here zero) rating.
+        assert!((effective_magic_evasion(&player(30.0, 0.0), &t) - 30.0).abs() < EPS);
+    }
+
+    /// Every row of the calibration table, recomputed by the shipped formula.
+    /// Rows whose level term reaches the outclassed wall return exactly 0.0
+    /// instead of resting on the 5 % floor.
+    #[test]
+    fn calibration_table() {
+        let t = CombatTuning::default();
+        let row =
+            |accuracy, target: &SaveTargetInfo, fighting| chance(&t, accuracy, target, fighting);
+
+        // 1. L10 caster (acc 12) vs a CR 1 beast with no resistance.
+        assert!((row(12.0, &creature(1.0, MagicResistTier::None), false) - 0.85).abs() < EPS);
+        // 2. L10 caster vs a CR 3.5 body with the major tier.
+        assert!((row(12.0, &creature(3.5, MagicResistTier::Major), false) - 0.475).abs() < EPS);
+        // 3. L10 caster vs a CR 5.2 body with the major tier.
+        assert!((row(12.0, &creature(5.2, MagicResistTier::Major), false) - 0.424).abs() < EPS);
+        // 4. L40 caster (acc 42) vs a CR 36 legendary body — outclassed wall.
+        assert_eq!(
+            row(42.0, &creature(36.0, MagicResistTier::Legendary), false),
+            0.0
+        );
+        // 5. L40 caster vs an equal-level PC.
+        assert!((row(42.0, &player(30.0, 0.0), false) - 0.88).abs() < EPS);
+        // 6. L40 caster vs a L5 PC — clamped by the 0.95 ceiling.
+        assert!((row(42.0, &player(4.0, 0.0), false) - t.save_hit_ceil).abs() < EPS);
+        // 6b. Same, mid-fight: the level term is far past the ceiling, so the
+        //     in-combat penalty does not rescue the victim.
+        assert!((row(42.0, &player(4.0, 0.0), true) - t.save_hit_ceil).abs() < EPS);
+        // 7. L5 caster (acc 7) vs a L40 PC — outclassed wall.
+        assert_eq!(row(7.0, &player(30.0, 0.0), false), 0.0);
+        // 7b. Same, mid-duel: still the wall, which is checked first.
+        assert_eq!(row(7.0, &player(30.0, 0.0), true), 0.0);
+        // 8. L5 caster vs a CR 36 legendary body — outclassed wall.
+        assert_eq!(
+            row(7.0, &creature(36.0, MagicResistTier::Legendary), false),
+            0.0
+        );
+        // 9. L10 caster vs a L10 PC with a minor racial magic resistance.
+        assert!((row(12.0, &player(6.0, 0.15), false) - 0.64).abs() < EPS);
+        // 9b. Same, mid-fight.
+        assert!((row(12.0, &player(6.0, 0.15), true) - 0.44).abs() < EPS);
+    }
+
+    /// The wall is a hard bypass of the floor, not another subtracted term: a
+    /// deficit just short of it still leaves a real chance, and one just past
+    /// it leaves none at all.
+    #[test]
+    fn outclassed_wall_bypasses_the_floor() {
+        let t = CombatTuning::default();
+        // -18 net points => level term -0.27, short of the -0.30 wall.
+        let winnable = chance(&t, 12.0, &player(30.0, 0.0), false);
+        assert!((winnable - 0.43).abs() < EPS);
+        // -22 net points => level term -0.33, past the wall.
+        assert_eq!(chance(&t, 8.0, &player(30.0, 0.0), false), 0.0);
+        // A target beyond any reach is 0.0, never the floor.
+        assert_eq!(chance(&t, 0.0, &player(1000.0, 0.0), false), 0.0);
+    }
+
+    /// A caster that is *not* outclassed still gets the floor, however
+    /// resistant the target is — the two mechanisms are independent.
+    #[test]
+    fn floor_still_applies_below_the_wall() {
+        let t = CombatTuning::default();
+        let mut target = player(30.0, 0.0);
+        target.crowd_control_resistance = 0.75;
+        // Level term -0.27 (inside the wall) minus the capped resist and the
+        // in-combat penalty lands far below zero, so the floor catches it.
+        assert!((chance(&t, 12.0, &target, true) - t.save_hit_floor).abs() < EPS);
+    }
+
+    /// Magic resistance and crowd-control resistance are summed and then
+    /// capped, so stacking them can never reach immunity.
+    #[test]
+    fn resistance_saturates_at_the_soft_cap() {
+        let t = CombatTuning::default();
+        // Legendary tier (0.50) + 0.60 CCR = 1.10 raw, capped to 0.75.
+        let mut over_capped = player(12.0, 0.0);
+        over_capped.magic_resist_tier = MagicResistTier::Legendary;
+        over_capped.crowd_control_resistance = 0.60;
+        // Exactly at the cap: 0.50 + 0.25.
+        let mut at_cap = over_capped;
+        at_cap.crowd_control_resistance = 0.25;
+        let over = chance(&t, 12.0, &over_capped, false);
+        let at = chance(&t, 12.0, &at_cap, false);
+        assert!((over - at).abs() < EPS);
+        // 0.70 - 0.75 is negative, so both rest on the floor rather than 0.0.
+        assert!((over - t.save_hit_floor).abs() < EPS);
+    }
+
+    /// The in-combat penalty is exactly the tuned value in the unclamped band,
+    /// and is symmetric in the sense that dropping the flag restores the value.
+    #[test]
+    fn in_combat_penalty_is_exact_when_unclamped() {
+        let t = CombatTuning::default();
+        let target = player(6.0, 0.0);
+        let calm = chance(&t, 12.0, &target, false);
+        let fighting = chance(&t, 12.0, &target, true);
+        assert!((calm - fighting - t.save_in_combat_penalty).abs() < EPS);
+        assert!((calm - 0.79).abs() < EPS);
+    }
+
+    /// A boss-tier body is out of reach for every reachable caster, with no
+    /// hand-authored "uncharmable" list: its combat rating alone puts the level
+    /// term past the wall for any accuracy a character can actually attain.
+    ///
+    /// Note the wall does *not* make it unreachable in principle: a caster
+    /// whose magic accuracy came within 20 net points of the boss's
+    /// effective magic evasion would clear the wall and fall back on the 5
+    /// % floor. At an effective evasion of 72 that needs ~52 accuracy, well
+    /// past the ~42 a max-level caster reaches, so the boss property holds
+    /// in practice — but it holds because of the accuracy ceiling, not
+    /// unconditionally.
+    #[test]
+    fn boss_tier_body_is_unreachable_at_attainable_caster_levels() {
+        let t = CombatTuning::default();
+        let boss = creature(36.0, MagicResistTier::Legendary);
+        for accuracy in [0.0, 7.0, 12.0, 42.0, 51.0] {
+            assert_eq!(chance(&t, accuracy, &boss, false), 0.0);
+        }
+        // Past the wall threshold the floor takes over again.
+        assert!((chance(&t, 55.0, &boss, false) - t.save_hit_floor).abs() < EPS);
+    }
+
+    /// The shipped asset carries the confirmed constants, and stays loadable.
+    #[test]
+    fn combat_tuning_asset_carries_saving_throw_constants() {
+        let tuning = Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let t = &tuning.read().0;
+        assert!((t.save_base_hit - 0.70).abs() < 1e-6);
+        assert!((t.save_hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.save_hit_ceil - 0.95).abs() < 1e-6);
+        assert!((t.save_mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.save_cr_to_evasion - 2.0).abs() < 1e-6);
+        assert!((t.save_in_combat_penalty - 0.20).abs() < 1e-6);
+        assert!((t.magic_resist_minor - 0.15).abs() < 1e-6);
+        assert!((t.magic_resist_major - 0.30).abs() < 1e-6);
+        assert!((t.magic_resist_legendary - 0.50).abs() < 1e-6);
+        assert!((t.save_outclassed_wall - 0.30).abs() < 1e-6);
+        // A mind-altering effect is never guaranteed, unlike damage.
+        assert!(t.save_hit_ceil < t.hit_ceil);
+        // Charm has its own, stingier base than the damage curve.
+        assert!(t.save_base_hit < t.base_hit);
+        // The tier ladder is monotonic.
+        assert!(t.magic_resist_minor < t.magic_resist_major);
+        assert!(t.magic_resist_major < t.magic_resist_legendary);
+    }
+
+    /// An asset predating the mind-altering section still parses, and picks up
+    /// the tuned values rather than zeroes: the struct-level
+    /// `#[serde(default)]` fills missing fields from
+    /// `CombatTuning::default()`, so no field may carry its own
+    /// `#[serde(default)]` (that would resolve to `0.0` and silently make
+    /// every charm land at the base rate).
+    #[test]
+    fn partial_asset_falls_back_to_tuned_defaults() {
+        let t: CombatTuning = ron::from_str("(base_hit: 0.85, hit_k: 0.015)").unwrap();
+        let d = CombatTuning::default();
+        assert!((t.save_base_hit - d.save_base_hit).abs() < 1e-6);
+        assert!((t.save_hit_floor - d.save_hit_floor).abs() < 1e-6);
+        assert!((t.save_hit_ceil - d.save_hit_ceil).abs() < 1e-6);
+        assert!((t.save_mr_soft_cap - d.save_mr_soft_cap).abs() < 1e-6);
+        assert!((t.save_cr_to_evasion - d.save_cr_to_evasion).abs() < 1e-6);
+        assert!((t.save_in_combat_penalty - d.save_in_combat_penalty).abs() < 1e-6);
+        assert!((t.magic_resist_minor - d.magic_resist_minor).abs() < 1e-6);
+        assert!((t.magic_resist_major - d.magic_resist_major).abs() < 1e-6);
+        assert!((t.magic_resist_legendary - d.magic_resist_legendary).abs() < 1e-6);
+        assert!((t.save_outclassed_wall - d.save_outclassed_wall).abs() < 1e-6);
+        assert!(t.save_cr_to_evasion > 0.0);
+        assert!(t.save_outclassed_wall > 0.0);
+    }
+
+    /// Every tier maps to its tuned number, and `None` is exactly zero.
+    #[test]
+    fn tier_values_map_to_tuning() {
+        let t = CombatTuning::default();
+        assert_eq!(t.magic_resist_tier_value(MagicResistTier::None), 0.0);
+        assert!((t.magic_resist_tier_value(MagicResistTier::Minor) - 0.15).abs() < EPS);
+        assert!((t.magic_resist_tier_value(MagicResistTier::Major) - 0.30).abs() < EPS);
+        assert!((t.magic_resist_tier_value(MagicResistTier::Legendary) - 0.50).abs() < EPS);
+        // The innate tier and the additive `Stats` term stack.
+        let mut target = creature(0.0, MagicResistTier::Major);
+        target.stats_magic_resistance = 0.15;
+        assert!((target.magic_resistance(&t) - 0.45).abs() < EPS);
+    }
+
+    fn health_change(amount: f32, by: Option<DamageContributor>, at: f64) -> HealthChange {
+        HealthChange {
+            amount,
+            by,
+            cause: Some(DamageSource::Attack(AttackSource::Melee)),
+            magic_source: None,
+            time: Time(at),
+            precise: false,
+            instance: 0,
+        }
+    }
+
+    const CASTER: u64 = 1;
+    const TARGET: u64 = 2;
+    const ALLY: u64 = 3;
+    const STRANGER: u64 = 4;
+
+    fn ctx<'a>(now: f64) -> SaveCombatContext<'a> {
+        SaveCombatContext {
+            caster_uid: uid(CASTER),
+            caster_group: None,
+            target_uid: uid(TARGET),
+            target_group: None,
+            target_hostile_focus: None,
+            target_last_change: None,
+            caster_last_change: None,
+            now,
+        }
+    }
+
+    #[test]
+    fn creature_target_fighting_the_caster_is_detected() {
+        let mut c = ctx(100.0);
+        c.target_hostile_focus = Some((uid(CASTER), None));
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn creature_target_fighting_the_casters_group_is_detected() {
+        let mut c = ctx(100.0);
+        c.caster_group = Some(group::ENEMY);
+        c.target_hostile_focus = Some((uid(ALLY), Some(group::ENEMY)));
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn creature_target_fighting_someone_else_is_not() {
+        let mut c = ctx(100.0);
+        c.caster_group = Some(group::ENEMY);
+        c.target_hostile_focus = Some((uid(STRANGER), Some(group::NPC)));
+        assert!(!is_fighting_caster(&c));
+        // A groupless caster must not match on two `None` groups.
+        let mut c = ctx(100.0);
+        c.target_hostile_focus = Some((uid(STRANGER), None));
+        assert!(!is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn idle_creature_target_is_not_fighting() {
+        assert!(!is_fighting_caster(&ctx(100.0)));
+    }
+
+    #[test]
+    fn player_target_recently_hurt_by_the_caster_is_detected() {
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(CASTER))), 98.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn player_target_hurt_long_ago_is_not_fighting() {
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(CASTER))), 90.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn caster_recently_hurt_by_the_target_is_detected() {
+        // The reverse direction: the target hit the caster, not the other way.
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(TARGET))), 99.0);
+        let mut c = ctx(100.0);
+        c.caster_last_change = Some(&change);
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn damage_from_the_casters_group_counts() {
+        let change = health_change(
+            -10.0,
+            Some(DamageContributor::Group {
+                entity_uid: uid(ALLY),
+                group: group::ENEMY,
+            }),
+            99.0,
+        );
+        let mut c = ctx(100.0);
+        c.caster_group = Some(group::ENEMY);
+        c.target_last_change = Some(&change);
+        assert!(is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn damage_from_an_unrelated_party_does_not_count() {
+        let change = health_change(-10.0, Some(DamageContributor::Solo(uid(STRANGER))), 99.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+        // Nor does an unattributed change.
+        let change = health_change(-10.0, None, 99.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+    }
+
+    #[test]
+    fn healing_does_not_count_as_fighting() {
+        let change = health_change(10.0, Some(DamageContributor::Solo(uid(CASTER))), 99.0);
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&change);
+        assert!(!is_fighting_caster(&c));
+    }
+
+    /// The predicate reads a real `Health`'s shipped `last_change` field, so it
+    /// keeps working off the component the pet behaviour tree already consults.
+    #[test]
+    fn predicate_reads_a_real_health_component() {
+        let health = Health::new(crate::comp::Body::Object(
+            crate::comp::object::Body::TrainingDummy,
+        ));
+        let mut c = ctx(100.0);
+        c.target_last_change = Some(&health.last_change);
+        // A freshly-built `Health` has no damaging change, so it must not fire.
+        assert!(!is_fighting_caster(&c));
+    }
+
+    /// The roll is not charm-specific: a fiend with Legendary innate magic
+    /// resistance resolves through the same generic function a banishment
+    /// save uses, with no charm-shaped types in the signature.
+    #[test]
+    fn saving_throw_chance_is_callable_for_a_non_charm_effect() {
+        let t = CombatTuning::default();
+        let target = SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: MagicResistTier::Legendary,
+            combat_rating: 10.0,
+        };
+        let chance = saving_throw_chance(
+            &SaveCasterInfo {
+                magic_accuracy: 40.0,
+            },
+            &target,
+            false,
+            &t,
+        );
+        // 0.70 base + (40 - 20)*0.015 - 0.50 legendary resist = 0.50
+        assert!((chance - 0.50).abs() < 1e-5, "got {chance}");
+        assert!(chance >= t.save_hit_floor && chance <= t.save_hit_ceil);
+    }
+}
+
+/// The disguise suspicion roll's own tuning instance, exercised through the
+/// same [`magic_effect_success_chance`] formula `saving_throw_tests` proves
+/// is unchanged for charm/save. This is the acceptance artefact: every row
+/// below is the real shipped formula, not hand arithmetic.
+#[cfg(test)]
+mod disguise_suspicion_formula_tests {
+    use super::{CombatTuning, SaveCasterInfo, SaveTargetInfo, magic_effect_success_chance};
+    use crate::{assets::AssetExt, comp::body::MagicResistTier};
+
+    const EPS: f32 = 1e-3;
+
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: tier,
+            combat_rating,
+        }
+    }
+
+    fn player(magic_evasion: f32) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: magic_evasion,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: MagicResistTier::None,
+            combat_rating: 0.0,
+        }
+    }
+
+    fn holds(t: &CombatTuning, accuracy: f32, target: &SaveTargetInfo, situational: bool) -> f32 {
+        magic_effect_success_chance(
+            &SaveCasterInfo {
+                magic_accuracy: accuracy,
+            },
+            target,
+            situational,
+            &t.disguise,
+            t,
+        )
+    }
+
+    /// The shipped asset's `disguise:` section carries the intended numbers.
+    #[test]
+    fn asset_carries_the_disguise_tuning() {
+        let t = CombatTuning::default();
+        assert!((t.disguise.base_hit - 0.85).abs() < 1e-6);
+        assert!((t.disguise.hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.disguise.hit_ceil - 0.95).abs() < 1e-6);
+        assert!((t.disguise.mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.disguise.cr_to_evasion - 2.0).abs() < 1e-6);
+        assert!((t.disguise.situational_penalty - 0.25).abs() < 1e-6);
+        assert_eq!(t.disguise.outclassed_wall, None);
+        // Same evasion-per-combat_rating curve as charm/save, by design: a
+        // boss that resists charm also sees through disguises.
+        assert!((t.disguise.cr_to_evasion - t.save_cr_to_evasion).abs() < 1e-6);
+    }
+
+    /// A `disguise:` section that only specifies *some* of
+    /// `MagicEffectTuning`'s fields must fail to deserialize rather than
+    /// silently pulling the rest from `MagicEffectTuning::default()` --
+    /// `MagicEffectTuning` is deliberately not `#[serde(default)]` for
+    /// exactly this reason (see its own doc comment). Confirms the fix is
+    /// real, not just a comment: without it, this would silently produce a
+    /// `disguise.outclassed_wall` of `Some(0.30)` -- reintroducing the hard
+    /// wall this whole feature exists to not have -- with no warning.
+    #[test]
+    fn a_partially_specified_disguise_section_fails_to_deserialize() {
+        let result: Result<CombatTuning, _> = ron::from_str("(disguise: (base_hit: 0.99))");
+        assert!(
+            result.is_err(),
+            "a disguise: section missing fields must be rejected, not silently defaulted"
+        );
+    }
+
+    /// Loading `common.combat_tuning` (not just `CombatTuning::default()`)
+    /// proves the RON asset itself parses the new `disguise:` section.
+    #[test]
+    fn combat_tuning_ron_carries_the_disguise_section() {
+        let tuning = crate::assets::Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let t = &tuning.read().0;
+        assert!((t.disguise.base_hit - 0.85).abs() < 1e-6);
+        assert!((t.disguise.situational_penalty - 0.25).abs() < 1e-6);
+    }
+
+    /// An asset predating the `disguise:` section still parses and picks up
+    /// the tuned disguise numbers from `CombatTuning::default()`, not
+    /// charm/save's numbers and not zeroes.
+    #[test]
+    fn partial_asset_falls_back_to_the_tuned_disguise_defaults() {
+        let t: CombatTuning = ron::from_str("(base_hit: 0.85, hit_k: 0.015)").unwrap();
+        let d = CombatTuning::default();
+        assert!((t.disguise.base_hit - d.disguise.base_hit).abs() < 1e-6);
+        assert!((t.disguise.situational_penalty - d.disguise.situational_penalty).abs() < 1e-6);
+        assert!((t.disguise.base_hit - 0.85).abs() < 1e-6);
+    }
+
+    /// Disguise's tuning has no outclassed wall: even a badly outclassed
+    /// caster's illusion rests on `hit_floor`, never a hard `0.0`. Charm's
+    /// own wall (`saving_throw_tests::outclassed_wall_bypasses_the_floor`)
+    /// is unaffected -- the two tuning instances are independent.
+    #[test]
+    fn disguise_has_no_outclassed_wall() {
+        let t = CombatTuning::default();
+        // A deficit that would hard-fail charm/save (level term far past
+        // -0.30) still lands the disguise floor.
+        let boss_observer = creature(60.0, MagicResistTier::Legendary);
+        let chance = holds(&t, 0.0, &boss_observer, false);
+        assert!(
+            (chance - t.disguise.hit_floor).abs() < EPS,
+            "expected the floor, got {chance}"
+        );
+        assert!(
+            chance > 0.0,
+            "disguise must never hard-fail from a level gap alone"
+        );
+    }
+
+    /// Every row of plan §3.5's calibration table, recomputed by the real
+    /// shipped formula and the real shipped `disguise:` tuning -- the
+    /// acceptance artefact for the shared-formula generalization.
+    #[test]
+    fn calibration_table() {
+        let t = CombatTuning::default();
+
+        // Row 1: L10 caster (acc 12) vs a CR 1 creature observer, at range.
+        // 0.85 + (12 - 2)*0.015 - 0 - 0 = 1.00, clamped to the 0.95 ceiling.
+        assert!((holds(&t, 12.0, &creature(1.0, MagicResistTier::None), false) - 0.95).abs() < EPS);
+
+        // Row 2: same pair, but the observer is inspecting up close.
+        // 0.85 + 0.15 - 0 - 0.25 = 0.75.
+        assert!((holds(&t, 12.0, &creature(1.0, MagicResistTier::None), true) - 0.75).abs() < EPS);
+
+        // Row 3: L10 caster vs a CR 3.5 creature observer with Minor magic
+        // resistance, at range. 0.85 + (12-7)*0.015 - 0.15 - 0 = 0.775.
+        assert!(
+            (holds(&t, 12.0, &creature(3.5, MagicResistTier::Minor), false) - 0.775).abs() < EPS
+        );
+
+        // Row 4: same pair, close inspection. 0.775 - 0.25 = 0.525.
+        assert!(
+            (holds(&t, 12.0, &creature(3.5, MagicResistTier::Minor), true) - 0.525).abs() < EPS
+        );
+
+        // Row 5: L40 caster (acc 42) vs a CR 36 Legendary observer (a
+        // Mindflayer-tier boss), at range. Level term (42-72)*0.015 = -0.45,
+        // well past charm's -0.30 wall, but disguise has none: 0.85 - 0.45 -
+        // 0.50 = -0.10, clamped up to the 0.05 floor.
+        assert!(
+            (holds(&t, 42.0, &creature(36.0, MagicResistTier::Legendary), false)
+                - t.disguise.hit_floor)
+                .abs()
+                < EPS
+        );
+
+        // Row 6: L5 caster (acc 7) vs an L40 guard (magic_evasion 30), at
+        // range. 0.85 + (7-30)*0.015 - 0 - 0 = 0.505.
+        assert!((holds(&t, 7.0, &player(30.0), false) - 0.505).abs() < EPS);
+
+        // Row 7: same pair, close inspection. 0.505 - 0.25 = 0.255.
+        assert!((holds(&t, 7.0, &player(30.0), true) - 0.255).abs() < EPS);
+    }
+}
+
+/// `scrying`'s own tuning instance, exercised through
+/// [`scrying_success_chance`] -- the acceptance artefact proving the
+/// additive A+B+C shape actually behaves additively against the real
+/// shipped formula, not just in the doc comment's algebra.
+#[cfg(test)]
+mod scrying_formula_tests {
+    use super::{CombatTuning, SaveCasterInfo, SaveTargetInfo, scrying_success_chance};
+    use crate::{assets::AssetExt, comp::body::MagicResistTier};
+
+    const EPS: f32 = 1e-3;
+
+    fn creature(combat_rating: f32, tier: MagicResistTier) -> SaveTargetInfo {
+        SaveTargetInfo {
+            stats_magic_evasion: 0.0,
+            crowd_control_resistance: 0.0,
+            stats_magic_resistance: 0.0,
+            magic_resist_tier: tier,
+            combat_rating,
+        }
+    }
+
+    fn chance(
+        t: &CombatTuning,
+        accuracy: f32,
+        target: &SaveTargetInfo,
+        in_group: bool,
+        holds_item: bool,
+    ) -> f32 {
+        scrying_success_chance(
+            &SaveCasterInfo {
+                magic_accuracy: accuracy,
+            },
+            target,
+            in_group,
+            holds_item,
+            t,
+        )
+    }
+
+    /// The shipped asset's `scrying:` section and its two bonus fields carry
+    /// the intended numbers.
+    #[test]
+    fn asset_carries_the_scrying_tuning() {
+        let t = CombatTuning::default();
+        assert!((t.scrying.base_hit - 0.75).abs() < 1e-6);
+        assert!((t.scrying.hit_floor - 0.05).abs() < 1e-6);
+        assert!((t.scrying.hit_ceil - 0.90).abs() < 1e-6);
+        assert!((t.scrying.mr_soft_cap - 0.75).abs() < 1e-6);
+        assert!((t.scrying.cr_to_evasion - 2.0).abs() < 1e-6);
+        assert_eq!(t.scrying.outclassed_wall, Some(0.30));
+        assert!((t.scrying_party_bonus_accuracy - 8.0).abs() < 1e-6);
+        assert!((t.scrying_focus_item_bonus_accuracy - 10.0).abs() < 1e-6);
+        assert!((t.scrying_reroll_secs - 15.0).abs() < 1e-6);
+    }
+
+    /// A `scrying:` section that only specifies *some* of
+    /// `MagicEffectTuning`'s fields must fail to deserialize, the same
+    /// footgun-avoidance `disguise_suspicion_formula_tests` already proves
+    /// for `disguise:`.
+    #[test]
+    fn a_partially_specified_scrying_section_fails_to_deserialize() {
+        let result: Result<CombatTuning, _> = ron::from_str("(scrying: (base_hit: 0.99))");
+        assert!(
+            result.is_err(),
+            "a scrying: section missing fields must be rejected, not silently defaulted"
+        );
+    }
+
+    /// Loading `common.combat_tuning` proves the RON asset itself carries
+    /// the new `scrying:` section and its sibling bonus fields.
+    #[test]
+    fn combat_tuning_ron_carries_the_scrying_section() {
+        let tuning = crate::assets::Ron::<CombatTuning>::load_expect("common.combat_tuning");
+        let t = &tuning.read().0;
+        assert!((t.scrying.base_hit - 0.75).abs() < 1e-6);
+        assert!((t.scrying_party_bonus_accuracy - 8.0).abs() < 1e-6);
+        assert!((t.scrying_focus_item_bonus_accuracy - 10.0).abs() < 1e-6);
+    }
+
+    /// Sane baseline: a caster reasonably matched against a middling target,
+    /// with neither bonus, lands a plausible-but-not-guaranteed chance
+    /// strictly between the floor and ceiling.
+    #[test]
+    fn base_roll_is_sane_for_a_matched_pair() {
+        let t = CombatTuning::default();
+        // A weak caster (accuracy 5) against a nearly-trivial target (CR 1,
+        // no resistance): favourable but not so lopsided it clamps to the
+        // ceiling, so this actually exercises the unclamped formula.
+        let target = creature(1.0, MagicResistTier::None);
+        let c = chance(&t, 5.0, &target, false, false);
+        assert!(
+            c > t.scrying.hit_floor && c < t.scrying.hit_ceil,
+            "expected a mid-range chance, got {c}"
+        );
+    }
+
+    /// The core acceptance case: against a target tough enough that the base
+    /// roll sits well clear of both the floor and the ceiling, the party and
+    /// focus-item bonuses each add their own independent contribution, and
+    /// applying both sums the two rather than one overriding the other.
+    #[test]
+    fn party_and_focus_item_bonuses_stack_additively() {
+        let t = CombatTuning::default();
+        // CR 20, Minor resistance: effective evasion 40, resist 0.15 --
+        // tough enough that a 30-accuracy caster's base roll lands well off
+        // both the floor and the ceiling, so every bonus's contribution is
+        // visible unclamped.
+        let target = creature(20.0, MagicResistTier::Minor);
+
+        let base = chance(&t, 30.0, &target, false, false);
+        let with_party = chance(&t, 30.0, &target, true, false);
+        let with_item = chance(&t, 30.0, &target, false, true);
+        let with_both = chance(&t, 30.0, &target, true, true);
+
+        let party_contribution = t.scrying_party_bonus_accuracy * t.hit_k;
+        let item_contribution = t.scrying_focus_item_bonus_accuracy * t.hit_k;
+
+        assert!(
+            (with_party - (base + party_contribution)).abs() < EPS,
+            "party bonus must add its own accuracy-scaled term: base {base}, with_party \
+             {with_party}, expected +{party_contribution}"
+        );
+        assert!(
+            (with_item - (base + item_contribution)).abs() < EPS,
+            "item bonus must add its own accuracy-scaled term: base {base}, with_item \
+             {with_item}, expected +{item_contribution}"
+        );
+        assert!(
+            (with_both - (base + party_contribution + item_contribution)).abs() < EPS,
+            "both bonuses together must sum, neither overriding the other: base {base}, with_both \
+             {with_both}, expected +{party_contribution} +{item_contribution}"
+        );
+        // Sanity: applying both must be strictly more favourable than either
+        // alone -- confirms this isn't secretly a max()/pick-one gate.
+        assert!(with_both > with_party && with_both > with_item);
+    }
+
+    /// A badly outclassed caster still hard-fails via `outclassed_wall`,
+    /// same shape as charm/save -- unlike disguise, scrying does not waive
+    /// this wall.
+    #[test]
+    fn a_badly_outclassed_caster_hard_fails() {
+        let t = CombatTuning::default();
+        let boss = creature(30.0, MagicResistTier::Legendary);
+        // effective evasion = 60; level_term = (0-60)*0.015 = -0.90, far past
+        // the -0.30 wall.
+        let c = chance(&t, 0.0, &boss, false, false);
+        assert_eq!(
+            c, 0.0,
+            "a wall-breaching deficit must hard-fail to exactly 0.0"
+        );
+        // Even with both bonuses (+18 accuracy), the wall still bites:
+        // level_term = (18-60)*0.015 = -0.63, still past -0.30.
+        let c_with_bonuses = chance(&t, 0.0, &boss, true, true);
+        assert_eq!(
+            c_with_bonuses, 0.0,
+            "bonuses shift the level term but do not waive the outclassed wall on their own"
+        );
+    }
+}
+
+#[cfg(test)]
+mod removal_cause_tests {
+    use super::{RemovalCause, RemovalInfo};
+
+    #[test]
+    fn a_kill_awards_the_full_reward_and_counts_as_a_kill() {
+        let info = RemovalInfo::killed();
+        assert_eq!(info.cause, RemovalCause::Killed);
+        assert!((info.reward_fraction - 1.0).abs() < f32::EPSILON);
+        assert!(info.cause.counts_as_kill());
+    }
+
+    #[test]
+    fn a_banishment_is_not_a_kill_and_carries_its_own_fraction() {
+        let info = RemovalInfo::banished(0.25);
+        assert_eq!(info.cause, RemovalCause::Banished);
+        assert!((info.reward_fraction - 0.25).abs() < f32::EPSILON);
+        assert!(!info.cause.counts_as_kill());
+    }
+
+    /// A malformed RON fraction must not be able to award more than a kill
+    /// does, nor a negative amount.
+    #[test]
+    fn a_banishment_reward_fraction_is_clamped() {
+        assert!((RemovalInfo::banished(4.0).reward_fraction - 1.0).abs() < f32::EPSILON);
+        assert!((RemovalInfo::banished(-1.0).reward_fraction - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// `Default` exists so the ~2 shipped `DestroyEvent` construction sites
+    /// stay readable; it must mean "a normal kill".
+    #[test]
+    fn default_removal_info_is_a_kill() {
+        assert_eq!(RemovalInfo::default(), RemovalInfo::killed());
+    }
+}
+
+#[cfg(test)]
+mod trigger_slot_cooldown_tests {
+    use super::CombatTuning;
+    use crate::assets::{AssetExt, Ron};
+
+    fn shipped() -> CombatTuning {
+        Ron::<CombatTuning>::load_expect("common.combat_tuning")
+            .read()
+            .0
+            .clone()
+    }
+
+    /// The two anchors the design fixed by hand: a circle-1 spell rests half an
+    /// hour, a circle-9 spell rests a day and a half.
+    #[test]
+    fn the_two_anchors_are_exact() {
+        let t = shipped();
+        assert_eq!(t.trigger_slot_cooldown(1), 1800.0);
+        assert_eq!(t.trigger_slot_cooldown(9), 129_600.0);
+    }
+
+    /// Circle 0 is an explicit floor for cantrips, not a curve output, and is
+    /// deliberately shorter than extrapolating the curve would give.
+    #[test]
+    fn circle_zero_is_an_explicit_ten_minute_floor() {
+        let t = shipped();
+        assert_eq!(t.trigger_slot_cooldown(0), 600.0);
+        assert!(t.trigger_slot_cooldown(0) < t.trigger_slot_cooldown(1));
+    }
+
+    #[test]
+    fn the_table_is_strictly_increasing() {
+        let t = shipped();
+        for c in 1..10u8 {
+            assert!(
+                t.trigger_slot_cooldown(c) > t.trigger_slot_cooldown(c - 1),
+                "circle {c} is not longer than circle {}",
+                c - 1
+            );
+        }
+    }
+
+    /// Circles 1-9 are the rounded exponential `1800 * 72^((C-1)/8)`. Rounding
+    /// for legibility is allowed; drifting off the curve is not. Circle 0 is
+    /// exempt: it is a floor, not a curve output.
+    #[test]
+    fn circles_one_to_nine_stay_on_the_exponential_curve() {
+        let t = shipped();
+        for c in 1..10u8 {
+            let exact = 1800.0_f64 * 72.0_f64.powf(f64::from(c - 1) / 8.0);
+            let shipped = f64::from(t.trigger_slot_cooldown(c));
+            let deviation = (shipped - exact).abs() / exact;
+            assert!(
+                deviation <= 0.031,
+                "circle {c}: shipped {shipped} deviates {:.2}% from the curve value {exact}",
+                deviation * 100.0
+            );
+        }
+    }
+
+    /// A circle beyond the catalogue clamps rather than panicking.
+    #[test]
+    fn an_out_of_range_circle_clamps_to_the_last_entry() {
+        let t = shipped();
+        assert_eq!(t.trigger_slot_cooldown(10), t.trigger_slot_cooldown(9));
+        assert_eq!(t.trigger_slot_cooldown(u8::MAX), t.trigger_slot_cooldown(9));
+    }
+}
+
+#[cfg(test)]
+mod gear_caster_stats_tests {
+    use std::sync::Arc;
+
+    use super::{AttunedItems, Inventory, MagicSource, Stats, apply_gear_caster_stats, tool};
+    use crate::comp::{
+        Body, humanoid,
+        inventory::{
+            item::{AbilityMap, Item, ItemBase, ItemDef, ItemKind, ItemTag},
+            loadout_builder::LoadoutBuilder,
+            slot::EquipSlot,
+        },
+    };
+
+    fn test_body() -> Body { Body::Humanoid(humanoid::Body::random()) }
+
+    fn caster_staff_stats() -> tool::Stats {
+        tool::Stats {
+            equip_time_secs: 0.4,
+            power: 1.0,
+            effect_power: 1.5,
+            speed: 1.0,
+            range: 1.0,
+            energy_efficiency: 1.25,
+            buff_strength: 1.75,
+            cooldown_reduction: 1.0,
+        }
+    }
+
+    fn tool_item(kind: tool::ToolKind, role: tool::WeaponRole, stats: tool::Stats) -> Item {
+        Item::create_test_item_from_kind(ItemKind::Tool(tool::Tool::new(
+            kind,
+            tool::Hands::Two,
+            Some(role),
+            stats,
+        )))
+    }
+
+    fn attunement_required_tool_item(
+        kind: tool::ToolKind,
+        role: tool::WeaponRole,
+        stats: tool::Stats,
+    ) -> Item {
+        let mut item_def = ItemDef::create_test_itemdef_from_kind(ItemKind::Tool(tool::Tool::new(
+            kind,
+            tool::Hands::Two,
+            Some(role),
+            stats,
+        )));
+        item_def.tags = vec![ItemTag::RequiresAttunement];
+        Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(item_def)),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &crate::comp::inventory::item::MaterialStatManifest::load().read(),
+        )
+    }
+
+    fn inventory_with_mainhand(item: Item) -> Inventory {
+        Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty().active_mainhand(Some(item)).build(),
+        )
+    }
+
+    fn empty_inventory() -> Inventory {
+        Inventory::with_loadout_humanoid(LoadoutBuilder::empty().build())
+    }
+
+    #[test]
+    fn no_inventory_leaves_stats_untouched() {
+        let mut stats = Stats::empty(test_body());
+        apply_gear_caster_stats(&mut stats, None, None);
+        assert_eq!(stats.spell_power, 1.0);
+        assert_eq!(stats.heal_power, 1.0);
+        assert_eq!(stats.energy_regen_modifier, 1.0);
+    }
+
+    #[test]
+    fn caster_staff_raises_the_three_caster_channels() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+        assert!((stats.heal_power - 1.75).abs() < 1e-5);
+        assert!((stats.energy_regen_modifier - 1.25).abs() < 1e-5);
+        // Deliberately not fed by this path: it already composes with the
+        // same tool stat at ability-construction time, so routing it here
+        // too would double-apply it for that weapon's own casts.
+        assert_eq!(stats.energy_efficiency_modifier, 1.0);
+    }
+
+    #[test]
+    fn martial_role_weapon_contributes_nothing() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Martial,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert_eq!(stats.spell_power, 1.0);
+        assert_eq!(stats.heal_power, 1.0);
+        assert_eq!(stats.energy_regen_modifier, 1.0);
+    }
+
+    #[test]
+    fn every_caster_implement_kind_contributes_not_just_staff_and_sceptre() {
+        for kind in [
+            tool::ToolKind::Staff,
+            tool::ToolKind::Sceptre,
+            tool::ToolKind::Tome,
+            tool::ToolKind::HolySymbol,
+            tool::ToolKind::Focus,
+        ] {
+            let inv = inventory_with_mainhand(tool_item(
+                kind,
+                tool::WeaponRole::Caster,
+                caster_staff_stats(),
+            ));
+            let mut stats = Stats::empty(test_body());
+
+            apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+            assert!(
+                (stats.spell_power - 1.5).abs() < 1e-5,
+                "{kind:?} caster implement should raise spell_power"
+            );
+        }
+    }
+
+    #[test]
+    fn unattuned_requires_attunement_item_contributes_nothing() {
+        let inv = inventory_with_mainhand(attunement_required_tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert_eq!(stats.spell_power, 1.0, "unattuned item must stay inert");
+    }
+
+    #[test]
+    fn attuning_the_slot_activates_the_contribution() {
+        let inv = inventory_with_mainhand(attunement_required_tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let attuned = AttunedItems(vec![EquipSlot::ActiveMainhand]);
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), Some(&attuned));
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn unequipping_removes_the_contribution_on_the_next_reset() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+
+        // A later tick resets to defaults before re-running the fold; the
+        // weapon is no longer equipped by then.
+        stats.reset_temp_modifiers();
+        apply_gear_caster_stats(&mut stats, Some(&empty_inventory()), None);
+
+        assert_eq!(stats.spell_power, 1.0, "unequipped gear must not linger");
+    }
+
+    #[test]
+    fn repeated_ticks_with_the_same_gear_do_not_compound() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+        let first_tick = stats.spell_power;
+
+        // A second tick: reset (mirroring what the per-tick rebuild does
+        // before re-running every contribution) then re-fold the SAME gear —
+        // the result must be identical, not doubled.
+        stats.reset_temp_modifiers();
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - first_tick).abs() < 1e-5);
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_weaponless_pool_caster_still_benefits_from_an_equipped_caster_implement() {
+        // A per-ability tool-stat scaling path only ever reads the specific
+        // ability hand, and falls back to a neutral multiplier when it finds
+        // no tool there. This fold does not consult any "ability hand" at
+        // all — it walks every equipped item — so a caster implement in the
+        // OFFHAND slot still raises the character's spell_power even though
+        // no ability-hand lookup would ever find it there.
+        let offhand_item = Item::create_test_item_from_kind(ItemKind::Tool(tool::Tool::new(
+            tool::ToolKind::Focus,
+            tool::Hands::One,
+            Some(tool::WeaponRole::Caster),
+            caster_staff_stats(),
+        )));
+        let inv = Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty()
+                .active_offhand(Some(offhand_item))
+                .build(),
+        );
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn caster_gear_cooldown_reduction_folds_into_the_cooldown_channel() {
+        let reduced_stats = tool::Stats {
+            cooldown_reduction: 0.6,
+            ..caster_staff_stats()
+        };
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Caster,
+            reduced_stats,
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.cooldown_reduction_modifier - 0.6).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_martial_weapon_never_reduces_cooldowns() {
+        let reduced_stats = tool::Stats {
+            cooldown_reduction: 0.2,
+            ..caster_staff_stats()
+        };
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Staff,
+            tool::WeaponRole::Martial,
+            reduced_stats,
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert_eq!(stats.cooldown_reduction_modifier, 1.0);
+    }
+
+    #[test]
+    fn an_unkeyed_caster_item_still_feeds_the_flat_spell_power_channel_only() {
+        let inv = inventory_with_mainhand(tool_item(
+            tool::ToolKind::Tome,
+            tool::WeaponRole::Caster,
+            caster_staff_stats(),
+        ));
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        assert!((stats.spell_power - 1.5).abs() < 1e-5);
+        assert_eq!(stats.spell_power_by_source, [1.0; MagicSource::NUM_SOURCES]);
+    }
+
+    #[test]
+    fn a_source_keyed_caster_item_boosts_only_its_own_source() {
+        let keyed_item = Item::create_test_item_from_kind(ItemKind::Tool(
+            tool::Tool::new(
+                tool::ToolKind::Tome,
+                tool::Hands::Two,
+                Some(tool::WeaponRole::Caster),
+                caster_staff_stats(),
+            )
+            .with_spell_power_source(MagicSource::Divine),
+        ));
+        let inv = inventory_with_mainhand(keyed_item);
+        let mut stats = Stats::empty(test_body());
+
+        apply_gear_caster_stats(&mut stats, Some(&inv), None);
+
+        // The keyed contribution lands ONLY in the Divine slot...
+        assert!((stats.spell_power_by_source[MagicSource::Divine.index()] - 1.5).abs() < 1e-5);
+        for source in [
+            MagicSource::Arcane,
+            MagicSource::Primordial,
+            MagicSource::Psionic,
+            MagicSource::Ki,
+        ] {
+            assert_eq!(stats.spell_power_by_source[source.index()], 1.0);
+        }
+        // ...and NOT the flat channel, which stays at identity: a
+        // source-keyed item boosts that source specifically, not every
+        // magic-source spell.
+        assert_eq!(stats.spell_power, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod attack_loadout_walk_tests {
+    use super::{
+        CombatTuning, Damage, DamageKind, DerivedStats, Inventory, Poise, compute_armor_evasion,
+    };
+    use crate::{
+        comp::{
+            Body, Energy, Health, humanoid,
+            inventory::{
+                item::{
+                    Item, ItemKind,
+                    armor::{self, Armor, ArmorKind, Protection},
+                },
+                loadout_builder::LoadoutBuilder,
+                loadout_walks, reset_loadout_walks,
+            },
+        },
+        skillset_builder::SkillSetBuilder,
+    };
+
+    fn armoured_inventory() -> Inventory {
+        Inventory::with_loadout_humanoid(
+            LoadoutBuilder::empty()
+                .chest(Some(Item::create_test_item_from_kind(ItemKind::Armor(
+                    Armor::new(
+                        ArmorKind::Chest,
+                        armor::StatsSource::Direct(armor::Stats {
+                            protection: Some(Protection::Normal(12.5)),
+                            poise_resilience: Some(Protection::Normal(7.25)),
+                            energy_max: Some(13.0),
+                            energy_reward: Some(0.35),
+                            precision_power: Some(0.17),
+                            stealth: Some(0.9),
+                            ground_contact: Default::default(),
+                        }),
+                    ),
+                ))))
+                .build(),
+        )
+    }
+
+    /// Resolving a single-target attack against a geared target must walk that
+    /// target's loadout **zero** times: every gear-derived number the
+    /// resolution path needs (armour protection for damage reduction, armour
+    /// weight and shield for evasion, armour resilience for poise, the
+    /// precision multiplier) is read off `DerivedStats`, which was folded once
+    /// when the gear last changed.
+    ///
+    /// Before the cache these were three independent loadout walks per damage
+    /// instance — the double walk the evasion path used to call out explicitly
+    /// in a perf TODO, plus the poise one.
+    #[test]
+    fn single_attack_reads_target_gear_once() {
+        let inventory = armoured_inventory();
+        let body = Body::Humanoid(humanoid::Body::random());
+        let skill_set = SkillSetBuilder::default().build();
+        let msm = crate::comp::inventory::item::MaterialStatManifest::load().cloned();
+        let tuning = CombatTuning::default();
+
+        // Building the cache is where the loadout is walked -- the "once" in
+        // the name. It happens on gear change, not per attack.
+        reset_loadout_walks();
+        let derived = DerivedStats::compute(
+            Some(&inventory),
+            None,
+            Some(&skill_set),
+            Some(body),
+            Some(Health::new(body).base_max()),
+            Some(Energy::new(body).base_max()),
+            Some(Poise::new(body).base_max()),
+            &msm,
+        );
+        let walks_to_build = loadout_walks();
+        assert!(
+            walks_to_build >= 3,
+            "the rebuild is where the gear is read: expected at least the three walks the \
+             resolution path used to do itself, got {walks_to_build}"
+        );
+
+        // Now resolve an attack against that cached target. Nothing here may
+        // touch the loadout again.
+        reset_loadout_walks();
+
+        let damage = Damage {
+            kind: DamageKind::Slashing,
+            value: 40.0,
+        };
+        let damage_reduction = Damage::compute_damage_reduction(Some(damage), Some(&derived), None);
+        let armor_evasion = compute_armor_evasion(&derived, None, &tuning);
+        let poise_damage = Poise::apply_poise_reduction(25.0, Some(&derived), None, None);
+        let precision_mult = derived.precision_mult;
+
+        assert_eq!(
+            loadout_walks(),
+            0,
+            "resolving an attack must read the cache, never the loadout"
+        );
+
+        // ...and it must still be reading real numbers, not silently
+        // defaulting: an armoured target mitigates, evades and resists.
+        assert!(damage_reduction > 0.0);
+        assert!(armor_evasion < tuning.gear_evasion_cap);
+        assert!(poise_damage < 25.0);
+        assert!(precision_mult > DerivedStats::DEFAULT_PRECISION_MULT);
+    }
+}
+
+#[cfg(test)]
+mod phantom_illusion_dispel_tests {
+    use super::{
+        Attack, AttackDamage, AttackOptions, AttackSource, Damage, DamageKind, GroupTarget,
+        TargetInfo,
+    };
+    use crate::{
+        event::{
+            BuffEvent, ComboChangeEvent, DispelIllusionEvent, EnergyChangeEvent,
+            EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
+            PoiseChangeEvent, TransformEvent,
+        },
+        event_emitters,
+        resources::Time,
+        uid::Uid,
+    };
+    use specs::{Builder, Entity as EcsEntity, SystemData, WorldExt};
+    use std::num::NonZeroU64;
+    use vek::Vec3;
+
+    event_emitters! {
+        struct ReadEvents[Emitters] {
+            health_change: HealthChangeEvent,
+            energy_change: EnergyChangeEvent,
+            parry_hook: ParryHookEvent,
+            knockback: KnockbackEvent,
+            buff: BuffEvent,
+            poise_change: PoiseChangeEvent,
+            combo_change: ComboChangeEvent,
+            entity_attack_hook: EntityAttackedHookEvent,
+            transform: TransformEvent,
+            dispel_illusion: DispelIllusionEvent,
+        }
+    }
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    /// Registers every event bus `apply_attack`'s emitters bound can write
+    /// to -- mirroring `server/src/sys/remote_sense.rs`'s `setup_world` idiom.
+    fn setup_world() -> specs::World {
+        let mut world = specs::World::new();
+        world.insert(EventBus::<HealthChangeEvent>::default());
+        world.insert(EventBus::<EnergyChangeEvent>::default());
+        world.insert(EventBus::<ParryHookEvent>::default());
+        world.insert(EventBus::<KnockbackEvent>::default());
+        world.insert(EventBus::<BuffEvent>::default());
+        world.insert(EventBus::<PoiseChangeEvent>::default());
+        world.insert(EventBus::<ComboChangeEvent>::default());
+        world.insert(EventBus::<EntityAttackedHookEvent>::default());
+        world.insert(EventBus::<TransformEvent>::default());
+        world.insert(EventBus::<DispelIllusionEvent>::default());
+        world
+    }
+
+    fn target_info(entity: EcsEntity, phantom_illusion: bool) -> TargetInfo<'static> {
+        TargetInfo {
+            entity,
+            uid: uid(2),
+            inventory: None,
+            derived: None,
+            stats: None,
+            health: None,
+            pos: Vec3::zero(),
+            ori: None,
+            char_state: None,
+            energy: None,
+            buffs: None,
+            mass: None,
+            player: None,
+            phantom_illusion,
+        }
+    }
+
+    fn attack_options(target_group: GroupTarget) -> AttackOptions {
+        AttackOptions {
+            target_dodging: false,
+            permit_pvp: true,
+            target_group,
+            allow_friendly_fire: false,
+            precision_mult: None,
+        }
+    }
+
+    fn some_damage() -> Attack {
+        Attack::new(None).with_damage(AttackDamage::new(
+            Damage {
+                kind: DamageKind::Slashing,
+                value: 10.0,
+            },
+            Some(GroupTarget::OutOfGroup),
+            0,
+        ))
+    }
+
+    /// The core reveal trigger: a single-target hostile attack (melee or
+    /// projectile) resolved against a `PhantomIllusion`-tagged target -- here
+    /// one with no `Health`, exactly like the real entity -- must not produce
+    /// any `HealthChangeEvent` (there would be nothing to write anyway), and
+    /// must instead emit exactly one `DispelIllusionEvent` naming the target.
+    #[test]
+    fn single_target_hostile_attack_on_phantom_illusion_dispels_instead_of_damaging() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, true);
+        let options = attack_options(GroupTarget::OutOfGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        let applied = attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Melee,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        assert!(
+            !applied,
+            "a dispelled phantasm attack must report nothing was applied"
+        );
+
+        let health_changes: Vec<_> = world
+            .read_resource::<EventBus<HealthChangeEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            health_changes.is_empty(),
+            "a phantasm has no Health -- no HealthChangeEvent must ever be produced for it"
+        );
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert_eq!(
+            dispels.len(),
+            1,
+            "exactly one DispelIllusionEvent must be emitted"
+        );
+        assert_eq!(dispels[0].0, target_entity);
+    }
+
+    /// Regression: a single-target hostile attack against an ordinary (non-
+    /// phantasm) target must resolve damage exactly as before -- the new gate
+    /// must not fire for anyone who doesn't carry `PhantomIllusion`.
+    #[test]
+    fn single_target_attack_on_a_non_phantasm_is_unaffected() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, false);
+        let options = attack_options(GroupTarget::OutOfGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Melee,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            dispels.is_empty(),
+            "an ordinary target must never produce a DispelIllusionEvent"
+        );
+    }
+
+    /// The AoE-safety invariant: an `Explosion` (or any other multi-target
+    /// source) attack against a `PhantomIllusion` target must not scan for or
+    /// dispel it -- the gate is `is_single_target`-only, exactly like the
+    /// `charmed_by_target` gate it mirrors.
+    #[test]
+    fn aoe_attack_on_phantom_illusion_does_not_dispel() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, true);
+        let options = attack_options(GroupTarget::OutOfGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Explosion,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            dispels.is_empty(),
+            "an AoE source must never read `phantom_illusion`, let alone dispel from it"
+        );
+    }
+
+    /// The hostile-only half of the gate: a single-target *in-group* effect
+    /// (e.g. an ally heal that happens to be routed through a single-target
+    /// attack) must not dispel a phantasm either -- only an out-of-group
+    /// (hostile) single-target attack does.
+    #[test]
+    fn in_group_single_target_effect_on_phantom_illusion_does_not_dispel() {
+        let mut world = setup_world();
+        let target_entity = world.create_entity().build();
+
+        let attack = some_damage();
+        let target = target_info(target_entity, true);
+        let options = attack_options(GroupTarget::InGroup);
+        let mut rng = rand::rng();
+
+        let read_events = ReadEvents::fetch(&world);
+        let mut emitters: Emitters = read_events.get_emitters();
+
+        attack.apply_attack(
+            None,
+            &target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Melee,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+
+        let dispels: Vec<_> = world
+            .read_resource::<EventBus<DispelIllusionEvent>>()
+            .recv_all()
+            .collect();
+        assert!(
+            dispels.is_empty(),
+            "an in-group single-target effect must never dispel a phantasm"
+        );
     }
 }

@@ -11,7 +11,7 @@ use common::{
     comp::{self, Admin, Player, Stats},
     event::{ClientDisconnectEvent, EventBus, MakeAdminEvent},
     recipe::default_component_recipe_book,
-    resources::TimeOfDay,
+    resources::{OracleLive, TimeOfDay},
     shared_server_config::ServerConstants,
     uid::Uid,
 };
@@ -44,6 +44,7 @@ pub struct ReadData<'a> {
     player_metrics: ReadExpect<'a, PlayerMetrics>,
     settings: ReadExpect<'a, Settings>,
     time_of_day: Read<'a, TimeOfDay>,
+    oracle_live: ReadExpect<'a, OracleLive>,
     material_stats: ReadExpect<'a, comp::item::MaterialStatManifest>,
     ability_map: ReadExpect<'a, comp::item::tool::AbilityMap>,
     recipe_book: ReadExpect<'a, common::recipe::RecipeBookManifest>,
@@ -404,6 +405,7 @@ impl<'a> System<'a> for Sys {
                             ability_map: (*read_data.ability_map).clone(),
                             server_constants: ServerConstants {
                                 day_cycle_coefficient: read_data.settings.day_cycle_coefficient(),
+                                oracle_live: read_data.oracle_live.0,
                             },
                             description,
                             active_plugins,

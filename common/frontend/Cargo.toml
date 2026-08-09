@@ -1,5 +1,5 @@
 [package]
-name = "veloren-common-frontend"
+name = "xindeler-common-frontend"
 description = "common stuff that is used by server-cli and voxygen directly"
 version.workspace = true
 edition.workspace = true
@@ -13,7 +13,7 @@ tracy = ["common-base/tracy", "tracing-tracy"]
 logging-verbose = []
 
 [dependencies]
-common-base = { package = "veloren-common-base", path = "../base" }
+common-base = { package = "xindeler-common-base", path = "../base" }
 
 # Logging
 termcolor = "1.1"

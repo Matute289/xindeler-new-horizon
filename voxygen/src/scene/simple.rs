@@ -7,7 +7,7 @@ use crate::{
         pipelines::terrain::BoundLocals as BoundTerrainLocals,
     },
     scene::{
-        CloudsLocals, CullingMode, Lod, PostProcessLocals,
+        CloudsLocals, CullingMode, Lod, PostProcessLocals, SsaoLocals,
         camera::{self, Camera, CameraMode},
         figure::{FigureAtlas, FigureModelCache, FigureState, FigureUpdateCommonParameters},
         terrain::{SpriteRenderContext, SpriteRenderState},
@@ -26,6 +26,7 @@ use common::{
     resources::TimeOfDay,
     slowjob::SlowJobPool,
     terrain::{BlockKind, CoordinateConversions},
+    util::Dir,
     vol::{BaseVol, ReadVol},
 };
 use specs::WorldExt;
@@ -199,13 +200,19 @@ impl Scene {
         scene_data: SceneData,
         inventory: Option<&Inventory>,
         client: &Client,
+        is_edit: bool,
     ) {
-        self.camera.set_distance(6.0);
+        self.camera.set_distance(if is_edit { 3.5 } else { 6.0 });
+        let cam_height = if let Some(b) = scene_data.body {
+            b.height() * 0.65
+        } else {
+            1.75
+        };
         self.camera
-            .force_focus_pos(self.char_pos + Vec3::unit_z() * 2.0);
+            .set_focus_pos(self.char_pos + Vec3::unit_z() * cam_height);
         let ori = self.camera.get_tgt_orientation();
         self.camera
-            .set_orientation(Vec3::new(ori.x, ori.y.max(-0.25), ori.z));
+            .set_orientation(Vec3::new(ori.x, ori.y.max(-0.15), ori.z));
         self.camera.update(
             scene_data.time,
             /* 1.0 / 60.0 */ scene_data.delta_time,
@@ -231,7 +238,8 @@ impl Scene {
         self.lod
             .maintain(renderer, client, self.camera.get_focus_pos(), &self.camera);
 
-        let lantern_light = if !time_of_day.day_period().is_light()
+        let lantern_light = if !is_edit
+            && !time_of_day.day_period().is_light()
             && let Some(char_state) = &self.char_state
             && let Some(inv) = inventory
             && let Some(item) = inv.equipped(EquipSlot::Lantern)
@@ -266,6 +274,7 @@ impl Scene {
             scene_data.time,
             0.0,
             renderer.resolution().as_(),
+            renderer.internal_resolution().as_(),
             Vec2::new(SHADOW_NEAR, SHADOW_FAR),
             lantern_light.is_some() as usize,
             0,
@@ -284,6 +293,7 @@ impl Scene {
         )]);
         renderer.update_clouds_locals(CloudsLocals::new(proj_mat_inv, view_mat_inv));
         renderer.update_postprocess_locals(PostProcessLocals::new(proj_mat_inv, view_mat_inv));
+        renderer.update_ssao_locals(SsaoLocals::new(proj_mat_inv, view_mat_inv));
 
         self.char_model_cache
             .clean(&mut self.figure_atlas, scene_data.tick);
@@ -319,6 +329,7 @@ impl Scene {
                 col: Rgba::broadcast(1.0),
                 dt,
                 is_player: false,
+                is_revealed: false,
                 terrain: None,
                 ground_vel: Vec3::zero(),
                 primary_trail_points: None,
@@ -332,6 +343,7 @@ impl Scene {
                 FigureState::new(renderer, CharacterSkeleton::new(false, 0.0, 1.0), body)
             });
             let params = figure_params(scene_data.delta_time, self.char_pos);
+            char_state.skeleton.holding_lantern = lantern_light.is_some();
             let tgt_skeleton = anim::character::IdleAnimation::update_skeleton(
                 &char_state.skeleton,
                 (
@@ -344,6 +356,63 @@ impl Scene {
                 &mut 0.0,
                 &anim::character::SkeletonAttr::from(&body),
             );
+            // Apply different animations to the character depending occasionally
+            let tgt_skeleton = if !is_edit && (scene_data.time + 113.0) % 80.0 < 10.0 {
+                anim::character::SitAnimation::update_skeleton(
+                    &tgt_skeleton,
+                    (
+                        active_tool_kind,
+                        second_tool_kind,
+                        Dir::forward().to_vec(),
+                        Dir::forward(),
+                        scene_data.time as f32,
+                    ),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            } else if (scene_data.time + 133.0) % 70.0 < 3.0 {
+                use common::{
+                    comp::item::ConsumableKind,
+                    states::{use_item::ItemUseKind, utils::StageSection},
+                };
+                anim::character::ConsumeAnimation::update_skeleton(
+                    &tgt_skeleton,
+                    (
+                        scene_data.time as f32,
+                        Some(StageSection::Action),
+                        Some(ItemUseKind::Consumable(ConsumableKind::Food)),
+                    ),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            } else if (scene_data.time + 173.0) % 60.0 < 6.0 {
+                anim::character::DanceAnimation::update_skeleton(
+                    &tgt_skeleton,
+                    (active_tool_kind, second_tool_kind, scene_data.time as f32),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            } else {
+                anim::character::StandAnimation::update_skeleton(
+                    &tgt_skeleton,
+                    (
+                        active_tool_kind,
+                        second_tool_kind,
+                        hands,
+                        Dir::forward().to_vec(),
+                        Dir::forward().to_vec(),
+                        Dir::forward(),
+                        scene_data.time as f32,
+                        Vec3::zero(),
+                    ),
+                    scene_data.time as f32,
+                    &mut 0.0,
+                    &anim::character::SkeletonAttr::from(&body),
+                )
+            };
             let dt_lerp = (scene_data.delta_time * 15.0).min(1.0);
             char_state.skeleton = Lerp::lerp(&char_state.skeleton, &tgt_skeleton, dt_lerp);
             char_state.skeleton.holding_lantern = lantern_light.is_some();
@@ -356,7 +425,9 @@ impl Scene {
                 scene_data.tick,
                 CameraMode::default(),
                 None,
-                scene_data.slow_job_pool,
+                // Don't perform meshing work on a job pool since we need the model to update
+                // immediately
+                None,
                 None,
             );
             char_state.update(

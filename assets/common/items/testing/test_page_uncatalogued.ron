@@ -1,0 +1,14 @@
+// Test fixture: a page whose spell id has NO SpellCompendium entry at all --
+// exercises the "always copyable, earns no mastery" rule for bespoke content
+// with no catalogue entry.
+ItemDef(
+    legacy_name: "Test Page (uncatalogued)",
+    legacy_description: "Transcription test fixture.",
+    kind: SpellGroup(
+        spells: [
+            "spells.testing.not_in_any_compendium",
+        ],
+    ),
+    quality: Common,
+    tags: [],
+)

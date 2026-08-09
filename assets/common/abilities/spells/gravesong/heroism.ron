@@ -1,0 +1,95 @@
+// Heroism: a touch-range spell granting a willing ally BOTH a temp-HP pool
+// and immunity to fear in one cast. `SelfBuff` cannot deliver this -- that
+// ability variant always lands its buffs on the caster (`entity: data.entity`
+// in `common/src/states/self_buff.rs`), never on a touched ally. The
+// established mechanism for "touch spell affecting an ally" in this engine is
+// `attack_effect_target: Some(InGroup)` on a near-inert melee hit (see
+// `lesser_restoration.ron`/`greater_restoration.ron`), but a single
+// `melee_constructor` only exposes one redirectable `attack_effect` slot, so
+// two ally-targeted buffs need two strikes. `ComboMelee2` with two quick,
+// identical-range strikes is the smallest RON-only way to do that: strike one
+// lands `Shielded` (the temp-HP absorb pool), strike two lands `Fearless`
+// (fear immunity). Both use `damage: 1` (inert, matching the
+// lesser/greater_restoration precedent) so the touch always registers as a
+// hit without meaningfully harming the ally.
+//
+// `auto_progress: true` is load-bearing, not cosmetic: `ComboMelee2`
+// defaults to requiring the input to still be held when strike 1's swing
+// finishes (`common/src/states/combo_melee2.rs`) to advance to strike 2 --
+// the "hold to combo" mechanic every real weapon combo wants. A one-tap cast
+// (the natural way to use a support spell) would otherwise land `Shielded`
+// and silently never reach `Fearless`. `auto_progress` skips that
+// hold-check so both strikes always fire from a single tap.
+//
+// 🔴 `AttackSource(Melee)`, not `AnyDamage`, gates each `attack_effect`:
+// `Stab`'s own `AttackDamage` entry is hardcoded to `GroupTarget::OutOfGroup`
+// regardless of `attack_effect_target` (`common/src/comp/melee.rs`), so an
+// `InGroup` (ally) hit always accumulates zero damage against this attack --
+// `AnyDamage` (`damage > 0.0`) can never be true here and would silently
+// swallow both buffs. `AttackSource(Melee)` doesn't depend on damage at all,
+// same "trivially true for this delivery" idiom `septic_shot.ron` already
+// uses with `AttackSource(Projectile)`.
+//
+// 🟡 Known residual limitation, not fixed here: each strike independently
+// re-resolves its own `InGroup` melee cone (`attack_options`), so nothing
+// guarantees strike 2 lands on the SAME ally strike 1 did if more than one
+// ally is in melee range when this is cast (e.g. a second ally steps into
+// range between the two strikes, ~0.7s apart). Low-probability in practice
+// (single touch-range cast, sub-second window) but a real gap -- a proper
+// fix needs a primitive that grants >1 buff from one melee hit (an
+// `attack_effect: Vec<...>` instead of a single slot), not built tonight.
+ComboMelee2(
+    strikes: [
+        (
+            melee_constructor: (
+                kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+                range: 3.0,
+                angle: 20.0,
+                attack_effect: Some((
+                    Buff((
+                        kind: Shielded,
+                        dur_secs: 60.0,
+                        strength: Value(15.0),
+                        chance: 1.0,
+                    )),
+                    AttackSource(Melee),
+                )),
+                attack_effect_target: Some(InGroup),
+            ),
+            buildup_duration: 0.4,
+            swing_duration: 0.1,
+            hit_timing: 0.5,
+            recover_duration: 0.2,
+        ),
+        (
+            melee_constructor: (
+                kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+                range: 3.0,
+                angle: 20.0,
+                attack_effect: Some((
+                    Buff((
+                        kind: Fearless,
+                        dur_secs: 60.0,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                    AttackSource(Melee),
+                )),
+                attack_effect_target: Some(InGroup),
+            ),
+            buildup_duration: 0.1,
+            swing_duration: 0.1,
+            hit_timing: 0.5,
+            recover_duration: 0.4,
+        ),
+    ],
+    energy_cost_per_strike: 20,
+    auto_progress: true,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Divine),
+        // level 1 spell -> min_level 6, same `level * 6` convention every
+        // other shipped spell follows (see see_invisibility.ron).
+        requirements: (min_level: Some(6)),
+    ),
+)

@@ -1,0 +1,28 @@
+ItemDef(
+    legacy_name: "Primordial Focus",
+    legacy_description: "A smooth river stone worn as a channel for wild spirits.",
+    kind: Tool((
+        kind: Focus,
+        hands: Two,
+        stats: (
+            equip_time_secs: 0.4,
+            power: 0.55,
+            effect_power: 1.0,
+            speed: 0.75,
+            range: 1.0,
+            energy_efficiency: 0.75,
+            buff_strength: 0.75,
+        ),
+    )),
+    quality: Low,
+    tags: [],
+    ability_spec: None,
+    // Focus: the explicit class whitelist below is the ONLY thing
+    // restricting who may wield it. The implement's primordial flavor is not
+    // a rule -- classes are not bound to magic sources.
+    requirements: Some((
+        classes: Some([Druid, Ranger]),
+        min_level: None,
+        races: None,
+    )),
+)

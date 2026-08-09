@@ -111,12 +111,21 @@ pub enum ClientGeneral {
         force_counter: u64,
     },
     UnlockSkill(Skill),
+    /// Intent to transcribe the named page (an item-definition id) from the
+    /// sender's own equipped Tome into their spellbook. Every gate and the
+    /// cost deduction are re-checked authoritatively server-side.
+    TranscribeSpell(String),
+    SetFutureLevelsToSecondary(bool),
     RequestSiteInfo(SiteId),
     UpdateMapMarker(comp::MapMarkerChange),
     SetBattleMode(BattleMode),
 
     SpectatePosition(Vec3<f32>),
     SpectateEntity(Option<common::uid::Uid>),
+    /// Voluntarily ends the sender's own active remote-sensing link before its
+    /// duration expires, returning them to their body. Names no target
+    /// entity — it only ever acts on the sender's own buff/component state.
+    CancelRemoteSense,
 
     //Only in Game, via terrain stream
     TerrainChunkRequest {
@@ -174,11 +183,14 @@ impl ClientMsg {
                         | ClientGeneral::PlayerPhysics { .. }
                         | ClientGeneral::TerrainChunkRequest { .. }
                         | ClientGeneral::UnlockSkill(_)
+                        | ClientGeneral::TranscribeSpell(_)
+                        | ClientGeneral::SetFutureLevelsToSecondary(_)
                         | ClientGeneral::RequestSiteInfo(_)
                         | ClientGeneral::RequestPlayerPhysics { .. }
                         | ClientGeneral::RequestLossyTerrainCompression { .. }
                         | ClientGeneral::UpdateMapMarker(_)
-                        | ClientGeneral::SetBattleMode(_) => {
+                        | ClientGeneral::SetBattleMode(_)
+                        | ClientGeneral::CancelRemoteSense => {
                             c_type == ClientType::Game && presence.is_some()
                         },
                         ClientGeneral::SpectatePosition(_) | ClientGeneral::SpectateEntity(_) => {

@@ -16,7 +16,7 @@ use crate::{
     mounting::VolumePos,
     outcome::Outcome,
     resources::{BattleMode, Secs},
-    rtsim::{self, RtSimEntity},
+    rtsim,
     states::basic_summon::BeamPillarIndicatorSpecifier,
     terrain::SpriteKind,
     trade::{TradeAction, TradeId},
@@ -67,12 +67,36 @@ pub struct NpcBuilder {
     pub anchor: Option<comp::Anchor>,
     pub loot: LootSpec<String>,
     pub pets: Vec<(NpcBuilder, Vec3<f32>)>,
-    pub rtsim_entity: Option<RtSimEntity>,
+    pub rtsim_actor: Option<rtsim::ActorId>,
     pub projectile: Option<comp::Projectile>,
     pub heads: Option<comp::body::parts::Heads>,
     pub death_effects: Option<DeathEffects>,
     pub rider_effects: Option<RiderEffects>,
     pub rider: Option<Box<Self>>,
+    /// If true, `handle_create_npc` overrides `body.collider()` with
+    /// `Collider::Point` regardless of body shape. For a summon that must
+    /// exist as a real, positioned, server-authoritative entity (so world
+    /// data streams correctly around it) without ever being a physical
+    /// obstacle — e.g. a remote-sensing spell's sensor, or an illusory
+    /// double. Never an absent `Collider`: that drops `PhysicsState`
+    /// entirely, which silently drops the entity from the figure renderer.
+    pub incorporeal: bool,
+    /// If true, `handle_create_npc` inserts `comp::PhantomIllusion` — a
+    /// shared-illusion decoy that the attack path (`combat::apply_attack`)
+    /// dispels on the first single-target hostile hit instead of resolving
+    /// normal damage against it.
+    pub phantom_illusion: bool,
+    /// Overrides the shipped `duration`-driven `Projectile` expiry timer
+    /// (built from `SummonInfo::Npc::duration` above `create_npc`'s call
+    /// site) with a `comp::Object::DeleteAfter { spawned_at: <server Time>,
+    /// timeout: <this> }` instead -- `handle_create_npc` reads the server's
+    /// authoritative `Time` itself rather than accepting a caller-supplied
+    /// `Object`, so this field can only ever express `DeleteAfter`. Needs
+    /// neither `Collider` nor `PhysicsState` (unlike the `Projectile` timer)
+    /// and, on the client, blinks the entity out over its final 10s for free
+    /// (`voxygen`'s `should_flicker`) — the "the illusion is fading" tell a
+    /// phantasm wants and a plain `Projectile` timer does not give.
+    pub delete_after: Option<Duration>,
 }
 
 impl NpcBuilder {
@@ -90,13 +114,16 @@ impl NpcBuilder {
             scale: comp::Scale(1.0),
             anchor: None,
             loot: LootSpec::Nothing,
-            rtsim_entity: None,
+            rtsim_actor: None,
             projectile: None,
             pets: Vec::new(),
             heads: None,
             death_effects: None,
             rider_effects: None,
             rider: None,
+            incorporeal: false,
+            phantom_illusion: false,
+            delete_after: None,
         }
     }
 
@@ -136,8 +163,8 @@ impl NpcBuilder {
         self
     }
 
-    pub fn with_rtsim(mut self, rtsim: RtSimEntity) -> Self {
-        self.rtsim_entity = Some(rtsim);
+    pub fn with_rtsim(mut self, actor: rtsim::ActorId) -> Self {
+        self.rtsim_actor = Some(actor);
         self
     }
 
@@ -180,6 +207,21 @@ impl NpcBuilder {
         self.rider_effects = rider_effects;
         self
     }
+
+    pub fn with_incorporeal(mut self, incorporeal: bool) -> Self {
+        self.incorporeal = incorporeal;
+        self
+    }
+
+    pub fn with_phantom_illusion(mut self, phantom_illusion: bool) -> Self {
+        self.phantom_illusion = phantom_illusion;
+        self
+    }
+
+    pub fn with_delete_after(mut self, delete_after: impl Into<Option<Duration>>) -> Self {
+        self.delete_after = delete_after.into();
+        self
+    }
 }
 
 // These events are generated only by server systems
@@ -204,7 +246,7 @@ pub struct CreateShipEvent {
     pub pos: Pos,
     pub ori: Ori,
     pub ship: comp::ship::Body,
-    pub rtsim_entity: Option<RtSimEntity>,
+    pub rtsim_actor: Option<rtsim::ActorId>,
     pub driver: Option<NpcBuilder>,
 }
 
@@ -224,6 +266,22 @@ pub struct CreateObjectEvent {
     pub item: Option<comp::PickupItem>,
     pub light_emitter: Option<comp::LightEmitter>,
     pub stats: Option<comp::Stats>,
+}
+
+/// Spawns a `floating_disk` prop: a `Body::Ship(ship::Body::Volume)` entity
+/// with a procedurally-built flat-disk collider, tracked and driven by an
+/// `Object::FloatingDisk` each tick. Distinct from `CreateObjectEvent`
+/// (cannot express a ship body) and `CreateShipEvent` (builds its collider
+/// via `ship::Body::make_collider`, which yields random rubble for
+/// `Body::Volume`).
+pub struct CreateFloatingDiskEvent {
+    pub pos: Pos,
+    pub owner: Uid,
+    pub radius: f32,
+    pub timeout: Duration,
+    pub follow_distance: f32,
+    pub hover_height: f32,
+    pub max_owner_distance: f32,
 }
 
 /// Inserts default components for a character when loading into the game.
@@ -250,6 +308,8 @@ pub struct UpdateCharacterDataEvent {
         Option<comp::MapMarker>,
         comp::Ethos,
         comp::Background,
+        comp::TriggerSlots,
+        comp::SpellMastery,
     ),
     pub metadata: UpdateCharacterMetadata,
 }
@@ -382,12 +442,61 @@ pub struct PoiseChangeEvent {
 
 pub struct DeleteEvent(pub EcsEntity);
 
+/// A single-target hostile attack resolved against a `comp::PhantomIllusion`
+/// entity. Raised by `combat::Attack::apply_attack` instead of any damage or
+/// other combat effect (a phantasm has no `Health`, so no `HealthChangeEvent`
+/// would otherwise exist to react to). `server/src/sys/phantasm.rs` consumes
+/// this to despawn the entity and announce the dissipate VFX.
+pub struct DispelIllusionEvent(pub EcsEntity);
+
 pub struct DestroyEvent {
     pub entity: EcsEntity,
     pub cause: comp::HealthChange,
+    /// Why the entity is being removed, and what fraction of the normal
+    /// rewards that removal awards. `RemovalInfo::killed()` for every
+    /// ordinary death.
+    pub removal: crate::combat::RemovalInfo,
+}
+
+/// Intent to banish `entity`, raised by an aura carrying a
+/// `BanishmentEffect`. Only the two cheap gates — creature kind and "not
+/// already banished" — have been applied at this point; the resisted roll and
+/// everything authoritative happen in the server-side handler, the same split
+/// charm resistance already uses.
+pub struct BanishEvent {
+    pub entity: EcsEntity,
+    /// The caster, for the saving throw's in-combat penalty and for reward
+    /// attribution.
+    pub banished_by: Uid,
+    pub min_return_hours: f64,
+    pub max_return_hours: f64,
+    pub reward_fraction: f32,
+}
+
+/// Intent to transcribe a spell out of `page` -- an `ItemKind::SpellGroup`
+/// item listed by an equipped item's `spell_pages` (a Tome, in the shipped
+/// scope) -- permanently into `entity`'s spellbook. Every gate (class,
+/// possession, the per-page mastery tier check) and the cost deduction are
+/// authoritative in the server-side handler; nothing here is trusted.
+pub struct TranscribeSpellEvent {
+    pub entity: EcsEntity,
+    /// Item-definition id of the page to transcribe, as listed in the
+    /// bearer's equipped Tome's `spell_pages`.
+    pub page: String,
 }
 
 pub struct InventoryManipEvent(pub EcsEntity, pub comp::InventoryManip);
+
+/// A ranged, keyless request to unlock a keyhole/lock sprite at `pos` — e.g.
+/// the `knock` spell's effect. Unlike `InventoryManip::Collect`, this never
+/// checks for (or consumes) a key item, and is subject to the target sprite's
+/// `no_knock` `SpriteCfg` flag: progression-gated keyholes can opt out of
+/// remote/keyless opening while still opening normally for a character that
+/// walks up with the matching key.
+pub struct RemoteUnlockEvent {
+    pub entity: EcsEntity,
+    pub pos: Vec3<i32>,
+}
 
 pub struct GroupManipEvent(pub EcsEntity, pub comp::GroupManip);
 
@@ -478,6 +587,60 @@ pub struct AuraEvent {
 pub struct BuffEvent {
     pub entity: EcsEntity,
     pub buff_change: comp::BuffChange,
+}
+
+/// Intent to resolve a `BuffKind::RemoteSensing` cast into a written
+/// `RemoteSense` link. Emitted once, at cast time, by `self_buff.rs`'s
+/// cast-fire branch when the buff being applied is `RemoteSensing`.
+/// `Buff`/`BuffData` never carry a `Uid` (broadcasting "who is watching
+/// what" over `SyncFrom::AnyEntity` would leak it to every nearby player), so
+/// the cast's target has nowhere else to survive until the server-side
+/// handler can validate it and write the owner-private `RemoteSense`
+/// component. Carries the raw, unvalidated cast-time target/position; the
+/// per-anchor-kind predicate (is it a beast, is it owned/charmed, is it
+/// alive, is it in range, ...) is authoritative only in the server-side
+/// handler, never here.
+pub struct ResolveRemoteSenseEvent {
+    pub entity: EcsEntity,
+    pub target_entity: Option<Uid>,
+    pub target_pos: Option<Vec3<f32>>,
+    pub anchor_kind: comp::buff::SenseAnchorKind,
+    pub free_look: bool,
+    pub piloted: bool,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::spawn_range`
+    /// (RON-authored, per-ability) -- see that field's own doc comment.
+    /// Consumed only by `server/src/events/remote_sense.rs`'s
+    /// `resolve_piloted`; meaningless for the `Existing`/`Sensor` anchor
+    /// kinds.
+    pub spawn_range: f32,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::flight_speed`.
+    /// Written onto `comp::RemoteSense::flight_speed` by every `resolve_*`
+    /// handler so `common/systems/src/pilot.rs` can read it back every tick
+    /// off the caster's own component; meaningless for the
+    /// `Existing`/`Sensor` anchor kinds.
+    pub flight_speed: f32,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::behind_dist`.
+    /// Consumed only by `server/src/events/remote_sense.rs`'s
+    /// `resolve_tracking`; meaningless for every other anchor kind.
+    pub behind_dist: f32,
+    /// Forwarded from `comp::buff::MiscBuffData::RemoteSense::above_dist`.
+    /// Same consumption/scope as `behind_dist` above.
+    pub above_dist: f32,
+}
+
+/// Intent to resolve a `BuffKind::Identifying` cast into a written
+/// `IdentifyLinks` entry (`server/src/sys/detection.rs`). Emitted once, at
+/// cast time, by `self_buff.rs`'s cast-fire branch when the buff being
+/// applied is `Identifying` -- same reasoning as `ResolveRemoteSenseEvent`
+/// above: `Buff`/`BuffData` never carry a `Uid`, so the cast's target has
+/// nowhere else to survive until the server-side handler can validate it.
+/// Carries the raw, unvalidated cast-time target; every predicate that
+/// decides whether the cast actually takes (is the target in range, is it an
+/// item or a creature, is it protected by `nondetection`, ...) is
+/// authoritative only in `server/src/events/identify.rs`, never here.
+pub struct ResolveIdentifyEvent {
+    pub entity: EcsEntity,
+    pub target_entity: Option<Uid>,
 }
 
 pub struct EnergyChangeEvent {
@@ -699,7 +862,7 @@ pub trait EmitExt<E> {
 /// # Example:
 /// ```
 /// mod some_mod_is_necessary_for_the_test {
-///     use veloren_common::event_emitters;
+///     use xindeler_common::event_emitters;
 ///     pub struct Foo;
 ///     pub struct Bar;
 ///     pub struct Baz;

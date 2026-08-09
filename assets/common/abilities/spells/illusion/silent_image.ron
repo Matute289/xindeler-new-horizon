@@ -1,0 +1,28 @@
+// Silent Image. L1: a purely visual mirage of an object, creature, or scene,
+// silent and inspectable up close. Straightforward phantasm -- see
+// `common/src/comp/phantom_illusion.rs` for the flag recipe this follows.
+BasicSummon(
+    buildup_duration: 0.75,
+    cast_duration: 0.25,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: Object(Scarecrow),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        // Matches the compendium entry's Concentration(60) cap.
+        duration: Some((
+            secs: 60,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

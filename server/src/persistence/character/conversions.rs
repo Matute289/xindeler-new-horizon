@@ -11,13 +11,16 @@ use common::{
     character::CharacterId,
     comp::{
         ActiveAbilities, Body as CompBody, Content, Hardcore, Inventory, MapMarker, Stats,
-        Waypoint, body,
+        Waypoint,
+        ability::AbilityPool,
+        body,
         inventory::{
             item::{Item as VelorenItem, MaterialStatManifest, tool::AbilityMap},
             loadout::{Loadout, LoadoutError},
             loadout_builder::LoadoutBuilder,
             recipe_book::RecipeBook,
             slot::InvSlotId,
+            spell_book::SpellBook,
         },
         item,
         skillset::{self, SkillGroupKind, SkillSet, skills::Skill},
@@ -59,6 +62,7 @@ pub fn convert_items_to_database_items(
     inventory_container_id: EntityId,
     overflow_items_container_id: EntityId,
     recipe_book_container_id: EntityId,
+    spell_book_container_id: EntityId,
     next_id: &mut i64,
 ) -> Vec<ItemModelPair> {
     let loadout = inventory
@@ -83,6 +87,20 @@ pub fn convert_items_to_database_items(
                 recipe_book_container_id,
             )
         });
+
+    // Xindeler: learned spell groups, stored exactly like recipe groups —
+    // position is the index within the book, which is stable for a given
+    // load/save cycle and re-derived on the next one.
+    let spell_book = inventory
+        .persistence_spells_iter_with_index()
+        .map(|(i, item)| {
+            (
+                serde_json::to_string(&i)
+                    .expect("failed to serialize index of spell from spell book"),
+                Some(item),
+                spell_book_container_id,
+            )
+        });
     // Inventory slots.
     let inventory = inventory.slots_with_id().map(|(pos, item)| {
         (
@@ -98,6 +116,7 @@ pub fn convert_items_to_database_items(
         .chain(loadout)
         .chain(overflow_items)
         .chain(recipe_book)
+        .chain(spell_book)
         .collect();
     let mut upserts = Vec::new();
     let mut depth = HashMap::new();
@@ -105,6 +124,7 @@ pub fn convert_items_to_database_items(
     depth.insert(loadout_container_id, 0);
     depth.insert(overflow_items_container_id, 0);
     depth.insert(recipe_book_container_id, 0);
+    depth.insert(spell_book_container_id, 0);
     while let Some((position, item, parent_container_item_id)) = bfs_queue.pop_front() {
         // Construct new items.
         if let Some(item) = item {
@@ -382,6 +402,7 @@ pub fn convert_inventory_from_database_items(
     overflow_items_container_id: i64,
     overflow_items: &[Item],
     recipe_book_items: &[Item],
+    spell_book_items: &[Item],
 ) -> Result<Inventory, PersistenceError> {
     // Loadout items must be loaded before inventory items since loadout items
     // provide inventory slots. Since items stored inside loadout items actually
@@ -395,8 +416,15 @@ pub fn convert_inventory_from_database_items(
     let (recipe_book, duplicate_recipes) =
         convert_recipe_book_from_database_items(recipe_book_items)?;
     overflow_items.extend(duplicate_recipes);
+    // Xindeler: duplicate spell groups are dropped rather than pushed to
+    // overflow. A spell page is knowledge, not stock: a second copy grants
+    // nothing, and handing the player a stray item out of their spellbook
+    // would be more confusing than silently collapsing it.
+    let spell_book = convert_spell_book_from_database_items(spell_book_items)?;
 
-    let mut inventory = Inventory::with_loadout_humanoid(loadout).with_recipe_book(recipe_book);
+    let mut inventory = Inventory::with_loadout_humanoid(loadout)
+        .with_recipe_book(recipe_book)
+        .with_spell_book(spell_book);
     let mut item_indices = HashMap::new();
 
     let mut failed_inserts = HashMap::new();
@@ -729,6 +757,7 @@ pub fn convert_body_from_database(
                 hair_color: json_model.hair_color,
                 skin: json_model.skin,
                 eye_color: json_model.eye_color,
+                height_scale: json_model.height_scale,
             })
         },
         "quadruped_low" => {
@@ -782,12 +811,42 @@ pub fn convert_hardcore_to_database(hardcore: Option<Hardcore>) -> i64 {
     if hardcore.is_some() { 1 } else { 0 }
 }
 
-pub fn convert_class_from_database(class: &str) -> common::comp::CharacterClass {
-    common::comp::CharacterClass(json_models::db_string_to_class(class))
+pub fn convert_class_from_database(
+    class: &str,
+    secondary_class: Option<&str>,
+    secondary_class_level: i64,
+    secondary_class_future_levels: i64,
+) -> common::comp::CharacterClass {
+    let secondary = secondary_class.map(json_models::db_string_to_class);
+    common::comp::CharacterClass {
+        primary: json_models::db_string_to_class(class),
+        secondary,
+        // Ignore a stale level if there is no secondary class, same
+        // defensive rule `CharacterClass::primary_level` itself applies.
+        secondary_level: if secondary.is_some() {
+            secondary_class_level.clamp(0, u16::MAX as i64) as u16
+        } else {
+            0
+        },
+        future_levels_to_secondary: secondary.is_some() && secondary_class_future_levels != 0,
+    }
 }
 
 pub fn convert_class_to_database(class: common::comp::CharacterClass) -> String {
-    json_models::class_to_db_string(class.0)
+    json_models::class_to_db_string(class.primary)
+}
+
+/// `None` -> single-class (`NULL` in the `secondary_class` column).
+pub fn convert_secondary_class_to_database(class: common::comp::CharacterClass) -> Option<String> {
+    class.secondary.map(json_models::class_to_db_string)
+}
+
+pub fn convert_secondary_class_level_to_database(class: common::comp::CharacterClass) -> i64 {
+    i64::from(class.secondary_level)
+}
+
+pub fn convert_future_levels_to_secondary_to_database(class: common::comp::CharacterClass) -> i64 {
+    i64::from(class.future_levels_to_secondary)
 }
 
 /// BL-31: `background` NULL or unrecognized -> `Background(None)`
@@ -861,6 +920,18 @@ fn convert_skill_groups_from_database(
         let skill_group_exp = skill_group.earned_exp.clamp(0, i64::from(u32::MAX)) as u32;
         new_skill_group.add_experience(skill_group_exp);
 
+        // Skill points granted outside the exp economy (e.g. level-milestone
+        // feats) are persisted separately from earned_exp, so restore them on
+        // top of the exp-reconstructed amounts here.
+        let direct_earned_sp = skill_group.direct_earned_sp.clamp(0, i64::from(u16::MAX)) as u16;
+        let direct_available_sp = skill_group
+            .direct_available_sp
+            .clamp(0, i64::from(u16::MAX)) as u16;
+        new_skill_group.earned_sp = new_skill_group.earned_sp.saturating_add(direct_earned_sp);
+        new_skill_group.available_sp = new_skill_group
+            .available_sp
+            .saturating_add(direct_available_sp);
+
         use skillset::SkillsPersistenceError;
 
         let skills_result = if skill_group.spent_exp != i64::from(new_skill_group.spent_exp()) {
@@ -902,33 +973,64 @@ pub fn convert_skill_groups_to_database<'a, I: Iterator<Item = &'a skillset::Ski
     let skill_group_hashes = &skillset::SKILL_GROUP_HASHES;
     skill_groups
         .into_iter()
-        .map(|sg| SkillGroup {
-            entity_id: entity_id.0,
-            skill_group_kind: json_models::skill_group_to_db_string(sg.skill_group_kind),
-            earned_exp: i64::from(sg.earned_exp),
-            spent_exp: i64::from(sg.spent_exp()),
-            // If fails to convert, just forces a respec on next login
-            skills: serde_json::to_string(&sg.ordered_skills).unwrap_or_else(|_| "".to_string()),
-            hash_val: skill_group_hashes
-                .get(&sg.skill_group_kind)
-                .cloned()
-                .unwrap_or_default(),
+        .map(|sg| {
+            // earned_sp/available_sp are a mix of exp-earned points and points
+            // granted directly (bypassing the exp economy). Replaying the same
+            // earned_exp through a fresh skill group isolates the exp-earned
+            // portion; whatever the live skill group has beyond that is the
+            // directly-granted portion, persisted in its own columns.
+            let mut exp_only = skillset::SkillGroup {
+                skill_group_kind: sg.skill_group_kind,
+                available_exp: 0,
+                earned_exp: 0,
+                available_sp: 0,
+                earned_sp: 0,
+                ordered_skills: Vec::new(),
+            };
+            exp_only.add_experience(sg.earned_exp);
+            let direct_earned_sp = sg.earned_sp.saturating_sub(exp_only.earned_sp);
+            let direct_available_sp = sg.available_sp.saturating_sub(exp_only.available_sp);
+
+            SkillGroup {
+                entity_id: entity_id.0,
+                skill_group_kind: json_models::skill_group_to_db_string(sg.skill_group_kind),
+                earned_exp: i64::from(sg.earned_exp),
+                spent_exp: i64::from(sg.spent_exp()),
+                // If fails to convert, just forces a respec on next login
+                skills: serde_json::to_string(&sg.ordered_skills)
+                    .unwrap_or_else(|_| "".to_string()),
+                hash_val: skill_group_hashes
+                    .get(&sg.skill_group_kind)
+                    .cloned()
+                    .unwrap_or_default(),
+                direct_earned_sp: i64::from(direct_earned_sp),
+                direct_available_sp: i64::from(direct_available_sp),
+            }
         })
         .collect()
 }
 
+/// Xindeler: `ability_pool` resolves `AuxiliaryAbility::Innate` slots to and
+/// from their stable pool key rather than their position — see
+/// `json_models::INNATE_KEY_PREFIX` for why. Callers that already hold the
+/// character's live pool should pass it; the rest rebuild it from the body and
+/// class they have in hand.
 pub fn convert_active_abilities_to_database(
     entity_id: CharacterId,
     active_abilities: &ActiveAbilities,
+    ability_pool: &AbilityPool,
 ) -> AbilitySets {
-    let ability_sets = json_models::active_abilities_to_db_model(active_abilities);
+    let ability_sets = json_models::active_abilities_to_db_model(active_abilities, ability_pool);
     AbilitySets {
         entity_id: entity_id.0,
         ability_sets: serde_json::to_string(&ability_sets).unwrap_or_default(),
     }
 }
 
-pub fn convert_active_abilities_from_database(ability_sets: &AbilitySets) -> ActiveAbilities {
+pub fn convert_active_abilities_from_database(
+    ability_sets: &AbilitySets,
+    ability_pool: &AbilityPool,
+) -> ActiveAbilities {
     let ability_sets = serde_json::from_str::<Vec<DatabaseAbilitySet>>(&ability_sets.ability_sets)
         .unwrap_or_else(|err| {
             common_base::dev_panic!(format!(
@@ -937,7 +1039,7 @@ pub fn convert_active_abilities_from_database(ability_sets: &AbilitySets) -> Act
             ));
             Vec::new()
         });
-    json_models::active_abilities_from_db_model(ability_sets)
+    json_models::active_abilities_from_db_model(ability_sets, ability_pool)
 }
 
 /// If ok, returns a tuple of the constructed `RecipeBook` and a `Vec` of
@@ -980,6 +1082,40 @@ pub fn convert_recipe_book_from_database_items(
     let recipe_book = RecipeBook::recipe_book_from_persistence(unique_groups);
 
     Ok((recipe_book, duplicate_recipes))
+}
+
+/// Xindeler: rebuilds the `SpellBook` from the rows of the `spell_book`
+/// pseudo-container.
+///
+/// Unlike its recipe-book twin this returns no leftovers: duplicate spell
+/// groups (which only a corrupted save or a bug could produce) are dropped.
+pub fn convert_spell_book_from_database_items(
+    database_items: &[Item],
+) -> Result<SpellBook, PersistenceError> {
+    let mut spell_groups: Vec<common::comp::Item> = Vec::with_capacity(database_items.len());
+    let mut seen: hashbrown::HashSet<&str> = hashbrown::HashSet::new();
+
+    for db_item in database_items.iter() {
+        if !seen.insert(db_item.item_definition_id.as_str()) {
+            warn!(
+                "Dropping duplicate spell group {} while loading a spell book",
+                db_item.item_definition_id
+            );
+            continue;
+        }
+
+        let item = get_item_from_asset(db_item.item_definition_id.as_str())?;
+
+        // NOTE: item id is currently *unique*, so we can store the ID safely.
+        let comp = item.get_item_id_for_database();
+        comp.store(Some(NonZeroU64::try_from(db_item.item_id as u64).map_err(
+            |_| PersistenceError::ConversionError("Item with zero item_id".to_owned()),
+        )?));
+
+        spell_groups.push(item);
+    }
+
+    Ok(SpellBook::spell_book_from_persistence(spell_groups))
 }
 
 #[cfg(test)]
@@ -1035,5 +1171,114 @@ mod tests {
             convert_background_from_database(Some("custom")),
             Background(None)
         );
+    }
+
+    #[test]
+    fn class_persistence_round_trips_single_and_multiclass() {
+        use common::comp::class::ClassKind;
+
+        // Single-class: NULL secondary_class column -> None, byte-identical
+        // to today's single-class behaviour. A stale non-zero level/future-
+        // levels column (from a bug, or a class that got un-set some other
+        // way) must be ignored rather than resurrected as a phantom
+        // secondary state.
+        let single = convert_class_from_database("Warrior", None, 20, 1);
+        assert_eq!(
+            single,
+            common::comp::CharacterClass::single(ClassKind::Warrior)
+        );
+        assert_eq!(convert_class_to_database(single), "Warrior");
+        assert_eq!(convert_secondary_class_to_database(single), None);
+        assert_eq!(convert_secondary_class_level_to_database(single), 0);
+        assert_eq!(convert_future_levels_to_secondary_to_database(single), 0);
+
+        // Multiclass: all four columns populated round-trip through both
+        // directions.
+        let multi = common::comp::CharacterClass {
+            primary: ClassKind::Warrior,
+            secondary: Some(ClassKind::Warlock),
+            secondary_level: 20,
+            future_levels_to_secondary: true,
+        };
+        assert_eq!(
+            convert_class_from_database("Warrior", Some("Warlock"), 20, 1),
+            multi
+        );
+        assert_eq!(convert_class_to_database(multi), "Warrior");
+        assert_eq!(
+            convert_secondary_class_to_database(multi),
+            Some("Warlock".to_string())
+        );
+        assert_eq!(convert_secondary_class_level_to_database(multi), 20);
+        assert_eq!(convert_future_levels_to_secondary_to_database(multi), 1);
+    }
+
+    #[test]
+    fn direct_skill_points_persist_across_save_and_load() {
+        // Points granted outside the exp economy (e.g. level-milestone feats)
+        // leave earned_exp/available_exp untouched, so they can't be
+        // reconstructed from exp alone on load — they need their own
+        // persisted columns. Simulate 3 granted, 1 already spent.
+        let feats = skillset::SkillGroup {
+            skill_group_kind: SkillGroupKind::Feats,
+            available_exp: 0,
+            earned_exp: 0,
+            earned_sp: 3,
+            available_sp: 1,
+            ordered_skills: Vec::new(),
+        };
+
+        let db_rows = convert_skill_groups_to_database(CharacterId(1), std::iter::once(&feats));
+        assert_eq!(db_rows.len(), 1);
+        assert_eq!(db_rows[0].earned_exp, 0);
+        assert_eq!(
+            db_rows[0].direct_earned_sp, 3,
+            "all 3 grants must be captured since none are backed by earned_exp"
+        );
+        assert_eq!(db_rows[0].direct_available_sp, 1);
+
+        let (restored, _) = convert_skill_groups_from_database(&db_rows);
+        let restored_feats = restored
+            .get(&SkillGroupKind::Feats)
+            .expect("Feats group must persist");
+        assert_eq!(
+            restored_feats.earned_sp, 3,
+            "milestone-granted points must survive a save/load round-trip"
+        );
+        assert_eq!(restored_feats.available_sp, 1);
+    }
+
+    #[test]
+    fn direct_skill_points_do_not_duplicate_exp_earned_points() {
+        // A group that mixes real exp-earned points with directly-granted
+        // ones must not double-count the exp-earned portion on reload.
+        let mut general = skillset::SkillGroup {
+            skill_group_kind: SkillGroupKind::General,
+            available_exp: 0,
+            earned_exp: 0,
+            earned_sp: 0,
+            available_sp: 0,
+            ordered_skills: Vec::new(),
+        };
+        // Earn 2 points the normal way, then grant 1 more directly on top.
+        general.add_experience(1_000_000);
+        let exp_earned_sp = general.earned_sp;
+        assert!(
+            exp_earned_sp > 0,
+            "test setup must actually earn sp from exp"
+        );
+        general.earned_sp += 1;
+        general.available_sp += 1;
+
+        let db_rows = convert_skill_groups_to_database(CharacterId(1), std::iter::once(&general));
+        assert_eq!(db_rows[0].direct_earned_sp, 1);
+        assert_eq!(db_rows[0].direct_available_sp, 1);
+
+        let (restored, _) = convert_skill_groups_from_database(&db_rows);
+        let restored_general = restored
+            .get(&SkillGroupKind::General)
+            .expect("General group must persist");
+        assert_eq!(restored_general.earned_sp, exp_earned_sp + 1);
+        assert_eq!(restored_general.available_sp, exp_earned_sp + 1);
     }
 }

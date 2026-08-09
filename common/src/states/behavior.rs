@@ -1,18 +1,19 @@
 use crate::{
     comp::{
         self, AbilityCooldowns, AbilityPool, ActiveAbilities, Alignment, AttunedItems, Beam, Body,
-        CharacterActivity, CharacterState, Combo, ControlAction, Controller, ControllerInputs,
-        Density, Energy, Health, InputAttr, InputKind, Inventory, InventoryAction, Mass, Melee,
-        Ori, PhysicsState, Pos, PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats,
-        Vel,
+        Buffs, CharacterActivity, CharacterClass, CharacterState, Combo, ControlAction, Controller,
+        ControllerInputs, Density, DerivedStats, Energy, Health, Immovable, InputAttr, InputKind,
+        Inventory, InventoryAction, Mass, Melee, Ori, PhysicsState, PickupItem, Pos,
+        PreviousPhysCache, Scale, SkillSet, Stance, StateUpdate, Stats, TriggerSlots, Vel,
         body::parts::Heads,
         character_state::OutputEvents,
         item::{MaterialStatManifest, tool::AbilityMap},
     },
     link::Is,
     mounting::{Rider, VolumeRider},
-    resources::{DeltaTime, Time},
+    resources::{DeltaTime, OracleLive, Time},
     terrain::TerrainGrid,
+    tether::Follower,
     uid::{IdMaps, Uid},
 };
 use specs::{Entity, LazyUpdate, Read, ReadStorage, storage::FlaggedAccessMut};
@@ -147,6 +148,10 @@ pub struct JoinData<'a> {
     pub density: &'a Density,
     pub dt: &'a DeltaTime,
     pub time: &'a Time,
+    /// Whether PROJECT ORACLE is live, read from the server's own resource so
+    /// `requirements_paid` can gate `AbilityRequirements.oracle` abilities
+    /// with server authority (see `OracleLive`).
+    pub oracle_live: &'a OracleLive,
     pub controller: &'a Controller,
     pub inputs: &'a ControllerInputs,
     pub health: Option<&'a Health>,
@@ -160,6 +165,11 @@ pub struct JoinData<'a> {
     /// The wearer's attuned-item set, so unattuned gear grants no abilities
     /// (ENG-D2c). `None` is treated as "nothing attuned".
     pub attuned: Option<&'a AttunedItems>,
+    /// The wearer's cached gear/skill/body aggregates. `None` means the entity
+    /// has no `Inventory`, and every read site falls back to
+    /// [`DerivedStats::default()`] — exactly the no-inventory result of the
+    /// arithmetic this cache replaced.
+    pub derived: Option<&'a DerivedStats>,
     pub body: &'a Body,
     pub physics: &'a PhysicsState,
     pub melee_attack: Option<&'a Melee>,
@@ -169,6 +179,16 @@ pub struct JoinData<'a> {
     pub active_abilities: Option<&'a ActiveAbilities>,
     pub ability_cooldowns: Option<&'a AbilityCooldowns>,
     pub ability_pool: Option<&'a AbilityPool>,
+    /// Xindeler: the character's class(es), so the spell-level gate can read
+    /// each held class's OWN level (`AbilityPool::is_unlocked`). `None` for
+    /// NPCs, which have no `CharacterClass` and no spell keys in their pool.
+    pub character_class: Option<&'a CharacterClass>,
+    /// The character's reactive trigger slots. Read on the activation path so
+    /// an `InputKind::TriggerAbility` resolves to the ability the slot stores,
+    /// and so the one-shot authorisation token that slot holds can be checked
+    /// against the ability actually resolved. `None` for every entity without
+    /// the component, which is nearly all of them.
+    pub trigger_slots: Option<&'a TriggerSlots>,
     pub ability_map: &'a AbilityMap,
     pub msm: &'a MaterialStatManifest,
     pub combo: Option<&'a Combo>,
@@ -181,6 +201,17 @@ pub struct JoinData<'a> {
     pub alignments: &'a ReadStorage<'a, Alignment>,
     pub prev_phys_caches: &'a ReadStorage<'a, PreviousPhysCache>,
     pub bodies: &'a ReadStorage<'a, Body>,
+    pub buffs: Option<&'a Buffs>,
+    /// Global lookup used by `TelekineticGrip` (and any future ranged-grab
+    /// ability) to validate an arbitrary `target_entity` carries loose,
+    /// grabbable loot — see `common/src/states/telekinetic_grip.rs`.
+    pub pickup_items: &'a ReadStorage<'a, PickupItem>,
+    /// Global lookup of the `Immovable` marker, so a grab ability can reject
+    /// world-anchored targets.
+    pub immovables: &'a ReadStorage<'a, Immovable>,
+    /// Global lookup of `Is<Follower>` so a grab ability can tell whether an
+    /// arbitrary target is already tethered to someone else.
+    pub is_followers: &'a ReadStorage<'a, Is<Follower>>,
 }
 
 pub struct JoinStruct<'a> {
@@ -197,6 +228,8 @@ pub struct JoinStruct<'a> {
     pub energy: FlaggedAccessMut<'a, &'a mut Energy, Energy>,
     pub inventory: Option<&'a Inventory>,
     pub attuned: Option<&'a AttunedItems>,
+    /// See [`JoinData::derived`].
+    pub derived: Option<&'a DerivedStats>,
     pub controller: &'a mut Controller,
     pub health: Option<&'a Health>,
     pub hardcore: bool,
@@ -210,6 +243,10 @@ pub struct JoinStruct<'a> {
     pub active_abilities: Option<&'a ActiveAbilities>,
     pub ability_cooldowns: Option<&'a AbilityCooldowns>,
     pub ability_pool: Option<&'a AbilityPool>,
+    /// Xindeler: see [`JoinData::character_class`].
+    pub character_class: Option<&'a CharacterClass>,
+    /// See [`JoinData::trigger_slots`].
+    pub trigger_slots: Option<&'a TriggerSlots>,
     pub combo: Option<&'a Combo>,
     pub alignment: Option<&'a comp::Alignment>,
     pub terrain: &'a TerrainGrid,
@@ -220,6 +257,10 @@ pub struct JoinStruct<'a> {
     pub alignments: &'a ReadStorage<'a, Alignment>,
     pub prev_phys_caches: &'a ReadStorage<'a, PreviousPhysCache>,
     pub bodies: &'a ReadStorage<'a, Body>,
+    pub buffs: Option<&'a Buffs>,
+    pub pickup_items: &'a ReadStorage<'a, PickupItem>,
+    pub immovables: &'a ReadStorage<'a, Immovable>,
+    pub is_followers: &'a ReadStorage<'a, Is<Follower>>,
 }
 
 impl<'a> JoinData<'a> {
@@ -230,6 +271,7 @@ impl<'a> JoinData<'a> {
         time: &'a Time,
         msm: &'a MaterialStatManifest,
         ability_map: &'a AbilityMap,
+        oracle_live: &'a OracleLive,
     ) -> Self {
         Self {
             entity: j.entity,
@@ -245,6 +287,7 @@ impl<'a> JoinData<'a> {
             energy: &j.energy,
             inventory: j.inventory,
             attuned: j.attuned,
+            derived: j.derived,
             controller: j.controller,
             inputs: &j.controller.inputs,
             health: j.health,
@@ -260,12 +303,15 @@ impl<'a> JoinData<'a> {
             time,
             msm,
             ability_map,
+            oracle_live,
             combo: j.combo,
             alignment: j.alignment,
             terrain: j.terrain,
             active_abilities: j.active_abilities,
             ability_cooldowns: j.ability_cooldowns,
             ability_pool: j.ability_pool,
+            character_class: j.character_class,
+            trigger_slots: j.trigger_slots,
             mount_data: j.mount_data,
             volume_mount_data: j.volume_mount_data,
             stance: j.stance,
@@ -273,6 +319,10 @@ impl<'a> JoinData<'a> {
             alignments: j.alignments,
             prev_phys_caches: j.prev_phys_caches,
             bodies: j.bodies,
+            buffs: j.buffs,
+            pickup_items: j.pickup_items,
+            immovables: j.immovables,
+            is_followers: j.is_followers,
         }
     }
 }

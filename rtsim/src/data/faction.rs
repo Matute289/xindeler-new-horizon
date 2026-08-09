@@ -1,5 +1,5 @@
 use crate::data::Sentiments;
-use common::rtsim::Actor;
+use common::rtsim::ActorId;
 pub use common::rtsim::FactionId;
 use serde::{Deserialize, Serialize};
 use slotmap::DenseSlotMap;
@@ -9,7 +9,7 @@ use vek::*;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Faction {
     pub seed: u32,
-    pub leader: Option<Actor>,
+    pub leader: Option<ActorId>,
     pub good_or_evil: bool, // TODO: Very stupid, get rid of this
 
     #[serde(default)]

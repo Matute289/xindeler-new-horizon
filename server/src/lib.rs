@@ -7,6 +7,7 @@
 #![feature(box_patterns, option_zip, const_type_name, slice_partition_dedup)]
 
 pub mod automod;
+pub mod banishment;
 mod character_creator;
 pub mod chat;
 pub mod chunk_generator;
@@ -22,6 +23,7 @@ pub mod location;
 pub mod lod;
 pub mod login_provider;
 pub mod metrics;
+pub mod oracle;
 pub mod persistence;
 mod pet;
 pub mod presence;
@@ -83,8 +85,7 @@ use common::{
     link::Is,
     mounting::{Volume, VolumeRider},
     region::RegionMap,
-    resources::{BattleMode, GameMode, Time, TimeOfDay},
-    rtsim::RtSimEntity,
+    resources::{BattleMode, GameMode, OracleLive, Time, TimeOfDay},
     shared_server_config::ServerConstants,
     slowjob::SlowJobPool,
     terrain::TerrainChunk,
@@ -121,8 +122,8 @@ use test_world::{IndexOwned, World};
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info, trace, warn};
 use vek::*;
-use veloren_query_server::server::QueryServer;
 pub use world::{WorldGenerateStage, civ::WorldCivStage, sim::WorldSimStage};
+use xindeler_query_server::server::QueryServer;
 
 use crate::{
     persistence::{DatabaseSettings, SqlLogMode},
@@ -379,17 +380,33 @@ impl Server {
             .ecs_mut()
             .insert(EventBus::<chunk_serialize::ChunkSendEntry>::default());
         state.ecs_mut().insert(Locations::default());
-        state.ecs_mut().insert(LoginProvider::new(
-            settings.auth_server_address.clone(),
-            Arc::clone(&runtime),
-        ));
+        state.ecs_mut().insert(
+            LoginProvider::new(
+                // This server's own /verify calls: `auth_service_address` if
+                // set (e.g. a loopback URL, when co-located with the auth
+                // service), otherwise the same public URL advertised to
+                // clients. NEVER the reverse -- `ServerInfo::auth_provider`
+                // below always advertises `auth_server_address` regardless of
+                // this fallback.
+                settings
+                    .auth_service_address
+                    .clone()
+                    .or_else(|| settings.auth_server_address.clone()),
+                Arc::clone(&runtime),
+            )
+            .map_err(Error::Other)?,
+        );
         state.ecs_mut().insert(HwStats {
             hardware_threads: num_cpus::get() as u32,
             rayon_threads: num_cpus::get() as u32,
         });
         state.ecs_mut().insert(ServerConstants {
             day_cycle_coefficient: settings.day_cycle_coefficient(),
+            oracle_live: settings.gameplay.oracle.is_live(),
         });
+        state
+            .ecs_mut()
+            .insert(OracleLive(settings.gameplay.oracle.is_live()));
         state.ecs_mut().insert(Tick(0));
         state.ecs_mut().insert(TickStart(Instant::now()));
         state.ecs_mut().insert(job_metrics);
@@ -431,6 +448,16 @@ impl Server {
         state
             .ecs_mut()
             .insert(ChunkGenerator::new(chunk_gen_metrics));
+        state.ecs_mut().insert(oracle::OracleWatcher::new(
+            &oracle::watcher::default_events_dir(),
+        ));
+        state.ecs_mut().insert(oracle::ChronicleLog::default());
+        state
+            .ecs_mut()
+            .insert(sys::detection::DetectionSnapshots::default());
+        state
+            .ecs_mut()
+            .insert(sys::detection::IdentifyLinks::default());
         {
             let (sender, receiver) =
                 crossbeam_channel::bounded::<chunk_serialize::SerializedChunk>(10_000);
@@ -475,7 +502,7 @@ impl Server {
         state.ecs_mut().register::<comp::Pet>();
         state.ecs_mut().register::<login_provider::PendingLogin>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
-        state.ecs_mut().register::<RtSimEntity>();
+        state.ecs_mut().register::<common::rtsim::ActorId>();
 
         // Load banned words list
         let banned_words = settings.moderation.load_banned_words(data_dir);
@@ -551,7 +578,9 @@ impl Server {
 
         state.ecs_mut().insert(DeletedEntities::default());
 
-        let network = Network::new_with_registry(Pid::new(), &runtime, &registry);
+        // Only allow clients to send us a maximum of 1 MB per uncompressed message, to
+        // reduce the effectiveness of a DoS attack
+        let network = Network::new_with_registry(Pid::new(), &runtime, &registry, 1 << 20);
         let (chat_cache, chat_tracker) = ChatCache::new(Duration::from_secs(60), &runtime);
         state.ecs_mut().insert(chat_tracker);
 
@@ -635,7 +664,7 @@ impl Server {
         }
 
         if let Some(addr) = settings.query_address {
-            use veloren_query_server::proto::ServerInfo;
+            use xindeler_query_server::proto::ServerInfo;
 
             const QUERY_SERVER_RATELIMIT: u16 = 120;
 
@@ -650,7 +679,7 @@ impl Server {
             let mut query_server =
                 QueryServer::new(addr, query_server_info_rx, QUERY_SERVER_RATELIMIT);
             let query_server_metrics =
-                Arc::new(Mutex::new(veloren_query_server::server::Metrics::default()));
+                Arc::new(Mutex::new(xindeler_query_server::server::Metrics::default()));
             let query_server_metrics2 = Arc::clone(&query_server_metrics);
             runtime.spawn(async move {
                 let err = query_server.run(query_server_metrics2).await.err();
@@ -889,6 +918,14 @@ impl Server {
         // Handle game events
         frontend_events.append(&mut self.handle_events());
 
+        // Park newly banished creatures, return the ones whose real-time
+        // deadline has arrived, and rehydrate records loaded from the save
+        // file. Runs after `handle_events` so a banishment raised this tick is
+        // parked this tick — and only *after* the `DestroyEvent` reward block
+        // has already read the creature's position, which stripping `Pos`
+        // would otherwise destroy.
+        banishment::maintain(self);
+
         let before_update_terrain_and_regions = Instant::now();
 
         // Apply terrain changes and update the region map after processing server
@@ -1021,10 +1058,10 @@ impl Server {
         #[cfg(feature = "worldgen")]
         {
             let mut rtsim = self.state.ecs().write_resource::<rtsim::RtSim>();
-            let rtsim_entities = self.state.ecs().read_storage();
+            let rtsim_actors = self.state.ecs().read_storage();
             for entity in &to_delete {
-                if let Some(rtsim_entity) = rtsim_entities.get(*entity) {
-                    rtsim.hook_rtsim_entity_unload(*rtsim_entity);
+                if let Some(actor) = rtsim_actors.get(*entity) {
+                    rtsim.hook_rtsim_entity_unload(*actor);
                 }
             }
         }
@@ -1128,6 +1165,8 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        trigger_slots,
+                                        spell_mastery,
                                     } = character_data;
                                     let character_data = (
                                         body,
@@ -1142,6 +1181,8 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        trigger_slots,
+                                        spell_mastery,
                                     );
                                     // TODO: Does this need to be a server event? E.g. we could
                                     // just handle it here.

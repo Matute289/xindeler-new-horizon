@@ -16,16 +16,19 @@ use crate::{
             convert_background_from_database, convert_background_to_database,
             convert_body_from_database, convert_body_to_database_json,
             convert_character_from_database, convert_class_from_database,
-            convert_class_to_database, convert_ethos_from_database, convert_hardcore_from_database,
+            convert_class_to_database, convert_ethos_from_database,
+            convert_future_levels_to_secondary_to_database, convert_hardcore_from_database,
             convert_hardcore_to_database, convert_inventory_from_database_items,
             convert_items_to_database_items, convert_loadout_from_database_items,
-            convert_recipe_book_from_database_items, convert_skill_groups_to_database,
+            convert_recipe_book_from_database_items, convert_secondary_class_level_to_database,
+            convert_secondary_class_to_database, convert_skill_groups_to_database,
             convert_skill_set_from_database, convert_stats_from_database,
             convert_waypoint_from_database_json, convert_waypoint_to_database_json,
         },
         character_loader::{CharacterCreationResult, CharacterDataResult, CharacterListResult},
         character_updater::PetPersistenceData,
         error::PersistenceError::DatabaseError,
+        json_models,
     },
 };
 use common::{
@@ -54,10 +57,15 @@ const LOADOUT_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.lo
 const OVERFLOW_ITEMS_PSEUDO_CONTAINER_DEF_ID: &str =
     "veloren.core.pseudo_containers.overflow_items";
 const RECIPE_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.recipe_book";
+/// Xindeler: holds the character's learned `ItemKind::SpellGroup` items. Every
+/// character has one, backfilled for pre-existing characters by the
+/// `spell_book` migration.
+const SPELL_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.spell_book";
 const INVENTORY_PSEUDO_CONTAINER_POSITION: &str = "inventory";
 const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
 const OVERFLOW_ITEMS_PSEUDO_CONTAINER_POSITION: &str = "overflow_items";
 const RECIPE_BOOK_PSEUDO_CONTAINER_POSITION: &str = "recipe_book";
+const SPELL_BOOK_PSEUDO_CONTAINER_POSITION: &str = "spell_book";
 const WORLD_PSEUDO_CONTAINER_ID: EntityId = 1;
 
 #[derive(Clone, Copy)]
@@ -66,6 +74,7 @@ struct CharacterContainers {
     loadout_container_id: EntityId,
     overflow_items_container_id: EntityId,
     recipe_book_container_id: EntityId,
+    spell_book_container_id: EntityId,
 }
 
 /// Load the inventory/loadout
@@ -141,6 +150,7 @@ pub fn load_character_data(
     let overflow_items_items =
         load_items(connection, character_containers.overflow_items_container_id)?;
     let recipe_book_items = load_items(connection, character_containers.recipe_book_container_id)?;
+    let spell_book_items = load_items(connection, character_containers.spell_book_container_id)?;
 
     let mut stmt = connection.prepare_cached(
         "
@@ -154,7 +164,12 @@ pub fn load_character_data(
                 c.ethos_good_evil,
                 c.ethos_law_chaos,
                 c.background,
-                c.background_custom_note
+                c.background_custom_note,
+                c.secondary_class,
+                c.secondary_class_level,
+                c.secondary_class_future_levels,
+                c.trigger_slots,
+                c.spell_mastery
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -175,6 +190,11 @@ pub fn load_character_data(
                 ethos_law_chaos: row.get(8)?,
                 background: row.get(9)?,
                 background_custom_note: row.get(10)?,
+                secondary_class: row.get(11)?,
+                secondary_class_level: row.get(12)?,
+                secondary_class_future_levels: row.get(13)?,
+                trigger_slots: row.get(14)?,
+                spell_mastery: row.get(15)?,
             };
 
             let body_data = Body {
@@ -210,7 +230,9 @@ pub fn load_character_data(
                 earned_exp,
                 spent_exp,
                 skills,
-                hash_val
+                hash_val,
+                direct_earned_sp,
+                direct_available_sp
         FROM    skill_group
         WHERE   entity_id = ?1",
     )?;
@@ -224,6 +246,8 @@ pub fn load_character_data(
                 spent_exp: row.get(2)?,
                 skills: row.get(3)?,
                 hash_val: row.get(4)?,
+                direct_earned_sp: row.get(5)?,
+                direct_available_sp: row.get(6)?,
             })
         })?
         .filter_map(Result::ok)
@@ -301,31 +325,62 @@ pub fn load_character_data(
         convert_skill_set_from_database(&skill_group_data);
     let body = convert_body_from_database(&body_data.variant, &body_data.body_data)?;
     let hardcore = convert_hardcore_from_database(character_data.hardcore)?;
+    let character_class = convert_class_from_database(
+        &character_data.class,
+        character_data.secondary_class.as_deref(),
+        character_data.secondary_class_level,
+        character_data.secondary_class_future_levels,
+    );
+    // Built before the pool below, because the pool is derived from the
+    // spellbook this carries.
+    let inventory = convert_inventory_from_database_items(
+        character_containers.inventory_container_id,
+        &inventory_items,
+        character_containers.loadout_container_id,
+        &loadout_items,
+        character_containers.overflow_items_container_id,
+        &overflow_items_items,
+        &recipe_book_items,
+        &spell_book_items,
+    )?;
+    // Xindeler: persisted `Innate` hotbar slots name pool keys, so resolving
+    // them needs the pool. Nothing here holds one yet — the component is only
+    // inserted once the character is applied to its entity — so rebuild it from
+    // the body, class and spellbook we just decoded, exactly as `state_ext`
+    // will. Both sites must agree, or a slot would resolve to a different
+    // ability than the one it was saved against.
+    let ability_pool = comp::ability::AbilityPool::for_character(
+        &body,
+        &character_class,
+        inventory.learned_spells(),
+    );
     Ok((
         PersistedComponents {
             body,
             hardcore,
-            character_class: convert_class_from_database(&character_data.class),
+            character_class,
             stats: convert_stats_from_database(character_data.alias, body),
             skill_set,
-            inventory: convert_inventory_from_database_items(
-                character_containers.inventory_container_id,
-                &inventory_items,
-                character_containers.loadout_container_id,
-                &loadout_items,
-                character_containers.overflow_items_container_id,
-                &overflow_items_items,
-                &recipe_book_items,
-            )?,
+            inventory,
             waypoint: char_waypoint,
             pets,
-            active_abilities: convert_active_abilities_from_database(&ability_set_data),
+            active_abilities: convert_active_abilities_from_database(
+                &ability_set_data,
+                &ability_pool,
+            ),
             map_marker: char_map_marker,
             ethos: convert_ethos_from_database(
                 character_data.ethos_good_evil,
                 character_data.ethos_law_chaos,
             ),
             background: convert_background_from_database(character_data.background.as_deref()),
+            trigger_slots: json_models::db_string_to_trigger_slots(
+                character_data.trigger_slots.as_deref(),
+                &ability_pool,
+            ),
+            spell_mastery: json_models::db_string_to_spell_mastery(
+                character_data.spell_mastery.as_deref(),
+            ),
         },
         UpdateCharacterMetadata {
             skill_set_persistence_load_error,
@@ -368,6 +423,14 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 // Nor background (BL-31): defaulted, same as ethos above.
                 background: None,
                 background_custom_note: None,
+                // Nor the secondary class: defaulted, same reasoning.
+                secondary_class: None,
+                secondary_class_level: 0,
+                secondary_class_future_levels: 0,
+                // Nor the trigger slots: the list view never shows them.
+                trigger_slots: None,
+                // Nor spell mastery: the list view never shows it either.
+                spell_mastery: None,
             })
         })?
         .map(|x| x.unwrap())
@@ -421,6 +484,11 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
 
             let (recipe_book, _) = convert_recipe_book_from_database_items(&recipe_book_items)?;
 
+            // Xindeler: the spell book is deliberately NOT loaded here. Nothing
+            // on the character-select screen reads it, and looking its
+            // pseudo-container up would make the whole character LIST fail for
+            // any character the backfill missed — a far worse failure than an
+            // absent spellbook on a screen that never shows one.
             Ok(CharacterItem {
                 character: char,
                 body: char_body,
@@ -454,11 +522,16 @@ pub fn create_character(
         map_marker,
         ethos,
         background,
+        // A brand-new character has nothing configured; the column stays NULL
+        // and the first autosave that changes it writes the row.
+        trigger_slots: _,
+        // Nothing accrued yet either; same reasoning as `trigger_slots`.
+        spell_mastery: _,
     } = persisted_components;
 
-    // Fetch new entity IDs for character, inventory, loadout, overflow items, and
-    // recipe book
-    let mut new_entity_ids = get_new_entity_ids(transaction, |next_id| next_id + 5)?;
+    // Fetch new entity IDs for character, inventory, loadout, overflow items,
+    // recipe book and spell book
+    let mut new_entity_ids = get_new_entity_ids(transaction, |next_id| next_id + 6)?;
 
     // Create pseudo-container items for character
     let character_id = new_entity_ids.next().unwrap();
@@ -466,6 +539,7 @@ pub fn create_character(
     let loadout_container_id = new_entity_ids.next().unwrap();
     let overflow_items_container_id = new_entity_ids.next().unwrap();
     let recipe_book_container_id = new_entity_ids.next().unwrap();
+    let spell_book_container_id = new_entity_ids.next().unwrap();
 
     let pseudo_containers = vec![
         Item {
@@ -506,6 +580,14 @@ pub fn create_character(
             parent_container_item_id: character_id,
             item_definition_id: RECIPE_BOOK_PSEUDO_CONTAINER_DEF_ID.to_owned(),
             position: RECIPE_BOOK_PSEUDO_CONTAINER_POSITION.to_owned(),
+            properties: String::new(),
+        },
+        Item {
+            stack_size: 1,
+            item_id: spell_book_container_id,
+            parent_container_item_id: character_id,
+            item_definition_id: SPELL_BOOK_PSEUDO_CONTAINER_DEF_ID.to_owned(),
+            position: SPELL_BOOK_PSEUDO_CONTAINER_POSITION.to_owned(),
             properties: String::new(),
         },
     ];
@@ -562,8 +644,11 @@ pub fn create_character(
                                ethos_good_evil,
                                ethos_law_chaos,
                                background,
-                               background_custom_note)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                               background_custom_note,
+                               secondary_class,
+                               secondary_class_level,
+                               secondary_class_future_levels)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
 
     stmt.execute([
@@ -577,6 +662,9 @@ pub fn create_character(
         &ethos.law_chaos,
         &background_db,
         &background_custom_note_db,
+        &convert_secondary_class_to_database(character_class),
+        &convert_secondary_class_level_to_database(character_class),
+        &convert_future_levels_to_secondary_to_database(character_class),
     ])?;
     drop(stmt);
 
@@ -590,8 +678,10 @@ pub fn create_character(
                                  earned_exp,
                                  spent_exp,
                                  skills,
-                                 hash_val)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                 hash_val,
+                                 direct_earned_sp,
+                                 direct_available_sp)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
 
     for skill_group in db_skill_groups {
@@ -602,12 +692,24 @@ pub fn create_character(
             &skill_group.spent_exp,
             &skill_group.skills,
             &skill_group.hash_val,
+            &skill_group.direct_earned_sp,
+            &skill_group.direct_available_sp,
         ])?;
     }
     drop(stmt);
 
-    let ability_sets =
-        convert_active_abilities_to_database(CharacterId(character_id), &active_abilities);
+    // Xindeler: character creation runs once, and no `AbilityPool` component
+    // exists for a character that has no entity yet, so rebuilding the pool
+    // here is both the only option and a negligible cost.
+    let ability_sets = convert_active_abilities_to_database(
+        CharacterId(character_id),
+        &active_abilities,
+        &comp::ability::AbilityPool::for_character(
+            &body,
+            &character_class,
+            inventory.learned_spells(),
+        ),
+    );
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -632,6 +734,7 @@ pub fn create_character(
             inventory_container_id,
             overflow_items_container_id,
             recipe_book_container_id,
+            spell_book_container_id,
             &mut next_id,
         );
         inserts = inserts_;
@@ -929,6 +1032,11 @@ fn get_pseudo_containers(
             character_id,
             RECIPE_BOOK_PSEUDO_CONTAINER_POSITION,
         )?,
+        spell_book_container_id: get_pseudo_container_id(
+            connection,
+            character_id,
+            SPELL_BOOK_PSEUDO_CONTAINER_POSITION,
+        )?,
     };
 
     Ok(character_containers)
@@ -1109,10 +1217,17 @@ pub fn update(
     pets: Vec<PetPersistenceData>,
     char_waypoint: Option<comp::Waypoint>,
     active_abilities: comp::ability::ActiveAbilities,
+    // Xindeler: the character's live pool, needed to persist `Innate` hotbar
+    // slots by key. Passed in rather than rebuilt: this runs on every save
+    // batch, the caller already has the component in its ECS storage, and
+    // rebuilding would also need a `Body` this function is not given.
+    ability_pool: comp::ability::AbilityPool,
     map_marker: Option<comp::MapMarker>,
     character_class: comp::CharacterClass,
     ethos: comp::Ethos,
     background: comp::Background,
+    trigger_slots: comp::TriggerSlots,
+    spell_mastery: comp::SpellMastery,
     transaction: &mut Transaction,
 ) -> Result<(), PersistenceError> {
     // Run pet persistence
@@ -1129,6 +1244,7 @@ pub fn update(
             pseudo_containers.inventory_container_id,
             pseudo_containers.overflow_items_container_id,
             pseudo_containers.recipe_book_container_id,
+            pseudo_containers.spell_book_container_id,
             &mut next_id,
         );
         upserts = upserts_;
@@ -1142,6 +1258,7 @@ pub fn update(
         Value::from(pseudo_containers.loadout_container_id),
         Value::from(pseudo_containers.overflow_items_container_id),
         Value::from(pseudo_containers.recipe_book_container_id),
+        Value::from(pseudo_containers.spell_book_container_id),
     ];
     for it in load_items(transaction, pseudo_containers.inventory_container_id)? {
         existing_item_ids.push(Value::from(it.item_id));
@@ -1153,6 +1270,9 @@ pub fn update(
         existing_item_ids.push(Value::from(it.item_id));
     }
     for it in load_items(transaction, pseudo_containers.recipe_book_container_id)? {
+        existing_item_ids.push(Value::from(it.item_id));
+    }
+    for it in load_items(transaction, pseudo_containers.spell_book_container_id)? {
         existing_item_ids.push(Value::from(it.item_id));
     }
 
@@ -1233,8 +1353,10 @@ pub fn update(
                              earned_exp,
                              spent_exp,
                              skills,
-                             hash_val)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                             hash_val,
+                             direct_earned_sp,
+                             direct_available_sp)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
 
     for skill_group in db_skill_groups {
@@ -1245,6 +1367,8 @@ pub fn update(
             &skill_group.spent_exp,
             &skill_group.skills,
             &skill_group.hash_val,
+            &skill_group.direct_earned_sp,
+            &skill_group.direct_available_sp,
         ])?;
     }
 
@@ -1259,8 +1383,13 @@ pub fn update(
                 ethos_good_evil = ?3,
                 ethos_law_chaos = ?4,
                 background = ?5,
-                background_custom_note = ?6
-        WHERE   character_id = ?7
+                background_custom_note = ?6,
+                secondary_class = ?7,
+                secondary_class_level = ?8,
+                secondary_class_future_levels = ?9,
+                trigger_slots = ?10,
+                spell_mastery = ?11
+        WHERE   character_id = ?12
     ",
     )?;
 
@@ -1271,6 +1400,11 @@ pub fn update(
         &ethos.law_chaos,
         &background_db,
         &background_custom_note_db,
+        &convert_secondary_class_to_database(character_class),
+        &convert_secondary_class_level_to_database(character_class),
+        &convert_future_levels_to_secondary_to_database(character_class),
+        &json_models::trigger_slots_to_db_string(&trigger_slots, &ability_pool),
+        &json_models::spell_mastery_to_db_string(&spell_mastery),
         &char_id.0,
     ])?;
 
@@ -1281,7 +1415,8 @@ pub fn update(
         )));
     }
 
-    let ability_sets = convert_active_abilities_to_database(char_id, &active_abilities);
+    let ability_sets =
+        convert_active_abilities_to_database(char_id, &active_abilities, &ability_pool);
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -1304,4 +1439,545 @@ pub fn update(
     }
 
     Ok(())
+}
+
+/// Xindeler: end-to-end persistence tests for the spell book.
+///
+/// These run the REAL migration set against a fresh SQLite file and then drive
+/// `create_character` / `update` / `load_character_data`, because the whole
+/// point of the exercise is the interaction between the schema, the
+/// pseudo-container backfill, and the entity-id sequence — none of which a unit
+/// test over the conversion functions alone would exercise.
+#[cfg(test)]
+mod spell_book_persistence_tests {
+    use super::*;
+    use crate::persistence::{ConnectionMode, DatabaseSettings, SqlLogMode, establish_connection};
+    use common::comp::{
+        ActiveAbilities, CharacterClass, ability::AuxiliaryAbility, item::ItemKind,
+    };
+
+    const SPELL_BOOK: &str = "common.items.spell_books.wanderers_primer";
+    const SECOND_SPELL_BOOK: &str = "common.items.spell_books.scavenged_page";
+
+    struct TestDb {
+        _dir: tempfile::TempDir,
+        settings: DatabaseSettings,
+    }
+
+    impl TestDb {
+        /// A fresh database with every migration applied, exactly as a server
+        /// would produce on first start.
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let settings = DatabaseSettings {
+                db_dir: dir.path().to_path_buf(),
+                sql_log_mode: SqlLogMode::Disabled,
+            };
+            crate::persistence::run_migrations(&settings);
+            Self {
+                _dir: dir,
+                settings,
+            }
+        }
+
+        fn connection(&self) -> crate::persistence::VelorenConnection {
+            establish_connection(&self.settings, ConnectionMode::ReadWrite)
+        }
+    }
+
+    fn spell_group(specifier: &str) -> common::comp::Item {
+        let item = common::comp::Item::new_from_asset_expect(specifier);
+        assert!(
+            matches!(&*item.kind(), ItemKind::SpellGroup { .. }),
+            "{specifier} must be a SpellGroup for these tests to mean anything"
+        );
+        item
+    }
+
+    fn components(inventory: Inventory) -> PersistedComponents {
+        let body = comp::Body::Humanoid(comp::humanoid::Body::random());
+        PersistedComponents {
+            body,
+            hardcore: None,
+            character_class: CharacterClass::single(comp::ClassKind::Mage),
+            stats: comp::Stats::new(Content::Plain("Testificate".to_owned()), body),
+            skill_set: comp::SkillSet::default(),
+            inventory,
+            waypoint: None,
+            pets: Vec::new(),
+            active_abilities: ActiveAbilities::default(),
+            map_marker: None,
+            ethos: comp::Ethos::default(),
+            background: comp::Background::default(),
+            trigger_slots: comp::TriggerSlots::default(),
+            spell_mastery: comp::SpellMastery::default(),
+        }
+    }
+
+    /// Creates a character holding `books` in its spellbook and returns its id.
+    fn create(db: &TestDb, uuid: &str, books: &[&str]) -> CharacterId {
+        let mut inventory = Inventory::with_empty();
+        for specifier in books {
+            inventory
+                .push_spell_group(spell_group(specifier))
+                .expect("distinct groups are accepted");
+        }
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let (id, _) =
+            create_character(uuid, "Testificate", components(inventory), &mut transaction)
+                .expect("character creation");
+        transaction.commit().expect("commit");
+        id
+    }
+
+    fn load(db: &TestDb, uuid: &str, id: CharacterId) -> PersistedComponents {
+        let conn = db.connection();
+        load_character_data(uuid.to_owned(), id, &conn)
+            .expect("character load")
+            .0
+    }
+
+    /// Saves the character back with whatever inventory/abilities it now has,
+    /// the way the persistence tick would.
+    fn save(db: &TestDb, id: CharacterId, loaded: &PersistedComponents, pool: &comp::AbilityPool) {
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        update(
+            id,
+            loaded.skill_set.clone(),
+            loaded.inventory.clone(),
+            Vec::new(),
+            loaded.waypoint,
+            loaded.active_abilities.clone(),
+            pool.clone(),
+            loaded.map_marker,
+            loaded.character_class,
+            loaded.ethos,
+            loaded.background,
+            loaded.trigger_slots.clone(),
+            loaded.spell_mastery,
+            &mut transaction,
+        )
+        .expect("character update");
+        transaction.commit().expect("commit");
+    }
+
+    fn pool_of(loaded: &PersistedComponents) -> comp::AbilityPool {
+        comp::ability::AbilityPool::for_character(
+            &loaded.body,
+            &loaded.character_class,
+            loaded.inventory.learned_spells(),
+        )
+    }
+
+    /// (a) the spellbook survives a save/load round-trip.
+    #[test]
+    fn a_non_empty_spell_book_survives_the_round_trip() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-survives", &[SPELL_BOOK]);
+
+        let loaded = load(&db, "uuid-survives", id);
+        let expected = spell_group(SPELL_BOOK);
+        let ItemKind::SpellGroup { spells } = &*expected.kind() else {
+            unreachable!()
+        };
+        assert_eq!(loaded.inventory.spell_book_len(), spells.len());
+        for key in spells {
+            assert!(
+                loaded.inventory.spell_is_known(key),
+                "{key} did not survive the round trip"
+            );
+        }
+        assert_eq!(loaded.inventory.spell_groups_iter().count(), 1);
+
+        // And again after an explicit save, which is the path a live server
+        // actually takes.
+        let pool = pool_of(&loaded);
+        save(&db, id, &loaded, &pool);
+        let reloaded = load(&db, "uuid-survives", id);
+        for key in spells {
+            assert!(reloaded.inventory.spell_is_known(key));
+        }
+    }
+
+    /// (b) the `AbilityPool` derived from the reloaded character is identical
+    /// to the one derived before the save — same keys, same order, same gates.
+    #[test]
+    fn the_ability_pool_ordering_is_identical_across_the_round_trip() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-ordering", &[SPELL_BOOK]);
+
+        let first = load(&db, "uuid-ordering", id);
+        let before = pool_of(&first);
+        save(&db, id, &first, &before);
+
+        let second = load(&db, "uuid-ordering", id);
+        let after = pool_of(&second);
+
+        assert_eq!(before.abilities, after.abilities);
+        assert_eq!(before.spell_gates, after.spell_gates);
+        // The learned keys really are in there, at the very end.
+        let book = spell_group(SPELL_BOOK);
+        let ItemKind::SpellGroup { spells } = &*book.kind() else {
+            unreachable!()
+        };
+        let tail = &after.abilities[after.abilities.len() - spells.len()..];
+        let mut expected: Vec<&String> = spells.iter().collect();
+        expected.sort();
+        assert_eq!(tail.iter().collect::<Vec<_>>(), expected);
+    }
+
+    /// (c) a persisted hotbar slot bound to a learned spell still resolves to
+    /// the SAME ability after a reload.
+    #[test]
+    fn a_bound_hotbar_slot_still_names_the_same_ability_after_reload() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-hotbar", &[SPELL_BOOK]);
+
+        let mut loaded = load(&db, "uuid-hotbar", id);
+        let pool = pool_of(&loaded);
+        // Bind the last pool entry: a learned spell, the most fragile case.
+        let index = pool.abilities.len() - 1;
+        let bound_key = pool.abilities[index].clone();
+        assert!(
+            loaded.inventory.spell_is_known(&bound_key),
+            "the last entry should be a learned spell"
+        );
+        let mut sets = hashbrown::HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(index)]);
+        loaded.active_abilities = ActiveAbilities::from_auxiliary(sets, None);
+
+        save(&db, id, &loaded, &pool);
+
+        let reloaded = load(&db, "uuid-hotbar", id);
+        let reloaded_pool = pool_of(&reloaded);
+        let slot = reloaded
+            .active_abilities
+            .auxiliary_sets
+            .get(&(None, None))
+            .and_then(|set| set.first())
+            .copied()
+            .expect("the bound set survives");
+        let AuxiliaryAbility::Innate(reloaded_index) = slot else {
+            panic!("the slot must still be an innate binding, got {slot:?}")
+        };
+        assert_eq!(
+            reloaded_pool.abilities[reloaded_index], bound_key,
+            "the hotbar slot re-pointed at a different ability across a reload"
+        );
+    }
+
+    /// A spell learned BETWEEN saves must not move an already-bound slot off
+    /// its ability.
+    ///
+    /// This models what a live server does: learn, rebuild the pool, then
+    /// re-point the in-memory bindings by key before the next save. That last
+    /// step is not optional — see the companion test below for what happens
+    /// without it — and every site that rebuilds a pool for a character already
+    /// in the world performs it.
+    #[test]
+    fn learning_a_spell_between_saves_leaves_bound_slots_on_their_ability() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-between", &[SPELL_BOOK]);
+
+        // Save 1: bind a slot to a learned spell.
+        let mut loaded = load(&db, "uuid-between", id);
+        let pool = pool_of(&loaded);
+        let index = pool.abilities.len() - 1;
+        let bound_key = pool.abilities[index].clone();
+        let mut sets = hashbrown::HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(index)]);
+        loaded.active_abilities = ActiveAbilities::from_auxiliary(sets, None);
+        save(&db, id, &loaded, &pool);
+
+        // Learn another book, then save 2.
+        let mut loaded = load(&db, "uuid-between", id);
+        loaded
+            .inventory
+            .push_spell_group(spell_group(SECOND_SPELL_BOOK))
+            .expect("a second, distinct group");
+        let grown = pool_of(&loaded);
+        // The second book contributes a key that sorts BEFORE the one already
+        // bound, so the bound entry genuinely moves within the pool. That is
+        // precisely the case a positional binding would get wrong.
+        assert!(grown.abilities.len() > pool.abilities.len());
+        assert_ne!(
+            grown.abilities.iter().position(|k| *k == bound_key),
+            pool.abilities.iter().position(|k| *k == bound_key),
+            "this test is only meaningful if the bound key actually moves"
+        );
+        comp::ability::remap_innate_bindings(&mut loaded.active_abilities, &pool, &grown);
+        save(&db, id, &loaded, &grown);
+
+        // The slot must still name the ability it was bound to.
+        let reloaded = load(&db, "uuid-between", id);
+        let reloaded_pool = pool_of(&reloaded);
+        let slot = reloaded
+            .active_abilities
+            .auxiliary_sets
+            .get(&(None, None))
+            .and_then(|set| set.first())
+            .copied()
+            .expect("the bound set survives");
+        let AuxiliaryAbility::Innate(reloaded_index) = slot else {
+            panic!("the slot must still be an innate binding, got {slot:?}")
+        };
+        assert_eq!(
+            reloaded_pool.abilities[reloaded_index], bound_key,
+            "learning a spell between saves moved a previously-bound slot"
+        );
+        // Both books are known now.
+        for specifier in [SPELL_BOOK, SECOND_SPELL_BOOK] {
+            let book = spell_group(specifier);
+            let ItemKind::SpellGroup { spells } = &*book.kind() else {
+                unreachable!()
+            };
+            for key in spells {
+                assert!(reloaded.inventory.spell_is_known(key), "{key} was lost");
+            }
+        }
+    }
+
+    /// The companion to the test above, pinning down WHY the remap is
+    /// mandatory: skipping it writes the slot out under whatever key happens to
+    /// occupy its old index, which is the "my hotbar scrambled" bug.
+    #[test]
+    fn skipping_the_remap_would_rebind_the_slot_to_the_wrong_ability() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-noremap", &[SPELL_BOOK]);
+
+        let mut loaded = load(&db, "uuid-noremap", id);
+        let pool = pool_of(&loaded);
+        let index = pool.abilities.len() - 1;
+        let bound_key = pool.abilities[index].clone();
+        let mut sets = hashbrown::HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(index)]);
+        loaded.active_abilities = ActiveAbilities::from_auxiliary(sets, None);
+        save(&db, id, &loaded, &pool);
+
+        let mut loaded = load(&db, "uuid-noremap", id);
+        loaded
+            .inventory
+            .push_spell_group(spell_group(SECOND_SPELL_BOOK))
+            .expect("a second, distinct group");
+        let grown = pool_of(&loaded);
+        // Deliberately NO remap here.
+        save(&db, id, &loaded, &grown);
+
+        let reloaded = load(&db, "uuid-noremap", id);
+        let reloaded_pool = pool_of(&reloaded);
+        let AuxiliaryAbility::Innate(reloaded_index) = reloaded
+            .active_abilities
+            .auxiliary_sets
+            .get(&(None, None))
+            .and_then(|set| set.first())
+            .copied()
+            .expect("the set survives")
+        else {
+            panic!("still an innate binding")
+        };
+        assert_ne!(
+            reloaded_pool.abilities[reloaded_index], bound_key,
+            "if this ever passes, index stability was achieved some other way and the remap \
+             requirement documented above can be revisited"
+        );
+    }
+
+    /// 🔴 The trigger-slot twin of
+    /// `learning_a_spell_between_saves_leaves_bound_slots_on_their_ability`,
+    /// and the one that actually matters: a hotbar slot that silently
+    /// re-pointed costs a mis-click, a trigger slot that silently re-points
+    /// mints a cooldown-bypass token for the wrong spell and charges up to
+    /// thirty-six real-world hours for it.
+    ///
+    /// Both halves of the fix are exercised at once — the persisted form names
+    /// a pool key rather than an index, and the in-memory binding is re-pointed
+    /// by `TriggerSlots::remap_innate_bindings` before the next save, exactly
+    /// as every live pool-rebuild site does.
+    #[test]
+    fn learning_a_spell_between_saves_leaves_a_trigger_on_its_ability() {
+        use common::comp::{TriggerCondition, TriggerSlot};
+
+        let db = TestDb::new();
+        let id = create(&db, "uuid-trigger", &[SPELL_BOOK]);
+
+        // Save 1: point a trigger at a learned spell.
+        let mut loaded = load(&db, "uuid-trigger", id);
+        let pool = pool_of(&loaded);
+        let index = pool.abilities.len() - 1;
+        let bound_key = pool.abilities[index].clone();
+        assert!(
+            loaded.inventory.spell_is_known(&bound_key),
+            "the last entry should be a learned spell"
+        );
+        loaded.trigger_slots.slots[0] = Some(TriggerSlot::from_pool_index(
+            index,
+            TriggerCondition::HealthBelow(0.25),
+        ));
+        save(&db, id, &loaded, &pool);
+
+        // Learn a second book whose keys sort before the bound one, then save.
+        let mut loaded = load(&db, "uuid-trigger", id);
+        loaded
+            .inventory
+            .push_spell_group(spell_group(SECOND_SPELL_BOOK))
+            .expect("a second, distinct group");
+        let grown = pool_of(&loaded);
+        assert_ne!(
+            grown.abilities.iter().position(|k| *k == bound_key),
+            pool.abilities.iter().position(|k| *k == bound_key),
+            "this test is only meaningful if the bound key actually moves"
+        );
+        loaded.trigger_slots.remap_innate_bindings(&pool, &grown);
+        // The in-memory binding already follows its ability, before any save.
+        let AuxiliaryAbility::Innate(live_index) = loaded
+            .trigger_slots
+            .configured_ability(0)
+            .expect("the slot survives the remap")
+        else {
+            panic!("a trigger slot always resolves to an innate binding")
+        };
+        assert_eq!(grown.abilities[live_index], bound_key);
+        save(&db, id, &loaded, &grown);
+
+        // And so does the persisted one.
+        let reloaded = load(&db, "uuid-trigger", id);
+        let reloaded_pool = pool_of(&reloaded);
+        let AuxiliaryAbility::Innate(reloaded_index) = reloaded
+            .trigger_slots
+            .configured_ability(0)
+            .expect("the trigger survives the reload")
+        else {
+            panic!("a trigger slot always resolves to an innate binding")
+        };
+        assert_eq!(
+            reloaded_pool.abilities[reloaded_index], bound_key,
+            "learning a spell between saves re-pointed a trigger at a different ability"
+        );
+        assert_eq!(
+            reloaded.trigger_slots.get(0).map(|s| s.condition),
+            Some(TriggerCondition::HealthBelow(0.25)),
+        );
+    }
+
+    /// The migration's own contract: a character created BEFORE the spell book
+    /// existed gets one, its normal inventory is untouched, and the entity-id
+    /// sequence is left consistent so the next allocation cannot collide (the
+    /// exact failure the recipe-book migration had to be repaired for).
+    #[test]
+    fn the_backfill_adds_a_container_without_disturbing_anything_else() {
+        let db = TestDb::new();
+        // A character with real inventory contents to protect.
+        let mut inventory = Inventory::with_empty();
+        inventory
+            .push(common::comp::Item::new_from_asset_expect(
+                "common.items.weapons.sword.starter",
+            ))
+            .expect("room in a fresh inventory");
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let (id, _) = create_character(
+            "uuid-backfill",
+            "Testificate",
+            components(inventory),
+            &mut transaction,
+        )
+        .expect("character creation");
+        transaction.commit().expect("commit");
+
+        let before = load(&db, "uuid-backfill", id);
+        let inventory_before: Vec<_> = before
+            .inventory
+            .slots()
+            .flatten()
+            .map(|item| item.item_definition_id().to_owned())
+            .collect();
+        assert!(!inventory_before.is_empty());
+
+        // Simulate the pre-migration state: a character with no spell book at
+        // all, exactly as every character looked before this schema change.
+        {
+            let conn = db.connection();
+            conn.execute(
+                "DELETE FROM item WHERE parent_container_item_id IN (
+                     SELECT item_id FROM item
+                     WHERE position = 'spell_book' AND parent_container_item_id = ?1
+                 )",
+                [id.0],
+            )
+            .expect("empty the spell book");
+            conn.execute(
+                "DELETE FROM item WHERE position = 'spell_book' AND parent_container_item_id = ?1",
+                [id.0],
+            )
+            .expect("remove the spell book container");
+        }
+        run_the_spell_book_backfill(&db);
+
+        let after = load(&db, "uuid-backfill", id);
+        let inventory_after: Vec<_> = after
+            .inventory
+            .slots()
+            .flatten()
+            .map(|item| item.item_definition_id().to_owned())
+            .collect();
+        assert_eq!(
+            inventory_before, inventory_after,
+            "the backfill disturbed the character's normal inventory"
+        );
+        // The backfilled book is empty (the migration never invents contents),
+        // which is exactly what a pre-existing character should have.
+        assert_eq!(after.inventory.spell_book_len(), 0);
+
+        // Every item row must have an entity row, and the AUTOINCREMENT
+        // sequence must be at or above the highest id in use — the invariant
+        // whose violation forced a follow-up fix on the recipe book.
+        let conn = db.connection();
+        let orphans: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM item WHERE item_id NOT IN (SELECT entity_id FROM entity)",
+                [],
+                |row| row.get(0),
+            )
+            .expect("orphan count");
+        assert_eq!(orphans, 0, "the backfill left item rows with no entity row");
+
+        let (seq, max_item): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT seq FROM sqlite_sequence WHERE name = 'entity'),
+                        (SELECT MAX(item_id) FROM item)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("sequence state");
+        assert!(
+            seq >= max_item,
+            "the entity sequence ({seq}) fell behind the highest item id ({max_item}); the next \
+             allocation would collide"
+        );
+
+        // Running the backfill again must be a no-op, never a duplicate.
+        run_the_spell_book_backfill(&db);
+        let books: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM item WHERE position = 'spell_book'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("book count");
+        assert_eq!(books, 1);
+    }
+
+    /// Executes the shipped backfill SQL directly.
+    ///
+    /// `run_migrations` cannot be reused here: refinery records the migration
+    /// as applied on the database's first start, so re-running it is a
+    /// no-op. The point of these assertions is the SQL itself, so it is
+    /// executed verbatim from the same file the runner embeds.
+    fn run_the_spell_book_backfill(db: &TestDb) {
+        let conn = db.connection();
+        conn.execute_batch(include_str!("../../migrations/V78__spell_book.sql"))
+            .expect("the backfill SQL runs");
+    }
 }

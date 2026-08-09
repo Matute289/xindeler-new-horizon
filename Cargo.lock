@@ -204,7 +204,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -215,7 +215,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -486,40 +486,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "auth-common"
-version = "0.1.0"
-source = "git+https://gitlab.com/veloren/auth.git?rev=ae0e16783a9f9041951296885f082308e155db79#ae0e16783a9f9041951296885f082308e155db79"
-dependencies = [
- "rand 0.8.6",
- "serde",
- "uuid",
-]
-
-[[package]]
-name = "authc"
-version = "1.0.0"
-source = "git+https://gitlab.com/veloren/auth.git?rev=ae0e16783a9f9041951296885f082308e155db79#ae0e16783a9f9041951296885f082308e155db79"
-dependencies = [
- "auth-common",
- "bytes",
- "fxhash",
- "hex",
- "http",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "rust-argon2",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "aws-lc-rs"
+version = "1.17.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00bdb5da18dac48ca2cc7cd4a98e533e8635a58e2361d13a1a4ee3888e0d72f1"
+dependencies = [
+ "aws-lc-sys",
+ "zeroize",
+]
+
+[[package]]
+name = "aws-lc-sys"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
+dependencies = [
+ "cc",
+ "cmake",
+ "dunce",
+ "fs_extra",
+ "pkg-config",
+]
 
 [[package]]
 name = "axum"
@@ -593,12 +586,6 @@ dependencies = [
  "rustc-demangle",
  "windows-link 0.2.1",
 ]
-
-[[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
@@ -700,7 +687,7 @@ checksum = "b79834656f71332577234b50bfc009996f7449e0c056884e6a02492ded0ca2f3"
 dependencies = [
  "arrayref",
  "arrayvec",
- "constant_time_eq 0.4.2",
+ "constant_time_eq",
 ]
 
 [[package]]
@@ -1287,12 +1274,6 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
-
-[[package]]
-name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
@@ -1422,7 +1403,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -2052,7 +2033,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2176,6 +2157,12 @@ name = "drop_guard"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c4a817d8b683f6e649aed359aab0c47a875377516bb5791d0f7e46d9066d209"
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dyn-clone"
@@ -2414,7 +2401,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2739,6 +2726,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs_extra"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
+
+[[package]]
 name = "fsevent-sys"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2875,8 +2868,8 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
+ "windows-link 0.1.3",
+ "windows-result 0.3.4",
 ]
 
 [[package]]
@@ -2983,7 +2976,7 @@ dependencies = [
  "vec_map",
  "wasm-bindgen",
  "web-sys",
- "windows 0.62.2",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -3443,7 +3436,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "rustls",
- "rustls-native-certs",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -3455,13 +3447,16 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
+ "base64",
  "bytes",
  "futures-channel",
  "futures-util",
  "http",
  "http-body",
  "hyper",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
  "tokio",
@@ -3481,7 +3476,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -4777,7 +4772,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5532,7 +5527,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "serde_core",
 ]
 
@@ -6064,6 +6059,7 @@ version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
+ "aws-lc-rs",
  "bytes",
  "fastbloom",
  "getrandom 0.3.4",
@@ -6534,6 +6530,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "reqwest"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
+dependencies = [
+ "base64",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "percent-encoding",
+ "pin-project-lite",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "resolv-conf"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6637,13 +6672,13 @@ dependencies = [
 
 [[package]]
 name = "rust-argon2"
-version = "2.1.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d9848531d60c9cbbcf9d166c885316c24bc0e2a9d3eba0956bb6cbbd79bc6e8"
+checksum = "8ae76b7506744d254fd0eb2c0ff5c5d108201ccbb083111ac04a44eeda105680"
 dependencies = [
- "base64 0.21.7",
+ "base64",
  "blake2b_simd",
- "constant_time_eq 0.3.1",
+ "constant_time_eq",
 ]
 
 [[package]]
@@ -6714,7 +6749,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6733,6 +6768,7 @@ version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
+ "aws-lc-rs",
  "log",
  "once_cell",
  "ring",
@@ -6791,7 +6827,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6806,6 +6842,7 @@ version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted",
@@ -7122,7 +7159,7 @@ version = "3.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76a5c54c7310e7b8b9577c286d7e399ddd876c3e12b3ed917a8aabc4b96e9e8c"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "bs58",
  "chrono",
  "hashbrown 0.17.1",
@@ -7457,7 +7494,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7528,7 +7565,7 @@ dependencies = [
  "cfg-if 1.0.4",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7721,6 +7758,9 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+dependencies = [
+ "futures-core",
+]
 
 [[package]]
 name = "synstructure"
@@ -7799,7 +7839,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7839,7 +7879,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4676b37242ccbd1aabf56edb093a4827dc49086c0ffd764a5705899e0f35f8f7"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64",
  "bitflags 2.13.0",
  "fancy-regex",
  "filedescriptor",
@@ -8228,6 +8268,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tower-http"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+dependencies = [
+ "bitflags 2.13.0",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "pin-project-lite",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "url",
+]
+
+[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8344,7 +8402,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5f7c95348f20c1c913d72157b3c6dee6ea3e30b3d19502c5a7f6d3f160dacbf"
 dependencies = [
  "cc",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -8390,7 +8448,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.4",
+ "cfg-if 0.1.10",
  "rand 0.8.6",
  "static_assertions",
 ]
@@ -8523,7 +8581,7 @@ version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "flate2",
  "log",
  "once_cell",
@@ -8616,606 +8674,6 @@ dependencies = [
  "num-traits",
  "rustc_version 0.4.1",
  "serde",
-]
-
-[[package]]
-name = "veloren-client"
-version = "0.18.0"
-dependencies = [
- "async-channel",
- "authc",
- "byteorder",
- "clap",
- "hashbrown 0.17.1",
- "hickory-resolver",
- "image",
- "num 0.4.3",
- "quinn",
- "rayon",
- "ron",
- "rustls",
- "rustyline",
- "serde",
- "specs",
- "tokio",
- "tracing",
- "vek 0.17.2",
- "veloren-client-i18n",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-frontend",
- "veloren-common-i18n",
- "veloren-common-net",
- "veloren-common-state",
- "veloren-common-systems",
- "veloren-network",
- "veloren-voxygen-i18n-helpers",
-]
-
-[[package]]
-name = "veloren-client-i18n"
-version = "0.18.0"
-dependencies = [
- "clap",
- "fluent",
- "fluent-bundle",
- "fluent-syntax",
- "hashbrown 0.17.1",
- "intl-memoizer",
- "serde",
- "tracing",
- "unic-langid",
- "veloren-common-assets",
- "veloren-common-i18n",
-]
-
-[[package]]
-name = "veloren-common"
-version = "0.18.0"
-dependencies = [
- "ahash 0.8.12",
- "approx 0.5.1",
- "bitflags 2.13.0",
- "chrono",
- "chrono-tz",
- "clap",
- "criterion",
- "crossbeam-utils 0.8.21",
- "csv",
- "dot_vox",
- "enum-map",
- "enumset",
- "fxhash",
- "hashbrown 0.17.1",
- "indexmap 2.14.0",
- "inline_tweak",
- "itertools 0.14.0",
- "kiddo",
- "lazy_static",
- "num-derive",
- "num-traits",
- "ordered-float 5.3.0",
- "petgraph 0.8.3",
- "rand 0.10.1",
- "rand_chacha 0.10.0",
- "rayon",
- "regex",
- "ron",
- "roots",
- "serde",
- "serde_json",
- "serde_repr",
- "sha2 0.11.0",
- "slab",
- "slotmap",
- "specs",
- "spin_sleep",
- "strum",
- "thread-priority",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "vek 0.17.2",
- "veloren-common-assets",
- "veloren-common-base",
- "veloren-common-i18n",
-]
-
-[[package]]
-name = "veloren-common-assets"
-version = "0.18.0"
-dependencies = [
- "assets_manager",
- "dot_vox",
- "hashbrown 0.17.1",
- "image",
- "lazy_static",
- "ron",
- "serde",
- "tempfile",
- "tracing",
- "walkdir",
- "wavefront",
-]
-
-[[package]]
-name = "veloren-common-base"
-version = "0.18.0"
-dependencies = [
- "directories-next",
- "profiling",
- "tracing",
-]
-
-[[package]]
-name = "veloren-common-dynlib"
-version = "0.18.0"
-dependencies = [
- "find_folder",
- "libloading 0.9.0",
- "notify",
- "tracing",
-]
-
-[[package]]
-name = "veloren-common-ecs"
-version = "0.18.0"
-dependencies = [
- "float-cmp",
- "specs",
- "tracing",
- "veloren-common-base",
-]
-
-[[package]]
-name = "veloren-common-frontend"
-version = "0.18.0"
-dependencies = [
- "chrono",
- "criterion",
- "crossbeam-channel",
- "flate2",
- "termcolor",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "tracing-tracy",
- "veloren-common-base",
-]
-
-[[package]]
-name = "veloren-common-i18n"
-version = "0.18.0"
-dependencies = [
- "hashbrown 0.17.1",
- "rand 0.10.1",
- "serde",
-]
-
-[[package]]
-name = "veloren-common-net"
-version = "0.18.0"
-dependencies = [
- "bincode",
- "flate2",
- "hashbrown 0.17.1",
- "image",
- "num-traits",
- "serde",
- "specs",
- "sum_type",
- "tracing",
- "vek 0.17.2",
- "veloren-common",
-]
-
-[[package]]
-name = "veloren-common-state"
-version = "0.18.0"
-dependencies = [
- "async-trait",
- "atomic_refcell",
- "bincode",
- "futures",
- "hashbrown 0.17.1",
- "hex",
- "num_cpus",
- "rayon",
- "scopeguard",
- "serde",
- "sha2 0.11.0",
- "specs",
- "tar",
- "thread-priority",
- "timer-queue",
- "tokio",
- "toml 1.1.2+spec-1.1.0",
- "tracing",
- "vek 0.17.2",
- "veloren-common",
- "veloren-common-assets",
- "veloren-common-base",
- "veloren-common-ecs",
- "veloren-common-net",
- "wasmtime",
- "wasmtime-wasi",
-]
-
-[[package]]
-name = "veloren-common-systems"
-version = "0.18.0"
-dependencies = [
- "itertools 0.14.0",
- "ordered-float 5.3.0",
- "rand 0.10.1",
- "rayon",
- "specs",
- "tracing",
- "vek 0.17.2",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-ecs",
- "veloren-common-net",
- "veloren-common-state",
-]
-
-[[package]]
-name = "veloren-network"
-version = "0.3.0"
-dependencies = [
- "async-channel",
- "async-trait",
- "bincode",
- "bytes",
- "clap",
- "criterion",
- "crossbeam-channel",
- "futures-util",
- "hashbrown 0.17.1",
- "lazy_static",
- "lz-fear",
- "prometheus",
- "prometheus-hyper",
- "quinn",
- "rand 0.10.1",
- "rcgen",
- "rustls",
- "serde",
- "shellexpand",
- "socket2",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "veloren-network-protocol",
-]
-
-[[package]]
-name = "veloren-network-protocol"
-version = "0.6.1"
-dependencies = [
- "async-channel",
- "async-trait",
- "bitflags 2.13.0",
- "bytes",
- "criterion",
- "hashbrown 0.17.1",
- "prometheus",
- "rand 0.10.1",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "veloren-query-server"
-version = "0.1.2"
-dependencies = [
- "clap",
- "protocol",
- "rand 0.10.1",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "veloren-rtsim"
-version = "0.18.0"
-dependencies = [
- "anymap2",
- "atomic_refcell",
- "enum-map",
- "fxhash",
- "hashbrown 0.17.1",
- "itertools 0.14.0",
- "num-traits",
- "once_cell",
- "rand 0.10.1",
- "rand_chacha 0.10.0",
- "rayon",
- "rmp-serde",
- "serde",
- "slotmap",
- "specs",
- "take-once",
- "tracing",
- "vek 0.17.2",
- "veloren-common",
- "veloren-world",
-]
-
-[[package]]
-name = "veloren-server"
-version = "0.18.0"
-dependencies = [
- "atomicwrites",
- "authc",
- "bincode",
- "censor",
- "chrono",
- "chrono-tz",
- "crossbeam-channel",
- "drop_guard",
- "enum-map",
- "futures-util",
- "hashbrown 0.17.1",
- "humantime",
- "itertools 0.14.0",
- "lazy_static",
- "noise",
- "num_cpus",
- "parking_lot",
- "portpicker",
- "prometheus",
- "quinn",
- "rand 0.10.1",
- "rayon",
- "refinery",
- "ron",
- "rusqlite",
- "rustls",
- "rustls-pemfile",
- "schnellru",
- "serde",
- "serde_json",
- "specs",
- "strum",
- "tokio",
- "tracing",
- "vek 0.17.2",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-ecs",
- "veloren-common-net",
- "veloren-common-state",
- "veloren-common-systems",
- "veloren-network",
- "veloren-query-server",
- "veloren-rtsim",
- "veloren-server-agent",
- "veloren-world",
-]
-
-[[package]]
-name = "veloren-server-agent"
-version = "0.18.0"
-dependencies = [
- "itertools 0.14.0",
- "lazy_static",
- "rand 0.10.1",
- "specs",
- "tracing",
- "vek 0.17.2",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-dynlib",
- "veloren-rtsim",
- "veloren-world",
-]
-
-[[package]]
-name = "veloren-server-cli"
-version = "0.18.0"
-dependencies = [
- "axum",
- "cansi",
- "chrono",
- "clap",
- "crossterm",
- "http-body-util",
- "hyper",
- "lazy_static",
- "mimalloc",
- "num_cpus",
- "prometheus",
- "rand 0.10.1",
- "ratatui",
- "ron",
- "serde",
- "shell-words",
- "signal-hook 0.4.4",
- "specs",
- "tokio",
- "tracing",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-frontend",
- "veloren-common-net",
- "veloren-server",
- "veloren-server-agent",
- "veloren-world",
-]
-
-[[package]]
-name = "veloren-voxygen"
-version = "0.18.0"
-dependencies = [
- "backtrace",
- "bitflags 2.13.0",
- "bytemuck",
- "chrono",
- "chumsky",
- "clap",
- "conrod_core",
- "cpal",
- "criterion",
- "crossbeam-channel",
- "crossbeam-utils 0.8.21",
- "directories-next",
- "discord-sdk",
- "dispatch",
- "dot_vox",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "enum-map",
- "euc",
- "gilrs",
- "glyph_brush",
- "guillotiere",
- "hashbrown 0.17.1",
- "iced_native",
- "image",
- "inline_tweak",
- "itertools 0.14.0",
- "kira",
- "lazy_static",
- "levenshtein",
- "mimalloc",
- "mumble-link",
- "native-dialog",
- "num 0.4.3",
- "num_cpus",
- "open",
- "ordered-float 5.3.0",
- "rand 0.10.1",
- "rand_chacha 0.10.0",
- "rayon",
- "regex",
- "ron",
- "serde",
- "serde_json",
- "serde_with",
- "sha2 0.11.0",
- "shaderc",
- "slab",
- "specs",
- "strum",
- "tokio",
- "tracing",
- "treeculler",
- "ureq",
- "vek 0.17.2",
- "veloren-client",
- "veloren-client-i18n",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-ecs",
- "veloren-common-frontend",
- "veloren-common-i18n",
- "veloren-common-net",
- "veloren-common-state",
- "veloren-common-systems",
- "veloren-server",
- "veloren-voxygen-anim",
- "veloren-voxygen-egui",
- "veloren-voxygen-i18n-helpers",
- "veloren-world",
- "wgpu",
- "wgpu-profiler",
- "window_clipboard",
- "winit",
- "winres",
-]
-
-[[package]]
-name = "veloren-voxygen-anim"
-version = "0.18.0"
-dependencies = [
- "bytemuck",
- "inline_tweak",
- "lazy_static",
- "vek 0.17.2",
- "veloren-common",
- "veloren-common-dynlib",
- "veloren-common-state",
-]
-
-[[package]]
-name = "veloren-voxygen-egui"
-version = "0.18.0"
-dependencies = [
- "egui",
- "egui-winit",
- "egui_plot",
- "lazy_static",
- "veloren-client",
- "veloren-common",
- "veloren-common-dynlib",
- "winit",
-]
-
-[[package]]
-name = "veloren-voxygen-i18n-helpers"
-version = "0.18.0"
-dependencies = [
- "rand 0.10.1",
- "tracing",
- "vek 0.17.2",
- "veloren-client-i18n",
- "veloren-common",
- "veloren-common-net",
-]
-
-[[package]]
-name = "veloren-world"
-version = "0.18.0"
-dependencies = [
- "arr_macro",
- "bincode",
- "bitvec",
- "clap",
- "criterion",
- "csv",
- "deflate",
- "delaunator",
- "enum-map",
- "enumset",
- "fallible-iterator",
- "fixed",
- "flate2",
- "fxhash",
- "hashbrown 0.17.1",
- "image",
- "indicatif",
- "itertools 0.14.0",
- "kiddo",
- "lazy_static",
- "lz-fear",
- "minifb",
- "noise",
- "num 0.4.3",
- "num-traits",
- "ordered-float 5.3.0",
- "rand 0.10.1",
- "rand_chacha 0.10.0",
- "rayon",
- "ron",
- "rstar",
- "rusqlite",
- "serde",
- "signal-hook 0.4.4",
- "strum",
- "svg_fmt",
- "tiny-skia 0.12.0",
- "tracing",
- "tracing-subscriber",
- "vek 0.17.2",
- "veloren-common",
- "veloren-common-base",
- "veloren-common-dynlib",
- "veloren-common-frontend",
- "veloren-common-net",
 ]
 
 [[package]]
@@ -9557,7 +9015,7 @@ version = "45.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0d1a46c4a2360186b59c6ed7a74a1121ac97925ae9a18db1b2f146cc27ac0b7"
 dependencies = [
- "base64 0.22.1",
+ "base64",
  "directories-next",
  "log",
  "postcard",
@@ -10409,7 +9867,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -10476,23 +9934,11 @@ version = "0.61.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
 dependencies = [
- "windows-collections 0.2.0",
+ "windows-collections",
  "windows-core 0.61.2",
- "windows-future 0.2.1",
+ "windows-future",
  "windows-link 0.1.3",
- "windows-numerics 0.2.0",
-]
-
-[[package]]
-name = "windows"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
-dependencies = [
- "windows-collections 0.3.2",
- "windows-core 0.62.2",
- "windows-future 0.3.2",
- "windows-numerics 0.3.1",
+ "windows-numerics",
 ]
 
 [[package]]
@@ -10502,15 +9948,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
 dependencies = [
  "windows-core 0.61.2",
-]
-
-[[package]]
-name = "windows-collections"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
-dependencies = [
- "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -10540,19 +9977,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement 0.60.2",
- "windows-interface 0.59.3",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
-]
-
-[[package]]
 name = "windows-future"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10560,18 +9984,7 @@ checksum = "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
 dependencies = [
  "windows-core 0.61.2",
  "windows-link 0.1.3",
- "windows-threading 0.1.0",
-]
-
-[[package]]
-name = "windows-future"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
-dependencies = [
- "windows-core 0.62.2",
- "windows-link 0.2.1",
- "windows-threading 0.2.1",
+ "windows-threading",
 ]
 
 [[package]]
@@ -10638,16 +10051,6 @@ checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
  "windows-core 0.61.2",
  "windows-link 0.1.3",
-]
-
-[[package]]
-name = "windows-numerics"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
-dependencies = [
- "windows-core 0.62.2",
- "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -10840,15 +10243,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66463ad2e0ea3bbf808b7f1d371311c80e115c0b71d60efc142cafbcfb057a6"
 dependencies = [
  "windows-link 0.1.3",
-]
-
-[[package]]
-name = "windows-threading"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
-dependencies = [
- "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -11382,6 +10776,649 @@ name = "xi-unicode"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a67300977d3dc3f8034dae89778f502b6ba20b269527b3223ba59c0cf393bb8a"
+
+[[package]]
+name = "xindeler-anim"
+version = "0.18.0"
+dependencies = [
+ "bytemuck",
+ "inline_tweak",
+ "lazy_static",
+ "vek 0.17.2",
+ "xindeler-common",
+ "xindeler-common-dynlib",
+ "xindeler-common-state",
+]
+
+[[package]]
+name = "xindeler-auth-common"
+version = "0.1.0"
+source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=99afc8ff5ff43d5d69cf06e56117b25ca0623de3#99afc8ff5ff43d5d69cf06e56117b25ca0623de3"
+dependencies = [
+ "hex",
+ "rand 0.10.1",
+ "rust-argon2",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "xindeler-authc"
+version = "1.0.0"
+source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=99afc8ff5ff43d5d69cf06e56117b25ca0623de3#99afc8ff5ff43d5d69cf06e56117b25ca0623de3"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+ "xindeler-auth-common",
+]
+
+[[package]]
+name = "xindeler-client"
+version = "0.18.0"
+dependencies = [
+ "async-channel",
+ "byteorder",
+ "clap",
+ "hashbrown 0.17.1",
+ "hickory-resolver",
+ "image",
+ "num 0.4.3",
+ "quinn",
+ "rayon",
+ "ron",
+ "rustls",
+ "rustyline",
+ "serde",
+ "specs",
+ "tokio",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-authc",
+ "xindeler-client-i18n",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-frontend",
+ "xindeler-common-i18n",
+ "xindeler-common-net",
+ "xindeler-common-state",
+ "xindeler-common-systems",
+ "xindeler-i18n-helpers",
+ "xindeler-network",
+]
+
+[[package]]
+name = "xindeler-client-i18n"
+version = "0.18.0"
+dependencies = [
+ "clap",
+ "fluent",
+ "fluent-bundle",
+ "fluent-syntax",
+ "hashbrown 0.17.1",
+ "intl-memoizer",
+ "serde",
+ "tracing",
+ "unic-langid",
+ "xindeler-common-assets",
+ "xindeler-common-i18n",
+]
+
+[[package]]
+name = "xindeler-common"
+version = "0.18.0"
+dependencies = [
+ "ahash 0.8.12",
+ "approx 0.5.1",
+ "bitflags 2.13.0",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "criterion",
+ "crossbeam-utils 0.8.21",
+ "csv",
+ "dot_vox",
+ "enum-map",
+ "enumset",
+ "fxhash",
+ "hashbrown 0.17.1",
+ "indexmap 2.14.0",
+ "inline_tweak",
+ "itertools 0.14.0",
+ "kiddo",
+ "lazy_static",
+ "num-derive",
+ "num-traits",
+ "ordered-float 5.3.0",
+ "petgraph 0.8.3",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
+ "rayon",
+ "regex",
+ "ron",
+ "roots",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "sha2 0.11.0",
+ "slab",
+ "slotmap",
+ "specs",
+ "spin_sleep",
+ "strum",
+ "thread-priority",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "vek 0.17.2",
+ "xindeler-common-assets",
+ "xindeler-common-base",
+ "xindeler-common-i18n",
+]
+
+[[package]]
+name = "xindeler-common-assets"
+version = "0.18.0"
+dependencies = [
+ "assets_manager",
+ "dot_vox",
+ "hashbrown 0.17.1",
+ "image",
+ "lazy_static",
+ "ron",
+ "serde",
+ "tempfile",
+ "tracing",
+ "walkdir",
+ "wavefront",
+]
+
+[[package]]
+name = "xindeler-common-base"
+version = "0.18.0"
+dependencies = [
+ "directories-next",
+ "profiling",
+ "tracing",
+]
+
+[[package]]
+name = "xindeler-common-dynlib"
+version = "0.18.0"
+dependencies = [
+ "find_folder",
+ "libloading 0.9.0",
+ "notify",
+ "tracing",
+]
+
+[[package]]
+name = "xindeler-common-ecs"
+version = "0.18.0"
+dependencies = [
+ "float-cmp",
+ "specs",
+ "tracing",
+ "xindeler-common-base",
+]
+
+[[package]]
+name = "xindeler-common-frontend"
+version = "0.18.0"
+dependencies = [
+ "chrono",
+ "criterion",
+ "crossbeam-channel",
+ "flate2",
+ "termcolor",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "tracing-tracy",
+ "xindeler-common-base",
+]
+
+[[package]]
+name = "xindeler-common-i18n"
+version = "0.18.0"
+dependencies = [
+ "hashbrown 0.17.1",
+ "rand 0.10.1",
+ "serde",
+]
+
+[[package]]
+name = "xindeler-common-net"
+version = "0.18.0"
+dependencies = [
+ "bincode",
+ "flate2",
+ "hashbrown 0.17.1",
+ "image",
+ "num-traits",
+ "serde",
+ "specs",
+ "sum_type",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-common",
+]
+
+[[package]]
+name = "xindeler-common-oracle"
+version = "0.18.0"
+dependencies = [
+ "ron",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "xindeler-common-state"
+version = "0.18.0"
+dependencies = [
+ "async-trait",
+ "atomic_refcell",
+ "bincode",
+ "futures",
+ "hashbrown 0.17.1",
+ "hex",
+ "num_cpus",
+ "rayon",
+ "scopeguard",
+ "serde",
+ "sha2 0.11.0",
+ "specs",
+ "tar",
+ "thread-priority",
+ "timer-queue",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+ "vek 0.17.2",
+ "wasmtime",
+ "wasmtime-wasi",
+ "xindeler-common",
+ "xindeler-common-assets",
+ "xindeler-common-base",
+ "xindeler-common-ecs",
+ "xindeler-common-net",
+]
+
+[[package]]
+name = "xindeler-common-systems"
+version = "0.18.0"
+dependencies = [
+ "chrono",
+ "hashbrown 0.17.1",
+ "itertools 0.14.0",
+ "ordered-float 5.3.0",
+ "rand 0.10.1",
+ "rayon",
+ "specs",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-ecs",
+ "xindeler-common-net",
+ "xindeler-common-state",
+]
+
+[[package]]
+name = "xindeler-i18n-helpers"
+version = "0.18.0"
+dependencies = [
+ "rand 0.10.1",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-client-i18n",
+ "xindeler-common",
+ "xindeler-common-net",
+]
+
+[[package]]
+name = "xindeler-network"
+version = "0.3.0"
+dependencies = [
+ "async-channel",
+ "async-trait",
+ "bincode",
+ "bytes",
+ "clap",
+ "criterion",
+ "crossbeam-channel",
+ "futures-util",
+ "hashbrown 0.17.1",
+ "lazy_static",
+ "lz-fear",
+ "prometheus",
+ "prometheus-hyper",
+ "quinn",
+ "rand 0.10.1",
+ "rcgen",
+ "rustls",
+ "serde",
+ "shellexpand",
+ "socket2",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "xindeler-network-protocol",
+]
+
+[[package]]
+name = "xindeler-network-protocol"
+version = "0.6.1"
+dependencies = [
+ "async-channel",
+ "async-trait",
+ "bitflags 2.13.0",
+ "bytes",
+ "criterion",
+ "hashbrown 0.17.1",
+ "prometheus",
+ "rand 0.10.1",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "xindeler-query-server"
+version = "0.1.2"
+dependencies = [
+ "clap",
+ "protocol",
+ "rand 0.10.1",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "xindeler-rtsim"
+version = "0.18.0"
+dependencies = [
+ "anymap2",
+ "atomic_refcell",
+ "enum-map",
+ "fxhash",
+ "hashbrown 0.17.1",
+ "itertools 0.14.0",
+ "num-traits",
+ "once_cell",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
+ "rayon",
+ "rmp-serde",
+ "serde",
+ "slotmap",
+ "specs",
+ "take-once",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-common",
+ "xindeler-world",
+]
+
+[[package]]
+name = "xindeler-server"
+version = "0.18.0"
+dependencies = [
+ "atomicwrites",
+ "bincode",
+ "censor",
+ "chrono",
+ "chrono-tz",
+ "crossbeam-channel",
+ "drop_guard",
+ "enum-map",
+ "futures-util",
+ "hashbrown 0.17.1",
+ "humantime",
+ "itertools 0.14.0",
+ "lazy_static",
+ "noise",
+ "notify",
+ "num_cpus",
+ "parking_lot",
+ "portpicker",
+ "prometheus",
+ "quinn",
+ "rand 0.10.1",
+ "rayon",
+ "refinery",
+ "ron",
+ "rusqlite",
+ "rustls",
+ "rustls-pemfile",
+ "schnellru",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "specs",
+ "strum",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-authc",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-ecs",
+ "xindeler-common-i18n",
+ "xindeler-common-net",
+ "xindeler-common-oracle",
+ "xindeler-common-state",
+ "xindeler-common-systems",
+ "xindeler-network",
+ "xindeler-query-server",
+ "xindeler-rtsim",
+ "xindeler-server-agent",
+ "xindeler-world",
+]
+
+[[package]]
+name = "xindeler-server-agent"
+version = "0.18.0"
+dependencies = [
+ "itertools 0.14.0",
+ "lazy_static",
+ "rand 0.10.1",
+ "specs",
+ "tracing",
+ "vek 0.17.2",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-dynlib",
+ "xindeler-rtsim",
+ "xindeler-world",
+]
+
+[[package]]
+name = "xindeler-server-cli"
+version = "0.18.0"
+dependencies = [
+ "axum",
+ "cansi",
+ "chrono",
+ "clap",
+ "crossterm",
+ "http-body-util",
+ "hyper",
+ "lazy_static",
+ "mimalloc",
+ "num_cpus",
+ "prometheus",
+ "rand 0.10.1",
+ "ratatui",
+ "ron",
+ "serde",
+ "shell-words",
+ "signal-hook 0.4.4",
+ "specs",
+ "tokio",
+ "tracing",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-frontend",
+ "xindeler-common-net",
+ "xindeler-server",
+ "xindeler-server-agent",
+ "xindeler-world",
+]
+
+[[package]]
+name = "xindeler-voxygen"
+version = "0.18.0"
+dependencies = [
+ "backtrace",
+ "bitflags 2.13.0",
+ "bytemuck",
+ "chrono",
+ "chumsky",
+ "clap",
+ "conrod_core",
+ "copypasta",
+ "cpal",
+ "criterion",
+ "crossbeam-channel",
+ "crossbeam-utils 0.8.21",
+ "directories-next",
+ "discord-sdk",
+ "dispatch",
+ "dot_vox",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "enum-map",
+ "euc",
+ "gilrs",
+ "glyph_brush",
+ "guillotiere",
+ "hashbrown 0.17.1",
+ "iced_native",
+ "image",
+ "inline_tweak",
+ "itertools 0.14.0",
+ "kira",
+ "lazy_static",
+ "levenshtein",
+ "mimalloc",
+ "mumble-link",
+ "native-dialog",
+ "num 0.4.3",
+ "num_cpus",
+ "open",
+ "ordered-float 5.3.0",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
+ "rayon",
+ "regex",
+ "ron",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.11.0",
+ "shaderc",
+ "slab",
+ "specs",
+ "strum",
+ "tokio",
+ "tracing",
+ "treeculler",
+ "ureq",
+ "vek 0.17.2",
+ "wgpu",
+ "wgpu-profiler",
+ "window_clipboard",
+ "winit",
+ "winres",
+ "xindeler-anim",
+ "xindeler-client",
+ "xindeler-client-i18n",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-ecs",
+ "xindeler-common-frontend",
+ "xindeler-common-i18n",
+ "xindeler-common-net",
+ "xindeler-common-state",
+ "xindeler-common-systems",
+ "xindeler-i18n-helpers",
+ "xindeler-server",
+ "xindeler-voxygen-egui",
+ "xindeler-world",
+]
+
+[[package]]
+name = "xindeler-voxygen-egui"
+version = "0.18.0"
+dependencies = [
+ "egui",
+ "egui-winit",
+ "egui_plot",
+ "lazy_static",
+ "winit",
+ "xindeler-client",
+ "xindeler-common",
+ "xindeler-common-dynlib",
+]
+
+[[package]]
+name = "xindeler-world"
+version = "0.18.0"
+dependencies = [
+ "arr_macro",
+ "bincode",
+ "bitvec",
+ "clap",
+ "criterion",
+ "csv",
+ "deflate",
+ "delaunator",
+ "enum-map",
+ "enumset",
+ "fallible-iterator",
+ "fixed",
+ "flate2",
+ "fxhash",
+ "hashbrown 0.17.1",
+ "image",
+ "indicatif",
+ "itertools 0.14.0",
+ "kiddo",
+ "lazy_static",
+ "lz-fear",
+ "minifb",
+ "noise",
+ "num 0.4.3",
+ "num-traits",
+ "ordered-float 5.3.0",
+ "rand 0.10.1",
+ "rand_chacha 0.10.0",
+ "rayon",
+ "ron",
+ "rstar",
+ "rusqlite",
+ "serde",
+ "signal-hook 0.4.4",
+ "strum",
+ "svg_fmt",
+ "tiny-skia 0.12.0",
+ "tracing",
+ "tracing-subscriber",
+ "vek 0.17.2",
+ "xindeler-common",
+ "xindeler-common-base",
+ "xindeler-common-dynlib",
+ "xindeler-common-frontend",
+ "xindeler-common-net",
+]
 
 [[package]]
 name = "xkbcommon-dl"

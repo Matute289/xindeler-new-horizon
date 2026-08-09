@@ -1,17 +1,19 @@
+pub mod actor;
 pub mod airship;
 pub mod architect;
+pub mod banished;
 pub mod faction;
 pub mod nature;
-pub mod npc;
 pub mod quest;
 pub mod report;
 pub mod sentiment;
 pub mod site;
 
 pub use self::{
+    actor::{Actor, Actors},
+    banished::{BanishedCreature, BanishedKind, Banishments},
     faction::{Faction, FactionId, Factions},
     nature::Nature,
-    npc::{Npc, NpcId, Npcs},
     quest::Quests,
     report::{Report, ReportId, ReportKind, Reports},
     sentiment::{Sentiment, Sentiments},
@@ -19,7 +21,7 @@ pub use self::{
 };
 use airship::AirshipSim;
 use architect::Architect;
-use common::resources::TimeOfDay;
+use common::{resources::TimeOfDay, rtsim::ActorId};
 use enum_map::{EnumArray, EnumMap, enum_map};
 use serde::{Deserialize, Serialize, de, ser};
 use std::{
@@ -34,7 +36,7 @@ use std::{
 /// Note that this number does *not* need incrementing on every change: most
 /// field removals/additions are fine. This number should only be incremented
 /// when we wish to perform a *hard purge* of rtsim data.
-pub const CURRENT_VERSION: u32 = 10;
+pub const CURRENT_VERSION: u32 = 11;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Data {
@@ -44,7 +46,7 @@ pub struct Data {
 
     pub nature: Nature,
     #[serde(default)]
-    pub npcs: Npcs,
+    pub actors: Actors,
     #[serde(default)]
     pub sites: Sites,
     #[serde(default)]
@@ -55,6 +57,13 @@ pub struct Data {
     pub architect: Architect,
     #[serde(default)]
     pub quests: Quests,
+    /// Creatures temporarily removed from the world by a banishment effect,
+    /// due to return at their own wall-clock deadline. Additive
+    /// `#[serde(default)]` field: per `CURRENT_VERSION`'s doc comment above,
+    /// this needs **no** version bump — an older save simply loads with an
+    /// empty registry.
+    #[serde(default)]
+    pub banished: Banishments,
 
     #[serde(default)]
     pub tick: u64,
@@ -87,9 +96,9 @@ impl fmt::Debug for ReadError {
 pub type WriteError = rmp_serde::encode::Error;
 
 impl Data {
-    pub fn spawn_npc(&mut self, npc: Npc) -> NpcId {
-        let home = npc.home;
-        let id = self.npcs.create_npc(npc);
+    pub fn spawn_actor(&mut self, actor: Actor) -> ActorId {
+        let home = actor.home;
+        let id = self.actors.create_actor(actor);
         if let Some(home) = home.and_then(|home| self.sites.get_mut(home)) {
             home.population.insert(id);
         }
@@ -116,7 +125,10 @@ impl Data {
     /// ready for simulation.
     ///
     /// This might include populating caches, normalising data, etc.
-    pub fn prepare(&mut self) { self.quests.prepare(); }
+    pub fn prepare(&mut self) {
+        self.quests.prepare();
+        self.banished.prepare();
+    }
 }
 
 fn rugged_ser_enum_map<
@@ -163,4 +175,64 @@ fn rugged_de_enum_map<
     }
 
     de.deserialize_map(Visitor::<_, _, DEFAULT>(PhantomData))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::grid::Grid;
+    use vek::Vec2;
+
+    /// The exact wire shape of an rtsim save written *before* `banished`
+    /// existed: every field `Data` has today except that one, in order, named
+    /// the same way `write_named` names them.
+    #[derive(Serialize)]
+    struct PreBanishmentData {
+        version: u32,
+        nature: Nature,
+        actors: Actors,
+        sites: Sites,
+        factions: Factions,
+        reports: Reports,
+        architect: Architect,
+        quests: Quests,
+        tick: u64,
+        time_of_day: TimeOfDay,
+        should_purge: bool,
+    }
+
+    /// `banished` is an additive `#[serde(default)]` field, which is why
+    /// `CURRENT_VERSION` does **not** move for it (see the constant's own doc
+    /// comment, and `quests`, which was added the same way). This pins that
+    /// claim end to end: a payload missing the key entirely must still load
+    /// through the real MessagePack codec, at the *unchanged* version, and
+    /// come up with an empty registry. It fails loudly if anyone drops the
+    /// `#[serde(default)]`.
+    #[test]
+    fn a_save_written_before_the_banishment_registry_still_loads_at_the_same_version() {
+        let old = PreBanishmentData {
+            version: CURRENT_VERSION,
+            nature: Nature {
+                chunks: Grid::populate_from(Vec2::new(1, 1), |_| nature::Chunk {
+                    res: Default::default(),
+                }),
+            },
+            actors: Default::default(),
+            sites: Default::default(),
+            factions: Default::default(),
+            reports: Default::default(),
+            architect: Default::default(),
+            quests: Default::default(),
+            tick: 7,
+            time_of_day: TimeOfDay(1234.0),
+            should_purge: false,
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect("serialise the old save");
+
+        let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
+        assert_eq!(data.tick, 7);
+        assert!(data.banished.is_empty());
+    }
 }

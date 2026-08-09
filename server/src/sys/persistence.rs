@@ -2,7 +2,8 @@ use crate::{persistence::character_updater, sys::SysScheduler};
 use common::{
     comp::{
         ActiveAbilities, Alignment, Background, Body, CharacterClass, Ethos, Inventory, MapMarker,
-        Presence, PresenceKind, SkillSet, Stats, Waypoint,
+        Presence, PresenceKind, SkillSet, SpellMastery, Stats, TriggerSlots, Waypoint,
+        ability::AbilityPool,
         pet::{Pet, is_tameable},
     },
     uid::Uid,
@@ -27,9 +28,14 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, Pet>,
         ReadStorage<'a, Stats>,
         ReadStorage<'a, ActiveAbilities>,
+        // Xindeler: persisted `Innate` hotbar slots are stored by pool key, so
+        // the writer needs each character's pool to translate them.
+        ReadStorage<'a, AbilityPool>,
         ReadStorage<'a, CharacterClass>,
         ReadStorage<'a, Ethos>,
         ReadStorage<'a, Background>,
+        ReadStorage<'a, TriggerSlots>,
+        ReadStorage<'a, SpellMastery>,
         WriteExpect<'a, character_updater::CharacterUpdater>,
         Write<'a, SysScheduler<Self>>,
     );
@@ -52,9 +58,12 @@ impl<'a> System<'a> for Sys {
             pets,
             stats,
             active_abilities,
+            ability_pools,
             character_classes,
             ethoses,
             backgrounds,
+            trigger_slots,
+            spell_masteries,
             mut updater,
             mut scheduler,
         ): Self::SystemData,
@@ -68,10 +77,13 @@ impl<'a> System<'a> for Sys {
                     &uids,
                     player_waypoints.maybe(),
                     &active_abilities,
+                    ability_pools.maybe(),
                     map_markers.maybe(),
                     character_classes.maybe(),
                     ethoses.maybe(),
                     backgrounds.maybe(),
+                    trigger_slots.maybe(),
+                    spell_masteries.maybe(),
                 )
                     .join()
                     .filter_map(
@@ -82,10 +94,13 @@ impl<'a> System<'a> for Sys {
                             player_uid,
                             waypoint,
                             active_abilities,
+                            ability_pool,
                             map_marker,
                             character_class,
                             ethos,
                             background,
+                            trigger_slots,
+                            spell_mastery,
                         )| match presence.kind {
                             PresenceKind::LoadingCharacter(_char_id) => {
                                 error!(
@@ -118,10 +133,13 @@ impl<'a> System<'a> for Sys {
                                     pets,
                                     waypoint.cloned(),
                                     active_abilities.clone(),
+                                    ability_pool.cloned().unwrap_or_default(),
                                     map_marker.cloned(),
                                     character_class.copied().unwrap_or_default(),
                                     ethos.copied().unwrap_or_default(),
                                     background.cloned().unwrap_or_default(),
+                                    trigger_slots.cloned().unwrap_or_default(),
+                                    spell_mastery.copied().unwrap_or_default(),
                                 ))
                             },
                             PresenceKind::Spectator | PresenceKind::Possessor => None,

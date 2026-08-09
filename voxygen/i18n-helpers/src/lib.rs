@@ -373,6 +373,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         BuffKind::Cursed => "curse",
         BuffKind::Crippled => "crippled",
         BuffKind::Frozen => "frozen",
+        BuffKind::Sickened => "sickened",
         BuffKind::Regeneration
         | BuffKind::Saturation
         | BuffKind::Potion
@@ -402,13 +403,41 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::ScornfulTaunt
         | BuffKind::Tenacity
         | BuffKind::Resilience
+        | BuffKind::StormChaser
+        | BuffKind::EagleEye
         | BuffKind::OwlTalon
         | BuffKind::HeavyNock
         | BuffKind::Heartseeker
-        | BuffKind::EagleEye
         | BuffKind::ArdentHunter
         | BuffKind::SepticShot
-        | BuffKind::FreedomOfMovement => {
+        | BuffKind::ArdentHunt
+        | BuffKind::IgniteArrow
+        | BuffKind::FreezeArrow
+        | BuffKind::DrenchArrow
+        | BuffKind::JoltArrow
+        | BuffKind::BlindingSmite
+        | BuffKind::BrandingSmite
+        | BuffKind::DivineSmite
+        | BuffKind::SearingSmite
+        | BuffKind::StaggeringSmite
+        | BuffKind::ThunderousSmite
+        | BuffKind::WrathfulSmite
+        | BuffKind::Blessed
+        | BuffKind::CrusadersMantle
+        | BuffKind::RestfulSleep
+        | BuffKind::OtherworldlyWard
+        | BuffKind::FreedomOfMovement
+        | BuffKind::Fearless
+        | BuffKind::Detecting
+        | BuffKind::SeeInvisible
+        | BuffKind::TrueSight
+        | BuffKind::RemoteSensing
+        | BuffKind::Identifying
+        | BuffKind::PassWithoutTrace
+        | BuffKind::Mooncloak
+        | BuffKind::Nondetection
+        | BuffKind::MagicAura
+        | BuffKind::Sequester => {
             tracing::error!("Player was killed by a positive buff!");
             "mysterious"
         },
@@ -418,6 +447,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Parried
         | BuffKind::PotionSickness
         | BuffKind::Polymorphed
+        | BuffKind::Disguised
         | BuffKind::Heatstroke
         | BuffKind::Rooted
         | BuffKind::Winded
@@ -427,13 +457,21 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::ArdentHunted
         | BuffKind::Terrified
         | BuffKind::Charmed
+        | BuffKind::Dominated
+        | BuffKind::Maddened
+        | BuffKind::Paralyzed
         | BuffKind::Hollowtouched
         | BuffKind::DifficultTerrain
         | BuffKind::Antimagic
         | BuffKind::Anchored
         | BuffKind::Asleep
         | BuffKind::Blinded
-        | BuffKind::Slowed => {
+        | BuffKind::Bane
+        | BuffKind::FaerieFire
+        | BuffKind::Enfeebled
+        | BuffKind::Hexed
+        | BuffKind::Slowed
+        | BuffKind::Agonized => {
             tracing::error!("Player was killed by a debuff that doesn't do damage!");
             "mysterious"
         },

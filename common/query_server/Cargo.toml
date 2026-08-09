@@ -1,5 +1,5 @@
 [package]
-name = "veloren-query-server"
+name = "xindeler-query-server"
 description = "Query Server crate for veloren (client and server)"
 version = "0.1.2"
 edition.workspace = true

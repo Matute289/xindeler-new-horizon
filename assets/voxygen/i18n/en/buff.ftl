@@ -123,6 +123,8 @@ buff-blinded = Blinded
 ## Slowed (BL-66 d)
 buff-slowed = Slowed
     .desc = Your movement speed is reduced.
+buff-agonized = Agonized
+    .desc = Wracked with pain - your movement and attacks are weakened, and you cannot use auxiliary abilities.
 ## Freeze
 buff-frozen = Frozen
     .desc = Your movements and attacks are slowed.
@@ -209,6 +211,9 @@ buff-tenacity = Tenacity
 ## Resilience
 buff-resilience = Resilience
     .desc = After having just taken a debilitating attack, you become more resilient to future incapaciting effects.
+## Storm Chaser
+buff-stormchaser = Storm Chaser
+    .desc = You revel in violence, when your arrows strike true your attacks and movements become faster.
 ## Owl Talon
 buff-owltalon = Owl Talon
     .desc = Taking advantage of your target not knowing of your presence, your next attack will be more precise and deal more damage.
@@ -236,12 +241,103 @@ buff-septicshot = Septic Shot
 ## Terrified
 buff-terrified = Terrified
     .desc = Dread floods your limbs, slowing every step.
+## Fearless
+buff-fearless = Fearless
+    .desc = A surge of courage steels you against fear itself.
 ## Charmed
 buff-charmed = Charmed
     .desc = You cannot bring yourself to harm whoever did this to you.
+buff-dominated = Dominated
+    .desc = Your will is not your own; you obey your dominator's commands.
+buff-maddened = Maddened
+    .desc = You have turned against everyone, even your former allies.
+buff-paralyzed = Paralyzed
+    .desc = You cannot move, act, or fight back.
 ## Hollowtouched
 buff-hollowtouched = Hollowtouched
     .desc = The Hollow has tasted you. Maximum health reduced.
+## Ardent Hunt (upstream)
+buff-ardenthunt = Ardent Hunt
+    .desc = Your fervor causes your arrows to be more lethal to a specific target, at the cost of them being weaker against other targets.
+## Ignite Arrow
+buff-ignitearrow = Ignite Arrow
+    .desc = You've ignited your next arrow, which will cause it to burn the target it strikes, and may be explosive if fired in a certain way.
+## Freeze Arrow
+buff-freezearrow = Freeze Arrow
+    .desc = You've frozen your next arrow, which will cause it to freeze the target it strikes, and it may explode in a cloud of frost if fired in a certain way.
+## Drench Arrow
+buff-drencharrow = Drench Arrow
+    .desc = You've drenched your next arrow in poison, which will cause it to poison the target it strikes, and it may explode in a cloud of poison if fired in a certain way.
+## Jolt Arrow
+buff-joltarrow = Jolt Arrow
+    .desc = You've statically charged your next arrow, which will create arcs of electricity from the target it strikes, and it may be attracted to targets if fired in a certain way.
+## Detecting
+buff-detecting = Detecting
+    .desc = You are attuned to a magical sense.
+## See Invisible (placeholder strings; content spells land separately)
+buff-seeinvisible = See Invisible
+    .desc = You can perceive concealed and invisible creatures.
+## True Sight (placeholder strings; content spells land separately)
+buff-truesight = True Sight
+    .desc = You see through illusion, invisibility, and darkness.
+## Remote Sensing (placeholder strings; content spells land separately)
+buff-remotesensing = Remote Sensing
+    .desc = Your senses are anchored elsewhere; your own body stands unattended.
+## Identifying
+buff-identifying = Identifying
+    .desc = You are studying a target, gathering knowledge you already possess about it.
+## Disguised (placeholder strings; content spells land separately)
+buff-disguised = Disguised
+    .desc = You appear as something else. Your body, movement and reach are unchanged.
+## Pass without Trace
+buff-passwithouttrace = Pass without Trace
+    .desc = A hush of shadow cloaks your footsteps and scent, making you far harder to notice.
+## Mooncloak
+buff-mooncloak = Mooncloak
+    .desc = Shifting silver dimness veils your movements and dulls harmful magic against you.
+## Nondetection
+buff-nondetection = Nondetection
+    .desc = A screening ward makes you immune to scrying and divination magic.
+## Magic Aura
+buff-magicaura = Magic Aura
+    .desc = A subtle veil feeds false readings to anyone probing you with detection magic.
+## Sequester
+buff-sequester = Sequester
+    .desc = A veil of stillness renders you unseen and shielded from every form of remote sensing.
+## Smites (self-buff, next weapon hit gains a rider)
+buff-blindingsmite = Blinding Smite
+    .desc = Your next weapon strike sears with radiant light, dealing extra damage and blinding your foe.
+buff-brandingsmite = Branding Smite
+    .desc = Your next weapon strike sears with radiant light, dealing extra damage.
+buff-divinesmite = Divine Smite
+    .desc = Your next weapon strike is charged with holy power, dealing significant extra damage.
+buff-searingsmite = Searing Smite
+    .desc = Your next weapon strike sears with fire, dealing extra damage and setting your foe alight.
+buff-staggeringsmite = Staggering Smite
+    .desc = Your next weapon strike rattles the senses, dealing extra damage and knocking your foe off balance.
+buff-thunderoussmite = Thunderous Smite
+    .desc = Your next weapon strike booms like thunder, dealing extra damage and hurling your foe backward.
+buff-wrathfulsmite = Wrathful Smite
+    .desc = Your next weapon strike channels dread, dealing extra damage and filling your foe with terror.
+## Bane / Bless / Faerie Fire / Enfeebled
+buff-blessed = Blessed
+    .desc = Your strikes and resolve are subtly sharpened.
+buff-crusadersmantle = Crusader's Mantle
+    .desc = A radius of consecrated light bolsters your strikes, wreathing every blow in searing radiance.
+buff-restfulsleep = Restful Sleep
+    .desc = You are sunk in a warded, restful sleep - unable to move or act, but any harm will wake you at once.
+buff-otherworldlyward = Otherworldly Ward
+    .desc = A radiant warding light surrounds you, dulling the blows of attackers while it holds.
+buff-bane = Bane
+    .desc = Your focus frays; your strikes and resolve falter at the worst moments.
+buff-faeriefire = Faerie Fire
+    .desc = A glow clings to you, leaving you unable to hide. Attacks against you land more easily.
+buff-enfeebled = Enfeebled
+    .desc = Your blows land weak, dealing only a fraction of their usual force.
+buff-sickened = Sickened
+    .desc = A baleful sickness saps your focus and wracks your body with pain.
+buff-hexed = Hexed
+    .desc = A curse dulls your precision - your blows are less likely to land a telling hit.
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

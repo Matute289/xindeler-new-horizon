@@ -31,10 +31,6 @@ layout(location = 3) flat out uint f_mode;
 void main() {
     f_color = v_color;
 
-    // vec2 v_pos = vec2(-1.0,1.0) * v_pos;
-    /* f_uv = vec2(1.0,1.0) * v_uv; */
-    // vec2 v_uv = vec2(1.0,-1.0) * v_uv;
-
     if (w_pos.w == 1.0) {
         f_uv = v_uv;
         // Fixed scale In-game element

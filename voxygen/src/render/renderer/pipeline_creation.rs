@@ -6,10 +6,10 @@ use crate::render::{
 use super::{
     super::{
         AaMode, BloomMode, CloudMode, ExperimentalShader, FluidMode, LightingMode, PipelineModes,
-        ReflectionMode, RenderError, ShadowMode,
+        ReflectionMode, RenderError, ShadowMode, SsaoMode, SsaoQuality,
         pipelines::{
             blit, bloom, clouds, debug, figure, fluid, lod_object, lod_terrain, particle,
-            postprocess, rope, shadow, skybox, sprite, terrain, trail, ui,
+            postprocess, rope, shadow, skybox, sprite, ssao, terrain, trail, ui,
         },
     },
     ImmutableLayouts, Layouts,
@@ -29,6 +29,7 @@ pub struct Pipelines {
     pub trail: trail::TrailPipeline,
     pub clouds: clouds::CloudsPipeline,
     pub bloom: Option<bloom::BloomPipelines>,
+    pub ssao: ssao::SsaoPipelines,
     pub postprocess: postprocess::PostProcessPipeline,
     // Consider reenabling at some time
     // player_shadow: figure::FigurePipeline,
@@ -53,6 +54,7 @@ pub struct IngamePipelines {
     trail: trail::TrailPipeline,
     clouds: clouds::CloudsPipeline,
     pub bloom: Option<bloom::BloomPipelines>,
+    ssao: ssao::SsaoPipelines,
     postprocess: postprocess::PostProcessPipeline,
     // Consider reenabling at some time
     // player_shadow: figure::FigurePipeline,
@@ -101,6 +103,7 @@ impl Pipelines {
             trail: ingame.trail,
             clouds: ingame.clouds,
             bloom: ingame.bloom,
+            ssao: ingame.ssao,
             postprocess: ingame.postprocess,
             //player_shadow: ingame.player_shadow,
             skybox: ingame.skybox,
@@ -147,6 +150,8 @@ struct ShaderModules {
     dual_downsample_filtered_frag: wgpu::ShaderModule,
     dual_downsample_frag: wgpu::ShaderModule,
     dual_upsample_frag: wgpu::ShaderModule,
+    ssao_frag: wgpu::ShaderModule,
+    ssao_blur_frag: wgpu::ShaderModule,
     postprocess_vert: wgpu::ShaderModule,
     postprocess_frag: wgpu::ShaderModule,
     blit_vert: wgpu::ShaderModule,
@@ -191,6 +196,7 @@ impl ShaderModules {
 #define REFLECTION_MODE {}
 #define LIGHTING_ALGORITHM {}
 #define SHADOW_MODE {}
+#define SSAO_QUALITY {}
 
 "#,
             constants.0.as_str(),
@@ -202,7 +208,7 @@ impl ShaderModules {
                 FluidMode::High => "FLUID_MODE_HIGH",
             },
             match pipeline_modes.cloud {
-                CloudMode::None => "CLOUD_MODE_NONE",
+                CloudMode::Flat => "CLOUD_MODE_FLAT",
                 CloudMode::Minimal => "CLOUD_MODE_MINIMAL",
                 CloudMode::Low => "CLOUD_MODE_LOW",
                 CloudMode::Medium => "CLOUD_MODE_MEDIUM",
@@ -223,6 +229,20 @@ impl ShaderModules {
                 ShadowMode::None => "SHADOW_MODE_NONE",
                 ShadowMode::Map(_) if has_shadow_views => "SHADOW_MODE_MAP",
                 ShadowMode::Cheap | ShadowMode::Map(_) => "SHADOW_MODE_CHEAP",
+            },
+            // `SSAO_QUALITY` must resolve even when SSAO is off: the
+            // generation/blur passes run unconditionally every frame
+            // regardless of the setting (only the clouds pass's
+            // consumption of the result is gated, by `SSAO_ENABLED` below),
+            // so `ssao-frag.glsl` is always compiled and always needs a
+            // valid tap-count tier.
+            match pipeline_modes.ssao {
+                SsaoMode::Off => "SSAO_QUALITY_MEDIUM",
+                SsaoMode::On(config) => match config.quality {
+                    SsaoQuality::Low => "SSAO_QUALITY_LOW",
+                    SsaoQuality::Medium => "SSAO_QUALITY_MEDIUM",
+                    SsaoQuality::High => "SSAO_QUALITY_HIGH",
+                },
             },
         );
 
@@ -266,6 +286,22 @@ impl ShaderModules {
             },
         };
 
+        let constants = match pipeline_modes.ssao {
+            SsaoMode::Off => constants,
+            SsaoMode::On(config) => {
+                format!(
+                    r#"
+{}
+
+#define SSAO_ENABLED
+#define SSAO_STRENGTH {}
+
+"#,
+                    constants, config.strength,
+                )
+            },
+        };
+
         let anti_alias = shaders
             .get(match pipeline_modes.aa {
                 AaMode::None => "antialias.none",
@@ -281,7 +317,7 @@ impl ShaderModules {
 
         let cloud = shaders
             .get(match pipeline_modes.cloud {
-                CloudMode::None => "include.cloud.none",
+                CloudMode::Flat => "include.cloud.flat",
                 _ => "include.cloud.regular",
             })
             .unwrap();
@@ -369,6 +405,8 @@ impl ShaderModules {
             )?,
             dual_downsample_frag: create_shader("dual-downsample-frag", ShaderStage::Fragment)?,
             dual_upsample_frag: create_shader("dual-upsample-frag", ShaderStage::Fragment)?,
+            ssao_frag: create_shader("ssao-frag", ShaderStage::Fragment)?,
+            ssao_blur_frag: create_shader("ssao-blur-frag", ShaderStage::Fragment)?,
             postprocess_vert: create_shader("postprocess-vert", ShaderStage::Vertex)?,
             postprocess_frag: create_shader("postprocess-frag", ShaderStage::Fragment)?,
             blit_vert: create_shader("blit-vert", ShaderStage::Vertex)?,
@@ -726,6 +764,21 @@ fn register_create_ingame_and_shadow_pipelines(
         },
         "bloom pipelines creation",
     );
+    // Pipelines for rendering screen-space ambient occlusion
+    let ssao = tasks.register(
+        move |needs| {
+            ssao::SsaoPipelines::new(
+                needs.device,
+                &needs.shaders.postprocess_vert,
+                &needs.shaders.ssao_frag,
+                &needs.shaders.ssao_blur_frag,
+                &needs.layouts.global,
+                &needs.layouts.ssao,
+                &needs.layouts.ssao_blur,
+            )
+        },
+        "ssao pipelines creation",
+    );
     // Pipeline for rendering our post-processing
     let postprocess = tasks.register(
         move |needs| {
@@ -854,6 +907,7 @@ fn register_create_ingame_and_shadow_pipelines(
             trail: trail.resolve(),
             clouds: clouds.resolve(),
             bloom: bloom.resolve(),
+            ssao: ssao.resolve(),
             postprocess: postprocess.resolve(),
             skybox: skybox.resolve(),
             sprite: sprite.resolve(),
@@ -989,6 +1043,7 @@ pub(super) fn recreate_pipelines(
             Pipelines,
             ShadowPipelines,
             RainOcclusionPipelines,
+            Arc<clouds::CloudsLayout>,
             Arc<postprocess::PostProcessLayout>,
         ),
         RenderError,
@@ -1036,7 +1091,11 @@ pub(super) fn recreate_pipelines(
             };
         drop(guard);
 
-        // Create new postprocess layouts
+        // Create new clouds and postprocess layouts -- both depend on
+        // `PipelineModes` (clouds on whether SSAO is enabled, postprocess on
+        // bloom/the material texture) and so need to be rebuilt here, unlike
+        // everything in `immutable_layouts`.
+        let clouds_layouts = Arc::new(clouds::CloudsLayout::new(&device, &pipeline_modes));
         let postprocess_layouts = Arc::new(postprocess::PostProcessLayout::new(
             &device,
             &pipeline_modes,
@@ -1044,6 +1103,7 @@ pub(super) fn recreate_pipelines(
 
         let layouts = Layouts {
             immutable: immutable_layouts,
+            clouds: clouds_layouts,
             postprocess: postprocess_layouts,
         };
 
@@ -1070,6 +1130,7 @@ pub(super) fn recreate_pipelines(
                 Pipelines::consolidate(interface, ingame),
                 shadow,
                 rain_occlusion,
+                layouts.clouds,
                 layouts.postprocess,
             )))
             .expect("Channel disconnected");

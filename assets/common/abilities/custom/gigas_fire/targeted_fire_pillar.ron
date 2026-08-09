@@ -23,12 +23,12 @@ BasicSummon(
     ),
     movement_modifier: (
         buildup: Some(0.0),
-        swing: Some(0.0),
+        action: Some(0.0),
         recover: Some(0.0),
     ),
     ori_modifier: (
         buildup: Some(0.0),
-        swing: Some(0.0),
+        action: Some(0.0),
         recover: Some(0.0),
     ),
 )

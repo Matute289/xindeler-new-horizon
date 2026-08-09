@@ -21,7 +21,7 @@ export VELOREN_ASSETS="/path/to/xindeler/assets"
 
 **Standard dev build** (hot-reloading enabled for animations and UI):
 ```bash
-cargo run --bin veloren-voxygen
+cargo run --bin xindeler-voxygen
 ```
 
 **Minimal feature set** (omits discord, plugins, singleplayer — faster startup for net/logic testing):
@@ -42,7 +42,7 @@ cargo dbg-voxygen
 **Release build** (no hot-reloading, LTO, for shipping):
 ```bash
 cargo build --release --no-default-features --features default-publish
-./target/release/veloren-voxygen
+./target/release/xindeler-voxygen
 ```
 
 ## Launching the Server (Headless)
@@ -50,13 +50,13 @@ cargo build --release --no-default-features --features default-publish
 **Standard dev server** (with worldgen, hot-reload agent AI):
 ```bash
 cargo server
-# equivalent to: cargo run --bin veloren-server-cli
+# equivalent to: cargo run --bin xindeler-server-cli
 ```
 
 **Minimal server** (no hot-reloading, faster startup for testing net code):
 ```bash
 cargo test-server
-# equivalent to: cargo run --bin veloren-server-cli --no-default-features --features simd
+# equivalent to: cargo run --bin xindeler-server-cli --no-default-features --features simd
 ```
 
 **With Tracy profiler**:
@@ -66,9 +66,9 @@ cargo tracy-server
 
 ## Single-Player (Client embeds Server)
 
-Single-player mode is built into `veloren-voxygen` via the `singleplayer` feature (on by default in dev). Just run the client — no separate server process needed:
+Single-player mode is built into `xindeler-voxygen` via the `singleplayer` feature (on by default in dev). Just run the client — no separate server process needed:
 ```bash
-cargo run --bin veloren-voxygen
+cargo run --bin xindeler-voxygen
 # then select "Singleplayer" in the main menu
 ```
 

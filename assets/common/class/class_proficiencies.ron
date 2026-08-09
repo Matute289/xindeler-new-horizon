@@ -1,0 +1,43 @@
+// Per-class weapon proficiency (soft gate): swinging a non-proficient
+// weapon is never blocked, only penalised (see combat_tuning.ron's
+// non_proficient_damage_mult). Mirrors class_attributes.ron's manifest
+// shape and hot-reload behavior. A class missing from this map resolves to
+// `ClassProficiencies::All` (permissive fail-open) — a typo here must fail
+// open, never silently mute a class's own proficiency.
+//
+// `Any(ToolKind)` covers every grip and role of that tool kind. `Handed(ToolKind,
+// Hands)` restricts to one specific grip — only meaningful for `Sword`
+// today, whose 1-handed (gladius) and 2-handed (greatsword) assets share a
+// single `ToolKind` and are distinguished only by the item's `Hands` field.
+// `Any(Sword)` therefore means "both grips"; `Handed(Sword, One)` means
+// "1-handed swords only". `Roled(ToolKind, WeaponRole)` restricts to one
+// specific role — only meaningful for `Staff`/`Sceptre` today, whose caster
+// (magic) and martial (melee) kits share a single `ToolKind`.
+{
+    Adventurer: All, // legacy permissive — grandfathers pre-class characters
+    Warrior: Only([Any(Sword), Any(Axe), Any(Hammer), Any(Bow), Any(Dagger), Any(Shield), Any(Spear)]),
+    Barbarian: Only([Any(Axe), Any(Hammer), Any(Sword), Any(Spear), Any(Shield), Any(Bow)]),
+    Rogue: Only([Any(Dagger), Handed(Sword, One), Any(Bow), Any(Blowgun), Any(Throwable)]),
+    // Monk's Staff proficiency is for the martial (quarterstaff) kit, not
+    // the caster fire kit -- narrowed from the old blanket Any(Staff), which
+    // handed Monk a legacy caster item's whole ability set despite Monk
+    // never being meant to cast it.
+    Monk: Only([Handed(Sword, One), Any(Spear), Roled(Staff, Martial)]),
+    Mage: Only([Roled(Staff, Caster), Any(Dagger), Any(Tome)]),
+    Sorcerer: Only([Any(Dagger), Roled(Staff, Caster)]),
+    Warlock: Only([Any(Dagger), Handed(Sword, One), Roled(Staff, Caster)]),
+    // Deliberately no Staff proficiency: Bard's starter weapon is being
+    // changed to an Instrument instead of widening this list to cover
+    // starter_staff. Do not add Staff here to "fix" the starter conflict.
+    Bard: Only([Handed(Sword, One), Any(Dagger), Any(Bow), Any(Instrument)]),
+    // Deliberately no Staff proficiency — same reasoning as Bard above;
+    // Artificer's starter weapon is a Hammer instead.
+    Artificer: Only([Any(Hammer), Any(Dagger), Any(Bow), Any(Shield), Any(Pick), Any(Farming)]),
+    // TODO: Cleric's sword grip (1h-only) is an inferred default, not a
+    // directly confirmed value — confirm before widening to Any(Sword).
+    Cleric: Only([Any(Hammer), Roled(Sceptre, Caster), Any(Shield), Any(HolySymbol), Handed(Sword, One)]),
+    Paladin: Only([Any(Sword), Any(Hammer), Any(Shield), Any(HolySymbol), Any(Axe)]),
+    Druid: Only([Roled(Staff, Caster), Roled(Sceptre, Caster), Any(Dagger), Any(Focus)]),
+    Ranger: Only([Any(Bow), Handed(Sword, One), Any(Dagger), Any(Spear), Any(Focus)]),
+    BloodSlayer: Only([Any(Sword), Any(Dagger), Any(Axe), Any(Bow)]),
+}

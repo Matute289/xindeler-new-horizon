@@ -18,7 +18,7 @@ use rand::prelude::*;
 use specs::{Builder, Entity, WorldExt};
 use std::{error::Error, sync::Arc, time::Duration};
 use vek::{Rgb, Vec2, Vec3};
-use veloren_common_systems::{character_behavior, phys};
+use xindeler_common_systems::{character_behavior, phys};
 
 pub const EPSILON: f32 = 0.00002;
 const DT_MILLIS: u64 = 10;
@@ -68,6 +68,7 @@ pub fn tick(state: &mut State, dt: Duration) {
         None,
         &ServerConstants {
             day_cycle_coefficient: 24.0,
+            oracle_live: false,
         },
         |_, _| {},
     );

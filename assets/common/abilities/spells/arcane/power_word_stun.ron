@@ -1,0 +1,42 @@
+BasicRanged(
+    energy_cost: 230.0,
+    buildup_duration: 1.0,
+    recover_duration: 0.6,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 1,
+            attack_effect: Some((
+                Buff((
+                    kind: Paralyzed,
+                    dur_secs: 60,
+                    strength: Value(1.0),
+                    chance: 1.0,
+                )),
+                All([
+                    TargetHealthAtOrBelow((
+                        base: 200.0,
+                        breakpoint: 400.0,
+                        scale: 0.5,
+                    )),
+                    CasterLevelRoll((
+                        unlock_level: 48,
+                        fail_chance_at_unlock: 0.25,
+                        fail_chance_at_max_level: 0.05,
+                        source_classes: [Mage, Sorcerer, Warlock, Bard],
+                    )),
+                ]),
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 80.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        cooldown: Some(75.0),
+        requirements: (min_level: Some(48)),
+    ),
+)

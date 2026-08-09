@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 use tracing::{info, trace, warn};
-use veloren_client::{Client, ClientType, addr::ConnectionArgs};
+use xindeler_client::{Client, ClientType, addr::ConnectionArgs};
 
 mod settings;
 mod tui;
@@ -102,7 +102,7 @@ impl BotClient {
         self.clock.tick();
         for (username, client) in self.bot_clients.iter_mut() {
             trace!(?username, "tick");
-            let _msgs: Result<Vec<veloren_client::Event>, veloren_client::Error> =
+            let _msgs: Result<Vec<xindeler_client::Event>, xindeler_client::Error> =
                 client.tick(comp::ControllerInputs::default(), self.clock.game_dt());
         }
     }
@@ -128,15 +128,7 @@ impl BotClient {
         };
         info!("usernames: {:?}", usernames);
         if let Some(auth_addr) = self.server_info.auth_provider.as_ref() {
-            let (scheme, authority) = auth_addr.split_once("://").expect("invalid auth url");
-            let scheme = scheme
-                .parse::<authc::Scheme>()
-                .expect("invalid auth url scheme");
-            let authority = authority
-                .parse::<authc::Authority>()
-                .expect("invalid auth url authority");
-
-            let authc = AuthClient::new(scheme, authority).expect("couldn't connect to , insecure");
+            let authc = AuthClient::new(auth_addr.as_str()).expect("invalid auth server address");
             for username in usernames.iter() {
                 if self
                     .settings
@@ -146,7 +138,15 @@ impl BotClient {
                 {
                     continue;
                 }
-                match self.runtime.block_on(authc.register(username, password)) {
+                // The auth server requires an email and will not let an
+                // account log in until that address is verified, so bots
+                // registered this way can be created but not used. Load
+                // testing against an auth-enabled server needs accounts
+                // provisioned ahead of time; against a server with
+                // auth_server_address unset this path is not reached at all.
+                // .invalid is the reserved TLD for exactly this (RFC 2606).
+                let email = format!("{username}@bot.invalid");
+                match authc.register(username, password, &email) {
                     Ok(()) => {
                         self.settings.bot_logins.push(BotCreds {
                             username: username.to_string(),
@@ -219,6 +219,7 @@ impl BotClient {
             hair_color: 0,
             skin: 0,
             eye_color: 0,
+            height_scale: u8::MAX / 2,
         }
     }
 

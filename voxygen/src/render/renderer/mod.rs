@@ -28,7 +28,7 @@ use super::{
     model::{DynamicModel, Model},
     pipelines::{
         GlobalsBindGroup, GlobalsLayouts, ShadowTexturesBindGroup, blit, bloom, clouds, debug,
-        figure, postprocess, rain_occlusion, rope, shadow, sprite, terrain, ui,
+        figure, postprocess, rain_occlusion, rope, shadow, sprite, ssao, terrain, ui,
     },
     texture::Texture,
 };
@@ -54,8 +54,9 @@ struct ImmutableLayouts {
     sprite: sprite::SpriteLayout,
     terrain: terrain::TerrainLayout,
     rope: rope::RopeLayout,
-    clouds: clouds::CloudsLayout,
     bloom: bloom::BloomLayout,
+    ssao: ssao::SsaoLayout,
+    ssao_blur: ssao::SsaoBlurLayout,
     ui: ui::UiLayout,
     premultiply_alpha: ui::PremultiplyAlphaLayout,
     blit: blit::BlitLayout,
@@ -65,6 +66,11 @@ struct ImmutableLayouts {
 struct Layouts {
     immutable: Arc<ImmutableLayouts>,
 
+    // Both of these depend on `PipelineModes` (postprocess on bloom/the
+    // material texture, clouds on whether SSAO is enabled) and so, unlike
+    // everything in `ImmutableLayouts`, get recreated whenever the render
+    // mode changes.
+    clouds: Arc<clouds::CloudsLayout>,
     postprocess: Arc<postprocess::PostProcessLayout>,
 }
 
@@ -86,6 +92,9 @@ struct Views {
     bloom_tgts: Option<[wgpu::TextureView; bloom::NUM_SIZES]>,
     // TODO: rename
     tgt_color_pp: wgpu::TextureView,
+
+    tgt_ao: wgpu::TextureView,
+    tgt_ao_blur: wgpu::TextureView,
 }
 
 /// Shadow rendering textures, layouts, pipelines, and bind groups
@@ -120,6 +129,7 @@ enum State {
                         Pipelines,
                         ShadowPipelines,
                         RainOcclusionPipelines,
+                        Arc<clouds::CloudsLayout>,
                         Arc<postprocess::PostProcessLayout>,
                     ),
                     RenderError,
@@ -458,8 +468,10 @@ impl Renderer {
             let sprite = sprite::SpriteLayout::new(&device);
             let terrain = terrain::TerrainLayout::new(&device);
             let rope = rope::RopeLayout::new(&device);
-            let clouds = clouds::CloudsLayout::new(&device);
             let bloom = bloom::BloomLayout::new(&device);
+            let ssao = ssao::SsaoLayout::new(&device);
+            let ssao_blur = ssao::SsaoBlurLayout::new(&device);
+            let clouds = Arc::new(clouds::CloudsLayout::new(&device, &pipeline_modes));
             let postprocess = Arc::new(postprocess::PostProcessLayout::new(
                 &device,
                 &pipeline_modes,
@@ -478,8 +490,9 @@ impl Renderer {
                 sprite,
                 terrain,
                 rope,
-                clouds,
                 bloom,
+                ssao,
+                ssao_blur,
                 ui,
                 premultiply_alpha,
                 blit,
@@ -487,6 +500,7 @@ impl Renderer {
 
             Layouts {
                 immutable,
+                clouds,
                 postprocess,
             }
         };
@@ -496,6 +510,7 @@ impl Renderer {
             graphics_backend,
             Layouts {
                 immutable: Arc::clone(&layouts.immutable),
+                clouds: Arc::clone(&layouts.clouds),
                 postprocess: Arc::clone(&layouts.postprocess),
             },
             shaders.cloned(),
@@ -549,12 +564,14 @@ impl Renderer {
             Self::create_consts_inner(&device, &queue, &[clouds::Locals::default()]);
         let postprocess_locals =
             Self::create_consts_inner(&device, &queue, &[postprocess::Locals::default()]);
+        let ssao_locals = Self::create_consts_inner(&device, &queue, &[ssao::Locals::default()]);
 
         let locals = Locals::new(
             &device,
             &layouts,
             clouds_locals,
             postprocess_locals,
+            ssao_locals,
             &views.tgt_color,
             &views.tgt_mat,
             &views.tgt_depth,
@@ -566,6 +583,8 @@ impl Renderer {
                 final_tgt_view: &tgts[0],
             }),
             &views.tgt_color_pp,
+            &views.tgt_ao,
+            &views.tgt_ao_blur,
             &sampler,
             &depth_sampler,
         );
@@ -807,6 +826,8 @@ impl Renderer {
                 &self.views.tgt_depth,
                 bloom_params,
                 &self.views.tgt_color_pp,
+                &self.views.tgt_ao,
+                &self.views.tgt_ao_blur,
                 &self.sampler,
                 &self.depth_sampler,
             );
@@ -975,6 +996,45 @@ impl Renderer {
             .is_on()
             .then(|| bloom_sizes.map(|size| color_view(size.x, size.y, format)));
 
+        // .max(1) to ensure we don't create zero sized textures, same guard as the
+        // bloom sizes above.
+        let ao_size = Vec2::new(width, height).map(|e| (e >> 1).max(1));
+        // Always single-sampled: this is a half-resolution derived target, not a
+        // multisampled render target, and every other screen-space pass already
+        // hard-codes `multisampled: false` in its bind group layout regardless of
+        // `sample_count` (see the SSAO bind group layouts).
+        let ao_view = |width, height| {
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: levels,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: ssao::SSAO_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+
+            tex.create_view(&wgpu::TextureViewDescriptor {
+                label: None,
+                format: Some(ssao::SSAO_FORMAT),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                usage: None,
+                aspect: wgpu::TextureAspect::All,
+                base_mip_level: 0,
+                mip_level_count: None,
+                base_array_layer: 0,
+                array_layer_count: None,
+            })
+        };
+        let tgt_ao_view = ao_view(ao_size.x, ao_size.y);
+        let tgt_ao_blur_view = ao_view(ao_size.x, ao_size.y);
+
         let tgt_depth_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size: wgpu::Extent3d {
@@ -1035,6 +1095,8 @@ impl Renderer {
                 tgt_depth: tgt_depth_view,
                 bloom_tgts: bloom_tgt_views,
                 tgt_color_pp: tgt_color_pp_view,
+                tgt_ao: tgt_ao_view,
+                tgt_ao_blur: tgt_ao_blur_view,
                 _win_depth: win_depth_view,
             },
             bloom_sizes.map(|s| s.map(|e| e as f32)),
@@ -1043,6 +1105,13 @@ impl Renderer {
 
     /// Get the resolution of the render target.
     pub fn resolution(&self) -> Vec2<u32> { self.resolution }
+
+    /// Get the internal resolution of the render target.
+    pub fn internal_resolution(&self) -> Vec2<u32> {
+        self.resolution
+            .map(|e| e as f32 * self.other_modes.upscale_mode.factor)
+            .as_()
+    }
 
     /// Get the resolution of the shadow render target.
     pub fn get_shadow_resolution(&self) -> (Vec2<u32>, Vec2<u32>) {
@@ -1175,6 +1244,7 @@ impl Renderer {
                     pipelines,
                     shadow_pipelines,
                     rain_occlusion_pipelines,
+                    clouds_layout,
                     postprocess_layout,
                 ))) => {
                     if let (
@@ -1210,6 +1280,7 @@ impl Renderer {
                     }
 
                     self.pipeline_modes = new_pipeline_modes;
+                    self.layouts.clouds = clouds_layout;
                     self.layouts.postprocess = postprocess_layout;
                     // TODO: we have the potential to skip recreating bindings / render targets on
                     // pipeline recreation trigged by shader reloading (would need to ensure new
@@ -1367,6 +1438,10 @@ impl Renderer {
 
     pub fn update_postprocess_locals(&mut self, new_val: postprocess::Locals) {
         self.locals.postprocess.update(&self.queue, &[new_val], 0)
+    }
+
+    pub fn update_ssao_locals(&mut self, new_val: ssao::Locals) {
+        self.locals.ssao.update(&self.queue, &[new_val], 0)
     }
 
     /// Create a new set of instances with the provided values.

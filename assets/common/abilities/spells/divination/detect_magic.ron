@@ -1,0 +1,42 @@
+// Detect Magic: the generic area-sense mechanism (`BuffKind::Detecting`)
+// applied to `SenseKind::Magic`. Reveals anything within range that
+// `is_magical` currently flags -- an active buff tagged
+// `BuffCategory::Magical`, or a dropped item whose `requires_attunement` is
+// set (`server/src/sys/detection.rs`'s own doc comment on `is_magical`). This
+// is strictly presence-only: unlike the D&D original's "hints at the nature
+// of its power", the engine has no per-target school/strength readout to
+// surface -- the reveal glow plus a generic `SenseKind::Magic` tag is the
+// whole effect. A player who also wants a fuller readout on one target casts
+// `identify` on it.
+//
+// `SenseMode::Snapshot`: membership is frozen at cast and held for the
+// buff's `Concentration(60)` duration, matching "for a short while you
+// perceive... nearby" -- not a continuously re-evaluated glow.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(
+            kind: Detecting,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                // Sheet has no explicit `aoe`; its own notes state "senses
+                // presence... within ~9 m", so 9.0 is taken directly from
+                // the sheet's prose rather than invented.
+                misc_data: Some(Sense(Magic, 9.0, Snapshot)),
+            ),
+        ),
+    ],
+    energy_cost: 15,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 1 spell -> min_level 6, same `level * 6` convention
+        // see_invisibility.ron/true_seeing.ron derive from every other
+        // shipped spell that sets this field.
+        requirements: (min_level: Some(6)),
+    ),
+)

@@ -1,7 +1,6 @@
 use crate::{
-    combat,
     comp::{
-        CharacterState, MeleeConstructor, StateUpdate, character_state::OutputEvents,
+        CharacterState, DerivedStats, MeleeConstructor, StateUpdate, character_state::OutputEvents,
         melee::CustomCombo,
     },
     event::LocalEvent,
@@ -92,8 +91,9 @@ impl CharacterBehavior for Data {
                             c.timer = tick_attack_or_default(data, self.timer, None);
                         }
                     } else {
-                        let precision_mult =
-                            combat::compute_precision_mult(data.inventory, data.msm);
+                        let precision_mult = data
+                            .derived
+                            .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                         let tool_stats = get_tool_stats(data, self.static_data.ability_info);
                         data.updater.insert(
                             data.entity,
@@ -116,7 +116,7 @@ impl CharacterBehavior for Data {
             },
             StageSection::Charge => {
                 if input_is_pressed(data, self.static_data.ability_info.input)
-                    && update.energy.current() >= self.static_data.energy_cost
+                    && update.energy.current() >= 1.0
                     && self.timer < self.static_data.charge_duration
                 {
                     let charge = (self.timer.as_secs_f32()
@@ -134,7 +134,7 @@ impl CharacterBehavior for Data {
                         .energy
                         .change_by(-self.static_data.energy_drain * data.dt.0);
                 } else if input_is_pressed(data, self.static_data.ability_info.input)
-                    && update.energy.current() >= self.static_data.energy_cost
+                    && update.energy.current() >= 1.0
                 {
                     // Maintains charge
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
@@ -150,8 +150,8 @@ impl CharacterBehavior for Data {
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
                         c.stage_section = StageSection::Action;
                         c.timer = Duration::default();
-                        c.movement_modifier = self.static_data.movement_modifier.swing;
-                        c.ori_modifier = self.static_data.ori_modifier.swing;
+                        c.movement_modifier = self.static_data.movement_modifier.action;
+                        c.ori_modifier = self.static_data.ori_modifier.action;
                     }
                 }
             },
@@ -167,7 +167,9 @@ impl CharacterBehavior for Data {
                         c.exhausted = true;
                     }
 
-                    let precision_mult = combat::compute_precision_mult(data.inventory, data.msm);
+                    let precision_mult = data
+                        .derived
+                        .map_or(DerivedStats::DEFAULT_PRECISION_MULT, |d| d.precision_mult);
                     let tool_stats = get_tool_stats(data, self.static_data.ability_info);
                     let custom_combo = CustomCombo {
                         base: self
@@ -175,11 +177,12 @@ impl CharacterBehavior for Data {
                             .custom_combo
                             .base
                             .map(|b| (self.charge_amount * b as f32).round() as i32),
-                        conditional: self
-                            .static_data
-                            .custom_combo
-                            .conditional
-                            .map(|c| ((self.charge_amount * c.0 as f32).round() as i32, c.1)),
+                        conditional: self.static_data.custom_combo.conditional.as_ref().map(|c| {
+                            (
+                                (self.charge_amount * c.0 as f32).round() as i32,
+                                c.1.clone(),
+                            )
+                        }),
                     };
 
                     data.updater.insert(
@@ -224,11 +227,7 @@ impl CharacterBehavior for Data {
                 if self.timer < self.static_data.recover_duration {
                     // Recovers
                     if let CharacterState::ChargedMelee(c) = &mut update.character {
-                        c.timer = tick_attack_or_default(
-                            data,
-                            self.timer,
-                            Some(data.stats.recovery_speed_modifier),
-                        );
+                        c.timer = tick_attack_or_default(data, self.timer, None);
                     }
                 } else {
                     // Done

@@ -2,12 +2,12 @@ use common::{
     GroupTarget,
     combat::{self, AttackOptions, AttackSource, AttackerInfo, TargetInfo},
     comp::{
-        Alignment, Body, Buffs, CharacterState, Combo, Energy, Group, Health, Inventory, Mass, Ori,
-        PhysicsState, Player, Pos, Scale, Stats, ability::Dodgeable, aura::EnteredAuras,
-        pool::Pool,
+        Alignment, Body, Buffs, CharacterClass, CharacterState, Combo, Energy, Group, Health,
+        Inventory, Mass, Ori, PhantomIllusion, PhysicsState, Player, Pos, Scale, Stats,
+        ability::Dodgeable, aura::EnteredAuras, pool::Pool,
     },
     event::{
-        BuffEvent, ComboChangeEvent, DeleteEvent, EmitExt, EnergyChangeEvent,
+        BuffEvent, ComboChangeEvent, DeleteEvent, DispelIllusionEvent, EmitExt, EnergyChangeEvent,
         EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
         PoiseChangeEvent, TransformEvent,
     },
@@ -37,6 +37,7 @@ event_emitters! {
         combo_change: ComboChangeEvent,
         entity_attack_hook: EntityAttackedHookEvent,
         transform: TransformEvent,
+        dispel_illusion: DispelIllusionEvent,
     }
 }
 
@@ -56,7 +57,9 @@ pub struct ReadData<'a> {
     energies: ReadStorage<'a, Energy>,
     combos: ReadStorage<'a, Combo>,
     inventories: ReadStorage<'a, Inventory>,
-    attuned_items: ReadStorage<'a, common::comp::AttunedItems>,
+    /// The target's cached gear aggregates, read instead of re-walking
+    /// its loadout once per damage instance.
+    derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     stats: ReadStorage<'a, Stats>,
     masses: ReadStorage<'a, Mass>,
     orientations: ReadStorage<'a, Ori>,
@@ -68,6 +71,8 @@ pub struct ReadData<'a> {
     entered_auras: ReadStorage<'a, EnteredAuras>,
     outcomes: Read<'a, EventBus<Outcome>>,
     physics_states: ReadStorage<'a, PhysicsState>,
+    character_classes: ReadStorage<'a, CharacterClass>,
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 #[derive(Default)]
@@ -167,17 +172,19 @@ impl<'a> System<'a> for Sys {
                                 group: read_data.groups.get(entity),
                                 energy: read_data.energies.get(entity),
                                 combo: read_data.combos.get(entity),
-                                inventory: read_data.inventories.get(entity),
+                                derived: read_data.derived_stats.get(entity),
                                 stats: read_data.stats.get(entity),
                                 mass: read_data.masses.get(entity),
                                 pos: Some(pool_pos.0),
+                                buffs: read_data.buffs.get(entity),
+                                character_class: read_data.character_classes.get(entity),
                             });
 
                     let target_info = TargetInfo {
                         entity: target,
                         uid: *uid_b,
                         inventory: read_data.inventories.get(target),
-                        attuned: read_data.attuned_items.get(target),
+                        derived: read_data.derived_stats.get(target),
                         stats: read_data.stats.get(target),
                         health: Some(health_b),
                         pos: pos_b.0,
@@ -187,6 +194,7 @@ impl<'a> System<'a> for Sys {
                         buffs: read_data.buffs.get(target),
                         mass: read_data.masses.get(target),
                         player: read_data.players.get(target),
+                        phantom_illusion: read_data.phantom_illusions.get(target).is_some(),
                     };
 
                     //TODO: Consider making pool hardcoded jump dodgeable only (like ground

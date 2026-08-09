@@ -25,7 +25,7 @@ use crate::{
 };
 use common::comp::{
     Body, Fluid,
-    aura::AuraKind::{Buff, ForcePvP, FriendlyFire},
+    aura::AuraKind::{Buff, ForcePvP, FriendlyFire, TieredHealthEffect},
 };
 use egui_winit::State as WinitState;
 use std::time::Duration;
@@ -39,7 +39,7 @@ use {
 #[cfg(feature = "use-dyn-lib")]
 lazy_static! {
     static ref LIB: Arc<Mutex<Option<LoadedLib>>> =
-        common_dynlib::init("veloren-voxygen-egui", "egui", &[]);
+        common_dynlib::init("xindeler-voxygen-egui", "egui", &[]);
 }
 
 #[cfg(feature = "use-dyn-lib")]
@@ -729,6 +729,7 @@ fn selected_entity_window(
                                         Buff { kind, .. } =>  format!("Buff - {:?}", kind),
                                         FriendlyFire =>  "Friendly Fire".to_string(),
                                         ForcePvP =>  "ForcedPvP".to_string(),
+                                        TieredHealthEffect { .. } => "Tiered Health Effect".to_string(),
                                     });
                                     ui.label(format!("{:1}", v.radius));
                                     ui.label(v.end_time.map_or("-".to_owned(), |x| format!("{:1}s", x.0 - time.0)));
@@ -794,9 +795,27 @@ fn selected_entity_window(
     }
 }
 
+fn humanoid_species_debug_label(species: common::comp::body::humanoid::Species) -> &'static str {
+    use common::comp::body::humanoid::Species;
+    // Danari/Draugr are the internal engine identifiers (kept forever per
+    // docs/design/specs/2026-07-02-race-rename-ingame.md); the player-facing
+    // canon names are Gnome/Dhampir. This inspector has no access to the
+    // Fluent i18n system (voxygen-egui doesn't depend on voxygen), so this is
+    // a plain label like every other debug string in this file, not a
+    // localization lookup.
+    match species {
+        Species::Danari => "Gnome",
+        Species::Draugr => "Dhampir",
+        Species::Dwarf => "Dwarf",
+        Species::Elf => "Elf",
+        Species::Human => "Human",
+        Species::Orc => "Orc",
+    }
+}
+
 fn body_species(body: &Body) -> String {
     match body {
-        Body::Humanoid(body) => format!("{:?}", body.species),
+        Body::Humanoid(body) => humanoid_species_debug_label(body.species).to_string(),
         Body::QuadrupedSmall(body) => format!("{:?}", body.species),
         Body::QuadrupedMedium(body) => format!("{:?}", body.species),
         Body::BirdMedium(body) => format!("{:?}", body.species),

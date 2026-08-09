@@ -13,6 +13,24 @@
             "common.items.testing.test_draugr_blade",
         ): "common-items-testing-test_draugr_blade",
         Simple(
+            "common.items.testing.test_page_divine_l1",
+        ): "common-items-testing-test_page_divine_l1",
+        Simple(
+            "common.items.testing.test_page_divine_l2",
+        ): "common-items-testing-test_page_divine_l2",
+        Simple(
+            "common.items.testing.test_page_divine_l3",
+        ): "common-items-testing-test_page_divine_l3",
+        Simple(
+            "common.items.testing.test_page_divine_l7",
+        ): "common-items-testing-test_page_divine_l7",
+        Simple(
+            "common.items.testing.test_page_uncatalogued",
+        ): "common-items-testing-test_page_uncatalogued",
+        Simple(
+            "common.items.testing.test_tome_of_transcription",
+        ): "common-items-testing-test_tome_of_transcription",
+        Simple(
             "common.items.npc_armor.pants.leather_blue",
         ): "common-items-npc_armor-pants-leather_blue",
         Simple(
@@ -901,14 +919,23 @@
             "common.items.weapons.staff.starter_staff",
         ): "weapon-staff-firestaff_starter",
         Simple(
+            "common.items.weapons.staff.frostbound_quarterstaff",
+        ): "weapon-staff-frostbound_quarterstaff",
+        Simple(
             "common.items.weapons.tome.apprentice_tome",
         ): "weapon-tome-apprentice_tome",
+        Simple(
+            "common.items.weapons.tome.the_dark_log",
+        ): "weapon-tome-the_dark_log",
+        Simple(
+            "common.items.weapons.tome.the_wicked_darkness",
+        ): "weapon-tome-the_wicked_darkness",
         Simple(
             "common.items.weapons.holy_symbol.initiate_symbol",
         ): "weapon-holy_symbol-initiate_symbol",
         Simple(
-            "common.items.weapons.focus.wanderer_focus",
-        ): "weapon-focus-wanderer_focus",
+            "common.items.weapons.focus.primordial_focus",
+        ): "weapon-focus-primordial_focus",
         Simple(
             "common.items.weapons.empty.empty",
         ): "common-items-weapons-empty-empty",
@@ -2419,6 +2446,9 @@
             "common.items.utility.training_dummy",
         ): "object-training_dummy",
         Simple(
+            "common.items.utility.scrying_crystal",
+        ): "object-scrying_crystal",
+        Simple(
             "common.items.food.apple",
         ): "object-apple_half",
         Simple(
@@ -3510,6 +3540,12 @@
         Simple(
             "common.items.crafting_ing.abyssal_heart",
         ): "sprite-crafting_ing-abyssal_heart",
+        Simple(
+            "common.items.crafting_ing.arcane_ink",
+        ): "sprite-crafting_ing-arcane_ink",
+        Simple(
+            "common.items.crafting_ing.binding_sigil",
+        ): "sprite-crafting_ing-binding_sigil",
         Simple(
             "common.items.crafting_ing.bowl",
         ): "sprite-crafting_ing-bowl",
@@ -7701,6 +7737,18 @@
         Simple("common.items.recipes.weapons.frostwood"): "recipe-weapons-frostwood",
         Simple("common.items.recipes.weapons.eldwood"): "recipe-weapons-eldwood",
         Simple("common.items.recipes.default"): "recipe-default",
+        Simple(
+            "common.items.spell_books.wanderers_primer",
+        ): "spell_book-wanderers_primer",
+        Simple(
+            "common.items.spell_books.scavenged_page",
+        ): "spell_book-scavenged_page",
+        Simple(
+            "common.items.spell_books.the_dark_log_page",
+        ): "spell_book-the_dark_log_page",
+        Simple(
+            "common.items.spell_books.the_wicked_darkness_page",
+        ): "spell_book-the_wicked_darkness_page",
     },
     // Templating support
     //

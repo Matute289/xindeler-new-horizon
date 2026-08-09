@@ -1,0 +1,24 @@
+SelfBuff(
+    buildup_duration: 0.1,
+    cast_duration: 0.1,
+    recover_duration: 0.1,
+    buffs: [
+        BuffDesc(
+            kind: RemoteSensing,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(RemoteSense(anchor_kind: Existing, free_look: false, piloted: false)),
+            ),
+        ),
+    ],
+    energy_cost: 10,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Primordial),
+        // level 2 spell -> min_level 12, same `level * 6` convention
+        // `see_invisibility`/`true_seeing` already use.
+        requirements: (min_level: Some(12)),
+    ),
+)

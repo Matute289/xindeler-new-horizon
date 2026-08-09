@@ -1,0 +1,100 @@
+BasicAura(
+    buildup_duration: 1.0,
+    cast_duration: 0.3,
+    recover_duration: 0.6,
+    targets: OutOfGroup,
+    auras: [],
+    tiered_health_effects: [
+        (
+            tiers: [
+                // Tier 4 — real 5e's "<=20 HP: killed instantly", shifted +15
+                // like the three tiers below. A flat health change of -2000
+                // (this aura kind reads AdditionalDamage as flat, not as a
+                // multiplier), the same absolute-overkill number
+                // power_word_kill.ron uses so the kill is guaranteed
+                // regardless of the target's max health. No target-side
+                // resistance, exactly like every other Power Word here.
+                // This is the only permanent result anywhere in the tier
+                // ladder (tiers 1-3 are temporary debuffs; banishment has its
+                // own target-side saving throw), so it gets the same
+                // caster-side CasterLevelRoll margin power_word_kill/pain/stun
+                // already give their own permanent results.
+                (
+                    max_current_health: 35.0,
+                    effect: AdditionalDamage(2000.0),
+                    requirement: Some(CasterLevelRoll((
+                        unlock_level: 42,
+                        fail_chance_at_unlock: 0.25,
+                        fail_chance_at_max_level: 0.05,
+                        source_classes: [Cleric],
+                    ))),
+                ),
+                // Tier 3 — the hour-long Paralyzed result, the worst
+                // temporary outcome anywhere in the ladder. Gated by the same
+                // caster-side CasterLevelRoll margin as tier 4's instant
+                // death (was previously unconditional, unlike every other
+                // permanent/near-permanent result this family of spells
+                // authors).
+                (
+                    max_current_health: 45.0,
+                    effect: Buff((
+                        kind: Paralyzed,
+                        dur_secs: 3600,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                    requirement: Some(CasterLevelRoll((
+                        unlock_level: 42,
+                        fail_chance_at_unlock: 0.25,
+                        fail_chance_at_max_level: 0.05,
+                        source_classes: [Cleric],
+                    ))),
+                ),
+                (
+                    max_current_health: 55.0,
+                    effect: Buff((
+                        kind: Blinded,
+                        dur_secs: 600,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                ),
+                (
+                    max_current_health: 65.0,
+                    effect: Buff((
+                        kind: Paralyzed,
+                        dur_secs: 60,
+                        strength: Value(1.0),
+                        chance: 1.0,
+                    )),
+                ),
+            ],
+            max_targets: 4,
+            // A selected target whose creature kind matches `banishment` is
+            // resolved *exclusively* via banishment -- it never enters the
+            // tier ladder above at all, at any HP -- matching real Divine
+            // Word's "banishes a qualifying creature that fails its save
+            // regardless of its current hit points". Resisted by the shared
+            // saving throw; 1-7 real days away; a quarter of the normal loot
+            // and XP, and it never counts as a kill. Every other creature
+            // kind is unaffected and resolves the tier ladder as usual.
+            banishment: Some((
+                creature_kinds: [Celestial, Elemental, Fey, Fiend],
+                min_return_hours: 24.0,
+                max_return_hours: 168.0,
+                reward_fraction: 0.25,
+            )),
+        ),
+    ],
+    aura_duration: Some(0.5),
+    range: 15.0,
+    energy_cost: 220.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Divine),
+        cooldown: Some(75.0),
+        requirements: (min_level: Some(42)),
+    ),
+)

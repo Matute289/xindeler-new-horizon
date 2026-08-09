@@ -1436,6 +1436,15 @@ pub struct SpriteCfg {
     /// NOTE: this is sent to the clients, we may potentionally strip this info
     /// on sending.
     pub loot_table: Option<String>,
+    /// Excludes this sprite from ranged/keyless unlocking (e.g. the `knock`
+    /// spell). Intended for progression-gated keyholes (dungeon/treasure
+    /// content whose whole point is requiring the matching key), so they
+    /// still open normally via the ordinary melee key-item interaction, but
+    /// cannot be bypassed remotely without the key. Defaults to `false` (most
+    /// keyholes are fine to `knock` open) — set `true` per-instance on the
+    /// specific keyholes that must keep gating progression.
+    #[serde(default)]
+    pub no_knock: bool,
 }
 
 #[cfg(test)]

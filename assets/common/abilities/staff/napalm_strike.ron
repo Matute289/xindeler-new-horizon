@@ -18,6 +18,7 @@ BasicRanged(
                 strength: DamageFraction(0.25),
                 chance: 1.0,
             )),
+            damage_kind: Fire,
         )),
     ),
     projectile_body: Object(NapalmShot),
@@ -29,4 +30,5 @@ BasicRanged(
         buildup: Some(0.0),
         recover: Some(0.0),
     ),
+    meta: (source: Some(Arcane)),
 )

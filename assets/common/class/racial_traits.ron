@@ -3,8 +3,8 @@
 {
     Human: (energy_reward_mult: 1.03),
     Dwarf: (damage_reduction_add: 0.02),
-    Elf: (move_speed_mult: 1.03),
+    Elf: (move_speed_mult: 1.03, magic_resistance_add: 0.15),
     Orc: (attack_damage_mult: 1.03),
-    Danari: (max_energy_mult: 1.05),
-    Draugr: (crowd_control_resistance_add: 0.10),
+    Danari: (max_energy_mult: 1.05, magic_resistance_add: 0.10),
+    Draugr: (crowd_control_resistance_add: 0.10, magic_resistance_add: 0.15),
 }

@@ -27,7 +27,7 @@ main-login_process =
     Za igranje na strežnikih, ki overjajo igralce, potrebuješ račun.
 
     Račun lahko ustvariš tukaj:
-    https://veloren.net/account/
+    https://xindeler.com/
 main-singleplayer-new = Nov
 main-singleplayer-delete = Izbriši
 main-singleplayer-regenerate = Ponovno generiraj

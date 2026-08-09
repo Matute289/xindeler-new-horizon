@@ -10,7 +10,7 @@ ItemDef(
                     strength: 5.0,
                     duration: Some(5),
                     ),
-                cat_ids: [Natural],
+                cat_ids: [],
             )),
         ),
         container: Some(Simple("common.items.crafting_ing.empty_vial")),

@@ -36,6 +36,7 @@ hud-free_look_indicator =
     }
 hud-camera_clamp_indicator = Cámara fija vertical activa. Pulsa { $key } para desactivarla.
 hud-auto_walk_indicator = Avance automático activo
+hud-remote_sensing_indicator = Detección a distancia activa — tu cuerpo quedó desatendido. Pulsa { $key } para volver.
 hud-zoom_lock_indicator-remind = Zoom fijado
 hud-zoom_lock_indicator-enable = Zoom de cámara fijado
 hud-zoom_lock_indicator-disable = Zoom de cámara desbloqueado
@@ -115,3 +116,32 @@ hud-init-stage-server-worldsim-erosion_time_left =
         }
 hud-tutorial-disable = Desactivar permanentemente las sugerencias del tutorial
 hud-steal = Robar
+
+hud-detected-path = Camino revelado
+hud-detected-point = Ubicación revelada
+hud-detected-bearing = { $bearing } · { $distance } m
+hud-compass-north = N
+hud-compass-northeast = NE
+hud-compass-east = E
+hud-compass-southeast = SE
+hud-compass-south = S
+hud-compass-southwest = SO
+hud-compass-west = O
+hud-compass-northwest = NO
+
+## Ficha de inspección de Identificar (mitad criatura; la mitad de objeto
+## reutiliza el tooltip de objeto normal tal cual)
+hud-creature_card-level = Niv. { $level }
+hud-creature_card-health = Salud: { $current } / { $max }
+hud-creature_card-energy = Energía: { $current } / { $max }
+hud-creature_card-poise = Aplomo: { $current } / { $max }
+hud-creature_card-buffs = Efectos activos
+hud-creature_card-no_buffs = Sin efectos activos
+hud-creature_card-resistances = Resistencias: Fuego { $fire }% · Escarcha { $frost }% · Veneno { $poison }% · Magia { $magic }%
+hud-creature_card-alignment_wild = Salvaje
+hud-creature_card-alignment_enemy = Hostil
+hud-creature_card-alignment_npc = Neutral
+hud-creature_card-alignment_tame = Domesticado
+hud-creature_card-alignment_owned = Con dueño
+hud-creature_card-alignment_passive = Pasivo
+hud-creature_card-close_hint = Presioná la tecla de inspección de nuevo para cerrar

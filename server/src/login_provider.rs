@@ -12,6 +12,10 @@ use std::{str::FromStr, sync::Arc};
 use tokio::{runtime::Runtime, sync::oneshot};
 use tracing::{error, info};
 
+/// Environment variable holding the shared secret this server presents to the
+/// auth server's service endpoints. Kept out of settings.ron on purpose.
+pub const AUTH_SERVICE_TOKEN_VAR: &str = "AUTH_SERVICE_TOKEN";
+
 /// Determines whether a user is banned, given a ban record connected to a user,
 /// the `AdminRecord` of that user (if it exists), and the current time.
 pub fn ban_applies(
@@ -67,26 +71,44 @@ pub struct LoginProvider {
 }
 
 impl LoginProvider {
-    pub fn new(auth_addr: Option<String>, runtime: Arc<Runtime>) -> Self {
+    /// # Errors
+    /// Returns `Err` if `auth_addr` is malformed (fails `AuthClient`'s own
+    /// validation -- e.g. not `https://` and not a loopback host). This is a
+    /// config-typo error, distinct from the deliberate panic just below for a
+    /// missing `AUTH_SERVICE_TOKEN`: both leave the server unable to
+    /// authenticate anyone, but a malformed URL is a caller mistake worth a
+    /// clean startup error rather than a raw panic backtrace.
+    pub fn new(auth_addr: Option<String>, runtime: Arc<Runtime>) -> Result<Self, String> {
         tracing::trace!(?auth_addr, "Starting LoginProvider");
 
-        let auth_server = auth_addr.map(|addr| {
-            let (scheme, authority) = addr.split_once("://").expect("invalid auth url");
+        let auth_server = auth_addr
+            .map(|addr| {
+                // The service credential authenticates this game server to the
+                // auth server's service endpoints (/verify, /uuid_to_username).
+                // It is read from the environment rather than settings.ron,
+                // because that file is written to disk and shared, and this is a
+                // shared secret.
+                //
+                // Failing here is deliberate: without it every single login would
+                // be rejected with 401, and a server that cannot authenticate
+                // anyone should not come up pretending it can.
+                let service_token = std::env::var(AUTH_SERVICE_TOKEN_VAR).unwrap_or_else(|_| {
+                    panic!(
+                        "{AUTH_SERVICE_TOKEN_VAR} must be set when auth_server_address is \
+                         configured (got auth_server_address = {addr:?})"
+                    )
+                });
 
-            let scheme = scheme
-                .parse::<authc::Scheme>()
-                .expect("invalid auth url scheme");
-            let authority = authority
-                .parse::<authc::Authority>()
-                .expect("invalid auth url authority");
+                AuthClient::with_service_token(addr.as_str(), service_token)
+                    .map(Arc::new)
+                    .map_err(|err| format!("invalid auth server address {addr:?}: {err}"))
+            })
+            .transpose()?;
 
-            Arc::new(AuthClient::new(scheme, authority).expect("insecure auth scheme"))
-        });
-
-        Self {
+        Ok(Self {
             runtime,
             auth_server,
-        }
+        })
     }
 
     pub fn verify(&self, username_or_token: &str) -> PendingLogin {
@@ -189,26 +211,38 @@ impl LoginProvider {
         // Parse token
         let token = AuthToken::from_str(username_or_token)
             .map_err(|e| RegisterError::AuthError(e.to_string()))?;
-        // Validate token
-        match async {
-            let uuid = srv.validate(token).await?;
-            let username = srv.uuid_to_username(uuid).await?;
-            let r: Result<_, AuthClientError> = Ok((username, uuid));
+        // The auth client is blocking, so it must not run on the async
+        // reactor: an HTTPS round-trip would stall every other task on that
+        // worker thread.
+        let lookup = tokio::task::spawn_blocking(move || {
+            let verified = srv.validate_full(token)?;
+            let username = match verified.username {
+                // The usual path. Answering with the name costs the auth server
+                // a local lookup and saves us a call to /uuid_to_username,
+                // which is rate limited per IP — and every login from this
+                // server shares one IP, so that limit is a hard ceiling on how
+                // many players can log in per window.
+                Some(username) => username,
+                // An auth server predating that field. Only reachable mid
+                // rolling deploy, but the fallback keeps logins working.
+                None => srv.uuid_to_username(verified.uuid)?,
+            };
+            let r: Result<_, AuthClientError> = Ok((username, verified.uuid));
             r
-        }
-        .await
-        {
+        })
+        .await;
+
+        match lookup {
+            Ok(Ok((username, uuid))) => Ok((username, uuid)),
+            Ok(Err(e)) => Err(RegisterError::AuthError(e.to_string())),
             Err(e) => Err(RegisterError::AuthError(e.to_string())),
-            Ok((username, uuid)) => Ok((username, uuid)),
         }
     }
 
     pub fn username_to_uuid(&self, username: &str) -> Result<Uuid, AuthClientError> {
         match &self.auth_server {
-            Some(srv) => {
-                //TODO: optimize
-                self.runtime.block_on(srv.username_to_uuid(&username))
-            },
+            // Already blocking, so no runtime round-trip is needed.
+            Some(srv) => srv.username_to_uuid(username),
             None => Ok(derive_uuid(username)),
         }
     }
@@ -219,10 +253,7 @@ impl LoginProvider {
         fallback_alias: &str,
     ) -> Result<String, AuthClientError> {
         match &self.auth_server {
-            Some(srv) => {
-                //TODO: optimize
-                self.runtime.block_on(srv.uuid_to_username(uuid))
-            },
+            Some(srv) => srv.uuid_to_username(uuid),
             None => Ok(fallback_alias.into()),
         }
     }

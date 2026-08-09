@@ -5,11 +5,13 @@ pub mod tool;
 
 // Reexports
 pub use modular::{MaterialStatManifest, ModularBase, ModularComponent};
-pub use tool::{AbilityMap, AbilitySet, AbilitySpec, Hands, Tool, ToolKind};
+pub use tool::{AbilityMap, AbilitySet, AbilitySpec, Hands, Tool, ToolKind, WeaponRole};
 
 use crate::{
     assets::{self, Asset, AssetCache, AssetExt, BoxedError, Error, Ron, SharedString},
-    comp::{Body, body::humanoid, inventory::InvSlot, skillset::SkillSet},
+    comp::{
+        Body, body::humanoid, inventory::InvSlot, item_condition::ItemCondition, skillset::SkillSet,
+    },
     effect::Effect,
     lottery::LootSpec,
     recipe::RecipeInput,
@@ -42,6 +44,7 @@ pub enum Reagent {
     Yellow,
     FireRain,
     FireGigas,
+    Earth,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -384,6 +387,15 @@ pub enum ItemKind {
     RecipeGroup {
         recipes: Vec<String>,
     },
+    /// Xindeler: a page/tome of spells, the structural sibling of
+    /// [`ItemKind::RecipeGroup`]. Each string is an `AbilitySpec::Custom(..)`
+    /// pool key — exactly the keys `AbilityPool::abilities` already stores —
+    /// so a spell learned this way needs no new casting code. Such an item
+    /// lives in the character's `spell_book` pseudo-container once learned;
+    /// held in a normal inventory slot it is merely carried, not known.
+    SpellGroup {
+        spells: Vec<String>,
+    },
     Quest,
 }
 
@@ -424,6 +436,7 @@ impl ItemKind {
             ItemKind::Ingredient { descriptor } => format!("Ingredient: {}", descriptor),
             ItemKind::TagExamples { item_ids } => format!("TagExamples: {:?}", item_ids),
             ItemKind::RecipeGroup { .. } => String::from("Recipes:"),
+            ItemKind::SpellGroup { .. } => String::from("Spells:"),
             ItemKind::Quest => String::from("Quest:"),
         }
     }
@@ -440,7 +453,8 @@ impl ItemKind {
             | ItemKind::Utility { .. }
             | ItemKind::Ingredient { .. }
             | ItemKind::TagExamples { .. }
-            | ItemKind::RecipeGroup { .. } => false,
+            | ItemKind::RecipeGroup { .. }
+            | ItemKind::SpellGroup { .. } => false,
         }
     }
 }
@@ -482,6 +496,11 @@ pub struct Item {
     /// - Modular components should agree with the tool kind
     /// - There should be exactly one damage component and exactly one held
     ///   component for modular weapons
+    /// - A `ItemBase::Simple` item (e.g. a Tome) may also carry non-modular
+    ///   "upgrade" components pushed via [`Item::add_upgrade`]. These don't
+    ///   need to agree with a tool kind (there is none to agree with) and fold
+    ///   into `quality()`/the item's `Compound` [`ItemDefinitionId`] exactly
+    ///   like any other component.
     components: Vec<Item>,
     /// amount is hidden because it needs to maintain the invariant that only
     /// stackable items can have > 1 amounts.
@@ -494,6 +513,16 @@ pub struct Item {
     /// converted into the items durability. Only tracked for tools and armor
     /// currently.
     durability_lost: Option<u32>,
+    /// Per-instance override of this item's [`Quality`] tier, independent of
+    /// the (possibly shared, `Arc`'d) [`ItemDef`] backing it. `None` (the
+    /// common case) means `quality()` falls back to the definition's
+    /// baseline. Only set via [`Item::set_quality_override`], currently used
+    /// by admin/testing tooling (`/give_item_quality`) to spawn a chosen
+    /// tier of an item without mutating the shared definition, which is
+    /// cached and reused by every other `Item` loaded from the same asset.
+    /// NOTE: not persisted to the database — items reloaded from storage
+    /// revert to their definition's baseline quality.
+    quality_override: Option<Quality>,
 }
 
 /// Newtype around [`Item`] used for frontend events to prevent it accidentally
@@ -812,20 +841,22 @@ pub enum UnmetRequirement {
 }
 
 impl ItemRequirements {
-    /// Requirements unmet for the given class/level/species combination.
-    /// `class` is `None` for entities without a `CharacterClass` component
-    /// (NPCs, spectators), which therefore fail any class gate.
-    /// `species` is `None` for non-humanoid bodies, which therefore fail any
-    /// race gate.
+    /// Requirements unmet for the given class(es)/level/species combination.
+    /// `character_class` is `None` for entities without a `CharacterClass`
+    /// component (NPCs, spectators), which therefore fail any class gate.
+    /// A multiclass character passes the gate if *any* of its held classes
+    /// is whitelisted — a Warrior who multiclasses into Warlock can equip
+    /// gear restricted to either class, not only the primary. `species` is
+    /// `None` for non-humanoid bodies, which therefore fail any race gate.
     pub fn unmet(
         &self,
-        class: Option<crate::comp::class::ClassKind>,
+        character_class: Option<&crate::comp::CharacterClass>,
         level: u16,
         species: Option<humanoid::Species>,
     ) -> Vec<UnmetRequirement> {
         let mut unmet = Vec::new();
         if let Some(classes) = &self.classes
-            && !class.is_some_and(|c| classes.contains(&c))
+            && !character_class.is_some_and(|cc| cc.classes().any(|c| classes.contains(&c)))
         {
             unmet.push(UnmetRequirement::Class);
         }
@@ -840,6 +871,68 @@ impl ItemRequirements {
             unmet.push(UnmetRequirement::Race);
         }
         unmet
+    }
+}
+
+/// `(ToolKind, WeaponRole) -> optional class whitelist`, consulted by
+/// [`Item::requirements`]/`ItemDef::requirements` in addition to (union
+/// with) any per-item `requirements:` block. An absent key, or an explicit
+/// `None` value, both mean "ungated" — e.g. every martial-role weapon today.
+/// A per-item `classes` list, when present, always wins outright; the
+/// manifest only fills the gap when the item declares none of its own. Do
+/// NOT call per-entity in tick systems — hoist one lookup per run (mirrors
+/// `class_proficiencies_manifest`).
+pub fn equip_gates_manifest() -> assets::AssetReadGuard<
+    Ron<HashMap<(ToolKind, WeaponRole), Option<Vec<crate::comp::class::ClassKind>>>>,
+> {
+    Ron::<HashMap<(ToolKind, WeaponRole), Option<Vec<crate::comp::class::ClassKind>>>>::load_expect(
+        "common.equip_gates",
+    )
+    .read()
+}
+
+/// Unions a per-item `requirements:` block with the [`equip_gates_manifest`]
+/// gate for `kind`'s `(ToolKind, WeaponRole)`, if any. Shared by every
+/// `ItemDesc::requirements` implementor so `ItemBase::Simple` and
+/// `ItemBase::Modular` items are gated identically for `classes` — this is
+/// what closes the bypass where a modular (crafted) weapon skipped its
+/// `classes` equip gate outright. `equip_gates_manifest` only ever carries a
+/// `classes` list; a modular item still has no data source for `min_level`
+/// or `races` (no shipped Staff/Sceptre — the only modular-craftable
+/// implements today — declares either), so those two remain unenforced on
+/// modular items. Extend the manifest's value type before shipping a
+/// level-gated or race-gated modular-craftable implement.
+fn resolve_requirements<'a>(
+    per_item: Option<&'a ItemRequirements>,
+    kind: &ItemKind,
+) -> Option<Cow<'a, ItemRequirements>> {
+    let manifest_classes = if let ItemKind::Tool(tool) = kind {
+        equip_gates_manifest()
+            .0
+            .get(&(tool.kind, tool.role()))
+            .cloned()
+            .flatten()
+    } else {
+        None
+    };
+
+    match (per_item, manifest_classes) {
+        (None, None) => None,
+        (Some(req), None) => Some(Cow::Borrowed(req)),
+        (None, Some(classes)) => Some(Cow::Owned(ItemRequirements {
+            classes: Some(classes),
+            min_level: None,
+            races: None,
+        })),
+        (Some(req), Some(classes)) => {
+            if req.classes.is_some() {
+                Some(Cow::Borrowed(req))
+            } else {
+                let mut merged = req.clone();
+                merged.classes = Some(classes);
+                Some(Cow::Owned(merged))
+            }
+        },
     }
 }
 
@@ -864,6 +957,25 @@ pub struct ItemDef {
     /// None = unrestricted.
     #[serde(default)]
     pub requirements: Option<ItemRequirements>,
+    /// A conditional buff/debuff pair evaluated per tick against this item's
+    /// current bearer. `None` for an item with no bearer-dependent effect
+    /// (every item shipped today).
+    #[serde(default)]
+    pub condition: Option<ItemCondition>,
+    /// Item-definition ids of `ItemKind::SpellGroup` "pages" this item offers
+    /// for transcription into a character's spellbook. Kept as item ids --
+    /// not raw spell/ability keys -- for the same reason `comp::SpellBook`
+    /// itself is a `Vec<Item>` rather than bare strings (`spell_book.rs`'s
+    /// doc comment): the referenced `SpellGroup` item stays the single
+    /// source of truth for what it actually teaches, re-balanceable by
+    /// editing its own RON.
+    ///
+    /// `None` for an item with no transcribable spells (every item shipped
+    /// before this field existed, including the one shipped Tome). Kept
+    /// generic rather than Tome-specific: a rune, a scroll, or any other
+    /// item type can list pages through the same field.
+    #[serde(default)]
+    pub spell_pages: Option<Vec<String>>,
 }
 
 impl PartialEq for ItemDef {
@@ -973,10 +1085,17 @@ impl ItemDef {
             slots,
             ability_spec: None,
             requirements: None,
+            condition: None,
+            spell_pages: None,
         }
     }
 
-    #[cfg(test)]
+    /// Builds a minimal `ItemDef` for tests that need a real `Item` without
+    /// going through asset loading. Kept as a normal (not `#[cfg(test)]`)
+    /// function — unlike `new_test` above — so fixture code in other crates
+    /// (e.g. `common-systems`) can use it too; `item_definition_id` and
+    /// `legacy_name` are private fields, so this is the only way to build an
+    /// `ItemDef` outside of RON deserialization.
     pub fn create_test_itemdef_from_kind(kind: ItemKind) -> Self {
         #[expect(deprecated)]
         Self {
@@ -988,6 +1107,8 @@ impl ItemDef {
             slots: 0,
             ability_spec: None,
             requirements: None,
+            condition: None,
+            spell_pages: None,
         }
     }
 }
@@ -1030,6 +1151,8 @@ impl Asset for ItemDef {
             slots,
             ability_spec,
             requirements,
+            condition,
+            spell_pages,
         } = cache.load::<Ron<_>>(specifier)?.cloned().into_inner();
 
         // Some commands like /give_item provide the asset specifier separated with \
@@ -1048,6 +1171,8 @@ impl Asset for ItemDef {
             slots,
             ability_spec,
             requirements,
+            condition,
+            spell_pages,
         })
     }
 }
@@ -1065,6 +1190,10 @@ struct RawItemDef {
     ability_spec: Option<AbilitySpec>,
     #[serde(default)]
     requirements: Option<ItemRequirements>,
+    #[serde(default)]
+    condition: Option<ItemCondition>,
+    #[serde(default)]
+    spell_pages: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -1093,6 +1222,7 @@ impl Item {
             item_config: None,
             hash: 0,
             durability_lost: None,
+            quality_override: None,
         };
         item.durability_lost = item.has_durability().then_some(0);
         item.update_item_state(ability_map, msm);
@@ -1203,6 +1333,9 @@ impl Item {
             "`new_item` has the same `item_def` and as an invariant, \
              self.set_amount(self.amount()) should always succeed.",
         );
+        if let Some(quality) = self.quality_override {
+            new_item.set_quality_override(quality);
+        }
         new_item.slots_mut().iter_mut().zip(self.slots()).for_each(
             |(new_item_slot, old_item_slot)| {
                 *new_item_slot = old_item_slot
@@ -1312,6 +1445,41 @@ impl Item {
 
     pub fn persistence_access_mutable_component(&mut self, index: usize) -> Option<&mut Self> {
         self.components.get_mut(index)
+    }
+
+    /// Attaches `upgrade` to this specific item instance, gameplay-side.
+    ///
+    /// This reuses the same `components` substrate modular weapons already
+    /// persist through: `server/src/persistence/character/conversions.rs`
+    /// walks every item's `components()` generically and stores each as a
+    /// child database row keyed to *this item's own* database id, not to the
+    /// shared, `Arc`'d [`ItemDef`]. So an upgrade pushed here stays with this
+    /// exact instance across a save/load round trip; a different item loaded
+    /// from the same asset (or the same item after being replaced) starts
+    /// with none of it.
+    ///
+    /// `quality()` folds every component's own quality into the item's
+    /// (`item_def.quality.max(components.max)`), so an upgrade carrying a
+    /// higher [`Quality`] tier than the base item immediately raises the
+    /// whole item's effective quality — which
+    /// [`crate::comp::inventory::trade_pricing::TradePricing::get_materials`]
+    /// also prices compositionally for the resulting `Compound`
+    /// [`ItemDefinitionId`] (base price plus each component's own).
+    ///
+    /// Distinct from [`Self::persistence_access_add_component`], which exists
+    /// purely for the database loader reconstructing an item's already-saved
+    /// components without a live `AbilityMap`/`MaterialStatManifest` on
+    /// hand; this is the gameplay-facing entry point, and immediately
+    /// refreshes `item_config` and the cached hash rather than waiting for
+    /// the next reload.
+    pub fn add_upgrade(
+        &mut self,
+        upgrade: Item,
+        ability_map: &AbilityMap,
+        msm: &MaterialStatManifest,
+    ) {
+        self.components.push(upgrade);
+        self.update_item_state(ability_map, msm);
     }
 
     /// Updates state of an item (important for creation of new items,
@@ -1454,14 +1622,30 @@ impl Item {
     pub fn num_slots(&self) -> u16 { self.item_base.num_slots() }
 
     pub fn quality(&self) -> Quality {
-        match &self.item_base {
-            ItemBase::Simple(item_def) => item_def.quality.max(
-                self.components
-                    .iter()
-                    .fold(Quality::MIN, |a, b| a.max(b.quality())),
-            ),
-            ItemBase::Modular(mod_base) => mod_base.compute_quality(self.components()),
-        }
+        self.quality_override
+            .unwrap_or_else(|| match &self.item_base {
+                ItemBase::Simple(item_def) => item_def.quality.max(
+                    self.components
+                        .iter()
+                        .fold(Quality::MIN, |a, b| a.max(b.quality())),
+                ),
+                ItemBase::Modular(mod_base) => mod_base.compute_quality(self.components()),
+            })
+    }
+
+    /// Overrides this item instance's [`Quality`] tier, independent of its
+    /// (possibly shared) [`ItemDef`]. Mutating the definition's `quality`
+    /// field directly is not an option: `ItemBase::Simple` holds an
+    /// `Arc<ItemDef>` shared with (and cached for) every other `Item` loaded
+    /// from the same asset, so doing so would corrupt every other instance.
+    ///
+    /// Currently only used by admin/testing tooling (`/give_item_quality`,
+    /// BL-82 EM-5.18) to compare the equipment panel's rarity-tier slot
+    /// border rendering across quality tiers of the same item. NOTE: this
+    /// override is **not** persisted — an item saved to the database and
+    /// reloaded reverts to its definition's baseline quality.
+    pub fn set_quality_override(&mut self, quality: Quality) {
+        self.quality_override = Some(quality);
     }
 
     pub fn components(&self) -> &[Item] { &self.components }
@@ -1508,21 +1692,29 @@ impl Item {
         }
     }
 
-    /// Equip gates declared on this item's definition. Modular (crafted)
-    /// weapons carry no gates.
-    pub fn requirements(&self) -> Option<&ItemRequirements> {
-        match &self.item_base {
+    /// Equip gates for this item: its own `requirements:` block (if any),
+    /// unioned with the [`equip_gates_manifest`] gate for its
+    /// `(ToolKind, WeaponRole)` (if any) — see [`resolve_requirements`].
+    /// Applies to `ItemBase::Simple` and `ItemBase::Modular` (crafted)
+    /// weapons alike for the `classes` gate — a modular weapon is no longer
+    /// exempt from *that* check specifically. `min_level`/`races` still have
+    /// no data source on a modular item (see `resolve_requirements`'s own
+    /// doc comment) and remain unenforced there.
+    pub fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> {
+        let per_item = match &self.item_base {
             ItemBase::Simple(item_def) => item_def.requirements.as_ref(),
             ItemBase::Modular(_) => None,
-        }
+        };
+        let kind = self.kind();
+        resolve_requirements(per_item, &kind)
     }
 
     /// Requirements this entity fails for equipping this item. Shared by
-    /// server enforcement and the client tooltip so they always agree.
-    /// `class` comes from `CharacterClass`; pass `None` for NPCs/spectators.
+    /// server enforcement and the client tooltip so they always agree. Pass
+    /// `None` for NPCs/spectators (entities with no `CharacterClass`).
     pub fn unmet_requirements_with_class(
         &self,
-        class: Option<crate::comp::class::ClassKind>,
+        character_class: Option<&crate::comp::CharacterClass>,
         skill_set: &SkillSet,
         body: &Body,
     ) -> Vec<UnmetRequirement> {
@@ -1531,17 +1723,17 @@ impl Item {
                 Body::Humanoid(humanoid_body) => Some(humanoid_body.species),
                 _ => None,
             };
-            requirements.unmet(class, skill_set.character_level(), species)
+            requirements.unmet(character_class, skill_set.character_level(), species)
         })
     }
 
     pub fn meets_requirements_with_class(
         &self,
-        class: Option<crate::comp::class::ClassKind>,
+        character_class: Option<&crate::comp::CharacterClass>,
         skill_set: &SkillSet,
         body: &Body,
     ) -> bool {
-        self.unmet_requirements_with_class(class, skill_set, body)
+        self.unmet_requirements_with_class(character_class, skill_set, body)
             .is_empty()
     }
 
@@ -1572,6 +1764,27 @@ impl Item {
         match &self.item_base {
             ItemBase::Simple(item_def) => item_def.tags.contains(&ItemTag::RequiresAttunement),
             ItemBase::Modular(_) => false,
+        }
+    }
+
+    /// The `ItemCondition` this item declares, if any. `None` for ~every
+    /// item shipped today, and always `None` for modular (crafted) items —
+    /// mirrors `requires_attunement()`.
+    pub fn condition(&self) -> Option<&ItemCondition> {
+        match &self.item_base {
+            ItemBase::Simple(item_def) => item_def.condition.as_ref(),
+            ItemBase::Modular(_) => None,
+        }
+    }
+
+    /// Item-definition ids of the `ItemKind::SpellGroup` pages this item
+    /// offers for transcription, if any. `None` for a modular (crafted) item
+    /// and for a simple item that declares no pages -- mirrors
+    /// `condition()`.
+    pub fn spell_pages(&self) -> Option<&[String]> {
+        match &self.item_base {
+            ItemBase::Simple(item_def) => item_def.spell_pages.as_deref(),
+            ItemBase::Modular(_) => None,
         }
     }
 
@@ -1912,7 +2125,7 @@ pub trait ItemDesc {
     fn has_durability(&self) -> bool;
     fn durability_lost(&self) -> Option<u32>;
     fn stats_durability_multiplier(&self) -> DurabilityMultiplier;
-    fn requirements(&self) -> Option<&ItemRequirements>;
+    fn requirements(&self) -> Option<Cow<'_, ItemRequirements>>;
 
     /// Whether this item carries `tag`. The default delegates to `tags()`
     /// (which allocates); `Item` overrides it with a non-allocating check.
@@ -2028,7 +2241,7 @@ impl ItemDesc for Item {
         self.stats_durability_multiplier()
     }
 
-    fn requirements(&self) -> Option<&ItemRequirements> { Item::requirements(self) }
+    fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> { Item::requirements(self) }
 }
 
 impl ItemDesc for FrontendItem {
@@ -2061,7 +2274,7 @@ impl ItemDesc for FrontendItem {
         self.0.stats_durability_multiplier()
     }
 
-    fn requirements(&self) -> Option<&ItemRequirements> { self.0.requirements() }
+    fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> { self.0.requirements() }
 }
 
 impl ItemDesc for ItemDef {
@@ -2096,7 +2309,9 @@ impl ItemDesc for ItemDef {
 
     fn stats_durability_multiplier(&self) -> DurabilityMultiplier { DurabilityMultiplier(1.0) }
 
-    fn requirements(&self) -> Option<&ItemRequirements> { self.requirements.as_ref() }
+    fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> {
+        resolve_requirements(self.requirements.as_ref(), &self.kind)
+    }
 }
 
 impl ItemDesc for PickupItem {
@@ -2131,7 +2346,7 @@ impl ItemDesc for PickupItem {
         self.item().stats_durability_multiplier()
     }
 
-    fn requirements(&self) -> Option<&ItemRequirements> { self.item().requirements() }
+    fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> { self.item().requirements() }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2182,7 +2397,7 @@ impl<T: ItemDesc + ?Sized> ItemDesc for &T {
         (*self).stats_durability_multiplier()
     }
 
-    fn requirements(&self) -> Option<&ItemRequirements> { (*self).requirements() }
+    fn requirements(&self) -> Option<Cow<'_, ItemRequirements>> { (*self).requirements() }
 }
 
 /// Returns all item asset specifiers
@@ -2345,6 +2560,126 @@ mod tests {
         if !errs.is_empty() {
             panic!("item i18n manifest misses translation-id for following items {errs:#?}")
         }
+    }
+
+    #[test]
+    fn set_quality_override_changes_quality() {
+        let mut item = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        // The asset's baseline quality (see starter.ron) is Low.
+        assert_eq!(item.quality(), Quality::Low);
+
+        item.set_quality_override(Quality::Legendary);
+        assert_eq!(item.quality(), Quality::Legendary);
+    }
+
+    #[test]
+    fn set_quality_override_does_not_corrupt_other_properties() {
+        let mut item = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        let definition_id_before = item.item_definition_id().to_owned();
+        let amount_before = item.amount();
+
+        item.set_quality_override(Quality::Artifact);
+
+        assert_eq!(item.item_definition_id().to_owned(), definition_id_before);
+        assert_eq!(item.amount(), amount_before);
+    }
+
+    #[test]
+    fn set_quality_override_does_not_leak_across_instances_of_the_same_asset() {
+        // `ItemBase::Simple` holds an `Arc<ItemDef>` shared with (and cached
+        // for) every `Item` loaded from the same asset path. Overriding one
+        // instance's quality must not corrupt the shared definition and leak
+        // into a sibling instance loaded from the same asset.
+        let mut overridden = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        overridden.set_quality_override(Quality::Legendary);
+
+        let sibling = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        assert_eq!(sibling.quality(), Quality::Low);
+    }
+
+    #[test]
+    fn duplicate_propagates_quality_override() {
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        let mut item = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        item.set_quality_override(Quality::Epic);
+
+        let duplicated = item.duplicate(&ability_map, &msm);
+        assert_eq!(duplicated.quality(), Quality::Epic);
+    }
+
+    #[test]
+    fn spell_pages_reads_back_the_declared_pages_in_order() {
+        let tome = Item::new_from_asset_expect("common.items.testing.test_tome_of_transcription");
+        let pages = tome.spell_pages().expect("fixture declares pages");
+        assert_eq!(pages, [
+            "common.items.testing.test_page_divine_l1",
+            "common.items.testing.test_page_divine_l2",
+            "common.items.testing.test_page_divine_l3",
+            "common.items.testing.test_page_divine_l7",
+            "common.items.testing.test_page_uncatalogued",
+        ]);
+    }
+
+    #[test]
+    fn spell_pages_is_none_for_an_item_that_declares_no_pages() {
+        let sword = Item::new_from_asset_expect("common.items.weapons.sword.starter");
+        assert!(sword.spell_pages().is_none());
+    }
+
+    #[test]
+    fn add_upgrade_raises_quality_and_only_on_the_upgraded_instance() {
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        // apprentice_tome.ron declares Quality::Low; binding_sigil.ron
+        // declares Quality::Moderate, so attaching it must raise the whole
+        // item's effective quality (`quality()` takes the max over its
+        // components).
+        let mut upgraded = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        assert_eq!(upgraded.quality(), Quality::Low);
+        upgraded.add_upgrade(
+            Item::new_from_asset_expect("common.items.crafting_ing.binding_sigil"),
+            &ability_map,
+            &msm,
+        );
+        assert_eq!(upgraded.quality(), Quality::Moderate);
+
+        // A separate instance loaded from the very same asset is unaffected
+        // -- the upgrade lives on this one `Item`, not on the shared
+        // `ItemDef` the two instances both point at.
+        let sibling = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        assert_eq!(sibling.quality(), Quality::Low);
+    }
+
+    #[test]
+    fn add_upgrade_survives_a_definition_id_round_trip() {
+        // The database loader reconstructs an item purely from its
+        // `ItemDefinitionId` (`Item::new_from_item_definition_id`), so an
+        // upgrade must still be there after exactly that round trip -- the
+        // same mechanism `server/src/persistence/character/conversions.rs`
+        // relies on for modular-weapon components, applied here to a Tome.
+        let ability_map = AbilityMap::load().read();
+        let msm = MaterialStatManifest::load().read();
+
+        let mut upgraded = Item::new_from_asset_expect("common.items.weapons.tome.apprentice_tome");
+        upgraded.add_upgrade(
+            Item::new_from_asset_expect("common.items.crafting_ing.binding_sigil"),
+            &ability_map,
+            &msm,
+        );
+
+        let def_id = upgraded.item_definition_id().to_owned();
+        assert!(
+            matches!(def_id, ItemDefinitionIdOwned::Compound { .. }),
+            "a Tome carrying an upgrade component must serialize as a Compound id, not Simple"
+        );
+
+        let reloaded =
+            Item::new_from_item_definition_id(def_id.as_ref(), &ability_map, &msm).unwrap();
+        assert_eq!(reloaded.quality(), Quality::Moderate);
+        assert_eq!(reloaded.components().len(), 1);
     }
 
     #[test]
@@ -2521,15 +2856,266 @@ mod tests {
             races: None,
         }));
         assert!(!cleric_only.meets_requirements_with_class(
-            Some(ClassKind::Adventurer),
+            Some(&crate::comp::CharacterClass::single(ClassKind::Adventurer)),
             &skill_set_at_level(1),
             &human,
         ));
         assert!(cleric_only.meets_requirements_with_class(
-            Some(ClassKind::Cleric),
+            Some(&crate::comp::CharacterClass::single(ClassKind::Cleric)),
             &skill_set_at_level(1),
             &human,
         ));
+        // A multiclass character passes if EITHER held class is whitelisted.
+        assert!(cleric_only.meets_requirements_with_class(
+            Some(&crate::comp::CharacterClass {
+                primary: ClassKind::Warrior,
+                secondary: Some(ClassKind::Cleric),
+                secondary_level: 20,
+                future_levels_to_secondary: false,
+            }),
+            &skill_set_at_level(20),
+            &human,
+        ));
+    }
+
+    #[test]
+    // The legacy Staff/Sceptre kits' abilities carry no per-spell `classes:`
+    // list in the compendium, so the only thing that can restrict who casts
+    // them is restricting who may equip the implement in the first place.
+    // This walks every shipped legacy Staff/Sceptre item and asserts that
+    // equip gate is in place with the intended whitelist, using the same
+    // class-whitelist-on-the-item mechanism as the Tome/HolySymbol/Focus
+    // implements and mirroring class_proficiencies.ron's Any(Staff)/
+    // Any(Sceptre) entries. Also asserts each item's resolved `WeaponRole`
+    // is `Caster` -- a whitelist on a `Martial`-role item would be a
+    // role/whitelist mismatch (the martial kit carries no whitelist at all).
+    fn legacy_staff_and_sceptre_items_are_class_gated() {
+        use crate::comp::class::ClassKind;
+
+        fn assert_caster_role(item: &Item, id: &str) {
+            match &*item.kind() {
+                ItemKind::Tool(tool) => assert_eq!(
+                    tool.role(),
+                    WeaponRole::Caster,
+                    "{id} resolves to a non-Caster role but carries a caster class whitelist"
+                ),
+                other => panic!("{id} is not a Tool: {other:?}"),
+            }
+        }
+
+        let staff_ids = [
+            "common.items.weapons.staff.starter_staff",
+            "common.items.weapons.staff.cultist_staff",
+            "common.items.weapons.staff.staff_1",
+            "common.items.weapons.staff.laevateinn",
+        ];
+        // Mirrors class_proficiencies.ron's Any(Staff) roster minus Monk:
+        // Monk's Staff proficiency there is for quarterstaff melee use, but
+        // every shipped Staff item has ability_spec: None, so equipping one
+        // grants the full legacy fire-spell kit (firebomb, pyroclasm, ...)
+        // regardless of proficiency -- gating Monk in would reopen exactly
+        // the "wrong class casts fireball" bug this test guards against.
+        let expected_staff_classes = [
+            ClassKind::Mage,
+            ClassKind::Sorcerer,
+            ClassKind::Warlock,
+            ClassKind::Druid,
+        ];
+        for id in staff_ids {
+            let item = Item::new_from_asset_expect(id);
+            assert_caster_role(&item, id);
+            let classes = item
+                .requirements()
+                .and_then(|r| r.classes.clone())
+                .unwrap_or_else(|| panic!("{id} has no class-gated requirements"));
+            assert_eq!(
+                classes.iter().collect::<HashSet<_>>(),
+                expected_staff_classes.iter().collect::<HashSet<_>>(),
+                "{id} has an unexpected class whitelist"
+            );
+        }
+
+        let sceptre_ids = [
+            "common.items.weapons.sceptre.starter_sceptre",
+            "common.items.weapons.sceptre.sceptre_velorite_0",
+            "common.items.weapons.sceptre.amethyst",
+            "common.items.weapons.sceptre.belzeshrub",
+            "common.items.weapons.sceptre.caduceus",
+            "common.items.weapons.sceptre.root_evil",
+        ];
+        // Mirrors class_proficiencies.ron's Any(Sceptre) roster exactly:
+        // Cleric (divine) and Druid (the sceptre kit's lifestealbeam is
+        // authored source: Primordial -- Druid's flavor, not Cleric's).
+        let expected_sceptre_classes = [ClassKind::Cleric, ClassKind::Druid];
+        for id in sceptre_ids {
+            let item = Item::new_from_asset_expect(id);
+            assert_caster_role(&item, id);
+            let classes = item
+                .requirements()
+                .and_then(|r| r.classes.clone())
+                .unwrap_or_else(|| panic!("{id} has no class-gated requirements"));
+            assert_eq!(
+                classes.iter().collect::<HashSet<_>>(),
+                expected_sceptre_classes.iter().collect::<HashSet<_>>(),
+                "{id} has an unexpected class whitelist"
+            );
+        }
+    }
+
+    /// A synthetic tool item at role `role`, carrying no per-item
+    /// `requirements:` block of its own -- so whatever `Item::requirements()`
+    /// returns for it comes purely from `equip_gates_manifest`.
+    fn manifest_only_tool_item(kind: ToolKind, role: WeaponRole) -> Item {
+        Item::create_test_item_from_kind(ItemKind::Tool(Tool::new(
+            kind,
+            Hands::Two,
+            Some(role),
+            tool::Stats::zero(),
+        )))
+    }
+
+    #[test]
+    // The five caster implements resolve their documented whitelist purely
+    // through `equip_gates_manifest`, with no per-item `requirements:` block
+    // at all -- proving the manifest itself (not a per-item copy) is what
+    // gates them.
+    fn caster_implements_resolve_their_whitelist_via_the_manifest_alone() {
+        use crate::comp::class::ClassKind;
+
+        let cases = [
+            (ToolKind::Staff, vec![
+                ClassKind::Mage,
+                ClassKind::Sorcerer,
+                ClassKind::Warlock,
+                ClassKind::Druid,
+            ]),
+            (ToolKind::Sceptre, vec![ClassKind::Cleric, ClassKind::Druid]),
+            (ToolKind::Tome, vec![ClassKind::Mage]),
+            (ToolKind::HolySymbol, vec![
+                ClassKind::Cleric,
+                ClassKind::Paladin,
+            ]),
+            (ToolKind::Focus, vec![ClassKind::Druid, ClassKind::Ranger]),
+        ];
+        for (kind, expected_classes) in cases {
+            let item = manifest_only_tool_item(kind, WeaponRole::Caster);
+            let classes = item
+                .requirements()
+                .and_then(|r| r.classes.clone())
+                .unwrap_or_else(|| panic!("{kind:?} Caster resolved no manifest gate"));
+            assert_eq!(
+                classes.iter().collect::<HashSet<_>>(),
+                expected_classes.iter().collect::<HashSet<_>>(),
+                "{kind:?} Caster has an unexpected manifest whitelist"
+            );
+        }
+    }
+
+    #[test]
+    // Q3: the martial staff/sceptre kit carries no class whitelist at all --
+    // absent from the manifest entirely (or an explicit `None` value), and
+    // with no per-item `requirements:` block, `Item::requirements()` must
+    // resolve to nothing at all, not an empty-but-`Some` block.
+    fn martial_staff_and_sceptre_have_no_manifest_gate() {
+        for kind in [ToolKind::Staff, ToolKind::Sceptre] {
+            let item = manifest_only_tool_item(kind, WeaponRole::Martial);
+            assert_eq!(
+                item.requirements(),
+                None,
+                "{kind:?} Martial must not carry any equip gate"
+            );
+        }
+    }
+
+    #[test]
+    // The security-relevant regression test: a *modular* (crafted) Sceptre,
+    // which today ships 42 recipes at an ordinary CraftingBench, must be
+    // gated by the same Cleric/Druid whitelist as the standard-item Sceptre
+    // -- `ItemBase::Modular(_)` no longer bypasses `Item::requirements()`
+    // outright.
+    fn modular_sceptre_no_longer_bypasses_the_class_equip_gate() {
+        use crate::comp::{CharacterClass, class::ClassKind, skillset::SkillSet};
+
+        let mut rng = rand::rng();
+        let item = modular::random_weapon(ToolKind::Sceptre, Material::Wood, None, &mut rng)
+            .expect("wood sceptre modular components ship");
+        assert!(item.is_modular());
+
+        let classes = item
+            .requirements()
+            .and_then(|r| r.classes.clone())
+            .unwrap_or_else(|| panic!("modular Sceptre resolved no equip gate at all"));
+        assert_eq!(
+            classes.iter().collect::<HashSet<_>>(),
+            [ClassKind::Cleric, ClassKind::Druid]
+                .iter()
+                .collect::<HashSet<_>>(),
+        );
+
+        // End to end: a class outside the whitelist is refused, a class
+        // inside it passes -- exercised through the same
+        // `meets_requirements_with_class` server enforcement/tooltip share.
+        let body = Body::Humanoid(humanoid::Body::random());
+        let skill_set = SkillSet::default();
+        assert!(!item.meets_requirements_with_class(
+            Some(&CharacterClass::single(ClassKind::Warrior)),
+            &skill_set,
+            &body,
+        ));
+        assert!(item.meets_requirements_with_class(
+            Some(&CharacterClass::single(ClassKind::Cleric)),
+            &skill_set,
+            &body,
+        ));
+    }
+
+    #[test]
+    // A per-item `min_level` on a caster implement must still compose with
+    // the manifest's `classes` gate -- the union is genuinely a union, not
+    // an override in either direction.
+    fn per_item_min_level_composes_with_the_manifest_classes_gate() {
+        use crate::comp::class::ClassKind;
+
+        let mut item_def = ItemDef::create_test_itemdef_from_kind(ItemKind::Tool(Tool::new(
+            ToolKind::Staff,
+            Hands::Two,
+            Some(WeaponRole::Caster),
+            tool::Stats::zero(),
+        )));
+        item_def.requirements = Some(ItemRequirements {
+            classes: None,
+            min_level: Some(20),
+            races: None,
+        });
+        let item = Item::new_from_item_base(
+            ItemBase::Simple(Arc::new(item_def)),
+            Vec::new(),
+            &AbilityMap::load().read(),
+            &MaterialStatManifest::load().read(),
+        );
+
+        let requirements = item
+            .requirements()
+            .expect("min_level alone must still surface a requirements block");
+        assert_eq!(requirements.min_level, Some(20));
+        assert_eq!(
+            requirements
+                .classes
+                .as_ref()
+                .map(|c| c.iter().collect::<HashSet<_>>()),
+            Some(
+                [
+                    ClassKind::Mage,
+                    ClassKind::Sorcerer,
+                    ClassKind::Warlock,
+                    ClassKind::Druid,
+                ]
+                .iter()
+                .collect::<HashSet<_>>()
+            ),
+            "the manifest's classes gate must still fill in even though the item declares its own \
+             min_level"
+        );
     }
 
     #[test]
@@ -2559,6 +3145,68 @@ mod tests {
         }
         if !errs.is_empty() {
             panic!("item i18n manifest missing fragment-id for following items {errs:#?}")
+        }
+    }
+
+    #[test]
+    // The shipped martial staff (Q3/Q9/Q10): `role: Martial`, no per-item
+    // `requirements:` block, and resolves the physical `staff_martial`
+    // ability kit instead of falling back to `Tool(Staff)` -- the caster
+    // fire kit that used to hand any Staff wielder a full fireball kit
+    // regardless of proficiency.
+    fn martial_staff_item_resolves_the_martial_kit_not_the_fire_kit() {
+        use crate::comp::tool::AbilityKind;
+
+        let id = "common.items.weapons.staff.frostbound_quarterstaff";
+        let item = Item::new_from_asset_expect(id);
+
+        match &*item.kind() {
+            ItemKind::Tool(tool) => {
+                assert_eq!(
+                    tool.role(),
+                    WeaponRole::Martial,
+                    "{id} must be Martial-role"
+                );
+            },
+            other => panic!("{id} is not a Tool: {other:?}"),
+        }
+
+        assert_eq!(
+            item.requirements(),
+            None,
+            "{id} must carry no equip gate at all (Q3)"
+        );
+
+        let spec = item
+            .ability_spec()
+            .unwrap_or_else(|| panic!("{id} resolved no AbilitySpec at all"));
+        assert_eq!(
+            *spec,
+            AbilitySpec::Custom("staff_martial".to_owned()),
+            "{id} must resolve the martial kit via its own ability_spec, not the tool-kind \
+             fallback (which would be the caster fire kit)"
+        );
+
+        let ability_map = AbilityMap::load();
+        let ability_map = ability_map.read();
+        let set = ability_map
+            .get_ability_set(&spec)
+            .unwrap_or_else(|| panic!("{id}'s ability_spec {spec:?} has no manifest entry"));
+        let AbilityKind::Simple(_, primary_id) = &set.primary else {
+            panic!("staff_martial primary must be a Simple ability");
+        };
+        let AbilityKind::Simple(_, secondary_id) = &set.secondary else {
+            panic!("staff_martial secondary must be a Simple ability");
+        };
+        for ability_id in [&primary_id.id, &secondary_id.id] {
+            assert!(
+                ability_id.starts_with("common.abilities.staff_martial."),
+                "{id}'s {ability_id} does not come from the martial kit"
+            );
+            assert!(
+                !ability_id.contains("staff.fire") && !ability_id.contains("staffsimple"),
+                "{id}'s {ability_id} leaked in the caster fire kit"
+            );
         }
     }
 }

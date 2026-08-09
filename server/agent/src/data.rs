@@ -1,9 +1,9 @@
 use crate::util::*;
 use common::{
     comp::{
-        ActiveAbilities, Alignment, Body, CharacterState, Combo, Energy, Health, Inventory,
-        LightEmitter, LootOwner, Ori, PhysicsState, Poise, Pos, Presence, Scale, SkillSet, Stance,
-        Stats, Vel,
+        ActiveAbilities, Alignment, Body, CharacterState, Combo, Disguise, Energy, Health,
+        Inventory, LightEmitter, LootOwner, Ori, PhysicsState, Poise, Pos, Presence, Scale,
+        SkillSet, Stance, Stats, Vel,
         ability::{Amount, BASE_ABILITY_LIMIT, CharacterAbility},
         body::parts::Heads,
         buff::{BuffKind, Buffs},
@@ -24,7 +24,7 @@ use common::{
     mounting::{Mount, Rider, VolumeRider},
     path::TraversalConfig,
     resources::{DeltaTime, Time, TimeOfDay},
-    rtsim::RtSimEntity,
+    rtsim,
     states::utils::{ForcedMovement, StageSection},
     terrain::TerrainGrid,
     uid::{IdMaps, Uid},
@@ -74,7 +74,7 @@ pub struct AgentData<'a> {
     pub cached_spatial_grid: &'a common::CachedSpatialGrid,
     pub msm: &'a MaterialStatManifest,
     pub ability_map: &'a AbilityMap,
-    pub rtsim_entity: Option<&'a RtSimEntity>,
+    pub rtsim_actor: Option<&'a rtsim::ActorId>,
 }
 
 pub struct TargetData<'a> {
@@ -459,6 +459,9 @@ pub struct ReadData<'a> {
     pub healths: ReadStorage<'a, Health>,
     pub heads: ReadStorage<'a, Heads>,
     pub inventories: ReadStorage<'a, Inventory>,
+    /// The observed entity's cached gear aggregates, so a perception check
+    /// reads its armour stealth as a field instead of walking its loadout.
+    pub derived_stats: ReadStorage<'a, common::comp::DerivedStats>,
     pub stats: ReadStorage<'a, Stats>,
     pub skill_set: ReadStorage<'a, SkillSet>,
     pub physics_states: ReadStorage<'a, PhysicsState>,
@@ -468,6 +471,9 @@ pub struct ReadData<'a> {
     pub terrain: ReadExpect<'a, TerrainGrid>,
     pub alignments: ReadStorage<'a, Alignment>,
     pub bodies: ReadStorage<'a, Body>,
+    /// The cosmetic disguise (if any) an observed entity is wearing. Read by
+    /// the disguise suspicion-roll gate in `AgentData::choose_target`.
+    pub disguises: ReadStorage<'a, Disguise>,
     pub is_mounts: ReadStorage<'a, Is<Mount>>,
     pub is_riders: ReadStorage<'a, Is<Rider>>,
     pub is_volume_riders: ReadStorage<'a, Is<VolumeRider>>,
@@ -476,7 +482,7 @@ pub struct ReadData<'a> {
     pub light_emitter: ReadStorage<'a, LightEmitter>,
     #[cfg(feature = "worldgen")]
     pub world: ReadExpect<'a, std::sync::Arc<world::World>>,
-    pub rtsim_entities: ReadStorage<'a, RtSimEntity>,
+    pub rtsim_actors: ReadStorage<'a, rtsim::ActorId>,
     pub buffs: ReadStorage<'a, Buffs>,
     pub combos: ReadStorage<'a, Combo>,
     pub active_abilities: ReadStorage<'a, ActiveAbilities>,

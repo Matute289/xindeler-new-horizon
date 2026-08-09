@@ -31,6 +31,9 @@ impl Component for LightAnimation {
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FrontendMarker {
+    IgniteArrow,
+    FreezeArrow,
+    DrenchArrow,
     JoltArrow,
     Torus(f32, TorusMode),
 }

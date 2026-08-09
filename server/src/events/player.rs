@@ -135,32 +135,13 @@ pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persisten
         .get(entity)
         .map(|p| (p.kind.character_id(), p.kind.sync_me()))
         .unzip();
-    let maybe_rtsim = state.read_component_copied::<common::rtsim::RtSimEntity>(entity);
+    let maybe_rtsim = state.read_component_copied::<common::rtsim::ActorId>(entity);
     state.mut_resource::<IdMaps>().remove_entity(
         Some(entity),
         None, // Uid re-mapped, we don't want to remove the mapping
         maybe_character.flatten(),
         maybe_rtsim,
     );
-
-    // If the character had a RtSim id (possibly from possesing an rtsim entity),
-    // make rtsim aware that this entity can now be respawned.
-    #[cfg(feature = "worldgen")]
-    if let Some(rtsim_entity) = maybe_rtsim {
-        let world = state.ecs().read_resource::<std::sync::Arc<world::World>>();
-        let index = state.ecs().read_resource::<world::index::IndexOwned>();
-        let pos = state.read_component_copied::<comp::Pos>(entity);
-        state
-            .ecs()
-            .write_resource::<crate::rtsim::RtSim>()
-            .hook_rtsim_actor_death(
-                &world,
-                index.as_index_ref(),
-                common::rtsim::Actor::Npc(rtsim_entity),
-                pos.map(|p| p.0),
-                None,
-            );
-    }
 
     // We don't want to use delete_entity_recorded since we are transfering the
     // Uid to a new entity (and e.g. don't want it to be unmapped).
@@ -407,6 +388,15 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .copied()
                         .unwrap_or_default();
 
+                    // Xindeler: needed to persist `Innate` hotbar slots by pool
+                    // key rather than by their (content-derived) position.
+                    let ability_pool = state
+                        .ecs()
+                        .read_storage::<comp::AbilityPool>()
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_default();
+
                     let ethos = state
                         .ecs()
                         .read_storage::<comp::Ethos>()
@@ -421,6 +411,22 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .copied()
                         .unwrap_or_default();
 
+                    // A slot's wait is real-world time, so the logout save is
+                    // exactly the moment it must not be lost.
+                    let trigger_slots = state
+                        .ecs()
+                        .read_storage::<comp::TriggerSlots>()
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    let spell_mastery = state
+                        .ecs()
+                        .read_storage::<comp::SpellMastery>()
+                        .get(entity)
+                        .copied()
+                        .unwrap_or_default();
+
                     character_updater.add_pending_logout_update((
                         char_id,
                         skill_set.clone(),
@@ -428,10 +434,13 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         pets,
                         waypoint,
                         active_abilities.clone(),
+                        ability_pool,
                         map_marker,
                         character_class,
                         ethos,
                         background,
+                        trigger_slots,
+                        spell_mastery,
                     ));
                 }
             },

@@ -8,7 +8,7 @@ use vek::{Vec2, Vec3, approx};
 
 #[test]
 fn simple_run() {
-    let mut state = utils::setup(veloren_common_systems::add_local_systems);
+    let mut state = utils::setup(xindeler_common_systems::add_local_systems);
     utils::create_player(&mut state);
     state.tick(
         DT,
@@ -16,6 +16,7 @@ fn simple_run() {
         None,
         &ServerConstants {
             day_cycle_coefficient: 24.0,
+            oracle_live: false,
         },
         |_, _| {},
     );

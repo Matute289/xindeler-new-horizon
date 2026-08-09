@@ -3,7 +3,7 @@ BasicRanged(
     buildup_duration: 1.3,
     recover_duration: 1.2,
     projectile: (
-        kind: Pointed,
+        kind: Simple,
         attack: Some((
             damage: 20,
             knockback: Some(8),
@@ -13,6 +13,7 @@ BasicRanged(
                 strength: DamageFraction(0.1),
                 chance: 0.1,
             )),
+            damage_kind: Piercing,
         )),
     ),
     projectile_body: Object(ArrowClay),

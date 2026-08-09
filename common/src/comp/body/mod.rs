@@ -31,7 +31,7 @@ use specs::{Component, DerefFlaggedStorage};
 use strum::{Display, IntoEnumIterator};
 use vek::*;
 
-use super::{BuffKind, CapsulePrism, Collider, Density, Mass, Scale};
+use super::{BuffKind, CapsulePrism, Collider, CreatureKind, Density, Mass, Scale};
 
 enum_iter! {
     #[derive(
@@ -220,6 +220,20 @@ pub enum Gender {
     Neuter,
 }
 
+/// Per-creature magic-resistance tier: how hard this body is to affect with a
+/// resisted magical effect (charm, domination, and similar mind-altering
+/// spells), independent of the caster/target level term. Taxonomy lives in
+/// code (exhaustively compiler-checked, exactly like [`Body::immune_to`]);
+/// the *numbers* each tier maps to live in `combat_tuning.ron` and are
+/// consumed by the resist-roll formula, not by this enum.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MagicResistTier {
+    None,
+    Minor,
+    Major,
+    Legendary,
+}
+
 impl Body {
     // BL-65: per-tier combat-stat baselines used by `base_accuracy`,
     // `base_evasion`, and `base_crit_chance` below.
@@ -338,29 +352,6 @@ impl Body {
     }
 
     pub fn is_humanoid(&self) -> bool { matches!(self, Body::Humanoid(_)) }
-
-    /// BL-06 (Q4): undead/unholy body tag. Keys conditional "vs undead" bonus
-    /// damage (Cleric Smiting Strikes / Radiant Channel) and seeds future
-    /// slayer-style conditionals (demons, beasts, …). Constructs (golems,
-    /// terracotta, haniwa, training dummies) are deliberately NOT undead — they
-    /// are unliving but not raised dead. Extend the lists as undead content
-    /// lands.
-    pub fn is_undead(&self) -> bool {
-        match self {
-            Body::BipedSmall(b) => matches!(
-                b.species,
-                biped_small::Species::Husk | biped_small::Species::Jiangshi
-            ),
-            Body::BipedLarge(b) => matches!(
-                b.species,
-                biped_large::Species::Huskbrute | biped_large::Species::Dullahan
-            ),
-            Body::QuadrupedMedium(b) => {
-                matches!(b.species, quadruped_medium::Species::Bonerattler)
-            },
-            _ => false,
-        }
-    }
 
     pub fn is_campfire(&self) -> bool { matches!(self, Body::Object(object::Body::CampfireLit)) }
 
@@ -1389,6 +1380,13 @@ impl Body {
                 object::Body::GnarlingTotemGreen => 15,
                 object::Body::GnarlingTotemRed | object::Body::GnarlingTotemWhite => 15,
                 object::Body::Crux => 350,
+                // A one-shot destructible prop, not a creature: a solid hit
+                // or two from a True-Sight holder ends it, matching the
+                // 30 HP pool the spells that spawn it declare.
+                object::Body::RemoteSensor => 30,
+                // Same one-shot 30 HP pool as `RemoteSensor` -- see that
+                // arm's own comment.
+                object::Body::ArcaneEye => 30,
                 _ => 1000,
             },
             Body::Item(_) => 1000,
@@ -1613,6 +1611,26 @@ impl Body {
                 _ => false,
             },
             BuffKind::ProtectingWard => matches!(self, Body::Object(object::Body::BarrelOrgan)),
+            // Undead and constructs have no mind for a charm-like effect to
+            // take hold of. This is deliberately narrower than immunity to
+            // every crowd-control kind: being mindless doesn't make a body
+            // immune to being physically restrained, so a hold/stun-style
+            // effect must still be able to land on these bodies — do not
+            // fold a movement/action-disabling buff kind into this arm.
+            // Any future domination/madness-style `BuffKind`s belong in this
+            // same arm alongside `Charmed`.
+            //
+            // The remaining two `matches!` cover inanimate bodies that are not
+            // creatures at all (ships, held items, most non-creature objects)
+            // and so fall outside `creature_kind` entirely; `TrainingDummy` is
+            // the sole object deliberately carved out of that allowlist.
+            BuffKind::Charmed => {
+                matches!(
+                    self.creature_kind(),
+                    Some(CreatureKind::Undead | CreatureKind::Construct)
+                ) || matches!(self, Body::Golem(_) | Body::Ship(_) | Body::Item(_))
+                    || matches!(self, Body::Object(o) if !matches!(o, object::Body::TrainingDummy))
+            },
             _ => false,
         }
     }
@@ -1687,6 +1705,46 @@ impl Body {
                 _ => 1.0,
             },
             _ => 1.0,
+        }
+    }
+
+    /// Per-creature magic-resistance tier, keyed off species (and, for a
+    /// handful of top-tier bodies, off the same difficulty axis
+    /// `combat_multiplier` uses) rather than a blanket per-body-enum rule —
+    /// mirrors how tabletop "advantage on saves against magic" traits are
+    /// granted to specific creatures rather than to entire creature families.
+    /// A sparse match; anything not listed has no innate resistance.
+    // TODO: fold in a proper creature-type/fiend predicate once one exists,
+    // rather than keying purely off `Body`/species.
+    pub fn magic_resist_tier(&self) -> MagicResistTier {
+        match self {
+            Body::Dragon(_) => MagicResistTier::Legendary,
+            Body::BipedLarge(b) => match b.species {
+                biped_large::Species::Mindflayer | biped_large::Species::Cursekeeper => {
+                    MagicResistTier::Legendary
+                },
+                biped_large::Species::Minotaur
+                | biped_large::Species::Tidalwarrior
+                | biped_large::Species::Yeti
+                | biped_large::Species::Blueoni
+                | biped_large::Species::Redoni
+                | biped_large::Species::Dullahan
+                | biped_large::Species::Harvester
+                | biped_large::Species::Huskbrute => MagicResistTier::Major,
+                _ => MagicResistTier::None,
+            },
+            Body::BipedSmall(b) => match b.species {
+                biped_small::Species::Flamekeeper => MagicResistTier::Legendary,
+                biped_small::Species::Jiangshi
+                | biped_small::Species::ShamanicSpirit
+                | biped_small::Species::Bloodservant
+                | biped_small::Species::IronDwarf => MagicResistTier::Major,
+                biped_small::Species::Haniwa
+                | biped_small::Species::Boreal
+                | biped_small::Species::Ashen => MagicResistTier::Minor,
+                _ => MagicResistTier::None,
+            },
+            _ => MagicResistTier::None,
         }
     }
 
@@ -2280,6 +2338,7 @@ mod bl65_tests {
             hair_color: 0,
             skin: 0,
             eye_color: 0,
+            height_scale: 0,
         })
     }
 
@@ -2386,5 +2445,222 @@ mod bl65_tests {
         assert_eq!(m.base_accuracy(), 15.0);
         assert_eq!(m.base_evasion(), 12.0);
         assert!((m.base_crit_chance() - 0.06).abs() < f32::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod magic_resist_tests {
+    use super::*;
+    use crate::comp::{
+        Stats,
+        body::{biped_large, biped_small, dragon, golem, humanoid, item, object, ship},
+    };
+    use common_i18n::Content;
+
+    fn humanoid_body() -> Body {
+        Body::Humanoid(humanoid::Body {
+            species: humanoid::Species::Human,
+            body_type: humanoid::BodyType::Male,
+            hair_style: 0,
+            beard: 0,
+            eyes: 0,
+            accessory: 0,
+            hair_color: 0,
+            skin: 0,
+            eye_color: 0,
+            height_scale: 0,
+        })
+    }
+
+    fn dragon_body() -> Body {
+        Body::Dragon(dragon::Body {
+            species: dragon::Species::Reddragon,
+            body_type: dragon::BodyType::Male,
+        })
+    }
+
+    fn mindflayer_body() -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species: biped_large::Species::Mindflayer,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn minotaur_body() -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species: biped_large::Species::Minotaur,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn haniwa_body() -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species: biped_small::Species::Haniwa,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    fn jiangshi_body() -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species: biped_small::Species::Jiangshi,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    // ── MagicResistTier tiering ──────────────────────────────────────────
+
+    #[test]
+    fn dragons_are_legendary_tier() {
+        assert_eq!(
+            dragon_body().magic_resist_tier(),
+            MagicResistTier::Legendary
+        );
+    }
+
+    #[test]
+    fn mindflayer_is_legendary_tier() {
+        assert_eq!(
+            mindflayer_body().magic_resist_tier(),
+            MagicResistTier::Legendary
+        );
+    }
+
+    #[test]
+    fn minotaur_is_major_tier() {
+        assert_eq!(minotaur_body().magic_resist_tier(), MagicResistTier::Major);
+    }
+
+    #[test]
+    fn haniwa_is_minor_tier() {
+        assert_eq!(haniwa_body().magic_resist_tier(), MagicResistTier::Minor);
+    }
+
+    #[test]
+    fn ordinary_bodies_have_no_tier() {
+        assert_eq!(humanoid_body().magic_resist_tier(), MagicResistTier::None);
+    }
+
+    // ── Charmed immunity ──────────────────────────────────────────────────
+
+    #[test]
+    fn undead_are_immune_to_charmed() {
+        assert!(jiangshi_body().immune_to(BuffKind::Charmed));
+    }
+
+    #[test]
+    fn golems_ships_and_items_are_immune_to_charmed() {
+        assert!(Body::Golem(golem::Body::random()).immune_to(BuffKind::Charmed));
+        assert!(Body::Ship(ship::Body::DefaultAirship).immune_to(BuffKind::Charmed));
+        assert!(Body::Item(item::Body::Coins).immune_to(BuffKind::Charmed));
+    }
+
+    #[test]
+    fn objects_are_immune_to_charmed_except_training_dummy() {
+        assert!(Body::Object(object::Body::BarrelOrgan).immune_to(BuffKind::Charmed));
+        assert!(!Body::Object(object::Body::TrainingDummy).immune_to(BuffKind::Charmed));
+    }
+
+    #[test]
+    fn ordinary_bodies_are_not_immune_to_charmed() {
+        assert!(!humanoid_body().immune_to(BuffKind::Charmed));
+        assert!(!minotaur_body().immune_to(BuffKind::Charmed));
+    }
+
+    #[test]
+    fn non_golem_constructs_are_immune_to_charmed() {
+        // Haniwa (BipedSmall) and Forgemaster (BipedLarge) are `Construct`
+        // creatures without being a `Body::Golem`, so they only become
+        // charm-immune through the `creature_kind` check, not the older
+        // body-kind allowlist.
+        assert!(haniwa_body().immune_to(BuffKind::Charmed));
+        assert!(
+            Body::BipedLarge(biped_large::Body {
+                species: biped_large::Species::Forgemaster,
+                body_type: biped_large::BodyType::Male,
+            })
+            .immune_to(BuffKind::Charmed)
+        );
+    }
+
+    #[test]
+    fn a_reskinned_entity_stays_charmable_via_its_actual_body() {
+        // A content-authored override can give an entity's `Stats.creature_kind`
+        // a different kind than the body it actually spawns on (e.g. a fiend
+        // wearing a humanoid body). `Body::immune_to` only ever consults the
+        // body, never `Stats`, so the override must not grant charm immunity
+        // it wouldn't otherwise have.
+        let body = humanoid_body();
+        let mut stats = Stats::new(Content::dummy(), body);
+        stats.creature_kind = Some(CreatureKind::Fiend);
+
+        assert!(!body.immune_to(BuffKind::Charmed));
+    }
+
+    #[test]
+    fn constructs_are_not_immune_to_paralyzed() {
+        // Charm-immune undead/constructs must not become blanket-immune to
+        // every crowd-control kind — a hold-style effect must still be able
+        // to land on them. `Frozen` already has real per-species arms
+        // (Yeti/Gigasfrost/Tursus etc.), none of which overlap the
+        // charm-immune set, so it doubles as a stand-in "not universally CC
+        // immune" check for a golem here.
+        assert!(!Body::Golem(golem::Body::random()).immune_to(BuffKind::Frozen));
+    }
+}
+
+#[cfg(test)]
+mod undead_creature_kind_tests {
+    use super::*;
+    use crate::comp::body::{biped_large, biped_small};
+
+    fn biped_large_body(species: biped_large::Species) -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn biped_small_body(species: biped_small::Species) -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    fn is_undead(body: Body) -> bool { body.creature_kind() == Some(CreatureKind::Undead) }
+
+    #[test]
+    fn vampire_castle_roster_is_undead() {
+        assert!(is_undead(biped_large_body(biped_large::Species::Strigoi)));
+        assert!(is_undead(biped_large_body(
+            biped_large::Species::Cursekeeper
+        )));
+        assert!(is_undead(biped_large_body(
+            biped_large::Species::Executioner
+        )));
+        assert!(is_undead(biped_small_body(
+            biped_small::Species::Bloodservant
+        )));
+        assert!(is_undead(biped_small_body(
+            biped_small::Species::BloodmoonHeiress
+        )));
+        assert!(is_undead(biped_small_body(
+            biped_small::Species::ShamanicSpirit
+        )));
+        assert!(is_undead(biped_small_body(biped_small::Species::Harlequin)));
+    }
+
+    #[test]
+    fn previously_covered_undead_still_covered() {
+        assert!(is_undead(biped_large_body(biped_large::Species::Huskbrute)));
+        assert!(is_undead(biped_large_body(biped_large::Species::Dullahan)));
+        assert!(is_undead(biped_small_body(biped_small::Species::Husk)));
+        assert!(is_undead(biped_small_body(biped_small::Species::Jiangshi)));
+    }
+
+    #[test]
+    fn ordinary_bodies_are_not_undead() {
+        assert!(!is_undead(biped_large_body(biped_large::Species::Minotaur)));
+        assert!(!is_undead(biped_small_body(biped_small::Species::Gnarling)));
     }
 }

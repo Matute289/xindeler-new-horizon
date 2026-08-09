@@ -52,9 +52,9 @@ use anim::{
 };
 use common::{
     comp::{
-        self, Body, CharacterActivity, CharacterState, Collider, Controller, Health, Inventory,
-        ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhysicsState, PickupItem,
-        PoiseState, Pos, Scale, ThrownItem, Vel,
+        self, Body, CharacterActivity, CharacterState, Collider, Controller, Disguise, Health,
+        Inventory, ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhantomIllusion,
+        PhysicsState, PickupItem, PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
         body::{self, parts::HeadState},
         inventory::slot::EquipSlot,
         item::{Hands, ItemKind, ToolKind, armor::ArmorKind},
@@ -95,6 +95,166 @@ use super::terrain::{BlocksOfInterest, SPRITE_LOD_LEVELS};
 const DAMAGE_FADE_COEFFICIENT: f64 = 15.0;
 const MOVING_THRESHOLD: f32 = 0.2;
 const MOVING_THRESHOLD_SQR: f32 = MOVING_THRESHOLD * MOVING_THRESHOLD;
+
+/// The colour a figure is tinted with while it is revealed by an active
+/// magical sense, one tint per sense so a caster can tell at a glance *which*
+/// sense picked something up. Multiplied into the per-figure colour, so
+/// channels above `1.0` brighten and channels below it darken.
+fn sense_tint(sense: SenseKind) -> Rgba<f32> {
+    let (r, g, b) = match sense {
+        // Cool blue.
+        SenseKind::Magic => (0.9, 1.1, 1.8),
+        // Blood red.
+        SenseKind::Aberrant => (1.8, 0.7, 0.7),
+        // Sickly green.
+        SenseKind::Affliction => (0.7, 1.7, 0.8),
+        // Violet.
+        SenseKind::Thought => (1.5, 0.8, 1.7),
+        // Cyan.
+        SenseKind::Portal => (0.7, 1.6, 1.7),
+        // Orange.
+        SenseKind::Creature => (1.8, 1.2, 0.6),
+        // Amber.
+        SenseKind::Fauna => (1.7, 1.5, 0.6),
+        // Lime.
+        SenseKind::Flora => (1.2, 1.7, 0.7),
+        // Pale gold.
+        SenseKind::Object => (1.6, 1.5, 1.1),
+        // Teal.
+        SenseKind::Nature => (0.7, 1.6, 1.3),
+        // Pale blue-white.
+        SenseKind::Path => (1.3, 1.5, 1.8),
+        // Neutral silver-white.
+        SenseKind::True => (1.6, 1.6, 1.6),
+    };
+    Rgba::new(r, g, b, 1.0)
+}
+
+/// The colour multiply for this client's own reveal of `entity`, folding in
+/// the one exception to the plain per-`SenseKind` tint above: a revealed
+/// phantasm has no separate real body to swap in the way a disguised entity
+/// does (see `disguise_for_observer`), so a colour cue is the only way this
+/// client's own True Sight can mark it as illusory rather than a solid
+/// creature. It gets a faded, desaturated multiplier instead of the bright
+/// `sense_tint(True)` glow — the closest a plain colour multiply gets to
+/// "translucent" without a second render pass or shader (the renderer's
+/// figure pipeline only ever consumes this multiply's RGB, never an alpha
+/// channel — see `pipelines::figure::Locals::new`).
+fn reveal_tint(sense: Option<SenseKind>, is_phantasm: bool) -> Rgba<f32> {
+    match sense {
+        Some(SenseKind::True) if is_phantasm => Rgba::new(0.55, 0.55, 0.62, 1.0),
+        Some(sense) => sense_tint(sense),
+        None => Rgba::one(),
+    }
+}
+
+/// The disguise this client's own observer should still be fooled by:
+/// `disguise` unchanged, or `None` when `entity` is in this client's own
+/// True Sight reveal set (`SenseKind::True` in `revealed_entities`).
+///
+/// `Disguise::render_body` itself stays a pure, observer-agnostic function —
+/// a disguise's lie is synced to every client alike, so the function that
+/// resolves it must not know who is looking. This is the one seam every
+/// `Disguise::render_body` call site in this file goes through first, so a
+/// True-Sight-holding observer sees the real body/name at every one of them
+/// consistently — this file has exactly one observer (the local client), so
+/// nothing here needs to vary per call site.
+fn disguise_for_observer<'a>(
+    disguise: Option<&'a Disguise>,
+    entity: EcsEntity,
+    revealed_entities: &HashMap<EcsEntity, SenseKind>,
+) -> Option<&'a Disguise> {
+    // Skip the reveal-set lookup entirely for the common case of an
+    // undisguised figure -- most entities never carry a `Disguise`.
+    disguise?;
+    if revealed_entities.get(&entity) == Some(&SenseKind::True) {
+        None
+    } else {
+        disguise
+    }
+}
+
+#[cfg(test)]
+mod true_sight_reveal_tests {
+    use super::*;
+    use common::{comp::body::humanoid, uid::Uid};
+    use specs::{Builder, WorldExt};
+    use std::num::NonZeroU64;
+
+    fn disguise() -> Disguise {
+        Disguise {
+            apparent_body: Body::Humanoid(humanoid::Body::random()),
+            apparent_name: None,
+            caster: Uid(NonZeroU64::new(1).unwrap()),
+            cast_accuracy: 0.5,
+        }
+    }
+
+    #[test]
+    fn an_unrevealed_entity_keeps_its_disguise() {
+        let mut world = specs::World::new();
+        let entity = world.create_entity().build();
+        let d = disguise();
+        let revealed = HashMap::new();
+        assert!(disguise_for_observer(Some(&d), entity, &revealed).is_some());
+    }
+
+    #[test]
+    fn a_true_sight_revealed_entity_loses_its_disguise() {
+        let mut world = specs::World::new();
+        let entity = world.create_entity().build();
+        let d = disguise();
+        let mut revealed = HashMap::new();
+        revealed.insert(entity, SenseKind::True);
+        assert!(
+            disguise_for_observer(Some(&d), entity, &revealed).is_none(),
+            "a True-Sight-revealed disguise must resolve as if there were none"
+        );
+    }
+
+    #[test]
+    fn a_reveal_by_an_unrelated_sense_kind_does_not_bypass_the_disguise() {
+        let mut world = specs::World::new();
+        let entity = world.create_entity().build();
+        let d = disguise();
+        let mut revealed = HashMap::new();
+        revealed.insert(entity, SenseKind::Magic);
+        assert!(
+            disguise_for_observer(Some(&d), entity, &revealed).is_some(),
+            "only SenseKind::True bypasses a disguise, not an arbitrary reveal"
+        );
+    }
+
+    #[test]
+    fn reveal_tint_gives_a_true_sight_revealed_phantasm_a_distinct_faded_tint() {
+        let tint = reveal_tint(Some(SenseKind::True), true);
+        assert_eq!(tint, Rgba::new(0.55, 0.55, 0.62, 1.0));
+        assert_ne!(
+            tint,
+            sense_tint(SenseKind::True),
+            "a revealed phantasm must not get the ordinary bright True Sight glow"
+        );
+    }
+
+    #[test]
+    fn reveal_tint_falls_back_to_the_ordinary_sense_tint_for_a_non_phantasm() {
+        assert_eq!(
+            reveal_tint(Some(SenseKind::True), false),
+            sense_tint(SenseKind::True)
+        );
+        assert_eq!(
+            reveal_tint(Some(SenseKind::Magic), true),
+            sense_tint(SenseKind::Magic),
+            "the phantasm tint only overrides SenseKind::True, not every sense"
+        );
+    }
+
+    #[test]
+    fn reveal_tint_is_neutral_without_any_reveal() {
+        assert_eq!(reveal_tint(None, false), Rgba::one());
+        assert_eq!(reveal_tint(None, true), Rgba::one());
+    }
+}
 
 /// camera data, figure LOD render distance.
 pub type CameraData<'a> = (&'a Camera, f32);
@@ -562,6 +722,16 @@ struct FigureReadData<'a> {
     volume_riders: ReadStorage<'a, VolumeRiders>,
     colliders: ReadStorage<'a, Collider>,
     heads: ReadStorage<'a, Heads>,
+    // The cast-disguise override. `Body` above stays a hard-required join
+    // member for physics/LOS elsewhere in the engine; this file's own
+    // model/skeleton/nameplate selection prefers this when present — see
+    // `Disguise::render_body`.
+    disguises: ReadStorage<'a, Disguise>,
+    // Marks a shared-illusion decoy. Read only by `maintain_entity`'s own
+    // True-Sight tint branch — a phantasm has no separate real body to swap
+    // in the way a disguise does, so revealing one to this client is purely
+    // a colour treatment, not a model/skeleton override.
+    phantom_illusions: ReadStorage<'a, PhantomIllusion>,
 }
 
 struct FigureUpdateData<'a, CSS, COR> {
@@ -611,6 +781,8 @@ impl FigureReadData<'_> {
             volume_riders: self.volume_riders.get(entity),
             collider: self.colliders.get(entity),
             heads: self.heads.get(entity),
+            disguise: self.disguises.get(entity),
+            phantom_illusion: self.phantom_illusions.get(entity),
         })
     }
 
@@ -639,6 +811,8 @@ impl FigureReadData<'_> {
                 self.volume_riders.maybe(),
                 self.colliders.maybe(),
                 self.heads.maybe(),
+                self.disguises.maybe(),
+                self.phantom_illusions.maybe(),
             ),
         )
             .join()
@@ -667,6 +841,8 @@ impl FigureReadData<'_> {
                         volume_riders,
                         collider,
                         heads,
+                        disguise,
+                        phantom_illusion,
                     ),
                 )| FigureUpdateParams {
                     entity,
@@ -691,6 +867,8 @@ impl FigureReadData<'_> {
                     volume_riders,
                     collider,
                     heads,
+                    disguise,
+                    phantom_illusion,
                 },
             )
     }
@@ -719,6 +897,8 @@ struct FigureUpdateParams<'a> {
     volume_riders: Option<&'a VolumeRiders>,
     collider: Option<&'a Collider>,
     heads: Option<&'a Heads>,
+    disguise: Option<&'a Disguise>,
+    phantom_illusion: Option<&'a PhantomIllusion>,
 }
 
 pub struct FigureMgr {
@@ -1156,14 +1336,16 @@ impl FigureMgr {
             // interpolate motion
             const MIN_PERFECT_RATE_DIST: f32 = 100.0;
 
-            if !(i as u64 + data.tick).is_multiple_of(
-                ((((pos.distance_squared(focus_pos) / entity_data.scale.map_or(1.0, |s| s.0))
-                    .powf(0.25)
-                    - MIN_PERFECT_RATE_DIST.sqrt())
-                .max(0.0)
-                    / 3.0) as u64)
-                    .saturating_add(1),
-            ) {
+            if !matches!(&entity_data.body, Body::Ship(_))
+                && !(i as u64 + data.tick).is_multiple_of(
+                    ((((pos.distance_squared(focus_pos) / entity_data.scale.map_or(1.0, |s| s.0))
+                        .powf(0.25)
+                        - MIN_PERFECT_RATE_DIST.sqrt())
+                    .max(0.0)
+                        / 3.0) as u64)
+                        .saturating_add(1),
+                )
+            {
                 continue;
             }
 
@@ -1213,7 +1395,25 @@ impl FigureMgr {
             volume_riders: _,
             collider,
             heads,
+            disguise,
+            phantom_illusion,
         } = *entity_data;
+
+        // Everything below this point that selects a model/skeleton/state-map
+        // entry must see the *apparent* body while disguised — `body` is
+        // shadowed here on purpose so every one of this function's many
+        // downstream body-driven dispatch sites (state lookup, skeleton
+        // selection, model choice) gets it for free from a single seam,
+        // rather than each site having to remember to check `disguise`
+        // itself. The real `Body` this entity actually has (still available
+        // via `entity_data.body`/`read_data.bodies`) is untouched by this —
+        // nothing about physics or line-of-sight is computed in this file.
+        // `disguise_for_observer` folds this client's own True Sight reveal
+        // set into the same seam, so a revealed disguise never gets keyed
+        // into the state-map cache under its apparent body in the first
+        // place.
+        let disguise = disguise_for_observer(disguise, entity, data.scene_data.revealed_entities);
+        let body = &Disguise::render_body(disguise, *body);
 
         let renderer = &mut *data.renderer;
         let tick = data.tick;
@@ -1310,6 +1510,13 @@ impl FigureMgr {
             return;
         }
 
+        // The same "is this figure currently revealed to me by an active magical
+        // sense" condition `reveal_tint` uses to pick `col`'s multiplier below,
+        // reused as-is to drive the emissive rim highlight (`Locals.flags` bit 1)
+        // rather than inventing a second reveal check.
+        let revealing_sense = data.scene_data.revealed_entities.get(&entity).copied();
+        let is_revealed = revealing_sense.is_some();
+
         // Change in health as color!
         let col = health
                 .map(|h| {
@@ -1326,7 +1533,9 @@ impl FigureMgr {
                 Rgba::new(1.5, 1.5, 1.5, 1.0)
             } else {
                 Rgba::one()
-            };
+            }
+            // Tint entities revealed to us by an active magical sense
+            * reveal_tint(revealing_sense, phantom_illusion.is_some());
 
         let scale = scale.map(|s| s.0).unwrap_or(1.0);
 
@@ -1410,6 +1619,7 @@ impl FigureMgr {
             col,
             dt,
             is_player: is_viewpoint,
+            is_revealed,
             terrain: data.terrain,
             ground_vel: physics.ground_vel,
             primary_trail_points: self.trail_points(data.scene_data, entity, true),
@@ -1767,6 +1977,7 @@ impl FigureMgr {
                     | CharacterState::BasicBlock(_)
                     | CharacterState::RiposteMelee(_)
                     | CharacterState::LeapRanged(_)
+                    | CharacterState::Knock(_)
                     | CharacterState::Simple(_) => {
                         let timer = character.timer();
                         let stage_section = character.stage_section();
@@ -7085,8 +7296,10 @@ impl FigureMgr {
         &'a self,
         drawer: &mut FigureDrawer<'_, 'a>,
         state: &State,
+        player_entity: EcsEntity,
         viewpoint_entity: EcsEntity,
         tick: u64,
+        revealed_entities: &HashMap<EcsEntity, SenseKind>,
         (camera, figure_lod_render_distance): CameraData,
     ) {
         span!(_guard, "render", "FigureManager::render");
@@ -7097,7 +7310,17 @@ impl FigureMgr {
         let character_state = character_state_storage.get(viewpoint_entity);
         let items = ecs.read_storage::<PickupItem>();
         let thrown_items = ecs.read_storage::<ThrownItem>();
-        for (entity, pos, body, _, inventory, scale, collider, _) in (
+        // Whether the player themselves (not the current viewpoint, which may
+        // be a remote-sensing anchor with no `Stats` of its own) currently
+        // pierces concealment -- mirrors `voxygen/src/session/target.rs`'s
+        // own target-acquisition gate, the other half of the same True-Sight
+        // reveal.
+        let pierces_concealment = ecs
+            .read_storage::<comp::Stats>()
+            .get(player_entity)
+            .is_some_and(comp::observer_pierces_concealment);
+        let concealed = ecs.read_storage::<comp::ConcealedUnlessTrueSight>();
+        for (entity, pos, real_body, _, inventory, scale, collider, _, disguise, _) in (
             &ecs.entities(),
             &ecs.read_storage::<Pos>(),
             &ecs.read_storage::<Body>(),
@@ -7106,14 +7329,30 @@ impl FigureMgr {
             ecs.read_storage::<Scale>().maybe(),
             ecs.read_storage::<Collider>().maybe(),
             ecs.read_storage::<Object>().maybe(),
+            ecs.read_storage::<Disguise>().maybe(),
+            concealed.maybe(),
         )
             .join()
         // Don't render dead entities
-        .filter(|(_, _, _, health, _, _, _, _)| health.is_none_or(|h| !h.is_dead))
+        .filter(|(_, _, _, health, _, _, _, _, _, _)| health.is_none_or(|h| !h.is_dead))
         // Don't render player
-        .filter(|(entity, _, _, _, _, _, _, _)| *entity != viewpoint_entity)
-        .filter(|(_, _, _, _, _, _, _, obj)| !self.should_flicker(*time, *obj))
-        {
+        .filter(|(entity, _, _, _, _, _, _, _, _, _)| *entity != viewpoint_entity)
+        .filter(|(_, _, _, _, _, _, _, obj, _, _)| !self.should_flicker(*time, *obj))
+        // An entity invisible to normal perception (e.g. a remote-sensing
+        // spell's sensor) is never drawn for an observer without True Sight.
+        .filter(|(_, _, _, _, _, _, _, _, _, is_concealed)| {
+            is_concealed.is_none() || pierces_concealment
+        }) {
+            // The apparent body while disguised, otherwise the real one —
+            // see `Disguise::render_body`'s doc comment. `real_body` stays
+            // available above for anything that must not be fooled (nothing
+            // in this render pass needs that, but keeping the name distinct
+            // avoids an accidental future misuse). Folded through
+            // `disguise_for_observer` first so a True-Sight-revealed
+            // disguise renders as its real body here too, matching the
+            // state-map key `maintain_entity` already resolved it under.
+            let disguise = disguise_for_observer(disguise, entity, revealed_entities);
+            let body = &Disguise::render_body(disguise, *real_body);
             if let Some((bound, model, atlas)) = self.get_model_for_render(
                 tick,
                 camera,
@@ -7151,6 +7390,7 @@ impl FigureMgr {
         state: &State,
         viewpoint_entity: EcsEntity,
         tick: u64,
+        revealed_entities: &HashMap<EcsEntity, SenseKind>,
         (camera, figure_lod_render_distance): CameraData,
     ) {
         span!(_guard, "render_player", "FigureManager::render_player");
@@ -7161,7 +7401,7 @@ impl FigureMgr {
         let items = ecs.read_storage::<PickupItem>();
         let thrown_items = ecs.read_storage::<ThrownItem>();
 
-        if let (Some(pos), Some(body), scale) = (
+        if let (Some(pos), Some(real_body), scale) = (
             ecs.read_storage::<Pos>().get(viewpoint_entity),
             ecs.read_storage::<Body>().get(viewpoint_entity),
             ecs.read_storage::<Scale>().get(viewpoint_entity),
@@ -7174,6 +7414,15 @@ impl FigureMgr {
 
             let inventory_storage = ecs.read_storage::<Inventory>();
             let inventory = inventory_storage.get(viewpoint_entity);
+            // See `render`'s own comment: apparent body while disguised,
+            // unless this observer's own True Sight has revealed it.
+            let disguise_storage = ecs.read_storage::<Disguise>();
+            let disguise = disguise_for_observer(
+                disguise_storage.get(viewpoint_entity),
+                viewpoint_entity,
+                revealed_entities,
+            );
+            let body = &Disguise::render_body(disguise, *real_body);
 
             if let Some((bound, model, atlas)) = self.get_model_for_render(
                 tick,
@@ -7797,119 +8046,131 @@ impl FigureMgr {
     }
 
     pub fn viewpoint_offset(&self, scene_data: &SceneData, entity: EcsEntity) -> Vec3<f32> {
-        scene_data
-            .state
-            .ecs()
-            .read_storage::<Body>()
-            .get(entity)
-            .and_then(|b| match b {
-                Body::Humanoid(_) => self
-                    .states
-                    .character_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 4.0, 1.0)).xyz()),
-                Body::QuadrupedSmall(_) => self
-                    .states
-                    .quadruped_small_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
-                Body::QuadrupedMedium(b) => self
-                    .states
-                    .quadruped_medium_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * quadruped_medium::viewpoint(b)).xyz()),
-                Body::BirdMedium(b) => self
-                    .states
-                    .bird_medium_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * bird_medium::viewpoint(b)).xyz()),
-                Body::FishMedium(_) => self
-                    .states
-                    .fish_medium_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 5.0, 0.0, 1.0)).xyz()),
-                Body::Dragon(_) => self
-                    .states
-                    .dragon_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head_upper * Vec4::new(0.0, 8.0, 0.0, 1.0)).xyz()),
-                Body::BirdLarge(_) => self
-                    .states
-                    .bird_large_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 6.0, 1.0)).xyz()),
-                Body::FishSmall(_) => self
-                    .states
-                    .fish_small_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
-                Body::BipedLarge(_) => self
-                    .states
-                    .biped_large_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.jaw * Vec4::new(0.0, 4.0, 0.0, 1.0)).xyz()),
-                Body::BipedSmall(_) => self
-                    .states
-                    .biped_small_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz()),
-                Body::Golem(_) => self
-                    .states
-                    .golem_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 5.0, 1.0)).xyz()),
-                Body::Theropod(_) => self
-                    .states
-                    .theropod_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 2.0, 0.0, 1.0)).xyz()),
-                Body::QuadrupedLow(_) => self
-                    .states
-                    .quadruped_low_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head_c_upper * Vec4::new(0.0, 4.0, 1.0, 1.0)).xyz()),
-                Body::Arthropod(_) => self
-                    .states
-                    .arthropod_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.head * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
-                Body::Object(_) => None,
-                Body::Ship(_) => None,
-                Body::Item(_) => None,
-                Body::Crustacean(_) => self
-                    .states
-                    .crustacean_states
-                    .get(&entity)
-                    .map(|state| &state.computed_skeleton)
-                    .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
-                Body::Plugin(_) => {
-                    #[cfg(not(feature = "plugins"))]
-                    unreachable!("Plugins require feature");
-                    #[cfg(feature = "plugins")]
-                    {
-                        self.states
-                            .plugin_states
-                            .get(&entity)
-                            .map(|state| &state.computed_skeleton)
-                            .map(|skeleton| (skeleton.bone0 * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz())
-                    }
-                },
-            })
-            .unwrap_or_else(Vec3::zero)
+        let ecs = scene_data.state.ecs();
+        // The apparent body while disguised, otherwise the real one -- see
+        // `Disguise::render_body`'s doc comment. This entity's `FigureState`
+        // lives under whichever body category `maintain_entity` last
+        // dispatched it into, which is always the apparent one when
+        // disguised, so the state-map lookups below must key off the same
+        // body `maintain_entity` used or they silently miss and this whole
+        // function falls through to `Vec3::zero()` -- collapsing the camera
+        // for a moderator spectating, or a future remote-sensing caster
+        // viewing through, a cross-category-disguised entity.
+        let Some(real_body) = ecs.read_storage::<Body>().get(entity).copied() else {
+            return Vec3::zero();
+        };
+        let disguise = ecs.read_storage::<Disguise>();
+        let disguise =
+            disguise_for_observer(disguise.get(entity), entity, scene_data.revealed_entities);
+        let body = Disguise::render_body(disguise, real_body);
+        match &body {
+            Body::Humanoid(_) => self
+                .states
+                .character_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 4.0, 1.0)).xyz()),
+            Body::QuadrupedSmall(_) => self
+                .states
+                .quadruped_small_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
+            Body::QuadrupedMedium(b) => self
+                .states
+                .quadruped_medium_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * quadruped_medium::viewpoint(b)).xyz()),
+            Body::BirdMedium(b) => self
+                .states
+                .bird_medium_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * bird_medium::viewpoint(b)).xyz()),
+            Body::FishMedium(_) => self
+                .states
+                .fish_medium_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 5.0, 0.0, 1.0)).xyz()),
+            Body::Dragon(_) => self
+                .states
+                .dragon_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head_upper * Vec4::new(0.0, 8.0, 0.0, 1.0)).xyz()),
+            Body::BirdLarge(_) => self
+                .states
+                .bird_large_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 3.0, 6.0, 1.0)).xyz()),
+            Body::FishSmall(_) => self
+                .states
+                .fish_small_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz()),
+            Body::BipedLarge(_) => self
+                .states
+                .biped_large_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.jaw * Vec4::new(0.0, 4.0, 0.0, 1.0)).xyz()),
+            Body::BipedSmall(_) => self
+                .states
+                .biped_small_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz()),
+            Body::Golem(_) => self
+                .states
+                .golem_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 0.0, 5.0, 1.0)).xyz()),
+            Body::Theropod(_) => self
+                .states
+                .theropod_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 2.0, 0.0, 1.0)).xyz()),
+            Body::QuadrupedLow(_) => self
+                .states
+                .quadruped_low_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head_c_upper * Vec4::new(0.0, 4.0, 1.0, 1.0)).xyz()),
+            Body::Arthropod(_) => self
+                .states
+                .arthropod_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.head * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
+            Body::Object(_) => None,
+            Body::Ship(_) => None,
+            Body::Item(_) => None,
+            Body::Crustacean(_) => self
+                .states
+                .crustacean_states
+                .get(&entity)
+                .map(|state| &state.computed_skeleton)
+                .map(|skeleton| (skeleton.chest * Vec4::new(0.0, 7.0, 0.0, 1.0)).xyz()),
+            Body::Plugin(_) => {
+                #[cfg(not(feature = "plugins"))]
+                unreachable!("Plugins require feature");
+                #[cfg(feature = "plugins")]
+                {
+                    self.states
+                        .plugin_states
+                        .get(&entity)
+                        .map(|state| &state.computed_skeleton)
+                        .map(|skeleton| (skeleton.bone0 * Vec4::new(0.0, 3.0, 0.0, 1.0)).xyz())
+                }
+            },
+        }
+        .unwrap_or_else(Vec3::zero)
     }
 
     pub fn lantern_mat(&self, entity: EcsEntity) -> Option<Mat4<f32>> {
@@ -7924,90 +8185,99 @@ impl FigureMgr {
         scene_data: &SceneData,
         entity: EcsEntity,
     ) -> Option<Transform<f32, f32, f32>> {
-        scene_data
-            .state
-            .ecs()
-            .read_storage::<Body>()
-            .get(entity)
-            .and_then(|body| match body {
-                Body::Humanoid(_) => self.states.character_states.get(&entity).map(|state| {
+        let ecs = scene_data.state.ecs();
+        // See `viewpoint_offset`'s identical comment: `entity`'s `FigureState`
+        // is keyed by its apparent body when disguised, so this lookup must
+        // resolve through `Disguise::render_body` too, or a disguised mount's
+        // rider silently gets no attachment transform.
+        let real_body = ecs.read_storage::<Body>().get(entity).copied()?;
+        let disguise = ecs.read_storage::<Disguise>();
+        let disguise =
+            disguise_for_observer(disguise.get(entity), entity, scene_data.revealed_entities);
+        let body = Disguise::render_body(disguise, real_body);
+        match &body {
+            Body::Humanoid(_) => {
+                self.states.character_states.get(&entity).map(|state| {
                     character::mount_transform(&state.computed_skeleton, &state.skeleton)
-                }),
-                Body::QuadrupedSmall(b) => {
-                    self.states
-                        .quadruped_small_states
-                        .get(&entity)
-                        .map(|state| {
-                            quadruped_small::mount_transform(
-                                b,
-                                &state.computed_skeleton,
-                                &state.skeleton,
-                            )
-                        })
-                },
-                Body::QuadrupedMedium(b) => {
-                    self.states
-                        .quadruped_medium_states
-                        .get(&entity)
-                        .map(|state| {
-                            quadruped_medium::mount_transform(
-                                b,
-                                &state.computed_skeleton,
-                                &state.skeleton,
-                            )
-                        })
-                },
-                Body::BirdMedium(b) => self.states.bird_medium_states.get(&entity).map(|state| {
-                    bird_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::FishMedium(b) => self.states.fish_medium_states.get(&entity).map(|state| {
-                    fish_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Dragon(b) => self.states.dragon_states.get(&entity).map(|state| {
+                })
+            },
+            Body::QuadrupedSmall(b) => {
+                self.states
+                    .quadruped_small_states
+                    .get(&entity)
+                    .map(|state| {
+                        quadruped_small::mount_transform(
+                            b,
+                            &state.computed_skeleton,
+                            &state.skeleton,
+                        )
+                    })
+            },
+            Body::QuadrupedMedium(b) => {
+                self.states
+                    .quadruped_medium_states
+                    .get(&entity)
+                    .map(|state| {
+                        quadruped_medium::mount_transform(
+                            b,
+                            &state.computed_skeleton,
+                            &state.skeleton,
+                        )
+                    })
+            },
+            Body::BirdMedium(b) => self.states.bird_medium_states.get(&entity).map(|state| {
+                bird_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::FishMedium(b) => self.states.fish_medium_states.get(&entity).map(|state| {
+                fish_medium::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Dragon(b) => {
+                self.states.dragon_states.get(&entity).map(|state| {
                     dragon::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::BirdLarge(b) => self.states.bird_large_states.get(&entity).map(|state| {
-                    bird_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::FishSmall(b) => self.states.fish_small_states.get(&entity).map(|state| {
-                    fish_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::BipedLarge(b) => self.states.biped_large_states.get(&entity).map(|state| {
-                    biped_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::BipedSmall(b) => self.states.biped_small_states.get(&entity).map(|state| {
-                    biped_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Golem(b) => self.states.golem_states.get(&entity).map(|state| {
+                })
+            },
+            Body::BirdLarge(b) => self.states.bird_large_states.get(&entity).map(|state| {
+                bird_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::FishSmall(b) => self.states.fish_small_states.get(&entity).map(|state| {
+                fish_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::BipedLarge(b) => self.states.biped_large_states.get(&entity).map(|state| {
+                biped_large::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::BipedSmall(b) => self.states.biped_small_states.get(&entity).map(|state| {
+                biped_small::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Golem(b) => {
+                self.states.golem_states.get(&entity).map(|state| {
                     golem::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Theropod(b) => self.states.theropod_states.get(&entity).map(|state| {
-                    theropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::QuadrupedLow(b) => {
-                    self.states.quadruped_low_states.get(&entity).map(|state| {
-                        quadruped_low::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                    })
-                },
-                Body::Arthropod(b) => self.states.arthropod_states.get(&entity).map(|state| {
-                    arthropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Object(_) => None,
-                Body::Ship(_) => None,
-                Body::Item(_) => None,
-                Body::Crustacean(b) => self.states.crustacean_states.get(&entity).map(|state| {
-                    crustacean::mount_transform(b, &state.computed_skeleton, &state.skeleton)
-                }),
-                Body::Plugin(_) => {
-                    #[cfg(not(feature = "plugins"))]
-                    unreachable!("Plugins require feature");
-                    #[cfg(feature = "plugins")]
-                    Some(Transform {
-                        position: body.mount_offset().into_tuple().into(),
-                        ..Default::default()
-                    })
-                },
-            })
+                })
+            },
+            Body::Theropod(b) => self.states.theropod_states.get(&entity).map(|state| {
+                theropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::QuadrupedLow(b) => self.states.quadruped_low_states.get(&entity).map(|state| {
+                quadruped_low::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Arthropod(b) => self.states.arthropod_states.get(&entity).map(|state| {
+                arthropod::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Object(_) => None,
+            Body::Ship(_) => None,
+            Body::Item(_) => None,
+            Body::Crustacean(b) => self.states.crustacean_states.get(&entity).map(|state| {
+                crustacean::mount_transform(b, &state.computed_skeleton, &state.skeleton)
+            }),
+            Body::Plugin(_) => {
+                #[cfg(not(feature = "plugins"))]
+                unreachable!("Plugins require feature");
+                #[cfg(feature = "plugins")]
+                Some(Transform {
+                    position: body.mount_offset().into_tuple().into(),
+                    ..Default::default()
+                })
+            },
+        }
     }
 
     fn trail_points(
@@ -8348,6 +8618,12 @@ pub struct FigureUpdateCommonParameters<'a> {
     pub col: Rgba<f32>,
     pub dt: f32,
     pub is_player: bool,
+    /// Whether this figure is currently revealed to the local client by an
+    /// active magical sense (i.e. it has an entry in
+    /// `SceneData::revealed_entities`), the same condition `reveal_tint`
+    /// uses to pick `col`'s multiplier. Drives the emissive rim highlight
+    /// (`Locals.flags` bit 1) in `figure-frag.glsl`.
+    pub is_revealed: bool,
     pub terrain: Option<&'a Terrain>,
     pub ground_vel: Vec3<f32>,
     pub primary_trail_points: Option<(anim::vek::Vec3<f32>, anim::vek::Vec3<f32>)>,
@@ -8433,6 +8709,7 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
             col,
             dt,
             is_player,
+            is_revealed,
             terrain,
             ground_vel,
             primary_trail_points,
@@ -8569,6 +8846,7 @@ impl<S: Skeleton, D: FigureData> FigureState<S, D> {
             *is_player,
             self.last_light,
             self.last_glow,
+            *is_revealed,
         );
         renderer.update_consts(&mut self.meta.bound.0, &[locals]);
 

@@ -1,0 +1,42 @@
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: RemoteSensing,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                // spawn_range/flight_speed: kept in sync by hand with the
+                // "9 meters" prose in
+                // assets/voxygen/i18n/en/hud/ability.ftl's
+                // `common-abilities-spells-divination-arcane_eye` .desc --
+                // there is no shared source of truth for that string yet
+                // (voxygen/src/hud/util.rs's `ability_description` would
+                // need to read the live RON value to interpolate it, which
+                // isn't wired up for any ability today; see that file's
+                // `min_combo`/`min_combo_upg` fluent-arg cases for the
+                // closest existing precedent, which are themselves
+                // hardcoded Rust literals per ability id, not read from
+                // RON). If you retune spawn_range here, update the FTL too.
+                misc_data: Some(RemoteSense(
+                    anchor_kind: Piloted,
+                    free_look: false,
+                    piloted: true,
+                    spawn_range: 9.0,
+                    flight_speed: 6.0,
+                )),
+            ),
+        ),
+    ],
+    energy_cost: 30,
+    enforced_limit: false,
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, same `level * 6` convention
+        // `see_invisibility`/`true_seeing` already use.
+        requirements: (min_level: Some(24)),
+    ),
+)

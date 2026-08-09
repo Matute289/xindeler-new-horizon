@@ -1,0 +1,23 @@
+# Transmutation spell names + descriptions.
+spell-magic_stone = Magic Stone
+spell-magic_stone-desc = You channel raw essence into a handful of small pebbles, hardening them into deadly projectiles. The charged stones can be flung or slung to strike a distant foe before their power fades.
+spell-lightning_arrow = Lightning Arrow
+spell-lightning_arrow-desc = You charge your next ranged shot so the projectile becomes a crackling bolt of lightning on impact, arcing to sear nearby foes as well.
+spell-plant_growth = Plant Growth
+spell-plant_growth-desc = You flood a patch of ground with surging life force, bursting the vegetation into dense, choking overgrowth. The lush tangle slows anything trying to push through it, and vines can ensnare those who step directly onto them.
+spell-control_winds_turbulence = Control Winds
+spell-control_winds_turbulence-desc = You seize command of the air around you, whipping it into a churning, ground-level turbulence that fouls footing and slows anyone caught in the gale.
+spell-knock = Knock
+spell-knock-desc = You gesture at a locked door, chest, or gate from a distance and its lock springs open with a sharp rap, no key required. Some ancient or heavily-warded locks are proof against this trick and must still be opened the old-fashioned way.
+spell-floating_disk = Floating Disk
+spell-floating_disk-desc = You conjure a disk of shimmering force that hovers at your side, holding station a short distance away and drifting over uneven ground to keep pace with you. It carries whatever is set upon it, but cannot climb higher than you could already stand or wander far from you before winking out of existence.
+spell-mage_hand = Mage Hand
+spell-mage_hand-desc = You conjure a spectral hand that can grasp a loose object at a short distance, holding it steady or setting it down gently wherever you point. It has no strength to speak of and cannot be used to strike anything.
+spell-telekinesis = Telekinesis
+spell-telekinesis-desc = You reach out with your mind and seize a loose object well beyond arm's reach, holding it suspended in the air or hurling it with bruising force at whatever you choose.
+spell-catapult = Catapult
+spell-catapult-desc = You hurl a small loose object at a target with a sudden burst of force, no throwing arm required.
+spell-sequester = Sequester
+spell-sequester-desc = You wrap yourself in a veil of stillness, turning yourself unseen and shielding yourself from every form of remote sensing.
+spell-weave_transfusion = Weave Transfusion
+spell-weave_transfusion-desc = You touch a wounded ally and pour a surge of raw vitality into them, closing wounds in an instant.

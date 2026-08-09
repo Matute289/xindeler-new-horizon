@@ -8,7 +8,7 @@ use common::{
         tool::AbilityMap,
     },
     event::{ChatEvent, EmitExt, ProcessTradeActionEvent},
-    rtsim::{Actor, NpcInput},
+    rtsim::NpcInput,
     trade::{TradeAction, TradePhase, TradeResult},
 };
 use rand::RngExt;
@@ -80,13 +80,9 @@ pub fn handle_inbox_dialogue(bdata: &mut BehaviorData) -> bool {
     if let Some(AgentEvent::Dialogue(sender, dialogue)) = agent.inbox.pop_front()
         && let Some(rtsim_outbox) = &mut agent.rtsim_outbox
         && let Some(sender_entity) = read_data.id_maps.uid_entity(sender)
-        && let Some(sender_actor) = read_data
-            .presences
-            .get(sender_entity)
-            .and_then(|p| p.kind.character_id().map(Actor::Character))
-            .or_else(|| Some(Actor::Npc(*read_data.rtsim_entities.get(sender_entity)?)))
+        && let Some(sender_actor_id) = read_data.rtsim_actors.get(sender_entity)
     {
-        rtsim_outbox.push_back(NpcInput::Dialogue(sender_actor, dialogue));
+        rtsim_outbox.push_back(NpcInput::Dialogue(*sender_actor_id, dialogue));
         return false;
     }
     true
@@ -107,13 +103,9 @@ pub fn handle_inbox_talk(bdata: &mut BehaviorData) -> bool {
 
         if let Some(rtsim_outbox) = &mut agent.rtsim_outbox
             && let Some(by_entity) = by_entity
-            && let Some(actor) = read_data
-                .presences
-                .get(by_entity)
-                .and_then(|p| p.kind.character_id().map(Actor::Character))
-                .or_else(|| Some(Actor::Npc(*read_data.rtsim_entities.get(by_entity)?)))
+            && let Some(actor_id) = read_data.rtsim_actors.get(by_entity)
         {
-            rtsim_outbox.push_back(NpcInput::Interaction(actor));
+            rtsim_outbox.push_back(NpcInput::Interaction(*actor_id));
             return false;
         }
 

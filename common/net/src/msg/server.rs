@@ -220,6 +220,10 @@ pub enum ServerGeneral {
     /// Economic information about sites
     SiteEconomy(EconomyInfo),
     MapMarker(comp::MapMarkerUpdate),
+    /// A mid-session flip of PROJECT ORACLE's liveness (`/oracle on|off`).
+    /// Updates the same client-side `OracleLive` resource the login-time
+    /// `ServerConstants::oracle_live` push writes.
+    OracleLive(bool),
     WeatherUpdate(SharedWeatherGrid),
     LocalWindUpdate(Vec2<f32>),
     /// Suggest the client to spectate a position. Called after client has
@@ -249,7 +253,7 @@ end of 2nd level Enums
 /// Inform the client of updates to the player list.
 ///
 /// Note: Before emiting any of these, check if the current
-/// [`veloren_client::Client::client_type`] wants to emit login events.
+/// [`xindeler_client::Client::client_type`] wants to emit login events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PlayerListUpdate {
     Init(HashMap<Uid, PlayerInfo>),
@@ -299,7 +303,7 @@ pub enum InviteAnswer {
 /// A message that should be displayed to the player, possibly with data to
 /// update the client.
 ///
-/// See [`veloren_client::UserNotification`] for the stripped down version,
+/// See [`xindeler_client::UserNotification`] for the stripped down version,
 /// which the client sends to the UI after removing (and using) any data that is
 /// not relevant to rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,6 +380,7 @@ impl ServerMsg {
                         | ServerGeneral::FinishedTrade(_)
                         | ServerGeneral::SiteEconomy(_)
                         | ServerGeneral::MapMarker(_)
+                        | ServerGeneral::OracleLive(_)
                         | ServerGeneral::WeatherUpdate(_)
                         | ServerGeneral::LocalWindUpdate(_)
                         | ServerGeneral::SpectatePosition(_)

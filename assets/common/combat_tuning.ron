@@ -27,4 +27,95 @@
     gear_evasion_floor: -10.0, // full plate cannot drag below this
     armor_evasion_per_protection: 0.3, // evasion lost per point of armor protection
     shield_evasion_penalty: 2.0, // flat -evasion while a shield is equipped
+
+    // --- resisted magical effects (charm / domination / compulsion / banishment) ---
+    // chance% = clamp(save_base_hit + level_term - resist - in_combat,
+    //                 save_hit_floor, save_hit_ceil)
+    //   level_term = (caster magic_accuracy - effective magic evasion) * hit_k
+    //   effective magic evasion = target magic_evasion + combat_rating * save_cr_to_evasion
+    //   resist = clamp(magic resistance + crowd_control_resistance, 0, save_mr_soft_cap)
+    // ...except that a level_term at or below -save_outclassed_wall returns 0%
+    // outright, bypassing the floor.
+    save_base_hit:  0.70, // own base, below base_hit: saves tune apart from damage
+    save_hit_floor: 0.05, // a disadvantaged (not outclassed) attempt is never impossible
+    save_hit_ceil:  0.95, // below hit_ceil on purpose: a resisted effect is never guaranteed
+    save_mr_soft_cap: 0.75, // stacked resistances can't reach immunity
+    save_cr_to_evasion: 2.0, // magic evasion per point of the target's combat_rating
+    save_in_combat_penalty: 0.20, // -20pp if the target is already fighting the caster
+    save_outclassed_wall: 0.30, // level_term <= -0.30 -> always fails, no floor rescue
+
+    // magic-resistance tier values; the tier taxonomy itself lives in Rust
+    magic_resist_minor:     0.15, // e.g. fey ancestry
+    magic_resist_major:     0.30, // the magic-resistance trait
+    magic_resist_legendary: 0.50, // magic resistance + legendary-resistance analogue
+
+    // --- disguise suspicion roll ---
+    // Second named instance of the same shared resisted-magic-effect formula
+    // the save_* block above feeds (see MagicEffectTuning in combat.rs) — the
+    // observer is the "target", the disguise's caster the "caster", and
+    // "situational" means the observer is inspecting the disguise up close.
+    // 🔴 MagicEffectTuning is NOT #[serde(default)] -- every field below must
+    // stay present, or the whole `disguise:` section fails to load rather
+    // than silently reverting a missing field to a different instance's
+    // number (see MagicEffectTuning's own doc comment in combat.rs).
+    disguise: (
+        base_hit: 0.85, // a disguise should usually pass a casual glance
+        hit_floor: 0.05, // even a hopelessly outclassed caster fools someone occasionally
+        hit_ceil: 0.95, // below 1.0 on purpose: no disguise is ever perfect
+        mr_soft_cap: 0.75, // mirrors save_mr_soft_cap
+        cr_to_evasion: 2.0, // identical to save_cr_to_evasion: a boss that resists charm also sees through disguises
+        situational_penalty: 0.25, // close inspection is a stronger tell than trading blows at range
+        outclassed_wall: None, // no hard wall: an outclassed disguise still rests on hit_floor, never hard-fails
+    ),
+    // How often, in real seconds, a still-fooled observer gets another
+    // periodic suspicion roll against a disguise it can currently sense.
+    disguise_suspicion_reroll_secs: 8.0,
+
+    // --- scrying resist roll ---
+    // Third named instance of the same shared resisted-magic-effect formula
+    // (see MagicEffectTuning in combat.rs). Unlike save_*/disguise above,
+    // scrying's context-dependent term is not a single subtracted penalty --
+    // it's two independent additive bonuses (party + focus item, below),
+    // applied to the caster's own magic_accuracy before the roll -- so
+    // situational_penalty is unused here (always called with situational:
+    // false); it is set to 0.0 only because MagicEffectTuning requires every
+    // field present.
+    // 🔴 Not #[serde(default)] -- every field below must stay present, or the
+    // whole `scrying:` section fails to load rather than silently reverting
+    // a missing field to a different instance's number.
+    scrying: (
+        base_hit: 0.75, // between save's 0.70 and disguise's 0.85: a real probe, not mind control, not a casual glance
+        hit_floor: 0.05, // never impossible for a disadvantaged-not-outclassed caster
+        hit_ceil: 0.90, // never guaranteed, and a notch below save/disguise's 0.95: watching is never certain
+        mr_soft_cap: 0.75, // mirrors save_mr_soft_cap/disguise's own cap
+        cr_to_evasion: 2.0, // identical to save/disguise: a boss that resists charm also resists scrying
+        situational_penalty: 0.0, // unused -- see comment above; scrying's context terms are additive bonuses, not this
+        outclassed_wall: Some(0.30), // same wall as charm/save: a badly outclassed diviner just can't establish the link
+    ),
+    // Flat magic-accuracy bonus (scaled through hit_k, same as the caster's
+    // own base accuracy) applied to the scrying roll when the scried target
+    // shares the caster's own party/group. Stacks additively with
+    // scrying_focus_item_bonus_accuracy below -- both may apply at once.
+    scrying_party_bonus_accuracy: 8.0,
+    // Flat magic-accuracy bonus applied the same way when the caster holds a
+    // divination-focus item (a scrying crystal). See
+    // scrying_party_bonus_accuracy above for why the two stack.
+    scrying_focus_item_bonus_accuracy: 10.0,
+    // How often, in real seconds, an active scrying link gets another
+    // periodic resist re-roll against the scried target.
+    scrying_reroll_secs: 15.0,
+
+    // --- weapon proficiency ---
+    // Physical damage/poise/knockback/crit multiplier when the swung weapon is
+    // not in the wielder's class proficiency set. 0.40 = -60%. Retune here, no rebuild.
+    non_proficient_damage_mult: 0.40,
+
+    // --- reactive trigger slots ---
+    // Slot cooldown in REAL-WORLD seconds, indexed by the spell circle (0..9) of
+    // the ability in the slot. Circles 1-9 are `1800 * 72^((C-1)/8)` rounded to
+    // readable values (every circle multiplies the wait by ~1.707); circle 0 is
+    // an explicit floor for cantrips, not a curve output. Anything without a
+    // circle (racial innate, weapon ability) uses index 0.
+    //             c0    c1     c2     c3     c4     c5      c6      c7      c8      c9
+    trigger_slot_cooldown_secs: [600.0, 1800.0, 3000.0, 5400.0, 9000.0, 15300.0, 26100.0, 44400.0, 75600.0, 129600.0],
 )

@@ -6,6 +6,7 @@
         UnlockGroup(Weapon(Bow)),
         UnlockGroup(Weapon(Staff)),
         UnlockGroup(Weapon(Sceptre)),
+        UnlockGroup(WeaponRoled(Staff, Martial)),
         Climb(Cost),
         Climb(Speed),
         Swim(Speed),
@@ -88,12 +89,12 @@
         Bow(ArdentHunt),
         Bow(SepticShot),
         Bow(Barrage),
-        Bow(OwlTalon),
+        Bow(StormChaser),
         Bow(EagleEye),
         Bow(IgniteArrow),
         Bow(DrenchArrow),
         Bow(PiercingGale),
-        Bow(Scatterburst),
+        Bow(ThornStake),
         Bow(Heartseeker),
         Bow(Hawkstrike),
         Bow(FreezeArrow),
@@ -129,6 +130,17 @@
         Pick(OreGain),
         Pick(GemGain),
     ],
+    // The martial Staff's own tree (separate from `Weapon(Staff)`, the
+    // caster/fire tree, since the two share a `ToolKind` but not a
+    // `WeaponRole`). Two T1 roots, each with a T2 follow-up, converging on a
+    // T3 capstone.
+    WeaponRoled(Staff, Martial): [
+        StaffMartial(Sweep),
+        StaffMartial(Brace),
+        StaffMartial(WhirlingGale),
+        StaffMartial(GlacialThrust),
+        StaffMartial(Avalanche),
+    ],
     // BL-06 class skill trees (proof slice). The 8 active-ability unlocks
     // (Rally/Onslaught/ArcaneSurge/ArcaneMastery/MendingLight/RadiantChannel/
     // Ambush/Vanish) are listed here as tree nodes; their abilities land in P2.
@@ -157,6 +169,10 @@
         Mage(PenetratingMagic),
         Mage(WardedSkin),
         Mage(ManaEfficiency),
+        Mage(ManaRecover),
+        Mage(ManaFlow),
+        Mage(ArcaneVigor),
+        Mage(Polyglot),
         Mage(Overcharge),
         Mage(ArcaneMastery),
     ],

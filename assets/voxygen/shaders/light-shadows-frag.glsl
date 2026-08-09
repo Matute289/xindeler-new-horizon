@@ -21,29 +21,4 @@
 
 #define LIGHTING_DISTRIBUTION LIGHTING_DISTRIBUTION_BECKMANN
 
-// Currently, we only need globals for the far plane.
-#include <globals.glsl>
-// // Currently, we only need lights for the light position
-// #include <light.glsl>
-
-// in vec3 FragPos; // FragPos from GS (output per emitvertex)
-// flat in int FragLayer;
-
-void main()
-{
-    // Only need to do anything with point lights, since sun and moon should already have nonlinear
-    // distance.
-    ///*if (FragLayer > 0) */{
-    //    // get distance between fragment and light source
-    //    float lightDistance = length(FragPos);
-    //    // float lightDistance = length(FragPos - lights[((/*FragLayer*/1 - 1) & 31)].light_pos.xyz);
-
-    //    // // map to [0;1] range by dividing by far_plane
-    //    lightDistance = lightDistance / screen_res.w;//FragPos.w;//screen_res.w;
-
-    //    // // write this as modified depth
-    //    // // lightDistance =  -1000.0 / (lightDistance + 10000.0);
-    //    // // lightDistance /= screen_res.w;
-    //    gl_FragDepth = lightDistance;//  / /*FragPos.w;*/screen_res.w;//-1000.0 / (lightDistance + 1000.0);//lightDistance
-    //}
-}
+void main() {}

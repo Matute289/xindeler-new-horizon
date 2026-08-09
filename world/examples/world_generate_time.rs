@@ -1,5 +1,5 @@
 use std::time::Instant;
-use veloren_world::{
+use xindeler_world::{
     World,
     sim::{DEFAULT_WORLD_MAP, DEFAULT_WORLD_SEED, FileOpts, WorldOpts},
 };

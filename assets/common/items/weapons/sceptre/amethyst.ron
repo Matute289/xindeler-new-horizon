@@ -1,9 +1,10 @@
 ItemDef(
-    legacy_name: "Amethyst Staff",
+    legacy_name: "Amethyst Sceptre",
     legacy_description: "Its stone is the closest thing from perfection",
     kind: Tool((
         kind: Sceptre,
         hands: Two,
+        role: Some(Caster),
         stats: (
             equip_time_secs: 0.4,
             power: 1.8,
@@ -17,4 +18,14 @@ ItemDef(
     quality: Epic,
     tags: [],
     ability_spec: None,
+    // Sceptre: the class whitelist below is the ONLY thing restricting who
+    // may wield it. Every legacy sceptre ability (healingaura, wardingaura,
+    // lifestealbeam) has no per-spell class filter of its own, so this is
+    // what stops e.g. a Warrior from casting healingaura with a picked-up
+    // sceptre.
+    requirements: Some((
+        classes: Some([Cleric, Druid]),
+        min_level: None,
+        races: None,
+    )),
 )

@@ -1,0 +1,15 @@
+-- Reactive trigger slots: the four (ability, condition, ready_at) rows a
+-- character has configured, as a JSON array.
+--
+-- Nullable on purpose: every existing character loads as "no slots configured",
+-- with no forced choice and no data loss.
+--
+-- This column MUST exist for the feature to be shippable, not merely nice to
+-- have: a trigger slot's cooldown is real-world wall-clock and runs from ten
+-- minutes to thirty-six hours, while `AbilityCooldowns` is rebuilt empty at
+-- every login. Without persistence, relogging would erase a day-and-a-half
+-- cooldown.
+--
+-- `ready_at` is stored as RFC-3339 UTC. The transient "firing" state is never
+-- written: it re-derives as "ready" on load.
+ALTER TABLE "character" ADD COLUMN trigger_slots TEXT;

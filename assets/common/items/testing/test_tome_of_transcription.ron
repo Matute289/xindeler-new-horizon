@@ -1,0 +1,34 @@
+// Test fixture: a Mage-only Tome listing five transcription pages (four
+// leveled Divine pages spanning the mastery-tier boundaries, plus one
+// uncatalogued page) for exercising the transcription gate end-to-end.
+ItemDef(
+    legacy_name: "Test Tome of Transcription",
+    legacy_description: "Transcription test fixture.",
+    kind: Tool((
+        kind: Tome,
+        hands: Two,
+        stats: (
+            equip_time_secs: 0.4,
+            power: 0.55,
+            effect_power: 1.0,
+            speed: 0.75,
+            range: 1.0,
+            energy_efficiency: 0.75,
+            buff_strength: 0.75,
+        ),
+    )),
+    quality: Low,
+    tags: [],
+    requirements: Some((
+        classes: Some([Mage]),
+        min_level: None,
+        races: None,
+    )),
+    spell_pages: Some([
+        "common.items.testing.test_page_divine_l1",
+        "common.items.testing.test_page_divine_l2",
+        "common.items.testing.test_page_divine_l3",
+        "common.items.testing.test_page_divine_l7",
+        "common.items.testing.test_page_uncatalogued",
+    ]),
+)
