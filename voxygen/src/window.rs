@@ -734,6 +734,16 @@ impl Window {
         // Mouse emulation for the menus, to be removed when a proper menu navigation
         // system is available
         if !self.cursor_grabbed {
+            // Emulated clicks also need to reach the `iced` UIs (the main
+            // menu and character selection), which only consume
+            // `Event::IcedUi`. The cursor position already flows there via
+            // the real (emulation-moved) OS cursor producing a winit
+            // `CursorMoved`, so only the button press/release needs
+            // synthesizing here, alongside the existing conrod emission
+            // below. Collected separately because the `filter_map` below
+            // only produces one output event per input event.
+            let mut emulated_iced_clicks = Vec::new();
+
             events = events
                 .into_iter()
                 .filter_map(|event| match event {
@@ -760,6 +770,15 @@ impl Window {
                             },
                             _ => return Some(event),
                         };
+                        let iced_button = match menu_input {
+                            MenuInput::EmulateLeftClick => iced::mouse::Button::Left,
+                            MenuInput::EmulateRightClick => iced::mouse::Button::Right,
+                            _ => unreachable!("checked above"),
+                        };
+                        emulated_iced_clicks.push(Event::IcedUi(iced::Event::Mouse(match state {
+                            true => iced::mouse::Event::ButtonPressed(iced_button),
+                            false => iced::mouse::Event::ButtonReleased(iced_button),
+                        })));
                         Some(match state {
                             true => Event::Ui(ui::Event(conrod_core::event::Input::Press(
                                 conrod_core::input::Button::Mouse(mouse_button),
@@ -772,6 +791,7 @@ impl Window {
                     _ => Some(event),
                 })
                 .collect();
+            events.extend(emulated_iced_clicks);
 
             let sensitivity = controller.mouse_emulation_sensitivity;
             // TODO: make this independent of framerate

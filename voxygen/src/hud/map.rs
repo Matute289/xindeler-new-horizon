@@ -8,7 +8,7 @@ use crate::{
     game_input::GameInput,
     session::settings_change::{Interface as InterfaceChange, Interface::*},
     ui::{ImageFrame, Tooltip, TooltipManager, Tooltipable, fonts::Fonts, img_ids},
-    window::KeyMouse,
+    window::{KeyMouse, MenuInput},
 };
 use client::{self, Client, SiteMarker};
 use common::{
@@ -131,6 +131,7 @@ pub struct Map<'a> {
     location_markers: &'a MapMarkers,
     map_drag: Vec2<f64>,
     extra_markers: &'a [ExtraMarker],
+    menu_events: &'a [MenuInput],
 }
 impl<'a> Map<'a> {
     pub fn new(
@@ -146,6 +147,7 @@ impl<'a> Map<'a> {
         location_markers: &'a MapMarkers,
         map_drag: Vec2<f64>,
         extra_markers: &'a [ExtraMarker],
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             imgs,
@@ -161,6 +163,7 @@ impl<'a> Map<'a> {
             location_markers,
             map_drag,
             extra_markers,
+            menu_events,
         }
     }
 }
@@ -272,6 +275,14 @@ impl Widget for Map<'_> {
             .flatten()
             .unwrap_or(KeyMouse::Mouse(MouseButton::Middle));
         let mut events = Vec::new();
+
+        // MENU INPUTS: `Back` closes the map, same as the X button. No dpad
+        // pan/zoom yet (later phase).
+        for key in self.menu_events {
+            if let MenuInput::Back = key {
+                events.push(Event::Close);
+            }
+        }
         let i18n = &self.localized_strings;
         // Tooltips
         let site_tooltip = Tooltip::new({

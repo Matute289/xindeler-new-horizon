@@ -1,5 +1,5 @@
 use super::{TEXT_COLOR, img_ids::Imgs, settings_window::SettingsTab};
-use crate::ui::fonts::Fonts;
+use crate::{ui::fonts::Fonts, window::MenuInput};
 use conrod_core::{
     Color, Labelable, Positionable, Sizeable, Widget, WidgetCommon,
     widget::{self, Button, Image},
@@ -26,17 +26,24 @@ pub struct EscMenu<'a> {
     imgs: &'a Imgs,
     fonts: &'a Fonts,
     localized_strings: &'a Localization,
+    menu_events: &'a [MenuInput],
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
 }
 
 impl<'a> EscMenu<'a> {
-    pub fn new(imgs: &'a Imgs, fonts: &'a Fonts, localized_strings: &'a Localization) -> Self {
+    pub fn new(
+        imgs: &'a Imgs,
+        fonts: &'a Fonts,
+        localized_strings: &'a Localization,
+        menu_events: &'a [MenuInput],
+    ) -> Self {
         Self {
             imgs,
             fonts,
             localized_strings,
+            menu_events,
             common: widget::CommonBuilder::default(),
         }
     }
@@ -71,6 +78,14 @@ impl Widget for EscMenu<'_> {
     fn update(self, args: widget::UpdateArgs<Self>) -> Self::Event {
         common_base::prof_span!("EscMenu::update");
         let widget::UpdateArgs { state, ui, .. } = args;
+
+        // MENU INPUTS: `Back` closes the esc menu, same as "Resume". No
+        // button-list dpad navigation yet (later phase).
+        for key in self.menu_events {
+            if let MenuInput::Back = key {
+                return Some(Event::Close);
+            }
+        }
 
         Image::new(self.imgs.esc_frame)
             .w_h(240.0, 440.0)
