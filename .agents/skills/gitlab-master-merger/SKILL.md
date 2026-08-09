@@ -228,11 +228,19 @@ VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common
 # Physics tests (upstream often updates these with balance changes)
 VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common-systems -- phys
 
+# Lint — matches CI exactly
+cargo clippy --all-targets --locked \
+  --features="bin_cmd_doc_gen,bin_compression,bin_csv,bin_graphviz,bin_bot,bin_asset_migrate,asset_tweak,bin,stat,cli" \
+  -- -D warnings
+
 # Voxygen clippy (publish profile, no hot-reload)
 cargo clippy -p xindeler-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
+
+# Format check
+cargo fmt --all -- --check
 ```
 
-All three must pass. If a test fails:
+All must pass. If a test fails:
 - Check if the upstream commits changed expected values in the test.
 - Check `git log --oneline HEAD -- <test-file>` to see if upstream touched it.
 - Fix or update the test accordingly.
@@ -282,6 +290,85 @@ If adaptation plans were created, list them:
 ### Follow-up plans created:
 - docs/design/plans/<filename>.md — <one line description>
 ```
+
+---
+
+## Sync Runbook & Known-Friction Watch-List (from real drills)
+
+Distilled from EM-6.1 (PR #203, 2026-07-23): 184 `gitlab/master` commits, 43 hand-resolved
+conflicts — the drill behind this repo's own inherited `merge: upstream gitlab/master (184
+commits)` history entry (this repo's git history predates the 2026-07-24 new-horizon fork point
+and carries the frozen source's own upstream-sync history, PR #203 included). The target for
+every subsequent drill is a
+**<1-day routine**. Read this list BEFORE Phase 2 and use it as the post-merge checklist in
+Phase 4/5.
+
+### The <1-day timebox
+
+1. **State + divergence** (Phase 1) — ~15 min. If `origin/development..gitlab/master` is empty, STOP:
+   nothing to merge.
+2. **Conflict triage** (Phase 2) — the expensive part; highest reasoning effort. Budget by overlap count.
+3. **Merge + resolve** (Phase 3).
+4. **`cargo check --workspace` + fix** (Phase 4) — this is where SILENT breaks surface (see pattern 2).
+5. **Targeted tests + asset validation** (Phase 5).
+6. **Re-sync `origin/development`, push, PR** (Phase 6).
+If any single phase blows well past its share, capture why in the PR body so the next drill's runbook grows.
+
+### Known-friction patterns — check every one after the merge
+
+1. **Enum / buff renames ripple across many files.** An upstream rename (EM-6.1: the "Ardent Hunt" buff)
+   fanned out to **5 files** — every match arm and every RON naming the old variant. After merging, grep
+   for the OLD name across `common/` and `assets/` and fix each site: `git grep -n <OldVariantName>`.
+
+2. **A clean git merge is NOT a green build.** Upstream reworked `common/src/comp/ability.rs` from bundling
+   an `AbilityContext` into passing raw `stance/inv/combo/buffs` params. Git auto-merged with **zero
+   conflicts**, then a downstream consumer failed to compile against the new signature.
+   → Phase 4's `cargo check --workspace` is **mandatory and non-negotiable**, and must cover every crate in
+   the workspace — not just `common`/`server`/`voxygen`. Pay particular attention to the **hot-reloaded
+   `cdylib` crates** (`voxygen-anim`, `server-agent`): a signature mismatch there doesn't fail the same way
+   a normal crate does — `cargo check --workspace` still catches the compile error, but if it's ever
+   skipped or scoped too narrowly, a broken dylib only surfaces at **runtime dylib-load** in a dev build,
+   not at merge time. If the fix is non-trivial, invoke `superpowers:writing-plans` before editing, per the
+   Decision Matrix.
+
+3. **Required-field additions to core structs break call sites with no conflict.** `humanoid::Body` gaining
+   a required `height_scale` field alone broke **13 construction sites**, none flagged by git. After the
+   merge, let `cargo check --workspace` enumerate them; grep for struct-literal construction of any core
+   type upstream touched (`git grep -n "Body {"`, `git grep -n "NpcBuilder {"`), don't assume the conflict
+   list is complete.
+
+4. **RON schema drift does NOT show up in `cargo check`.** Upstream added a `damage_kind` field, renamed
+   `Pointed`→`Simple`, and removed `BuffCategory::Magical` entirely. RON asset drift only surfaces at
+   **asset-load / test time**. → In Phase 5 always run the asset-loading tests
+   (`VELOREN_ASSETS="$(pwd)/assets" cargo test -p xindeler-common`) and any spell/ability RON validation;
+   a green `cargo check` proves nothing about the assets.
+
+5. **Upstream LFS binaries live on gitlab.com's LFS, NOT on our VPS.** New upstream `.vox`/`.png`/`.ogg`/
+   `.ttf` blobs must be fetched from gitlab.com's own LFS store first, then **re-pushed to our VPS** before
+   the integration branch can push (our `.lfsconfig` routes LFS to the VPS, which has never seen upstream's
+   blobs). Practical sequence when the merge brings new binaries:
+
+   ```bash
+   # Fetch the new blobs from gitlab's LFS (upstream remote), then push them to OUR VPS store.
+   git lfs fetch gitlab --all           # pull upstream blobs from gitlab.com LFS
+   git lfs push origin --all            # re-upload them to the VPS (origin uses .lfsconfig's VPS url)
+   ```
+
+   If a VPS SSH fetch hiccups mid-checkout, use `GIT_LFS_SKIP_SMUDGE=1` for the checkout, then
+   `git lfs pull` / `git lfs checkout`.
+
+6. **`development` can advance mid-drill → a second resolution round.** During EM-6.1 a same-night PR landed
+   on `development` and touched some of the same files, forcing a second conflict pass. Before Phase 6 push,
+   `git fetch origin` again; if `origin/development` moved, merge it into the integration branch (or rebase)
+   and re-resolve any newly-conflicting files before pushing.
+
+### One pre-existing failure to expect
+
+During EM-6.1 (in the sibling `xindeler` repo), `xindeler-world`'s economy-sim test failed on a clean
+`development` too, independent of the merge. The general lesson carries over here: before treating any
+Phase 5 failure as a merge regression, check whether it reproduces on a clean `origin/development` checkout
+first — if it does, note it and move on rather than trying to "fix" a pre-existing failure as part of the
+integration PR.
 
 ---
 
