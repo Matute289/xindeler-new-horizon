@@ -145,6 +145,7 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         incorporeal,
         phantom_illusion,
         delete_after,
+        oracle_event_id,
     } = ev.npc;
     let entity = server
         .state
@@ -173,6 +174,19 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         spawned_at: time,
         timeout,
     }));
+
+    // Attribute this entity to the ORACLE `DmEvent` that spawned it, if any.
+    // Cloned rather than moved: `oracle_event_id` is still needed below to
+    // propagate onto recursively-created rider/pet entities.
+    let entity =
+        entity.maybe_with(
+            oracle_event_id
+                .clone()
+                .map(|event_id| crate::oracle::OracleSpawned {
+                    event_id,
+                    spawned_at: time,
+                }),
+        );
 
     if let Some(agent) = &mut agent
         && let Alignment::Owned(_) = &alignment
@@ -267,7 +281,12 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         let _ = server.state.ecs().write_storage().insert(new_entity, group);
     }
 
-    if let Some(rider) = rider {
+    if let Some(mut rider) = rider {
+        // Riders are created via a nested `NpcBuilder` that does not inherit
+        // the parent's ORACLE attribution automatically. Propagate it
+        // explicitly so a mounted rider is still counted against the live
+        // ceiling and shows up under the same event id.
+        rider.oracle_event_id = oracle_event_id.clone();
         let rider_entity = handle_create_npc(server, CreateNpcEvent {
             pos: ev.pos,
             ori: Ori::default(),
@@ -285,7 +304,11 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
             .expect("We just created these entities");
     }
 
-    for (pet, offset) in pets {
+    for (mut pet, offset) in pets {
+        // Same propagation as the rider above: a pet spawned by an ORACLE
+        // trigger must stay tagged and countable, not slip past the ceiling
+        // untagged.
+        pet.oracle_event_id = oracle_event_id.clone();
         let pet_entity = handle_create_npc(server, CreateNpcEvent {
             pos: comp::Pos(ev.pos.0 + offset),
             ori: Ori::from_unnormalized_vec(offset).unwrap_or_default(),

@@ -7,7 +7,10 @@
 pub mod chronicle;
 pub mod factory;
 pub mod narrative;
+pub mod spawned;
+pub mod trigger;
 pub mod watcher;
 
 pub use chronicle::ChronicleLog;
+pub use spawned::OracleSpawned;
 pub use watcher::{OracleAsset, OracleEvents, OracleWatcher};
