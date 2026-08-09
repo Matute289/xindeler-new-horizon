@@ -822,10 +822,14 @@ impl Widget for Crafting<'_> {
         // mouse-only rather than wired through a menu-driven select-to-swap, which
         // would let one stray keypress fire a real inventory move against whatever
         // slot happened to be selected in another window.
-        let visible_recipe_count = ordered_recipes
-            .iter()
+        // Filtered once and reused for both the dpad-nav clamp below and the
+        // render loop further down, rather than re-running `satisfies()` over
+        // the full recipe list twice per frame.
+        let visible_recipes: Vec<_> = ordered_recipes
+            .into_iter()
             .filter(|(_, recipe, _, _, _)| self.show.crafting_fields.crafting_tab.satisfies(recipe))
-            .count();
+            .collect();
+        let visible_recipe_count = visible_recipes.len();
         let last_input = self.global_state.window.last_input();
         let mut recipe_list_apply = false;
         let mut ingredient_slot_apply = false;
@@ -902,10 +906,8 @@ impl Widget for Crafting<'_> {
                     .resize(recipe_list_length, &mut ui.widget_id_generator())
             });
         }
-        for (i, (name, recipe, is_craftable, has_materials, knows_recipe)) in ordered_recipes
-            .into_iter()
-            .filter(|(_, recipe, _, _, _)| self.show.crafting_fields.crafting_tab.satisfies(recipe))
-            .enumerate()
+        for (i, (name, recipe, is_craftable, has_materials, knows_recipe)) in
+            visible_recipes.into_iter().enumerate()
         {
             let is_menu_highlighted =
                 recipe_list_menu_active && state.active_content == 0 && i == active_recipe_index;

@@ -1041,7 +1041,19 @@ impl Widget for Bag<'_> {
                 &state.bg_ids,
                 self.show.crafting_fields.salvage,
                 self.show.bag_details,
-                true,
+                // Bag is force-opened alongside Crafting/Trade (both call
+                // `set_bag_state` so their own slot grids can show the player's
+                // inventory), and Crafting/Trade consume `MenuInput`s of their
+                // own for their own navigation. With this grid also `navigable`
+                // at the same time, a single dpad press would move both this
+                // grid's highlight AND Crafting's/Trade's, and `Apply` could open
+                // this grid's own Use/Drop/Cancel context menu on whatever slot
+                // happened to be highlighted here — a real risk of an unintended
+                // item drop/use while trying to navigate Crafting/Trade. Crafting
+                // and Trade each handle their own `MenuInput::Back` independently
+                // of this grid's `SlotEvents::Close`, so suppressing navigation
+                // here costs nothing: Back still closes both windows correctly.
+                !(self.show.crafting || self.show.trade),
             )
             .set(state.ids.inventory_scroller, ui)
             {

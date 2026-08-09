@@ -687,26 +687,40 @@ impl Controls {
     fn tab(&mut self) {
         if let Screen::Login { screen, .. } = &mut self.screen {
             // TODO: add select all function in iced
+            //
+            // Also updates `login_focus` to match, alongside each branch's real
+            // `text_input` focus change: `login_focus` is a second, independent
+            // record of "which field is focused" that `menu_input`'s Up/Down
+            // (`set_login_focus`) reads to compute its own next/previous field.
+            // Moving the real focus here without updating it would leave that
+            // tracked value stale, so a later arrow-key press would compute its
+            // next field from wherever `login_focus` last was instead of from
+            // where Tab actually left real focus.
             if screen.banner.username.is_focused() {
                 screen.banner.username = text_input::State::new();
                 screen.banner.password = text_input::State::focused();
                 screen.banner.password.move_cursor_to_end();
+                self.login_focus = LoginFocus::Password;
             } else if screen.banner.password.is_focused() {
                 screen.banner.password = text_input::State::new();
                 // Skip focusing server field if it isn't editable!
                 if self.server_field_locked {
                     screen.banner.username = text_input::State::focused();
+                    self.login_focus = LoginFocus::Username;
                 } else {
                     screen.banner.server = text_input::State::focused();
+                    self.login_focus = LoginFocus::Server;
                 }
                 screen.banner.server.move_cursor_to_end();
             } else if screen.banner.server.is_focused() {
                 screen.banner.server = text_input::State::new();
                 screen.banner.username = text_input::State::focused();
                 screen.banner.username.move_cursor_to_end();
+                self.login_focus = LoginFocus::Username;
             } else {
                 screen.banner.username = text_input::State::focused();
                 screen.banner.username.move_cursor_to_end();
+                self.login_focus = LoginFocus::Username;
             }
         }
     }
