@@ -146,7 +146,18 @@ pub fn trigger_dm_event(
         &mut spawn_rng,
     );
 
-    if spawns.is_empty() && !dm_event.spawning_rules.entity_templates.is_empty() {
+    // `spawns` can be empty for two different reasons: no `entity_templates`
+    // id matched a loaded template (a real configuration problem, worth its
+    // own error), or every id matched fine but `spawning_rules.spawn_count`
+    // sanitizes to zero (a legitimate zero-entity request). Checking
+    // `factory::has_matching_templates` directly, rather than inferring the
+    // cause from `spawns.is_empty()` alone, tells the two apart so the
+    // second case doesn't get a misleading "none of them are currently
+    // loaded" error.
+    if spawns.is_empty()
+        && !dm_event.spawning_rules.entity_templates.is_empty()
+        && !factory::has_matching_templates(&dm_event.spawning_rules, templates.iter())
+    {
         return Err(TriggerError::NoTemplatesMatched {
             event_id: event_id.to_string(),
         });
@@ -361,6 +372,22 @@ mod trigger_dm_event_tests {
     /// touches. The `TempDir` is returned too so it isn't dropped (and
     /// deleted) before the test finishes with it.
     fn world_with_loaded_fixture_event() -> (World, tempfile::TempDir) {
+        world_with_event("fixture_event", SpawningRules {
+            entity_templates: vec!["test_template".to_owned()],
+            spawn_count: 3.0,
+            spawn_radius: 5.0,
+            ..Default::default()
+        })
+    }
+
+    /// Same fixture as `world_with_loaded_fixture_event`, but with the
+    /// `DmEvent`'s `spawning_rules` swapped out for `spawning_rules` — the
+    /// "test_template" `EntityTemplate` is always loaded, so tests can name
+    /// or omit it from `entity_templates` themselves.
+    fn world_with_event(
+        event_id: &str,
+        spawning_rules: SpawningRules,
+    ) -> (World, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().canonicalize().expect("canonicalize tempdir");
         let mut watcher = OracleWatcher::new(&root);
@@ -378,16 +405,11 @@ mod trigger_dm_event_tests {
         .expect("write template fixture");
 
         let event = DmEvent {
-            spawning_rules: SpawningRules {
-                entity_templates: vec!["test_template".to_owned()],
-                spawn_count: 3.0,
-                spawn_radius: 5.0,
-                ..Default::default()
-            },
+            spawning_rules,
             ..Default::default()
         };
         std::fs::write(
-            root.join("fixture_event.dmevent.ron"),
+            root.join(format!("{event_id}.dmevent.ron")),
             ron::ser::to_string(&event).expect("DmEvent serializes"),
         )
         .expect("write event fixture");
@@ -483,5 +505,59 @@ mod trigger_dm_event_tests {
             "dry_run must never emit a CreateNpcEvent"
         );
         assert!(world.read_resource::<ChronicleLog>().is_empty());
+    }
+
+    #[test]
+    fn an_unmatched_template_id_errors_as_no_templates_matched() {
+        let (world, _dir) = world_with_event("unmatched_event", SpawningRules {
+            entity_templates: vec!["no_such_template".to_owned()],
+            spawn_count: 3.0,
+            spawn_radius: 5.0,
+            ..Default::default()
+        });
+        let err = trigger_dm_event(
+            &world,
+            "unmatched_event",
+            Vec3::zero(),
+            false,
+            CeilingPolicy::Refuse,
+        )
+        .expect_err("no loaded template matches \"no_such_template\"");
+        assert_eq!(err, TriggerError::NoTemplatesMatched {
+            event_id: "unmatched_event".to_owned(),
+        });
+    }
+
+    #[test]
+    fn a_matched_template_with_zero_spawn_count_succeeds_with_nothing_spawned() {
+        // `spawn_count: 0.0` is `SpawningRules::default()`'s own value (and
+        // within `bounds::SPAWN_COUNT`), so an event whose author simply
+        // omits `spawn_count` hits this path — it must not be misreported as
+        // "no templates matched" just because the resolved spawn list is
+        // also empty.
+        let (world, _dir) = world_with_event("zero_count_event", SpawningRules {
+            entity_templates: vec!["test_template".to_owned()],
+            spawn_count: 0.0,
+            spawn_radius: 5.0,
+            ..Default::default()
+        });
+        let outcome = trigger_dm_event(
+            &world,
+            "zero_count_event",
+            Vec3::zero(),
+            false,
+            CeilingPolicy::Refuse,
+        )
+        .expect("a matched template with spawn_count 0 is a legitimate no-op, not an error");
+
+        assert_eq!(outcome.requested, 0);
+        assert_eq!(outcome.spawned, 0);
+        assert_eq!(
+            world
+                .read_resource::<EventBus<CreateNpcEvent>>()
+                .recv_all()
+                .len(),
+            0
+        );
     }
 }
