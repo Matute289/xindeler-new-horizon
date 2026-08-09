@@ -1473,6 +1473,29 @@ impl PlayState for SessionState {
                         .hud
                         .new_message(ChatType::CommandInfo.into_plain_msg(screenshot_msg)),
 
+                    Event::GamepadConnected { name } => {
+                        let msg = global_state
+                            .i18n
+                            .read()
+                            .get_msg_ctx("hud-gamepad-connected", &i18n::fluent_args! {
+                                "name" => name,
+                            })
+                            .into_owned();
+                        self.hud
+                            .new_message(ChatType::CommandInfo.into_plain_msg(msg));
+                    },
+                    Event::GamepadDisconnected { name } => {
+                        let msg = global_state
+                            .i18n
+                            .read()
+                            .get_msg_ctx("hud-gamepad-disconnected", &i18n::fluent_args! {
+                                "name" => name,
+                            })
+                            .into_owned();
+                        self.hud
+                            .new_message(ChatType::CommandInfo.into_plain_msg(msg));
+                    },
+
                     Event::Zoom(delta) if self.zoom_lock => {
                         // only fire this Hud event when player has "intent" to zoom
                         if delta.abs() > ZOOM_LOCK_SCROLL_DELTA_INTENT {

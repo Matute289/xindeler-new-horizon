@@ -129,6 +129,10 @@ hud-compass-southwest = SW
 hud-compass-west = W
 hud-compass-northwest = NW
 
+## Gamepad hotplug notices
+hud-gamepad-connected = Controller connected: { $name }
+hud-gamepad-disconnected = Controller disconnected: { $name }
+
 ## Identify inspect card (creature half; the item half reuses the ordinary
 ## item tooltip verbatim)
 hud-creature_card-level = Lvl { $level }
