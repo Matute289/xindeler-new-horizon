@@ -14,6 +14,7 @@ mod hotbar;
 mod loot_scroller;
 mod map;
 mod minimap;
+mod osk;
 mod overhead;
 mod overitem;
 mod popup;
@@ -58,6 +59,7 @@ use item_imgs::ItemImgs;
 use loot_scroller::LootScroller;
 use map::Map;
 use minimap::{MiniMap, VoxelMinimap};
+use osk::Osk;
 use popup::Popup;
 use prompt_dialog::PromptDialog;
 use quest::Quest;
@@ -94,7 +96,7 @@ use crate::{
         img_ids::Rotations,
         slot::{self, SlotKey},
     },
-    window::{Event as WinEvent, MenuInput},
+    window::{Event as WinEvent, LastInput, MenuInput},
 };
 use client::{Client, UserNotification};
 use common::{
@@ -307,6 +309,7 @@ widget_ids! {
 
         // External
         chat,
+        osk,
         loot_scroller,
         map,
         world_map,
@@ -941,6 +944,8 @@ pub enum WindowId {
     Settings,
     EscMenu,
     PromptDialog,
+    /// The chat on-screen keyboard (controller-only text entry).
+    Osk,
 }
 
 pub struct Show {
@@ -982,6 +987,9 @@ pub struct Show {
     identify_card: Option<specs::Entity>,
     prompt_dialog: Option<PromptDialogSettings>,
     trade_amount_input_key: Option<TradeAmountInput>,
+    /// Chat on-screen keyboard open state (controller-only text entry, no
+    /// physical keyboard involved). See `Hud::osk_events`/`osk_prefill`.
+    osk: bool,
     // A stack of open menus; the menu in focus should be on top
     focus: Vec<WindowId>,
 }
@@ -1025,6 +1033,7 @@ impl Show {
             identify_card: None,
             prompt_dialog: None,
             trade_amount_input_key: None,
+            osk: false,
             focus: Vec::new(),
         }
     }
@@ -1068,6 +1077,7 @@ impl Show {
             ),
             (WindowId::EscMenu, self.esc_menu),
             (WindowId::PromptDialog, self.prompt_dialog.is_some()),
+            (WindowId::Osk, self.osk),
         ];
         for (id, open) in wanted {
             let present = self.focus.contains(&id);
@@ -1214,6 +1224,12 @@ impl Show {
 
     fn toggle_ui(&mut self) { self.ui = !self.ui; }
 
+    /// Open/close the chat on-screen keyboard. Unlike the other window
+    /// setters above this doesn't close sibling windows or touch
+    /// `want_grab` — it's meant to be usable while e.g. trading, and it
+    /// never needs the mouse cursor.
+    fn osk(&mut self, open: bool) { self.osk = open; }
+
     fn toggle_settings(&mut self, global_state: &GlobalState) {
         match self.open_windows {
             Windows::Settings => {
@@ -1260,6 +1276,7 @@ impl Show {
             self.diary = false;
             self.crafting = false;
             self.open_windows = Windows::None;
+            self.osk = false;
             self.want_grab = true;
 
             // Unpause the game if we are on singleplayer
@@ -1438,6 +1455,16 @@ pub struct Hud {
     hotbar: hotbar::State,
     events: Vec<Event>,
     menu_events: Vec<MenuInput>,
+    /// `MenuInput`s routed to the on-screen keyboard instead of
+    /// `menu_events` while it's open, so a shared Apply/Back press can't
+    /// leak into whatever other window (bag, crafting, trade, ...) happens
+    /// to be open behind it — the same class of bug the crafting/trade
+    /// dpad-nav work found and fixed for `menu_events` itself.
+    osk_events: Vec<MenuInput>,
+    /// Text to seed the on-screen keyboard's buffer with the next time it's
+    /// constructed (e.g. `/` when opened via `GameInput::Command`). Taken
+    /// once, mirroring `force_chat_input`.
+    osk_prefill: Option<String>,
     crosshair_opacity: f32,
     floaters: Floaters,
     voxel_minimap: VoxelMinimap,
@@ -1543,6 +1570,8 @@ impl Hud {
             hotbar: hotbar_state,
             events: Vec::new(),
             menu_events: Vec::new(),
+            osk_events: Vec::new(),
+            osk_prefill: None,
             crosshair_opacity: 0.0,
             floaters: Floaters {
                 exp_floaters: Vec::new(),
@@ -4022,6 +4051,56 @@ impl Hud {
             }
         }
 
+        // Chat on-screen keyboard (controller-only text entry). Rendered as
+        // its own overlay independent of the toggle_chat/force_chat
+        // visibility branch above — the message log stays visible behind it
+        // (via `force_chat`) but the real chat text field is never focused,
+        // so `typing()` stays false and dpad/Apply/Back keep flowing to
+        // `osk_events` instead of getting swallowed as keyboard input.
+        if self.show.osk {
+            let mut osk_widget = Osk::new(
+                &self.imgs,
+                &self.fonts,
+                i18n,
+                &self.osk_events,
+                global_state.window.last_input(),
+            );
+            if let Some(prefill) = self.osk_prefill.take() {
+                osk_widget = osk_widget.prefill(prefill);
+            }
+            if let Some(event) = osk_widget.set(self.ids.osk, ui_widgets) {
+                match event {
+                    osk::Event::Submit(msg) => {
+                        let msg = msg.trim().to_string();
+                        if let Some(cmd) =
+                            msg.strip_prefix(global_state.settings.chat.chat_cmd_prefix)
+                        {
+                            match chat::parse_cmd(cmd) {
+                                Ok((name, args)) => {
+                                    events.push(Event::SendCommand(name.to_owned(), args));
+                                },
+                                Err(err) => self
+                                    .new_messages
+                                    .push_back(comp::ChatType::CommandError.into_plain_msg(err)),
+                            }
+                        } else if !msg.is_empty() {
+                            events.push(Event::SendMessage(msg));
+                        }
+                        self.show.osk(false);
+                        self.force_chat = false;
+                    },
+                    osk::Event::Close => {
+                        self.show.osk(false);
+                        self.force_chat = false;
+                    },
+                }
+            }
+        } else {
+            // Dropped if the OSK never opened this session, matching how
+            // `force_chat_input` etc. are only ever consumed once.
+            self.osk_prefill = None;
+        }
+
         self.new_messages.clear();
         self.new_notifications.clear();
 
@@ -5104,6 +5183,7 @@ impl Hud {
         global_state.window.menu_open = !self.show.focus.is_empty();
 
         self.menu_events.clear(); // clear all menu inputs after they have been read
+        self.osk_events.clear();
         events
     }
 
@@ -5352,17 +5432,32 @@ impl Hud {
             WinEvent::Zoom(_) => !cursor_grabbed && !self.ui.no_widget_capturing_mouse(),
 
             WinEvent::InputUpdate(GameInput::Chat, true) => {
-                self.ui.focus_widget(if self.typing() {
-                    None
+                // Controller players have no physical keyboard to type with,
+                // so route them to the on-screen keyboard instead of the
+                // real chat text field — mirrors the keyboard path's own
+                // toggle-by-pressing-Chat-again behavior.
+                if global_state.window.last_input() == LastInput::Controller {
+                    let opening = !self.show.osk;
+                    self.show.osk(opening);
+                    if opening {
+                        self.force_chat = true;
+                    }
                 } else {
-                    self.force_chat = true;
-                    Some(self.ids.chat)
-                });
+                    self.ui.focus_widget(if self.typing() {
+                        None
+                    } else {
+                        self.force_chat = true;
+                        Some(self.ids.chat)
+                    });
+                }
                 true
             },
             WinEvent::InputUpdate(GameInput::Escape, true) => {
                 if self.typing() {
                     self.ui.focus_widget(None);
+                    self.force_chat = false;
+                } else if self.show.osk {
+                    self.show.osk(false);
                     self.force_chat = false;
                 } else if self.show.trade {
                     self.events.push(Event::TradeAction(TradeAction::Decline));
@@ -5389,6 +5484,18 @@ impl Hud {
                     } else {
                         false
                     }
+                } else if self.show.osk {
+                    // Isolate the on-screen keyboard's input from
+                    // `menu_events` entirely, so an Apply/Back press meant
+                    // for it can't also be consumed by whatever other
+                    // window (bag, crafting, trade, ...) happens to be open
+                    // behind it this frame.
+                    if state {
+                        self.osk_events.push(key);
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     // Pass MenuInputs along to the UI
                     if state {
@@ -5411,10 +5518,16 @@ impl Hud {
 
                 match key {
                     GameInput::Command if state => {
-                        self.force_chat_input = Some("/".to_owned());
-                        self.force_chat_cursor = Some(Index { line: 0, char: 1 });
-                        self.force_chat = true;
-                        self.ui.focus_widget(Some(self.ids.chat));
+                        if global_state.window.last_input() == LastInput::Controller {
+                            self.show.osk(true);
+                            self.osk_prefill = Some("/".to_owned());
+                            self.force_chat = true;
+                        } else {
+                            self.force_chat_input = Some("/".to_owned());
+                            self.force_chat_cursor = Some(Index { line: 0, char: 1 });
+                            self.force_chat = true;
+                            self.ui.focus_widget(Some(self.ids.chat));
+                        }
                         true
                     },
                     GameInput::Map if state => {

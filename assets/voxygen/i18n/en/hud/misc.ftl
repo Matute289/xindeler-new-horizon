@@ -133,6 +133,9 @@ hud-compass-northwest = NW
 hud-gamepad-connected = Controller connected: { $name }
 hud-gamepad-disconnected = Controller disconnected: { $name }
 
+## Chat on-screen keyboard (controller text entry)
+hud-osk-title = On-Screen Keyboard
+
 ## Identify inspect card (creature half; the item half reuses the ordinary
 ## item tooltip verbatim)
 hud-creature_card-level = Lvl { $level }
