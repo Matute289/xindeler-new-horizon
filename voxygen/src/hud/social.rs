@@ -6,12 +6,12 @@ use crate::{
     GlobalState,
     settings::HudPositionSettings,
     ui::{ImageFrame, Tooltip, TooltipManager, Tooltipable, fonts::Fonts},
-    window::MenuInput,
+    window::{LastInput, MenuInput},
 };
 use client::{self, Client};
 use common::{comp::group, resources::BattleMode, uid::Uid};
 use conrod_core::{
-    Color, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
+    Borderable, Color, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
     widget::{self, Button, Image, Rectangle, Scrollbar, Text, TextEdit},
     widget_ids,
 };
@@ -52,6 +52,9 @@ pub struct State {
     // Holds the time when selection is made since this selection can be overridden
     // by selecting an entity in-game
     selected_uid: Option<(Uid, Instant)>,
+    // Gamepad/keyboard menu navigation: index into the (filtered, sorted) online
+    // player list in visual (top-to-bottom) order.
+    active_player_index: usize,
 }
 
 #[derive(WidgetCommon)]
@@ -118,6 +121,7 @@ impl Widget for Social<'_> {
         Self::State {
             ids: Ids::new(id_gen),
             selected_uid: None,
+            active_player_index: 0,
         }
     }
 
@@ -129,13 +133,16 @@ impl Widget for Social<'_> {
         let widget::UpdateArgs { state, ui, .. } = args;
         let mut events = Vec::new();
 
-        // MENU INPUTS: `Back` closes the social window, same as the X
-        // button. No dpad navigation of the player list yet (later phase).
+        // MENU INPUTS: `Back` closes the social window, same as the X button.
+        // Up/Down/Apply navigation of the online player list is wired further
+        // down, once the (filtered, sorted) list itself is built.
         for key in self.menu_events {
             if let MenuInput::Back = key {
                 events.push(Event::Close);
             }
         }
+        let last_input = self.global_state.window.last_input();
+        let menu_active = matches!(last_input, LastInput::Keyboard | LastInput::Controller);
 
         let button_tooltip = Tooltip::new({
             // Edge images [t, b, r, l]
@@ -287,6 +294,32 @@ impl Widget for Social<'_> {
             };
             name.to_lowercase()
         });
+
+        // MENU INPUTS: Up/Down highlights a player in the list below, Apply
+        // selects them (same as clicking their row) — the `ContextMenu` list-nav
+        // shape from `slot_grid.rs`, replicated locally since that struct isn't
+        // exported. Inviting the highlighted player to a group is out of scope
+        // for this pass (a separate, single "Invite" button elsewhere in the
+        // window); the existing mouse-emulation fallback still reaches it.
+        let visible_player_count = player_list.len();
+        let mut player_apply = false;
+        for key in self.menu_events {
+            match *key {
+                MenuInput::Up => state.update(|s| {
+                    s.active_player_index = s.active_player_index.saturating_sub(1);
+                }),
+                MenuInput::Down if visible_player_count > 0 => state.update(|s| {
+                    s.active_player_index =
+                        (s.active_player_index + 1).min(visible_player_count - 1);
+                }),
+                MenuInput::Apply => player_apply = true,
+                _ => {},
+            }
+        }
+        let active_player_index = state
+            .active_player_index
+            .min(visible_player_count.saturating_sub(1));
+
         for (i, (&uid, player_info)) in player_list.into_iter().enumerate() {
             let hide_username = true;
             let selected = state.selected_uid.is_some_and(|u| u.0 == uid);
@@ -320,6 +353,7 @@ impl Widget for Social<'_> {
                 alias
             );
             // Player name widget
+            let player_menu_highlighted = menu_active && i == active_player_index;
             let button = Button::image(if !selected {
                 self.imgs.nothing
             } else {
@@ -336,7 +370,13 @@ impl Widget for Social<'_> {
                 self.imgs.selection_press
             })
             .w_h(256.0, 20.0)
-            .image_color(color::rgba(1.0, 0.82, 0.27, 1.0));
+            .image_color(color::rgba(1.0, 0.82, 0.27, 1.0))
+            .border(if player_menu_highlighted { 2.0 } else { 0.0 })
+            .border_color(if player_menu_highlighted {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            });
             let button = if i == 0 {
                 button.mid_top_with_margin_on(state.ids.online_align, 1.0)
             } else {
@@ -358,6 +398,7 @@ impl Widget for Social<'_> {
                 )
                 .set(state.ids.player_names[i], ui)
                 .was_clicked()
+                || (player_apply && player_menu_highlighted)
             {
                 state.update(|s| s.selected_uid = Some((uid, Instant::now())));
             }

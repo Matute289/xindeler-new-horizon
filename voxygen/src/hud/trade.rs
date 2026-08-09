@@ -1,5 +1,6 @@
 use conrod_core::{
-    Color, Colorable, Labelable, Positionable, Sizeable, UiCell, Widget, WidgetCommon, color,
+    Borderable, Color, Colorable, Labelable, Positionable, Sizeable, UiCell, Widget, WidgetCommon,
+    color,
     position::Relative,
     widget::{self, Button, Image, Rectangle, State as ConrodState, Text, TextEdit},
     widget_ids,
@@ -31,6 +32,7 @@ use crate::{
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
+    window::{LastInput, MenuInput},
 };
 
 use super::{
@@ -60,6 +62,17 @@ pub enum HudUpdate {
 pub struct State {
     ids: Ids,
     bg_ids: BackgroundIds,
+    // Gamepad/keyboard menu navigation (mirrors bag.rs's `active_content` LocalFocus
+    // cycling). 0 = our offer grid, 1 = their offer grid (view-only), 2 = accept/
+    // decline buttons.
+    active_content: usize,
+    active_our_slot: usize,
+    active_their_slot: usize,
+    active_action_btn: usize,
+    // Which button (0 = Remove, 1 = Cancel) is highlighted in the small menu shown
+    // when a selected offer slot is ours (the gamepad-nav equivalent of dragging it
+    // back out of the trade).
+    slot_menu_active_btn: usize,
 }
 
 widget_ids! {
@@ -86,6 +99,8 @@ widget_ids! {
         amount_input,
         amount_btn,
         trade_details_btn,
+        slot_menu_bg,
+        slot_menu_buttons[],
     }
 }
 
@@ -110,6 +125,7 @@ pub struct Trade<'a> {
     pulse: f32,
     show: &'a mut Show,
     needs_thirdconfirm: bool,
+    menu_events: &'a Vec<MenuInput>,
 }
 
 impl<'a> Trade<'a> {
@@ -131,6 +147,7 @@ impl<'a> Trade<'a> {
         rbm: &'a RecipeBookManifest,
         pulse: f32,
         show: &'a mut Show,
+        menu_events: &'a Vec<MenuInput>,
     ) -> Self {
         Self {
             client,
@@ -151,6 +168,7 @@ impl<'a> Trade<'a> {
             pulse,
             show,
             needs_thirdconfirm: false,
+            menu_events,
         }
     }
 }
@@ -219,6 +237,7 @@ impl<'a> Trade<'a> {
         trade: &'a PendingTrade,
         prices: &'a Option<SitePrices>,
         ours: bool,
+        grid_apply: bool,
     ) -> Option<Vec<TradeEvent>> {
         let mut events: Vec<TradeEvent> = Vec::new();
         let inventories = self.client.inventories();
@@ -348,6 +367,7 @@ impl<'a> Trade<'a> {
                 name,
                 prices,
                 &tradeslots,
+                grid_apply,
             ) {
                 events.push(event);
             }
@@ -371,6 +391,7 @@ impl<'a> Trade<'a> {
         name: String,
         prices: &'a Option<SitePrices>,
         tradeslots: &[TradeSlot],
+        grid_apply: bool,
     ) -> Vec<TradeEvent> {
         let mut events = Vec::new();
         // Tooltips
@@ -522,6 +543,16 @@ impl<'a> Trade<'a> {
             });
         }
 
+        // Local focus: area 0 = our offer grid, area 1 = their offer grid (view-only —
+        // see the note in `Trade::update`). `grid_apply` (Apply pressed this frame
+        // while the matching area is focused) was computed once in `Trade::update`.
+        let local_focus_area = if ours { 0 } else { 1 };
+        let active_slot_index = if ours {
+            state.active_our_slot
+        } else {
+            state.active_their_slot
+        };
+
         for i in 0..MAX_TRADE_SLOTS {
             let x = i % 4;
             let y = i / 4;
@@ -533,9 +564,10 @@ impl<'a> Trade<'a> {
                 ours,
                 entity,
             });
+            let menu_hover = state.active_content == local_focus_area && i == active_slot_index;
             // Slot
             let slot_widget = slot_maker
-                .fabricate(slot, [40.0; 2], false, false)
+                .fabricate(slot, [40.0; 2], menu_hover, grid_apply && menu_hover)
                 .top_left_with_margins_on(
                     state.ids.inv_alignment[who],
                     0.0 + y as f64 * (40.0),
@@ -660,6 +692,8 @@ impl<'a> Trade<'a> {
         state: &mut ConrodState<'_, State>,
         ui: &mut UiCell<'_>,
         trade: &'a PendingTrade,
+        action_apply: bool,
+        menu_active: bool,
     ) -> Option<TradeEvent> {
         let mut event = None;
         let (hover_img, press_img, accept_button_luminance) = if trade.is_empty_trade() {
@@ -676,10 +710,22 @@ impl<'a> Trade<'a> {
                 Color::Rgba(1.0, 1.0, 1.0, 1.0),
             )
         };
+        // Local focus area 2 (accept/decline). `active_action_btn` (0 = decline,
+        // 1 = accept) is toggled by Left/Right in `Trade::update`.
+        let decline_highlighted =
+            menu_active && state.active_content == 2 && state.active_action_btn == 0;
+        let accept_highlighted =
+            menu_active && state.active_content == 2 && state.active_action_btn == 1;
         if Button::image(self.imgs.button)
             .w_h(31.0 * 5.0, 12.0 * 2.0)
             .hover_image(self.imgs.button_hover)
             .press_image(self.imgs.button_press)
+            .border(if decline_highlighted { 2.0 } else { 0.0 })
+            .border_color(if decline_highlighted {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .bottom_left_with_margins_on(state.ids.bg, 90.0, 47.0)
             .label(&self.localized_strings.get_msg("hud-trade-decline"))
             .label_font_size(self.fonts.cyri.scale(14))
@@ -688,6 +734,7 @@ impl<'a> Trade<'a> {
             .label_y(Relative::Scalar(2.0))
             .set(state.ids.decline_button, ui)
             .was_clicked()
+            || (action_apply && decline_highlighted)
         {
             event = Some(TradeEvent::TradeAction(TradeAction::Decline));
         }
@@ -696,6 +743,12 @@ impl<'a> Trade<'a> {
             .hover_image(hover_img)
             .press_image(press_img)
             .image_color(accept_button_luminance)
+            .border(if accept_highlighted { 2.0 } else { 0.0 })
+            .border_color(if accept_highlighted {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .right_from(state.ids.decline_button, 20.0)
             .label(&self.localized_strings.get_msg("hud-trade-accept"))
             .label_font_size(self.fonts.cyri.scale(14))
@@ -704,6 +757,7 @@ impl<'a> Trade<'a> {
             .label_y(Relative::Scalar(2.0))
             .set(state.ids.accept_button, ui)
             .was_clicked()
+            || (action_apply && accept_highlighted)
         {
             if matches!(trade.phase, TradePhase::Review) && self.needs_thirdconfirm {
                 event = Some(TradeEvent::ShowPrompt(PromptDialogSettings::new(
@@ -878,6 +932,11 @@ impl Widget for Trade<'_> {
                 bg_frame: id_gen.next(),
             },
             ids: Ids::new(id_gen),
+            active_content: 0,
+            active_our_slot: 0,
+            active_their_slot: 0,
+            active_action_btn: 0,
+            slot_menu_active_btn: 0,
         }
     }
 
@@ -914,23 +973,196 @@ impl Widget for Trade<'_> {
             });
         }
 
+        // MENU INPUTS: trade window navigation, mirroring the SlotGrid/menu_events
+        // pattern the bag already uses (see hud/slot_grid.rs, hud/bag.rs).
+        //
+        // Local focus areas (LocalFocus cycles through them):
+        // - Area 0, our offer grid: Up/Down/Left/Right highlights a slot (4 columns),
+        //   Apply selects the highlighted slot via the shared SlotManager (same live
+        //   fabricate(.., menu_hover, clicked) mechanism the bag's inventory grid
+        //   already uses), opening the Remove/Cancel menu below. Offering a *new* item
+        //   still requires a mouse drag from the bag — see the note below.
+        // - Area 1, their offer grid: view-only (mouse-hover tooltips only); nav here
+        //   is for visual parity — the `ours` check in `hud/mod.rs`'s slot-event
+        //   handling rejects any cross-party drag, so no action reaches the wire.
+        // - Area 2, accept/decline: Left/Right toggles between the two buttons, Apply
+        //   activates the highlighted one.
+        //
+        // Back cancels an open offer-slot selection if one is active, else declines
+        // the trade (same as the window's own close button).
+        //
+        // Note: like the bag's own SlotGrid, this reads `self.menu_events` whenever
+        // the trade window is open, with no cross-window arbitration against Bag
+        // (commonly open at the same time, to drag items into the trade).
+        // `Show::focus` (`hud/mod.rs`) tracks which windows are open but does not yet
+        // gate which one consumes `menu_events` per frame — whichever window renders
+        // last in a given frame "wins" the shared SlotManager's selection. This is a
+        // pre-existing gap in how `menu_events` is dispatched, not something
+        // introduced here — it's also why offering a new item is deliberately left
+        // mouse-only rather than wired
+        // through a menu-driven select-to-swap, which would let one stray keypress fire
+        // a real `TradeAction` against whatever slot happened to be selected in
+        // another window.
+        let selected_our_slot = match self.slot_manager.selected() {
+            Some(SlotKind::Trade(t)) if t.ours => Some(t),
+            _ => None,
+        };
+        let last_input = self.global_state.window.last_input();
+        let menu_active = matches!(last_input, LastInput::Keyboard | LastInput::Controller);
+        let mut grid_apply = false;
+        let mut action_apply = false;
+        let mut slot_menu_apply = false;
+
+        if selected_our_slot.is_some() {
+            // A slot is selected: grid nav is frozen; only the small Remove/Cancel
+            // menu reacts, matching SlotGrid's own context-menu behavior.
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::Up | MenuInput::Down => state.update(|s| {
+                        s.slot_menu_active_btn = 1 - s.slot_menu_active_btn;
+                    }),
+                    MenuInput::Apply => slot_menu_apply = true,
+                    MenuInput::Back => self.slot_manager.idle(),
+                    _ => {},
+                }
+            }
+        } else {
+            for event in self.menu_events {
+                match *event {
+                    MenuInput::Back => {
+                        events.push(TradeEvent::TradeAction(TradeAction::Decline));
+                    },
+                    MenuInput::LocalFocus => state.update(|s| {
+                        s.active_content = (s.active_content + 1) % 3;
+                    }),
+                    MenuInput::Up if state.active_content == 0 => state.update(|s| {
+                        if s.active_our_slot >= 4 {
+                            s.active_our_slot -= 4;
+                        }
+                    }),
+                    MenuInput::Down if state.active_content == 0 => state.update(|s| {
+                        if s.active_our_slot + 4 < MAX_TRADE_SLOTS {
+                            s.active_our_slot += 4;
+                        }
+                    }),
+                    MenuInput::Left if state.active_content == 0 => state.update(|s| {
+                        if s.active_our_slot % 4 > 0 {
+                            s.active_our_slot -= 1;
+                        }
+                    }),
+                    MenuInput::Right if state.active_content == 0 => state.update(|s| {
+                        if s.active_our_slot % 4 < 3 && s.active_our_slot + 1 < MAX_TRADE_SLOTS {
+                            s.active_our_slot += 1;
+                        }
+                    }),
+                    MenuInput::Apply if state.active_content == 0 => grid_apply = true,
+                    MenuInput::Up if state.active_content == 1 => state.update(|s| {
+                        if s.active_their_slot >= 4 {
+                            s.active_their_slot -= 4;
+                        }
+                    }),
+                    MenuInput::Down if state.active_content == 1 => state.update(|s| {
+                        if s.active_their_slot + 4 < MAX_TRADE_SLOTS {
+                            s.active_their_slot += 4;
+                        }
+                    }),
+                    MenuInput::Left if state.active_content == 1 => state.update(|s| {
+                        if s.active_their_slot % 4 > 0 {
+                            s.active_their_slot -= 1;
+                        }
+                    }),
+                    MenuInput::Right if state.active_content == 1 => state.update(|s| {
+                        if s.active_their_slot % 4 < 3 && s.active_their_slot + 1 < MAX_TRADE_SLOTS
+                        {
+                            s.active_their_slot += 1;
+                        }
+                    }),
+                    MenuInput::Left | MenuInput::Right if state.active_content == 2 => state
+                        .update(|s| {
+                            s.active_action_btn = 1 - s.active_action_btn;
+                        }),
+                    MenuInput::Apply if state.active_content == 2 => action_apply = true,
+                    _ => {},
+                }
+            }
+        }
+
         self.background(state, ui);
         self.title(state, ui);
         self.phase_indicator(state, ui, trade);
 
-        if let Some(event_list) = self.item_pane(state, ui, trade, prices, false) {
+        if let Some(event_list) = self.item_pane(state, ui, trade, prices, false, grid_apply) {
             for event in event_list {
                 events.push(event);
             }
         }
 
-        if let Some(event_list) = self.item_pane(state, ui, trade, prices, true) {
+        if let Some(event_list) = self.item_pane(state, ui, trade, prices, true, grid_apply) {
             for event in event_list {
                 events.push(event);
             }
         }
 
-        if let Some(event) = self.accept_decline_buttons(state, ui, trade) {
+        // Small Remove/Cancel menu for a selected offer slot — the gamepad-nav
+        // equivalent of dragging an offered item back out of the trade, since a
+        // menu-driven "select" has no continuous drag gesture to complete a swap
+        // with. Mirrors the bag's SlotGrid context menu (hud/slot_grid.rs) in shape,
+        // kept local here since only two actions apply.
+        if selected_our_slot.is_some() {
+            if state.ids.slot_menu_buttons.len() < 2 {
+                state.update(|s| {
+                    s.ids
+                        .slot_menu_buttons
+                        .resize(2, &mut ui.widget_id_generator());
+                });
+            }
+            let labels = [
+                self.localized_strings.get_msg("hud-context-menu-drop"),
+                self.localized_strings.get_msg("hud-context-menu-cancel"),
+            ];
+            Rectangle::fill([130.0, 58.0])
+                .mid_top_with_margin_on(state.ids.bg, 100.0)
+                .hsla(0.0, 0.0, 0.0, 0.9)
+                .set(state.ids.slot_menu_bg, ui);
+            for (i, label) in labels.iter().enumerate() {
+                let highlighted = menu_active && state.slot_menu_active_btn == i;
+                let btn_id = state.ids.slot_menu_buttons[i];
+                let btn = Button::image(self.imgs.nothing)
+                    .color(color::BLACK)
+                    .border(if highlighted { 2.0 } else { 0.0 })
+                    .border_color(if highlighted {
+                        color::YELLOW
+                    } else {
+                        color::WHITE
+                    })
+                    .label(label)
+                    .label_font_size(self.fonts.cyri.scale(12))
+                    .label_font_id(self.fonts.cyri.conrod_id)
+                    .label_color(if highlighted {
+                        color::YELLOW
+                    } else {
+                        color::WHITE
+                    })
+                    .w_h(126.0, 25.0)
+                    .parent(state.ids.slot_menu_bg);
+                let placed = if i == 0 {
+                    btn.mid_top_with_margin_on(state.ids.slot_menu_bg, 2.0)
+                } else {
+                    btn.down_from(state.ids.slot_menu_buttons[i - 1], 2.0)
+                };
+                if placed.set(btn_id, ui).was_clicked() || (slot_menu_apply && highlighted) {
+                    if i == 0 {
+                        self.slot_manager.dropped_selected();
+                    } else {
+                        self.slot_manager.idle();
+                    }
+                }
+            }
+        }
+
+        if let Some(event) =
+            self.accept_decline_buttons(state, ui, trade, action_apply, menu_active)
+        {
             events.push(event);
         }
 
