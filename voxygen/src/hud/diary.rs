@@ -17,6 +17,7 @@ use crate::{
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
+    window::MenuInput,
 };
 use client::{self, Client};
 use common::{
@@ -254,6 +255,7 @@ pub struct Diary<'a> {
     buffs: Option<&'a Buffs>,
     character_class: Option<&'a CharacterClass>,
     spell_mastery: Option<&'a comp::SpellMastery>,
+    menu_events: &'a [MenuInput],
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -307,6 +309,7 @@ impl<'a> Diary<'a> {
         buffs: Option<&'a Buffs>,
         character_class: Option<&'a CharacterClass>,
         spell_mastery: Option<&'a comp::SpellMastery>,
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             show,
@@ -336,6 +339,7 @@ impl<'a> Diary<'a> {
             buffs,
             character_class,
             spell_mastery,
+            menu_events,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -468,6 +472,14 @@ impl Widget for Diary<'_> {
         common_base::prof_span!("Diary::update");
         let widget::UpdateArgs { state, ui, .. } = args;
         let mut events = Vec::new();
+
+        // MENU INPUTS: `Back` closes the diary, same as the X button. No
+        // dpad navigation of tabs/skill trees yet (later phase).
+        for key in self.menu_events {
+            if let MenuInput::Back = key {
+                events.push(Event::Close);
+            }
+        }
 
         // Tooltips
         let diary_tooltip = Tooltip::new({

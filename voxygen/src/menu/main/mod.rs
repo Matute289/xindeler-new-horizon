@@ -108,6 +108,13 @@ impl PlayState for MainMenuState {
     fn tick(&mut self, global_state: &mut GlobalState, events: Vec<Event>) -> PlayStateResult {
         span!(_guard, "tick", "<MainMenuState as PlayState>::tick");
 
+        // The main menu is always "a menu" for gamepad/keyboard menu-input
+        // routing (mouse-emulation clicks, and eventually native focus nav).
+        // The in-session HUD is the only other writer of this flag and
+        // restores it to the correct value every frame once a session
+        // starts (`Hud::maintain`), so this doesn't need to be undone here.
+        global_state.window.menu_open = true;
+
         // Pull in localizations
         let localized_strings = &global_state.i18n.read();
 

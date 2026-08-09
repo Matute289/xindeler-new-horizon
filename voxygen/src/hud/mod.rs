@@ -930,7 +930,17 @@ impl TradeAmountInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowId {
     None,
+    /// Also covers `Show::trade` and `Show::crafting`, which both reuse the
+    /// bag's slot grid (and so already call `set_bag_state`) rather than
+    /// tracking a focus entry of their own.
     Bag,
+    Map,
+    Social,
+    Quest,
+    Diary,
+    Settings,
+    EscMenu,
+    PromptDialog,
 }
 
 pub struct Show {
@@ -1027,6 +1037,45 @@ impl Show {
         } else {
             self.focus.retain(|x| *x != WindowId::Bag);
             self.bag = false;
+        }
+    }
+
+    /// Keep the focus-stack membership of the single-owner windows (map,
+    /// social, quest, diary, settings, esc menu, prompt dialog) in sync with
+    /// their own boolean/`Option` state.
+    ///
+    /// These windows can't use `set_bag_state`'s push/retain-on-toggle
+    /// pattern directly: several of the setter methods below close sibling
+    /// windows by writing their field directly (e.g. `map()` sets
+    /// `self.social = false` rather than calling `self.social(false)`), so a
+    /// push/retain call embedded in only the "owning" setter would go stale
+    /// whenever a sibling method closes it as a side effect. Recomputing
+    /// from the source-of-truth booleans once per frame (see the
+    /// `menu_open` write in `Hud::maintain`) is correct regardless of which
+    /// method flipped which field. `WindowId::Bag` is untouched here — it
+    /// keeps using `set_bag_state`, which doesn't have this problem since
+    /// `bag`/`trade`/`crafting` all call it directly whenever they open or
+    /// close.
+    fn sync_window_focus(&mut self) {
+        let wanted = [
+            (WindowId::Map, self.map),
+            (WindowId::Social, self.social),
+            (WindowId::Quest, self.quest),
+            (WindowId::Diary, self.diary),
+            (
+                WindowId::Settings,
+                !matches!(self.open_windows, Windows::None),
+            ),
+            (WindowId::EscMenu, self.esc_menu),
+            (WindowId::PromptDialog, self.prompt_dialog.is_some()),
+        ];
+        for (id, open) in wanted {
+            let present = self.focus.contains(&id);
+            if open && !present {
+                self.focus.push(id);
+            } else if !open && present {
+                self.focus.retain(|x| *x != id);
+            }
         }
     }
 
@@ -3369,6 +3418,7 @@ impl Hud {
                 &global_state.i18n,
                 &global_state.settings,
                 prompt_dialog_settings,
+                &self.menu_events,
             )
             .set(self.ids.prompt_dialog, ui_widgets)
             {
@@ -3983,6 +4033,7 @@ impl Hud {
                 i18n,
                 client.server_view_distance_limit(),
                 fps as f32,
+                &self.menu_events,
             )
             .set(self.ids.settings_window, ui_widgets)
             {
@@ -4042,6 +4093,7 @@ impl Hud {
                 dialogue,
                 *time,
                 self.pulse,
+                &self.menu_events,
             )
             .set(self.ids.quest_window, ui_widgets)
             {
@@ -4102,6 +4154,7 @@ impl Hud {
                 &self.rot_imgs,
                 tooltip_manager,
                 global_state,
+                &self.menu_events,
             )
             .set(self.ids.social_window, ui_widgets)
             {
@@ -4181,6 +4234,7 @@ impl Hud {
                     buffs.get(entity),
                     character_classes.get(entity),
                     spell_masteries.get(entity),
+                    &self.menu_events,
                 )
                 .set(self.ids.diary, ui_widgets)
                 {
@@ -4223,6 +4277,7 @@ impl Hud {
                 &persisted_state.location_markers,
                 self.map_drag,
                 &self.extra_markers,
+                &self.menu_events,
             )
             .set(self.ids.map, ui_widgets)
             {
@@ -4261,7 +4316,9 @@ impl Hud {
         }
 
         if self.show.esc_menu {
-            match EscMenu::new(&self.imgs, &self.fonts, i18n).set(self.ids.esc_menu, ui_widgets) {
+            match EscMenu::new(&self.imgs, &self.fonts, i18n, &self.menu_events)
+                .set(self.ids.esc_menu, ui_widgets)
+            {
                 Some(esc_menu::Event::OpenSettings(tab)) => {
                     common::telemetry!("ui", widget = "EscMenu", btn = "Settings");
                     self.show.open_setting_tab(tab);
@@ -5030,6 +5087,11 @@ impl Hud {
             }
         }
 
+        // Bring the map/social/quest/diary/settings/esc-menu/prompt-dialog
+        // focus entries up to date before computing `menu_open` (see
+        // `Show::sync_window_focus` for why this can't just be pushed/
+        // retained inline in each toggle method).
+        self.show.sync_window_focus();
         // if a menu is open, notify window so it can restrict GameInputs
         global_state.window.menu_open = !self.show.focus.is_empty();
 

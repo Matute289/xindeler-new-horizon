@@ -99,6 +99,12 @@ impl PlayState for CharSelectionState {
 
     fn tick(&mut self, global_state: &mut GlobalState, events: Vec<WinEvent>) -> PlayStateResult {
         span!(_guard, "tick", "<CharSelectionState as PlayState>::tick");
+
+        // Character selection is always "a menu" for gamepad/keyboard
+        // menu-input routing; see the identical write in
+        // `MainMenuState::tick` for why this doesn't need to be undone here.
+        global_state.window.menu_open = true;
+
         let client_registered = {
             let client = self.client.borrow();
             client.registered()

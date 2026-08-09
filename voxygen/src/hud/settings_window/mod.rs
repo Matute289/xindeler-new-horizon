@@ -13,6 +13,7 @@ use crate::{
     hud::{Show, TEXT_COLOR, UI_HIGHLIGHT_0, UI_MAIN, img_ids::Imgs},
     session::settings_change::SettingsChange,
     ui::fonts::Fonts,
+    window::MenuInput,
 };
 use conrod_core::{
     Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
@@ -100,6 +101,7 @@ pub struct SettingsWindow<'a> {
     localized_strings: &'a Localization,
     server_view_distance_limit: Option<u32>,
     fps: f32,
+    menu_events: &'a [MenuInput],
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
 }
@@ -113,6 +115,7 @@ impl<'a> SettingsWindow<'a> {
         localized_strings: &'a Localization,
         server_view_distance_limit: Option<u32>,
         fps: f32,
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             global_state,
@@ -122,6 +125,7 @@ impl<'a> SettingsWindow<'a> {
             localized_strings,
             server_view_distance_limit,
             fps,
+            menu_events,
             common: widget::CommonBuilder::default(),
         }
     }
@@ -165,6 +169,16 @@ impl Widget for SettingsWindow<'_> {
 
         let mut events = Vec::new();
         let tab_font_scale = 18;
+
+        // MENU INPUTS: `Back` closes the settings window, same as the
+        // X button (also aborting any pending gamepad remap). No tab/row
+        // dpad navigation yet (later phase).
+        for key in self.menu_events {
+            if let MenuInput::Back = key {
+                events.push(Event::Close);
+                events.push(Event::ResetBindingMode);
+            }
+        }
 
         // Frame
         Image::new(self.imgs.settings_bg)

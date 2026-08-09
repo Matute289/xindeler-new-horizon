@@ -6,6 +6,7 @@ use crate::{
     GlobalState,
     settings::HudPositionSettings,
     ui::{ImageFrame, Tooltip, TooltipManager, Tooltipable, fonts::Fonts},
+    window::MenuInput,
 };
 use client::{self, Client};
 use common::{comp::group, resources::BattleMode, uid::Uid};
@@ -64,6 +65,7 @@ pub struct Social<'a> {
     rot_imgs: &'a ImgsRot,
     tooltip_manager: &'a mut TooltipManager,
     global_state: &'a GlobalState,
+    menu_events: &'a [MenuInput],
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -80,6 +82,7 @@ impl<'a> Social<'a> {
         rot_imgs: &'a ImgsRot,
         tooltip_manager: &'a mut TooltipManager,
         global_state: &'a GlobalState,
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             show,
@@ -92,6 +95,7 @@ impl<'a> Social<'a> {
             selected_entity,
             common: widget::CommonBuilder::default(),
             global_state,
+            menu_events,
         }
     }
 }
@@ -124,6 +128,15 @@ impl Widget for Social<'_> {
         let battle_mode = self.client.get_battle_mode();
         let widget::UpdateArgs { state, ui, .. } = args;
         let mut events = Vec::new();
+
+        // MENU INPUTS: `Back` closes the social window, same as the X
+        // button. No dpad navigation of the player list yet (later phase).
+        for key in self.menu_events {
+            if let MenuInput::Back = key {
+                events.push(Event::Close);
+            }
+        }
+
         let button_tooltip = Tooltip::new({
             // Edge images [t, b, r, l]
             // Corner images [tr, tl, br, bl]
