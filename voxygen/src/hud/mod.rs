@@ -3653,6 +3653,7 @@ impl Hud {
                 tooltip_manager,
                 &mut self.show,
                 &global_state.settings,
+                &self.menu_events,
             )
             .set(self.ids.crafting_window, ui_widgets)
             {
@@ -3895,6 +3896,7 @@ impl Hud {
                 &rbm,
                 self.pulse,
                 &mut self.show,
+                &self.menu_events,
             )
             .set(self.ids.trade, ui_widgets)
             {
