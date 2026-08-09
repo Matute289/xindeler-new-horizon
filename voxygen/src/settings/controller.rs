@@ -144,6 +144,23 @@ impl From<ControllerSettingsSerde> for ControllerSettings {
                 None => controller_settings.remove_menu_binding(k),
             }
         }
+
+        // The remaining `ControllerSettingsSerde` fields aren't deltas (see
+        // the `From<ControllerSettings> for ControllerSettingsSerde` impl
+        // above — they're copied through unconditionally, not diffed
+        // against a default), but they were previously never copied back
+        // here, so every load silently reset sensitivity, deadzones, axis
+        // inversion, and modifier-button choices to hardcoded defaults even
+        // though they'd been written to the settings file correctly.
+        controller_settings.modifier_buttons = controller_serde.modifier_buttons;
+        controller_settings.pan_sensitivity = controller_serde.pan_sensitivity;
+        controller_settings.pan_invert_y = controller_serde.pan_invert_y;
+        controller_settings.axis_deadzones = controller_serde.axis_deadzones;
+        controller_settings.button_deadzones = controller_serde.button_deadzones;
+        controller_settings.mouse_emulation_sensitivity =
+            controller_serde.mouse_emulation_sensitivity;
+        controller_settings.inverted_axes = controller_serde.inverted_axes;
+
         controller_settings
     }
 }
@@ -1232,6 +1249,141 @@ impl From<(GilButton, GilCode)> for AnalogButton {
         match button {
             GilButton::Unknown => Self::EventCode(code.into_u32()),
             _ => Self::Simple(button),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes `settings` the same way `Settings::save_to_file` does
+    /// (RON, going through `ControllerSettingsSerde`'s delta encoding via
+    /// the `#[serde(from = ..., into = ...)]` on `ControllerSettings`), then
+    /// deserializes it back the same way `Settings::load` does.
+    fn round_trip(settings: &ControllerSettings) -> ControllerSettings {
+        let ron = ron::ser::to_string_pretty(settings, ron::ser::PrettyConfig::default())
+            .expect("ControllerSettings must serialize");
+        ron::de::from_str(&ron).expect("round-tripped ControllerSettings must deserialize")
+    }
+
+    /// `GilButton`/`GilAxis` (from `gilrs`) name button/axis *positions*
+    /// (South, DPadUp, LeftStickX, ...), not printed labels — the same
+    /// enum values represent a remap regardless of whether the physical pad
+    /// is Xbox, PlayStation, or Nintendo (that only affects which glyph
+    /// gets drawn for a given position, and which vendor-id/name a
+    /// controller-type detector matches — separate concerns from this
+    /// module's own storage/serde). So a single round-trip exercising
+    /// representative button/menu/axis remaps here covers the storage
+    /// layer for all three pad types simultaneously.
+    #[test]
+    fn round_trips_remapped_bindings_after_remapping() {
+        let mut settings = ControllerSettings::default();
+        settings.modify_button_binding(GameInput::Jump, Button::Simple(GilButton::West));
+        settings.modify_menu_binding(MenuInput::Apply, Button::Simple(GilButton::North));
+        settings.modify_layer_binding(GameInput::Primary, LayerEntry {
+            button: Button::Simple(GilButton::South),
+            mod1: Button::Simple(GilButton::LeftTrigger),
+            mod2: Button::Simple(GilButton::Unknown),
+        });
+
+        let restored = round_trip(&settings);
+
+        assert_eq!(
+            restored.get_game_button_binding(GameInput::Jump),
+            Some(Button::Simple(GilButton::West))
+        );
+        assert_eq!(
+            restored.get_menu_button_binding(MenuInput::Apply),
+            Some(Button::Simple(GilButton::North))
+        );
+        assert_eq!(
+            restored.get_layer_button_binding(GameInput::Primary),
+            Some(LayerEntry {
+                button: Button::Simple(GilButton::South),
+                mod1: Button::Simple(GilButton::LeftTrigger),
+                mod2: Button::Simple(GilButton::Unknown),
+            })
+        );
+        // A binding that was never touched must still round-trip to its
+        // default rather than being disturbed by the delta encoding.
+        assert_eq!(
+            restored.get_game_button_binding(GameInput::Secondary),
+            ControllerSettings::default_button_binding(GameInput::Secondary)
+        );
+    }
+
+    /// Regression test for a bug this round-trip check caught directly:
+    /// `From<ControllerSettingsSerde> for ControllerSettings` restored only
+    /// the three keybinding delta maps and silently dropped
+    /// `pan_sensitivity`/`pan_invert_y`/`axis_deadzones`/
+    /// `button_deadzones`/`mouse_emulation_sensitivity`/`inverted_axes`/
+    /// `modifier_buttons` back to hardcoded defaults on every load, even
+    /// though they were written to the settings file correctly (those
+    /// fields are copied through unconditionally on the serialize side, not
+    /// diffed against a default — see `From<ControllerSettings> for
+    /// ControllerSettingsSerde` above).
+    #[test]
+    fn round_trips_sensitivity_and_deadzone_settings() {
+        let mut settings = ControllerSettings {
+            pan_sensitivity: 42,
+            pan_invert_y: true,
+            mouse_emulation_sensitivity: 77,
+            ..ControllerSettings::default()
+        };
+        settings
+            .axis_deadzones
+            .insert(Axis::Simple(GilAxis::LeftStickX), 0.35);
+        settings
+            .axis_deadzones
+            .insert(Axis::Simple(GilAxis::RightStickY), 0.5);
+        settings
+            .inverted_axes
+            .push(Axis::Simple(GilAxis::RightStickY));
+
+        let restored = round_trip(&settings);
+
+        assert_eq!(restored.pan_sensitivity, 42);
+        assert!(restored.pan_invert_y);
+        assert_eq!(restored.mouse_emulation_sensitivity, 77);
+        assert_eq!(
+            restored
+                .axis_deadzones
+                .get(&Axis::Simple(GilAxis::LeftStickX)),
+            Some(&0.35)
+        );
+        assert_eq!(
+            restored
+                .axis_deadzones
+                .get(&Axis::Simple(GilAxis::RightStickY)),
+            Some(&0.5)
+        );
+        assert!(
+            restored
+                .inverted_axes
+                .contains(&Axis::Simple(GilAxis::RightStickY))
+        );
+    }
+
+    /// An untouched (never-remapped) settings file must still round-trip
+    /// exactly to defaults — the delta encoding shouldn't invent changes.
+    #[test]
+    fn round_trips_defaults_unchanged() {
+        let settings = ControllerSettings::default();
+        let restored = round_trip(&settings);
+
+        assert_eq!(restored.pan_sensitivity, settings.pan_sensitivity);
+        assert_eq!(restored.pan_invert_y, settings.pan_invert_y);
+        assert_eq!(
+            restored.mouse_emulation_sensitivity,
+            settings.mouse_emulation_sensitivity
+        );
+        for game_input in GameInput::iter() {
+            assert_eq!(
+                restored.get_game_button_binding(game_input),
+                settings.get_game_button_binding(game_input),
+                "{game_input:?} binding changed across a no-op round trip"
+            );
         }
     }
 }

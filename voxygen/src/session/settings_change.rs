@@ -11,10 +11,12 @@ use crate::{
     settings::{
         AudioSettings, ChatSettings, ControlSettings, ControllerSettings, Fps, GameplaySettings,
         GraphicsSettings, HudPositionSettings, InterfaceSettings, audio::AudioVolume,
+        controller::Axis,
     },
     window::{FullScreenSettings, MenuInput, Window},
 };
 use common::comp::inventory::InventorySortOrder;
+use gilrs::Axis as GilAxis;
 use i18n::{LanguageMetadata, LocalizationHandle};
 use std::rc::Rc;
 
@@ -84,7 +86,22 @@ pub enum Control {
     ResetBindingMode,
 }
 #[derive(Clone)]
-pub enum Gamepad {}
+pub enum Gamepad {
+    /// Right-stick camera pan speed (`ControllerSettings::pan_sensitivity`,
+    /// a percentage — same units/scale as `Gameplay::AdjustMousePan`).
+    AdjustPanSensitivity(u32),
+    /// Cursor-move speed while the mouse-emulation fallback is active
+    /// (`ControllerSettings::mouse_emulation_sensitivity`).
+    AdjustMouseEmulationSensitivity(u32),
+    /// Deadzone applied to both axes of the left stick
+    /// (`ControllerSettings::axis_deadzones`, keyed per raw axis — exposed
+    /// per-stick rather than per-raw-axis since X/Y of the same stick
+    /// practically always share one deadzone value, and no other game
+    /// exposes it more granularly than this).
+    AdjustLeftStickDeadzone(f32),
+    /// Same as `AdjustLeftStickDeadzone`, for the right stick.
+    AdjustRightStickDeadzone(f32),
+}
 #[derive(Clone)]
 pub enum Gameplay {
     AdjustMousePan(u32),
@@ -495,7 +512,34 @@ impl SettingsChange {
                     global_state.window.reset_mapping_mode();
                 },
             },
-            SettingsChange::Gamepad(gamepad_change) => match gamepad_change {},
+            SettingsChange::Gamepad(gamepad_change) => match gamepad_change {
+                Gamepad::AdjustPanSensitivity(sensitivity) => {
+                    settings.controller.pan_sensitivity = sensitivity;
+                },
+                Gamepad::AdjustMouseEmulationSensitivity(sensitivity) => {
+                    settings.controller.mouse_emulation_sensitivity = sensitivity;
+                },
+                Gamepad::AdjustLeftStickDeadzone(deadzone) => {
+                    settings
+                        .controller
+                        .axis_deadzones
+                        .insert(Axis::Simple(GilAxis::LeftStickX), deadzone);
+                    settings
+                        .controller
+                        .axis_deadzones
+                        .insert(Axis::Simple(GilAxis::LeftStickY), deadzone);
+                },
+                Gamepad::AdjustRightStickDeadzone(deadzone) => {
+                    settings
+                        .controller
+                        .axis_deadzones
+                        .insert(Axis::Simple(GilAxis::RightStickX), deadzone);
+                    settings
+                        .controller
+                        .axis_deadzones
+                        .insert(Axis::Simple(GilAxis::RightStickY), deadzone);
+                },
+            },
             SettingsChange::Gameplay(gameplay_change) => {
                 let window = &mut global_state.window;
                 match gameplay_change {

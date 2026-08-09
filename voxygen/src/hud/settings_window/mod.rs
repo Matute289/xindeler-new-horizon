@@ -349,11 +349,15 @@ impl Widget for SettingsWindow<'_> {
                 }
             },
             SettingsTab::Controls => {
-                for change in controls::Controls::new(global_state, imgs, fonts, localized_strings)
-                    .top_left_with_margins_on(state.ids.settings_content_align, 0.0, 0.0)
-                    .wh_of(state.ids.settings_content_align)
-                    .set(state.ids.controls, ui)
-                {
+                let (control_changes, gamepad_changes) =
+                    controls::Controls::new(global_state, imgs, fonts, localized_strings)
+                        .top_left_with_margins_on(state.ids.settings_content_align, 0.0, 0.0)
+                        .wh_of(state.ids.settings_content_align)
+                        .set(state.ids.controls, ui);
+                for change in control_changes {
+                    events.push(Event::SettingsChange(change.into()));
+                }
+                for change in gamepad_changes {
                     events.push(Event::SettingsChange(change.into()));
                 }
             },

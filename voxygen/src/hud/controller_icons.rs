@@ -77,8 +77,18 @@ pub fn get_controller_input_string(
 
 /// returns a ConrodImageId for valid strings
 pub fn get_controller_icon_id_from_string(name: &str, imgs: &Imgs) -> ConrodImageId {
-    // TODO: either gilrs or we have to swap nintendo buttons to be accurate. Figure
-    // it out when controller type detection is working.
+    // Controller-type detection (vendor-id/name based) is real now, so this
+    // no longer blocks on that — it blocks on art. Nintendo's face buttons
+    // are physically swapped vs. Xbox (bottom = B not A, right = A not B,
+    // left = Y not X, top = X not Y — gilrs's South/East/West/North name the
+    // *position*, not the printed letter), but there are no
+    // `south_button_nin`/`east_button_nin`/etc. assets to show the correct
+    // letter, so every `_n` arm below falls back to the Xbox-lettered (and
+    // Xbox-colored) glyph for that position. Swapping which *existing*
+    // Xbox/PlayStation asset gets shown per position would fix the letter
+    // but keep the wrong art style, which isn't obviously better — flagged
+    // as a gap for a real Nintendo glyph set, not something to work around
+    // here (no art authoring in this pass).
     match name {
         "south" | "south_x" | "south_n" => imgs.south_button_a,
         "south_p" => imgs.south_button_ps_cross,
