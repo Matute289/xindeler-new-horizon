@@ -62,6 +62,20 @@ use strum::{EnumIter, IntoEnumIterator};
 use vek::*;
 const ART_SIZE: [f64; 2] = [320.0, 320.0];
 
+/// Ability-browse grid layout (`DiarySection::AbilitySelection`): rows per
+/// column, and abilities per page (2 columns). Shared between the render
+/// code and the gamepad/keyboard grid-nav math in `Widget::update` so the
+/// two can't drift out of sync.
+const ABILITY_GRID_ROWS_PER_COL: usize = 6;
+const ABILITIES_PER_PAGE: usize = ABILITY_GRID_ROWS_PER_COL * 2;
+/// Spell-browse grid layout (`DiarySection::Spells`): rows per column
+/// (reduced from the ability tab's 6 to leave room for the per-source
+/// mastery header at the top of each page), and spells per page (2
+/// columns). Shared between the render code and the grid-nav math in
+/// `Widget::update`.
+const SPELL_GRID_ROWS_PER_COL: usize = 5;
+const SPELLS_PER_PAGE: usize = SPELL_GRID_ROWS_PER_COL * 2;
+
 widget_ids! {
     pub struct Ids {
         frame,
@@ -515,12 +529,9 @@ impl Widget for Diary<'_> {
         let sections_len = DiarySection::iter().count();
         let last_input = self.global_state.window.last_input();
         let menu_active = matches!(last_input, LastInput::Keyboard | LastInput::Controller);
-        // Mirrors each section's own `ABILITIES_PER_PAGE`/`ROWS_PER_COL` constants
-        // (AbilitySelection: 6 rows x 2 cols = 12/page; Spells: 5 rows x 2 cols =
-        // 10/page) — keep in sync if those change.
         let (grid_rows_per_col, grid_per_page) = match self.show.diary_fields.section {
-            DiarySection::Spells => (5usize, 10usize),
-            _ => (6usize, 12usize),
+            DiarySection::Spells => (SPELL_GRID_ROWS_PER_COL, SPELLS_PER_PAGE),
+            _ => (ABILITY_GRID_ROWS_PER_COL, ABILITIES_PER_PAGE),
         };
         let mut apply_pressed = false;
         let mut ability_row_apply = false;
@@ -1301,8 +1312,6 @@ impl Widget for Diary<'_> {
                 })
                 .collect();
 
-                const ABILITIES_PER_PAGE: usize = 12;
-
                 let page_indices = (abilities.len().saturating_sub(1)) / ABILITIES_PER_PAGE;
 
                 if state.ability_page > page_indices {
@@ -1436,10 +1445,13 @@ impl Widget for Diary<'_> {
                     let (ability_title, ability_desc) =
                         util::ability_description(ability_id.unwrap_or(""), self.localized_strings);
 
-                    let (align_state, image_offsets) = if id_index < 6 {
+                    let (align_state, image_offsets) = if id_index < ABILITY_GRID_ROWS_PER_COL {
                         (state.ids.sb_page_left_align, 120.0 * id_index as f64)
                     } else {
-                        (state.ids.sb_page_right_align, 120.0 * (id_index - 6) as f64)
+                        (
+                            state.ids.sb_page_right_align,
+                            120.0 * (id_index - ABILITY_GRID_ROWS_PER_COL) as f64,
+                        )
                     };
 
                     Image::new(if same_weap_kinds {
@@ -1519,14 +1531,6 @@ impl Widget for Diary<'_> {
                     spell::SpellCompendium,
                 };
 
-                /// Spell rows per column. Reduced from the ability tab's 6 to
-                /// leave `MASTERY_HEADER_HEIGHT` of clear space at the top of
-                /// each page for the per-source mastery header below, without
-                /// any row spilling past the book art's bottom edge.
-                const ROWS_PER_COL: usize = 5;
-                /// How many spell rows fit on one spread (two columns of
-                /// `ROWS_PER_COL`).
-                const SPELLS_PER_PAGE: usize = ROWS_PER_COL * 2;
                 /// Tint applied to a locked spell's empty slot.
                 const LOCKED_SLOT_COLOR: Color = Color::Rgba(0.35, 0.35, 0.35, 1.0);
                 /// Vertical space reserved at the top of each page for the
@@ -1937,7 +1941,7 @@ impl Widget for Diary<'_> {
                         .map(String::as_str);
                     let spell = pool_key.and_then(|key| compendium.get(key));
 
-                    let (align_state, image_offsets) = if id_index < ROWS_PER_COL {
+                    let (align_state, image_offsets) = if id_index < SPELL_GRID_ROWS_PER_COL {
                         (
                             state.ids.sp_page_left_align,
                             MASTERY_HEADER_HEIGHT + 120.0 * id_index as f64,
@@ -1945,7 +1949,8 @@ impl Widget for Diary<'_> {
                     } else {
                         (
                             state.ids.sp_page_right_align,
-                            MASTERY_HEADER_HEIGHT + 120.0 * (id_index - ROWS_PER_COL) as f64,
+                            MASTERY_HEADER_HEIGHT
+                                + 120.0 * (id_index - SPELL_GRID_ROWS_PER_COL) as f64,
                         )
                     };
 

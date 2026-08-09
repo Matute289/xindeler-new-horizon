@@ -3437,15 +3437,29 @@ impl Controls {
     }
 
     /// Handles a `MenuInput` (gamepad or keyboard menu binding) forwarded
-    /// from `CharSelectionUi::maintain`. Only `Mode::Select` has real
-    /// navigation in this pass (see `menu_focus`); the creation wizard
-    /// (`Mode::CreateOrEdit`) is left to the mouse-emulation fallback.
+    /// from `CharSelectionUi::maintain`. Only `Mode::Select` has real list/
+    /// button navigation in this pass (see `menu_focus`); the creation
+    /// wizard (`Mode::CreateOrEdit`) is left to the mouse-emulation
+    /// fallback, except for Back, which always works (`Message::Back`'s own
+    /// handler already only acts on `Mode::CreateOrEdit`) so a gamepad
+    /// player who entered "New Character" isn't stuck there.
     fn menu_input(
         &mut self,
         input: MenuInput,
         events: &mut Vec<Event>,
         characters: &[CharacterItem],
     ) {
+        if matches!(input, MenuInput::Back) {
+            if matches!(self.mode, Mode::CreateOrEdit { .. }) {
+                self.update(Message::Back, events, characters);
+            } else {
+                // Nothing to back out of on the character list itself — same
+                // as the existing "X button"/Logout affordance being the
+                // only way out of this screen.
+                self.update(Message::Logout, events, characters);
+            }
+            return;
+        }
         if !matches!(self.mode, Mode::Select { .. }) {
             return;
         }
