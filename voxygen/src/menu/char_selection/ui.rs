@@ -19,7 +19,7 @@ use crate::{
         },
         img_ids::ImageGraphic,
     },
-    window,
+    window::{self, MenuInput},
 };
 use client::{Client, ServerInfo};
 use common::{
@@ -816,6 +816,14 @@ struct Controls {
     possible_starting_sites: Vec<Marker>,
     world_sz: Vec2<u32>,
     has_rules: bool,
+    // Gamepad/keyboard menu-navigation local focus in `Mode::Select`: 0 = the
+    // character list (Up/Down moves `selected` — the same selection a mouse
+    // click sets, so the existing highlighted-art feedback already applies —
+    // Apply enters the world), 1 = the "New Character" button (Apply creates
+    // one). LocalFocus cycles between them. `Mode::CreateOrEdit` (the
+    // creation wizard's species/class/background pickers) has no navigation
+    // in this pass; mouse emulation still reaches it.
+    menu_focus: usize,
 }
 
 #[derive(Clone)]
@@ -900,6 +908,7 @@ impl Controls {
             possible_starting_sites,
             world_sz,
             has_rules,
+            menu_focus: 0,
         }
     }
 
@@ -1221,6 +1230,9 @@ impl Controls {
                     } else {
                         (97, 255, 18)
                     };
+                    // Gamepad/keyboard menu-navigation highlight, matching the
+                    // character rows' own `Some(i) == selected` art swap above.
+                    let new_char_menu_focused = self.menu_focus == 1;
                     characters.push(
                         AspectRatioContainer::new({
                             let button = Button::new(
@@ -1234,14 +1246,18 @@ impl Controls {
                                 .center_y(),
                             )
                             .style(
-                                style::button::Style::new(imgs.char_selection)
-                                    .hover_image(imgs.char_selection_hover)
-                                    .press_image(imgs.char_selection_press)
-                                    .image_color(Rgba::new(color.0, color.1, color.2, 255))
-                                    .text_color(iced::Color::from_rgb8(color.0, color.1, color.2))
-                                    .disabled_text_color(iced::Color::from_rgb8(
-                                        color.0, color.1, color.2,
-                                    )),
+                                style::button::Style::new(if new_char_menu_focused {
+                                    imgs.char_selection_hover
+                                } else {
+                                    imgs.char_selection
+                                })
+                                .hover_image(imgs.char_selection_hover)
+                                .press_image(imgs.char_selection_press)
+                                .image_color(Rgba::new(color.0, color.1, color.2, 255))
+                                .text_color(iced::Color::from_rgb8(color.0, color.1, color.2))
+                                .disabled_text_color(
+                                    iced::Color::from_rgb8(color.0, color.1, color.2),
+                                ),
                             )
                             .width(Length::Fill)
                             .height(Length::Fill);
@@ -3420,6 +3436,46 @@ impl Controls {
         }
     }
 
+    /// Handles a `MenuInput` (gamepad or keyboard menu binding) forwarded
+    /// from `CharSelectionUi::maintain`. Only `Mode::Select` has real
+    /// navigation in this pass (see `menu_focus`); the creation wizard
+    /// (`Mode::CreateOrEdit`) is left to the mouse-emulation fallback.
+    fn menu_input(
+        &mut self,
+        input: MenuInput,
+        events: &mut Vec<Event>,
+        characters: &[CharacterItem],
+    ) {
+        if !matches!(self.mode, Mode::Select { .. }) {
+            return;
+        }
+        match input {
+            MenuInput::LocalFocus => self.menu_focus = 1 - self.menu_focus,
+            MenuInput::Up | MenuInput::Down if self.menu_focus == 0 && !characters.is_empty() => {
+                let current_index = self
+                    .selected
+                    .and_then(|id| characters.iter().position(|c| c.character.id == Some(id)));
+                let new_index = match current_index {
+                    Some(i) if matches!(input, MenuInput::Down) => {
+                        (i + 1).min(characters.len() - 1)
+                    },
+                    Some(i) => i.saturating_sub(1),
+                    None => 0,
+                };
+                if let Some(id) = characters.get(new_index).and_then(|c| c.character.id) {
+                    self.update(Message::Select(id), events, characters);
+                }
+            },
+            MenuInput::Apply if self.menu_focus == 0 => {
+                self.update(Message::EnterWorld, events, characters);
+            },
+            MenuInput::Apply if self.menu_focus == 1 => {
+                self.update(Message::NewCharacter, events, characters);
+            },
+            _ => {},
+        }
+    }
+
     /// Get the character to display
     pub fn display_body_inventory<'a>(
         &'a self,
@@ -3443,6 +3499,9 @@ pub struct CharSelectionUi {
     enter_pressed: bool,
     select_character: Option<CharacterId>,
     pub error: Option<String>,
+    // Gamepad/keyboard menu-input presses collected since the last `maintain` call
+    // and drained there, mirroring how `hud::Hud` collects `menu_events`.
+    menu_events: Vec<MenuInput>,
 }
 
 impl CharSelectionUi {
@@ -3501,6 +3560,7 @@ impl CharSelectionUi {
             enter_pressed: false,
             select_character: None,
             error: None,
+            menu_events: Vec::new(),
         }
     }
 
@@ -3534,6 +3594,15 @@ impl CharSelectionUi {
                 self.ui.scale_factor_changed(s);
                 false
             },
+            // Gamepad/keyboard menu navigation, collected here and consumed in
+            // `maintain` (which is where `Controls::update`/`Event` construction
+            // already happens for iced messages, so this reuses the same path
+            // rather than plumbing a second `Vec<Event>` out of `handle_event`).
+            window::Event::MenuInput(key, true) => {
+                self.menu_events.push(key);
+                true
+            },
+            window::Event::MenuInput(_, false) => true,
             _ => false,
         }
     }
@@ -3584,6 +3653,11 @@ impl CharSelectionUi {
             self.controls
                 .update(message, &mut events, &client.character_list().characters)
         });
+
+        for key in self.menu_events.drain(..) {
+            self.controls
+                .menu_input(key, &mut events, &client.character_list().characters);
+        }
 
         events
     }
