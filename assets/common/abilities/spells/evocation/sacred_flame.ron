@@ -1,0 +1,20 @@
+// Cleric radiant damage cantrip. The sheet's "cover gives it no shelter"
+// rider has no cover/line-of-sight-bypass primitive in this engine's combat
+// model -- ships as a plain ranged attack, same simplification precedent as
+// every other unmodelable rider dropped in this batch (see PR body).
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 15,
+            damage_kind: Radiant,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

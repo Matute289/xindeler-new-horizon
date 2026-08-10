@@ -1,0 +1,30 @@
+// The sheet's own lingering-acid rider ("continues to eat at them for a
+// moment afterward") IS modeled, via the same `Burning` BuffKind reused as a
+// generic damage-over-time primitive that
+// assets/common/abilities/spells/evocation/caustic_brew.ron (Wave 1) already
+// established -- Burning is implemented purely as a HealthChangeOverTime
+// effect, so it works fine as a stand-in acid-tick regardless of its
+// fire-coded name. `chance: 1.0` since the sheet frames this as automatic on
+// a hit ("continues to eat"), not a probabilistic proc.
+BasicRanged(
+    energy_cost: 45,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 24,
+            buff: Some((
+                kind: Burning,
+                dur_secs: 4,
+                strength: DamageFraction(0.2),
+                chance: 1.0,
+            )),
+            damage_kind: Acid,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

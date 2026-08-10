@@ -1,0 +1,19 @@
+// Simple single-target cold bolt. The "disadvantage on the target's next
+// weapon attack" rider is dropped: this is a real-time action game with no
+// attack-roll/advantage system to hook a control rider like that into.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 14,
+            damage_kind: Cold,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

@@ -1,0 +1,32 @@
+// Real-agent BasicSummon (the `find_familiar.ron` shape): a fighting/bearing
+// companion, not a decorative phantasm -- matches "forging a lasting bond...
+// ready to serve and bear you into battle."
+// `alignment`/`with_agent`/`incorporeal`/`phantom_illusion` all left at their
+// `#[serde(default)]` values (owned, agentic, solid, real), and
+// `duration: None` for a permanent bond (recast doesn't despawn/replace a
+// prior steed -- no cap exists on this summon path, same as
+// `find_familiar.ron`). `body: QuadrupedMedium(Horse)` stands in for "a swift
+// and intelligent mount" -- no in-cast mount-selection UI exists, so one
+// representative mount body is picked rather than exposing a choice the
+// engine can't offer yet.
+//
+// Same known gap as `find_familiar.ron`, not re-derived here: `BasicSummon`'s
+// `CreateNpcEvent` path never populates `comp::Pet`, so this steed will NOT
+// survive a logout/server-restart and isn't chunk-unload-protected. See
+// `find_familiar.ron`'s own comment for the mechanism.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 3.0),
+        body: QuadrupedMedium((species: Horse, body_type: Female)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: None,
+    ),
+)

@@ -1,0 +1,28 @@
+// Sheet: pure control zone, explicitly "No damage" -- heavily obscured
+// (blind) + slippery difficult terrain over a wide area. Combines this
+// batch's two already-shipped single-rider precedents directly, same as
+// web.ron: `Blinded` at fog_cloud.ron's own strength (0.4, "wrapped in a
+// blinding gray haze" matches this spell's own obscuring-storm flavor
+// closely) and `DifficultTerrain` at grease.ron's strength band (0.4,
+// "slippery footing"). No damage rider to drop -- this is the cleanest
+// sheet-fidelity case in the batch. Sheet footprint is a 40 ft radius / 20
+// ft tall cylinder, approximated as a sphere of the same radius (12 m),
+// same shape-approximation precedent as every other zone in this pipeline.
+// `StaticAura` always places the zone at the caster's own position -- the
+// sheet's 46 m cast range isn't mechanically expressed, same simplification
+// as entangle/fog_cloud/grease.
+StaticAura(
+    buildup_duration: 0.7,
+    cast_duration: 0.5,
+    recover_duration: 0.45,
+    energy_cost: 80.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Blinded, strength: 0.4, duration: Some(2), category: Some(Magical)),
+        (kind: DifficultTerrain, strength: 0.4, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(25.0),
+    range: 12.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

@@ -1,0 +1,31 @@
+// Sheet: "persistent fire control zone (creatures ending turn near the
+// rolling sphere take Dexterity-save fire damage; mobile each round)".
+// Primary effect is periodic fire damage from a zone, not a one-shot burst --
+// same reasoning as cloud_of_daggers.ron: `StaticAura` + a damage `BuffKind`
+// (here `Burning`, a perfect flavor match for "living flame" and already a
+// real per-tick HP-drain buff, `common/src/comp/buff.rs`, tick_dur 0.25s).
+// `BasicAura`'s own `flame_cloak.ron`/`gnarling/totem/red.ron` already
+// deliver `Burning` through an aura at flat (non-fraction) strength values
+// in the 1.2-3.0 range -- this reuses that same strength unit directly, just
+// through `StaticAura` instead of `BasicAura` since this sphere is not the
+// caster (see spirit_guardians.ron for the one spell in this batch that
+// genuinely IS caster-attached and uses `BasicAura` instead). The sheet's
+// "mobile each round, caster wills it across the battlefield" rider is
+// dropped -- no movement primitive exists for a `StaticAura` zone (it is
+// pinned to the caster's cast position for its whole `aura_duration`,
+// common/src/states/static_aura.rs), the same class of drop already accepted
+// for entangle/fog_cloud/grease's own aimed-range limitation.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 55.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Burning, strength: 3.0, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(20.0),
+    range: 3.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

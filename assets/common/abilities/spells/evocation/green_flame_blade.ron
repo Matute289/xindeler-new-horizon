@@ -1,0 +1,32 @@
+// Sear is picked over Stab/Slash/Bash for its built-in Burning rider
+// (common/src/comp/melee.rs), which fits "emerald fire erupts from the
+// wound" directly -- the best flavor match of the four MeleeConstructorKind
+// options available for a melee spell (see booming_blade.ron for why none
+// of them offer a real elemental damage_kind field; Sear's own hardcoded
+// kind is Energy, not Fire, but at least it is a magical kind rather than a
+// physical one).
+//
+// The "flame leaps to a second nearby foe" rider is modeled with
+// `multi_target: Some(Normal)`, the same wide-swing-hits-everyone-in-arc
+// primitive sword cleave abilities use (see
+// assets/common/abilities/sword/cleaving_cross_cut.ron) -- both targets take
+// equal power, which is the closest existing analogue to "the second target
+// also takes the secondary fire damage." Per-target damage is halved
+// relative to a single-target cantrip (eldritch_blast.ron in this same
+// folder applies the same discipline for its own multi-hit cantrip, split
+// 8+8 instead of one shot at full cantrip damage) so hitting both targets
+// totals to roughly one single-target cantrip's worth of damage, not double.
+BasicMelee(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.3,
+    melee_constructor: (
+        kind: Sear(damage: 8, poise: 5, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 80.0,
+        multi_target: Some(Normal),
+    ),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

@@ -32,5 +32,7 @@ spell-commune_with_nature = Comulgar con la Naturaleza
 spell-commune_with_nature-desc = Por un momento tus sentidos se fusionan con la tierra viva, extrayendo una conciencia íntima de las bestias y plantas a tu alrededor.
 spell-find_the_path = Encontrar el Camino
 spell-find_the_path-desc = Al concentrarte en un destino que conocés personalmente, percibís la ruta más corta y directa hacia el punto de referencia conocido más cercano. La sensación del camino persiste mientras mantengas tu atención fija en él.
+spell-hunters_mark = Marca del Cazador
+spell-hunters_mark-desc = Fijás tus sentidos en un único enemigo elegido, marcándolo como tu presa. Mientras el vínculo se mantenga, tus golpes contra ese objetivo calan más hondo, y podés sentir su dirección incluso a través de la espesura.
 spell-mind_spike = Punzada Mental
 spell-mind_spike-desc = Una lanza de pensamiento puro se clava en la mente de una criatura, abrasándola con dolor psíquico que perdura mucho después del golpe.

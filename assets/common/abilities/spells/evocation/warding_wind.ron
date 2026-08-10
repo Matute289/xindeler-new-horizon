@@ -1,0 +1,25 @@
+// `SelfBuff` always inserts its buff on the caster only
+// (common/src/states/self_buff.rs: `entity: data.entity`) -- it has no
+// reach onto other entities at all, so the sheet's own "deafens [nearby
+// creatures], hinders their approach, disperses gas/fog" riders are dropped
+// entirely: no target-other-entities primitive exists on this variant to
+// hook them into (contrast BasicAura, which does reach nearby allies, but
+// isn't the variant assigned here). What survives is the purely
+// self-protective half of the flavor ("buffets anyone who tries to draw
+// near") modeled with the existing `ProtectingWard` BuffKind (flat damage
+// reduction) as the closest defensive analogue to a swirling wind shell
+// around the caster -- the same "closest existing BuffKind, not a new one"
+// discipline this whole batch follows. Genuinely sustained for the full
+// 60 s via `BuffData.duration`, so unlike flame_blade.ron/
+// spiritual_weapon.ron in this same batch, the Concentration(60) framing is
+// real here and is kept as-is.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 45,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

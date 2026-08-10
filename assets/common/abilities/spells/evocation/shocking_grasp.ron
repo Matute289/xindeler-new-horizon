@@ -1,0 +1,21 @@
+// Both sheet riders are dropped: "advantage against a target wearing metal
+// armor" has no armor-material-check hook anywhere in combat resolution,
+// and "the target can't take reactions until its next turn" has no
+// reaction-suppression status in this real-time game (there is no reaction
+// economy to suppress). Ships as a plain touch strike. Stab is used for
+// the same reason as lightning_lure.ron -- no MeleeConstructorKind offers a
+// real Lightning damage_kind, so the true in-engine damage type here is
+// Piercing.
+BasicMelee(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.3,
+    melee_constructor: (
+        kind: Stab(damage: 16, poise: 5, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+    ),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

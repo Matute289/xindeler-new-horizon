@@ -1,0 +1,18 @@
+// Touch range, but narrowed to self exactly like nondetection.ron's own
+// precedent: no touch-a-willing-ally targeting mechanism exists for a
+// `SelfBuff`-shaped spell, and the sheet's own notes already call for the
+// `SelfBuff` arm here ("Touch on a willing ally but functions as a
+// defensive ward buff; SelfBuff arm chosen"). D&D's "sets base AC to 13 +
+// Dex while unarmored" becomes the same flat `ProtectingWard` damage
+// reduction this school's other AC-style wards use, held for the spell's
+// full 8-hour duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.15, duration: Some(28800.0))),
+    ],
+    energy_cost: 20.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

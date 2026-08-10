@@ -1,0 +1,30 @@
+// Same touch-ally deviation as jump.ron in this folder: sheet range is Touch and
+// the description reads "a touched creature's legs" (third person), so this
+// uses the established touch-ally pattern (spare_the_dying.ron / heroism.ron /
+// jump.ron) instead of SelfBuff, which can only ever land on the caster.
+// Modeled with Hastened (movement speed) -- the only existing mobility buff
+// that fits "quickens its stride." Long (1h) duration matches the sheet's own
+// duration: Secs(3600).
+BasicMelee(
+    energy_cost: 30.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Buff((
+                kind: Hastened,
+                dur_secs: 3600.0,
+                strength: Value(0.1),
+                chance: 1.0,
+            )),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Transmutation), source: Some(Primordial)),
+)

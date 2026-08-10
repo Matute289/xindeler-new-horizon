@@ -1,0 +1,38 @@
+// Unlike find_familiar.ron (a real agent-driven, permanent companion), this
+// servant performs no in-engine task/chore mechanic -- no such system
+// exists, and this spell has no combat fit either way. It maps cleanly onto
+// the recipe already used by the shipped illusion phantasms
+// (illusion/silent_image.ron and siblings): `alignment: Some(Passive)` (no
+// will of its own), `with_agent: false` (no independent behaviour to run),
+// `incorporeal: true` (approximates "unseen"/non-solid), `has_health: false`
+// + `phantom_illusion: true` (vanishes the moment anything actually hits
+// it -- a reasonable stand-in for D&D's "1 HP, destroyed by any attack"),
+// `delete_after_expiry: true` for the client-side pre-expiry flicker. The
+// only real change from that recipe is `duration`: a full hour instead of
+// the illusions' 60-180s, matching this spell's much longer nominal
+// lifetime. `body: Object(Pebble)` reuses minor_illusion_image.ron's own
+// "small, unobtrusive placeholder" body rather than inventing a new asset.
+BasicSummon(
+    buildup_duration: 0.75,
+    cast_duration: 0.3,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: Object(Pebble),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((
+            secs: 3600,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

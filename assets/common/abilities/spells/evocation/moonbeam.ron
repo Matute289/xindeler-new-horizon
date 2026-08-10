@@ -1,0 +1,36 @@
+// Detonated at a chosen point up to 37 m away, same deviation as
+// assets/common/abilities/spells/evocation/acid_splash.ron (Wave 1):
+// CharacterAbility::Explosion always detonates centered on the caster's own
+// position (common/src/states/explosion.rs has no target-point field at
+// all), which contradicts this spell's own ranged-and-relocatable beam, so
+// it uses GroundAoe instead, the engine's real "detonate at a chosen point
+// within range" primitive.
+//
+// GroundAoe also hardcodes DamageKind::Energy in
+// common/src/states/ground_aoe.rs (no RON-configurable damage_kind field
+// exists on this variant) -- so despite the Radiant flavor text, this deals
+// generic Energy damage under the hood, same drift already documented on
+// acid_splash.ron.
+//
+// The sheet's own "lingers ... each round ... caster can shift the beam to
+// a new spot" persistence is dropped, not approximated: GroundAoe is a
+// single detonation with no repeat-tick or move-the-zone mechanism. The
+// compendium entry below lists duration: Instant rather than
+// Concentration(60) for the same reason divine_favor.ron (Wave 1) does -- a
+// 60 s "active zone" claim in the spellbook tooltip would promise a
+// persistence this ability doesn't have.
+GroundAoe(
+    energy_cost: 60.0,
+    buildup_duration: 0.6,
+    delay: 0.5,
+    recover_duration: 0.4,
+    max_range: 37.0,
+    radius: 3.0,
+    min_falloff: 0.3,
+    damage: 26,
+    poise: 10,
+    knockback: (strength: 0, direction: Away),
+    dodgeable: Roll,
+    rooted_cast: false,
+    meta: (school: Some(Evocation), source: Some(Divine), cooldown: Some(12.0)),
+)

@@ -1,0 +1,61 @@
+// Establishes `BasicSummon` as a real player-cast companion, distinct from
+// this variant's only other player-spell precedent so far. Every
+// already-shipped `BasicSummon` player spell
+// (illusion/{minor_illusion_image,silent_image,major_image,project_image}.ron,
+// transmutation/floating_disk.ron) is a `with_agent: false`,
+// `incorporeal: true`, `phantom_illusion: true`, `has_health: false`
+// decorative phantasm or a scripted prop -- none is an actual fighting/
+// following creature with its own agency. This spell instead uses the OTHER
+// already-real `SummonInfo::Npc` recipe: the one NPC-cast summon abilities
+// already use for genuine owned companions (see
+// assets/common/abilities/custom/dwarves/forgemaster/summon_iron_dwarf.ron
+// and assets/common/abilities/vampire/bloodmoon_heiress/summon.ron) --
+// `alignment`/`with_agent`/`incorporeal`/`phantom_illusion`/
+// `delete_after_expiry` all left at their `#[serde(default)]` values:
+// `alignment: None` resolves to `Alignment::Owned(caster)`, `with_agent`
+// defaults to true (it acts on its own AI, matching "obeys your commands"),
+// `incorporeal`/`phantom_illusion` default to false (a real, hittable
+// creature, not a decoy), and `duration: None` means no expiry timer WITHIN
+// this ability's own lifecycle.
+//
+// KNOWN GAP, reviewed and left open deliberately (content-only pass, no
+// Rust touched): `Alignment::Owned` alone does NOT grant the persistence a
+// "permanent companion" implies. The real cross-session pet system
+// (`comp::Pet`, populated only via `server::pet::tame_pet_internal`, the
+// interact-to-tame flow) is what gets saved to the DB on logout
+// (`server/src/events/player.rs`'s persistence loop explicitly skips
+// `Alignment::Owned` entities without a `Pet` component) and gets an
+// `Anchor` to survive its owner's chunk unloading while they're online.
+// `BasicSummon`'s `CreateNpcEvent` path never populates `comp::Pet`, so this
+// familiar will NOT survive a logout/server-restart, and isn't chunk-unload
+// -protected either. Recasting doesn't despawn/replace a prior familiar
+// (no cap exists on this summon path, unlike the DB-backed pet system's
+// `MAX_PETS`), so repeated casts stack multiple foxes rather than replacing
+// one. True permanence/replace-on-recast needs a Lane B follow-up wiring
+// `BasicSummon`-created `Alignment::Owned` NPCs through the same
+// `comp::Pet`/persistence/anchor path real tamed pets use. This RON still
+// establishes the intended CharacterAbility/SummonInfo shape (agent,
+// health, ownership) for that follow-up to build on; only the
+// cross-session persistence guarantee is currently absent, and neither the
+// i18n flavor text nor this comment should overclaim it in the meantime.
+//
+// `body`: `QuadrupedSmall(Fox)` stands in for "a small animal of your
+// choosing" -- no in-cast body-selection UI exists, so one representative
+// small-animal body is picked rather than exposing a choice the engine
+// can't offer yet.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: QuadrupedSmall((species: Fox, body_type: Female)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: None,
+    ),
+)
