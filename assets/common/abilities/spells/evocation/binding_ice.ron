@@ -1,0 +1,43 @@
+// Cone burst of cold, same Shockwave shape as
+// assets/common/abilities/spells/evocation/frost_fingers.ron (Wave 1's own
+// circle-1 cone-cold sibling) -- Shockwave is the only AoE variant with a
+// real RON-configurable damage_kind field (set directly, not hardcoded per
+// sub-kind the way MeleeConstructorKind/Explosion/GroundAoe/BasicBeam are),
+// so Cold is exactly representable, no drift. `shockwave_speed`/
+// `shockwave_duration` are tuned so `speed * duration` (~8.8 m) approximates
+// the sheet's 9 m cone reach, the same approximation frost_fingers already
+// makes for its own 5 m cone.
+//
+// The sheet's own "left sluggish" rider IS modeled, via the same `Slowed`
+// BuffKind ray_of_frost.ron already established as the generic movement-slow
+// primitive -- attached through `damage_effect`, the field Shockwave exposes
+// for exactly this purpose (see frost_fingers.ron's own `damage_effect: None`
+// for where this would otherwise sit unused).
+Shockwave(
+    energy_cost: 55,
+    buildup_duration: 0.4,
+    swing_duration: 0.3,
+    recover_duration: 0.35,
+    damage: 26.0,
+    poise_damage: 10,
+    knockback: (strength: 0.0, direction: Away),
+    shockwave_angle: 60.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 22.0,
+    shockwave_duration: 0.4,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Cold,
+    specifier: Ice,
+    ori_rate: 1.0,
+    damage_effect: Some(Buff((
+        kind: Slowed,
+        dur_secs: 5,
+        strength: Value(0.3),
+        chance: 1.0,
+    ))),
+    timing: PostBuildup,
+    emit_outcome: true,
+    minimum_combo: None,
+    meta: (school: Some(Evocation), source: Some(Arcane), cooldown: Some(9.0)),
+)
