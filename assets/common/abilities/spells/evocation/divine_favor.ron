@@ -1,0 +1,30 @@
+// The sheet's own duration is Concentration(60) ("every blow you land ...
+// for the duration"), but every existing weapon-damage-bonus BuffKind in
+// this engine (BlindingSmite/BrandingSmite/DivineSmite/SearingSmite/
+// StaggeringSmite/ThunderousSmite/WrathfulSmite -- see
+// assets/common/abilities/spells/gravesong/) is a one-shot "bonus on the
+// NEXT weapon hit only" buff, removed the moment it triggers
+// (`buff_cat: RemoveOnAttack`, `duration: None`) -- there is no continuous
+// "every hit for N seconds" weapon-buff mechanism anywhere in
+// common/src/comp/buff.rs. This reuses that same one-shot family
+// (BrandingSmite -- "deal additional damage, no secondary effect", the
+// smaller-magnitude sibling of DivineSmite, matching this being a lower-
+// circle spell) rather than inventing a new persistent BuffKind. The
+// "every hit for the duration" persistence rider is dropped, not carried
+// through as metadata: the compendium entry lists duration: Instant,
+// matching how all 7 already-shipped gravesong smites describe their own
+// one-shot mechanic (checked every one -- none of them list Concentration
+// either, despite some of their own sheet rows saying the same thing).
+// Listing Concentration(60) here would make the in-game spellbook tooltip
+// claim a 60s buffed-hits window that doesn't exist.
+SelfBuff(
+    buildup_duration: 0.1,
+    cast_duration: 0.1,
+    recover_duration: 0.1,
+    buffs: [
+        BuffDesc(kind: BrandingSmite, data: BuffData(strength: 6.0, duration: None)),
+    ],
+    buff_cat: Some(RemoveOnAttack),
+    energy_cost: 10,
+    enforced_limit: true,
+)
