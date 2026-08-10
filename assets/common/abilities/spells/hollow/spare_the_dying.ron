@@ -1,0 +1,29 @@
+// Targets a dying ALLY (a "stabilize" effect), not the caster -- `SelfBuff`
+// always lands its effect on the caster (`entity: data.entity` in
+// common/src/states/self_buff.rs), never a touched ally, so this uses
+// `BasicMelee` with the engine's established touch-ally pattern (see
+// weave_transfusion.ron / lesser_restoration.ron): a near-inert Stab whose
+// `attack_effect_target: InGroup` redirects the effect onto whoever is
+// struck instead of dealing damage. No dedicated "downed/dying" state
+// exists in this engine (0 HP has no separate stabilize-able state), so the
+// stabilize effect is modeled as a modest instant heal on the touched ally --
+// the closest existing primitive to "pulls someone back from the brink"
+// (see CombatEffect::Heal, common/src/combat.rs).
+BasicMelee(
+    energy_cost: 20.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Heal(20.0),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Necromancy), source: Some(Divine)),
+)

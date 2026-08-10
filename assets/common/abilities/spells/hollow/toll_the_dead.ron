@@ -1,0 +1,25 @@
+// Deals extra necrotic damage when the target is already below half health,
+// via the engine's TargetHealthBelow + AdditionalDamage primitives
+// (common/src/combat.rs), the health-fraction sibling of the
+// TargetHealthAtOrBelow + AdditionalDamage combo power_word_kill.ron uses
+// for its own (absolute-HP, caster-level-gated) health-based bonus.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 12,
+            attack_effect: Some((
+                AdditionalDamage(6.0),
+                TargetHealthBelow(0.5),
+            )),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)
