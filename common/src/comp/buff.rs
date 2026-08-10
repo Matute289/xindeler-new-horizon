@@ -630,15 +630,10 @@ impl BuffKind {
             | BuffKind::OtherworldlyWard
             | BuffKind::FreedomOfMovement
             | BuffKind::Fearless
-            | BuffKind::Detecting
             | BuffKind::SeeInvisible
-            | BuffKind::TrueSight
-            | BuffKind::RemoteSensing
             | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
-            | BuffKind::Mooncloak
             | BuffKind::Nondetection
-            | BuffKind::MagicAura
             | BuffKind::Sequester => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
@@ -676,15 +671,32 @@ impl BuffKind {
             | BuffKind::Agonized
             | BuffKind::Sickened
             | BuffKind::Hexed => BuffDescriptor::SimpleNegative,
-            BuffKind::Polymorphed | BuffKind::Disguised => BuffDescriptor::Complex,
+            BuffKind::Polymorphed
+            | BuffKind::Disguised
+            | BuffKind::Detecting
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing
+            | BuffKind::Mooncloak
+            | BuffKind::MagicAura => BuffDescriptor::Complex,
         }
     }
 
     /// Checks if buff is buff or debuff.
     pub fn is_buff(self) -> bool {
-        match self.differentiate() {
-            BuffDescriptor::SimplePositive => true,
-            BuffDescriptor::SimpleNegative | BuffDescriptor::Complex => false,
+        match self {
+            // `differentiate()`'s `Complex` bucket is otherwise assumed
+            // neutral (see its own doc comment) -- these five are Complex
+            // only because their *data* needs an explicit spec, not because
+            // their polarity is ambiguous. They're unconditionally positive.
+            BuffKind::Detecting
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing
+            | BuffKind::Mooncloak
+            | BuffKind::MagicAura => true,
+            _ => match self.differentiate() {
+                BuffDescriptor::SimplePositive => true,
+                BuffDescriptor::SimpleNegative | BuffDescriptor::Complex => false,
+            },
         }
     }
 

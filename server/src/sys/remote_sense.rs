@@ -266,6 +266,17 @@ impl<'a> System<'a> for Sys {
                     target_lost.push(link.caster);
                     continue;
                 }
+                // `sequester`'s own doc comment promises "can't be targeted
+                // by divination, regardless of which sense" -- nondetection
+                // gained *after* the link formed must end it too, not just
+                // block new casts (`server/src/events/remote_sense.rs`'s
+                // `resolve_tracking` only gates cast time). Same silent
+                // structural ending as target_alive/target_pos above, not a
+                // resisted roll -- no `Outcome::Resisted`.
+                if stats.get(target_entity).is_some_and(|s| s.nondetection) {
+                    target_lost.push(link.caster);
+                    continue;
+                }
 
                 let offset = scrying_follow_offset(
                     orientations.get(target_entity),
@@ -995,6 +1006,52 @@ mod tests {
                 .get(fixture.caster)
                 .is_none(),
             "a dead scried target must end the link even with the reroll not yet due"
+        );
+    }
+
+    /// `sequester`'s own doc comment promises "can't be targeted by
+    /// divination, regardless of which sense" -- a target gaining
+    /// `nondetection` *after* the link already formed must end it too, the
+    /// same tick, without waiting for the periodic resist reroll (which
+    /// alone `resolve_tracking`'s cast-time gate can't cover, since it only
+    /// runs once, at cast time).
+    #[test]
+    fn scried_target_gaining_nondetection_ends_the_link() {
+        let mut world = setup_world();
+        world.insert(EventBus::<DeleteEvent>::default());
+        let target_pos = Vec3::new(0.0, 0.0, 0.0);
+        let fixture = setup_tracking_fixture(&mut world, target_pos, 1_000_000.0);
+        let mut target_stats = Stats::new(
+            common_i18n::Content::Plain(String::new()),
+            Body::Humanoid(humanoid::Body::random()),
+        );
+        target_stats.nondetection = true;
+        world
+            .write_storage::<Stats>()
+            .insert(fixture.target, target_stats)
+            .unwrap();
+
+        common_ecs::run_now::<Sys>(&world);
+
+        assert!(
+            world
+                .read_storage::<RemoteSense>()
+                .get(fixture.caster)
+                .is_none(),
+            "a nondetection-protected scried target must end the link even with the reroll not \
+             yet due"
+        );
+        let resisted_outcomes: Vec<_> = world
+            .read_resource::<EventBus<Outcome>>()
+            .recv_all()
+            .filter(
+                |o| matches!(o, Outcome::Resisted { target, .. } if *target == fixture.target_uid),
+            )
+            .collect();
+        assert!(
+            resisted_outcomes.is_empty(),
+            "nondetection is an unconditional immunity, not a resisted roll -- no \
+             Outcome::Resisted should fire"
         );
     }
 }

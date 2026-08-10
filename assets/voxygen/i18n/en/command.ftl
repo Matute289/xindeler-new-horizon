@@ -269,6 +269,7 @@ command-battlemode-updated = New battle mode: { $battlemode }
 command-buff-unknown = Unknown buff: { $buff }
 command-buff-data = Buff argument '{ $buff }' requires additional data
 command-buff-body-unknown = Unknown body spec: { $spec }
+command-buff-spec-invalid = Invalid data spec: { $spec }
 command-skillpreset-load-error = Error while loading presets
 command-skillpreset-broken = Skill preset is broken
 command-skillpreset-missing = Preset does not exist: { $preset }
