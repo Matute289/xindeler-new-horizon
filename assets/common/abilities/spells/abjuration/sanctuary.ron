@@ -1,0 +1,39 @@
+// D&D's "any foe targeting the warded creature must first succeed on a
+// Wisdom save or choose a new target" has no redirect-attacker /
+// targeting-veto primitive in this engine, so -- same substitution this
+// file already leans on for protection_from_evil_and_good.ron/
+// dispel_evil_and_good.ron's own creature-kind wards -- it ships as a flat
+// `ProtectingWard` damage reduction on the warded ally instead: still "hard
+// to meaningfully hurt", just not "hard to target". Delivered as a
+// short-range `BasicAura` (9 m, matching the sheet's own ranged-touch
+// framing) rather than `BasicMelee`, consistent with resistance.ron's own
+// "no attack framing to hang a melee hitbox off of" reasoning.
+//
+// Strength/cost weighed against shield_of_faith.ron, the closest sibling
+// (also level 1, touch/short-range ally BasicAura, ~60s window): sanctuary
+// keeps a real sheet-accurate edge over it (non-concentration, per the
+// sheet's own `Secs(60)` vs. shield_of_faith's `Concentration(60)`), so its
+// energy_cost is set above shield_of_faith's (30 vs. 25) rather than below,
+// and strength is only a modest step up (0.2 vs. 0.15) -- enough to read as
+// the stronger ward D&D's original mechanic implies, without also
+// strictly dominating shield_of_faith on cost.
+BasicAura(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: ProtectingWard,
+            strength: 0.2,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 9.0,
+    energy_cost: 30.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)
