@@ -1,0 +1,16 @@
+// Cantrip self-ward against weapon strikes. D&D's "reduced bludgeoning/
+// piercing/slashing damage" is modeled with the same flat, kind-agnostic
+// `ProtectingWard` damage reduction every other abjuration ward in this
+// compendium already uses (see dispel_evil_and_good.ron's own
+// OtherworldlyWard comment) -- there is no per-damage-kind resistance
+// primitive to narrow it to physical-only.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.15, duration: Some(6.0))),
+    ],
+    energy_cost: 10.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)
