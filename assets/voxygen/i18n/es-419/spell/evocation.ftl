@@ -1,0 +1,21 @@
+# Evocación — nombres y descripciones de hechizos.
+spell-fire_bolt = Dardo de Fuego
+spell-fire_bolt-desc = Lanzás una brasa de fuego contra un objetivo, chamuscándolo si conecta.
+spell-ray_of_frost = Rayo de Escarcha
+spell-ray_of_frost-desc = Un rayo gélido de luz blanquiazul sale disparado hacia un objetivo, causando daño de frío y enfriándolo para que se mueva más lento por un momento.
+spell-sacred_flame = Llama Sagrada
+spell-sacred_flame-desc = Un resplandor con forma de llama desciende sobre un objetivo, abrasándolo donde está parado.
+spell-burning_hands = Manos Ardientes
+spell-burning_hands-desc = Una lámina de fuego se abre en abanico desde tus dedos extendidos, quemando todo en un cono corto frente a vos.
+spell-chromatic_orb = Orbe Cromático
+spell-chromatic_orb-desc = Lanzás un orbe crepitante de energía elemental cruda contra un objetivo, que estalla en llamas al impactar.
+spell-guiding_bolt = Rayo Guía
+spell-guiding_bolt-desc = Un destello de luz radiante golpea a un enemigo y se aferra a él, facilitando que el próximo ataque contra ese objetivo conecte.
+spell-thunderwave = Onda de Trueno
+spell-thunderwave-desc = Una onda de fuerza atronadora se expande a tu alrededor, dañando y empujando todo lo que atrapa.
+spell-witch_bolt = Rayo de Bruja
+spell-witch_bolt-desc = Un arco crepitante de electricidad salta hacia un enemigo y se prende, dejándote sostener la corriente para volver a electrocutarlo una y otra vez.
+spell-cure_wounds = Curar Heridas
+spell-cure_wounds-desc = Tu toque entreteje la carne herida de un aliado, restaurando una oleada de salud.
+spell-healing_word = Palabra Curativa
+spell-healing_word-desc = Una palabra de poder pronunciada al instante restaura una porción de salud a un aliado tocado.
