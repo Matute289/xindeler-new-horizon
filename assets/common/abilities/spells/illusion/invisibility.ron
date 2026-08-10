@@ -1,0 +1,29 @@
+// Full render-hide invisibility has no primitive in this engine -- see
+// Sequester's own doc comment ("functionally invisible, not a render-hide"):
+// the detection-multiplier trick (BuffEffect::Stealth) is the only
+// concealment mechanism that exists. Reuses PassWithoutTrace (a pure Stealth
+// contribution, no other rider) rather than the heavier Sequester (which
+// also bundles Nondetection and is calibrated for its own level-7 capstone,
+// strength 20.0) -- this is a level-2 spell, calibrated instead against
+// pass_without_trace.ron's own strength: 1.0 for its level-2 group aura,
+// bumped up since this is a dedicated single-target SelfBuff rather than a
+// shared aura. The source spell's "touch a creature" targeting narrows to
+// self-only, the same Touch-range-SelfBuff narrowing nondetection.ron/
+// sequester.ron/magic_aura.ron already document -- SelfBuff always lands on
+// the caster (see common/src/states/self_buff.rs).
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: PassWithoutTrace, data: BuffData(strength: 2.0, duration: Some(60.0))),
+    ],
+    energy_cost: 45.0,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, the `level * 6` convention (see
+        // sleep.ron).
+        requirements: (min_level: Some(12)),
+    ),
+)

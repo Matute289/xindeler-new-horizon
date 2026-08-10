@@ -1,0 +1,21 @@
+// "Attackers strike at the blur and miss more often" narrows to the
+// existing ProtectingWard damage-reduction buff -- there is no discrete
+// miss-chance/evasion primitive in this engine. Same primitive
+// sanguine_ward.ron already uses for its own defensive self-buff (strength
+// 0.15 at level 1); scaled up slightly here for this spell's higher circle.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.25, duration: Some(60.0))),
+    ],
+    energy_cost: 45.0,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, the `level * 6` convention (see
+        // sleep.ron).
+        requirements: (min_level: Some(12)),
+    ),
+)
