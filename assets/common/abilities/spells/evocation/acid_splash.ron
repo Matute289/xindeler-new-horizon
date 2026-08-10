@@ -1,0 +1,34 @@
+// Deviates from a straight Explosion mapping: CharacterAbility::Explosion
+// (common/src/states/explosion.rs) always detonates centered on the
+// caster's own position -- it has no target-point field at all, only a
+// `radius`. This spell's own sheet range (18 m, thrown at a chosen point)
+// contradicts that, so it uses GroundAoe instead, the engine's real
+// "detonate at a chosen point within range" primitive (see
+// assets/common/abilities/spells/axiomancy/dark_star.ron for the sibling
+// shape this was cloned from).
+//
+// Also note: GroundAoe hardcodes DamageKind::Energy in
+// common/src/states/ground_aoe.rs (no RON-configurable damage_kind field
+// exists on this variant) -- so despite the Acid flavor text, this deals
+// generic Energy damage under the hood. Same category of engine-vs-flavor
+// drift as this batch's melee spells; noted, not hidden.
+//
+// Damage is set below the batch's single-target cantrip baseline (14),
+// same AoE-cantrip discount as thunderclap.ron/word_of_radiance.ron: this
+// can hit everyone caught in the burst radius, not just one target,
+// matching real D&D's own Acid Splash die (1d6, below Fire Bolt's 1d10).
+GroundAoe(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    delay: 0.3,
+    recover_duration: 0.3,
+    max_range: 18.0,
+    radius: 3.0,
+    min_falloff: 0.3,
+    damage: 10,
+    poise: 5,
+    knockback: (strength: 0, direction: Away),
+    dodgeable: Roll,
+    rooted_cast: false,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

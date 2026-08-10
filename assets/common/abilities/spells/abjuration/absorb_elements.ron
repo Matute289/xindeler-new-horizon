@@ -1,0 +1,30 @@
+// Reaction ward: the two riders D&D grants ("resist the triggering
+// elemental damage type until your next turn" + "the absorbed power flares
+// into your next melee strike") map onto two independently-precedented
+// primitives stacked in one `SelfBuff` cast -- `ProtectingWard` for the
+// former (same flat-DR substitution every ward in this file uses, since
+// there is no per-triggering-damage-type resistance primitive), and
+// `BrandingSmite` ("next weapon hit deals additional damage, no secondary
+// effect", consumed after one hit) for the latter, an exact mechanical fit
+// for "stored power flares into your next melee strike".
+//
+// `buff_cat: Some(RemoveOnAttack)` (same field `branding_smite.ron` sets)
+// applies to every buff in `buffs` uniformly, not just `BrandingSmite`
+// (see the shared `buff_cat_ids` loop in
+// `common/src/states/self_buff.rs`) -- so the `ProtectingWard` ward ends
+// the instant the stored strike lands too, not just on its own 6s timer.
+// That reads as correct here: once the retaliatory hit consumes the
+// absorbed power, the short defensive window it was drawn from is spent
+// as well, not a mismatch to route around.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.1,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.25, duration: Some(6.0))),
+        BuffDesc(kind: BrandingSmite, data: BuffData(strength: 8.0, duration: Some(6.0))),
+    ],
+    buff_cat: Some(RemoveOnAttack),
+    energy_cost: 25.0,
+    meta: (school: Some(Abjuration), source: Some(Primordial)),
+)

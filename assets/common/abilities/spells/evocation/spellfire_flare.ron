@@ -1,0 +1,18 @@
+// The "target ignores cover" rider is dropped: there is no cover/line-of-
+// sight-bonus system for a spell to bypass. Ships as a plain radiant bolt.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 20,
+            damage_kind: Radiant,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

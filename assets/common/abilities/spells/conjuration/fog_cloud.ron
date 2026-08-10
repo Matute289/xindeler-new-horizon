@@ -1,0 +1,28 @@
+// Reviewer correction: switched from GroundAoe's `pooled_debuff` (instant,
+// non-lingering) to `StaticAura` (see transmutation/plant_growth.ron), which
+// leaves a real, reapplying zone behind at the caster's position for
+// `aura_duration` -- a much closer match to "a bank of mist that billows
+// out and lingers" than a one-shot burst. No vision-occlusion/concealment
+// mechanic exists (checked common/src/comp/buff.rs in full); `Blinded`'s own
+// doc comment explicitly calls this out ("vision occlusion is a deferred
+// client-only effect") and is the closest already-shipped analog reused
+// here rather than inventing a new BuffKind. `StaticAura` always places the
+// zone at the caster's own position (no aimed placement exists,
+// common/src/states/static_aura.rs) -- the sheet's 37 m cast range isn't
+// mechanically expressed, the same simplification transmutation/
+// plant_growth.ron and transmutation/control_winds_turbulence.ron already
+// ship with.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 40.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Blinded, strength: 0.4, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(15.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

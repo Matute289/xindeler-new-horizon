@@ -1,0 +1,28 @@
+// Reviewer correction: switched from GroundAoe's `pooled_debuff` (instant,
+// non-lingering) to `StaticAura` (see transmutation/plant_growth.ron and
+// axiomancy/magnify_gravity.ron, both already delivering `DifficultTerrain`
+// this same way), which leaves a real, reapplying zone behind at the
+// caster's position for `aura_duration`. `DifficultTerrain` ("slick
+// footing... delivered by an aura", common/src/comp/buff.rs) is the closest
+// already-shipped primitive to "slippery ground"; the sheet's secondary
+// "possible prone on a failed save" is still dropped -- no
+// knockdown-on-condition-failure primitive exists independent of an actual
+// knockback attack effect, which this zone doesn't carry. `StaticAura`
+// always places the zone at the caster's own position (no aimed placement
+// exists, common/src/states/static_aura.rs) -- the sheet's 18 m cast range
+// isn't mechanically expressed, the same simplification the two cited
+// precedents already ship with.
+StaticAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.4,
+    recover_duration: 0.35,
+    energy_cost: 30.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: DifficultTerrain, strength: 0.4, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(10.0),
+    range: 3.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

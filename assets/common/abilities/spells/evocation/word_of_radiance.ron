@@ -1,0 +1,27 @@
+// Self-centered burst hitting nearby chosen foes -- the sheet's 2 m range
+// is short enough to treat as the burst's own radius rather than a
+// separate travel distance, so this uses Explosion the same way
+// thunderclap.ron does (see that file for why Explosion is always
+// caster-centered and always hardcodes DamageKind::Crushing regardless of
+// RON content -- true in-engine damage here is Crushing, not Radiant,
+// flavor-only mismatch).
+//
+// Same AoE-cantrip discount as thunderclap.ron: below the single-target
+// cantrip baseline (14) since it can hit multiple nearby foes at once,
+// matching real D&D's own Word of Radiance die (1d6, below Fire Bolt's
+// 1d10).
+Explosion(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    action_duration: 0.2,
+    recover_duration: 0.3,
+    damage: 10,
+    poise: 5,
+    knockback: (direction: Away, strength: 3.0),
+    radius: 4.0,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

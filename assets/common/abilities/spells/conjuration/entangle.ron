@@ -1,0 +1,28 @@
+// Reviewer correction: an earlier version used GroundAoe's `pooled_debuff`
+// for an instant, non-lingering burst, reasoning no persistent-zone
+// primitive existed. One does: `StaticAura` (see
+// transmutation/plant_growth.ron, itself flavored as "dense, choking
+// overgrowth" -- an close match for Entangle) leaves a real aura entity
+// behind at the caster's position that keeps reapplying its buff to anyone
+// standing in it for `aura_duration`. The one real limitation `StaticAura`
+// has (common/src/states/static_aura.rs): it always places the zone at the
+// caster's OWN position (no aimed/targeted placement exists), so the
+// sheet's 27 m cast range is not mechanically expressed -- the same
+// simplification transmutation/plant_growth.ron (compendium range
+// Meters(46.0)) and transmutation/control_winds_turbulence.ron (compendium
+// range Meters(91.0)) already ship with despite their own sheets also
+// describing a remote cast point.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 40.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Rooted, strength: 1.0, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(15.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

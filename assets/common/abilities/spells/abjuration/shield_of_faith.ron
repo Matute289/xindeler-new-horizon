@@ -1,0 +1,31 @@
+// Touch-ally AC buff ("+2 AC ward"), delivered as a `ProtectingWard`
+// `BasicAura` at the sheet's own 18 m cast range -- the same touch-ally
+// aura shape shield_of_faith's sibling ally-wards in this file already use.
+// Strength kept below shield.ron's own single-hit spike (0.35) and
+// resistance.ron's (0.15 too, but shorter-lived): this is a mild, lasting
+// concentration buff rather than either of those.
+//
+// `duration: Some(60.0)` matches the sheet's own `Concentration(60)` field,
+// not D&D canon's 10-minute (600s) version -- same intentional
+// already-shortened-at-the-sheet-level duration as
+// protection_from_evil_and_good.ron, not a truncation introduced here.
+BasicAura(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: ProtectingWard,
+            strength: 0.15,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 18.0,
+    energy_cost: 25.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

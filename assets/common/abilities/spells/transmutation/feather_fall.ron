@@ -1,0 +1,35 @@
+// D&D's Feather Fall grants full fall-damage immunity to up to five falling
+// allies. No BuffKind targets fall damage or DamageSource::Falling specifically,
+// and nothing modifies fall speed (checked common/src/comp/buff.rs in full).
+// Fall damage IS gated by armor damage_reduction reaching exactly 1.0
+// (common/src/combat.rs's DamageSource::Falling branch zeroes damage only at
+// that threshold), which Invulnerability already provides via
+// BuffEffect::DamageReduction(1.0) (common/src/comp/buff.rs). Used here at a
+// short (8s) duration -- just long enough to cover a fall, not a general
+// damage-immunity grant -- as the closest available primitive. Flagged as a
+// deviation: broader than pure fall immunity for its short window (blocks all
+// damage sources, not falling specifically), and `strength` is a no-op per
+// Invulnerability's own doc comment ("Strength does not affect this buff").
+// Same ally-touch delivery shape as gravesong/bless.ron (BasicAura, InGroup);
+// aoe stays None like every other BasicAura spell -- the AoE radius is the
+// `range` field itself, not a separate compendium aoe shape.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Invulnerability,
+            strength: 0.0,
+            duration: Some(8.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(1.0),
+    range: 18.0,
+    energy_cost: 45.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Transmutation), source: Some(Arcane)),
+)
