@@ -1,0 +1,31 @@
+// Sheet: "summon a churning storm cloud overhead... while the cloud lingers
+// you can call down another bolt each round" -- a persistent zone the caster
+// manually re-triggers every round. No engine primitive lets a spell recast
+// itself for free on a timer, and no lingering-cloud entity exists
+// independent of an actual strike -- ships as a single GroundAoe lightning
+// strike (the same "keep the damage burst, drop the persistence/repeat
+// rider" simplification create_bonfire.ron/dust_devil.ron already use); a
+// player who wants another bolt simply recasts the spell at its energy cost,
+// which is the closest in-engine equivalent to "call down another bolt".
+// `GroundAoe`'s damage strike is hardcoded to `DamageKind::Energy` -- the
+// sheet's Lightning damage_type is flavor-only, same pre-existing gap every
+// GroundAoe spell in this pipeline ships with. Radius uses the sheet's own
+// per-bolt strike footprint (Sphere r1.5), not the much larger ~30 m
+// storm-cloud flavor text, since only the strike itself is mechanically
+// real.
+GroundAoe(
+    energy_cost: 95.0,
+    buildup_duration: 0.65,
+    delay: 0.4,
+    recover_duration: 0.4,
+    max_range: 37.0,
+    radius: 1.5,
+    min_falloff: 0.5,
+    damage: 36.0,
+    poise: 15.0,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: Some(Yellow),
+    rooted_cast: false,
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

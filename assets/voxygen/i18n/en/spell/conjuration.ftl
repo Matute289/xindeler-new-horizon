@@ -1,0 +1,21 @@
+# Conjuration spell names + descriptions.
+spell-cloud_of_daggers = Cloud of Daggers
+spell-cloud_of_daggers-desc = A whirling mass of conjured blades fills the air around a chosen point, slicing apart anything that enters or lingers within.
+spell-dust_devil = Dust Devil
+spell-dust_devil-desc = A churning vortex of grit and wind springs up at a point you choose, battering nearby foes and flinging them aside.
+spell-flaming_sphere = Flaming Sphere
+spell-flaming_sphere-desc = A rolling orb of living flame springs into being, scorching any creature that strays too close to its heat.
+spell-web = Web
+spell-web-desc = A dense lattice of clinging strands spins across a chosen volume, snaring anyone caught within and choking their movement.
+spell-call_lightning = Call Lightning
+spell-call_lightning-desc = You summon a churning storm cloud overhead and draw a searing bolt of lightning down onto a chosen point, scorching everyone near the strike.
+spell-hunger_of_hadar = Hunger of Hadar
+spell-hunger_of_hadar-desc = A tear in space spills a sphere of starless void and biting cold, gnawing at everything caught within and leaving victims groping blindly through the smothering dark.
+spell-sleet_storm = Sleet Storm
+spell-sleet_storm-desc = A churning column of freezing rain and sleet pours down over a wide area, blinding those caught within and coating the ground in treacherous ice.
+spell-spirit_guardians = Spirit Guardians
+spell-spirit_guardians-desc = Summoned spirits wheel and flit around you, lashing at any foe that draws near and sapping their strength.
+spell-stinking_cloud = Stinking Cloud
+spell-stinking_cloud-desc = A churning sphere of foul yellow vapor erupts at a chosen point, seeping around corners and leaving everyone caught within sick and reeling.
+spell-tidal_wave = Tidal Wave
+spell-tidal_wave-desc = A surging crest of conjured water rises and slams down across a stretch of ground, battering those caught beneath it and sweeping them off their feet.

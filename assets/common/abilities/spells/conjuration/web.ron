@@ -1,0 +1,30 @@
+// Sheet: control zone -- restrains (Dexterity save) AND counts as difficult
+// terrain. Combines this batch's two already-shipped single-rider precedents
+// directly: `Rooted` (conjuration/entangle.ron) for the restrain, and
+// `DifficultTerrain` (conjuration/grease.ron, transmutation/plant_growth.ron)
+// for the "choking their movement" clinging-strands half -- `StaticAura`'s
+// `auras:` field is a `Vec<AuraBuffConstructor>`, so both apply
+// simultaneously from the same zone, not a new mechanic. The sheet's
+// "flammable, ignites if touched by flame" rider has no fire-interaction
+// primitive and is dropped. `StaticAura` always places the zone at the
+// caster's own position (no aimed placement exists,
+// common/src/states/static_aura.rs) -- the sheet's 18 m cast range isn't
+// mechanically expressed, same simplification as entangle/fog_cloud/grease.
+// Sheet footprint is a 6 m cube; `range` (a radius) reuses the raw 6.0
+// number directly, the same cube-as-radius approximation entangle.ron's own
+// `range: 6.0` already ships with for its Sphere r6 footprint.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 60.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Rooted, strength: 1.0, duration: Some(2), category: Some(Magical)),
+        (kind: DifficultTerrain, strength: 0.5, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(20.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)
