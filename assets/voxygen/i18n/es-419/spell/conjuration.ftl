@@ -1,4 +1,22 @@
 # Nombres y descripciones de hechizos de Conjuración.
+spell-find_steed = Buscar Montura
+spell-find_steed-desc = Invocás a un espíritu fiel que toma la forma de una montura veloz e inteligente, forjando un vínculo duradero entre ustedes. La montura aparece en un espacio abierto cercano, lista para servirte y llevarte a la batalla o por largos caminos.
+spell-flock_of_familiars = Bandada de Familiares
+spell-flock_of_familiars-desc = Invocás a tres espíritus menores que toman forma de pequeños animales a su elección. Cada compañero vinculado puede explorar, buscar cosas y transmitirte lo que percibe.
+spell-healing_spirit = Espíritu Sanador
+spell-healing_spirit-desc = Un apacible espíritu de la naturaleza cobra forma en un pequeño espacio que designás, flotando a tu orden a través del combate. Se queda cerca de los heridos, ofreciendo el silencioso consuelo que su presencia fugaz puede brindar.
+spell-helpful_homunculi = Homúnculos Serviciales
+spell-helpful_homunculi-desc = Invocás a una bandada de espíritus ayudantes intangibles e invulnerables que toman la forma de pequeños constructos y asisten en tareas según tus indicaciones. Se quedan cerca tuyo, prestando sus muchas manitas mientras dure el hechizo.
+spell-homunculus_servant = Sirviente Homúnculo
+spell-homunculus_servant-desc = Tejés un pequeño ayudante artificial que obedece tu voluntad y actúa en tu nombre. El constructo persiste como un compañero leal, compartiendo tu magia.
+spell-summon_beast = Invocar Bestia
+spell-summon_beast-desc = Llamás a un espíritu feroz hacia un cuerpo bestial que surge del aire vacío cerca tuyo. La criatura conjurada te obedece y pelea a tu lado hasta que el vínculo se desvanece.
+spell-conjure_animals = Conjurar Animales
+spell-conjure_animals-desc = Llamás a espíritus salvajes que toman formas de bestias, materializándose en espacios abiertos cercanos para pelear a tu lado. Las criaturas invocadas persisten mientras mantengas la concentración.
+spell-conjure_constructs = Conjurar Constructos
+spell-conjure_constructs-desc = Invocás a un grupo de espíritus ordenados y semirreales que toman la forma de figuras mecánicas en un espacio abierto cercano. Persisten mientras te concentrás, golpeando a los enemigos que les señalés.
+spell-conjured_viper = Víbora Conjurada
+spell-conjured_viper-desc = Una serpiente enroscada de luz pálida y tejida se envuelve alrededor tuyo, prestándote su vitalidad prestada como un escudo resplandeciente. La protección se desvanece en cuanto esa resiliencia conjurada se agota por completo.
 spell-create_bonfire = Crear Fogata
 spell-create_bonfire-desc = Conjurás un pequeño pilar de llama mágica sobre un parche de suelo que podés ver, chamuscando a cualquier criatura atrapada en su espacio.
 spell-infestation = Infestación

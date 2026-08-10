@@ -1,0 +1,24 @@
+// Real-agent BasicSummon (the `find_familiar.ron` shape): "obeys its
+// summoner and battles at their side" is a genuine fighting companion, not a
+// decorative phantasm. `duration` matches the spell's own `Concentration(60)`
+// (recast doesn't despawn/replace a prior summon -- no cap exists on this
+// summon path, same known limitation as `find_familiar.ron`).
+// `body: QuadrupedMedium(Bear)` stands in for "a beastlike body" -- no
+// in-cast body-selection UI exists, so one representative fierce-beast body
+// is picked rather than exposing a choice the engine can't offer yet.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 4.0),
+        body: QuadrupedMedium((species: Bear, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+)
