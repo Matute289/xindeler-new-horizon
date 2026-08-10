@@ -1,0 +1,34 @@
+// The sheet's own mechanic is a pooled/simultaneous instant heal to up to
+// six chosen allies -- `BasicAura`'s only healing primitive is
+// `AuraKind::Buff(Regeneration)`, a per-second tick over a duration, not a
+// lump-sum instant. A `pool_split` (see
+// assets/common/abilities/spells/arcane/power_word_fortify.ron) exists for
+// capped-nearest-N target selection, but it is tied to that spell's own
+// class-level-scaling design (`unlock_level`/`value_at_max_level`/
+// `source_classes`) built for a high-circle Power Word, not a generic
+// pooled heal -- reusing it here would import scaling knobs this circle-2
+// spell has no use for. Approximated instead the same way
+// assets/common/abilities/spells/hemomancy/vitalic_font.ron approximates a
+// heal via `BasicAura`: a short, strong `Regeneration` tick (duration kept
+// brief so the total delivered reads as "at once" rather than a real
+// sustain), same simplification the sheet's own notes already flag.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.6,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Regeneration,
+            strength: 8.0,
+            duration: Some(3.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3.0),
+    range: 9.0,
+    energy_cost: 55.0,
+    scales_with_combo: false,
+    specifier: Some(HealingAura),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)
