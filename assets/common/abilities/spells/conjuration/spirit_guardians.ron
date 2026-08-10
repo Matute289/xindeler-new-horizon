@@ -1,0 +1,38 @@
+// Sheet: "persistent control zone moving with the caster" -- explicitly NOT
+// a fixed-position zone, unlike every other persistent zone in this batch.
+// `StaticAura` (used by cloud_of_daggers/flaming_sphere/web/hunger_of_hadar/
+// sleet_storm above) leaves its aura entity BEHIND at the caster's cast-time
+// position and does not follow -- the wrong primitive for
+// "wheel and flit around the caster". `BasicAura` is the actual match: it
+// adds the aura directly onto the CASTER's own entity
+// (`AuraChange::Add { entity: data.entity, .. }`, common/src/states/
+// basic_aura.rs) rather than spawning a separate positioned entity, so the
+// effective zone tracks the caster's position every tick for free -- exactly
+// "moves with the caster". Already the precedent for a self-anchored zone in
+// this pipeline (transmutation/control_winds_turbulence.ron's own doc
+// comment: "BasicAura attaches the aura to the caster's own entity, so the
+// zone follows the caster"), just applied here to an enemy-targeted combat
+// zone instead of a self-only utility one (see goodberry.ron for this
+// batch's own ally-targeted `BasicAura` precedent). Riders: `Slowed`
+// ("enemies... are slowed") and `Bleeding` ("take searing harm") both fire
+// from the same aura simultaneously, same multi-rider pattern as
+// hunger_of_hadar.ron/web.ron. The sheet's necrotic/radiant
+// alignment-switchable damage type has no alignment-conditional primitive
+// and ships flat as the generic Bleeding drain (same non-elemental-DoT
+// choice as cloud_of_daggers.ron/hunger_of_hadar.ron).
+BasicAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.4,
+    recover_duration: 0.4,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Slowed, strength: 0.5, duration: Some(2), category: Some(Magical)),
+        (kind: Bleeding, strength: 5.5, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(35.0),
+    range: 3.0,
+    energy_cost: 95.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Conjuration), source: Some(Divine)),
+)
