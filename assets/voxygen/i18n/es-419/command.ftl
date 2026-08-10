@@ -256,6 +256,8 @@ command-buff-body-unknown = Especificación de cuerpo desconocida: { $spec }
 
 command-buff-data = El argumento de potenciador '{ $buff }' requiere datos adicionales
 
+command-buff-spec-invalid = Especificación de datos inválida: { $spec }
+
 command-buff-unknown = Potenciador desconocido: { $buff }
 
 command-cannot-send-message-hidden = No se pueden enviar mensajes como espectador oculto.

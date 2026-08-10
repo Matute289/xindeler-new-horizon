@@ -181,8 +181,14 @@ pub struct Stats {
     /// skipped entirely by `server/src/sys/detection.rs`'s per-`SenseKind`
     /// predicate — "can't be targeted by divination," unconditionally,
     /// regardless of which sense is queried or what `false_aura` below
-    /// claims. Same boolean shape as `disable_magic` above. Set by
-    /// `BuffEffect::Nondetection`.
+    /// claims. Also checked by `scrying`'s `Tracking` anchor, both at cast
+    /// time (`resolve_tracking`, `server/src/events/remote_sense.rs`) and
+    /// every tick thereafter (`server/src/sys/remote_sense.rs`'s own
+    /// per-tick upkeep, so a target gaining this flag *after* a link already
+    /// formed still ends it) — the "regardless of which sense" promise holds
+    /// for scrying's targeted divination too, not just the area/passive
+    /// senses `detection.rs` governs. Same boolean shape as `disable_magic`
+    /// above. Set by `BuffEffect::Nondetection`.
     pub nondetection: bool,
     /// `magic_aura`'s lie: when set, `server/src/sys/detection.rs`'s
     /// predicate reports this entity as revealed by the given `SenseKind`

@@ -39,7 +39,11 @@ use common::{
         LightEmitter, LocalizationArg, WaypointArea,
         agent::{FlightMode, PidControllers},
         aura::{AuraKindVariant, AuraTarget},
-        buff::{Buff, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData},
+        buff::{
+            Buff, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData, SenseAnchorKind,
+            SenseMode,
+        },
+        detection::SenseKind,
         inventory::{
             item::{MaterialStatManifest, Quality, all_items_expect, tool::AbilityMap},
             slot::Slot,
@@ -7335,6 +7339,80 @@ fn build_buff(
                 };
                 MiscBuffData::Body(body())
             },
+            // `<sense_kind>:<radius>:<mode>`, e.g. `magic:20:continuous`.
+            BuffKind::Detecting | BuffKind::TrueSight => {
+                let mut parts = spec.split(':');
+                let (Some(kind), Some(radius), Some(mode)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                let (Some(kind), Ok(radius), Some(mode)) = (
+                    parse_sense_kind(kind),
+                    radius.parse::<f32>(),
+                    parse_sense_mode(mode),
+                ) else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::Sense(kind, radius, mode)
+            },
+            // `<anchor_kind>:<free_look>:<piloted>`, e.g. `sensor:true:false`.
+            // `spawn_range`/`flight_speed`/`behind_dist`/`above_dist` have no
+            // per-field spec here -- every RON-authored spell already covers
+            // the real content, this admin command is for quick testing, so
+            // it just takes the same shipped defaults `common::comp::buff`'s
+            // RON `#[serde(default)]` fns use (`arcane_eye`'s spawn
+            // range/flight speed, `scrying`'s follow offset).
+            BuffKind::RemoteSensing => {
+                let mut parts = spec.split(':');
+                let (Some(anchor), Some(free_look), Some(piloted)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                let (Some(anchor_kind), Ok(free_look), Ok(piloted)) = (
+                    parse_sense_anchor_kind(anchor),
+                    free_look.parse::<bool>(),
+                    piloted.parse::<bool>(),
+                ) else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::RemoteSense {
+                    anchor_kind,
+                    free_look,
+                    piloted,
+                    spawn_range: 9.0,
+                    flight_speed: 6.0,
+                    behind_dist: 3.0,
+                    above_dist: 2.0,
+                }
+            },
+            // A bare float, e.g. `0.15`.
+            BuffKind::Mooncloak => {
+                let Ok(resist) = spec.parse::<f32>() else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::ResistMagic(resist)
+            },
+            // A bare sense kind, e.g. `magic`.
+            BuffKind::MagicAura => {
+                let Some(kind) = parse_sense_kind(&spec) else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::FalseAura(kind)
+            },
             BuffKind::Regeneration
             | BuffKind::Saturation
             | BuffKind::Potion
@@ -7424,15 +7502,10 @@ fn build_buff(
             | BuffKind::Blinded
             | BuffKind::Slowed
             | BuffKind::Agonized
-            | BuffKind::Detecting
             | BuffKind::SeeInvisible
-            | BuffKind::TrueSight
-            | BuffKind::RemoteSensing
             | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
-            | BuffKind::Mooncloak
             | BuffKind::Nondetection
-            | BuffKind::MagicAura
             | BuffKind::Sequester => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
@@ -7444,6 +7517,42 @@ fn build_buff(
 
         Ok(BuffData::new(strength, Some(Secs(duration))).with_misc_data(misc_data))
     }
+}
+
+fn parse_sense_kind(s: &str) -> Option<SenseKind> {
+    Some(match s {
+        "magic" => SenseKind::Magic,
+        "aberrant" => SenseKind::Aberrant,
+        "affliction" => SenseKind::Affliction,
+        "thought" => SenseKind::Thought,
+        "portal" => SenseKind::Portal,
+        "creature" => SenseKind::Creature,
+        "fauna" => SenseKind::Fauna,
+        "flora" => SenseKind::Flora,
+        "object" => SenseKind::Object,
+        "nature" => SenseKind::Nature,
+        "path" => SenseKind::Path,
+        "true" => SenseKind::True,
+        _ => return None,
+    })
+}
+
+fn parse_sense_mode(s: &str) -> Option<SenseMode> {
+    Some(match s {
+        "snapshot" => SenseMode::Snapshot,
+        "continuous" => SenseMode::Continuous,
+        _ => return None,
+    })
+}
+
+fn parse_sense_anchor_kind(s: &str) -> Option<SenseAnchorKind> {
+    Some(match s {
+        "existing" => SenseAnchorKind::Existing,
+        "sensor" => SenseAnchorKind::Sensor,
+        "piloted" => SenseAnchorKind::Piloted,
+        "tracking" => SenseAnchorKind::Tracking,
+        _ => return None,
+    })
 }
 
 fn cast_buff(buffkind: BuffKind, data: BuffData, server: &mut Server, target: EcsEntity) {
