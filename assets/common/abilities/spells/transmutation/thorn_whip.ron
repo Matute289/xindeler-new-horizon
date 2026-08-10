@@ -1,0 +1,23 @@
+// D&D's "wrench the target ~3m closer on a hit" rider is dropped: BasicRanged's
+// ProjectileConstructor hardcodes its knockback to KnockbackDir::Away
+// (common/src/comp/projectile.rs) with no exposed field for KnockbackDir::Towards
+// (unlike MeleeConstructor, which some melee abilities already use for a pull --
+// see the KnockbackDir::Towards call sites in common/src/comp/melee.rs). Ships as
+// a plain piercing bolt; a Lane B follow-up if ProjectileConstructor ever grows a
+// direction field.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.35,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 9,
+            damage_kind: Piercing,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Transmutation), source: Some(Primordial)),
+)

@@ -1,0 +1,16 @@
+// Reaction ward: D&D's "+5 AC until the start of your next turn" (also
+// blocking Magic Missile outright, not modeled -- no per-spell-immunity
+// primitive) becomes the same flat `ProtectingWard` damage reduction every
+// AC-flavored ward in this file uses, strength set above blade_ward's
+// (0.15) since this is a much stronger, single-hit-focused spike rather
+// than a lingering light ward.
+SelfBuff(
+    buildup_duration: 0.2,
+    cast_duration: 0.1,
+    recover_duration: 0.25,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.35, duration: Some(6.0))),
+    ],
+    energy_cost: 15.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

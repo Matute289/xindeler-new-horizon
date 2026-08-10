@@ -1,0 +1,34 @@
+// Touch-ally ward vs aberrations/celestials/elementals/fey/fiends/undead --
+// the exact same `OtherworldlyWard` BuffKind dispel_evil_and_good.ron
+// already uses for its own self-cast otherworldly ward (see that file's
+// comment: no creature-kind-conditional resistance primitive exists, so it
+// reduces all incoming damage while it holds rather than only damage from
+// the listed creature kinds). Delivered here as a touch-ally `BasicAura`
+// instead of `SelfBuff`, since this spell's own description is explicitly
+// "a willing creature you touch", not the caster.
+//
+// `duration: Some(60.0)` deliberately matches the sheet's own
+// `Concentration(60)` field, not D&D canon's 10-minute (600s) version --
+// the sheet already shortens this spell's concentration window before it
+// ever reaches this file (unlike telekinesis.ron, which does carry its
+// canon 600s duration for a spell whose sheet wasn't shortened).
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: OtherworldlyWard,
+            strength: 0.25,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 2.0,
+    energy_cost: 30.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

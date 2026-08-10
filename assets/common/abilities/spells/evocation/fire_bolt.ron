@@ -1,0 +1,23 @@
+// The classic fire attack cantrip -- pure single-target damage, no rider.
+// Balance anchor for the rest of this Evocation batch's cantrips: matches
+// the established cantrip band (0 energy, ~14-16 damage) set by the
+// already-catalogued cantrips bloodlet/chill_touch/poison_spray/
+// sapping_sting (dawnmote/cinderbolt sit in the same damage band too, but
+// as legacy weapon-primary abilities wired via ability_set_manifest.ron
+// rather than compendium-catalogued spells, a different content category).
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 15,
+            damage_kind: Fire,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)
