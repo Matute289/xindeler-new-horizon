@@ -1,0 +1,33 @@
+// Second player-authored RapidRanged spell, following eldritch_blast.ron's
+// now-reviewed shape in this same folder: same variant, same fire_all
+// burst pattern, scaled up for a 1st-circle spell (3 darts instead of 2,
+// higher per-dart damage and energy cost). See eldritch_blast.ron's own
+// header for the full reasoning on why RapidRanged fires every projectile
+// along the same look direction (no independent per-dart aim exists in
+// common/src/states/rapid_ranged.rs) -- in practice all 3 darts land on
+// the SAME target, not spread across "nearby foes" the way the sheet's own
+// flavor implies; the i18n description below is written to avoid promising
+// a multi-target spread this engine can't deliver. The "unerringly"
+// auto-hit framing is not modeled either: RapidRanged has no auto_aim
+// field (unlike BasicRanged, which does), so this resolves as a normal
+// to-hit ranged attack roll per dart, same as every other ranged spell.
+RapidRanged(
+    energy_cost: 10,
+    buildup_duration: 0.4,
+    shoot_duration: 0.05,
+    recover_duration: 0.35,
+    options: (
+        max_projectiles: Some(3),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 6,
+            damage_kind: Force,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 80.0,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

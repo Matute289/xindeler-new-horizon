@@ -1,0 +1,23 @@
+// cast_time: Reaction (set on the compendium entry, not here) is metadata
+// only, matching how the 7 already-shipped gravesong smites already use
+// cast_time: Bonus without any real bonus-action turn economy existing in
+// this real-time game -- there is no "cast this only in response to being
+// hit" trigger system, so this behaves as an ordinary player-activated
+// ranged bolt like any other. The Dexterity-save-for-half framing doesn't
+// need separate modeling; standard attack resolution already applies.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 20,
+            damage_kind: Fire,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)
