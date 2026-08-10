@@ -1,0 +1,13 @@
+// Self-only mobility buff (sheet range: Self). Modeled with the existing
+// Hastened buff (movement + attack speed), the same primitive already used by
+// axiomancy/gift_of_alacrity.ron for a same-circle self movement buff.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.1,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.1, duration: Some(60.0))),
+    ],
+    energy_cost: 35,
+    meta: (school: Some(Transmutation), source: Some(Arcane)),
+)
