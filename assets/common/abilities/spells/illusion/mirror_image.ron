@@ -1,0 +1,38 @@
+// Three illusory duplicates via the same BasicSummon + PhantomIllusion
+// "shared-illusion decoy" recipe minor_illusion_image.ron/major_image.ron
+// already ship (common/src/comp/phantom_illusion.rs) -- not new engine
+// work, but the first Lane-A dispatch of BasicSummon per plan Q6, flagged
+// for reviewer attention accordingly. phantom_illusion.rs's own module doc
+// already documents "attacking is the only reveal trigger" (a phantasm
+// dispels the instant it's struck, for everyone watching) -- an exact
+// mechanical match for "each strike that lands on a decoy shatters it
+// harmlessly". Scope narrowed: a decoy is a separate targetable entity
+// summoned near the caster, not a redirect of an attack aimed at the
+// caster's own body (no such redirect mechanism exists); decoys render as a
+// generic phantasm placeholder body, not a likeness of the caster (same
+// "visual half only" scoping major_image.ron's own comment documents --
+// cloning a player's exact appearance onto a summoned NPC is new work).
+BasicSummon(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    summon_info: Npc(
+        summoned_amount: 3,
+        summon_distance: (1.0, 2.0),
+        body: Object(Pebble),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((
+            secs: 60,
+            nanos: 0,
+        )),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

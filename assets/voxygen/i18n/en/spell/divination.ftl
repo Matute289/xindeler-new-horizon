@@ -32,3 +32,5 @@ spell-commune_with_nature = Commune with Nature
 spell-commune_with_nature-desc = For a moment your senses merge with the living land, drawing forth an intimate awareness of the beasts and plants around you.
 spell-find_the_path = Find the Path
 spell-find_the_path-desc = By focusing on a destination you have personally known, you perceive the shortest, most direct route leading toward the nearest known waypoint. The sense of the way persists as long as you keep your attention fixed upon it.
+spell-mind_spike = Mind Spike
+spell-mind_spike-desc = A lance of raw thought stabs into a creature's mind, searing it with psychic pain that lingers long after the strike lands.

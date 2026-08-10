@@ -39,3 +39,5 @@ spell-vicious_mockery = Burla Cruel
 spell-vicious_mockery-desc = Le arrojás una burla punzante tejida con compulsión sutil a un enemigo que puede oírte, abrasando su mente con dolor psíquico. El escozor le arruina la puntería.
 spell-sleep = Sueño
 spell-sleep-desc = Una ola de magia somnolienta baña un área elegida, arrastrando a las criaturas más débiles dentro de ella hacia un sueño profundo e indefenso. Los seres más fuertes o más alertas se sacuden la pesadez y permanecen despiertos.
+spell-motivational_speech = Discurso Motivador
+spell-motivational_speech-desc = Alentás a tus aliados cercanos con palabras vibrantes, dándole a cada uno un impulso de determinación que calma sus nervios y los protege de una parte del daño.
