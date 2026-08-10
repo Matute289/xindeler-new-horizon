@@ -1,0 +1,31 @@
+// Same ally-targeting issue as cure_wounds (`SelfBuff` can't land on anyone
+// but the caster -- see that file's header), but the sheet's second problem
+// is range: it wants a ranged single-ally heal at 18m, not touch. Checked
+// for a ranged-ally-target primitive: `ProjectileAttack.attack_effect`
+// (common/src/comp/projectile.rs) is hardcoded to `GroupTarget::OutOfGroup`
+// at construction time regardless of the `friendly_fire` flag (which only
+// widens the plain `damage`/poise/knockback targeting, not the custom
+// `attack_effect` a heal would need) -- no existing spell delivers a custom
+// effect onto an ally at range. Ships touch-range instead, same
+// `BasicMelee` + `InGroup` pattern as cure_wounds, a documented
+// simplification rather than new engine work. The `Bonus` cast_time (quick
+// heal) and a smaller heal than cure_wounds are kept as the mechanical
+// differentiation between the two spells, matching their D&D relationship.
+BasicMelee(
+    energy_cost: 25.0,
+    buildup_duration: 0.25,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.3,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Heal(26.0),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

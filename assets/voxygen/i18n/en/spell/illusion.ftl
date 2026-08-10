@@ -13,3 +13,5 @@ spell-seeming = Seeming
 spell-seeming-desc = The caster drapes any number of willing creatures within reach in a woven veil of false form, reshaping how each one appears to onlookers.
 spell-magic_aura = Magic Aura
 spell-magic_aura-desc = By cloaking yourself in a subtle veil, you feed false readings to those who probe you with detection magic. The deception masks your true nature or invents one that was never there.
+spell-color_spray = Color Spray
+spell-color_spray-desc = A sudden fan of dazzling, shifting hues erupts from your outstretched hand. Anyone caught in the cone is overwhelmed by the swirling colors, left blinking and blind.

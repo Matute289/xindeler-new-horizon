@@ -1,0 +1,33 @@
+// Self-centered thunder burst with a real push -- unlike burning_hands, the
+// sheet explicitly wants forced movement, so `knockback` here is a genuine
+// sheet-fidelity feature, not a simplification. `shockwave_angle: 360.0`
+// models "sweeps out around you" (all-around burst) rather than a cone --
+// the sheet's own AoE text is `Cube 5 m`, which the compendium maps directly
+// to `SpellAoe::Cube(5.0)` (a real enum variant); the `Shockwave` ability
+// itself has no cube-shaped hitbox, so the full-circle angle is the closest
+// mechanical match to "everything caught in it" within reach.
+// Same zero-circle-1-precedent caveat as burning_hands (see that file's
+// header) -- energy/damage/travel scaled down from pulse_wave/crimson_lash
+// (circle 3-4, the only shipped Shockwave-as-player-spell precedents),
+// flagged for wave-close-out balance review.
+Shockwave(
+    energy_cost: 45,
+    buildup_duration: 0.5,
+    swing_duration: 0.3,
+    recover_duration: 0.35,
+    damage: 22.0,
+    poise_damage: 8,
+    knockback: (strength: 6.0, direction: Away),
+    shockwave_angle: 360.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 12.0,
+    shockwave_duration: 0.4,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Thunder,
+    specifier: Ground,
+    ori_rate: 1.0,
+    timing: PostBuildup,
+    emit_outcome: true,
+    meta: (school: Some(Evocation), source: Some(Arcane), cooldown: Some(9.0)),
+)

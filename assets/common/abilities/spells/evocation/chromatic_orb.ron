@@ -1,0 +1,21 @@
+// The sheet's caster-chosen damage type (acid/cold/fire/lightning/poison/
+// thunder at cast time) has no per-cast element-select primitive in this
+// engine -- ships with a single fixed damage type (Fire) rather than
+// per-element variants, per the sheet's own already-set `damage_type: Fire`
+// field. Documented simplification, dropped rather than invented.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 20,
+            damage_kind: Fire,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)
