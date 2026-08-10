@@ -1,0 +1,38 @@
+// Hunter's Mark: a self-buff that marks a chosen foe so the caster's
+// strikes against it bite deeper, and the caster can sense its direction.
+// `SelfBuff` always lands its buff on the CASTER (common/src/states/
+// self_buff.rs: `entity: data.entity`) -- exactly right here, since Hunter's
+// Mark IS a buff the ranger carries, not an effect placed on the target.
+// The mark itself comes for free by reusing `BuffKind::ArdentHunt` wholesale
+// -- the bow skill tree's own "mark a target for bonus damage" buff (see
+// assets/common/abilities/bow/ardent_hunt.ron, which applies it the same
+// way, as a `SelfBuff`) already implements BOTH sheet-stated halves of this
+// spell, no new engine work or BuffKind needed:
+//   - `effects()` (common/src/comp/buff.rs) reads the buff's `target_entity`
+//     -- populated at cast time from `ability_info.input_attr.target_entity`,
+//     the caster's current target -- and emits an `AttackEffect(
+//     AdditionalDamage)` gated on `CombatRequirement::Target(uid)`: bonus
+//     damage against THAT target specifically ("your strikes against that
+//     target bite deeper"), at the cost of a flat -25% vs everyone else
+//     (`AttackDamage(0.75)`), same tradeoff/strength (0.25) the shipped bow
+//     ability already uses.
+//   - The same `effects()` arm also emits `BuffEffect::MarkEntity(target)`,
+//     which writes into `Stats.marked_entities`; the HUD
+//     (voxygen/src/hud/mod.rs `is_marked`) keeps a marked entity's
+//     nameplate/healthbar visible regardless of distance -- a real, already-
+//     shipped "sense its direction" effect, not a simplification.
+// Duration: `Some(60.0)` matches the sheet's `Concentration(60)` (the
+// engine's own `Concentration` compendium-duration kind maps to a plain
+// timed buff at the ability layer; nothing here auto-cancels on taking
+// damage yet, same simplification every other Concentration-tagged spell in
+// this compendium already carries).
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: ArdentHunt, data: BuffData(strength: 0.25, duration: Some(60.0))),
+    ],
+    energy_cost: 30,
+    meta: (school: Some(Divination), source: Some(Primordial)),
+)
