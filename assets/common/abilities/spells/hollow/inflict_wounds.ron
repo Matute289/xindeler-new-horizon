@@ -1,0 +1,15 @@
+// Touch-delivered necrotic melee bolt, pure damage (no life-drain/self-heal
+// rider).
+BasicMelee(
+    energy_cost: 35.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 20, poise: 5, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+    ),
+    meta: (school: Some(Necromancy), source: Some(Divine)),
+)

@@ -1,0 +1,15 @@
+// Temporary hit points modeled with the existing Shielded buff
+// (common/src/comp/buff.rs: "Temp-HP / absorb shield... Grants an absorb
+// pool equal to strength that soaks incoming damage before real HP") -- an
+// exact fit for temporary hit points, no new mechanism needed. 1-hour
+// duration.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: Shielded, data: BuffData(strength: 20.0, duration: Some(3600.0))),
+    ],
+    energy_cost: 30,
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

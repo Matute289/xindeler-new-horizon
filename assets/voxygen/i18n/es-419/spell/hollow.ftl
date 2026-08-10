@@ -16,3 +16,18 @@ spell-eyebite_sickened-desc = Tu mirada se vuelve funesta, y la fijás en una cr
 
 spell-dread_whisper = Susurro de Pavor
 spell-dread_whisper-desc = Susurrás hacia un enemigo unas palabras cargadas con el pavor de la tumba; el estallido psíquico sacude su mente de terror. Invocar el poder del Más Allá siempre cobra su precio, dejándote un poco más hueco que antes.
+
+spell-chill_touch = Toque Gélido
+spell-chill_touch-desc = Conjurás una mano espectral, fría como la tumba, que se lanza contra un enemigo lejano y drena su vitalidad con un agarre helado. El toque marchito deja las heridas de la víctima doloridas y lentas para cerrar.
+spell-poison_spray = Rocío Venenoso
+spell-poison_spray-desc = Lanzás una ráfaga de vapor cáustico contra un solo enemigo a tu alcance. Un ataque de hechizo a distancia certero abrasa al objetivo con corrosión venenosa.
+spell-spare_the_dying = Estabilizar al Moribundo
+spell-spare_the_dying-desc = Un toque de luz estabilizadora detiene a un aliado moribundo al borde del abismo, anclando su chispa vital para que no se apague. No hace nada por los no-muertos ni por los seres sin alma.
+spell-toll_the_dead = Tañido de la Muerte
+spell-toll_the_dead-desc = Señalás a un enemigo y un tañido lúgubre resuena a su alrededor. El objetivo resiste con fuerza de voluntad o es sacudido por energía necrótica marchita, sufriendo un daño mayor si ya está herido.
+spell-false_life = Vida Falsa
+spell-false_life-desc = Te envolvés en un brillo hueco de vitalidad prestada, ganando una reserva de vigor temporal que absorbe el daño. La animación falsa se desvanece cuando se agota la energía o el hechizo expira.
+spell-inflict_wounds = Infligir Heridas
+spell-inflict_wounds-desc = Canalizás magia de muerte marchita hacia un enemigo tocado, desgarrando su vitalidad. Un golpe certero abrasa al objetivo con una oleada de decadencia necrótica.
+spell-ray_of_sickness = Rayo de Enfermedad
+spell-ray_of_sickness-desc = Un rayo de energía verde enfermiza sale disparado hacia una criatura; si conecta, sufre un estallido de corrupción venenosa y puede quedar sacudida por náuseas si falla en resistir.
