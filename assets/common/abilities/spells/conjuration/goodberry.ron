@@ -1,0 +1,21 @@
+// Small touch-range restorative aura, scaled well down from
+// hemomancy/vitalic_font.ron (a much stronger, longer-range healing aura).
+// No "conjure N edible berries as individual items" mechanic exists, so this
+// ships as a short Regeneration burst applied to nearby allies -- the
+// closest already-shipped primitive to "share out a little restorative
+// food" -- rather than a literal consumable-item spawner.
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (kind: Regeneration, strength: 0.5, duration: Some(10.0), category: Some(Magical)),
+    ],
+    aura_duration: Some(10.0),
+    range: 5.0,
+    energy_cost: 15.0,
+    scales_with_combo: false,
+    specifier: Some(HealingAura),
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

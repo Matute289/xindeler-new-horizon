@@ -1,0 +1,21 @@
+// Ships the "hurled fire bolt" half only (BasicRanged). The sheet's other
+// half -- a held light source lasting 600s -- is dropped for v1: a single
+// CharacterAbility variant can't express both a thrown-bolt attack and a
+// standing light-emitter utility at once, and no existing spell combines
+// BasicRanged with a light-emission rider. Same shape as hollow/chill_touch.ron.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 14,
+            damage_kind: Fire,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)
