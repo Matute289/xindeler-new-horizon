@@ -1,0 +1,30 @@
+// Targets a touched ALLY, not the caster -- `SelfBuff` always lands its
+// effect on the caster (`entity: data.entity` in
+// common/src/states/self_buff.rs), never a touched ally, so this uses
+// `BasicMelee` with the engine's established touch-ally heal pattern (see
+// spare_the_dying.ron/weave_transfusion.ron/lesser_restoration.ron): a
+// near-inert Stab whose `attack_effect_target: InGroup` redirects the
+// effect onto whoever is struck instead of dealing damage.
+// `AttackSource(Melee)` (not `AnyDamage`) gates the heal for the same reason
+// spare_the_dying/weave_transfusion do: `Stab`'s own `AttackDamage` is
+// hardcoded to `GroupTarget::OutOfGroup` regardless of `attack_effect_target`
+// (common/src/comp/melee.rs), so an `InGroup` hit always accumulates zero
+// damage and `AnyDamage` could never fire.
+BasicMelee(
+    energy_cost: 35.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Heal(40.0),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

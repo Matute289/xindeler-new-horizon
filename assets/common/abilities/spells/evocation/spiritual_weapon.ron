@@ -1,0 +1,39 @@
+// The sheet's own delivery is a conjured floating weapon that makes its own
+// melee spell attack, re-thrown at any target it can reach each round as a
+// bonus action; there is no summoned-pet/conjured-weapon-entity mechanism
+// in this engine to model the "floating weapon" itself, so this ships as a
+// direct player-triggered melee strike -- same simplification precedent as
+// every other conjured-weapon spell in this batch (flame_blade.ron). The
+// 18 m range is dropped (it only governed where the weapon could be
+// summoned/moved, not the strike's own reach, per the sheet's own notes);
+// the strike itself is melee range, matching the sheet's explicit "the
+// strike itself is melee reach."
+//
+// Sear is used over Stab/Slash/Bash/Hook for the closest available flavor
+// match to "raw force" -- its hardcoded kind is Energy, not Force (no
+// MeleeConstructorKind exposes a real Force damage_kind field, see
+// booming_blade.ron, Wave 1, for the full reasoning), but Energy reads
+// closer to an unworldly force strike than Piercing/Slashing/Crushing
+// would.
+//
+// The sheet's own duration is Secs(60) ("re-attack each round ... for the
+// duration"), but there is no persistent-conjured-weapon-summon mechanism
+// that would need a real 60 s timer (same situation as flame_blade.ron in
+// this batch) -- the compendium entry below lists duration: Instant rather
+// than Secs(60) for the same reason divine_favor.ron (Wave 1) does. `Bonus`
+// cast_time is kept as flavor metadata only (matches how every gravesong
+// smite and healing_word.ron, Wave 1, already treat non-Action cast times --
+// there is no real turn economy to enforce it against).
+BasicMelee(
+    energy_cost: 35,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.3,
+    melee_constructor: (
+        kind: Sear(damage: 26, poise: 5, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+    ),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

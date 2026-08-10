@@ -1,0 +1,30 @@
+// Self-centered ground burst, same Explosion shape as thunderclap.ron.
+// Explosion always hardcodes DamageKind::Crushing -- for this spell that
+// is an exact match, not a drift: the real damage type is Bludgeoning
+// (Crushing's own content-name alias, per common/src/combat.rs's
+// `#[serde(alias = "Bludgeoning")]`), so no mismatch note is needed here.
+// The "loose terrain becomes difficult ground" rider is dropped: no
+// difficult-terrain-creation primitive exists on this variant
+// (destroy_terrain/replace_terrain only remove or reskin terrain, they
+// don't apply a movement-speed debuff zone).
+//
+// Damage is set below this batch's single-target level-1 baseline (~20,
+// see chaos_bolt.ron/hellish_rebuke.ron/spellfire_flare.ron) since this can
+// hit multiple foes in the burst radius at once -- matching real D&D's own
+// Earth Tremor (2d6, notably below a single-target 1st-level spell like
+// Chromatic Orb's 3d8).
+Explosion(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    action_duration: 0.2,
+    recover_duration: 0.35,
+    damage: 12,
+    poise: 10,
+    knockback: (direction: Away, strength: 5.0),
+    radius: 3.0,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

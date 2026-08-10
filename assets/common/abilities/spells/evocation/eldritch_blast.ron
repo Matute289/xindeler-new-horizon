@@ -1,0 +1,44 @@
+// First authored player spell using RapidRanged (prior usage is all
+// NPC/weapon abilities -- assets/common/abilities/bow/fusillade.ron,
+// staff/pyroclasm.ron -- never a spell RON before this one).
+//
+// Real behavior confirmed by reading common/src/states/rapid_ranged.rs:
+// every projectile fires along the SAME data.inputs.look_dir each shot
+// (there is no per-projectile spread/homing field on RapidRanged, unlike
+// BasicRanged's projectile_spread). `options.fire_all: true` +
+// `max_projectiles: Some(2)` fires both beams back-to-back in one cast.
+// The flavor text ("chosen foes") implies independently-aimed beams that
+// can each hit a different creature; this engine's RapidRanged cannot
+// express that -- both beams travel the same line, so in practice they
+// will usually land on the same first target unless the caster's aim
+// visibly moves between the two shoot ticks. Documented drop, not
+// silently invented: no per-projectile independent-aim primitive exists.
+//
+// Damage split across 2 independent-rolling beams so total cantrip output
+// (8+8=16) lands in the same band as this wave's single-shot cantrips
+// (chill_touch 14, poison_spray 16 -- see
+// assets/common/abilities/spells/hollow/). damage_kind: Force is exactly
+// representable here (RapidRanged's `projectile.attack.damage_kind` is
+// fully RON-configurable, unlike BasicMelee/Explosion/GroundAoe/BasicBeam,
+// which all hardcode their DamageKind in Rust -- see this batch's other
+// RONs for where that constraint forced a drift note).
+RapidRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    shoot_duration: 0.05,
+    recover_duration: 0.3,
+    options: (
+        max_projectiles: Some(2),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 8,
+            damage_kind: Force,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 70.0,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

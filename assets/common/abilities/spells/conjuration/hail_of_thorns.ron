@@ -1,0 +1,20 @@
+// Sheet describes a next-ranged-hit buff whose payload is a secondary AoE
+// thorn burst on the struck target. No existing BuffKind grants an AoE
+// on-hit rider (the gravesong *_smite BuffKinds each bake in one fixed
+// single-target effect -- bonus damage, blind, burn, knockback, fear --
+// never a burst); ships instead as gravesong/branding_smite.ron's shape
+// (flat bonus damage, no secondary effect), dropping the AoE-thorn-burst
+// rider. First-of-kind simplification within this batch; flag for reviewer
+// attention alongside the GroundAoe pooled_debuff spells.
+SelfBuff(
+    buildup_duration: 0.1,
+    cast_duration: 0.1,
+    recover_duration: 0.1,
+    buffs: [
+        BuffDesc(kind: BrandingSmite, data: BuffData(strength: 6.0, duration: None)),
+    ],
+    buff_cat: Some(RemoveOnAttack),
+    energy_cost: 15,
+    enforced_limit: true,
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

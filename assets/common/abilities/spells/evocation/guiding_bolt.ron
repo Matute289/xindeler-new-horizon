@@ -1,0 +1,29 @@
+// Radiant damage plus a "next attack against this target lands more easily"
+// rider, modeled with the existing `FaerieFire` BuffKind (already shipped as
+// a flat evasion penalty on the target -- see faerie_fire.ron/hex_evasion.ron,
+// the latter applying it via this exact same BasicRanged projectile-buff
+// shape). Duration kept short (6s, vs hex_evasion's dedicated 60s debuff)
+// since this is a minor rider on a nuke, not the spell's whole purpose --
+// mirrors D&D's own "until the end of your next turn" framing.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 20,
+            buff: Some((
+                kind: FaerieFire,
+                dur_secs: 6,
+                strength: Value(0.3),
+                chance: 1.0,
+            )),
+            damage_kind: Radiant,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

@@ -1,0 +1,21 @@
+// The sheet's own notes say the caster picks one of several elemental
+// forms at cast time; that per-cast element-choice mechanic doesn't exist
+// in this engine (a CharacterAbility's damage_kind is fixed at asset-load
+// time, not per-cast). Ships as a fixed Acid bolt, the same "list the first
+// element" convention the sheet itself uses.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 16,
+            damage_kind: Acid,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

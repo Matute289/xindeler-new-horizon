@@ -1,0 +1,38 @@
+// Phantasm-shape BasicSummon (the `unseen_servant.ron` shape): a decorative,
+// non-agentic prop, not a fighter. `alignment: Some(Passive)` (no will of its
+// own), `with_agent: false` (no independent behaviour to run),
+// `incorporeal: true` + `has_health: false` + `phantom_illusion: true`
+// (vanishes on the first hit), matching a fragile nature spirit rather than a
+// combatant. `duration` matches the spell's own `Concentration(60)`.
+//
+// KNOWN GAP, dropped rider: the sheet's "mends the wounds of allies who
+// share its presence" is not expressed here. No primitive lets a summoned
+// NPC apply a passive heal-on-proximity effect to nearby entities --
+// `BasicAura`/`StaticAura` grant that kind of zone effect directly, but this
+// spell's own sheet `variant` is `BasicSummon`, and no summoned-NPC-as-
+// walking-aura mechanism exists in `SummonInfo::Npc`. Ships as a moving,
+// harmless decorative spirit only; the healing rider is a Lane B follow-up
+// (a `SummonInfo` variant or NPC-carried aura would be new engine work).
+// `body: Object(Pebble)` reuses `unseen_servant.ron`'s own "small,
+// unobtrusive placeholder" body rather than inventing a new asset.
+BasicSummon(
+    buildup_duration: 0.75,
+    cast_duration: 0.3,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 3.0),
+        body: Object(Pebble),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 60, nanos: 0)),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)
