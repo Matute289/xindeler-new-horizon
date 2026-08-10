@@ -1,0 +1,29 @@
+// Sustained single-target lightning beam (concentration), the school's own
+// first `BasicBeam` player-spell precedent at circle 1 -- the only shipped
+// siblings (exsanguinate circle 5, gravity_fissure circle 6) run much
+// shorter `beam_duration` (3-4s) with a very high `energy_drain` (137-162,
+// i.e. energy/sec while channeling) that burns through most builds' energy
+// pool in ~1s regardless of the nominal cap. `beam_duration: 60` here
+// matches the sheet's `Concentration(60)` (D&D's "up to 1 minute") as the
+// hard cap, but `energy_drain: 18` is deliberately low so a circle-1 caster
+// can actually sustain it for several seconds rather than have the 60s cap
+// be purely cosmetic -- self-gates reuse via the drain, so no separate
+// `cooldown` is set (matches every other circle-0/1 spell in this batch).
+// Flagged for wave-close-out balance review alongside burning_hands/
+// thunderwave (no circle-1 BasicBeam sibling to calibrate against yet).
+BasicBeam(
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    beam_duration: 60,
+    damage: 6.0,
+    tick_rate: 3.0,
+    range: 9.0,
+    max_angle: 5.0,
+    damage_effect: None,
+    energy_regen: 0,
+    energy_drain: 18,
+    move_efficiency: 0.3,
+    ori_rate: 0.3,
+    specifier: Lightning,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

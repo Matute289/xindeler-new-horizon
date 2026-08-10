@@ -1,0 +1,25 @@
+// Weapon-cantrip delivered as a melee strike. MeleeConstructorKind has no
+// damage_kind field -- every kind hardcodes its own DamageKind in
+// common/src/comp/melee.rs (Stab/Hook->Piercing, Slash->Slashing,
+// Bash->Crushing, Sear->Energy). No kind produces Thunder. Bash is picked
+// here for its built-in Knockback(Away) rider, which fits "the blow rings
+// with crashing sound" reasonably well; the true in-engine damage type is
+// Crushing, not Thunder -- flavor-only mismatch, same as every other
+// BasicMelee spell in this batch.
+//
+// The sheet's on-move rider ("additional thunder damage if the target
+// moves before the caster's next turn") is dropped: no movement-triggered
+// combat effect exists anywhere in common/src/combat.rs or comp/buff.rs.
+BasicMelee(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.3,
+    melee_constructor: (
+        kind: Bash(damage: 14, poise: 5, knockback: 3, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+    ),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

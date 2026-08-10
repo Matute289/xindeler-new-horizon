@@ -1,0 +1,30 @@
+// Phantasm-shape BasicSummon (the `unseen_servant.ron` shape): the sheet
+// itself calls these "intangible, invulnerable helper spirits", an exact
+// match for `incorporeal: true` + `has_health: false` + `phantom_illusion:
+// true` + `with_agent: false` -- no will of its own, can't be fought, purely
+// decorative. Scaled to three (a "flock") instead of one.
+// `body: Golem(Mogwai)` stands in for "tiny constructs" -- `Mogwai` is
+// already the smallest/most spirit-like entry in the golem species list, a
+// closer fit than reusing `unseen_servant.ron`'s inert `Object(Pebble)` for
+// something explicitly described as taking construct shape.
+BasicSummon(
+    buildup_duration: 0.75,
+    cast_duration: 0.3,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 3,
+        summon_distance: (1.0, 2.0),
+        body: Golem((species: Mogwai, body_type: Male)),
+        scale: None,
+        has_health: false,
+        use_npc_name: false,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 60, nanos: 0)),
+        alignment: Some(Passive),
+        with_agent: false,
+        incorporeal: true,
+        phantom_illusion: true,
+        delete_after_expiry: true,
+    ),
+)

@@ -1,0 +1,29 @@
+// Real-agent BasicSummon (the `find_familiar.ron` shape), scaled to three
+// companions instead of one -- "scout, fetch, and relay" needs real agency
+// (movement/perception), unlike a decorative phantasm that can't act on its
+// own. Unlike `find_familiar.ron`'s permanent bond, this spell's own
+// duration is `Concentration(60)`, so `summon_info.duration` is set to match
+// rather than left `None`. `body: QuadrupedSmall(Squirrel)` stands in for
+// "small animal shapes of their choosing" -- no in-cast body-selection UI
+// exists, so one representative small-animal body covers all three.
+//
+// Same known gap as `find_familiar.ron`: `BasicSummon`'s `CreateNpcEvent`
+// path never populates `comp::Pet`, so these familiars won't survive a
+// logout/server-restart -- less load-bearing here since the spell is already
+// temporary (60s concentration), but noted for consistency.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 3,
+        summon_distance: (1.0, 3.0),
+        body: QuadrupedSmall((species: Squirrel, body_type: Female)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+)

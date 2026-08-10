@@ -1,0 +1,17 @@
+// D&D's Shillelagh lets the caster's weapon strikes use spellcasting power
+// instead of raw muscle and hit harder -- modeled with the existing Reckless
+// buff (attack-damage increase), the same "weapon damage bonus (modeled as
+// Reckless interim)" pattern already shipped in hemomancy/bloodbound_edge.ron.
+// Reckless's paired vulnerability increase isn't in the sheet's description but
+// is Reckless's only shape in this engine; flagged as a deviation, not a silent
+// reinterpretation.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Reckless, data: BuffData(strength: 0.15, duration: Some(60.0))),
+    ],
+    energy_cost: 20,
+    meta: (school: Some(Transmutation), source: Some(Primordial)),
+)
