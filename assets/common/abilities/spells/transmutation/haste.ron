@@ -1,0 +1,24 @@
+// Single-ally ranged buff (sheet range 9m, aoe "single-target"). "Doubling movement, sharpening
+// reflexes, blinding quickness" maps directly onto the existing Hastened buff (movement + attack
+// speed increase) -- an exact fit, not a substitution. The "extra action each round" rider has
+// no analog in this engine's action-economy model and is dropped.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Hastened,
+            strength: 0.2,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(1.0),
+    range: 9.0,
+    energy_cost: 75.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(40.0)),
+)

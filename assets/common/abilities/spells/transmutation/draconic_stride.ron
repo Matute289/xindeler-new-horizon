@@ -1,0 +1,15 @@
+// Self-only mobility burst (sheet range: Self). The sheet's own notes mark the Fire damage_type
+// as trail flavor only, not a damage roll, so this ships as a pure movement buff with no damage
+// component -- matching the sheet's own guidance, not a silent drop. Modeled with the existing
+// Hastened buff (movement + attack speed), the same primitive already used elsewhere in this
+// project for other self-only mobility buffs (e.g. axiomancy/gift_of_alacrity.ron).
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.15, duration: Some(60.0))),
+    ],
+    energy_cost: 60.0,
+    meta: (school: Some(Transmutation), source: Some(Primordial), cooldown: Some(30.0)),
+)
