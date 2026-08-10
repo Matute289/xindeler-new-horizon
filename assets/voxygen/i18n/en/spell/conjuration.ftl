@@ -1,0 +1,19 @@
+# Conjuration spell names + descriptions.
+spell-find_steed = Find Steed
+spell-find_steed-desc = You call forth a faithful spirit that takes the shape of a swift and intelligent mount, forging a lasting bond between you. The steed appears in an open space nearby, ready to serve and bear you into battle or across long roads.
+spell-flock_of_familiars = Flock of Familiars
+spell-flock_of_familiars-desc = You call forth three minor spirits that settle into small animal shapes of their choosing. Each bonded companion can scout, fetch, and relay what it senses back to you.
+spell-healing_spirit = Healing Spirit
+spell-healing_spirit-desc = A gentle nature spirit takes form in a small space you designate, drifting at your command through the fray. It lingers near the wounded, offering what quiet comfort its fading presence can lend.
+spell-helpful_homunculi = Helpful Homunculi
+spell-helpful_homunculi-desc = You call forth a flock of intangible, invulnerable helper spirits that take the shape of tiny constructs and assist with tasks at your direction. They linger near you, lending their many small hands for the spell's duration.
+spell-homunculus_servant = Homunculus Servant
+spell-homunculus_servant-desc = You knit together a tiny artificial helper that obeys your will and acts on your behalf. The construct persists as a loyal companion, sharing in your magic.
+spell-summon_beast = Summon Beast
+spell-summon_beast-desc = You call a fierce spirit into a beastlike body that springs from empty air nearby. The conjured creature obeys you and battles at your side until the binding fades.
+spell-conjure_animals = Conjure Animals
+spell-conjure_animals-desc = You call wild spirits that take on the shapes of beasts, materializing in open spaces nearby to fight at your side. The summoned creatures persist while you keep your focus.
+spell-conjure_constructs = Conjure Constructs
+spell-conjure_constructs-desc = You call forth a cluster of orderly, half-real spirits that take the shape of mechanical figures in an open space nearby. They persist while you concentrate, striking at foes you direct them against.
+spell-conjured_viper = Conjured Viper
+spell-conjured_viper-desc = A coiling serpent of pale, woven light wraps around you, lending its borrowed vitality as a shimmering ward. The protection fades the moment that conjured resilience is fully spent.
