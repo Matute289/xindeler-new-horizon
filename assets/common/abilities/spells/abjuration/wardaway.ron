@@ -1,0 +1,24 @@
+// Single-target force bolt. D&D's Constitution save and the Construct/
+// Undead auto-immunity rider are both dropped -- this engine resolves
+// ranged spell hits via its own dodge/block combat pipeline, not D&D-style
+// saving throws, and there is no creature-kind-conditional immunity
+// primitive (same documented gap OtherworldlyWard/dispel_evil_and_good's
+// own creature-kind wards already work around). Ships as a plain
+// single-target Force damage bolt, reusing the generic projectile visuals
+// every other cantrip/level-1 bolt in this wave already uses.
+BasicRanged(
+    energy_cost: 30.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 18,
+            damage_kind: Force,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

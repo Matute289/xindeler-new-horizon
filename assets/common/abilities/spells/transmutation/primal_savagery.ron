@@ -1,0 +1,20 @@
+// D&D's Primal Savagery is a melee spell attack ("teeth and nails warp into fangs
+// and claws"), but the sheet's own `variant` field is BasicRanged (its own notes
+// say "closest arm BasicRanged (melee-range), single target") -- kept as-is per
+// sheet fidelity, same shape as this school's other cantrip bolt, magic_stone.ron.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.35,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 10,
+            damage_kind: Acid,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Transmutation), source: Some(Primordial)),
+)
