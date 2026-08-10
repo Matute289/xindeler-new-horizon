@@ -4,8 +4,12 @@ use crate::{
     GlobalState,
     game_input::GameInput,
     hud::{ERROR_COLOR, TEXT_BIND_CONFLICT_COLOR, TEXT_COLOR, img_ids::Imgs},
-    session::settings_change::Control::{self as ControlChange, *},
-    ui::{ToggleButton, fonts::Fonts},
+    session::settings_change::{
+        Control::{self as ControlChange, *},
+        Gamepad as GamepadChange,
+    },
+    settings::controller::Axis,
+    ui::{ImageSlider, ToggleButton, fonts::Fonts},
     window::{MenuInput, RemappingMode},
 };
 use conrod_core::{
@@ -14,6 +18,7 @@ use conrod_core::{
     widget::{self, Button, DropDownList, Rectangle, Scrollbar, Text},
     widget_ids,
 };
+use gilrs::Axis as GilAxis;
 use i18n::Localization;
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
@@ -34,6 +39,18 @@ widget_ids! {
         gamelayer_mod2_checkbox,
         gamelayer_mod1_text,
         gamelayer_mod2_text,
+        gamepad_pan_sensitivity_label,
+        gamepad_pan_sensitivity_slider,
+        gamepad_pan_sensitivity_value,
+        gamepad_mouse_emulation_sensitivity_label,
+        gamepad_mouse_emulation_sensitivity_slider,
+        gamepad_mouse_emulation_sensitivity_value,
+        gamepad_left_deadzone_label,
+        gamepad_left_deadzone_slider,
+        gamepad_left_deadzone_value,
+        gamepad_right_deadzone_label,
+        gamepad_right_deadzone_slider,
+        gamepad_right_deadzone_value,
     }
 }
 
@@ -73,6 +90,10 @@ pub enum GamepadBindingOption {
     GameButtons,
     GameLayers,
     MenuButtons,
+    /// Per-stick deadzones and the two `ControllerSettings` speed values
+    /// (right-stick camera pan, mouse-emulation cursor speed) — the sliders
+    /// this codebase otherwise had no settings-window UI for.
+    Sensitivity,
 }
 #[derive(Clone, Copy)]
 pub enum KeyMouseBindingOption {
@@ -99,7 +120,13 @@ static SORTED_MENUINPUTS: LazyLock<Vec<MenuInput>> = LazyLock::new(|| {
 });
 
 impl Widget for Controls<'_> {
-    type Event = Vec<ControlChange>;
+    // Keybinding changes and gamepad-sensitivity changes are different
+    // `SettingsChange` variants (`Control` vs. `Gamepad`) — returned as a
+    // pair rather than folding the sensitivity sliders' output into
+    // `Control` (an ill fit: `Control` is entirely about binding
+    // changes) or reworking every existing `events.push(..)` call site in
+    // this file to go through a new combined wrapper type.
+    type Event = (Vec<ControlChange>, Vec<GamepadChange>);
     type State = State;
     type Style = ();
 
@@ -119,6 +146,7 @@ impl Widget for Controls<'_> {
         let widget::UpdateArgs { state, ui, .. } = args;
 
         let mut events = Vec::new();
+        let mut gamepad_events: Vec<GamepadChange> = Vec::new();
 
         Rectangle::fill_with(args.rect.dim(), color::TRANSPARENT)
             .xy(args.rect.xy())
@@ -420,6 +448,11 @@ impl Widget for Controls<'_> {
                         previous_element_id = Some(text_id);
                     }
                 },
+                // Rendered separately below (`GamepadBindingOption::Sensitivity`
+                // block, further down in this function) — it's sliders, not a
+                // `controls_texts`/`controls_buttons` rebind list, so it doesn't
+                // belong in this match.
+                GamepadBindingOption::Sensitivity => {},
             }
         } else {
             match keymouse_binding_option {
@@ -692,13 +725,17 @@ impl Widget for Controls<'_> {
             }
         }
 
-        // Drop down menu to select gamepad game bindings or menu bindings
+        // Drop down menu to select gamepad game bindings, menu bindings, or
+        // sensitivity/deadzone
         if let BindingMode::Gamepad = state.binding_mode {
             let game_buttons = &self.localized_strings.get_msg("hud-settings-game_buttons");
             let game_layers = &self.localized_strings.get_msg("hud-settings-game_layers");
             let menu_buttons = &self.localized_strings.get_msg("hud-settings-menu_buttons");
+            let sensitivity = &self
+                .localized_strings
+                .get_msg("hud-settings-gamepad_sensitivity");
 
-            let binding_mode_list = [game_buttons, game_layers, menu_buttons];
+            let binding_mode_list = [game_buttons, game_layers, menu_buttons, sensitivity];
             if let Some(clicked) = DropDownList::new(
                 &binding_mode_list,
                 Some(state.gamepad_binding_option as usize),
@@ -729,6 +766,12 @@ impl Widget for Controls<'_> {
                     2 => {
                         state.update(|s| {
                             s.gamepad_binding_option = GamepadBindingOption::MenuButtons
+                        });
+                        events.push(ResetBindingMode);
+                    },
+                    3 => {
+                        state.update(|s| {
+                            s.gamepad_binding_option = GamepadBindingOption::Sensitivity
                         });
                         events.push(ResetBindingMode);
                     },
@@ -787,6 +830,163 @@ impl Widget for Controls<'_> {
                     .color(TEXT_COLOR)
                     .set(state.ids.gamelayer_mod2_text, ui);
             }
+
+            // Sensitivity/deadzone sliders — the settings this widget
+            // otherwise had no UI for (only reachable by hand-editing the
+            // settings file).
+            if let GamepadBindingOption::Sensitivity = state.gamepad_binding_option {
+                let controller = &self.global_state.settings.controller;
+
+                let display_pan = controller.pan_sensitivity;
+                Text::new(
+                    &self
+                        .localized_strings
+                        .get_msg("hud-settings-gamepad_pan_sensitivity"),
+                )
+                .down_from(state.ids.gamepad_option_dropdown, 10.0)
+                .font_size(self.fonts.cyri.scale(14))
+                .font_id(self.fonts.cyri.conrod_id)
+                .color(TEXT_COLOR)
+                .set(state.ids.gamepad_pan_sensitivity_label, ui);
+                if let Some(new_val) = ImageSlider::discrete(
+                    display_pan,
+                    1,
+                    200,
+                    self.imgs.slider_indicator,
+                    self.imgs.slider,
+                )
+                .w_h(400.0, 22.0)
+                .down_from(state.ids.gamepad_pan_sensitivity_label, 10.0)
+                .track_breadth(30.0)
+                .slider_length(10.0)
+                .pad_track((5.0, 5.0))
+                .set(state.ids.gamepad_pan_sensitivity_slider, ui)
+                {
+                    gamepad_events.push(GamepadChange::AdjustPanSensitivity(new_val));
+                }
+                Text::new(&format!("{display_pan}"))
+                    .right_from(state.ids.gamepad_pan_sensitivity_slider, 8.0)
+                    .font_size(self.fonts.cyri.scale(14))
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .color(TEXT_COLOR)
+                    .set(state.ids.gamepad_pan_sensitivity_value, ui);
+
+                let display_mouse_emulation = controller.mouse_emulation_sensitivity;
+                Text::new(
+                    &self
+                        .localized_strings
+                        .get_msg("hud-settings-gamepad_mouse_emulation_sensitivity"),
+                )
+                .down_from(state.ids.gamepad_pan_sensitivity_slider, 10.0)
+                .font_size(self.fonts.cyri.scale(14))
+                .font_id(self.fonts.cyri.conrod_id)
+                .color(TEXT_COLOR)
+                .set(state.ids.gamepad_mouse_emulation_sensitivity_label, ui);
+                if let Some(new_val) = ImageSlider::discrete(
+                    display_mouse_emulation,
+                    1,
+                    200,
+                    self.imgs.slider_indicator,
+                    self.imgs.slider,
+                )
+                .w_h(400.0, 22.0)
+                .down_from(state.ids.gamepad_mouse_emulation_sensitivity_label, 10.0)
+                .track_breadth(30.0)
+                .slider_length(10.0)
+                .pad_track((5.0, 5.0))
+                .set(state.ids.gamepad_mouse_emulation_sensitivity_slider, ui)
+                {
+                    gamepad_events.push(GamepadChange::AdjustMouseEmulationSensitivity(new_val));
+                }
+                Text::new(&format!("{display_mouse_emulation}"))
+                    .right_from(state.ids.gamepad_mouse_emulation_sensitivity_slider, 8.0)
+                    .font_size(self.fonts.cyri.scale(14))
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .color(TEXT_COLOR)
+                    .set(state.ids.gamepad_mouse_emulation_sensitivity_value, ui);
+
+                // Deadzones are stored per raw gilrs axis (X and Y of the
+                // same stick independently), but every value the player
+                // actually cares about tuning is per-stick — read the X
+                // entry as the display value for each stick (they're kept
+                // equal by the two sliders below, which always write both
+                // axes of a stick together).
+                let display_left_deadzone = controller
+                    .axis_deadzones
+                    .get(&Axis::Simple(GilAxis::LeftStickX))
+                    .copied()
+                    .unwrap_or(0.2);
+                Text::new(
+                    &self
+                        .localized_strings
+                        .get_msg("hud-settings-gamepad_left_stick_deadzone"),
+                )
+                .down_from(state.ids.gamepad_mouse_emulation_sensitivity_slider, 10.0)
+                .font_size(self.fonts.cyri.scale(14))
+                .font_id(self.fonts.cyri.conrod_id)
+                .color(TEXT_COLOR)
+                .set(state.ids.gamepad_left_deadzone_label, ui);
+                if let Some(new_val) = ImageSlider::continuous(
+                    display_left_deadzone,
+                    0.0,
+                    0.9,
+                    self.imgs.slider_indicator,
+                    self.imgs.slider,
+                )
+                .w_h(400.0, 22.0)
+                .down_from(state.ids.gamepad_left_deadzone_label, 10.0)
+                .track_breadth(30.0)
+                .slider_length(10.0)
+                .pad_track((5.0, 5.0))
+                .set(state.ids.gamepad_left_deadzone_slider, ui)
+                {
+                    gamepad_events.push(GamepadChange::AdjustLeftStickDeadzone(new_val));
+                }
+                Text::new(&format!("{display_left_deadzone:.2}"))
+                    .right_from(state.ids.gamepad_left_deadzone_slider, 8.0)
+                    .font_size(self.fonts.cyri.scale(14))
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .color(TEXT_COLOR)
+                    .set(state.ids.gamepad_left_deadzone_value, ui);
+
+                let display_right_deadzone = controller
+                    .axis_deadzones
+                    .get(&Axis::Simple(GilAxis::RightStickX))
+                    .copied()
+                    .unwrap_or(0.2);
+                Text::new(
+                    &self
+                        .localized_strings
+                        .get_msg("hud-settings-gamepad_right_stick_deadzone"),
+                )
+                .down_from(state.ids.gamepad_left_deadzone_slider, 10.0)
+                .font_size(self.fonts.cyri.scale(14))
+                .font_id(self.fonts.cyri.conrod_id)
+                .color(TEXT_COLOR)
+                .set(state.ids.gamepad_right_deadzone_label, ui);
+                if let Some(new_val) = ImageSlider::continuous(
+                    display_right_deadzone,
+                    0.0,
+                    0.9,
+                    self.imgs.slider_indicator,
+                    self.imgs.slider,
+                )
+                .w_h(400.0, 22.0)
+                .down_from(state.ids.gamepad_right_deadzone_label, 10.0)
+                .track_breadth(30.0)
+                .slider_length(10.0)
+                .pad_track((5.0, 5.0))
+                .set(state.ids.gamepad_right_deadzone_slider, ui)
+                {
+                    gamepad_events.push(GamepadChange::AdjustRightStickDeadzone(new_val));
+                }
+                Text::new(&format!("{display_right_deadzone:.2}"))
+                    .right_from(state.ids.gamepad_right_deadzone_slider, 8.0)
+                    .font_size(self.fonts.cyri.scale(14))
+                    .font_id(self.fonts.cyri.conrod_id)
+                    .color(TEXT_COLOR)
+                    .set(state.ids.gamepad_right_deadzone_value, ui);
+            }
         }
 
         let gamepad = &self.localized_strings.get_msg("hud-settings-gamepad");
@@ -827,6 +1027,6 @@ impl Widget for Controls<'_> {
                 .set(state.ids.controls_alignment_rectangle, ui);
         }
 
-        events
+        (events, gamepad_events)
     }
 }
