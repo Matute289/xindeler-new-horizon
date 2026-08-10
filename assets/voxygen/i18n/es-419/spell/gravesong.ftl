@@ -22,5 +22,5 @@ spell-crusaders_mantle-desc = Un radio de luz consagrada florece a tu alrededor 
 spell-heroism = Heroísmo
 spell-heroism-desc = Tocás a un aliado dispuesto y lo llenás de valentía, envolviéndolo en una protección reconfortante y blindándolo contra el miedo mismo mientras mantengas la concentración.
 
-# Name only for now; its description is pending the spell-prose pass.
 spell-censure = Censura
+spell-censure-desc = Pronunciás una palabra de reproche divino que golpea la mente de un enemigo; la reprimenda psíquica deja sus pensamientos dispersos y difíciles de retener.

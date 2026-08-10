@@ -14,5 +14,5 @@ spell-eyebite_panicked-desc = Tu mirada se vuelve funesta, y la fijás en una cr
 spell-eyebite_sickened = Mirada Maligna (Enfermar)
 spell-eyebite_sickened-desc = Tu mirada se vuelve funesta, y la fijás en una criatura a la vista. Si su voluntad flaquea, una enfermedad consuntiva drena su concentración y castiga su cuerpo mientras mantengas la concentración.
 
-# Name only for now; its description is pending the spell-prose pass.
 spell-dread_whisper = Susurro de Pavor
+spell-dread_whisper-desc = Susurrás hacia un enemigo unas palabras cargadas con el pavor de la tumba; el estallido psíquico sacude su mente de terror. Invocar el poder del Más Allá siempre cobra su precio, dejándote un poco más hueco que antes.

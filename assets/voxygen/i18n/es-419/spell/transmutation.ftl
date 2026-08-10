@@ -13,8 +13,11 @@ spell-catapult = Catapulta
 spell-catapult-desc = Arrojás un objeto pequeño y suelto contra un objetivo con un estallido repentino de fuerza, sin necesitar brazo de lanzamiento.
 spell-weave_transfusion = Transfusión del Tejido
 spell-weave_transfusion-desc = Tocás a un aliado herido y volcás en él una oleada de vitalidad pura, cerrando sus heridas en un instante.
-
-# Names only for now; their descriptions are pending the spell-prose pass.
+spell-sequester = Reclusión
+spell-sequester-desc = Te envolvés en un velo de quietud, volviéndote invisible y blindándote contra toda forma de detección a distancia.
 spell-knock = Abrir
+spell-knock-desc = Hacés un gesto hacia una puerta, cofre o portón cerrado a distancia, y su cerradura se abre de golpe con un chasquido seco, sin necesitar llave. Algunas cerraduras antiguas o fuertemente protegidas son inmunes a este truco y todavía hay que abrirlas a la manera tradicional.
 spell-plant_growth = Crecimiento Vegetal
+spell-plant_growth-desc = Inundás un trozo de terreno con fuerza vital desbordante, haciendo que la vegetación estalle en una maleza densa y sofocante. El enredo exuberante ralentiza a cualquiera que intente atravesarlo, y las enredaderas pueden atrapar a quienes pisen directamente sobre ellas.
 spell-control_winds_turbulence = Controlar Vientos: Turbulencia
+spell-control_winds_turbulence-desc = Tomás el control del aire a tu alrededor, agitándolo en una turbulencia arremolinada a ras del suelo que arruina el equilibrio y ralentiza a cualquiera que quede atrapado en el vendaval.
