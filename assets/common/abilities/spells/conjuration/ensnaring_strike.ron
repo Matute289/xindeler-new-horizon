@@ -1,0 +1,30 @@
+// Reviewer correction: an earlier version of this file wrongly claimed no
+// primitive existed to deliver a restrain rider on a weapon strike. It does:
+// `MeleeConstructor.damage_effect: Option<CombatEffect>` already attaches an
+// arbitrary buff to a melee hit (see hammer/pile_driver.ron, which grants
+// Rooted exactly this way). Ships as a direct touch-range `BasicMelee` --
+// `Stab` maps to `DamageKind::Piercing` natively (common/src/comp/melee.rs),
+// matching the sheet's own Piercing damage_type -- rather than the
+// self-buff-triggers-on-next-hit framing the sheet literally describes (no
+// existing pattern arms "your next weapon swing" with an arbitrary
+// caster-agnostic melee_constructor; every *_smite.ron SelfBuff instead
+// bakes its rider into a dedicated BuffKind, none of which is Rooted).
+BasicMelee(
+    energy_cost: 25,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.35,
+    melee_constructor: (
+        kind: Stab(damage: 14, poise: 5, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        damage_effect: Some(Buff((
+            kind: Rooted,
+            dur_secs: 6.0,
+            strength: Value(1.0),
+            chance: 1.0,
+        ))),
+    ),
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

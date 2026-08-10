@@ -1,0 +1,23 @@
+// Instant self-centered burst, cantrip tier (scaled well down from
+// hemomancy/gory_eruption.ron's level-3 numbers). Force damage: `Explosion`'s
+// damage is hardcoded to `DamageKind::Crushing` (common/src/states/
+// explosion.rs), not RON-configurable -- ships as Crushing regardless of the
+// sheet's Force flavor, the same pre-existing gap gory_eruption.ron/
+// hemoclysm.ron (also flavor-mismatched: Hemomancy blood damage, also
+// Crushing) already ship with.
+Explosion(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    action_duration: 0.2,
+    recover_duration: 0.3,
+    damage: 10,
+    poise: 5,
+    knockback: (direction: Away, strength: 5.0),
+    radius: 3,
+    min_falloff: 0.4,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    reagent: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

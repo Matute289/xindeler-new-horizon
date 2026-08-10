@@ -1,0 +1,23 @@
+// Instant self-centered burst, level-1 tier (scaled down from
+// hemomancy/gory_eruption.ron's level-3 numbers). The sheet's "cannot take
+// reactions" rider has no analog in this real-time combat system (no
+// reaction/action-economy resource exists to deny) and is dropped. Necrotic
+// flavor: `Explosion`'s damage is hardcoded to `DamageKind::Crushing`
+// (common/src/states/explosion.rs), not RON-configurable -- same
+// pre-existing gap as sword_burst.ron/gory_eruption.ron.
+Explosion(
+    energy_cost: 30,
+    buildup_duration: 0.5,
+    action_duration: 0.25,
+    recover_duration: 0.35,
+    damage: 18,
+    poise: 10,
+    knockback: (direction: Away, strength: 8.0),
+    radius: 3,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    reagent: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)
