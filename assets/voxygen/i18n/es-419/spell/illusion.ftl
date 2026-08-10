@@ -13,3 +13,5 @@ spell-seeming = Apariencia
 spell-seeming-desc = El lanzador envuelve a cualquier cantidad de criaturas dispuestas a su alcance en un velo tejido de forma falsa, cambiando cómo se ve cada una ante quienes la observan.
 spell-magic_aura = Aura Mágica
 spell-magic_aura-desc = Al envolverte en un velo sutil, alimentás con lecturas falsas a quienes te sondean con magia de detección. El engaño enmascara tu verdadera naturaleza, o inventa una que nunca existió.
+spell-color_spray = Ráfaga de Colores
+spell-color_spray-desc = Un repentino abanico de tonos deslumbrantes y cambiantes estalla desde tu mano extendida. Quien quede atrapado en el cono se ve abrumado por los colores arremolinados y se queda ciego, parpadeando.
