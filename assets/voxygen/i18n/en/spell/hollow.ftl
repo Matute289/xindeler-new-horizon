@@ -14,5 +14,5 @@ spell-eyebite_panicked-desc = Your gaze turns baleful, and you fix it on one cre
 spell-eyebite_sickened = Eyebite (Sicken)
 spell-eyebite_sickened-desc = Your gaze turns baleful, and you fix it on one creature within sight. If its will falters, a wasting sickness saps its focus and wracks its body for as long as you hold focus.
 
-# Name only for now; its description is pending the spell-prose pass.
 spell-dread_whisper = Dread Whisper
+spell-dread_whisper-desc = You breathe a whisper laced with the dread of the grave toward a foe, the psychic blast rattling their mind with terror. Drawing on power from Beyond always exacts its own toll, leaving you a little more hollow than before.

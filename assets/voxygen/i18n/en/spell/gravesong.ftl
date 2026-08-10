@@ -22,5 +22,5 @@ spell-crusaders_mantle-desc = A radius of consecrated light blooms around you an
 spell-heroism = Heroism
 spell-heroism-desc = You touch a willing ally and fill them with bravery, wrapping them in a bolstering ward and steeling them against fear itself for as long as you hold focus.
 
-# Name only for now; its description is pending the spell-prose pass.
 spell-censure = Censure
+spell-censure-desc = You speak a word of divine reproach that lashes out at a foe's mind, the psychic rebuke leaving their thoughts scattered and hard to hold onto.
