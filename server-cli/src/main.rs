@@ -19,8 +19,8 @@ mod tuilog;
 mod web;
 use crate::{
     cli::{
-        Admin, ArgvApp, ArgvCommand, BenchParams, Message, MessageReturn, ServerInfoDto,
-        SharedCommand, Shutdown,
+        Admin, ArgvApp, ArgvCommand, BenchParams, Message, MessageReturn, OracleEventsDto,
+        OracleTarget, ServerInfoDto, SharedCommand, Shutdown,
     },
     settings::Settings,
     shutdown_coordinator::ShutdownCoordinator,
@@ -29,13 +29,18 @@ use crate::{
 };
 use common::{
     clock::Clock,
-    comp::{ChatType, Player},
+    comp::{ChatType, Player, Pos},
     consts::MIN_RECOMMENDED_TOKIO_THREADS,
 };
 use common_base::span;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use rand::distr::SampleString;
-use server::{Event, Input, Server, persistence::DatabaseSettings, settings::Protocol};
+use server::{
+    Event, Input, Server, oracle,
+    oracle::policy::{self, PolicyError},
+    persistence::DatabaseSettings,
+    settings::Protocol,
+};
 use std::{
     io,
     sync::{Arc, atomic::AtomicBool},
@@ -43,11 +48,64 @@ use std::{
 };
 use tokio::sync::Notify;
 use tracing::{error, info, trace};
+use vek::Vec3;
 
 lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
 }
 const TPS: u64 = 30;
+
+/// Recovers a loaded `DmEvent`'s own `<id>` from the path it was ingested
+/// from -- the inverse of the `{event_id}.dmevent.ron`/`.json` match
+/// `server::oracle::trigger::find_loaded_event` does in the other
+/// direction. `OracleEvents` keys its table by path, not id, since a path is
+/// what the filesystem watcher actually observes.
+fn dmevent_id_from_path(path: &std::path::Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    name.strip_suffix(".dmevent.ron")
+        .or_else(|| name.strip_suffix(".dmevent.json"))
+        .map(str::to_owned)
+}
+
+/// Renders a `server::oracle::policy::PolicyError` as an operator-facing
+/// message for `MessageReturn::Error`.
+fn render_policy_error(err: &PolicyError) -> String {
+    use server::oracle::trigger::TriggerError;
+    match err {
+        PolicyError::Disabled => {
+            "ORACLE triggers are currently disabled (kill switch is off).".to_owned()
+        },
+        PolicyError::RateLimited { window, limit } => {
+            format!("Refused: the {limit}-per-{window} trigger rate limit has been reached.")
+        },
+        PolicyError::Cooldown {
+            event_id,
+            remaining,
+        } => format!(
+            "Refused: '{event_id}' fired too recently, {}s of cooldown remain.",
+            remaining.as_secs()
+        ),
+        PolicyError::Trigger(TriggerError::UnknownEvent { event_id }) => {
+            format!("No loaded ORACLE event named '{event_id}'.")
+        },
+        PolicyError::Trigger(TriggerError::NoTemplatesMatched { event_id }) => format!(
+            "Oracle event '{event_id}' names entity templates, but none of them are currently \
+             loaded."
+        ),
+        PolicyError::Trigger(TriggerError::WouldExceedCeiling {
+            live,
+            planned,
+            ceiling,
+        }) => format!(
+            "Refused: {live} ORACLE entities are already live, this trigger would add {planned} \
+             more, exceeding the ceiling of {ceiling}."
+        ),
+        PolicyError::Trigger(TriggerError::WouldExceedPerEventCap { requested, cap }) => format!(
+            "Refused: this trigger's resolved plan of {requested} exceeds the per-trigger cap of \
+             {cap}."
+        ),
+    }
+}
 
 fn main() -> io::Result<()> {
     #[cfg(feature = "tracy")]
@@ -417,6 +475,108 @@ fn server_loop(
                     };
                     let _ = response.send(MessageReturn::Info(info));
                 },
+                Message::ListChronicle { limit } => {
+                    let ecs = server.state().ecs();
+                    let all: Vec<String> = ecs
+                        .read_resource::<oracle::ChronicleLog>()
+                        .iter()
+                        .map(str::to_owned)
+                        .collect();
+                    let start = all.len().saturating_sub(limit);
+                    let _ = response.send(MessageReturn::Chronicle(all[start..].to_vec()));
+                },
+                Message::OracleListEvents => {
+                    let ecs = server.state().ecs();
+                    let watcher = ecs.read_resource::<oracle::OracleWatcher>();
+                    let dm_events: Vec<String> = watcher
+                        .events()
+                        .dm_events()
+                        .filter_map(|(path, _)| dmevent_id_from_path(path))
+                        .collect();
+                    let entity_templates: Vec<String> = watcher
+                        .events()
+                        .entity_templates()
+                        .map(|(_, template)| template.entity_template_id.clone())
+                        .collect();
+                    drop(watcher);
+                    let _ = response.send(MessageReturn::OracleEvents(OracleEventsDto {
+                        dm_events,
+                        entity_templates,
+                    }));
+                },
+                Message::OracleTrigger {
+                    event_id,
+                    target,
+                    dry_run,
+                    high_impact_override,
+                } => {
+                    let ecs = server.state().ecs();
+                    let pos_result = match target {
+                        OracleTarget::Coords { x, y, z } => Ok(Vec3::new(x, y, z)),
+                        OracleTarget::Player { alias } => {
+                            (&ecs.read_storage::<Player>(), &ecs.read_storage::<Pos>())
+                                .join()
+                                .find(|(p, _)| p.alias == alias)
+                                .map(|(_, pos)| pos.0)
+                                .ok_or_else(|| format!("player '{alias}' is not online"))
+                        },
+                    };
+
+                    match pos_result {
+                        Err(err) => {
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
+                        Ok(pos) => match policy::gated_trigger_dm_event(
+                            ecs,
+                            &event_id,
+                            pos,
+                            dry_run,
+                            high_impact_override,
+                        ) {
+                            Ok(outcome) => {
+                                let at = [outcome.at.x, outcome.at.y, outcome.at.z];
+                                let event_id = outcome.event_id.to_string();
+                                if dry_run {
+                                    let distance_to_nearest_player =
+                                        (&ecs.read_storage::<Player>(), &ecs.read_storage::<Pos>())
+                                            .join()
+                                            .map(|(_, p)| p.0.distance(pos))
+                                            .fold(None, |acc: Option<f32>, d| {
+                                                Some(acc.map_or(d, |a| a.min(d)))
+                                            });
+                                    let _ = response.send(MessageReturn::OraclePreview {
+                                        event_id,
+                                        at,
+                                        requested: outcome.requested,
+                                        spawned: outcome.spawned,
+                                        clamped: outcome.clamped,
+                                        bodies: outcome.bodies,
+                                        distance_to_nearest_player,
+                                    });
+                                } else {
+                                    let _ = response.send(MessageReturn::OracleTriggered {
+                                        event_id,
+                                        at,
+                                        requested: outcome.requested,
+                                        spawned: outcome.spawned,
+                                        clamped: outcome.clamped,
+                                    });
+                                }
+                            },
+                            Err(err) => {
+                                let _ =
+                                    response.send(MessageReturn::Error(render_policy_error(&err)));
+                            },
+                        },
+                    }
+                },
+                Message::OracleEventsEnabled { enabled } => {
+                    *server
+                        .state()
+                        .ecs()
+                        .write_resource::<policy::OracleEventsEnabled>() =
+                        policy::OracleEventsEnabled(enabled);
+                },
             }
             false
         };
@@ -433,6 +593,20 @@ fn server_loop(
                         MessageReturn::Players(players) => info!("Players: {:?}", players),
                         MessageReturn::Logs(_) => info!("skipp sending logs to tui"),
                         MessageReturn::Info(info) => info!(?info, "Server info"),
+                        MessageReturn::Chronicle(entries) => {
+                            info!(count = entries.len(), "Chronicle tail")
+                        },
+                        MessageReturn::OracleEvents(events) => info!(
+                            dm_events = ?events.dm_events,
+                            entity_templates = ?events.entity_templates,
+                            "Loaded ORACLE assets"
+                        ),
+                        MessageReturn::OracleTriggered {
+                            event_id, spawned, ..
+                        } => info!(%event_id, spawned, "Oracle event triggered"),
+                        MessageReturn::OraclePreview {
+                            event_id, spawned, ..
+                        } => info!(%event_id, spawned, "Oracle event preview"),
                         MessageReturn::Error(err) => error!(%err, "Command failed"),
                     };
                 }

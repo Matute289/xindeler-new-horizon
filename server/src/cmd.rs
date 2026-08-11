@@ -1445,6 +1445,12 @@ fn handle_oracle_trigger(
         pos,
         false,
         ceiling_policy,
+        // The in-game admin command has no separate per-trigger spawn cap
+        // of its own -- `usize::MAX` defers entirely to whatever
+        // `DmEvent::sanitize` already clamped `spawn_count` to. The tighter
+        // operational cap in `crate::oracle::policy` only applies to the
+        // HTTP-reachable trigger path.
+        usize::MAX,
     )
     .map_err(|err| Content::Plain(render_trigger_error(&err)))?;
 
@@ -1525,6 +1531,14 @@ fn render_trigger_error(err: &crate::oracle::trigger::TriggerError) -> String {
              more, exceeding the ceiling of {ceiling} by {over}. Re-run with 'clamp true' to \
              spawn only what fits, or despawn/wait for the live count to drop and try again.",
             over = (live + planned).saturating_sub(*ceiling),
+        ),
+        // Unreachable via this command: it always passes `usize::MAX` as
+        // its own per-event cap (see the call site above). Kept as a real
+        // arm, not a wildcard, so a future change to that call site can't
+        // silently regress into an unhandled case.
+        TriggerError::WouldExceedPerEventCap { requested, cap } => format!(
+            "Refused: this trigger's resolved plan of {requested} exceeds the per-trigger cap of \
+             {cap}."
         ),
     }
 }

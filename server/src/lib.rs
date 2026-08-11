@@ -454,6 +454,12 @@ impl Server {
         state.ecs_mut().insert(oracle::ChronicleLog::default());
         state
             .ecs_mut()
+            .insert(oracle::OracleEventsEnabled::default());
+        state
+            .ecs_mut()
+            .insert(oracle::OracleTriggerLedger::default());
+        state
+            .ecs_mut()
             .insert(sys::detection::DetectionSnapshots::default());
         state
             .ecs_mut()
