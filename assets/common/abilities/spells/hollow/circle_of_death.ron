@@ -1,0 +1,27 @@
+// Wide-radius burst-damage `Explosion`, same shape as
+// hemomancy/hemoclysm.ron scaled down to circle 6 (hemoclysm sits well
+// above this circle at 150 damage/191 energy). Sheet's "fail to steel
+// their bodies are seared" save-for-half rider dropped, same reasoning
+// blight.ron documents (no partial-damage-on-save primitive exists).
+Explosion(
+    energy_cost: 155.0,
+    buildup_duration: 0.9,
+    action_duration: 0.3,
+    recover_duration: 0.55,
+    damage: 68,
+    poise: 20,
+    knockback: (direction: Away, strength: 10.0),
+    radius: 6,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    reagent: Some(Purple),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        cooldown: Some(45.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)
