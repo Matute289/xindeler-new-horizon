@@ -3,6 +3,15 @@
 // lump-sum instant-heal primitive exists, only a per-second tick, so a
 // short strong burst approximates an instant heal). Sheet's condition-
 // cleanse rider dropped, no condition-removal `BuffEffect` exists.
+//
+// Reviewer correction: `BasicAura(targets: InGroup)` hits every ally in
+// range, no single-target cap exists -- `range` is the only real lever
+// for "single-ally" framing. Original `range: 18.0` copied mass_heal.ron's
+// own group-heal range verbatim (3x wider than the actual group heal
+// mass_cure_wounds.ron's 6.0), making this spell a cheaper, wider group
+// heal that undercut mass_cure_wounds entirely. Narrowed to a tight
+// touch-range, matching word_of_full_restoration.ron's own correctly-
+// scoped single-ally range.
 BasicAura(
     buildup_duration: 0.5,
     cast_duration: 0.5,
@@ -17,7 +26,7 @@ BasicAura(
         ),
     ],
     aura_duration: Some(3.0),
-    range: 18.0,
+    range: 3.0,
     energy_cost: 150.0,
     scales_with_combo: false,
     specifier: None,

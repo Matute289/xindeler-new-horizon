@@ -1,9 +1,14 @@
+// Reviewer correction: originally authored as Explosion, which always
+// detonates centered on the caster (no target-point field exists) --
+// contradicted this spell own longer cast range. Converted to GroundAoe,
+// the real detonate-at-a-chosen-point primitive.
 // Same straight-damage Explosion shape as destructive_wave.ron, same
 // circle.
-Explosion(
+GroundAoe(
     energy_cost: 145.0,
     buildup_duration: 0.65,
-    action_duration: 0.3,
+    delay: 0.4,
+    max_range: 18.0,
     recover_duration: 0.5,
     damage: 62,
     poise: 15,
@@ -11,8 +16,7 @@ Explosion(
     radius: 3,
     min_falloff: 0.35,
     dodgeable: Roll,
-    destroy_terrain: None,
-    eye_height: false,
+    rooted_cast: false,
     reagent: Some(Red),
     meta: (
         school: Some(Evocation),

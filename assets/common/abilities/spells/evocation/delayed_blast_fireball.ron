@@ -1,11 +1,16 @@
+// Reviewer correction: originally authored as Explosion, which always
+// detonates centered on the caster (no target-point field exists) --
+// contradicted this spell own longer cast range. Converted to GroundAoe,
+// the real detonate-at-a-chosen-point primitive.
 // Straight-damage Explosion, scaled to circle 7. Sheet's grow-over-time
 // delayed-trigger rider dropped, no held-charge/delayed-detonation
 // primitive exists -- ships as an immediate burst at the tuned circle-7
 // damage instead.
-Explosion(
+GroundAoe(
     energy_cost: 185.0,
     buildup_duration: 0.8,
-    action_duration: 0.3,
+    delay: 0.4,
+    max_range: 46.0,
     recover_duration: 0.55,
     damage: 100,
     poise: 20,
@@ -13,8 +18,7 @@ Explosion(
     radius: 6,
     min_falloff: 0.3,
     dodgeable: Roll,
-    destroy_terrain: None,
-    eye_height: false,
+    rooted_cast: false,
     reagent: Some(Red),
     meta: (
         school: Some(Evocation),

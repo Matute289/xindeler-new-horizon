@@ -1,10 +1,15 @@
+// Reviewer correction: originally authored as Explosion, which always
+// detonates centered on the caster (no target-point field exists) --
+// contradicted this spell own longer cast range. Converted to GroundAoe,
+// the real detonate-at-a-chosen-point primitive.
 // Straight-damage Explosion, scaled to circle 4 on the
 // fireball.ron->hemoclysm.ron curve. Sheet's save-for-half rider dropped,
 // no partial-damage-on-save primitive exists.
-Explosion(
+GroundAoe(
     energy_cost: 105.0,
     buildup_duration: 0.7,
-    action_duration: 0.3,
+    delay: 0.4,
+    max_range: 91.0,
     recover_duration: 0.5,
     damage: 55,
     poise: 15,
@@ -12,8 +17,7 @@ Explosion(
     radius: 6,
     min_falloff: 0.35,
     dodgeable: Roll,
-    destroy_terrain: None,
-    eye_height: false,
+    rooted_cast: false,
     reagent: Some(Blue),
     meta: (
         school: Some(Evocation),

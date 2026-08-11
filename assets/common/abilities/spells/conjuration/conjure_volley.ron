@@ -1,0 +1,23 @@
+// "Multiplies a shot into a storm of projectiles that rains down over an
+// area" -- straight-damage Explosion, matching this wave's L5 curve.
+Explosion(
+    energy_cost: 145.0,
+    buildup_duration: 0.65,
+    action_duration: 0.3,
+    recover_duration: 0.5,
+    damage: 62,
+    poise: 15,
+    knockback: (direction: Away, strength: 0.0),
+    radius: 6,
+    min_falloff: 0.35,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    reagent: Some(Yellow),
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Primordial),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)
