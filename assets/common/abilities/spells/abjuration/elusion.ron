@@ -1,0 +1,17 @@
+// "Resists magical effects more easily and slips free of spells that would
+// seize them" -- there is no advantage-on-save-vs-spells primitive, nor a
+// magic-only damage-kind filter (`ProtectingWard`'s own reduction is kind-
+// agnostic, per blade_ward.ron's precedent), so this ships as the same flat
+// `ProtectingWard` damage-reduction ward every other Abjuration self-ward in
+// this file uses, read here as "a general defensive lattice" rather than a
+// save-specific bonus.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.2, duration: Some(60.0))),
+    ],
+    energy_cost: 30.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

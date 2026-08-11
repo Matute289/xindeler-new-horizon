@@ -1,0 +1,17 @@
+// "Expend reserves of vitality to knit wounds" -- a self-heal, not a
+// lingering buff. No "expend Hit Dice" resource exists in this engine, so
+// this is modeled as a short, strong `Regeneration` burst (same primitive
+// goodberry.ron/vitalic_font.ron already use for restorative auras, scaled
+// here for a single dedicated self-heal rather than a shared group trickle):
+// 7.0 HP/s for 4s = 28 HP delivered fast enough to read as "instant"
+// recovery even though `Regeneration` itself always ticks over time.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.3,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: Regeneration, data: BuffData(strength: 7.0, duration: Some(4.0))),
+    ],
+    energy_cost: 35.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

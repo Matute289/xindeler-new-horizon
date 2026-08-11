@@ -1,0 +1,29 @@
+// A touch-ally protective pact. D&D's "the caster shares/splits the
+// warded ally's incoming wounds" has no damage-redirect or damage-share
+// primitive in this engine (checked every `BuffEffect` in
+// common/src/comp/buff.rs), so that half is dropped -- the same
+// documented gap sanctuary.ron/protection_from_evil_and_good.ron already
+// carry for their own D&D riders with no fitting mechanism. Ships as the
+// "+AC/+saves" half only, via the same flat `ProtectingWard` reduction this
+// file's touch-ally wards already share, held for the sheet's own
+// non-concentration 1-hour duration.
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: ProtectingWard,
+            strength: 0.2,
+            duration: Some(3600.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3600.0),
+    range: 2.0,
+    energy_cost: 35.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

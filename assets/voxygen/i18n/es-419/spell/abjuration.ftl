@@ -42,3 +42,27 @@ spell-snare = Lazo
 spell-snare-desc = Colocás un tramo de cuerda tejida con magia de atadura en un pequeño anillo sobre el suelo, que desaparece al activarse una trampa oculta. La primera criatura que pise el círculo protegido queda alzada en el aire y sujeta con firmeza hasta que logra soltarse.
 spell-wardaway = Rechazo
 spell-wardaway-desc = Lanzás un pulso de fuerza desorientadora contra una sola criatura, golpeándola con poder crudo e insólito.
+
+
+spell-aid = Auxilio
+spell-aid-desc = Una oleada de resolución fortificante baña a tus compañeros cercanos, elevando el límite de su vitalidad por un buen rato.
+spell-arcane_vigor = Vigor Arcano
+spell-arcane_vigor-desc = Canalizás energía mágica cruda a través de tu propio cuerpo, recurriendo a tus reservas para cerrar heridas y recuperar fuerzas.
+spell-elusion = Elusión
+spell-elusion-desc = Una red resplandeciente de sigilos protectores te envuelve, amortiguando el daño entrante mientras se mantenga.
+spell-protection_from_poison = Protección contra el Veneno
+spell-protection_from_poison-desc = Con un toque estabilizador envolvés el cuerpo de un aliado en una guardia protectora, amortiguando el daño entrante por un buen rato.
+spell-warding_bond = Vínculo Protector
+spell-warding_bond-desc = Forjás un vínculo protector con un compañero dispuesto que tocás, otorgándole una medida de resiliencia mientras el vínculo se mantenga.
+spell-beacon_of_hope = Faro de Esperanza
+spell-beacon_of_hope-desc = Un grupo elegido de aliados queda envuelto en esperanza inquebrantable, su resolución endureciéndose contra el miedo y la desesperación mientras dure.
+spell-glyph_of_warding = Glifo de Protección
+spell-glyph_of_warding-desc = Trazás un sigilo protector oculto en el suelo a tu alrededor; la tierra marcada se vuelve incómoda y traicionera bajo los pies de quien la perturbe.
+spell-intellect_fortress = Fortaleza del Intelecto
+spell-intellect_fortress-desc = Una mente dispuesta queda envuelta en una red de protección psíquica, amortiguando el daño entrante mientras mantengas la concentración.
+spell-linked_glyphs = Glifos Enlazados
+spell-linked_glyphs-desc = Trazás un glifo disparador oculto en el suelo a tus pies; el punto marcado se vuelve incómodo bajo los pies de quien lo perturbe.
+spell-magic_circle = Círculo Mágico
+spell-magic_circle-desc = Un anillo de runas protectoras resplandecientes se alza del suelo marcado, entorpeciendo a toda criatura hostil que intente cruzar el límite.
+spell-protection_from_energy = Protección contra la Energía
+spell-protection_from_energy-desc = Una guardia protectora se posa sobre vos, amortiguando el daño entrante mientras dure.

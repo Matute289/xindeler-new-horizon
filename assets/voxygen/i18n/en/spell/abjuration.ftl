@@ -42,3 +42,27 @@ spell-snare = Snare
 spell-snare-desc = You lay a length of cord woven with binding magic in a small ring upon the ground, vanishing as it sets a hidden trap. The first creature to step into the warded circle is yanked aloft and held fast until it wrenches itself free.
 spell-wardaway = Wardaway
 spell-wardaway-desc = You fling a pulse of disorienting force at a single creature, battering it with raw, uncanny power.
+
+
+spell-aid = Aid
+spell-aid-desc = A surge of fortifying resolve washes over nearby companions, raising their vitality's ceiling for a long while.
+spell-arcane_vigor = Arcane Vigor
+spell-arcane_vigor-desc = You channel raw magical energy through your own body, drawing on your reserves to knit wounds and restore strength.
+spell-elusion = Elusion
+spell-elusion-desc = A shimmering lattice of protective sigils wraps around you, blunting incoming harm while it holds.
+spell-protection_from_poison = Protection from Poison
+spell-protection_from_poison-desc = With a steadying touch you shield an ally's body in a protective ward, blunting incoming harm for a good while.
+spell-warding_bond = Warding Bond
+spell-warding_bond-desc = You forge a protective bond with a willing companion you touch, granting them a measure of resilience for as long as the bond holds.
+spell-beacon_of_hope = Beacon of Hope
+spell-beacon_of_hope-desc = A chosen group of allies is wreathed in steadfast hope, their resolve hardening against fear and despair while it lasts.
+spell-glyph_of_warding = Glyph of Warding
+spell-glyph_of_warding-desc = You etch a hidden warding sigil onto the ground around you, the marked earth growing awkward and treacherous underfoot to anyone who disturbs it.
+spell-intellect_fortress = Intellect Fortress
+spell-intellect_fortress-desc = A willing mind is wrapped in a lattice of psychic warding, blunting incoming harm for as long as you keep your focus.
+spell-linked_glyphs = Linked Glyphs
+spell-linked_glyphs-desc = You etch a hidden trigger-glyph into the ground at your feet, the marked spot growing awkward underfoot to anyone who disturbs it.
+spell-magic_circle = Magic Circle
+spell-magic_circle-desc = A ring of glowing protective runes rises from the marked ground, hindering any hostile creature that tries to cross the boundary.
+spell-protection_from_energy = Protection from Energy
+spell-protection_from_energy-desc = A protective ward settles over you, blunting incoming harm while it lasts.
