@@ -1,18 +1,23 @@
-// Reviewer correction: originally authored as Explosion, which always
-// detonates centered on the caster (no target-point field exists) --
-// contradicted this spell own longer cast range. Converted to GroundAoe,
-// the real detonate-at-a-chosen-point primitive.
-// Straight-damage Explosion, scaled to circle 4 on the
-// fireball.ron->hemoclysm.ron curve. Sheet's save-for-half rider dropped,
-// no partial-damage-on-save primitive exists.
+// Reviewer correction (round 1): originally authored as Explosion, which
+// always detonates centered on the caster (no target-point field exists)
+// -- contradicted this spell's own longer cast range. Converted to
+// GroundAoe, the real detonate-at-a-chosen-point primitive.
+// Reviewer correction (round 2): damage/poise still carried the old
+// Explosion-tier numbers (55/15) after the round-1 conversion, a ~25%
+// premium over this circle's real GroundAoe baseline
+// (sickening_radiance.ron/spellfire_storm.ron/storm_sphere.ron, 44/10) --
+// that premium exists to compensate Explosion's self-centered delivery
+// risk, which this spell no longer takes as a ranged GroundAoe. Matched
+// to the circle-4 GroundAoe baseline. Sheet's save-for-half rider
+// dropped, no partial-damage-on-save primitive exists.
 GroundAoe(
     energy_cost: 105.0,
     buildup_duration: 0.7,
     delay: 0.4,
     max_range: 91.0,
     recover_duration: 0.5,
-    damage: 55,
-    poise: 15,
+    damage: 44,
+    poise: 10,
     knockback: (direction: Away, strength: 5.0),
     radius: 6,
     min_falloff: 0.35,

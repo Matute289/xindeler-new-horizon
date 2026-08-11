@@ -1,15 +1,19 @@
-// Reviewer correction: originally authored as Explosion, which always
-// detonates centered on the caster (no target-point field exists) --
-// contradicted this spell own longer cast range. Converted to GroundAoe,
-// the real detonate-at-a-chosen-point primitive.
-// Straight-damage Explosion, scaled to circle 8.
+// Reviewer correction (round 1): originally authored as Explosion, which
+// always detonates centered on the caster (no target-point field exists)
+// -- contradicted this spell's own longer cast range. Converted to
+// GroundAoe, the real detonate-at-a-chosen-point primitive.
+// Reviewer correction (round 2): damage still carried the old
+// Explosion-tier number (112), a ~22% premium over this circle's real
+// GroundAoe baseline (earthquake.ron/maddening_darkness.ron, 92) that no
+// longer applies once delivery is ranged. Matched to the circle-8
+// GroundAoe baseline.
 GroundAoe(
     energy_cost: 195.0,
     buildup_duration: 0.8,
     delay: 0.4,
     max_range: 46.0,
     recover_duration: 0.55,
-    damage: 112,
+    damage: 92,
     poise: 25,
     knockback: (direction: Away, strength: 8.0),
     radius: 6,

@@ -2,6 +2,10 @@
 // weapon-empowerment stand-in, same substitution shillelagh.ron already
 // established. The multi-target on-demand radiant burst rider dropped, no
 // on-demand-secondary-attack primitive exists on `SelfBuff`.
+// Reckless's paired vulnerability increase isn't in the sheet's
+// description but is Reckless's only shape in this engine; flagged as a
+// deviation, not a silent reinterpretation (same note shillelagh.ron
+// carries for the same substitution).
 SelfBuff(
     buildup_duration: 0.4,
     cast_duration: 0.2,

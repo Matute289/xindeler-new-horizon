@@ -1,18 +1,20 @@
-// Reviewer correction: originally authored as Explosion, which always
-// detonates centered on the caster (no target-point field exists) --
-// contradicted this spell own longer cast range. Converted to GroundAoe,
-// the real detonate-at-a-chosen-point primitive.
-// Straight-damage Explosion, scaled to circle 7. Sheet's grow-over-time
-// delayed-trigger rider dropped, no held-charge/delayed-detonation
-// primitive exists -- ships as an immediate burst at the tuned circle-7
-// damage instead.
+// Reviewer correction (round 1): originally authored as Explosion, which
+// always detonates centered on the caster (no target-point field exists)
+// -- contradicted this spell's own longer cast range. Converted to
+// GroundAoe, the real detonate-at-a-chosen-point primitive. Sheet's
+// grow-over-time delayed-trigger rider dropped, no held-charge/delayed-
+// detonation primitive exists -- ships as an immediate burst instead.
+// Reviewer correction (round 2): damage still carried the old
+// Explosion-tier number (100), a ~25% premium over this circle's real
+// GroundAoe baseline (whirlwind.ron, 80) that no longer applies once
+// delivery is ranged. Matched to the circle-7 GroundAoe baseline.
 GroundAoe(
     energy_cost: 185.0,
     buildup_duration: 0.8,
     delay: 0.4,
     max_range: 46.0,
     recover_duration: 0.55,
-    damage: 100,
+    damage: 80,
     poise: 20,
     knockback: (direction: Away, strength: 8.0),
     radius: 6,
