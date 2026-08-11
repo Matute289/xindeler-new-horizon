@@ -1,0 +1,19 @@
+// "Grants flight, ranged attacks struggle to reach" -- `Hastened`
+// (movement speed) stands in for the flight/evasion half; the offensive
+// wind-cone rider dropped, no per-cast reusable-AoE-attack primitive
+// attached to a SelfBuff exists.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.35, duration: Some(60.0))),
+    ],
+    energy_cost: 115.0,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

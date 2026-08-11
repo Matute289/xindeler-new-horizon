@@ -1,0 +1,24 @@
+// Single-target high-damage Force bolt, same BasicRanged shape as this
+// batch's other big single-target nukes. Sheet's save-for-half rider
+// dropped, no partial-damage-on-save primitive exists.
+BasicRanged(
+    energy_cost: 145.0,
+    buildup_duration: 0.55,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 70,
+            damage_kind: Force,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

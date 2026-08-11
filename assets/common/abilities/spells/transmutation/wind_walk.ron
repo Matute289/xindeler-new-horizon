@@ -1,0 +1,29 @@
+// "Dissolve into cloud, soaring through the sky" group buff -- `Hastened`
+// (movement speed) via touch-ally `BasicAura`, same InGroup shape as
+// stoneskin.ron. Real flight rider dropped, no flight-grant `BuffEffect`
+// exists.
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.3,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Hastened,
+            strength: 0.3,
+            duration: Some(28800.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(28800.0),
+    range: 9.0,
+    energy_cost: 100.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

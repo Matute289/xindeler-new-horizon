@@ -1,0 +1,30 @@
+// Sheet describes this cast on the caster's own body already ("You reshape
+// your own body... keeping your own mind throughout") -- no narrowing
+// needed, unlike polymorph.ron/animal_shapes.ron's own multi/enemy-to-self
+// deviation. Same `Transform`-variant deviation as guardian_of_nature.ron.
+// `BipedLarge(Ogre)` stands in for "nearly any living creature whose power
+// matches your own" -- one fixed powerful form, no per-cast free-form
+// species choice exists in the data model.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(BipedLarge((species: Ogre, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 200,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 9 spell -> min_level 54, the level * 6 convention.
+        requirements: (min_level: Some(54)),
+    ),
+)

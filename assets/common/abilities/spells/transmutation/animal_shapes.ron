@@ -1,0 +1,28 @@
+// Same `Transform`-variant deviation as guardian_of_nature.ron. Sheet
+// describes reshaping "several willing companions" -- `SelfBuff` always
+// lands on the caster, so this narrows to a self-cast shapeshift, same
+// class of narrowing polymorph.ron already makes for its own multi/enemy
+// framing. `QuadrupedMedium(Tiger)` stands in for "sturdy beast form."
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(QuadrupedMedium((species: Tiger, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 150,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

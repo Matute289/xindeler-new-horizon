@@ -1,0 +1,19 @@
+// "Elemental resistances and searing/freezing strikes" -- damage-reduction
+// half via `ProtectingWard`, same self-only shape as this pass's other
+// resistance spells. Sheet's weapon-elemental-infusion rider dropped, no
+// per-cast weapon-damage-type-swap primitive exists.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 95.0,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

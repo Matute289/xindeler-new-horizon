@@ -1,0 +1,28 @@
+// Same `Transform`-variant deviation as guardian_of_nature.ron, same
+// enemy-to-self narrowing as polymorph.ron. Sheet's "sustained focus makes
+// the new shape permanent" rider dropped -- `Polymorphed` always
+// auto-reverts on buff expiry (see alter_self.ron), no permanent-swap path
+// exists. `BipedLarge(Cyclops)` stands in for "another creature entirely."
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(BipedLarge((species: Cyclops, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 200,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 9 spell -> min_level 54, the level * 6 convention.
+        requirements: (min_level: Some(54)),
+    ),
+)

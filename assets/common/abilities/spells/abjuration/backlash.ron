@@ -6,14 +6,19 @@
 // compendium entry as flavor, same as every other Reaction-tagged spell
 // in this pass. "Turning part of its force back on its source" reflect
 // rider dropped -- no reflect/thorns `BuffEffect` exists.
+//
+// Reviewer correction: original strength 0.3 for 60 energy at a level-24
+// gate was strictly dominated by the unleveled shield.ron (strength 0.35
+// for 15 energy). Re-costed above shield.ron's baseline to actually
+// justify the level gate: higher strength, modest energy.
 SelfBuff(
     buildup_duration: 0.3,
     cast_duration: 0.15,
     recover_duration: 0.3,
     buffs: [
-        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.3, duration: Some(6.0))),
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.45, duration: Some(6.0))),
     ],
-    energy_cost: 60.0,
+    energy_cost: 30.0,
     meta: (
         school: Some(Abjuration),
         source: Some(Arcane),
