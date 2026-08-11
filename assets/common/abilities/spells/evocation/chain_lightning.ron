@@ -1,0 +1,31 @@
+// Multi-hit lightning bolt, same `RapidRanged` shape as eldritch_blast.ron
+// (the first player-spell pilot for this variant) -- all projectiles
+// travel the caster's own aim line, not independently-aimed forks per
+// target, same documented limitation eldritch_blast.ron's own header
+// establishes.
+RapidRanged(
+    energy_cost: 165.0,
+    buildup_duration: 0.5,
+    shoot_duration: 0.06,
+    recover_duration: 0.4,
+    options: (
+        max_projectiles: Some(4),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 22,
+            damage_kind: Lightning,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 80.0,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(35.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

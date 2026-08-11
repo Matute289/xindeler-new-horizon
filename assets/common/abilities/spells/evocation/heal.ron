@@ -1,0 +1,31 @@
+// Single-ally heal, same `BasicAura`+`Regeneration` shape as
+// prayer_of_healing.ron (that file's own header documents why: no
+// lump-sum instant-heal primitive exists, only a per-second tick, so a
+// short strong burst approximates an instant heal). Sheet's condition-
+// cleanse rider dropped, no condition-removal `BuffEffect` exists.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Regeneration,
+            strength: 24.0,
+            duration: Some(3.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3.0),
+    range: 18.0,
+    energy_cost: 150.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        cooldown: Some(20.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

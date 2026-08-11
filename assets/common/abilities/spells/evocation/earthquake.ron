@@ -1,0 +1,25 @@
+// Straight-damage GroundAoe scaled for circle 8. Sheet's structural-
+// collapse/knock-prone dual-save rider dropped, no such compound-condition
+// primitive exists.
+GroundAoe(
+    energy_cost: 195.0,
+    buildup_duration: 0.8,
+    delay: 0.55,
+    recover_duration: 0.55,
+    max_range: 152.0,
+    radius: 6.0,
+    min_falloff: 0.3,
+    damage: 92,
+    poise: 25,
+    knockback: (strength: 12.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(55.0),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

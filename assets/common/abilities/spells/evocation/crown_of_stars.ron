@@ -1,0 +1,31 @@
+// "Seven motes... hurl one at a foe" -- same `RapidRanged` shape as
+// chain_lightning.ron. Sheet's "one mote per bonus action over the spell's
+// full duration" cadence collapses to firing all shots in one cast, same
+// simplification eldritch_blast.ron's own header documents (no per-cast
+// resource-pool/repeat-cast-over-time primitive exists).
+RapidRanged(
+    energy_cost: 180.0,
+    buildup_duration: 0.5,
+    shoot_duration: 0.06,
+    recover_duration: 0.4,
+    options: (
+        max_projectiles: Some(7),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 16,
+            damage_kind: Radiant,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 80.0,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        cooldown: Some(45.0),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

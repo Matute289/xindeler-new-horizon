@@ -6,7 +6,7 @@ SelfBuff(
     cast_duration: 0.2,
     recover_duration: 0.3,
     buffs: [
-        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.35, duration: Some(60.0))),
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.4, duration: Some(60.0))),
     ],
     energy_cost: 115.0,
     meta: (

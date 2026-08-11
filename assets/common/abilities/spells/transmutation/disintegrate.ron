@@ -2,7 +2,7 @@
 // batch's other big single-target nukes. Sheet's save-for-half rider
 // dropped, no partial-damage-on-save primitive exists.
 BasicRanged(
-    energy_cost: 145.0,
+    energy_cost: 155.0,
     buildup_duration: 0.55,
     recover_duration: 0.4,
     projectile: (

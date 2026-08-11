@@ -1,0 +1,23 @@
+// Straight-damage Explosion, scaled to circle 8.
+Explosion(
+    energy_cost: 195.0,
+    buildup_duration: 0.8,
+    action_duration: 0.3,
+    recover_duration: 0.55,
+    damage: 112,
+    poise: 25,
+    knockback: (direction: Away, strength: 8.0),
+    radius: 6,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    reagent: Some(White),
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        cooldown: Some(50.0),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

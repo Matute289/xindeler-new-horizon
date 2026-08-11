@@ -1,0 +1,28 @@
+// Real-agent companion summon, same `SummonInfo::Npc` shape as
+// hollow/spirit_of_death.ron. `body: BipedLarge(Ogre)` stands in for "huge
+// hand woven from force" -- the closest already-shipped large humanoid
+// body with a real combat loadout preset. Sheet's selectable-action modes
+// (clench/shove/grasp) collapse to the preset's own default melee kit.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (2.0, 4.0),
+        body: BipedLarge((species: Ogre, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(40.0),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

@@ -1,0 +1,23 @@
+// Straight-damage Explosion, scaled to circle 6.
+Explosion(
+    energy_cost: 175.0,
+    buildup_duration: 0.75,
+    action_duration: 0.3,
+    recover_duration: 0.55,
+    damage: 78,
+    poise: 20,
+    knockback: (direction: Away, strength: 5.0),
+    radius: 6,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    reagent: Some(Blue),
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(40.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)
