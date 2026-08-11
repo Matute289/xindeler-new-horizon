@@ -1,0 +1,30 @@
+// Straight burst-damage GroundAoe, matching this wave's established
+// GroundAoe damage/energy curve for its circle. Sheet's lingering-turn-
+// based-damage/save riders dropped, matched to a single-application
+// burst -- no partial-damage-on-save or per-turn-tick-while-standing
+// primitive exists on this variant beyond its own one-shot strike.
+// Reviewer correction: was identical to insect_plague.ron (same energy/
+// damage/poise/radius) but with less range (37 vs 46), a strict
+// downgrade at the same cost. Energy reduced to reflect the shorter
+// reach.
+GroundAoe(
+    energy_cost: 130.0,
+    buildup_duration: 0.6,
+    delay: 0.4,
+    recover_duration: 0.45,
+    max_range: 37.0,
+    radius: 6.0,
+    min_falloff: 0.35,
+    damage: 62.0,
+    poise: 15,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

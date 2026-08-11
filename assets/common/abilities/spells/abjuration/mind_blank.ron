@@ -1,0 +1,30 @@
+// "Sealed against intrusion of the mind... charms and divinations slide
+// off" -- `BuffKind::Nondetection` (real `BuffEffect::Nondetection`,
+// already shipped on nondetection.ron) is the closest existing anti-
+// divination primitive. Sheet's "immune to psychic harm" damage-type
+// immunity dropped -- no per-damage-type immunity `BuffEffect` exists.
+// Self-only: same Touch-range-to-SelfOnly narrowing nondetection.ron/
+// invisibility.ron already establish (`SelfBuff` always lands on the
+// caster). Duration matches the sheet's own 24h span.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(
+            kind: Nondetection,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(86400.0),
+            ),
+        ),
+    ],
+    energy_cost: 145.0,
+    enforced_limit: false,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Arcane),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

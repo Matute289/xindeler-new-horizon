@@ -1,0 +1,40 @@
+// "Strips resistance to a chosen element, extra harm from that type" --
+// no vulnerability-grant `BuffEffect` exists. Modeled as a save-gated
+// generic debuff (`Sickened`) via the school's real `CasterLevelRoll`
+// save primitive, token damage alongside the roll, same shape as this
+// pass's other save-for-condition spells.
+BasicRanged(
+    energy_cost: 75.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 4,
+            attack_effect: Some((
+                Buff((
+                    kind: Sickened,
+                    dur_secs: 60,
+                    strength: Value(0.3),
+                    chance: 1.0,
+                )),
+                CasterLevelRoll((
+                    unlock_level: 24,
+                    fail_chance_at_unlock: 0.25,
+                    fail_chance_at_max_level: 0.05,
+                    source_classes: [Artificer, Druid, Warlock, Mage],
+                )),
+            )),
+            damage_kind: Acid,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

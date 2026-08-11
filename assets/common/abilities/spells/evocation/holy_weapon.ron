@@ -1,0 +1,23 @@
+// "Weapon strikes sear foes with holy energy" -- `Reckless` (damage-up)
+// weapon-empowerment stand-in, same substitution shillelagh.ron already
+// established. The multi-target on-demand radiant burst rider dropped, no
+// on-demand-secondary-attack primitive exists on `SelfBuff`.
+// Reckless's paired vulnerability increase isn't in the sheet's
+// description but is Reckless's only shape in this engine; flagged as a
+// deviation, not a silent reinterpretation (same note shillelagh.ron
+// carries for the same substitution).
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Reckless, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 90.0,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

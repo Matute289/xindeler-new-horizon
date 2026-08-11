@@ -1,0 +1,18 @@
+// "Looses arrows with relentless, blurring speed" -- `Hastened` (attack-
+// speed buff) stands in for the extra-attacks rider; the endless-ammo half
+// dropped, no ammo-consumption/conjuration primitive exists to hook into.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 90.0,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

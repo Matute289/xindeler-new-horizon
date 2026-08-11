@@ -1,0 +1,24 @@
+// Same straight-damage GroundAoe shape as synaptic_static.ron's L5
+// scaling. Sheet's "column relocates each turn" rider dropped, no
+// repeat-cast-free-relocation primitive exists.
+GroundAoe(
+    energy_cost: 145.0,
+    buildup_duration: 0.6,
+    delay: 0.4,
+    recover_duration: 0.45,
+    max_range: 18.0,
+    radius: 9.0,
+    min_falloff: 0.4,
+    damage: 62,
+    poise: 15,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

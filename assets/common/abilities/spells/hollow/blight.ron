@@ -1,0 +1,27 @@
+// Single-target necrotic bolt, same BasicRanged shape as vampiric_touch.ron/
+// negative_energy_flood.ron (this cell). Sheet's "resists with a hardy
+// constitution to halve the decaying damage" save-for-half rider dropped --
+// no partial-damage-on-save primitive exists (`combat.rs`'s `CasterLevelRoll`
+// gates whether a *buff* lands, not a damage split); the full-damage hit
+// alone is a reasonable single-target circle-4 nuke on its own.
+BasicRanged(
+    energy_cost: 70.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 34,
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

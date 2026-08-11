@@ -1,0 +1,27 @@
+// Straight burst-damage GroundAoe, matching this wave's established
+// GroundAoe damage/energy curve for its circle. Sheet's lingering-turn-
+// based-damage/save riders dropped, matched to a single-application
+// burst -- no partial-damage-on-save or per-turn-tick-while-standing
+// primitive exists on this variant beyond its own one-shot strike.
+GroundAoe(
+    energy_cost: 225.0,
+    buildup_duration: 0.6,
+    delay: 0.4,
+    recover_duration: 0.45,
+    max_range: 152.0,
+    radius: 9.0,
+    min_falloff: 0.35,
+    damage: 130.0,
+    poise: 15,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Arcane),
+        cooldown: Some(60.0),
+        // level 9 spell -> min_level 54, the level * 6 convention.
+        requirements: (min_level: Some(54)),
+    ),
+)

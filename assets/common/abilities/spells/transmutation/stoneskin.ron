@@ -1,0 +1,27 @@
+// Touch-ally damage-reduction ward, same `BasicAura`+`ProtectingWard`
+// shape as shield_of_faith.ron.
+BasicAura(
+    buildup_duration: 0.3,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: ProtectingWard,
+            strength: 0.3,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 3.0,
+    energy_cost: 90.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

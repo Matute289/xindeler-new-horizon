@@ -1,0 +1,24 @@
+// Straight-damage GroundAoe scaled for circle 7. Sheet's forced-throw
+// rider on failed save dropped, kept as flat knockback instead.
+GroundAoe(
+    energy_cost: 175.0,
+    buildup_duration: 0.7,
+    delay: 0.5,
+    recover_duration: 0.5,
+    max_range: 91.0,
+    radius: 6.0,
+    min_falloff: 0.35,
+    damage: 80,
+    poise: 20,
+    knockback: (strength: 12.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(45.0),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

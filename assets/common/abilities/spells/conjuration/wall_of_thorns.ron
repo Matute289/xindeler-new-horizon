@@ -1,0 +1,23 @@
+// Wall-shaped lingering hazard, same `SpriteSummon`+`EnsnaringVines` shape
+// as evocation/wall_of_fire.ron. This is the one wall spell in this pass
+// where `EnsnaringVines`' real traction-reduction effect is the closest
+// possible flavor match (the sheet's own "briar" is thorny plant growth).
+SpriteSummon(
+    buildup_duration: 0.7,
+    cast_duration: 0.5,
+    recover_duration: 0.45,
+    sprite: EnsnaringVines,
+    del_timeout: Some((60.0, 30.0)),
+    summon_distance: (0.0, 9.0),
+    sparseness: 0.4,
+    angle: 90.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Primordial),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

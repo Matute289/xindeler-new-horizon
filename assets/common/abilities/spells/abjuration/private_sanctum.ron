@@ -1,0 +1,27 @@
+// Long-lived warded zone, same `SpriteSummon`-as-hazard-ground shape as
+// glyph_of_warding.ron (see that file's header for the full precedent
+// trail: no energy_cost field on this variant, no damage/buff/trigger
+// field, `EnsnaringVines` is the only real physical footprint available).
+// Sheet's "muffles sound, blocks sight, bars divination/teleportation"
+// riders all dropped -- no sound-dampening, sight-blocking, or magic-
+// travel-blocking primitive exists. `del_timeout` matches the sheet's own
+// 24h duration.
+SpriteSummon(
+    buildup_duration: 0.7,
+    cast_duration: 0.6,
+    recover_duration: 0.45,
+    sprite: EnsnaringVines,
+    del_timeout: Some((86400.0, 60.0)),
+    summon_distance: (0.0, 9.0),
+    sparseness: 0.5,
+    angle: 360.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

@@ -1,0 +1,42 @@
+// Single-target cast-disable on a failed save. Reviewer correction: an
+// earlier version granted `Antimagic` unconditionally on top of a full
+// 58-damage hit -- switched to the same `CasterLevelRoll` save-gate shape
+// as psychic_lance.ron/power_word_stun.ron (this school's real "on a
+// failed save" primitive), with only token damage alongside the roll,
+// matching power_word_stun.ron's own 1-damage precedent for its
+// comparably severe L8 disable rider.
+BasicRanged(
+    energy_cost: 170.0,
+    buildup_duration: 0.5,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 2,
+            attack_effect: Some((
+                Buff((
+                    kind: Antimagic,
+                    dur_secs: 180,
+                    strength: Value(1.0),
+                    chance: 1.0,
+                )),
+                CasterLevelRoll((
+                    unlock_level: 48,
+                    fail_chance_at_unlock: 0.25,
+                    fail_chance_at_max_level: 0.05,
+                    source_classes: [Bard, Druid, Warlock, Mage],
+                )),
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

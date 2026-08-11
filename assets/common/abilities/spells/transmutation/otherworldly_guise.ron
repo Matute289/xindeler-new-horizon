@@ -1,0 +1,22 @@
+// Sheet `variant: Transform`, but the description ("hardens defenses,
+// lends strikes celestial/infernal might") reads as a stat buff, not a
+// literal species swap -- no celestial/infernal `Body` exists in the
+// engine's species roster to swap into anyway. Modeled as `Reckless`
+// (damage-up), same substitution battle_transformation.ron uses for a
+// comparable martial-empowerment buff, rather than forcing a body-swap
+// this spell's own flavor doesn't really call for.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.25,
+    buffs: [
+        BuffDesc(kind: Reckless, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 115.0,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

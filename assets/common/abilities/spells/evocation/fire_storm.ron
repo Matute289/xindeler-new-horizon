@@ -1,0 +1,31 @@
+// Same Shockwave cone shape as cone_of_cold.ron, scaled for circle 7.
+// Sheet's freeform-cube-cluster area approximated to a cone, same
+// simplification the sheet's own notes already flag.
+Shockwave(
+    energy_cost: 185.0,
+    buildup_duration: 0.75,
+    swing_duration: 0.4,
+    recover_duration: 0.55,
+    damage: 100.0,
+    poise_damage: 20,
+    knockback: (strength: 0.0, direction: Away),
+    shockwave_angle: 90.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 25.0,
+    shockwave_duration: 0.45,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Fire,
+    specifier: Ground,
+    damage_effect: None,
+    ori_rate: 1.0,
+    timing: PostBuildup,
+    emit_outcome: true,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(45.0),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

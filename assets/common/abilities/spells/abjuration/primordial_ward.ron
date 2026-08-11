@@ -1,0 +1,25 @@
+// "Resistance to acid, cold, fire, lightning, and thunder" -- `ProtectingWard`'s
+// `DamageReduction` has no per-damage-type filter: it blunts ALL incoming
+// damage identically, not any specific element. Same primitive reused here
+// as a generic damage-reduction ward; the i18n description is written to
+// avoid naming specific damage types the mechanic can't actually filter for.
+//
+// Reviewer correction: original strength 0.35 exactly matched the
+// lower-level antilife_shell.ron (L5) for more energy, giving no reason to
+// take this L6 spell over its cheaper sibling. Bumped to 0.4, matching
+// globe_of_invulnerability.ron's own correctly-scaled L6 value.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.4, duration: Some(60.0))),
+    ],
+    energy_cost: 110.0,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Primordial),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

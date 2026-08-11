@@ -1,0 +1,38 @@
+// "Grow progressively rigid... hardens into an immobile statue" -- a hold,
+// same save-gated `Rooted` shape (via `CasterLevelRoll`) as this pass's
+// other hard-CC spells.
+BasicRanged(
+    energy_cost: 120.0,
+    buildup_duration: 0.5,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 3,
+            attack_effect: Some((
+                Buff((
+                    kind: Rooted,
+                    dur_secs: 10,
+                    strength: Value(1.0),
+                    chance: 1.0,
+                )),
+                CasterLevelRoll((
+                    unlock_level: 36,
+                    fail_chance_at_unlock: 0.25,
+                    fail_chance_at_max_level: 0.05,
+                    source_classes: [Druid, Sorcerer, Warlock, Mage],
+                )),
+            )),
+            damage_kind: Crushing,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

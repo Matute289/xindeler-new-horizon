@@ -1,0 +1,31 @@
+// "Blessed dishes restore vitality and fortify all who partake" -- same
+// `BasicAura`+`Regeneration` heal-burst shape as evocation/heal.ron, group-
+// targeted. Sheet's "lasting resilience" long-duration secondary buff and
+// condition immunities dropped, no multi-effect stacked-buff-grant
+// primitive exists on a single `AuraBuffConstructor` entry.
+BasicAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.6,
+    recover_duration: 0.4,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Regeneration,
+            strength: 20.0,
+            duration: Some(3.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3.0),
+    range: 9.0,
+    energy_cost: 155.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Divine),
+        cooldown: Some(30.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)
