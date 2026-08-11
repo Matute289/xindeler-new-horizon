@@ -1,0 +1,25 @@
+// "Wards a wide stretch of ground, seals against teleport/planar entry,
+// intruders seared by hostile energy" -- same `SpriteSummon`-as-hazard-
+// ground shape as glyph_of_warding.ron. Sheet's anti-teleport/planar-entry
+// warding rider dropped -- no magic-travel-blocking primitive exists.
+// `EnsnaringVines` sprites stand in for the "intruders seared" footprint
+// the same partial way glyph_of_warding.ron's own header documents.
+SpriteSummon(
+    buildup_duration: 0.7,
+    cast_duration: 0.6,
+    recover_duration: 0.45,
+    sprite: EnsnaringVines,
+    del_timeout: Some((3600.0, 60.0)),
+    summon_distance: (0.0, 12.0),
+    sparseness: 0.5,
+    angle: 360.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Divine),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

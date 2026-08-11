@@ -1,0 +1,23 @@
+// "Braces against an incoming surge, blunting the blow" -- a self
+// damage-reduction ward, same `SelfBuff`+`ProtectingWard` primitive as
+// blade_ward.ron/resistance.ron (Wave-1 Abjuration). Sheet's `cast_time:
+// Reaction` is compendium-only presentational metadata (no real trigger-
+// on-being-hit mechanic exists to gate an ability on); kept in the
+// compendium entry as flavor, same as every other Reaction-tagged spell
+// in this pass. "Turning part of its force back on its source" reflect
+// rider dropped -- no reflect/thorns `BuffEffect` exists.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.3, duration: Some(6.0))),
+    ],
+    energy_cost: 60.0,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)
