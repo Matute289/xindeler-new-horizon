@@ -94,6 +94,10 @@ pub struct TriggerOutcome {
     /// and how to deliver it (the in-game chat command has a client entity
     /// to greet; a future non-chat trigger path may not).
     pub on_enter_message: Option<String>,
+    /// The outer `Body` variant of every entity actually (or, for a
+    /// `dry_run`, would be) spawned — e.g. `"QuadrupedMedium"`, not the
+    /// specific species. A preview aid, not player-facing text.
+    pub bodies: Vec<String>,
 }
 
 /// Why `trigger_dm_event` could not produce a [`TriggerOutcome`].
@@ -113,12 +117,23 @@ pub enum TriggerError {
         planned: usize,
         ceiling: usize,
     },
+    /// The resolved spawn plan alone (before any aggregate-ceiling check)
+    /// exceeds the caller's `per_event_cap`. Checked first, independently of
+    /// [`CeilingPolicy`] — a caller-supplied per-trigger cap is not a
+    /// clampable ceiling, it is a hard refusal. Zero entities were created.
+    WouldExceedPerEventCap { requested: usize, cap: usize },
 }
 
-/// Resolves `event_id` against currently-loaded ORACLE assets, checks the
-/// live-entity ceiling per `ceiling_policy`, and — unless `dry_run` — emits
-/// the resulting `CreateNpcEvent`s (each tagged with `event_id`) and pushes
-/// the event's `world_rumor` to the chronicle log.
+/// Resolves `event_id` against currently-loaded ORACLE assets, checks
+/// `per_event_cap` and the live-entity ceiling (per `ceiling_policy`), and —
+/// unless `dry_run` — emits the resulting `CreateNpcEvent`s (each tagged
+/// with `event_id`) and pushes the event's `world_rumor` to the chronicle
+/// log.
+///
+/// `per_event_cap` bounds this single trigger's resolved spawn count,
+/// independently of and checked before the aggregate `MAX_LIVE_ORACLE_ENTITIES`
+/// ceiling — pass `usize::MAX` for "no additional cap beyond whatever
+/// `DmEvent::sanitize` already clamped `spawn_count` to".
 ///
 /// Does **not** send any message to a player: no client entity is assumed
 /// to exist. The caller renders `on_enter_message` and any operator-facing
@@ -129,6 +144,7 @@ pub fn trigger_dm_event(
     pos: Vec3<f32>,
     dry_run: bool,
     ceiling_policy: CeilingPolicy,
+    per_event_cap: usize,
 ) -> Result<TriggerOutcome, TriggerError> {
     let dm_event = find_loaded_event(ecs, event_id)?;
     let templates: Vec<_> = ecs
@@ -163,8 +179,15 @@ pub fn trigger_dm_event(
         });
     }
 
-    let live = spawned::live_count(ecs);
     let requested = spawns.len();
+    if requested > per_event_cap {
+        return Err(TriggerError::WouldExceedPerEventCap {
+            requested,
+            cap: per_event_cap,
+        });
+    }
+
+    let live = spawned::live_count(ecs);
     let resolution = resolve_ceiling(
         live,
         requested,
@@ -176,6 +199,10 @@ pub fn trigger_dm_event(
 
     let event_id: Arc<str> = Arc::from(event_id);
     let spawned_count = spawns.len();
+    let bodies = spawns
+        .iter()
+        .map(|(_, _, npc)| npc.body.to_string())
+        .collect();
 
     if !dry_run {
         let event_bus = ecs.read_resource::<EventBus<CreateNpcEvent>>();
@@ -201,6 +228,7 @@ pub fn trigger_dm_event(
         clamped: resolution.clamped,
         warning: resolution.warning,
         on_enter_message: dm_event.narrative.on_enter_message.clone(),
+        bodies,
     })
 }
 
@@ -441,6 +469,7 @@ mod trigger_dm_event_tests {
             Vec3::zero(),
             false,
             CeilingPolicy::Refuse,
+            usize::MAX,
         )
         .expect_err("id was never loaded");
         assert_eq!(err, TriggerError::UnknownEvent {
@@ -464,6 +493,7 @@ mod trigger_dm_event_tests {
             Vec3::zero(),
             false,
             CeilingPolicy::Refuse,
+            usize::MAX,
         )
         .expect("fits comfortably under the ceiling");
 
@@ -472,6 +502,7 @@ mod trigger_dm_event_tests {
         assert!(!outcome.clamped);
         assert!(outcome.warning.is_none());
         assert_eq!(&*outcome.event_id, "fixture_event");
+        assert_eq!(outcome.bodies.len(), 3);
 
         let emitted: Vec<_> = world
             .read_resource::<EventBus<CreateNpcEvent>>()
@@ -492,10 +523,16 @@ mod trigger_dm_event_tests {
             Vec3::zero(),
             true,
             CeilingPolicy::Refuse,
+            usize::MAX,
         )
         .expect("fits comfortably under the ceiling");
 
         assert_eq!(outcome.spawned, 3);
+        assert_eq!(
+            outcome.bodies.len(),
+            3,
+            "dry_run still reports what would spawn"
+        );
         assert_eq!(
             world
                 .read_resource::<EventBus<CreateNpcEvent>>()
@@ -521,6 +558,7 @@ mod trigger_dm_event_tests {
             Vec3::zero(),
             false,
             CeilingPolicy::Refuse,
+            usize::MAX,
         )
         .expect_err("no loaded template matches \"no_such_template\"");
         assert_eq!(err, TriggerError::NoTemplatesMatched {
@@ -547,6 +585,7 @@ mod trigger_dm_event_tests {
             Vec3::zero(),
             false,
             CeilingPolicy::Refuse,
+            usize::MAX,
         )
         .expect("a matched template with spawn_count 0 is a legitimate no-op, not an error");
 
@@ -559,5 +598,67 @@ mod trigger_dm_event_tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn a_per_event_cap_below_the_resolved_plan_refuses_and_spawns_nothing() {
+        let (world, _dir) = world_with_loaded_fixture_event();
+        let err = trigger_dm_event(
+            &world,
+            "fixture_event",
+            Vec3::zero(),
+            false,
+            CeilingPolicy::Refuse,
+            2,
+        )
+        .expect_err("3 requested exceeds a cap of 2");
+        assert_eq!(err, TriggerError::WouldExceedPerEventCap {
+            requested: 3,
+            cap: 2,
+        });
+        assert_eq!(
+            world
+                .read_resource::<EventBus<CreateNpcEvent>>()
+                .recv_all()
+                .len(),
+            0,
+            "a per-event-cap refusal must not fall back to spawning a clamped amount"
+        );
+    }
+
+    #[test]
+    fn a_per_event_cap_checked_before_the_aggregate_ceiling() {
+        // A per_event_cap of 2 is tighter than a ceiling that would
+        // otherwise happily clamp the request -- the per-event refusal must
+        // win, not be silently superseded by CeilingPolicy::Clamp.
+        let (world, _dir) = world_with_loaded_fixture_event();
+        let err = trigger_dm_event(
+            &world,
+            "fixture_event",
+            Vec3::zero(),
+            false,
+            CeilingPolicy::Clamp,
+            2,
+        )
+        .expect_err("the per-event cap is checked independently of CeilingPolicy");
+        assert_eq!(err, TriggerError::WouldExceedPerEventCap {
+            requested: 3,
+            cap: 2,
+        });
+    }
+
+    #[test]
+    fn a_per_event_cap_at_or_above_the_resolved_plan_does_not_refuse() {
+        let (world, _dir) = world_with_loaded_fixture_event();
+        let outcome = trigger_dm_event(
+            &world,
+            "fixture_event",
+            Vec3::zero(),
+            false,
+            CeilingPolicy::Refuse,
+            3,
+        )
+        .expect("exactly at the cap must not refuse");
+        assert_eq!(outcome.spawned, 3);
     }
 }

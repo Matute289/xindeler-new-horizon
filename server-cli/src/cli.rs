@@ -56,6 +56,17 @@ pub enum SharedCommand {
     },
 }
 
+/// Where an `OracleTrigger` should resolve its spawn origin.
+#[derive(Clone, Debug, Parser)]
+pub enum OracleTarget {
+    /// Resolve to a currently-online player's position by alias. Fails
+    /// (never silently falls back to the world origin) if no online player
+    /// has this alias.
+    Player { alias: String },
+    /// Use these world-space coordinates verbatim.
+    Coords { x: f32, y: f32, z: f32 },
+}
+
 #[derive(Debug, Clone, Parser)]
 pub enum Message {
     #[command(flatten)]
@@ -89,6 +100,45 @@ pub enum Message {
     /// Uptime-adjacent server status not already exported via `/metrics`:
     /// version, player count, pending-shutdown state.
     ServerInfo,
+    /// Tail of the ORACLE chronicle log, oldest-first, capped to `limit`
+    /// most-recent entries.
+    ListChronicle {
+        limit: usize,
+    },
+    /// Ids of every currently-loaded ORACLE `.dmevent`/`.entity_template`.
+    OracleListEvents,
+    /// Fire (or, with `dry_run`, preview) a currently-loaded ORACLE
+    /// `DmEvent`. Gated by `crate::web::ui::api`'s HTTP route through
+    /// `server::oracle::policy::gated_trigger_dm_event` -- rate limit,
+    /// per-event cooldown, per-event spawn cap, and the
+    /// `OracleEventsEnabled` kill switch all apply.
+    OracleTrigger {
+        event_id: String,
+        #[command(subcommand)]
+        target: OracleTarget,
+        #[arg(long)]
+        dry_run: bool,
+        /// Raises the per-trigger spawn cap up to the sanitize-time
+        /// ceiling. The caller is responsible for only setting this after
+        /// its own step-up re-auth; this message does not gate who may set
+        /// it.
+        #[arg(long)]
+        high_impact_override: bool,
+    },
+    /// Enables or disables the HTTP ORACLE-trigger kill switch
+    /// (`server::oracle::policy::OracleEventsEnabled`). Distinct from, and
+    /// must never be confused with, `common::resources::OracleLive`, which
+    /// gates player spellcasting and this message never touches.
+    OracleEventsEnabled {
+        enabled: bool,
+    },
+}
+
+/// Ids of every currently-loaded ORACLE asset. See `Message::OracleListEvents`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OracleEventsDto {
+    pub dm_events: Vec<String>,
+    pub entity_templates: Vec<String>,
 }
 
 /// The subset of server status not already exported via `/metrics`. See
@@ -107,11 +157,30 @@ pub enum MessageReturn {
     Players(Vec<String>),
     Logs(Vec<String>),
     Info(ServerInfoDto),
+    Chronicle(Vec<String>),
+    OracleEvents(OracleEventsDto),
+    /// A real (non-`dry_run`) `OracleTrigger` fired.
+    OracleTriggered {
+        event_id: String,
+        at: [f32; 3],
+        requested: usize,
+        spawned: usize,
+        clamped: bool,
+    },
+    /// A `dry_run: true` `OracleTrigger` resolved everything and passed
+    /// every check, but emitted nothing.
+    OraclePreview {
+        event_id: String,
+        at: [f32; 3],
+        requested: usize,
+        spawned: usize,
+        clamped: bool,
+        bodies: Vec<String>,
+        distance_to_nearest_player: Option<f32>,
+    },
     /// A fallible operation failed. Every `Message` arm that can fail must
     /// send this instead of silently dropping the response sender, or the
     /// caller only ever observes a request timeout with no explanation.
-    /// Unconstructed until the first fallible `Message` arm is added.
-    #[expect(dead_code)]
     Error(String),
 }
 

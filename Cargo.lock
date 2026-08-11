@@ -11263,6 +11263,7 @@ dependencies = [
  "specs",
  "tokio",
  "tracing",
+ "vek 0.17.2",
  "xindeler-common",
  "xindeler-common-base",
  "xindeler-common-frontend",
