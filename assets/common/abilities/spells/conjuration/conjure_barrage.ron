@@ -1,0 +1,34 @@
+// Cone-shaped physical burst, same Shockwave shape as spray_of_cards.ron
+// (this batch) and axiomancy/pulse_wave.ron. `shockwave_speed *
+// shockwave_duration` = 30.0 * 0.6 = 18.0, matching the sheet's "Cone 18"
+// reach. The sheet leaves `damage_type` unset ("data.dmg empty in source"),
+// noting only "assign weapon-appropriate physical damage" -- ships as
+// Piercing, the same damage kind conjuration/ensnaring_strike.ron's `Stab`
+// melee already uses for a thrown/bladed effect. The sheet's "half damage on
+// a successful Dexterity save" rider has no partial-mitigation primitive on
+// `Shockwave` (`damage_effect` only attaches a buff, it can't scale the
+// damage roll); `dodgeable: Jump` is kept as the closest already-shipped
+// analog (a successful dodge avoids the hit outright, an already-shipped
+// simplification, not full/half riders) rather than inventing a new
+// mitigation mechanic.
+Shockwave(
+    energy_cost: 40,
+    buildup_duration: 0.5,
+    swing_duration: 0.35,
+    recover_duration: 0.4,
+    damage: 24.0,
+    poise_damage: 8,
+    knockback: (strength: 4.0, direction: Away),
+    shockwave_angle: 60.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 30.0,
+    shockwave_duration: 0.6,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Piercing,
+    specifier: Ground,
+    ori_rate: 1.0,
+    timing: PostBuildup,
+    emit_outcome: true,
+    meta: (school: Some(Conjuration), source: Some(Primordial), cooldown: Some(18.0)),
+)

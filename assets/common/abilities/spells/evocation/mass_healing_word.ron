@@ -1,0 +1,40 @@
+// The sheet's own notes already flag the mismatch: "pooled/instant heal
+// allocation diverges from an aura/HoT -> approximation. Targets up to six
+// creatures of choice within range (multi-target, not a contiguous aura)."
+// No primitive lets a caster pick specific targets out of a crowd for a
+// one-shot heal; `BasicAura`'s `AuraBuffConstructor` only wraps a
+// `BuffKind` applied to whoever is in range when the (very short-lived)
+// aura entity exists. Ships as the same shape
+// `assets/common/abilities/sceptre/healingaura.ron` already uses for an
+// "instant party heal": `aura_duration: Some(1.0)` (the aura entity only
+// exists for ~1s, so it reads as a single burst rather than a lingering
+// field) applying a short `Regeneration` HoT to every ally in range at
+// that moment -- not capped at six, and not player-selectable, both
+// documented deviations from the sheet's literal "up to six chosen"
+// wording.
+//
+// `AuraBuffConstructor.pool_split` (a shared-pool-divided-among-N-nearest
+// mechanic, see common/src/comp/aura.rs) would cap targets at 6 for real,
+// but it requires per-class-level scaling config (`unlock_level`,
+// `value_at_unlock`, `value_at_max_level`) with no established default for
+// a spell that isn't a class-leveled feature -- not used here for that
+// reason, same as every other shipped `BasicAura` heal in this asset tree.
+BasicAura(
+    buildup_duration: 0.2,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Regeneration,
+            strength: 1.0,
+            duration: Some(6.0),
+        ),
+    ],
+    aura_duration: Some(1.0),
+    range: 18.0,
+    energy_cost: 55.0,
+    scales_with_combo: false,
+    specifier: Some(HealingAura),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

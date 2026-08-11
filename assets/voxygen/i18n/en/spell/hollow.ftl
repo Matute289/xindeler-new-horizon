@@ -31,3 +31,23 @@ spell-inflict_wounds = Inflict Wounds
 spell-inflict_wounds-desc = You channel withering death-magic into a single touched foe, tearing at their vitality. A successful strike sears the target with a surge of necrotic decay.
 spell-ray_of_sickness = Ray of Sickness
 spell-ray_of_sickness-desc = A lance of sickly green energy streaks toward one creature; on a hit it suffers a burst of poisonous corruption and may be wracked with nausea if it fails to resist.
+
+
+spell-death_armor = Death Armor
+spell-death_armor-desc = You wrap a creature you touch in a shroud of dark, clinging energy, warding it with a barrier of stored vitality that absorbs harm before it can land.
+spell-gentle_repose = Gentle Repose
+spell-gentle_repose-desc = By laying a hand upon fallen remains, you halt all rot and corruption, holding the body in a state of perfect stillness. While the blessing endures, no foul power can rouse the corpse into undeath.
+spell-wither_and_bloom = Wither and Bloom
+spell-wither_and_bloom-desc = Twin currents of decay erupt across a patch of ground, sapping the vitality of every foe caught within it.
+spell-animate_dead = Animate Dead
+spell-animate_dead-desc = You pour a thread of corrupt vigor into a nearby corpse or heap of bones, knitting it back into shambling motion. The reanimated husk rises as an obedient thrall, carrying out your commands until it is destroyed or dismissed.
+spell-life_transference = Life Transference
+spell-life_transference-desc = You strain your own life essence and channel the stolen vitality into a chosen ally within reach, mending their wounds by far more than the toll it took from you.
+spell-revivify = Revivify
+spell-revivify-desc = With a touch and a gift of restored life-force, you call back a soul that left its body only moments ago, knitting it back to the faintest spark of living vitality.
+spell-spirit_shroud = Spirit Shroud
+spell-spirit_shroud-desc = Restless spirits of the slain swirl around you, wreathing you in a chilling funereal aura. Every foe you strike in melee suffers additional searing harm while the shroud holds.
+spell-summon_undead = Summon Undead
+spell-summon_undead-desc = You tear open a sliver of the deathly veil and call a restless spirit into corporeal form. The bound revenant fights at your command until the binding fails.
+spell-vampiric_touch = Vampiric Touch
+spell-vampiric_touch-desc = A shadow-wreathed hand drains the vital force from a foe you strike, withering their flesh with creeping decay. Part of the stolen life flows back to mend your own wounds.

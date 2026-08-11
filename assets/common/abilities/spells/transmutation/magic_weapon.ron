@@ -1,0 +1,27 @@
+// Sheet range is Touch, but "touch a mundane weapon" reads naturally as the
+// caster enchanting their own held weapon -- unlike this batch's ally-facing
+// Touch spells (`barkskin.ron`/`dragons_breath.ron`), there is no third-person
+// "the touched creature" framing here, so this stays a plain `SelfBuff`
+// (caster benefits), no `InGroup`-melee redirect needed.
+// `BuffKind::Reckless` (`common/src/comp/buff.rs`: "Increases both attack
+// damage and vulnerability to damage") is the only existing buff that grants
+// a flat attack-damage bonus to the wielder's own strikes, matching the
+// sheet's "strikes truer and bites deeper" flavor. Reckless's paired
+// vulnerability increase isn't in the sheet's description but is Reckless's
+// only shape in this engine; flagged as a deviation, not a silent
+// reinterpretation.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Reckless, data: BuffData(strength: 0.15, duration: Some(60.0))),
+    ],
+    energy_cost: 40,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

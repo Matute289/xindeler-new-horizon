@@ -1,0 +1,36 @@
+// Real fighting companions -- see summon_fey.ron for the shared shape notes
+// (`alignment`/`with_agent`/`incorporeal`/`phantom_illusion` all left at
+// their real-companion defaults, `meta.cooldown` added deliberately since
+// this variant has no `energy_cost` field).
+//
+// No dedicated "demon"/"fiend" species exists anywhere in the engine
+// (checked every species list in
+// common/src/comp/body/{biped_small,biped_large}.rs, plus
+// quadruped_low.rs's reptilian/beast roster -- zero demon/fiend-themed
+// entries). `Ashen` (`BipedSmall`) is reused as the closest available
+// brimstone/infernal-flavored species with its own real combat loadout
+// preset (`AshenSummon`, see custom/gigas_fire/ashen_summons.ron), standing
+// in for "minor fiends... from the churning chaos beyond".
+//
+// The sheet's own description is explicitly plural ("a pack of minor
+// fiends... the summoned horde"), unlike summon_fey.ron/
+// summon_shadowspawn.ron's singular phrasing -- `summoned_amount: 3` reflects
+// that difference rather than defaulting every `BasicSummon` spell in this
+// batch to 1, with the cooldown raised accordingly for the extra companions.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.7,
+    recover_duration: 0.6,
+    summon_info: Npc(
+        summoned_amount: 3,
+        summon_distance: (2.0, 4.0),
+        body: BipedSmall((species: Ashen, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: Some(AshenSummon),
+        skillset_config: Some(Rank5),
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+    meta: (school: Some(Conjuration), source: Some(Arcane), cooldown: Some(55.0)),
+)

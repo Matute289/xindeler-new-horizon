@@ -1,0 +1,38 @@
+// Third player-authored RapidRanged spell in this folder, same shape as
+// eldritch_blast.ron/wayward_force_darts.ron (both circle 0/1). See
+// eldritch_blast.ron's own header for the full reasoning on why
+// RapidRanged fires every projectile along the SAME
+// data.inputs.look_dir -- there is no per-projectile independent aim in
+// common/src/states/rapid_ranged.rs, so the sheet's "each streaking at a
+// target of your choice" (implying 3 independently-aimed rays that could
+// hit 3 different creatures) is not modeled; in practice all 3 rays land
+// on whichever single target the caster is looking at. `damage_kind:
+// Fire` is exactly representable here (RapidRanged's
+// `projectile.attack.damage_kind` is fully RON-configurable, unlike
+// BasicMelee/Explosion/GroundAoe/BasicBeam, which all hardcode their
+// DamageKind in Rust).
+//
+// Circle 2, scaled up from wayward_force_darts (circle 1: 3 darts, 6
+// dmg/dart, 10 energy/dart = 30 total) -- 3 rays, 9 dmg/ray (27 total),
+// 14 energy/ray (42 total). Flagged for wave-close-out balance review
+// alongside this cell's other first-of-kind numbers.
+RapidRanged(
+    energy_cost: 14,
+    buildup_duration: 0.4,
+    shoot_duration: 0.05,
+    recover_duration: 0.3,
+    options: (
+        max_projectiles: Some(3),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 9,
+            damage_kind: Fire,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 80.0,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

@@ -1,0 +1,26 @@
+// GroundAoe (common/src/comp/ability.rs) has no heal-delivery field --
+// `damage`/`poise`/`knockback` (or the pooled-debuff path for a shared-HP
+// mechanic like Sleep) are the only per-target outcomes this variant can
+// express. The sheet's own hybrid rider ("also heals one chosen ally in the
+// area") is dropped, same class of gap as chill_touch.ron's anti-healing
+// rider in this same folder -- no existing primitive delivers a
+// damage-some/heal-others split within one AoE resolution. Ships as a pure
+// necrotic damage zone, shape of bloodboil.ron (hemomancy) scaled to this
+// school's own established level-1 single-target damage band
+// (ray_of_sickness/chill_touch: 14-16).
+GroundAoe(
+    energy_cost: 55.0,
+    buildup_duration: 0.6,
+    delay: 0.5,
+    recover_duration: 0.4,
+    max_range: 18.0,
+    radius: 3.0,
+    min_falloff: 0.4,
+    damage: 18,
+    poise: 8,
+    knockback: (strength: 5, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

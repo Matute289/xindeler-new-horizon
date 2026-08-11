@@ -1,0 +1,42 @@
+// Same touch-ally deviation as `barkskin.ron` in this folder: sheet range is
+// Touch and the description is explicitly second-person-to-an-ally ("You
+// touch a willing ally"), which `SelfBuff` cannot deliver (always lands on
+// the caster). Uses the established touch-ally pattern instead (see
+// `barkskin.ron`'s own comment for the citation trail).
+// The sheet's real mechanic -- granting the target an entirely new usable
+// cone-breath attack they can trigger repeatedly for the duration -- has no
+// primitive anywhere in this compendium; every existing ability a character
+// can use is fixed at character-build time (equipped tool/innate pool), and
+// nothing grants a temporary new active ability via a buff. That rider is
+// dropped as out of content-only scope. Kept branch: the "infuse with
+// elemental power" flavor, modeled with `BuffKind::Flame` ("your attacks
+// cause targets to receive the burning debuff"), the nearest existing
+// "makes your attacks elemental" buff, at a moderate strength.
+BasicMelee(
+    energy_cost: 35.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Buff((
+                kind: Flame,
+                dur_secs: 60.0,
+                strength: Value(0.15),
+                chance: 1.0,
+            )),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

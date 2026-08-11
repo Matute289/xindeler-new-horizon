@@ -1,0 +1,41 @@
+// D&D's Levitate can target a willing ally (float them gently) or an
+// unwilling creature (Constitution save, effectively a hard pin). No
+// vertical-lift/anti-gravity `BuffEffect` exists at all (checked the full
+// list in `common/src/comp/buff.rs` -- `MovementSpeed`, `GroundFriction`,
+// `SwimSpeed` and friends only ever scale horizontal movement or ground
+// friction, nothing addresses vertical position), so the "gently float a
+// willing ally" branch has no delivery mechanism whatsoever and is dropped.
+// Kept branch: the unwilling/hostile CC framing, modeled with
+// `BuffKind::Rooted` ("Reduces movement speed to 0") as "suspended
+// helplessly, unable to proceed" -- the same primitive this batch's
+// `earthbind.ron`/`earthen_grasp.ron` already use for their own closest-CC
+// fit, matching the sheet's own 18m range and single-target shape exactly
+// (unlike a touch-ally melee redirect, which would contradict the sheet's
+// real 18m reach).
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.35,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 0,
+            buff: Some((
+                kind: Rooted,
+                dur_secs: 10.0,
+                strength: Value(1.5),
+                chance: 1.0,
+            )),
+            damage_kind: Bludgeoning,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

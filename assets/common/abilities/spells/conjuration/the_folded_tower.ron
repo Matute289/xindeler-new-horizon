@@ -1,0 +1,35 @@
+// PILOT: first `SpriteSummon` ever authored as a real *player spell*. Every
+// existing `SpriteSummon` RON is an NPC/monster trap or terrain-hazard
+// scatter (custom/cursekeeper/trap.ron, custom/harvester/ensnaringvines_*.ron,
+// custom/gigas_frost/icespike_*.ron, custom/dagon/seaurchins.ron): the
+// variant always scatters copies of ONE `SpriteKind` across an area
+// (common/src/states/sprite_summon.rs) -- there is no primitive to construct
+// a walkable, multi-block building with floors and an interior, which is
+// what the sheet literally describes ("a sturdy two-story tower... complete
+// with floors and an interior").
+//
+// Ships instead as a small closed ring of `MagicalBarrier` sprites
+// (common/src/terrain/sprite/mod.rs: a solid, height-3.0 sprite already
+// flagged collidable alongside `GlassBarrier`/`OneWayWall`) around a chosen
+// point -- a magical defensive perimeter/cover element a player can plant
+// and fight from behind, not an enterable structure. Nothing shipped before
+// this uses `MagicalBarrier` as a summoned effect. `anchor: Target` places
+// the ring at the caster's selected point (the sheet's 9 m cast range)
+// rather than around the caster themselves, which is the
+// `SpriteSummonAnchor::Summoner` default every existing NPC-cast
+// `SpriteSummon` uses instead. `del_timeout: None` matches "stands... until
+// dispelled" -- no auto-expiry.
+SpriteSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.4,
+    recover_duration: 0.5,
+    sprite: MagicalBarrier,
+    del_timeout: None,
+    summon_distance: (2.0, 3.0),
+    sparseness: 0.0,
+    angle: 360.0,
+    anchor: Target,
+    move_efficiency: 0.0,
+    ori_modifier: 1.0,
+    meta: (school: Some(Conjuration), source: Some(Arcane), cooldown: Some(45.0)),
+)

@@ -1,0 +1,21 @@
+// Corpse-preservation utility: "halts all rot and corruption... no foul
+// power can rouse the corpse into undeath." No combat effect (sheet's own
+// classification), and unlike death_armor.ron/revivify.ron there is no
+// living-ally target to redirect an `attack_effect` onto either -- the
+// target here is an inert corpse, which has no addressable entity/state in
+// this engine to touch at all (no "preserved/ward against reanimation" flag
+// exists on any body). `SelfBuff` with an empty buff list is therefore not a
+// simplification of a touch-ally delivery (contrast spare_the_dying.ron) --
+// it is the correct, and only, primitive: a flavor-only cast with no
+// mechanical target. Same NO-OP-placeholder shape already shipped for
+// Axiomancy's own non-combat utility casts (see
+// assets/common/abilities/spells/axiomancy/immovable_object.ron and
+// wristpocket.ron).
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.4,
+    buffs: [],
+    energy_cost: 20,
+    meta: (school: Some(Necromancy), source: Some(Divine)),
+)
