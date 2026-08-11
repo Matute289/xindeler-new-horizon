@@ -7,15 +7,20 @@
 // no cross-plane, long-distance-beyond-max_range, or multi-target
 // teleport primitive exists (`common/src/states/blink.rs` moves only the
 // caster, within `max_range`).
+// Reviewer correction: range 9.0 was identical to misty_step.ron (a much
+// lower tier pilot spell) despite a 6x longer cooldown, meaning this L7
+// spell bought nothing over the L1-2 baseline. Raised range to the max
+// tier used by this school's other high-level Blinks and the cooldown to
+// match the established L7 band (60-90s).
 Blink(
     buildup_duration: 0.35,
     recover_duration: 0.25,
-    max_range: 9.0,
+    max_range: 46.0,
     frontend_specifier: None,
     meta: (
         school: Some(Conjuration),
         source: Some(Arcane),
-        cooldown: Some(60.0),
+        cooldown: Some(70.0),
         // level 7 spell -> min_level 42, the level * 6 convention.
         requirements: (min_level: Some(42)),
     ),

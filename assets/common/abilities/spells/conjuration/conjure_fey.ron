@@ -6,6 +6,11 @@
 // data model. No `QuadrupedMedium`-specific summon loadout/skillset preset exists
 // (unlike HuskSummon/JiangshiSummon for undead), so both stay `None` --
 // deliberate, not an oversight.
+// Reviewer correction: half the summoned_amount of
+// conjure_woodland_beings.ron (this school's L4 sibling, 2x Tiger) for
+// a longer cooldown -- a strict downgrade at a higher level. `scale`
+// bumped so the single Tiger is meaningfully bigger/tougher than
+// either of the L4 pair, rather than just fewer of the same thing.
 BasicSummon(
     buildup_duration: 1.0,
     cast_duration: 0.5,
@@ -14,7 +19,7 @@ BasicSummon(
         summoned_amount: 1,
         summon_distance: (1.0, 3.0),
         body: QuadrupedMedium((species: Tiger, body_type: Male)),
-        scale: None,
+        scale: Some(Scale(1.3)),
         has_health: true,
         use_npc_name: true,
         loadout_config: None,

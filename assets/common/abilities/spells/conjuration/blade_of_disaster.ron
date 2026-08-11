@@ -6,6 +6,10 @@
 // data model. No `BipedLarge`-specific summon loadout/skillset preset exists
 // (unlike HuskSummon/JiangshiSummon for undead), so both stay `None` --
 // deliberate, not an oversight.
+// Reviewer correction: same Cyclops reuse issue as summon_fiend.ron
+// (L6) -- this is the L9 tier of the same chain, so it needs a bigger
+// scale bump than summon_fiend's to keep the level progression
+// meaningful.
 BasicSummon(
     buildup_duration: 1.0,
     cast_duration: 0.5,
@@ -14,7 +18,7 @@ BasicSummon(
         summoned_amount: 1,
         summon_distance: (1.0, 3.0),
         body: BipedLarge((species: Cyclops, body_type: Male)),
-        scale: None,
+        scale: Some(Scale(1.35)),
         has_health: true,
         use_npc_name: true,
         loadout_config: None,

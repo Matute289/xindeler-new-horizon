@@ -7,6 +7,10 @@
 // no cross-plane, long-distance-beyond-max_range, or multi-target
 // teleport primitive exists (`common/src/states/blink.rs` moves only the
 // caster, within `max_range`).
+// Reviewer correction: cooldown 20.0 was 3x cheaper than
+// teleportation_circle.ron, the other spell at this exact level+range
+// tier (L5, max_range 46), with no documented reason. Raised to match
+// that cohort.
 Blink(
     buildup_duration: 0.35,
     recover_duration: 0.25,
@@ -15,7 +19,7 @@ Blink(
     meta: (
         school: Some(Conjuration),
         source: Some(Arcane),
-        cooldown: Some(20.0),
+        cooldown: Some(50.0),
         // level 5 spell -> min_level 30, the level * 6 convention.
         requirements: (min_level: Some(30)),
     ),

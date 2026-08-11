@@ -1,9 +1,17 @@
-// "Multiplies a shot into a storm of projectiles that rains down over an
-// area" -- straight-damage Explosion, matching this wave's L5 curve.
-Explosion(
+// "Multiplies a shot into a storm of projectiles that rains down over a
+// chosen patch of ground" -- a targeted-point AoE at range.
+// Reviewer correction: originally authored as Explosion, which always
+// detonates centered on the caster (no target-point field exists) --
+// contradicted this spell's own compendium range (46.0) and "chosen
+// patch of ground" flavor text, the same mismatch already caught and
+// fixed for six Evocation spells in this wave. Converted to GroundAoe,
+// the real detonate-at-a-chosen-point primitive, matching the
+// established L5 GroundAoe curve (cloudkill.ron/insect_plague.ron).
+GroundAoe(
     energy_cost: 145.0,
     buildup_duration: 0.65,
-    action_duration: 0.3,
+    delay: 0.4,
+    max_range: 46.0,
     recover_duration: 0.5,
     damage: 62,
     poise: 15,
@@ -11,8 +19,7 @@ Explosion(
     radius: 6,
     min_falloff: 0.35,
     dodgeable: Roll,
-    destroy_terrain: None,
-    eye_height: false,
+    rooted_cast: false,
     reagent: Some(Yellow),
     meta: (
         school: Some(Conjuration),

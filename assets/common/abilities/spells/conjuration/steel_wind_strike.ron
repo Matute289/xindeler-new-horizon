@@ -5,6 +5,9 @@
 // documented drop, same limitation eldritch_blast.ron's own header
 // establishes. The "caster relocates beside the target" teleport half is
 // also dropped, no combined blink+strike primitive exists.
+// Reviewer correction: total burst damage (20x5=100) exceeded
+// evocation/chain_lightning.ron (22x4=88) despite this being a lower-level
+// (L5 vs L6) spell. Reduced to stay below that level-6 neighbor.
 RapidRanged(
     energy_cost: 130.0,
     buildup_duration: 0.45,
@@ -17,7 +20,7 @@ RapidRanged(
     projectile: (
         kind: Simple,
         attack: Some((
-            damage: 20,
+            damage: 16,
             damage_kind: Force,
         )),
     ),

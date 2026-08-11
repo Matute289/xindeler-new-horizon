@@ -7,6 +7,11 @@
 // no cross-plane, long-distance-beyond-max_range, or multi-target
 // teleport primitive exists (`common/src/states/blink.rs` moves only the
 // caster, within `max_range`).
+// Reviewer correction: cooldown 8.0 undercut every lower-level Blink
+// sibling (thunder_step.ron L3/range27/cooldown18,
+// vortex_warp.ron L2/range27/cooldown16) despite this being a strictly
+// higher-level (L5) spell with a smaller range (18) than either. Raised
+// to match thunder_step.ron's cooldown band.
 Blink(
     buildup_duration: 0.35,
     recover_duration: 0.25,
@@ -15,7 +20,7 @@ Blink(
     meta: (
         school: Some(Conjuration),
         source: Some(Arcane),
-        cooldown: Some(8.0),
+        cooldown: Some(18.0),
         // level 5 spell -> min_level 30, the level * 6 convention.
         requirements: (min_level: Some(30)),
     ),

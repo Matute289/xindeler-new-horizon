@@ -3,8 +3,12 @@
 // based-damage/save riders dropped, matched to a single-application
 // burst -- no partial-damage-on-save or per-turn-tick-while-standing
 // primitive exists on this variant beyond its own one-shot strike.
+// Reviewer correction: was identical to insect_plague.ron (same energy/
+// damage/poise/radius) but with less range (37 vs 46), a strict
+// downgrade at the same cost. Energy reduced to reflect the shorter
+// reach.
 GroundAoe(
-    energy_cost: 145.0,
+    energy_cost: 130.0,
     buildup_duration: 0.6,
     delay: 0.4,
     recover_duration: 0.45,
