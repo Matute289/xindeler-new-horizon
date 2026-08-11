@@ -1,0 +1,35 @@
+// Single-target phantasmal terror: BasicRanged hit with an attached fear
+// buff, same shape as fear.ron's Terrified application but delivered via
+// a ranged bolt instead of a melee shockwave (matching this spell's own
+// 37m sheet range). Sheet's "dealing psychic damage each turn" (a
+// repeat-tick DoT) is approximated by Terrified's own duration rather than
+// a second damage-over-time buff stacked on top -- Terrified alone already
+// carries real mechanical weight (see fear.ron), and no buff exists that
+// combines a fear effect with its own periodic damage tick.
+BasicRanged(
+    energy_cost: 75.0,
+    buildup_duration: 0.45,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 30,
+            buff: Some((
+                kind: Terrified,
+                dur_secs: 10,
+                strength: Value(0.8),
+                chance: 1.0,
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

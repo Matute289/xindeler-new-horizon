@@ -1,0 +1,34 @@
+// Straight burst-damage GroundAoe, same shape as dark_star.ron. Sheet also
+// lists a secondary "muddled-mind" penalty (attacks/checks/concentration)
+// on top of the burst -- dropped, same as GroundAoe's own doc comment
+// forces elsewhere in this pass (`pooled_debuff` replaces the normal
+// damage hit entirely, so a real burst and an attached debuff can't
+// coexist on one cast; the burst is the spell's stated primary effect
+// here, unlike regal_presence.ron next door where the hold was primary).
+//
+// Reviewer correction: original 95 energy / 46 damage sat barely above L3
+// fireball.ron (90 energy / 48 damage) despite this being L5, well under
+// the L3->L9 raw-damage-nuke curve those two endpoints establish
+// (fireball.ron L3 -> axiomancy/dark_star.ron L9: 225 energy / 80 damage).
+// Re-tuned to the curve's L5 interpolation.
+GroundAoe(
+    energy_cost: 145.0,
+    buildup_duration: 0.6,
+    delay: 0.4,
+    recover_duration: 0.45,
+    max_range: 37.0,
+    radius: 6.0,
+    min_falloff: 0.4,
+    damage: 62,
+    poise: 10,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

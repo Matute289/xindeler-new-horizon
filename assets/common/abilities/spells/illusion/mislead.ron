@@ -1,0 +1,23 @@
+// Same self-only `PassWithoutTrace` concealment shape as
+// greater_invisibility.ron/invisibility.ron -- the sheet's "controllable
+// illusory decoy that moves and speaks" half is dropped, since no
+// primitive exists for a player to remote-puppet a second, independently
+// visible NPC body (the closest thing, `BasicSummon`, spawns a real
+// separate entity with its own AI, not a caster-piloted decoy). Strength
+// matched to greater_invisibility.ron rather than plain invisibility.ron
+// since both are circle-5, one step above invisibility's circle-2.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: PassWithoutTrace, data: BuffData(strength: 4.0, duration: Some(60.0))),
+    ],
+    energy_cost: 90.0,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

@@ -1,0 +1,31 @@
+// Multi-target phantasmal terror, same straight-damage GroundAoe shape as
+// dark_star.ron scaled for circle 9 -- damage is the spell's own
+// description centerpiece ("torn at by an unreal predator that gnaws
+// their thoughts"). Sheet's secondary fear rider dropped: `pooled_debuff`
+// (the only path to attach a buff on a GroundAoe) fully replaces the
+// normal damage strike, and this cell already has two pooled-debuff fear/
+// hold spells (regal_presence.ron, mental_prison.ron via BasicRanged) --
+// keeping weird as the raw-damage circle-9 capstone gives the wave real
+// mechanical variety instead of every high-circle Illusion/Enchantment
+// spell converging on the same CC shape.
+GroundAoe(
+    energy_cost: 210.0,
+    buildup_duration: 0.7,
+    delay: 0.5,
+    recover_duration: 0.5,
+    max_range: 37.0,
+    radius: 6.0,
+    min_falloff: 0.4,
+    damage: 95,
+    poise: 20,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 9 spell -> min_level 54, the level * 6 convention.
+        requirements: (min_level: Some(54)),
+    ),
+)

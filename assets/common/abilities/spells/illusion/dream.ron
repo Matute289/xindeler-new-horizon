@@ -1,0 +1,31 @@
+// Sheet's own "range" field is mapped to "Self" in the source data because
+// D&D's real Dream reaches a sleeping creature across any distance (no
+// line-of-sight requirement) rather than because the spell targets the
+// caster -- the sheet's own `notes` field says so explicitly ("range
+// 'special' ... mapped to Self + note"). Mechanically this still needs to
+// land on a real target, so `range` here is set to a generous long-range
+// value matching this circle's other single-target ranged nightmares
+// (phantasmal_killer.ron, mental_prison.ron) rather than literally
+// `SelfOnly`, which would make the spell untargetable. Documented here
+// rather than silently overriding the sheet's own field without comment.
+BasicRanged(
+    energy_cost: 90.0,
+    buildup_duration: 0.5,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 36,
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

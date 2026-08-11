@@ -1,0 +1,47 @@
+// Single-target psychic bolt with an incapacitate rider on a failed save.
+// Reviewer correction: an earlier version granted `Paralyzed` unconditionally
+// (`chance: 1.0` with no roll) stacked on top of full damage -- this school
+// already has a real save-gate primitive, `CasterLevelRoll`
+// (`attack_effect`, not the plain `buff:` field), shipped by
+// hold_person.ron/hold_monster.ron/irresistible_dance.ron/
+// power_word_stun.ron: the CC lands only on a level-scaled roll, and every
+// sibling that uses it pairs the roll with only token direct damage, not a
+// full hit. Matched here: `unlock_level` = this spell's own `min_level`,
+// `fail_chance_at_unlock`/`fail_chance_at_max_level` = hold_person.ron's own
+// values (the only same-effect -- Paralyzed -- sibling), `source_classes`
+// mirrors this spell's own `classes:` list in compendium.ron.
+BasicRanged(
+    energy_cost: 70.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 4,
+            attack_effect: Some((
+                Buff((
+                    kind: Paralyzed,
+                    dur_secs: 6,
+                    strength: Value(1.0),
+                    chance: 1.0,
+                )),
+                CasterLevelRoll((
+                    unlock_level: 24,
+                    fail_chance_at_unlock: 0.25,
+                    fail_chance_at_max_level: 0.05,
+                    source_classes: [Bard, Sorcerer, Warlock, Mage],
+                )),
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)
