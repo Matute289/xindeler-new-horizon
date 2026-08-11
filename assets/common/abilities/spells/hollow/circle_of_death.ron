@@ -1,22 +1,31 @@
-// Wide-radius burst-damage `Explosion`, same shape as
-// hemomancy/hemoclysm.ron scaled down to circle 6 (hemoclysm sits well
-// above this circle at 150 damage/191 energy). Sheet's "fail to steel
-// their bodies are seared" save-for-half rider dropped, same reasoning
-// blight.ron documents (no partial-damage-on-save primitive exists).
-Explosion(
+// Reviewer correction: `Explosion` always detonates centered on the
+// caster's own position (common/src/states/explosion.rs, no target-point
+// field) -- contradicts the sheet's "erupts from a chosen point" 46m cast
+// range. Deviates to `GroundAoe`, the real "detonate at a chosen point"
+// primitive, same fix already applied to evocation/acid_splash.ron and
+// evocation/snowball_swarm.ron for the identical mismatch.
+//
+// Damage retuned: original value undertuned relative to
+// hemomancy/hemoclysm.ron's own damage/level curve (150 dmg at L7) --
+// interpolating that curve against gory_eruption.ron (50 dmg at L3) put
+// L6's expected damage around 110-125, not the original 68. Sheet's
+// "fail to steel their bodies are seared" save-for-half rider dropped,
+// same reasoning blight.ron documents (no partial-damage-on-save
+// primitive exists).
+GroundAoe(
     energy_cost: 155.0,
     buildup_duration: 0.9,
-    action_duration: 0.3,
+    delay: 0.5,
     recover_duration: 0.55,
-    damage: 68,
-    poise: 20,
-    knockback: (direction: Away, strength: 10.0),
-    radius: 6,
+    max_range: 46.0,
+    radius: 6.0,
     min_falloff: 0.3,
+    damage: 118,
+    poise: 20,
+    knockback: (strength: 10.0, direction: Away),
     dodgeable: Roll,
-    destroy_terrain: None,
-    eye_height: false,
     reagent: Some(Purple),
+    rooted_cast: false,
     meta: (
         school: Some(Necromancy),
         source: Some(Arcane),
