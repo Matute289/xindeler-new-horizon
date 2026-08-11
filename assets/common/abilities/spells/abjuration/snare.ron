@@ -1,0 +1,36 @@
+// A hidden ground trap: whoever first steps into the small warded circle is
+// yanked aloft and held fast. Modeled with `GroundAoe`'s `pooled_debuff`
+// path (see sleep.ron's own precedent/comment for the shared-HP-pool
+// resolution mechanism) applying `Rooted` instead of raw damage --
+// `damage`/`poise`/`knockback` are unused no-ops per that field's own doc
+// comment. `strength: Value(2.0)` on the Rooted grant (double the 1.0
+// "same-mass creature rooted for the full duration" baseline) so most
+// mid-weight trespassers stay held for the full 15s rather than being
+// scaled down by `Rooted`'s own mass-ratio reduction. `max_range: 3.0`
+// stands in for the sheet's `Touch` cast range (the trap is laid at/near
+// the caster's feet, not thrown).
+GroundAoe(
+    energy_cost: 35.0,
+    buildup_duration: 0.6,
+    delay: 0.5,
+    recover_duration: 0.4,
+    max_range: 3.0,
+    radius: 3.0,
+    min_falloff: 0.4,
+    damage: 0.0,
+    poise: 0.0,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: No,
+    reagent: None,
+    rooted_cast: false,
+    pooled_debuff: Some((
+        pool: 20.0,
+        buff: (
+            kind: Rooted,
+            dur_secs: 15,
+            strength: Value(2.0),
+            chance: 1.0,
+        ),
+    )),
+    meta: (school: Some(Abjuration), source: Some(Primordial)),
+)

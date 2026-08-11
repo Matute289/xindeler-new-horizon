@@ -1,0 +1,32 @@
+// Sheet: persistent, mobile control zone -- bludgeoning damage + push +
+// blind/difficult-terrain dust cloud, roams the battlefield each round. The
+// primary described effect (damage + knockback, "battering... and flinging
+// them aside") is a single-strike combo GroundAoe already delivers natively
+// (`damage`/`poise`/`knockback` are all first-class fields, see
+// hemomancy/bloodboil.ron), so this ships as a one-shot burst -- same
+// simplification already accepted for axiomancy/dark_star.ron and
+// axiomancy/gravity_sinkhole.ron, both of which also describe a
+// lingering/mobile zone in their sheet notes and ship as one-shot bursts.
+// The secondary dust-cloud rider (push/blind & difficult terrain) has no
+// periodic-knockback primitive to express it -- `StaticAura`'s aura list is
+// buff-only, and no `BuffKind` reapplies a knockback -- so it's dropped
+// rather than half-modeled. `GroundAoe`'s damage strike is hardcoded to
+// `DamageKind::Energy` (see create_bonfire.ron's own note) -- the sheet's
+// Bludgeoning damage_type is flavor-only here, the same pre-existing gap
+// every GroundAoe spell in this pipeline ships with.
+GroundAoe(
+    energy_cost: 78.0,
+    buildup_duration: 0.6,
+    delay: 0.45,
+    recover_duration: 0.4,
+    max_range: 18.0,
+    radius: 3.0,
+    min_falloff: 0.4,
+    damage: 20.0,
+    poise: 15.0,
+    knockback: (strength: 10.0, direction: Away),
+    dodgeable: Roll,
+    reagent: Some(White),
+    rooted_cast: false,
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

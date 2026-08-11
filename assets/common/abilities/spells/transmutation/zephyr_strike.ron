@@ -1,0 +1,18 @@
+// D&D's real rider ("moving doesn't provoke opportunity attacks") has no engine
+// equivalent -- this engine has no attacks-of-opportunity system at all
+// (checked common/src/combat.rs and common/src/states/ for any such mechanic).
+// Modeled as a straightforward Hastened mobility buff instead ("your stride
+// flows as freely as a gust"); the AoO-immunity rider is dropped. The sheet's
+// damage_type: Force is flavor metadata only -- SelfBuff has no damage_kind
+// field to place it in (its core effect is utility/mobility per the sheet's
+// own notes).
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.1,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.1, duration: Some(60.0))),
+    ],
+    energy_cost: 35,
+    meta: (school: Some(Transmutation), source: Some(Primordial)),
+)

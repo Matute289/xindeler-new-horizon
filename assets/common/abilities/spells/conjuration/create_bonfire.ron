@@ -1,0 +1,29 @@
+// GroundAoe's strike is a single instantaneous burst (buildup -> telegraph
+// delay -> one explosion at the locked point -> recover; see
+// common/src/states/ground_aoe.rs), not a lingering hazard zone. The sheet's
+// "the fire lingers, burning anyone who enters or remains within it" rider is
+// dropped for v1 -- no persistent-zone primitive exists for GroundAoe (same
+// simplification already accepted for axiomancy/dark_star.ron and
+// axiomancy/gravity_sinkhole.ron, both of which also describe a
+// lingering/zone effect in their sheet notes and ship as one-shot bursts).
+// Also note: GroundAoe's damage strike is hardcoded to `DamageKind::Energy`
+// (see the same file) -- the sheet's Fire damage_type is flavor-only here,
+// not mechanically expressible via GroundAoe; every existing GroundAoe spell
+// (bloodboil, dark_star, gravity_sinkhole) is Energy-kind regardless of its
+// own elemental flavor, so this isn't a new gap, just an existing one.
+GroundAoe(
+    energy_cost: 0.0,
+    buildup_duration: 0.6,
+    delay: 0.4,
+    recover_duration: 0.4,
+    max_range: 18.0,
+    radius: 3.0,
+    min_falloff: 0.4,
+    damage: 14.0,
+    poise: 5.0,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: Some(Red),
+    rooted_cast: false,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

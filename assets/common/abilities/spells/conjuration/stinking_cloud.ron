@@ -1,0 +1,32 @@
+// Sheet: "persistent AoE control zone, heavily obscuring gas; nauseating-
+// condition rider (lose action on failed Constitution save)". No
+// action-denial-on-failed-save primitive exists (no action-economy resource
+// to deny in this real-time combat system, the same gap
+// conjuration/hail_of_thorns.ron's own note already flags for a different
+// rider). `BuffKind::Sickened` is the closest already-shipped analog for
+// "nauseated" -- it's the same buff Necromancy's own ray_of_sickness.ron
+// uses for the same real-world condition name, and its effects()
+// (common/src/comp/buff.rs) bundle an accuracy penalty with a
+// Bleeding-shaped HP-drain tick that can't be separated out. The sheet is
+// explicit ("No damage") -- the strength here (0.2, well below
+// ray_of_sickness.ron's already-mild 0.3 for a single 6s hit, applied here
+// continuously for the whole zone duration instead) is kept deliberately low
+// so the unavoidable drain reads as incidental nausea-flavor rather than a
+// real damage source, closest available compromise rather than inventing a
+// new BuffKind. `StaticAura` always places the zone at the caster's own
+// position -- the sheet's 27 m cast range isn't mechanically expressed, same
+// simplification as entangle/fog_cloud/grease.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 75.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Sickened, strength: 0.2, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(20.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

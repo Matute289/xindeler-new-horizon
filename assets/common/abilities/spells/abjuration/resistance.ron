@@ -1,0 +1,29 @@
+// A steadying touch on a willing ally. D&D's "one-time saving-throw bonus,
+// consumed on the next roll" has no reroll/save-bonus primitive in this
+// engine, so it is delivered instead as the same touch-ally `ProtectingWard`
+// pattern this batch's own sibling ally-wards use (sanctuary.ron/
+// shield_of_faith.ron), reading as a brief flat damage reduction instead of
+// a save bonus. `BasicAura`, not `BasicMelee`: this spell has no
+// combat/attack framing to hang a touch-melee hitbox off of, and the
+// existing `freedom_of_movement.ron`/`pass_without_trace.ron` touch/
+// short-range `BasicAura` shape fits a passive ward better.
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: ProtectingWard,
+            strength: 0.15,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 2.0,
+    energy_cost: 20.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

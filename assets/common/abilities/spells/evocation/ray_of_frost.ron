@@ -1,0 +1,30 @@
+// Cold damage cantrip with a movement-slow rider, modeled with the existing
+// `Slowed` BuffKind (common/src/comp/buff.rs: "Generic movement slow, for
+// Slow spells and other sources that should reduce movement speed without
+// any other side effect" -- a direct fit, unlike `Chilled` which also adds
+// a poise-damage-received penalty this spell's text doesn't call for).
+// Damage set slightly below fire_bolt's cantrip anchor (15) to pay for the
+// rider while staying at 0 energy, mirroring D&D's own positioning of Ray of
+// Frost as the lowest-damage attack cantrip in exchange for the utility.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 11,
+            buff: Some((
+                kind: Slowed,
+                dur_secs: 4,
+                strength: Value(0.3),
+                chance: 1.0,
+            )),
+            damage_kind: Cold,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

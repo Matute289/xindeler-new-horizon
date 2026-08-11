@@ -1,0 +1,30 @@
+// Cone burst of cold -- Shockwave is the only AoE variant with a real
+// RON-configurable damage_kind field (set directly, not hardcoded per
+// sub-kind like MeleeConstructorKind/Explosion/GroundAoe/BasicBeam are), so
+// Cold is exactly representable here, no drift. The forced-movement
+// component isn't part of this spell's own description (unlike e.g.
+// lightning_lure), so knockback strength is left at 0 -- a pure damage
+// cone.
+Shockwave(
+    energy_cost: 25,
+    buildup_duration: 0.4,
+    swing_duration: 0.3,
+    recover_duration: 0.35,
+    damage: 16.0,
+    poise_damage: 8,
+    knockback: (strength: 0.0, direction: Away),
+    shockwave_angle: 60.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 20.0,
+    shockwave_duration: 0.3,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Cold,
+    specifier: Ice,
+    ori_rate: 1.0,
+    damage_effect: None,
+    timing: PostBuildup,
+    emit_outcome: true,
+    minimum_combo: None,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

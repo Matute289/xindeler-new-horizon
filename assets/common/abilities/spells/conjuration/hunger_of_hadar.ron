@@ -1,0 +1,33 @@
+// Sheet: "corrosive+chilling void zone, blinded inside the sphere, slowed
+// exit" -- a genuine dual-rider persistent zone (damage AND a control
+// debuff at once), unlike the Wave-1 zone spells (entangle.ron/fog_cloud.ron/
+// grease.ron), which were each single-rider (entangle: restrain only,
+// fog_cloud: blind only, grease: terrain only). `StaticAura`'s `auras:`
+// accepts multiple entries
+// simultaneously (see web.ron in this same batch), so both riders ship
+// together: `Bleeding` for the periodic acid/cold damage (same
+// generic-DoT-buff choice as cloud_of_daggers.ron -- no acid- or
+// cold-specific DoT `BuffKind` exists, `Burning` is fire-specific and
+// grants Frozen-immunity, a flavor mismatch worse than Bleeding's plain
+// physical framing) and `Blinded` at the exact same strength fog_cloud.ron
+// already ships (0.4), matching "grope blindly through the smothering
+// dark" directly. The sheet's secondary "slowed exit" (creatures take extra
+// damage trying to leave) has no distinct primitive beyond what's already
+// modeled and is dropped. `StaticAura` always places the zone at the
+// caster's own position -- the sheet's 46 m cast range isn't mechanically
+// expressed, same simplification as entangle/fog_cloud/grease.
+StaticAura(
+    buildup_duration: 0.7,
+    cast_duration: 0.5,
+    recover_duration: 0.45,
+    energy_cost: 85.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Bleeding, strength: 6.0, duration: Some(2), category: Some(Magical)),
+        (kind: Blinded, strength: 0.4, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(25.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

@@ -1,0 +1,19 @@
+// The "betrays the target's position to allies" rider is dropped: no
+// detection/marking mechanic exists to hook a reveal effect into. Ships as
+// a plain radiant bolt.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 14,
+            damage_kind: Radiant,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Divine)),
+)

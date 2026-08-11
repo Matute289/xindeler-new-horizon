@@ -1,0 +1,29 @@
+// Self-centered burst -- CharacterAbility::Explosion always detonates at
+// the caster's own position (common/src/states/explosion.rs has no
+// target-point field), which matches this spell's own "Self" range exactly
+// (contrast acid_splash.ron, whose 18 m range forced a deviation to
+// GroundAoe instead). Explosion also hardcodes DamageKind::Crushing in
+// common/src/explosion.rs -- no RON-configurable damage_kind field exists
+// on this variant -- so despite the Thunder flavor text this deals generic
+// Crushing damage under the hood; the small Away knockback below still
+// fits "concussive crack of sound" reasonably well as compensation.
+//
+// Damage is set below the batch's single-target cantrip baseline (14) since
+// this can hit every creature in the radius at once, not just one -- the
+// same AoE-cantrip discount real D&D itself applies (Thunderclap's actual
+// die is 1d6, notably below a single-target cantrip's 1d10).
+Explosion(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    action_duration: 0.2,
+    recover_duration: 0.3,
+    damage: 10,
+    poise: 8,
+    knockback: (direction: Away, strength: 4.0),
+    radius: 3.0,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    destroy_terrain: None,
+    eye_height: false,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

@@ -1,0 +1,46 @@
+// Sustained line-shaped push, no damage -- the school's own first
+// no-damage BasicBeam player-spell. `beam_duration: 60` genuinely matches
+// the sheet's own Concentration(60) ("the gale holds for as long as the
+// caster keeps it focused"): unlike flame_blade.ron/spiritual_weapon.ron in
+// this same batch, BasicBeam really is a hold-to-sustain mechanic
+// (common/src/states/basic_beam.rs re-checks `input_is_pressed` every
+// frame and drains `energy_drain` while held), so the Concentration framing
+// is not misleading here and is kept as-is.
+//
+// `damage: 1.0` (a deliberate near-zero token, not the sheet's real
+// payload): the sheet's own notes are explicit ("No damage; ... save to
+// resist forced movement (push)"), but `damage.effects` (which carries
+// `damage_effect`'s `CombatEffect`, including this spell's `Knockback`) is
+// only iterated inside the `change.amount.abs() > Health::HEALTH_EPSILON`
+// gate in `common/src/combat.rs` (~line 1308) -- a literal `damage: 0.0`
+// means that gate never opens and the knockback silently never fires
+// (verified by reviewer; confirmed by tracing `calculate_health_change`'s
+// output back to `basic_beam.rs`'s `AttackDamage::new`). `1.0` sits well
+// above `Health::HEALTH_EPSILON` (`0.5 / MAX_SCALED_HEALTH`, a tiny
+// fraction of a point) so the gate opens on every tick while the actual HP
+// chip is negligible -- the push, not the scratch damage, is this spell's
+// real effect. The push itself is modeled via `CombatEffect::Knockback` on
+// `damage_effect` -- the same field this batch's caustic_brew.ron (Wave 1)
+// uses for its own DoT rider, just carrying a push instead of a buff here.
+//
+// `specifier: Steam` is the closest available `beam::FrontendSpecifier`
+// (Flamethrower/LifestealBeam/Cultist/Gravewarden/Bubbles/Steam/Frost/
+// WebStrand/Poison/Ink/Lightning/PhoenixLaser/FireGigasOverheat/FirePillar/
+// FlameWallPillar -- no literal "wind" option exists); a visual mismatch
+// only, no gameplay effect depends on it.
+BasicBeam(
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    beam_duration: 60,
+    damage: 1.0,
+    tick_rate: 2.0,
+    range: 18.0,
+    max_angle: 5.0,
+    damage_effect: Some(Knockback((strength: 4.0, direction: Away))),
+    energy_regen: 0,
+    energy_drain: 15,
+    move_efficiency: 0.3,
+    ori_rate: 0.3,
+    specifier: Steam,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

@@ -1,0 +1,26 @@
+// The sheet's "shard splits on impact into a small cold splash" is a real,
+// already-shipped projectile shape: `ProjectileConstructorKind::Explosive`
+// (see arcane/cinderbolt.ron), not a plain `Simple` bolt. The `attack`
+// below applies to everyone caught in the impact radius, matching "sprays
+// freezing fragments at those nearby" directly -- no rider drop needed here.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Explosive(
+            radius: 3.0,
+            min_falloff: 0.5,
+            reagent: Some(Blue),
+            terrain: None,
+        ),
+        attack: Some((
+            damage: 14,
+            damage_kind: Cold,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

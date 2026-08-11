@@ -1,0 +1,18 @@
+// D&D's "Armor of Agathys": a temp-HP shell (modeled with `Shielded`, the
+// same absorb-pool primitive false_life.ron already uses for temporary hit
+// points) that in the source spell also bites back with cold damage against
+// any melee attacker while it holds. That retaliation/thorns rider is
+// dropped -- this engine has no reflect-damage-to-attacker primitive
+// (checked every BuffKind in common/src/comp/buff.rs) -- same "no fitting
+// primitive, ships without the rider" call N76-I made for chill_touch's
+// anti-healing rider. Ships as the temp-HP shell alone.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: Shielded, data: BuffData(strength: 15.0, duration: Some(3600.0))),
+    ],
+    energy_cost: 30.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

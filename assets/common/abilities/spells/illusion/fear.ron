@@ -1,0 +1,42 @@
+// "Fail to steel their will recoil in panic, dropping what they hold and
+// fleeing" maps to the existing Terrified buff (already used for fear by
+// cause_fear.ron/dissonant_whispers.ron/eyebite_panicked.ron), applied via
+// Shockwave's damage_effect rider -- the same shape draugr.ron's own Chilled
+// application already ships for this variant. No forced knockback/prone:
+// fear frightens, it doesn't physically shove, so knockback strength is 0.
+Shockwave(
+    energy_cost: 80.0,
+    buildup_duration: 0.7,
+    swing_duration: 0.4,
+    recover_duration: 0.45,
+    damage: 15.0,
+    poise_damage: 0,
+    knockback: (strength: 0.0, direction: Away),
+    shockwave_angle: 90.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 20.0,
+    shockwave_duration: 0.5,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Psychic,
+    specifier: Ground,
+    damage_effect: Some(Buff((
+        kind: Terrified,
+        dur_secs: 10.0,
+        strength: Value(0.7),
+        chance: 1.0,
+    ))),
+    ori_rate: 1.0,
+    timing: PostBuildup,
+    emit_outcome: true,
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 3 spell -> min_level 18, the `level * 6` convention (see
+        // sleep.ron). Real gap without this: the mastery/transcription
+        // learned-spellbook path (common/src/comp/spell_mastery.rs,
+        // transcription.rs) clears the class-level SpellGate entirely and
+        // relies solely on this field as the floor.
+        requirements: (min_level: Some(18)),
+    ),
+)
