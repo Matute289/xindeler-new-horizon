@@ -4,8 +4,12 @@
 // primitive exists for a player to remote-puppet a second, independently
 // visible NPC body (the closest thing, `BasicSummon`, spawns a real
 // separate entity with its own AI, not a caster-piloted decoy). Strength
-// matched to greater_invisibility.ron rather than plain invisibility.ron
-// since both are circle-5, one step above invisibility's circle-2.
+// matched to greater_invisibility.ron (circle 4, one circle below this
+// spell) rather than plain invisibility.ron (circle 2) -- both sit well
+// above invisibility's own strength, and the detection-multiplier curve's
+// diminishing returns (common/src/combat.rs, 1/(1+x)) mean escalating
+// further per-circle buys little, so a shared strength across circles 4-5
+// is a reasonable plateau, not an oversight.
 SelfBuff(
     buildup_duration: 0.5,
     cast_duration: 0.2,
