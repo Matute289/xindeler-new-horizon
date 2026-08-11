@@ -1,0 +1,19 @@
+// This is the sheet's "Blink" (a Transmutation phase-shift defense buff), NOT the
+// `CharacterAbility::Blink` teleport variant -- name collision only, different mechanic
+// entirely. Sheet variant is SelfBuff and range is Self, so no touch-ally deviation needed here.
+//
+// "Attacks and effects pass harmlessly through" is literally full damage immunity
+// (`BuffKind::Invulnerability`), but a full-immunity grant is a materially higher power level
+// than a partial defensive buff and worth escalating on its own rather than bundling a second
+// one alongside an existing unreviewed grant elsewhere in the school. `ProtectingWard` (partial,
+// non-linear damage reduction) is used instead as the safer available defensive primitive.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.5, duration: Some(60.0))),
+    ],
+    energy_cost: 65.0,
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(35.0)),
+)

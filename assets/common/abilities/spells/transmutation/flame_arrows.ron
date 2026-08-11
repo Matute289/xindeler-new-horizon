@@ -1,0 +1,15 @@
+// Ammunition-enchantment buff (touch your own arrows/bolts, sheet range: Touch, first-person
+// "you imbue a bundle of arrows" -- no third-party creature named, so no touch-ally deviation).
+// "Each enchanted projectile that strikes a foe sears it with an extra burst of flame" maps
+// directly onto the existing Flame buff (attacks cause the burning debuff on the target) --
+// an exact fit, not a substitution.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Flame, data: BuffData(strength: 0.2, duration: Some(60.0))),
+    ],
+    energy_cost: 60.0,
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(30.0)),
+)

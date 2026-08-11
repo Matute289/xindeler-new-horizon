@@ -1,0 +1,60 @@
+// PILOT NOTE: the sheet's own variant for this spell is `Transform`, and this is the first
+// attempt anywhere in the compendium to author a player spell with it. After reading
+// `common/src/comp/ability.rs` (the `Transform` variant), `common/src/states/transform.rs`, and
+// `server/src/events/entity_manipulation.rs::transform_entity`, `Transform` was found unusable
+// for this spell and is NOT used here. Concretely, `Transform`:
+//   1. Replaces the target's entire body/stats/inventory/skillset with a brand-new `EntityConfig`
+//      loaded from a `target: String` asset path (`transform.rs`'s `StaticData::target`) -- it
+//      is a full entity swap, not a stat-modifying buff, so a player's real gear/stats would be
+//      discarded, not preserved "along with all it wears and carries" as the sheet requires.
+//   2. Sets the transformed entity's `Presence` to `PresenceKind::Possessor` and explicitly
+//      disables persistence for it (`transform_entity`'s "Disable persistence" block) -- there
+//      is no code path anywhere in this engine that reverts `Possessor` back to
+//      `PresenceKind::Character` or restores the pre-transform body. Every existing `Transform`
+//      RON (`cursekeeper/transform.ron`, `debug/evolve.ron`, `debug/eaglify.ron`) is a one-way,
+//      permanent-until-a-human-intervenes admin/debug/lore gimmick, not a timed effect.
+//   3. Has no `duration` field at all -- `buildup_duration`/`recover_duration` only cover the
+//      cast animation, not how long the new form lasts.
+// None of this matches a Concentration(60)-duration, willing-target, fully reversible buff that
+// "collapses" under a condition. Using `Transform` as-shipped for `gaseous_form` would
+// permanently strip the target's real character and never give it back -- shipping that as a
+// player spell would be a serious, silent regression, not a faithful rendering of the sheet.
+//
+// Ships instead as the established touch-ally pattern (spider_climb.ron/weave_transfusion.ron
+// in this folder: SelfBuff can only ever land on the caster, and the sheet's own range: Touch +
+// "a willing creature you touch" third-person phrasing calls for the ally-touch shape).
+// "Dissolves into vapor, seeps through gaps, floats" is modeled with ProtectingWard
+// (partial damage resistance -- gaseous form's real defensive core in the source material) as
+// the nearest existing primitive; the "seep through narrow gaps" and "collapses near death"
+// riders have no engine hook and are dropped, not silently reinterpreted.
+//
+// Reconciliation note for whoever authors the next `Transform`-variant spell: this pilot's
+// conclusion is that `Transform`, in its current shape, has no viable use as a *timed, willing,
+// reversible* player spell effect at all -- only as a one-way permanent transformation (which no
+// sheet spell in this school calls for). A real fix would need new Rust: storing the
+// pre-transform body/stats and a timer-driven revert event. Until that exists, any other
+// Transform-labeled sheet spell should default to the same substitution approach used here
+// rather than re-attempting the literal variant.
+BasicMelee(
+    energy_cost: 55.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Buff((
+                kind: ProtectingWard,
+                dur_secs: 60.0,
+                strength: Value(0.5),
+                chance: 1.0,
+            )),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(30.0)),
+)

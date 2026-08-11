@@ -1,0 +1,32 @@
+// The sheet's own variant is SelfBuff, but its range (9m) and aoe ("multi-target") describe a
+// ranged group buff, not an effect that can land only on the caster
+// (common/src/states/self_buff.rs: SelfBuff always targets the caster). This deviates to
+// BasicAura -- the same multi-target ally-touch shape already used for water_breathing.ron in
+// this folder, whose sheet entry has near-identical range/aoe/notes -- rather than the literal
+// SelfBuff label, which cannot structurally deliver a multi-target effect.
+//
+// "Steps firm against water, mud, snow, or molten flows as though walking on solid earth" maps
+// directly onto the existing FreedomOfMovement buff (immunity to DifficultTerrain, which is what
+// models exactly this kind of surface-based movement penalty elsewhere in this folder) -- a
+// strong fit, not a stretch substitution. The still-burned-by-lava carve-out has no separate
+// hook and is dropped.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: FreedomOfMovement,
+            strength: 1.0,
+            duration: Some(3600.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(1.0),
+    range: 9.0,
+    energy_cost: 55.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Transmutation), source: Some(Primordial), cooldown: Some(20.0)),
+)
