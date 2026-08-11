@@ -1,0 +1,74 @@
+// 🔴 The sheet's own `variant` field is `Transform`, but this does NOT use
+// `CharacterAbility::Transform` (`common/src/comp/ability.rs`). Investigated
+// that variant in full first:
+//
+// - `common/src/states/transform.rs` + `server/src/events/entity_manipulation.rs`
+//   `transform_entity()`: on activation it emits `TransformEvent`, which
+//   overwrites the target's real `Inventory`, `Stats`, `SkillSet`, `Poise`,
+//   `Health`, `Energy`, `Body`, `Mass`, `Density`, `Collider` and active
+//   abilities with an entirely different `EntityConfig`'s values, and
+//   explicitly disables persistence while doing so (`'persist: { ... }` block).
+// - `allow_players` is documented on the variant itself: "Only set to `true`
+//   for admin only abilities since this disables persistence and is not
+//   intended to be used by regular players." Its only two shipped call sites
+//   (`custom/cursekeeper/transform.ron`, `debug/evolve.ron`) both set it
+//   `false`/admin-triggered, and there is no revert-after-duration mechanism
+//   anywhere in the state (`transform.rs` has no timer that transforms the
+//   entity back) — it is a one-way NPC-swap primitive built for boss/debug
+//   triggers, not a reversible ~60s player self-buff.
+// Using it here would wipe the caster's real gear/stats for the spell's
+// duration with no automatic way back — unacceptable for a temporary player
+// buff, and would require new Rust (a revert-on-expiry mechanism) to fix.
+//
+// The correct existing primitive instead: `BuffKind::Polymorphed`
+// (`common/src/comp/buff.rs`) + `BuffEffect::BodyChange`
+// (`common/systems/src/buff.rs` line ~811: `body_override.unwrap_or(stat.
+// original_body)` — the body is automatically reconciled back to
+// `stat.original_body` the instant the buff is no longer active, giving a
+// real, already-*shipped*-for-players auto-revert with zero extra Rust).
+// Already used by a real player-facing drinkable, `potion_curious.ron`
+// ("Curious Potion"), which grants exactly this buff with a
+// `MiscBuffData::Body(...)` payload and a timed duration. This is the
+// buff-based polymorph machinery that is already proven safe for players —
+// unlike the literal `Transform` variant, which stays untouched by any
+// player spell.
+//
+// Kept branch: the sheet's third option, "wearing an altered appearance" —
+// `Polymorphed` can only swap to one *fixed*, fully-specified `Body` value
+// (no per-cast "choose claws vs. gills vs. a new face" choice exists in the
+// data model), so this authors one concrete alternate form rather than the
+// sheet's three player-chosen options. `FishMedium(Marlin)` mirrors
+// `potion_curious.ron`'s exact same-primitive usage (a small/medium
+// creature swap) most closely, of the school's few simple-struct `Body`
+// variants (`Humanoid::Body` needs 8 additional cosmetic fields with no
+// serde default, `FishMedium`/`FishSmall`/`QuadrupedLow` need only
+// `species`+`body_type`).
+// Dropped: "growing natural weapons" (damage_type: Bludgeoning) — no
+// `BuffEffect` grants an attack-damage bonus tied to `Polymorphed`, and
+// "adopting aquatic traits" as a *swim-speed* buff specifically — the only
+// swim-speed-granting kind, `BuffKind::SalamanderAspect`, is commented out
+// in the enum (`// SalamanderAspect, TODO: Readd in second dwarven mine MR`,
+// `common/src/comp/buff.rs`), not a live variant today.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(FishMedium((species: Marlin, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 40,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

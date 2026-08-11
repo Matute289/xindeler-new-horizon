@@ -1,0 +1,40 @@
+// `SelfBuff` cannot deliver this: the sheet's range is Touch and the
+// description reads "the touched creature's skin" (third person), which
+// `SelfBuff` can never satisfy since it always lands on the caster
+// (`entity: data.entity`, `common/src/states/self_buff.rs`). Uses the same
+// touch-ally pattern as this folder's own `weave_transfusion.ron` /
+// `hollow/spare_the_dying.ron` (`attack_effect_target: Some(InGroup)` on a
+// near-inert `Stab`).
+// No "hard floor on armor regardless of what's worn" primitive exists in
+// `BuffEffect` (checked `common/src/comp/buff.rs` in full) -- modeled with
+// `ProtectingWard` (flat damage reduction) instead, the nearest existing
+// defensive buff, at a modest strength reflecting a minimum-AC floor rather
+// than a strong ward.
+BasicMelee(
+    energy_cost: 35.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Buff((
+                kind: ProtectingWard,
+                dur_secs: 60.0,
+                strength: Value(0.3),
+                chance: 1.0,
+            )),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

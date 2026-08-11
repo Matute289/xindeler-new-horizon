@@ -1,0 +1,32 @@
+// Same "next weapon hit gets a bonus, consumed on attack" shape as
+// `evocation/blinding_smite.ron` -- `SelfBuff` + `buff_cat: RemoveOnAttack`,
+// `duration: None` (consumed rather than timed out). Modeled with
+// `BuffKind::BrandingSmite` ("Causes the wielder's next weapon hit to deal
+// additional damage, no secondary effect") since no existing Smite variant
+// grants an evasion-penalty rider on the struck target (checked every
+// `*Smite` kind's doc comment in `common/src/comp/buff.rs` -- `Blinding`/
+// `Searing`/`Staggering`/`Thunderous`/`Wrathful` each pair the bonus damage
+// with a *different* specific rider, none of them "target becomes easier to
+// hit"). The sheet's "foe glows, easier to hit" rider is dropped rather than
+// substituted with a mismatched Smite kind.
+// Same level (2), same buff kind, same shape, same energy_cost as the
+// already-shipped `evocation/branding_smite.ron` -- strength matched to its
+// 7.0 exactly rather than picked independently, since an apples-to-apples
+// same-kind/same-level comparison exists to calibrate against directly.
+SelfBuff(
+    buildup_duration: 0.1,
+    cast_duration: 0.1,
+    recover_duration: 0.1,
+    buffs: [
+        BuffDesc(kind: BrandingSmite, data: BuffData(strength: 7.0, duration: None)),
+    ],
+    buff_cat: Some(RemoveOnAttack),
+    energy_cost: 15,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Divine),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

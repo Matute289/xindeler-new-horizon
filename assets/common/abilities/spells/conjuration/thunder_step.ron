@@ -1,0 +1,19 @@
+// Third `Blink` player spell in this batch (see misty_step.ron for the
+// pilot notes on the variant itself).
+//
+// Deviation from the sheet, flagged for reviewer attention: the sheet
+// describes a thunder burst at the departure point damaging nearby
+// creatures on a failed save. `CharacterAbility::Blink` carries no
+// damage/attack fields whatsoever (common/src/comp/ability.rs) -- unlike
+// `Explosion` or `Shockwave`, there is no secondary-effect hook this variant
+// can trigger. The departure burst is therefore dropped entirely, not
+// reinterpreted; this ships as a pure self-teleport, mechanically identical
+// in shape to vortex_warp.ron but with this spell's own range/cooldown. The
+// flavor text does not claim any damage happens.
+Blink(
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    max_range: 27.0,
+    frontend_specifier: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane), cooldown: Some(18.0)),
+)

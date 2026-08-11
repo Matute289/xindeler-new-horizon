@@ -1,0 +1,35 @@
+// Deviates from the sheet's own `Explosion` variant, same reasoning
+// acid_splash.ron in this folder already documents:
+// `CharacterAbility::Explosion` (common/src/states/explosion.rs) always
+// detonates centered on the CASTER's own position -- it has no
+// target-point field, only a `radius`. This spell's 18 m range (a burst
+// thrown at a chosen point, not self-centered) contradicts that, so it
+// uses `GroundAoe` instead, the real "detonate at a chosen point within
+// range" primitive (see dark_star.ron, the sibling shape this was cloned
+// from).
+//
+// `GroundAoe` also hardcodes `DamageKind::Energy`
+// (common/src/states/ground_aoe.rs) -- no RON-configurable `damage_kind`
+// field exists on this variant -- so despite the Thunder flavor text this
+// deals generic Energy damage under the hood, same drift acid_splash.ron
+// documents.
+//
+// Circle 2: damage/energy set below fireball.ron's circle-3 numbers in
+// this same folder (48 dmg / 90 energy), matching the one-circle-lower
+// relationship real D&D's own Shatter (2nd) has to Fireball (3rd).
+// Flagged for wave-close-out balance review.
+GroundAoe(
+    energy_cost: 45.0,
+    buildup_duration: 0.45,
+    delay: 0.3,
+    recover_duration: 0.35,
+    max_range: 18.0,
+    radius: 3.0,
+    min_falloff: 0.3,
+    damage: 30,
+    poise: 15,
+    knockback: (strength: 8, direction: Away),
+    dodgeable: Roll,
+    rooted_cast: false,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

@@ -1,0 +1,24 @@
+// Second `Blink` player spell in this batch (see misty_step.ron for the
+// pilot notes on the variant itself: no `energy_cost` field, cooldown-gated).
+//
+// Deviation from the sheet, flagged for reviewer attention: the sheet
+// describes a target creature being involuntarily flung to an open space
+// (a Constitution save to resist). `Blink`'s own state machine
+// (common/src/states/blink.rs) only ever moves the CASTER: on a targeted
+// entity it emits `TeleportToEvent { entity: data.entity, target, .. }`
+// (moves self toward the target, a gap-closer), and on a selected ground
+// point it does `update.pos.0 = pos` on the caster's own position. There is
+// no code path in this variant that displaces another entity against its
+// will. The forced-displacement/save rider is therefore dropped -- no
+// primitive exists for it -- and this ships as the caster instead warping
+// directly to an open point (or adjacent to a chosen target) within a much
+// longer range and slower (`Action`-cast) buildup than misty_step.ron's
+// short `Bonus` blink, which is what actually distinguishes the two spells
+// mechanically.
+Blink(
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    max_range: 27.0,
+    frontend_specifier: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane), cooldown: Some(16.0)),
+)

@@ -1,0 +1,45 @@
+// Real fighting companion: `alignment`/`with_agent`/`incorporeal`/
+// `phantom_illusion` all omitted, which resolves them to their
+// `#[serde(default)]` values (`Alignment::Owned(caster)`, `with_agent: true`,
+// both booleans `false`) -- a genuine, hittable, AI-driven ally, not a
+// decorative phantasm. Same recipe already-shipped NPC-cast summon abilities
+// use for their own owned companions (see
+// custom/dwarves/forgemaster/summon_iron_dwarf.ron and
+// vampire/bloodmoon_heiress/summon.ron).
+//
+// No dedicated "fey" species exists anywhere in the engine (checked every
+// species list in common/src/comp/body/{biped_small,biped_large}.rs -- zero
+// fey/sprite/dryad-themed entries). `ShamanicSpirit` (`BipedSmall`) is the
+// closest already-modeled "spirit" creature and already ships with a real
+// combat loadout preset (`ShamanicSpiritSummon`, see
+// custom/cursekeeper/summonshamanicspirit.ron, which also supplies the
+// `skillset_config: Some(Rank5)` pairing reused here) -- reused as a stand-in
+// for "a capricious wildland spirit" rather than adding a new `Body` variant.
+//
+// The sheet's `Concentration(60)` duration renders as a flat 60s expiry
+// timer; there is no per-tick concentration-check mechanic to interrupt it
+// early, so only that nuance is dropped, not the 60s number itself.
+//
+// Deviation from the two cited precedent files, flagged for reviewer
+// attention: those omit `meta` entirely (so: no cooldown, unlimited recast)
+// because they're short-lived utility/decoy summons. This is a real,
+// multi-second combat ally on a resource-free `BasicSummon` cast (no
+// `energy_cost` field exists on this variant), so a `cooldown` is added here
+// to prevent free-spamming a full-health fighting companion.
+BasicSummon(
+    buildup_duration: 0.9,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (2.0, 3.0),
+        body: BipedSmall((species: ShamanicSpirit, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: Some(ShamanicSpiritSummon),
+        skillset_config: Some(Rank5),
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+    meta: (school: Some(Conjuration), source: Some(Primordial), cooldown: Some(45.0)),
+)

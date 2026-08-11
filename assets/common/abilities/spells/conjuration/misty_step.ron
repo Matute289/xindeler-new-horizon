@@ -1,0 +1,22 @@
+// First `Blink` authored as a real *player spell*. Every prior `Blink` RON is
+// either a racial innate (`innate/danari.ron`, "Shadowstep") or an
+// NPC/monster teleport (vampire/*, custom/*/teleport.ron,
+// custom/mindflayer/dimensionaldoor.ron). `danari.ron` is the closest usable
+// template: it's the only other player-triggered `Blink`, and confirms the
+// variant has NO `energy_cost` field (see `CharacterAbility::Blink` in
+// common/src/comp/ability.rs) -- it is free by nature, so cooldown is the
+// only balance lever available.
+//
+// Closest 1:1 sheet match of this batch's three Blink spells: the sheet
+// already just says "the caster slips out of one spot and reappears a short
+// dash away", which is exactly what `Blink` does (common/src/states/blink.rs)
+// -- no rider dropped here. `frontend_specifier` is left `None`: the only two
+// options (`CultistFlame`, `FlameThrower`) are both fire-flavored and would
+// misrepresent this spell's misty theme; no new VFX asset is added.
+Blink(
+    buildup_duration: 0.3,
+    recover_duration: 0.2,
+    max_range: 9.0,
+    frontend_specifier: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane), cooldown: Some(10.0)),
+)

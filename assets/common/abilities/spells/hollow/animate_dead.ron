@@ -1,0 +1,59 @@
+// "Raises the reanimated husk as an obedient thrall, mindlessly carrying out
+// the commands of the one who roused it" -- a genuine fighting/following
+// minion, not a decorative phantasm. Every already-shipped player-spell
+// `BasicSummon` (illusion/{minor_illusion_image,silent_image,major_image,
+// project_image}.ron, transmutation/floating_disk.ron) is a
+// `with_agent: false`, `incorporeal: true`, `phantom_illusion: true`,
+// `has_health: false` decoy -- none is an actual owned, hittable, acting
+// creature. This spell instead uses the OTHER already-real `SummonInfo::Npc`
+// recipe, the one NPC-cast summon abilities already use for genuine owned
+// companions (assets/common/abilities/custom/dwarves/forgemaster/
+// summon_iron_dwarf.ron, assets/common/abilities/vampire/bloodmoon_heiress/
+// summon.ron): `alignment`/`with_agent`/`incorporeal`/`phantom_illusion`/
+// `delete_after_expiry` left at their `#[serde(default)]` values --
+// `alignment: None` resolves to `Alignment::Owned(caster)`, `with_agent`
+// defaults to true (real AI, matching "carrying out the commands"),
+// `incorporeal`/`phantom_illusion` default to false (a real, hittable
+// creature), `duration: None` means no expiry timer (a raised thrall stays
+// until dismissed/killed, matching the sheet's classification as a
+// persistent summon mechanic rather than a timed one). `loadout_config:
+// None` -- `basic_summon.rs`'s own `with_default_maintool(body)` still gives
+// the reanimated body its species-default weapon; no `Preset::*Summon`
+// variant exists for an undead body and adding one is Rust (Lane B), out of
+// scope for this content-only pass.
+//
+// `body`: `BipedSmall(Husk)` -- Necromancy's own already-shipped dungeon
+// undead (assets/common/entity/dungeon/cultist/husk.ron), a real
+// `CreatureKind::Undead` species (common/src/comp/body/mod.rs), and the
+// literal "shambling husk" the sheet's own description names.
+//
+// KNOWN GAP, same one the Conjuration Wave-1 pilot (find_familiar.ron)
+// documents and deliberately leaves open in this content-only pass:
+// `Alignment::Owned` alone does not grant cross-session persistence (the
+// real `comp::Pet`/DB-save/chunk-anchor path is untouched by `BasicSummon`),
+// and nothing here caps or replaces a prior summon on recast -- repeated
+// casts stack multiple thralls. A Lane B follow-up wiring `BasicSummon`
+// through the real pet system would close this for every spell using this
+// recipe, not just this one.
+//
+// `loadout_config`/`skillset_config`: `Preset::HuskSummon` already exists
+// for this exact body (loadout_builder.rs) and is already used by the
+// mechanically-identical conjuration/summon_shadowspawn.ron -- reused here
+// instead of leaving the thrall unarmed.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 2.0),
+        body: BipedSmall((species: Husk, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: Some(HuskSummon),
+        skillset_config: Some(Rank5),
+        duration: None,
+    ),
+    meta: (school: Some(Necromancy), source: Some(Arcane), cooldown: Some(30.0)),
+)

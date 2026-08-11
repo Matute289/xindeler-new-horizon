@@ -1,0 +1,37 @@
+// Third `SpriteSummon` wall in this folder -- see wall_of_sand.ron's
+// header for the full write-up of the variant's real behavior. This
+// spell's "deflects loose debris/small flyers/gusts" and the minor
+// Bludgeoning-on-cross damage both drop for the same reason as the other
+// two walls: `SpriteSummon` carries no attack/effect/aura field, so
+// nothing it summons can deal damage or deflect projectiles -- the sheet's
+// own notes already flag the damage as secondary ("the spell's primary
+// function is a barrier"), which is exactly what a solid, riderless
+// obstruction can still deliver honestly (an actual physical block via
+// `solid_height`), even without the damage tick.
+//
+// No wind/air solid sprite exists in the terrain catalogue.
+// `SpriteKind::SeaDecorPillar` (`solid_height: 2.55` --
+// common/src/terrain/sprite/mod.rs) is used for the tallest available
+// *solid* sprite among the reused sea-decor family (wall_of_water.ron
+// picks `SeaDecorBlock` from the same family), approximating this spell's
+// taller "5 m high" flavor better than a short/squat sprite would -- still
+// a documented flavor drift, not a wind effect.
+//
+// The sheet's "15 m long, 5 m high" is the largest footprint of these
+// three walls, so `summon_distance`/`angle` are widened accordingly
+// relative to wall_of_sand.ron/wall_of_water.ron (both 9 m). `anchor:
+// Target` matches the sheet's 37 m cast range.
+SpriteSummon(
+    buildup_duration: 0.8,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    sprite: SeaDecorPillar,
+    del_timeout: Some((58, 4)),
+    summon_distance: (0, 4),
+    sparseness: 0.25,
+    angle: 120.0,
+    anchor: Target,
+    move_efficiency: 0.3,
+    ori_modifier: 1.0,
+    meta: (school: Some(Evocation), source: Some(Arcane), cooldown: Some(26.0)),
+)

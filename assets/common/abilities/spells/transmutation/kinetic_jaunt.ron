@@ -1,0 +1,20 @@
+// Pure self-only mobility buff (sheet range: Self) -- no deviation needed.
+// Modeled with the existing `Hastened` buff (movement + attack speed,
+// `common/src/comp/buff.rs`), the nearest "make the caster faster" buff.
+// The sheet's `damage_type: Force` is flavor metadata only; `SelfBuff` has
+// no `damage_kind` field since the spell deals no damage.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.1,
+    recover_duration: 0.2,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.1, duration: Some(60.0))),
+    ],
+    energy_cost: 40,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)
