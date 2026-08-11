@@ -1,0 +1,32 @@
+// A touch-ally cleanse-and-ward. D&D's instant "neutralize an existing
+// poison" half has no target-side remove-buff primitive reachable from a
+// touch-range `BasicAura` (`AbilityInitEvent::RemoveBuff` fires for the
+// caster on ability activation, not for whoever the aura lands on), so that
+// half is dropped -- this ships as the preventive-ward half only: a flat
+// `ProtectingWard` damage-reduction ward standing in for "resists damage
+// from venoms while the warding lasts". `duration: Instant` at the
+// compendium level describes the one-action cast, not the ward itself --
+// the real 1-hour ward lifespan (matching D&D's own timed duration, per the
+// sheet's own note) lives in this file's `auras[].duration`/`aura_duration`,
+// the same split snare.ron already uses for its own Instant-cast,
+// timed-effect shape.
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: ProtectingWard,
+            strength: 0.15,
+            duration: Some(3600.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3600.0),
+    range: 2.0,
+    energy_cost: 25.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

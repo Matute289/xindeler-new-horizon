@@ -1,0 +1,18 @@
+// Touch range in D&D (can be cast on a willing ally), narrowed to self-only
+// exactly like mage_armor.ron's/nondetection.ron's own precedent: no
+// touch-a-willing-ally targeting mechanism exists for a `SelfBuff`-shaped
+// spell, and the sheet's own notes explicitly call for the `SelfBuff` arm
+// here. "Resistance to one chosen energy type" has no per-damage-kind
+// resistance primitive to pick a specific type with, so it becomes the same
+// flat, kind-agnostic `ProtectingWard` reduction this school's other energy/
+// AC-style wards already use.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.25, duration: Some(60.0))),
+    ],
+    energy_cost: 35.0,
+    meta: (school: Some(Abjuration), source: Some(Primordial)),
+)

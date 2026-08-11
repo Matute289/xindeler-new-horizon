@@ -1,0 +1,30 @@
+// A group blessing against despair. D&D's "advantage on Wisdom saves and
+// death saving throws" has no save-advantage primitive, and "healing
+// received is always maximized" has no healing-multiplier primitive either
+// (checked every `BuffEffect` in common/src/comp/buff.rs), so both riders
+// are dropped. The closest still-fitting primitive is `Fearless`
+// ("Immunity to Terrified -- a tag-only buff") -- steadfast resolve against
+// fear/despair reads as a reasonable, if narrower, stand-in for "advantage
+// on saves against a hopeless death". `strength: 1.0` is the same no-op
+// placeholder freedom_of_movement.ron already uses for its own tag-only
+// buff, since `Fearless` has no numeric effect of its own.
+BasicAura(
+    buildup_duration: 0.4,
+    cast_duration: 0.3,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Fearless,
+            strength: 1.0,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 9.0,
+    energy_cost: 40.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)
