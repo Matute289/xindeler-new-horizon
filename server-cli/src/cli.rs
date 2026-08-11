@@ -86,12 +86,33 @@ pub enum Message {
     SendGlobalMsg {
         msg: String,
     },
+    /// Uptime-adjacent server status not already exported via `/metrics`:
+    /// version, player count, pending-shutdown state.
+    ServerInfo,
+}
+
+/// The subset of server status not already exported via `/metrics`. See
+/// `Message::ServerInfo`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServerInfoDto {
+    pub version: String,
+    pub player_count: usize,
+    /// `Some(seconds)` while a graceful shutdown countdown is in progress
+    /// (see `ShutdownCoordinator`); `None` otherwise.
+    pub shutdown_pending_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub enum MessageReturn {
     Players(Vec<String>),
     Logs(Vec<String>),
+    Info(ServerInfoDto),
+    /// A fallible operation failed. Every `Message` arm that can fail must
+    /// send this instead of silently dropping the response sender, or the
+    /// caller only ever observes a request timeout with no explanation.
+    /// Unconstructed until the first fallible `Message` arm is added.
+    #[expect(dead_code)]
+    Error(String),
 }
 
 #[derive(Parser)]

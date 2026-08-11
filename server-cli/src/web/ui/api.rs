@@ -1,4 +1,4 @@
-use crate::cli::{Message, MessageReturn};
+use crate::cli::{Message, MessageReturn, Shutdown};
 use axum::{
     Json, Router,
     extract::{ConnectInfo, Request, State},
@@ -73,6 +73,9 @@ pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router
         .route("/players", get(players))
         .route("/logs", get(logs))
         .route("/send_global_msg", post(send_global_msg))
+        .route("/info", get(info))
+        .route("/shutdown", post(shutdown))
+        .route("/disconnect_all", post(disconnect_all))
         .layer(axum::middleware::from_fn_with_state(ip_addrs, log_users))
         .layer(axum::middleware::from_fn_with_state(token, validate_secret))
         .with_state(web_ui_request_s)
@@ -118,6 +121,74 @@ async fn send_global_msg(
     let (dummy_s, _) = tokio::sync::oneshot::channel();
     let _ = web_ui_request_s
         .send((Message::SendGlobalMsg { msg: payload.msg }, dummy_s))
+        .await;
+    Ok(())
+}
+
+async fn info(
+    State(web_ui_request_s): State<UiRequestSender>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s.send((Message::ServerInfo, sender)).await;
+    match receiver
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        MessageReturn::Info(info) => Ok(Json(info)),
+        _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// Mirrors `crate::cli::Shutdown`'s three modes as a JSON body instead of a
+/// clap subcommand -- `graceful` takes `seconds`/`reason`, the other two
+/// ignore both fields.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ShutdownMode {
+    Graceful,
+    Immediate,
+    Cancel,
+}
+
+#[derive(Deserialize)]
+struct ShutdownBody {
+    mode: ShutdownMode,
+    #[serde(default)]
+    seconds: u64,
+    reason: Option<String>,
+}
+
+async fn shutdown(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Json(payload): Json<ShutdownBody>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let command = match payload.mode {
+        ShutdownMode::Graceful => Shutdown::Graceful {
+            seconds: payload.seconds,
+            reason: payload
+                .reason
+                .unwrap_or_else(|| "The server is shutting down".to_owned()),
+        },
+        ShutdownMode::Immediate => Shutdown::Immediate,
+        ShutdownMode::Cancel => Shutdown::Cancel,
+    };
+    // `Message::Shutdown` never sends a response on any of its three arms
+    // (a graceful/cancel mutates `ShutdownCoordinator` state with nothing to
+    // report back; an immediate shutdown exits the process) -- same
+    // fire-and-forget shape as `send_global_msg` above.
+    let (dummy_s, _) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((Message::Shutdown { command }, dummy_s))
+        .await;
+    Ok(())
+}
+
+async fn disconnect_all(
+    State(web_ui_request_s): State<UiRequestSender>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let (dummy_s, _) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((Message::DisconnectAllClients, dummy_s))
         .await;
     Ok(())
 }
