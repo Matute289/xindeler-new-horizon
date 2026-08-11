@@ -19,7 +19,8 @@ mod tuilog;
 mod web;
 use crate::{
     cli::{
-        Admin, ArgvApp, ArgvCommand, BenchParams, Message, MessageReturn, SharedCommand, Shutdown,
+        Admin, ArgvApp, ArgvCommand, BenchParams, Message, MessageReturn, ServerInfoDto,
+        SharedCommand, Shutdown,
     },
     settings::Settings,
     shutdown_coordinator::ShutdownCoordinator,
@@ -41,7 +42,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Notify;
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
@@ -407,6 +408,15 @@ fn server_loop(
                     let msg = ChatType::Meta.into_plain_msg(msg);
                     server.state().send_chat(msg, false);
                 },
+                Message::ServerInfo => {
+                    let player_count = server.state().ecs().read_storage::<Player>().join().count();
+                    let info = ServerInfoDto {
+                        version: common::util::DISPLAY_VERSION.clone(),
+                        player_count,
+                        shutdown_pending_secs: shutdown_coordinator.pending_shutdown_secs(),
+                    };
+                    let _ = response.send(MessageReturn::Info(info));
+                },
             }
             false
         };
@@ -422,6 +432,8 @@ fn server_loop(
                     match msg_answ {
                         MessageReturn::Players(players) => info!("Players: {:?}", players),
                         MessageReturn::Logs(_) => info!("skipp sending logs to tui"),
+                        MessageReturn::Info(info) => info!(?info, "Server info"),
+                        MessageReturn::Error(err) => error!(%err, "Command failed"),
                     };
                 }
             }

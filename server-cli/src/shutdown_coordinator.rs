@@ -142,6 +142,15 @@ impl ShutdownCoordinator {
         }
     }
 
+    /// Whole seconds remaining before a pending graceful shutdown fires, or
+    /// `None` if no shutdown is currently in progress. Public read-only view
+    /// of `time_until_shutdown` for callers outside this module that need to
+    /// report lifecycle status without being able to mutate it.
+    pub fn pending_shutdown_secs(&self) -> Option<u64> {
+        self.time_until_shutdown()
+            .map(|d| d.as_secs_f64().round() as u64)
+    }
+
     /// Calculates the remaining time before the shutdown grace period expires
     fn time_until_shutdown(&self) -> Option<Duration> {
         let shutdown_initiated_at = self.shutdown_initiated_at?;
