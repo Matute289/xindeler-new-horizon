@@ -1,0 +1,31 @@
+// Real-agent companion summon, same `SummonInfo::Npc` shape as
+// conjuration/summon_shadowspawn.ron/hollow/summon_undead.ron (`with_agent`/
+// `incorporeal`/`phantom_illusion` at their `#[serde(default)]` values --
+// `Owned(caster)`, real AI, hittable). `body: BipedSmall(Jiangshi)` reused
+// as the closest already-shipped "reaping spirit" flavor (a possessed
+// undead revenant, not a raised corpse) -- the same species
+// hollow/summon_undead.ron already uses for a comparable single elite
+// spirit-summon, with the same loadout/skillset wiring.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.0, 3.0),
+        body: BipedSmall((species: Jiangshi, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: Some(JiangshiSummon),
+        skillset_config: Some(Rank5),
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        cooldown: Some(45.0),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

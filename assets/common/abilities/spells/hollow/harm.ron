@@ -1,0 +1,25 @@
+// Single-target necrotic bolt, same BasicRanged shape as blight.ron/
+// negative_energy_flood.ron, scaled for circle 6. Sheet's "save for half"
+// rider dropped, same reasoning blight.ron documents (no partial-damage-
+// on-save primitive exists).
+BasicRanged(
+    energy_cost: 155.0,
+    buildup_duration: 0.6,
+    recover_duration: 0.45,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 64,
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Divine),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

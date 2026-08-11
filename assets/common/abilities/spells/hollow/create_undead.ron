@@ -1,0 +1,31 @@
+// "Up to three fallen humanoid bodies... obedient servants" -- real-agent
+// companion summon, same shape as danse_macabre.ron/spirit_of_death.ron,
+// with `summoned_amount: 3` for the sheet's own explicit trio.
+// `duration: None` (permanent until dismissed/killed) matches the sheet's
+// "until the binding is renewed" framing more closely than a timed
+// duration -- same choice hollow/animate_dead.ron already made for its own
+// "obedient thrall" phrasing. Sheet's night-only casting restriction
+// dropped -- no time-of-day cast-gate primitive exists.
+BasicSummon(
+    buildup_duration: 1.1,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    summon_info: Npc(
+        summoned_amount: 3,
+        summon_distance: (1.0, 3.0),
+        body: BipedSmall((species: Husk, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: Some(HuskSummon),
+        skillset_config: Some(Rank5),
+        duration: None,
+    ),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        cooldown: Some(60.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

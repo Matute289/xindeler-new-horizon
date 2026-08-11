@@ -1,0 +1,30 @@
+// "Life is torn away and returned to the caster" -- self-heal-on-hit, same
+// `CombatEffect::Lifesteal` primitive vampiric_touch.ron uses next door,
+// here on `ProjectileAttack`'s own `damage_effect: Option<CombatEffect>`
+// field (`common/src/comp/projectile.rs`) rather than `MeleeConstructor`'s.
+// Sheet's "sustained per-turn drain while concentration holds" is
+// approximated as one hit-and-drain bolt (no repeat-tick-while-held
+// primitive on a ranged projectile), same simplification this pass already
+// applies to every other "channel/concentration" ranged spell.
+BasicRanged(
+    energy_cost: 90.0,
+    buildup_duration: 0.5,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 38,
+            damage_effect: Some(Lifesteal(0.3)),
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)
