@@ -868,6 +868,40 @@ pub fn convert_background_to_database(
     }
 }
 
+/// `pact_standing`/`pact_patron_id` NULL or unrecognized fall back to
+/// `Bound`/`None` respectively, matching `Pact`'s own fail-open default.
+/// `pact_favour` is reserved for a future mechanic; NULL -> `0`.
+pub fn convert_pact_from_database(
+    standing: Option<&str>,
+    patron: Option<&str>,
+    favour: Option<i32>,
+) -> common::comp::Pact {
+    common::comp::Pact {
+        standing: standing
+            .map(json_models::db_string_to_pact_standing)
+            .unwrap_or_default(),
+        patron: patron.and_then(json_models::db_string_to_patron_id),
+        favour: favour.unwrap_or(0),
+    }
+}
+
+/// Inverse of [`convert_pact_from_database`]. A pact still at its fail-open
+/// default (untouched -- `Bound`, no patron, no favour) writes all three
+/// columns as `NULL` rather than spelling the default out, matching
+/// `convert_background_to_database`'s "unset stays unset" contract.
+pub fn convert_pact_to_database(
+    pact: common::comp::Pact,
+) -> (Option<String>, Option<String>, Option<i32>) {
+    if pact == common::comp::Pact::default() {
+        return (None, None, None);
+    }
+    (
+        Some(json_models::pact_standing_to_db_string(pact.standing)),
+        pact.patron.map(json_models::patron_id_to_db_string),
+        Some(pact.favour),
+    )
+}
+
 /// BL-33: the two moral-alignment scores are stored verbatim; the discrete
 /// 9-box is derived in `comp::Ethos`. To-database is just reading the public
 /// fields, so no symmetric helper is needed.
@@ -1170,6 +1204,56 @@ mod tests {
         assert_eq!(
             convert_background_from_database(Some("custom")),
             Background(None)
+        );
+    }
+
+    /// `NULL` columns and a fixed `standing`/`patron` pair both round-trip
+    /// through their keywords; unrecognized strings degrade rather than
+    /// panic, matching `background`'s own contract.
+    #[test]
+    fn pact_persistence_round_trips_none_and_fixed() {
+        use common::comp::{Pact, PactStanding, PatronId};
+
+        // Legacy / unset: NULL columns -> the fail-open default, and the
+        // untouched default writes back out as NULL too (matching
+        // `background`'s "unset stays unset" contract).
+        let none = convert_pact_from_database(None, None, None);
+        assert_eq!(none, Pact::default());
+        assert_eq!(convert_pact_to_database(none), (None, None, None));
+
+        // A fully-set pact round-trips through its keywords.
+        let bound_court = Pact {
+            standing: PactStanding::Bound,
+            patron: Some(PatronId::VeiledCourt),
+            favour: 0,
+        };
+        let (standing_col, patron_col, favour_col) = convert_pact_to_database(bound_court);
+        assert_eq!(standing_col.as_deref(), Some("bound"));
+        assert_eq!(patron_col.as_deref(), Some("veiled_court"));
+        assert_eq!(favour_col, Some(0));
+        assert_eq!(
+            convert_pact_from_database(standing_col.as_deref(), patron_col.as_deref(), favour_col),
+            bound_court
+        );
+
+        let severed = Pact {
+            standing: PactStanding::Severed,
+            patron: Some(PatronId::HorrorOfTheVoid),
+            favour: 0,
+        };
+        let (standing_col, patron_col, _) = convert_pact_to_database(severed);
+        assert_eq!(standing_col.as_deref(), Some("severed"));
+        assert_eq!(patron_col.as_deref(), Some("horror_of_the_void"));
+
+        // Unrecognized strings (future-version downgrade) degrade instead
+        // of panicking.
+        assert_eq!(
+            convert_pact_from_database(Some("cursed"), Some("cthulhu"), None),
+            Pact {
+                standing: PactStanding::Bound,
+                patron: None,
+                favour: 0,
+            }
         );
     }
 

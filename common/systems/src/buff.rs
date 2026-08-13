@@ -16,6 +16,7 @@ use common::{
         },
         fluid_dynamics::{Fluid, LiquidKind},
         item_condition_buff_data,
+        pact::PactStanding,
     },
     event::{
         BuffEvent, ChangeBodyEvent, ComboChangeEvent, CreateSpriteEvent, EmitExt,
@@ -135,6 +136,7 @@ pub struct ReadData<'a> {
     // BL-01: per-class + per-level permanent attribute scaling (applied with racial passives).
     character_classes: ReadStorage<'a, common::comp::CharacterClass>,
     skill_sets: ReadStorage<'a, common::comp::SkillSet>,
+    pacts: ReadStorage<'a, common::comp::Pact>,
 }
 
 #[derive(Default)]
@@ -646,6 +648,22 @@ impl<'a> System<'a> for Sys {
 
             // Call to reset stats to base values
             stat.reset_temp_modifiers();
+
+            // A Warlock whose pact is severed can't draw on their patron.
+            // Reuses the same `disable_magic` flag an antimagic field sets
+            // (`BuffEffect::DisableMagic` below): every ability whose
+            // `source` is `Some(_)` already refuses to fire while it's set
+            // (`states/utils.rs`), while `source: None` (physical) abilities
+            // are untouched. Unlike a buff this has no expiry to manage: it
+            // simply re-applies every tick for as long as the pact stays
+            // severed.
+            if read_data
+                .pacts
+                .get(entity)
+                .is_some_and(|pact| pact.standing == PactStanding::Severed)
+            {
+                stat.disable_magic = true;
+            }
 
             // Racial passives re-apply each tick right after the reset so
             // they stack with buffs and need no persistence (spec §6).

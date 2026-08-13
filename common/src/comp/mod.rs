@@ -37,6 +37,7 @@ pub mod loot_owner;
 pub mod melee;
 pub mod misc;
 pub mod ori;
+pub mod pact;
 pub mod pet;
 pub mod phantom_illusion;
 mod phys;
@@ -133,6 +134,7 @@ pub use self::{
     melee::{Melee, MeleeConstructor, MeleeConstructorKind},
     misc::Object,
     ori::Ori,
+    pact::{Pact, PactStanding, PatronId},
     pet::Pet,
     phantom_illusion::PhantomIllusion,
     phys::{

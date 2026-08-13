@@ -25,6 +25,7 @@ macro_rules! synced_components {
             character_class: CharacterClass,
             ethos: Ethos,
             background: Background,
+            pact: Pact,
             stats: Stats,
             buffs: Buffs,
             auras: Auras,
@@ -196,6 +197,12 @@ impl NetSync for Ethos {
 impl NetSync for Background {
     // Mirrors CharacterClass/Ethos: visible on other players' character
     // sheets, not just the client's own entity.
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for Pact {
+    // Mirrors Background: visible on other players' character sheets, not
+    // just the client's own entity.
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 

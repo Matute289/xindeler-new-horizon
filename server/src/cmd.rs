@@ -205,6 +205,7 @@ fn do_command(
         ServerChatCommand::Oracle => handle_oracle,
         ServerChatCommand::OracleTrigger => handle_oracle_trigger,
         ServerChatCommand::Outcome => handle_outcome,
+        ServerChatCommand::Pact => handle_pact,
         ServerChatCommand::PermitBuild => handle_permit_build,
         ServerChatCommand::Players => handle_players,
         ServerChatCommand::Poise => handle_poise,
@@ -6986,6 +6987,120 @@ fn handle_set_ethos(
             Content::Plain(format!("Alignment set to {order:?} {moral:?}.")),
         ),
     );
+    Ok(())
+}
+
+/// `/pact <bind|sever|status> [patron] [target]` — admin-only: manages a
+/// Warlock's [`Pact`]. `bind` requires a `patron` id and sets `Bound`
+/// (used both for a first pact and for re-pacting after a severance);
+/// `sever` flips the current pact to `Severed` (disabling magic via the
+/// `disable_magic` gate in `common-systems`' `buff::Sys`) while keeping
+/// whatever patron identity was already recorded; `status` is read-only.
+///
+/// The actual write goes through [`crate::pact::set_pact`], kept free-standing
+/// (and outside this module) so a future quest/event trigger can bind or
+/// sever a pact directly, without going through chat.
+fn handle_pact(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::pact::{Pact, PactStanding, PatronId};
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain("Only admins may use /pact.".to_string()));
+    }
+
+    let (Some(action_arg), patron_arg, entity_target) =
+        parse_cmd_args!(args, String, String, EntityTarget)
+    else {
+        return Err(action.help_content());
+    };
+
+    let pact_target = entity_target
+        .map(|entity_target| get_entity_target(entity_target, server))
+        .unwrap_or(Ok(target))?;
+
+    // `bind`/`sever` are refused on a non-Warlock rather than silently
+    // applied -- a `Pact` is meaningless for any other class, and a stray
+    // `Severed` on e.g. a Mage would gate their casting for no in-fiction
+    // reason. `status` stays allowed for anyone: it's read-only and useful
+    // for confirming a target genuinely has no pact.
+    if action_arg != "status"
+        && !server
+            .state
+            .ecs()
+            .read_storage::<common::comp::CharacterClass>()
+            .get(pact_target)
+            .is_some_and(|cc| {
+                cc.classes()
+                    .any(|c| c == common::comp::class::ClassKind::Warlock)
+            })
+    {
+        return Err(Content::Plain(
+            "Target is not a Warlock; a pact would do nothing.".to_string(),
+        ));
+    }
+
+    let current = server
+        .state
+        .ecs()
+        .read_storage::<Pact>()
+        .get(pact_target)
+        .copied()
+        .unwrap_or_default();
+
+    match action_arg.as_str() {
+        "bind" => {
+            let patron_arg = patron_arg
+                .ok_or_else(|| Content::Plain("bind requires a patron id.".to_string()))?;
+            let patron = PatronId::from_keyword(&patron_arg)
+                .ok_or_else(|| Content::Plain(format!("Unknown patron '{patron_arg}'.")))?;
+            crate::pact::set_pact(server, pact_target, Pact {
+                standing: PactStanding::Bound,
+                patron: Some(patron),
+                favour: current.favour,
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(format!("Pact bound to {patron:?}.")),
+                ),
+            );
+        },
+        "sever" => {
+            crate::pact::set_pact(server, pact_target, Pact {
+                standing: PactStanding::Severed,
+                patron: current.patron,
+                favour: current.favour,
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain("Pact severed.".to_string()),
+                ),
+            );
+        },
+        "status" => {
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(format!(
+                        "Pact: {:?}, patron: {:?}, favour: {}.",
+                        current.standing, current.patron, current.favour
+                    )),
+                ),
+            );
+        },
+        _ => return Err(action.help_content()),
+    }
+
     Ok(())
 }
 

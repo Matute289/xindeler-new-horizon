@@ -3486,6 +3486,7 @@ impl Hud {
         let uids = ecs.read_storage::<Uid>();
         let character_classes = ecs.read_storage::<comp::CharacterClass>();
         let spell_masteries = ecs.read_storage::<comp::SpellMastery>();
+        let pacts = ecs.read_storage::<comp::Pact>();
         let combos = ecs.read_storage::<comp::Combo>();
         let combo = combos.get(entity);
         let time = ecs.read_resource::<Time>();
@@ -4315,6 +4316,7 @@ impl Hud {
                     buffs.get(entity),
                     character_classes.get(entity),
                     spell_masteries.get(entity),
+                    pacts.get(entity),
                     &self.menu_events,
                 )
                 .set(self.ids.diary, ui_widgets)

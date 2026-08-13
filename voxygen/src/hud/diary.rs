@@ -36,6 +36,7 @@ use common::{
             },
             slot::EquipSlot,
         },
+        pact::PactStanding,
         skills::{
             self, AxeSkill, BowSkill, ClericSkill, ClimbSkill, HammerSkill, MageSkill, MiningSkill,
             RogueSkill, SKILL_MODIFIERS, SceptreSkill, Skill, SwimSkill, SwordSkill, WarriorSkill,
@@ -269,6 +270,7 @@ pub struct Diary<'a> {
     buffs: Option<&'a Buffs>,
     character_class: Option<&'a CharacterClass>,
     spell_mastery: Option<&'a comp::SpellMastery>,
+    pact: Option<&'a comp::Pact>,
     menu_events: &'a [MenuInput],
 
     #[conrod(common_builder)]
@@ -323,6 +325,7 @@ impl<'a> Diary<'a> {
         buffs: Option<&'a Buffs>,
         character_class: Option<&'a CharacterClass>,
         spell_mastery: Option<&'a comp::SpellMastery>,
+        pact: Option<&'a comp::Pact>,
         menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
@@ -353,6 +356,7 @@ impl<'a> Diary<'a> {
             buffs,
             character_class,
             spell_mastery,
+            pact,
             menu_events,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
@@ -2250,6 +2254,36 @@ impl Widget for Diary<'_> {
                                 format!("{}", stats.effect_power * 10.0)
                             },
                             (None, None) => String::new(),
+                        },
+                        CharacterStat::Pact => match self
+                            .character_class
+                            .filter(|cc| cc.classes().any(|c| c == ClassKind::Warlock))
+                        {
+                            Some(_) => {
+                                let standing = match self.pact.map(|p| p.standing) {
+                                    Some(PactStanding::Severed) => {
+                                        self.localized_strings.get_msg("hud-warlock-pact-severed")
+                                    },
+                                    Some(PactStanding::Bound) | None => {
+                                        self.localized_strings.get_msg("hud-warlock-pact-bound")
+                                    },
+                                };
+                                let patron = self
+                                    .pact
+                                    .and_then(|p| p.patron)
+                                    .map(|patron| {
+                                        self.localized_strings
+                                            .get_msg(&patron.name_i18n_key())
+                                            .into_owned()
+                                    })
+                                    .unwrap_or_else(|| {
+                                        self.localized_strings
+                                            .get_msg("hud-warlock-pact-no_patron")
+                                            .into_owned()
+                                    });
+                                format!("{standing} — {patron}")
+                            },
+                            None => String::new(),
                         },
                     };
 
@@ -4888,7 +4922,7 @@ impl<'a> SkillStrings<'a> {
 }
 
 /// The number of variants of the [`CharacterStat`] enum.
-const STAT_COUNT: usize = 16;
+const STAT_COUNT: usize = 17;
 
 #[derive(EnumIter)]
 enum CharacterStat {
@@ -4908,6 +4942,10 @@ enum CharacterStat {
     WeaponPower,
     WeaponSpeed,
     WeaponEffectPower,
+    /// Warlock-only: shows the bound patron and pact standing. Blank for
+    /// every other class, same as `WeaponPower`/`WeaponSpeed` blank out
+    /// when there's no weapon to report on.
+    Pact,
 }
 
 impl CharacterStat {
@@ -4931,6 +4969,7 @@ impl CharacterStat {
             WeaponPower => i18n.get_msg("common-stats-power"),
             WeaponSpeed => i18n.get_msg("common-stats-speed"),
             WeaponEffectPower => i18n.get_msg("common-stats-effect-power"),
+            Pact => i18n.get_msg("hud-warlock-pact"),
         }
     }
 }

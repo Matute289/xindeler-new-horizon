@@ -705,6 +705,7 @@ impl StateExt for State {
             map_marker,
             ethos,
             background,
+            pact,
             mut trigger_slots,
             spell_mastery,
         } = components;
@@ -753,6 +754,7 @@ impl StateExt for State {
             self.write_component_ignore_entity_dead(entity, character_class);
             self.write_component_ignore_entity_dead(entity, ethos);
             self.write_component_ignore_entity_dead(entity, background);
+            self.write_component_ignore_entity_dead(entity, pact);
             self.write_component_ignore_entity_dead(entity, active_abilities);
             self.write_component_ignore_entity_dead(entity, comp::AbilityCooldowns::default());
             // Reactive trigger slots are the opposite of `AbilityCooldowns`
