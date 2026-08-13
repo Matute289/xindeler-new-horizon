@@ -207,7 +207,9 @@
     // Classes-wave (BL-04): empty trees now; populated per-class in BL-06.
     Class(Barbarian): [],
     Class(Sorcerer): [],
-    Class(Warlock): [],
+    Class(Warlock): [
+        Warlock(ChainMastery),
+    ],
     Class(Bard): [],
     Class(Paladin): [],
     Class(Druid): [],

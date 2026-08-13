@@ -1063,13 +1063,14 @@ mod class_tree_tests {
 
     #[test]
     fn class_skill_groups_have_defs_and_stable_hashes() {
-        // BL-06 proof slice: these 4 trees are populated; the other 10 are still
-        // empty stubs until they are authored in a later phase.
-        const POPULATED: [ClassKind; 4] = [
+        // These 5 trees are populated; the other 8 are still empty stubs
+        // until they are authored in a later phase.
+        const POPULATED: [ClassKind; 5] = [
             ClassKind::Warrior,
             ClassKind::Mage,
             ClassKind::Cleric,
             ClassKind::Rogue,
+            ClassKind::Warlock,
         ];
         for class in ClassKind::PLAYABLE {
             let group = SkillGroupKind::Class(class);

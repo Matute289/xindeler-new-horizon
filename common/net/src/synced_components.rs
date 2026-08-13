@@ -126,6 +126,10 @@ macro_rules! synced_components {
             can_build: CanBuild,
             is_interactor: IsInteractor,
             interactors: Interactors,
+            // A Cadena Warlock's live summon ledger, read-only so the HUD
+            // can show `spent() / pool`. Owner-private: nobody else needs to
+            // see the running total, same reasoning as `ability_pool`.
+            summons: Summons,
         }
     };
 }
@@ -208,6 +212,12 @@ impl NetSync for Pact {
 
 impl NetSync for Stats {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for Summons {
+    // Owner-private -- see the field's own doc comment in the macro list
+    // above for why.
+    const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 
 impl NetSync for Buffs {
