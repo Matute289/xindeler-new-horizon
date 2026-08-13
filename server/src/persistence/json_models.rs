@@ -267,6 +267,22 @@ pub fn db_string_to_patron_id(patron_string: &str) -> Option<comp::pact::PatronI
     })
 }
 
+/// db-string for `PactBoon` variants.
+pub fn pact_boon_to_db_string(boon: comp::pact::PactBoon) -> String { boon.keyword().to_string() }
+
+/// Unlike the skill-group converter this never panics: unknown or
+/// unrecognized strings fall back to `None` (no boon chosen) with a warning
+/// so a DB downgrade never bricks a save.
+pub fn db_string_to_pact_boon(boon_string: &str) -> Option<comp::pact::PactBoon> {
+    comp::pact::PactBoon::from_keyword(boon_string).or_else(|| {
+        tracing::warn!(
+            unknown = ?boon_string,
+            "Unknown pact boon in database, defaulting to None"
+        );
+        None
+    })
+}
+
 /// On-disk form of one reactive trigger slot.
 ///
 /// Deliberately its own type rather than `serde`-ing the component: the live

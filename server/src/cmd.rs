@@ -6990,12 +6990,14 @@ fn handle_set_ethos(
     Ok(())
 }
 
-/// `/pact <bind|sever|status> [patron] [target]` — admin-only: manages a
-/// Warlock's [`Pact`]. `bind` requires a `patron` id and sets `Bound`
-/// (used both for a first pact and for re-pacting after a severance);
-/// `sever` flips the current pact to `Severed` (disabling magic via the
-/// `disable_magic` gate in `common-systems`' `buff::Sys`) while keeping
-/// whatever patron identity was already recorded; `status` is read-only.
+/// `/pact <bind|sever|boon|status> [patron_or_boon] [target]` — admin-only:
+/// manages a Warlock's [`Pact`]. `bind` requires a `patron` id and sets
+/// `Bound` (used both for a first pact and for re-pacting after a
+/// severance); `sever` flips the current pact to `Severed` (disabling magic
+/// via the `disable_magic` gate in `common-systems`' `buff::Sys`) while
+/// keeping whatever patron identity was already recorded; `boon` requires a
+/// [`PactBoon`] id and is refused while the pact is `Severed`; `status` is
+/// read-only.
 ///
 /// The actual write goes through [`crate::pact::set_pact`], kept free-standing
 /// (and outside this module) so a future quest/event trigger can bind or
@@ -7007,7 +7009,7 @@ fn handle_pact(
     args: Vec<String>,
     action: &ServerChatCommand,
 ) -> CmdResult<()> {
-    use common::comp::pact::{Pact, PactStanding, PatronId};
+    use common::comp::pact::{Pact, PactBoon, PactStanding, PatronId};
 
     let client_uuid = uuid(server, client, "client")?;
     if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
@@ -7079,6 +7081,7 @@ fn handle_pact(
             crate::pact::set_pact(server, pact_target, Pact {
                 standing: PactStanding::Bound,
                 patron: Some(patron),
+                boon: current.boon,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7093,6 +7096,7 @@ fn handle_pact(
             crate::pact::set_pact(server, pact_target, Pact {
                 standing: PactStanding::Severed,
                 patron: current.patron,
+                boon: current.boon,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7103,14 +7107,42 @@ fn handle_pact(
                 ),
             );
         },
+        "boon" => {
+            // Refused on a Severed pact: the whole point of severing is that
+            // the patron's power is gone, so accepting a fresh boon in that
+            // state would silently pre-configure a pact the Warlock hasn't
+            // actually re-bound yet.
+            if current.standing == PactStanding::Severed {
+                return Err(Content::Plain(
+                    "Cannot choose a boon while the pact is severed.".to_string(),
+                ));
+            }
+            let boon_arg =
+                patron_arg.ok_or_else(|| Content::Plain("boon requires a boon id.".to_string()))?;
+            let boon = PactBoon::from_keyword(&boon_arg)
+                .ok_or_else(|| Content::Plain(format!("Unknown boon '{boon_arg}'.")))?;
+            crate::pact::set_pact(server, pact_target, Pact {
+                standing: current.standing,
+                patron: current.patron,
+                boon: Some(boon),
+                favour: current.favour,
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(format!("Boon set to {boon:?}.")),
+                ),
+            );
+        },
         "status" => {
             server.notify_client(
                 client,
                 ServerGeneral::server_msg(
                     ChatType::CommandInfo,
                     Content::Plain(format!(
-                        "Pact: {:?}, patron: {:?}, favour: {}.",
-                        current.standing, current.patron, current.favour
+                        "Pact: {:?}, patron: {:?}, boon: {:?}, favour: {}.",
+                        current.standing, current.patron, current.boon, current.favour
                     )),
                 ),
             );

@@ -90,6 +90,43 @@ impl PatronId {
     pub fn name_i18n_key(self) -> String { format!("warlock-patron-{}", self.keyword()) }
 }
 
+/// Which of the four canon boons a Warlock's pact grants -- orthogonal to
+/// [`PatronId`]: the patron roster and the boon list never constrain each
+/// other, and any patron can grant any boon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PactBoon {
+    Tome,
+    Chain,
+    Blade,
+    Talisman,
+}
+
+impl PactBoon {
+    /// Every variant, in declaration order.
+    pub const ALL: [PactBoon; 4] = [
+        PactBoon::Tome,
+        PactBoon::Chain,
+        PactBoon::Blade,
+        PactBoon::Talisman,
+    ];
+
+    /// Lowercase snake_case keyword used for DB persistence and `/pact boon`
+    /// arguments.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            PactBoon::Tome => "tome",
+            PactBoon::Chain => "chain",
+            PactBoon::Blade => "blade",
+            PactBoon::Talisman => "talisman",
+        }
+    }
+
+    /// Inverse of [`Self::keyword`].
+    pub fn from_keyword(keyword: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| b.keyword() == keyword)
+    }
+}
+
 /// Whether a Warlock's pact currently grants them their patron's power.
 /// `Severed` is the only standing that suppresses casting (see
 /// `common/systems/src/buff.rs`'s `CharacterClass` block) -- everything else
@@ -130,6 +167,11 @@ impl PactStanding {
 pub struct Pact {
     pub standing: PactStanding,
     pub patron: Option<PatronId>,
+    /// `None` = no boon chosen yet (the pre-Tier-2.5 default, and the state
+    /// of any pact that never opts into one). Set via `/pact boon <id>`.
+    /// Nothing reads this outside that command yet -- each boon's own
+    /// mechanic (Tome/Chain/Blade/Talisman) is unbuilt.
+    pub boon: Option<PactBoon>,
     /// Reserved for a future demand/favour mechanic; not read or written by
     /// anything yet. Always `0` for now -- do not add a tick/decay system
     /// against this field without a full design pass, since nothing may set
@@ -242,7 +284,24 @@ mod tests {
         let pact = Pact::default();
         assert_eq!(pact.standing, PactStanding::Bound);
         assert_eq!(pact.patron, None);
+        assert_eq!(pact.boon, None);
         assert_eq!(pact.favour, 0);
+    }
+
+    #[test]
+    fn boon_keyword_round_trips_for_all_fixed_variants() {
+        for boon in PactBoon::ALL {
+            assert_eq!(
+                PactBoon::from_keyword(boon.keyword()),
+                Some(boon),
+                "{boon:?} did not round-trip through its keyword"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_boon_keyword_returns_none() {
+        assert_eq!(PactBoon::from_keyword("staff"), None);
     }
 
     #[test]

@@ -35,6 +35,8 @@ pub struct Character {
     pub pact_standing: Option<String>,
     /// `NULL` -> no patron chosen yet (`Pact::default()`).
     pub pact_patron_id: Option<String>,
+    /// `NULL` -> no boon chosen yet.
+    pub pact_boon: Option<String>,
     /// Reserved for a future demand/favour mechanic; `NULL` -> `0`. Nothing
     /// reads or writes a non-zero value yet.
     pub pact_favour: Option<i32>,
