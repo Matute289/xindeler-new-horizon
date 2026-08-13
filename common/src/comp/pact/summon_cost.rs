@@ -4,6 +4,7 @@
 //! hand-authoring a second difficulty axis that would drift from it on every
 //! future stat/loadout rebalance.
 
+use super::SummonTuning;
 use crate::{
     comp::{
         DerivedStats, Energy, Health, Inventory, Poise,
@@ -15,13 +16,24 @@ use crate::{
 
 /// A creature's cost against the Cadena point pool, derived from its combat
 /// rating. Deliberately never hand-authored per creature.
-pub fn summon_cost(combat_rating: f32) -> u16 { (combat_rating * 2.0).round().max(1.0) as u16 }
+pub fn summon_cost(combat_rating: f32, tuning: &SummonTuning) -> u16 {
+    (combat_rating * tuning.cost_multiplier)
+        .round()
+        .max(tuning.cost_floor) as u16
+}
 
 /// The cost of the creature a `SummonInfo::Npc` would spawn. Constructs the
-/// same throwaway `Inventory`/`SkillSet`/`Health`/`Energy`/`Poise` that
+/// same throwaway `Inventory`/`SkillSet`/`Energy`/`Poise` that
 /// `states::basic_summon`'s `CharacterBehavior::update` constructs when it
-/// actually spawns one -- if that construction ever changes, this must
-/// change with it (comment-tagged at both sites).
+/// actually spawns one (`Energy`/`Poise` themselves are actually granted a
+/// tick later, by `NpcBuilder`/`StateExt::create_npc` -- both depend only on
+/// `Body`, so the values are identical either way) -- if that construction
+/// ever changes, this must change with it (comment-tagged at both sites).
+/// `has_health: false` means the real spawn gets no `Health` component at
+/// all (a purely visual/projectile-styled summon), which this mirrors by
+/// passing `None` for `health_base_max` -- `DerivedStats::compute` then
+/// can't derive a combat rating and this returns the cost floor, not a
+/// health-based one.
 ///
 /// `SummonInfo` variants other than `Npc` (`BeamPillar`, `BeamWall`, ...)
 /// have no creature and so no combat rating; they cost `0`. The Cadena boon
@@ -30,11 +42,16 @@ pub fn summon_cost(combat_rating: f32) -> u16 { (combat_rating * 2.0).round().ma
 /// Expensive: constructs a throwaway `Inventory` + `SkillSet` and reads
 /// `MaterialStatManifest`. Callers MUST cache this per ability id once, at
 /// manifest-load time -- never call it in a per-cast or per-tick path.
-pub fn npc_summon_cost(summon_info: &SummonInfo, msm: &MaterialStatManifest) -> u16 {
+pub fn npc_summon_cost(
+    summon_info: &SummonInfo,
+    msm: &MaterialStatManifest,
+    tuning: &SummonTuning,
+) -> u16 {
     let SummonInfo::Npc {
         body,
         loadout_config,
         skillset_config,
+        has_health,
         ..
     } = summon_info
     else {
@@ -60,7 +77,7 @@ pub fn npc_summon_cost(summon_info: &SummonInfo, msm: &MaterialStatManifest) -> 
         }
     };
 
-    let health = Health::new(*body);
+    let health_base_max = has_health.then(|| Health::new(*body).base_max());
     let energy = Energy::new(*body);
     let poise = Poise::new(*body);
 
@@ -69,13 +86,13 @@ pub fn npc_summon_cost(summon_info: &SummonInfo, msm: &MaterialStatManifest) -> 
         None,
         Some(&skill_set),
         Some(*body),
-        Some(health.base_max()),
+        health_base_max,
         Some(energy.base_max()),
         Some(poise.base_max()),
         msm,
     );
 
-    summon_cost(derived.combat_rating)
+    summon_cost(derived.combat_rating, tuning)
 }
 
 #[cfg(test)]
@@ -84,13 +101,15 @@ mod tests {
     use crate::comp::{Body, body};
     use rand::{SeedableRng, rngs::SmallRng};
 
-    fn npc_summon_info(body: Body) -> SummonInfo {
+    fn tuning() -> SummonTuning { super::super::summon_tuning_manifest().0 }
+
+    fn npc_summon_info(body: Body, has_health: bool) -> SummonInfo {
         SummonInfo::Npc {
             summoned_amount: 1,
             summon_distance: (1.0, 1.0),
             body,
             scale: None,
-            has_health: true,
+            has_health,
             use_npc_name: false,
             loadout_config: None,
             skillset_config: None,
@@ -105,7 +124,7 @@ mod tests {
 
     fn cost_of(body: Body) -> u16 {
         let msm = MaterialStatManifest::load().cloned();
-        npc_summon_cost(&npc_summon_info(body), &msm)
+        npc_summon_cost(&npc_summon_info(body, true), &msm, &tuning())
     }
 
     fn biped_small(species: body::biped_small::Species) -> Body {
@@ -121,13 +140,13 @@ mod tests {
     #[test]
     fn zero_combat_rating_still_floors_to_a_cost_of_one() {
         // A degenerate/zero rating must never be free to summon.
-        assert_eq!(summon_cost(0.0), 1);
+        assert_eq!(summon_cost(0.0, &tuning()), 1);
     }
 
     #[test]
     fn cost_scales_with_combat_rating() {
-        assert_eq!(summon_cost(1.0), 2);
-        assert_eq!(summon_cost(10.4), 21);
+        assert_eq!(summon_cost(1.0, &tuning()), 2);
+        assert_eq!(summon_cost(10.4, &tuning()), 21);
     }
 
     #[test]
@@ -148,7 +167,41 @@ mod tests {
             indicator_specifier:
                 crate::states::basic_summon::BeamPillarIndicatorSpecifier::FirePillar,
         };
-        assert_eq!(npc_summon_cost(&pillar, &msm), 0);
+        assert_eq!(npc_summon_cost(&pillar, &msm, &tuning()), 0);
+    }
+
+    #[test]
+    fn a_health_less_summon_gets_the_cost_floor_not_a_health_based_one() {
+        // `has_health: false` means the real spawn never gets a `Health`
+        // component (a purely visual/projectile-styled summon) -- mirrored
+        // here as `health_base_max: None`, which `DerivedStats::compute`
+        // can't turn into a combat rating, so this must land on the floor
+        // rather than silently pricing it as if it had a body's full HP.
+        let msm = MaterialStatManifest::load().cloned();
+        let healthy = npc_summon_cost(
+            &npc_summon_info(
+                Body::BipedSmall(body::biped_small::Body::random_with(
+                    &mut SmallRng::seed_from_u64(0),
+                    &body::biped_small::Species::Husk,
+                )),
+                true,
+            ),
+            &msm,
+            &tuning(),
+        );
+        let healthless = npc_summon_cost(
+            &npc_summon_info(
+                Body::BipedSmall(body::biped_small::Body::random_with(
+                    &mut SmallRng::seed_from_u64(0),
+                    &body::biped_small::Species::Husk,
+                )),
+                false,
+            ),
+            &msm,
+            &tuning(),
+        );
+        assert_eq!(healthless, tuning().cost_floor as u16);
+        assert!(healthless <= healthy);
     }
 
     /// Regression test pinning the *ordering* the plan derives from the

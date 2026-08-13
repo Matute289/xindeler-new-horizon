@@ -7177,9 +7177,9 @@ fn handle_pact(
                 ServerGeneral::server_msg(
                     ChatType::CommandInfo,
                     Content::Plain(if blade_summoned {
-                        "Blade summoned.".to_string()
+                        "Blade flag set (no ability/weapon granted yet).".to_string()
                     } else {
-                        "Blade dismissed.".to_string()
+                        "Blade flag cleared.".to_string()
                     }),
                 ),
             );

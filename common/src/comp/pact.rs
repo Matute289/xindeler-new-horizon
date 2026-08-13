@@ -231,14 +231,34 @@ pub fn patron_moral(patron: PatronId) -> Moral {
     )
 }
 
-/// The hard ceiling on a Cadena Warlock's summon point pool -- no level, no
-/// investment, reaches past it. Deliberately below every raid-boss-tier
-/// [`summon_cost::npc_summon_cost`] (e.g. a Mindflayer costs far more), so
-/// the pool excludes those by construction rather than a special-case list.
-pub const CHAIN_POOL_CEILING: u16 = 25;
+/// Tunable numbers for the Cadena boon's summon-cost derivation and point
+/// pool. `assets/common/pact/summon_tuning.ron` -- kept as data, not Rust
+/// constants, so a balance pass can retune without a recompile (same
+/// convention as `combat::CombatTuning`).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct SummonTuning {
+    /// [`summon_cost::summon_cost`]'s multiplier on combat rating.
+    pub cost_multiplier: f32,
+    /// [`summon_cost::summon_cost`]'s floor -- nothing is ever free to
+    /// summon.
+    pub cost_floor: f32,
+    /// The hard ceiling on a Cadena Warlock's summon point pool -- no
+    /// level, no investment, reaches past it. Deliberately below every
+    /// raid-boss-tier [`summon_cost::npc_summon_cost`] (e.g. a Mindflayer
+    /// costs far more), so the pool excludes those by construction rather
+    /// than a special-case list.
+    pub pool_ceiling: u16,
+}
+
+/// Do NOT call per-entity in tick systems -- hoist once per run, same as
+/// `patrons_manifest`.
+pub fn summon_tuning_manifest() -> AssetReadGuard<Ron<SummonTuning>> {
+    Ron::<SummonTuning>::load_expect("common.pact.summon_tuning").read()
+}
 
 /// `(level, base)` milestones for the Cadena point pool, ascending by level.
-/// `assets/common/pact/chain_pool.ron`.
+/// `assets/common/pact/chain_pool.ron`. Do NOT call per-entity in tick
+/// systems -- hoist once per run, same as `patrons_manifest`.
 pub fn chain_pool_manifest() -> AssetReadGuard<Ron<Vec<(u32, u16)>>> {
     Ron::<Vec<(u32, u16)>>::load_expect("common.pact.chain_pool").read()
 }
@@ -246,8 +266,8 @@ pub fn chain_pool_manifest() -> AssetReadGuard<Ron<Vec<(u32, u16)>>> {
 /// A Cadena Warlock's total summon point pool: the highest level milestone
 /// at or below `character_level`, plus one point per `chain_rank`
 /// (`Skill::Warlock(ChainMastery)`'s level, `max_level: 5`), capped at
-/// [`CHAIN_POOL_CEILING`]. A level below every milestone (should not happen
-/// -- the table's first entry is level 1) reads as `0 + chain_rank`.
+/// [`SummonTuning::pool_ceiling`]. A level below every milestone (should not
+/// happen -- the table's first entry is level 1) reads as `0 + chain_rank`.
 pub fn chain_pool(character_level: u32, chain_rank: u16) -> u16 {
     let base = chain_pool_manifest()
         .0
@@ -256,7 +276,7 @@ pub fn chain_pool(character_level: u32, chain_rank: u16) -> u16 {
         .map(|(_, base)| *base)
         .max()
         .unwrap_or(0);
-    (base + chain_rank).min(CHAIN_POOL_CEILING)
+    (base + chain_rank).min(summon_tuning_manifest().0.pool_ceiling)
 }
 
 /// A summoner's live Cadena summons ledger: which entities they currently
@@ -317,7 +337,7 @@ mod tests {
 
     #[test]
     fn pool_is_capped_at_the_ceiling_even_fully_invested() {
-        assert_eq!(chain_pool(60, 5), CHAIN_POOL_CEILING);
+        assert_eq!(chain_pool(60, 5), summon_tuning_manifest().0.pool_ceiling);
     }
 
     #[test]

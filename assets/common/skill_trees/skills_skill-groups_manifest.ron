@@ -207,9 +207,12 @@
     // Classes-wave (BL-04): empty trees now; populated per-class in BL-06.
     Class(Barbarian): [],
     Class(Sorcerer): [],
-    Class(Warlock): [
-        Warlock(ChainMastery),
-    ],
+    // ChainMastery is defined (skill_max_levels.ron) but deliberately kept
+    // out of this purchasable tree until the Cadena boon actually consumes
+    // it (chain_pool()'s only caller today is its own unit tests) -- a real
+    // player must not be able to spend a real skill point on a node with no
+    // observable effect.
+    Class(Warlock): [],
     Class(Bard): [],
     Class(Paladin): [],
     Class(Druid): [],
