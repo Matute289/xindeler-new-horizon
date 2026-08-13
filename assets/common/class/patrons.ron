@@ -1,0 +1,22 @@
+// The 12 canon Warlock patrons. Every row is transcribed from
+// docs/design/lore/chargen/classes/warlock.md -- no invented patron, no
+// flavour text here (that lives in the lore doc + i18n, not Rust/RON data).
+//
+// `moral` gates patron choice via `Ethos::moral()` /
+// `Moral::compatible_npc_morals()` (no new alignment machinery): a patron
+// marked `Neutral` accepts any Warlock alignment; `Good`/`Evil` exclude the
+// opposite pole. Hot-reloads in dev.
+{
+    VeiledCourt: (moral: Neutral),
+    HellsLord: (moral: Evil),
+    DawnLord: (moral: Good),
+    VoidMind: (moral: Neutral),
+    CursedBlade: (moral: Neutral),
+    DrownedDeep: (moral: Neutral),
+    BoundElemental: (moral: Neutral),
+    Deathless: (moral: Evil),
+    Undying: (moral: Neutral),
+    GreatOldOne: (moral: Evil),
+    HorrorOfTheVoid: (moral: Evil),
+    Archfey: (moral: Neutral),
+}
