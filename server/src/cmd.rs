@@ -7024,6 +7024,27 @@ fn handle_pact(
         .map(|entity_target| get_entity_target(entity_target, server))
         .unwrap_or(Ok(target))?;
 
+    // `bind`/`sever` are refused on a non-Warlock rather than silently
+    // applied -- a `Pact` is meaningless for any other class, and a stray
+    // `Severed` on e.g. a Mage would gate their casting for no in-fiction
+    // reason. `status` stays allowed for anyone: it's read-only and useful
+    // for confirming a target genuinely has no pact.
+    if action_arg != "status"
+        && !server
+            .state
+            .ecs()
+            .read_storage::<common::comp::CharacterClass>()
+            .get(pact_target)
+            .is_some_and(|cc| {
+                cc.classes()
+                    .any(|c| c == common::comp::class::ClassKind::Warlock)
+            })
+    {
+        return Err(Content::Plain(
+            "Target is not a Warlock; a pact would do nothing.".to_string(),
+        ));
+    }
+
     let current = server
         .state
         .ecs()
