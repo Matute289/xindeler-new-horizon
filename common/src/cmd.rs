@@ -278,6 +278,11 @@ lazy_static! {
 
     static ref ROLES: Vec<String> = ["admin", "moderator"].iter().copied().map(Into::into).collect();
 
+    static ref PATRON_IDS: Vec<String> = crate::comp::pact::PatronId::ALL
+        .iter()
+        .map(|p| p.keyword().to_string())
+        .collect();
+
     /// List of item's asset specifiers. Useful for tab completing.
     /// Doesn't cover all items (like modulars), includes "fake" items like
     /// TagExamples.
@@ -489,6 +494,7 @@ pub enum ServerChatCommand {
     Oracle,
     OracleTrigger,
     Outcome,
+    Pact,
     PermitBuild,
     Players,
     Poise,
@@ -978,6 +984,19 @@ impl ServerChatCommand {
             ServerChatCommand::Outcome => cmd(
                 vec![Enum("outcome", OUTCOME_KINDS.clone(), Required)],
                 Content::localized("command-outcome-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::Pact => cmd(
+                vec![
+                    Enum(
+                        "action",
+                        vec!["bind".to_owned(), "sever".to_owned(), "status".to_owned()],
+                        Required,
+                    ),
+                    Enum("patron", PATRON_IDS.clone(), Optional),
+                    EntityTarget(Optional),
+                ],
+                Content::localized("command-pact-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::PermitBuild => cmd(
@@ -1492,6 +1511,7 @@ impl ServerChatCommand {
             ServerChatCommand::Oracle => "oracle",
             ServerChatCommand::OracleTrigger => "oracle_trigger",
             ServerChatCommand::Outcome => "outcome",
+            ServerChatCommand::Pact => "pact",
             ServerChatCommand::PermitBuild => "permit_build",
             ServerChatCommand::Players => "players",
             ServerChatCommand::Poise => "poise",

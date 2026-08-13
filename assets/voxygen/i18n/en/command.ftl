@@ -94,6 +94,7 @@ command-object-desc = Spawn an object
 command-oracle-desc = (Admin) Turn PROJECT ORACLE live on or off server-wide: greys out (and refuses) any ability requiring it
 command-oracle_trigger-desc = (Admin) Manually trigger a loaded ORACLE .dmevent.ron/.json: spawn its NPCs near you, log its rumor, and greet you. If the live ORACLE-entity count would exceed the ceiling, refuses and reports the numbers unless the optional 'clamp' argument is true, in which case it spawns as many as fit
 command-outcome-desc = Create an outcome
+command-pact-desc = (Admin) Manage a Warlock's pact: 'bind <patron> [target]' binds them to a patron, 'sever [target]' breaks the pact (disabling their magic), 'status [target]' reports it
 command-permit_build-desc = Grants player a bounded box they can build in
 command-players-desc = Lists players currently online
 command-poise-desc = Set your current poise

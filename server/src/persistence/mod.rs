@@ -48,6 +48,10 @@ pub struct PersistedComponents {
     /// `Background(None)` ("Uncommitted", P0 §Q1) if the client doesn't send
     /// one.
     pub background: comp::Background,
+    /// A Warlock's pact. Meaningless for other classes. Server-authoritative
+    /// default is `Pact::default()` (`Bound`, no patron chosen) if the
+    /// client doesn't send one.
+    pub pact: comp::Pact,
     /// Reactive trigger slots. Loaded with an infinite in-game projection on
     /// every cooling slot; `state_ext` rebuilds the projection from the
     /// authoritative wall clock before inserting the component.

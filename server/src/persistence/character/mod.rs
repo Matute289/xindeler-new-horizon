@@ -20,6 +20,7 @@ use crate::{
             convert_future_levels_to_secondary_to_database, convert_hardcore_from_database,
             convert_hardcore_to_database, convert_inventory_from_database_items,
             convert_items_to_database_items, convert_loadout_from_database_items,
+            convert_pact_from_database, convert_pact_to_database,
             convert_recipe_book_from_database_items, convert_secondary_class_level_to_database,
             convert_secondary_class_to_database, convert_skill_groups_to_database,
             convert_skill_set_from_database, convert_stats_from_database,
@@ -169,7 +170,10 @@ pub fn load_character_data(
                 c.secondary_class_level,
                 c.secondary_class_future_levels,
                 c.trigger_slots,
-                c.spell_mastery
+                c.spell_mastery,
+                c.pact_standing,
+                c.pact_patron_id,
+                c.pact_favour
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
         WHERE   c.player_uuid = ?1
@@ -195,6 +199,9 @@ pub fn load_character_data(
                 secondary_class_future_levels: row.get(13)?,
                 trigger_slots: row.get(14)?,
                 spell_mastery: row.get(15)?,
+                pact_standing: row.get(16)?,
+                pact_patron_id: row.get(17)?,
+                pact_favour: row.get(18)?,
             };
 
             let body_data = Body {
@@ -374,6 +381,11 @@ pub fn load_character_data(
                 character_data.ethos_law_chaos,
             ),
             background: convert_background_from_database(character_data.background.as_deref()),
+            pact: convert_pact_from_database(
+                character_data.pact_standing.as_deref(),
+                character_data.pact_patron_id.as_deref(),
+                character_data.pact_favour,
+            ),
             trigger_slots: json_models::db_string_to_trigger_slots(
                 character_data.trigger_slots.as_deref(),
                 &ability_pool,
@@ -431,6 +443,10 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 trigger_slots: None,
                 // Nor spell mastery: the list view never shows it either.
                 spell_mastery: None,
+                // Nor the pact: the list view never shows it either.
+                pact_standing: None,
+                pact_patron_id: None,
+                pact_favour: None,
             })
         })?
         .map(|x| x.unwrap())
@@ -527,6 +543,9 @@ pub fn create_character(
         trigger_slots: _,
         // Nothing accrued yet either; same reasoning as `trigger_slots`.
         spell_mastery: _,
+        // A brand-new character has no pact yet either; the columns stay
+        // NULL and load back as `Pact::default()`, same reasoning.
+        pact: _,
     } = persisted_components;
 
     // Fetch new entity IDs for character, inventory, loadout, overflow items,
@@ -1226,6 +1245,7 @@ pub fn update(
     character_class: comp::CharacterClass,
     ethos: comp::Ethos,
     background: comp::Background,
+    pact: comp::Pact,
     trigger_slots: comp::TriggerSlots,
     spell_mastery: comp::SpellMastery,
     transaction: &mut Transaction,
@@ -1374,6 +1394,7 @@ pub fn update(
 
     let db_waypoint = convert_waypoint_to_database_json(char_waypoint, map_marker);
     let (background_db, background_custom_note_db) = convert_background_to_database(background);
+    let (pact_standing_db, pact_patron_db, pact_favour_db) = convert_pact_to_database(pact);
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -1388,8 +1409,11 @@ pub fn update(
                 secondary_class_level = ?8,
                 secondary_class_future_levels = ?9,
                 trigger_slots = ?10,
-                spell_mastery = ?11
-        WHERE   character_id = ?12
+                spell_mastery = ?11,
+                pact_standing = ?12,
+                pact_patron_id = ?13,
+                pact_favour = ?14
+        WHERE   character_id = ?15
     ",
     )?;
 
@@ -1405,6 +1429,9 @@ pub fn update(
         &convert_future_levels_to_secondary_to_database(character_class),
         &json_models::trigger_slots_to_db_string(&trigger_slots, &ability_pool),
         &json_models::spell_mastery_to_db_string(&spell_mastery),
+        &pact_standing_db,
+        &pact_patron_db,
+        &pact_favour_db,
         &char_id.0,
     ])?;
 
@@ -1509,6 +1536,7 @@ mod spell_book_persistence_tests {
             map_marker: None,
             ethos: comp::Ethos::default(),
             background: comp::Background::default(),
+            pact: comp::Pact::default(),
             trigger_slots: comp::TriggerSlots::default(),
             spell_mastery: comp::SpellMastery::default(),
         }
@@ -1555,6 +1583,7 @@ mod spell_book_persistence_tests {
             loaded.character_class,
             loaded.ethos,
             loaded.background,
+            loaded.pact,
             loaded.trigger_slots.clone(),
             loaded.spell_mastery,
             &mut transaction,

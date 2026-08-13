@@ -327,6 +327,7 @@ pub struct UpdateCharacterDataEvent {
         Option<comp::MapMarker>,
         comp::Ethos,
         comp::Background,
+        comp::Pact,
         comp::TriggerSlots,
         comp::SpellMastery,
     ),

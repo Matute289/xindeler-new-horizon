@@ -24,6 +24,7 @@ pub mod lod;
 pub mod login_provider;
 pub mod metrics;
 pub mod oracle;
+pub mod pact;
 pub mod persistence;
 mod pet;
 pub mod presence;
@@ -1172,6 +1173,7 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        pact,
                                         trigger_slots,
                                         spell_mastery,
                                     } = character_data;
@@ -1188,6 +1190,7 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        pact,
                                         trigger_slots,
                                         spell_mastery,
                                     );

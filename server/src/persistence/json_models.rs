@@ -232,6 +232,41 @@ pub fn db_string_to_background(
     })
 }
 
+/// db-string for `PactStanding` variants.
+pub fn pact_standing_to_db_string(standing: comp::pact::PactStanding) -> String {
+    standing.keyword().to_string()
+}
+
+/// Unlike the skill-group converter this never panics: unknown strings fall
+/// back to `Bound` with a warning, matching `Pact`'s own fail-open default.
+pub fn db_string_to_pact_standing(standing_string: &str) -> comp::pact::PactStanding {
+    comp::pact::PactStanding::from_keyword(standing_string).unwrap_or_else(|| {
+        tracing::warn!(
+            unknown = ?standing_string,
+            "Unknown pact standing in database, defaulting to Bound"
+        );
+        comp::pact::PactStanding::Bound
+    })
+}
+
+/// db-string for `PatronId` variants.
+pub fn patron_id_to_db_string(patron: comp::pact::PatronId) -> String {
+    patron.keyword().to_string()
+}
+
+/// Unlike the skill-group converter this never panics: unknown or
+/// unrecognized strings fall back to `None` (no patron chosen) with a
+/// warning so a DB downgrade never bricks a save.
+pub fn db_string_to_patron_id(patron_string: &str) -> Option<comp::pact::PatronId> {
+    comp::pact::PatronId::from_keyword(patron_string).or_else(|| {
+        tracing::warn!(
+            unknown = ?patron_string,
+            "Unknown pact patron in database, defaulting to None"
+        );
+        None
+    })
+}
+
 /// On-disk form of one reactive trigger slot.
 ///
 /// Deliberately its own type rather than `serde`-ing the component: the live

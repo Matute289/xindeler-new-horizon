@@ -30,6 +30,14 @@ pub struct Character {
     /// Per-`MagicSource` mastery progress as a small JSON object; `NULL` ->
     /// nothing accrued yet (every source at 0%).
     pub spell_mastery: Option<String>,
+    /// `NULL` -> `PactStanding::Bound` (only an explicit "severed" row
+    /// suppresses casting).
+    pub pact_standing: Option<String>,
+    /// `NULL` -> no patron chosen yet (`Pact::default()`).
+    pub pact_patron_id: Option<String>,
+    /// Reserved for a future demand/favour mechanic; `NULL` -> `0`. Nothing
+    /// reads or writes a non-zero value yet.
+    pub pact_favour: Option<i32>,
 }
 
 #[derive(Debug)]

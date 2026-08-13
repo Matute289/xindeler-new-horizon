@@ -36,6 +36,7 @@ pub type CharacterUpdateData = (
     comp::CharacterClass,
     comp::Ethos,
     comp::Background,
+    comp::Pact,
     comp::TriggerSlots,
     comp::SpellMastery,
 );
@@ -444,6 +445,7 @@ fn execute_batch_update(
             character_class,
             ethos,
             background,
+            pact,
             trigger_slots,
             spell_mastery,
         )) => super::character::update(
@@ -458,6 +460,7 @@ fn execute_batch_update(
             character_class,
             ethos,
             background,
+            pact,
             trigger_slots,
             spell_mastery,
             &mut transaction,
