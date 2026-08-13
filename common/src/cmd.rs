@@ -278,9 +278,17 @@ lazy_static! {
 
     static ref ROLES: Vec<String> = ["admin", "moderator"].iter().copied().map(Into::into).collect();
 
-    static ref PATRON_IDS: Vec<String> = crate::comp::pact::PatronId::ALL
+    /// `bind`'s patron ids and `boon`'s boon ids share the same positional
+    /// argument slot in `/pact`, so tab-completion offers both; the handler
+    /// validates against the one the chosen action actually expects.
+    static ref PATRON_OR_BOON_IDS: Vec<String> = crate::comp::pact::PatronId::ALL
         .iter()
         .map(|p| p.keyword().to_string())
+        .chain(
+            crate::comp::pact::PactBoon::ALL
+                .iter()
+                .map(|b| b.keyword().to_string())
+        )
         .collect();
 
     /// List of item's asset specifiers. Useful for tab completing.
@@ -990,10 +998,15 @@ impl ServerChatCommand {
                 vec![
                     Enum(
                         "action",
-                        vec!["bind".to_owned(), "sever".to_owned(), "status".to_owned()],
+                        vec![
+                            "bind".to_owned(),
+                            "sever".to_owned(),
+                            "boon".to_owned(),
+                            "status".to_owned(),
+                        ],
                         Required,
                     ),
-                    Enum("patron", PATRON_IDS.clone(), Optional),
+                    Enum("patron_or_boon", PATRON_OR_BOON_IDS.clone(), Optional),
                     EntityTarget(Optional),
                 ],
                 Content::localized("command-pact-desc"),

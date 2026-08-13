@@ -109,6 +109,7 @@ mod tests {
             Some(Pact {
                 standing: PactStanding::Severed,
                 patron: None,
+                boon: None,
                 favour: 0,
             }),
         );
@@ -151,6 +152,7 @@ mod tests {
             Some(Pact {
                 standing: PactStanding::Severed,
                 patron: None,
+                boon: None,
                 favour: 0,
             }),
         );
