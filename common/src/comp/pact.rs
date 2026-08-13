@@ -14,8 +14,14 @@
 //! that a character predating this component, or a Warlock who simply
 //! hasn't picked a patron yet, is never silently muted.
 
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
+
+use crate::{
+    assets::{AssetExt, AssetReadGuard, Ron},
+    comp::ethos::Moral,
+};
 
 /// One variant per canon Warlock patron.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -139,9 +145,65 @@ impl Component for Pact {
     type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
 }
 
+/// One canon patron's manifest data. Deliberately minimal -- emissary NPCs,
+/// demand tables, and boon eligibility are unbuilt follow-ups, not fields on
+/// this struct yet.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct PatronData {
+    /// Gates which `Ethos.moral()` values may choose this patron (via
+    /// `Moral::compatible_npc_morals`) -- no new alignment machinery, reuses
+    /// the shipped `Ethos` axis. `Moral::Neutral` accepts any alignment,
+    /// matching patrons open to Good/Neutral/Evil Warlocks alike.
+    pub moral: Moral,
+}
+
+/// Per-patron manifest read for per-tick consumers (mirrors
+/// [`crate::comp::class::class_attributes_manifest`]). Do NOT call
+/// per-entity in tick systems -- hoist once per run.
+pub fn patrons_manifest() -> AssetReadGuard<Ron<HashMap<PatronId, PatronData>>> {
+    Ron::<HashMap<PatronId, PatronData>>::load_expect("common.class.patrons").read()
+}
+
+/// A patron's `moral` from the manifest, or `Moral::Neutral` (open to any
+/// alignment) if the manifest has no row for it. Never panics.
+pub fn patron_moral(patron: PatronId) -> Moral {
+    patrons_manifest().0.get(&patron).map_or_else(
+        || {
+            tracing::warn!(
+                ?patron,
+                "Patron missing from patrons.ron, defaulting to Neutral"
+            );
+            Moral::Neutral
+        },
+        |data| data.moral,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patrons_manifest_covers_every_patron() {
+        // Every PatronId::ALL variant must be an actual key in the RON
+        // file, not merely resolve via the permissive fallback -- a patron
+        // silently missing from the manifest is a data bug even though the
+        // fallback happens to be safe.
+        let manifest = patrons_manifest();
+        for patron in PatronId::ALL {
+            assert!(
+                manifest.0.contains_key(&patron),
+                "patrons.ron is missing a row for {patron:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn patron_moral_reads_the_manifest_row() {
+        assert_eq!(patron_moral(PatronId::HellsLord), Moral::Evil);
+        assert_eq!(patron_moral(PatronId::DawnLord), Moral::Good);
+        assert_eq!(patron_moral(PatronId::VeiledCourt), Moral::Neutral);
+    }
 
     #[test]
     fn all_len_matches_const() {

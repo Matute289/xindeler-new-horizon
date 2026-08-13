@@ -7059,6 +7059,23 @@ fn handle_pact(
                 .ok_or_else(|| Content::Plain("bind requires a patron id.".to_string()))?;
             let patron = PatronId::from_keyword(&patron_arg)
                 .ok_or_else(|| Content::Plain(format!("Unknown patron '{patron_arg}'.")))?;
+
+            let target_moral = server
+                .state
+                .ecs()
+                .read_storage::<common::comp::Ethos>()
+                .get(pact_target)
+                .copied()
+                .unwrap_or_default()
+                .moral();
+            let patron_moral = common::comp::pact::patron_moral(patron);
+            if !patron_moral.compatible_npc_morals().contains(&target_moral) {
+                return Err(Content::Plain(format!(
+                    "{patron:?} would refuse this pact -- the target's alignment \
+                     ({target_moral:?}) is incompatible with this patron's ({patron_moral:?})."
+                )));
+            }
+
             crate::pact::set_pact(server, pact_target, Pact {
                 standing: PactStanding::Bound,
                 patron: Some(patron),
