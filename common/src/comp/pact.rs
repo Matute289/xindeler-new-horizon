@@ -174,6 +174,14 @@ pub struct Pact {
     /// Nothing reads this outside that command yet -- each boon's own
     /// mechanic (Tome/Chain/Blade/Talisman) is unbuilt.
     pub boon: Option<PactBoon>,
+    /// Whether a `Blade`-boon Warlock currently has their conjured weapon
+    /// out. Meaningless (and always `false`) for every other boon. Toggled
+    /// via `/pact blade <summon|dismiss>`. The blade occupies no
+    /// `EquipSlot` and is never a real `Item` -- this flag is its entire
+    /// state. Not yet consumed by any ability or combat code; granting the
+    /// blade's actual attack ability set is separate, unbuilt follow-up
+    /// work.
+    pub blade_summoned: bool,
     /// Reserved for a future demand/favour mechanic; not read or written by
     /// anything yet. Always `0` for now -- do not add a tick/decay system
     /// against this field without a full design pass, since nothing may set
