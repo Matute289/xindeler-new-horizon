@@ -174,6 +174,7 @@ pub fn load_character_data(
                 c.pact_standing,
                 c.pact_patron_id,
                 c.pact_boon,
+                c.pact_blade_summoned,
                 c.pact_favour
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
@@ -203,7 +204,8 @@ pub fn load_character_data(
                 pact_standing: row.get(16)?,
                 pact_patron_id: row.get(17)?,
                 pact_boon: row.get(18)?,
-                pact_favour: row.get(19)?,
+                pact_blade_summoned: row.get(19)?,
+                pact_favour: row.get(20)?,
             };
 
             let body_data = Body {
@@ -387,6 +389,7 @@ pub fn load_character_data(
                 character_data.pact_standing.as_deref(),
                 character_data.pact_patron_id.as_deref(),
                 character_data.pact_boon.as_deref(),
+                character_data.pact_blade_summoned,
                 character_data.pact_favour,
             ),
             trigger_slots: json_models::db_string_to_trigger_slots(
@@ -450,6 +453,7 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 pact_standing: None,
                 pact_patron_id: None,
                 pact_boon: None,
+                pact_blade_summoned: None,
                 pact_favour: None,
             })
         })?
@@ -1398,7 +1402,7 @@ pub fn update(
 
     let db_waypoint = convert_waypoint_to_database_json(char_waypoint, map_marker);
     let (background_db, background_custom_note_db) = convert_background_to_database(background);
-    let (pact_standing_db, pact_patron_db, pact_boon_db, pact_favour_db) =
+    let (pact_standing_db, pact_patron_db, pact_boon_db, pact_blade_summoned_db, pact_favour_db) =
         convert_pact_to_database(pact);
 
     let mut stmt = transaction.prepare_cached(
@@ -1418,8 +1422,9 @@ pub fn update(
                 pact_standing = ?12,
                 pact_patron_id = ?13,
                 pact_boon = ?14,
-                pact_favour = ?15
-        WHERE   character_id = ?16
+                pact_blade_summoned = ?15,
+                pact_favour = ?16
+        WHERE   character_id = ?17
     ",
     )?;
 
@@ -1438,6 +1443,7 @@ pub fn update(
         &pact_standing_db,
         &pact_patron_db,
         &pact_boon_db,
+        &pact_blade_summoned_db,
         &pact_favour_db,
         &char_id.0,
     ])?;

@@ -37,6 +37,8 @@ pub struct Character {
     pub pact_patron_id: Option<String>,
     /// `NULL` -> no boon chosen yet.
     pub pact_boon: Option<String>,
+    /// `0`/`NULL` -> not summoned. Meaningless for every boon but `Blade`.
+    pub pact_blade_summoned: Option<i64>,
     /// Reserved for a future demand/favour mechanic; `NULL` -> `0`. Nothing
     /// reads or writes a non-zero value yet.
     pub pact_favour: Option<i32>,

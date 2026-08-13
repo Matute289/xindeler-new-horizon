@@ -1063,8 +1063,9 @@ mod class_tree_tests {
 
     #[test]
     fn class_skill_groups_have_defs_and_stable_hashes() {
-        // BL-06 proof slice: these 4 trees are populated; the other 10 are still
-        // empty stubs until they are authored in a later phase.
+        // These 4 trees are populated; the other 9 (including Warlock,
+        // whose only defined skill is deliberately kept out of its tree
+        // until something consumes it) are still empty stubs.
         const POPULATED: [ClassKind; 4] = [
             ClassKind::Warrior,
             ClassKind::Mage,

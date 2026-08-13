@@ -110,6 +110,7 @@ mod tests {
                 standing: PactStanding::Severed,
                 patron: None,
                 boon: None,
+                blade_summoned: false,
                 favour: 0,
             }),
         );
@@ -153,6 +154,7 @@ mod tests {
                 standing: PactStanding::Severed,
                 patron: None,
                 boon: None,
+                blade_summoned: false,
                 favour: 0,
             }),
         );

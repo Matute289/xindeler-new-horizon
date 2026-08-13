@@ -134,7 +134,7 @@ pub use self::{
     melee::{Melee, MeleeConstructor, MeleeConstructorKind},
     misc::Object,
     ori::Ori,
-    pact::{Pact, PactBoon, PactStanding, PatronId},
+    pact::{Pact, PactBoon, PactStanding, PatronId, Summons},
     pet::Pet,
     phantom_illusion::PhantomIllusion,
     phys::{

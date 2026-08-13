@@ -6990,14 +6990,17 @@ fn handle_set_ethos(
     Ok(())
 }
 
-/// `/pact <bind|sever|boon|status> [patron_or_boon] [target]` — admin-only:
-/// manages a Warlock's [`Pact`]. `bind` requires a `patron` id and sets
-/// `Bound` (used both for a first pact and for re-pacting after a
-/// severance); `sever` flips the current pact to `Severed` (disabling magic
-/// via the `disable_magic` gate in `common-systems`' `buff::Sys`) while
-/// keeping whatever patron identity was already recorded; `boon` requires a
-/// [`PactBoon`] id and is refused while the pact is `Severed`; `status` is
-/// read-only.
+/// `/pact <bind|sever|boon|blade|status> [patron_or_boon_or_blade_action]
+/// [target]` — admin-only: manages a Warlock's [`Pact`]. `bind` requires a
+/// `patron` id and sets `Bound` (used both for a first pact and for
+/// re-pacting after a severance); `sever` flips the current pact to
+/// `Severed` (disabling magic via the `disable_magic` gate in
+/// `common-systems`' `buff::Sys`) while keeping whatever patron identity
+/// was already recorded, and dismisses a summoned blade; `boon` requires a
+/// [`PactBoon`] id, is refused while the pact is `Severed`, and always
+/// dismisses the blade (a freshly chosen boon starts un-summoned); `blade`
+/// requires `summon` or `dismiss`, refused without the `Blade` boon or
+/// while `Severed`; `status` is read-only.
 ///
 /// The actual write goes through [`crate::pact::set_pact`], kept free-standing
 /// (and outside this module) so a future quest/event trigger can bind or
@@ -7082,6 +7085,7 @@ fn handle_pact(
                 standing: PactStanding::Bound,
                 patron: Some(patron),
                 boon: current.boon,
+                blade_summoned: current.blade_summoned,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7097,6 +7101,9 @@ fn handle_pact(
                 standing: PactStanding::Severed,
                 patron: current.patron,
                 boon: current.boon,
+                // The patron's power is gone -- a summoned blade cannot
+                // stay out any more than casting can continue.
+                blade_summoned: false,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7125,6 +7132,9 @@ fn handle_pact(
                 standing: current.standing,
                 patron: current.patron,
                 boon: Some(boon),
+                // A freshly (re)chosen boon always starts un-summoned, even
+                // if the previous boon was also Blade.
+                blade_summoned: false,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7135,14 +7145,57 @@ fn handle_pact(
                 ),
             );
         },
+        "blade" => {
+            if current.boon != Some(PactBoon::Blade) {
+                return Err(Content::Plain(
+                    "Target does not have the Blade boon.".to_string(),
+                ));
+            }
+            if current.standing == PactStanding::Severed {
+                return Err(Content::Plain(
+                    "Cannot summon the blade while the pact is severed.".to_string(),
+                ));
+            }
+            let summon_arg = patron_arg.ok_or_else(|| {
+                Content::Plain("blade requires 'summon' or 'dismiss'.".to_string())
+            })?;
+            let blade_summoned = match summon_arg.as_str() {
+                "summon" => true,
+                "dismiss" => false,
+                _ => {
+                    return Err(Content::Plain(format!(
+                        "Unknown blade action '{summon_arg}'; use 'summon' or 'dismiss'."
+                    )));
+                },
+            };
+            crate::pact::set_pact(server, pact_target, Pact {
+                blade_summoned,
+                ..current
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(if blade_summoned {
+                        "Blade flag set (no ability/weapon granted yet).".to_string()
+                    } else {
+                        "Blade flag cleared.".to_string()
+                    }),
+                ),
+            );
+        },
         "status" => {
             server.notify_client(
                 client,
                 ServerGeneral::server_msg(
                     ChatType::CommandInfo,
                     Content::Plain(format!(
-                        "Pact: {:?}, patron: {:?}, boon: {:?}, favour: {}.",
-                        current.standing, current.patron, current.boon, current.favour
+                        "Pact: {:?}, patron: {:?}, boon: {:?}, blade_summoned: {}, favour: {}.",
+                        current.standing,
+                        current.patron,
+                        current.boon,
+                        current.blade_summoned,
+                        current.favour
                     )),
                 ),
             );

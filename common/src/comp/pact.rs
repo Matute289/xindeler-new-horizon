@@ -14,6 +14,8 @@
 //! that a character predating this component, or a Warlock who simply
 //! hasn't picked a patron yet, is never silently muted.
 
+pub mod summon_cost;
+
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
@@ -172,6 +174,14 @@ pub struct Pact {
     /// Nothing reads this outside that command yet -- each boon's own
     /// mechanic (Tome/Chain/Blade/Talisman) is unbuilt.
     pub boon: Option<PactBoon>,
+    /// Whether a `Blade`-boon Warlock currently has their conjured weapon
+    /// out. Meaningless (and always `false`) for every other boon. Toggled
+    /// via `/pact blade <summon|dismiss>`. The blade occupies no
+    /// `EquipSlot` and is never a real `Item` -- this flag is its entire
+    /// state. Not yet consumed by any ability or combat code; granting the
+    /// blade's actual attack ability set is separate, unbuilt follow-up
+    /// work.
+    pub blade_summoned: bool,
     /// Reserved for a future demand/favour mechanic; not read or written by
     /// anything yet. Always `0` for now -- do not add a tick/decay system
     /// against this field without a full design pass, since nothing may set
@@ -221,9 +231,128 @@ pub fn patron_moral(patron: PatronId) -> Moral {
     )
 }
 
+/// Tunable numbers for the Cadena boon's summon-cost derivation and point
+/// pool. `assets/common/pact/summon_tuning.ron` -- kept as data, not Rust
+/// constants, so a balance pass can retune without a recompile (same
+/// convention as `combat::CombatTuning`).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct SummonTuning {
+    /// [`summon_cost::summon_cost`]'s multiplier on combat rating.
+    pub cost_multiplier: f32,
+    /// [`summon_cost::summon_cost`]'s floor -- nothing is ever free to
+    /// summon.
+    pub cost_floor: f32,
+    /// The hard ceiling on a Cadena Warlock's summon point pool -- no
+    /// level, no investment, reaches past it. Deliberately below every
+    /// raid-boss-tier [`summon_cost::npc_summon_cost`] (e.g. a Mindflayer
+    /// costs far more), so the pool excludes those by construction rather
+    /// than a special-case list.
+    pub pool_ceiling: u16,
+}
+
+/// Do NOT call per-entity in tick systems -- hoist once per run, same as
+/// `patrons_manifest`.
+pub fn summon_tuning_manifest() -> AssetReadGuard<Ron<SummonTuning>> {
+    Ron::<SummonTuning>::load_expect("common.pact.summon_tuning").read()
+}
+
+/// `(level, base)` milestones for the Cadena point pool, ascending by level.
+/// `assets/common/pact/chain_pool.ron`. Do NOT call per-entity in tick
+/// systems -- hoist once per run, same as `patrons_manifest`.
+pub fn chain_pool_manifest() -> AssetReadGuard<Ron<Vec<(u32, u16)>>> {
+    Ron::<Vec<(u32, u16)>>::load_expect("common.pact.chain_pool").read()
+}
+
+/// A Cadena Warlock's total summon point pool: the highest level milestone
+/// at or below `character_level`, plus one point per `chain_rank`
+/// (`Skill::Warlock(ChainMastery)`'s level, `max_level: 5`), capped at
+/// [`SummonTuning::pool_ceiling`]. A level below every milestone (should not
+/// happen -- the table's first entry is level 1) reads as `0 + chain_rank`.
+pub fn chain_pool(character_level: u32, chain_rank: u16) -> u16 {
+    let base = chain_pool_manifest()
+        .0
+        .iter()
+        .filter(|(level, _)| *level <= character_level)
+        .map(|(_, base)| *base)
+        .max()
+        .unwrap_or(0);
+    (base + chain_rank).min(summon_tuning_manifest().0.pool_ceiling)
+}
+
+/// A summoner's live Cadena summons ledger: which entities they currently
+/// have out, and the pool cost each one is charged. Server-authoritative;
+/// net-synced read-only so the HUD can show `spent() / pool`. Present on
+/// any character, but only ever populated for a Cadena Warlock -- an empty
+/// ledger is indistinguishable from "no Cadena boon" and costs nothing.
+///
+/// Freeing an entry must be driven by the same cleanup path that despawns
+/// the summon (death, lifetime expiry, dismiss, owner logout/death), never
+/// a separate timer -- two independently-driven ledgers is exactly how a
+/// player permanently loses pool capacity.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Summons {
+    pub active: Vec<(crate::uid::Uid, u16)>,
+}
+
+impl Summons {
+    pub fn spent(&self) -> u16 { self.active.iter().map(|(_, cost)| *cost).sum() }
+}
+
+impl Component for Summons {
+    // `DenseVecStorage`: rare, same reasoning as `Pact` itself -- only
+    // Cadena Warlocks with something currently summoned ever have one.
+    type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fresh_warlock_pool_is_two() {
+        assert_eq!(chain_pool(1, 0), 2);
+    }
+
+    #[test]
+    fn an_uninvested_level_60_pool_is_twenty() {
+        // Levels 50-60 do not widen the base further (plan §14.1d).
+        assert_eq!(chain_pool(50, 0), 20);
+        assert_eq!(chain_pool(60, 0), 20);
+    }
+
+    #[test]
+    fn pool_widens_at_every_milestone() {
+        assert_eq!(chain_pool(4, 0), 2, "still under the level-5 milestone");
+        assert_eq!(chain_pool(5, 0), 4);
+        assert_eq!(chain_pool(19, 0), 4, "still under the level-20 milestone");
+        assert_eq!(chain_pool(20, 0), 8);
+        assert_eq!(chain_pool(30, 0), 12);
+        assert_eq!(chain_pool(40, 0), 16);
+    }
+
+    #[test]
+    fn chain_rank_adds_one_point_per_level() {
+        assert_eq!(chain_pool(1, 3), 5);
+    }
+
+    #[test]
+    fn pool_is_capped_at_the_ceiling_even_fully_invested() {
+        assert_eq!(chain_pool(60, 5), summon_tuning_manifest().0.pool_ceiling);
+    }
+
+    #[test]
+    fn summons_spent_sums_every_active_entry() {
+        let uid = |n: u64| crate::uid::Uid::from(std::num::NonZeroU64::new(n).unwrap());
+        let summons = Summons {
+            active: vec![(uid(1), 3), (uid(2), 7)],
+        };
+        assert_eq!(summons.spent(), 10);
+    }
+
+    #[test]
+    fn empty_summons_has_spent_zero() {
+        assert_eq!(Summons::default().spent(), 0);
+    }
 
     #[test]
     fn patrons_manifest_covers_every_patron() {

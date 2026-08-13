@@ -870,12 +870,13 @@ pub fn convert_background_to_database(
 
 /// `pact_standing`/`pact_patron_id`/`pact_boon` NULL or unrecognized fall
 /// back to `Bound`/`None`/`None` respectively, matching `Pact`'s own
-/// fail-open default. `pact_favour` is reserved for a future mechanic;
-/// NULL -> `0`.
+/// fail-open default. `pact_blade_summoned` NULL -> `false`. `pact_favour`
+/// is reserved for a future mechanic; NULL -> `0`.
 pub fn convert_pact_from_database(
     standing: Option<&str>,
     patron: Option<&str>,
     boon: Option<&str>,
+    blade_summoned: Option<i64>,
     favour: Option<i32>,
 ) -> common::comp::Pact {
     common::comp::Pact {
@@ -884,24 +885,33 @@ pub fn convert_pact_from_database(
             .unwrap_or_default(),
         patron: patron.and_then(json_models::db_string_to_patron_id),
         boon: boon.and_then(json_models::db_string_to_pact_boon),
+        blade_summoned: blade_summoned.unwrap_or(0) != 0,
         favour: favour.unwrap_or(0),
     }
 }
 
 /// Inverse of [`convert_pact_from_database`]. A pact still at its fail-open
-/// default (untouched -- `Bound`, no patron, no boon, no favour) writes all
-/// four columns as `NULL` rather than spelling the default out, matching
-/// `convert_background_to_database`'s "unset stays unset" contract.
+/// default (untouched -- `Bound`, no patron, no boon, not summoned, no
+/// favour) writes all five columns as `NULL` rather than spelling the
+/// default out, matching `convert_background_to_database`'s "unset stays
+/// unset" contract.
 pub fn convert_pact_to_database(
     pact: common::comp::Pact,
-) -> (Option<String>, Option<String>, Option<String>, Option<i32>) {
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i32>,
+) {
     if pact == common::comp::Pact::default() {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     }
     (
         Some(json_models::pact_standing_to_db_string(pact.standing)),
         pact.patron.map(json_models::patron_id_to_db_string),
         pact.boon.map(json_models::pact_boon_to_db_string),
+        Some(pact.blade_summoned as i64),
         Some(pact.favour),
     )
 }
@@ -1221,28 +1231,34 @@ mod tests {
         // Legacy / unset: NULL columns -> the fail-open default, and the
         // untouched default writes back out as NULL too (matching
         // `background`'s "unset stays unset" contract).
-        let none = convert_pact_from_database(None, None, None, None);
+        let none = convert_pact_from_database(None, None, None, None, None);
         assert_eq!(none, Pact::default());
-        assert_eq!(convert_pact_to_database(none), (None, None, None, None));
+        assert_eq!(
+            convert_pact_to_database(none),
+            (None, None, None, None, None)
+        );
 
         // A fully-set pact round-trips through its keywords.
         let bound_court = Pact {
             standing: PactStanding::Bound,
             patron: Some(PatronId::VeiledCourt),
-            boon: Some(PactBoon::Chain),
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
             favour: 0,
         };
-        let (standing_col, patron_col, boon_col, favour_col) =
+        let (standing_col, patron_col, boon_col, blade_summoned_col, favour_col) =
             convert_pact_to_database(bound_court);
         assert_eq!(standing_col.as_deref(), Some("bound"));
         assert_eq!(patron_col.as_deref(), Some("veiled_court"));
-        assert_eq!(boon_col.as_deref(), Some("chain"));
+        assert_eq!(boon_col.as_deref(), Some("blade"));
+        assert_eq!(blade_summoned_col, Some(1));
         assert_eq!(favour_col, Some(0));
         assert_eq!(
             convert_pact_from_database(
                 standing_col.as_deref(),
                 patron_col.as_deref(),
                 boon_col.as_deref(),
+                blade_summoned_col,
                 favour_col
             ),
             bound_court
@@ -1252,21 +1268,25 @@ mod tests {
             standing: PactStanding::Severed,
             patron: Some(PatronId::HorrorOfTheVoid),
             boon: None,
+            blade_summoned: false,
             favour: 0,
         };
-        let (standing_col, patron_col, boon_col, _) = convert_pact_to_database(severed);
+        let (standing_col, patron_col, boon_col, blade_summoned_col, _) =
+            convert_pact_to_database(severed);
         assert_eq!(standing_col.as_deref(), Some("severed"));
         assert_eq!(patron_col.as_deref(), Some("horror_of_the_void"));
         assert_eq!(boon_col, None);
+        assert_eq!(blade_summoned_col, Some(0));
 
         // Unrecognized strings (future-version downgrade) degrade instead
         // of panicking.
         assert_eq!(
-            convert_pact_from_database(Some("cursed"), Some("cthulhu"), Some("staff"), None),
+            convert_pact_from_database(Some("cursed"), Some("cthulhu"), Some("staff"), None, None),
             Pact {
                 standing: PactStanding::Bound,
                 patron: None,
                 boon: None,
+                blade_summoned: false,
                 favour: 0,
             }
         );

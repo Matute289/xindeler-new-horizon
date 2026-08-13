@@ -1,0 +1,13 @@
+// The Cadena boon's point-pool base grant by character level milestone.
+// (level, base) pairs; a character's base is the highest entry at or below
+// their level. Investment (Skill::Warlock(ChainMastery), +1/rank) is added
+// on top in code, then the whole thing is capped at a ceiling -- see
+// common/src/comp/pact.rs's chain_pool() function, not here.
+[
+    (1, 2),
+    (5, 4),
+    (20, 8),
+    (30, 12),
+    (40, 16),
+    (50, 20),
+]

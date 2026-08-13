@@ -35,11 +35,22 @@ pub enum Skill {
     Mage(MageSkill),
     Cleric(ClericSkill),
     Rogue(RogueSkill),
+    /// The Cadena pact-boon's investment track. `max_level: 5`, +1 summon
+    /// point-pool per rank (`comp::pact::chain_pool`) -- not a `Stats`
+    /// passive, so it carries no per-level stat-modifier manifest entry.
+    Warlock(WarlockSkill),
     // BL-20 feats/skills system. A single class-agnostic group (see
     // `SkillGroupKind::Feats`); `FeatSkill` carries the V1-implementable feat
     // subset locked in `docs/design/plans/2026-07-01-feats-p0-triage.md`.
     Feat(FeatSkill),
     UnlockGroup(SkillGroupKind),
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+pub enum WarlockSkill {
+    /// Ranked 1-5. Each rank adds one point to the Cadena boon's summon
+    /// point pool (`comp::pact::chain_pool`).
+    ChainMastery,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
