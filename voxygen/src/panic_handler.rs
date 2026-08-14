@@ -20,8 +20,8 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
         let potential_cause = potential_cause(panic_info);
 
         let mut dialog_message = format!(
-            "A critical error has occurred and Voxygen has been forced to terminate in an unusual \
-             manner. Details about the error can be found below.\n\nPanic reason: {}\n\n",
+            "A critical error has occurred and Xindeler has been forced to terminate in an \
+             unusual manner. Details about the error can be found below.\n\nPanic reason: {}\n\n",
             reason
         );
 
@@ -34,13 +34,10 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
                 format!("> What should I do?\n\
             \n\
             We need your help to fix this! You can help by contacting us and \
-            reporting this problem. To do this, open an issue on the Veloren \
+            reporting this problem. To do this, open an issue on the Xindeler \
             issue tracker:\n\
             \n\
-            https://www.gitlab.com/veloren/veloren/issues/new\n\
-            \n\
-            If you're on the Veloren community Discord server, we'd be \
-            grateful if you could also post a message in the #support channel.
+            https://github.com/Matute289/xindeler-new-horizon/issues/new\n\
             \n\
             > What should I include?\n\
             \n\
@@ -48,7 +45,7 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
             the problem. Please include as much information about your setup \
             and the events that led up to the panic as possible.
             \n\
-            Voxygen has logged information about the problem (including this \
+            Xindeler has logged information about the problem (including this \
             message) to the file {}. Please include the contents of this \
             file in your bug report.
             \n\n", logs_dir.join(&log_filename).display())
@@ -79,7 +76,7 @@ pub fn set_panic_hook(log_filename: String, logs_dir: PathBuf) {
             let mbox = move || {
                 DialogBuilder::message()
                     .set_level(MessageLevel::Error)
-                    .set_title("Veloren has crashed!")
+                    .set_title("Xindeler has crashed!")
                     //somehow `<` and `>` are invalid characters and cause the msg to get replaced
                     // by some generic text thus i replace them
                     .set_text(dialog_message.replace('<', "[").replace('>', "]"))

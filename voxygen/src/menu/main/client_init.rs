@@ -99,7 +99,14 @@ impl ClientInit {
                 {
                     Ok(client) => {
                         let _ = tx.send(Msg::Done(Ok(client)));
-                        tokio::task::block_in_place(move || drop(runtime2));
+                        // `block_in_place` only permits blocking I/O on this
+                        // worker thread -- it does not make it safe to drop
+                        // the very `Runtime` this task is running on (tokio
+                        // still panics: "Cannot drop a runtime in a context
+                        // where blocking is not allowed"). A real OS thread,
+                        // outside any tokio context, is the documented-safe
+                        // way to run that final drop.
+                        std::thread::spawn(move || drop(runtime2));
                         return;
                     },
                     Err(ClientError::NetworkErr(NetworkError::ConnectFailed(
@@ -124,8 +131,10 @@ impl ClientInit {
             // address and all the attempts timed out.
             let _ = tx.send(Msg::Done(Err(last_err.unwrap_or(Error::ServerNotFound))));
 
-            // Safe drop runtime
-            tokio::task::block_in_place(move || drop(runtime2));
+            // Safe drop runtime -- see the comment on the identical call
+            // above (the `Ok(client)` branch) for why this must be a real
+            // OS thread rather than `block_in_place`.
+            std::thread::spawn(move || drop(runtime2));
         });
 
         ClientInit {
