@@ -36,7 +36,9 @@ pub mod util;
 
 pub use chat::MessageBacklog;
 pub use crafting::CraftingTab;
-pub use hotbar::{SlotContents as HotbarSlotContents, State as HotbarState};
+pub use hotbar::{
+    SLOT_COUNT as HOTBAR_SLOT_COUNT, SlotContents as HotbarSlotContents, State as HotbarState,
+};
 pub use item_imgs::animate_by_pulse;
 pub use loot_scroller::LootMessage;
 pub use settings_window::ScaleChange;
@@ -5652,6 +5654,35 @@ impl Hud {
                     },
                     GameInput::PreviousSlot if state => {
                         self.hotbar.currently_selected_slot.previous_slot();
+                        true
+                    },
+                    // Left/right click, bound: use whatever's in that mouse
+                    // slot instead of the equipped weapon's own combo for
+                    // this click. Unbound, fall through to the catch-all
+                    // below (`try_hotbar_slot_from_input` returns `None` for
+                    // `Primary`/`Secondary`), which reports "not handled" so
+                    // `session::SessionState` runs the weapon's combo
+                    // exactly as it always has.
+                    GameInput::Primary if self.hotbar.get(hotbar::Slot::MouseLeft).is_some() => {
+                        handle_slot(
+                            hotbar::Slot::MouseLeft,
+                            state,
+                            &mut self.events,
+                            &mut self.slot_manager,
+                            &mut self.hotbar,
+                            client_inventory,
+                        );
+                        true
+                    },
+                    GameInput::Secondary if self.hotbar.get(hotbar::Slot::MouseRight).is_some() => {
+                        handle_slot(
+                            hotbar::Slot::MouseRight,
+                            state,
+                            &mut self.events,
+                            &mut self.slot_manager,
+                            &mut self.hotbar,
+                            client_inventory,
+                        );
                         true
                     },
                     // Skillbar

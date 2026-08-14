@@ -30,7 +30,7 @@ use common::{
         self, Ability, AbilityCooldowns, AbilityPool, ActiveAbilities, Body, Buffs, CharacterClass,
         CharacterState, Combo, Energy, Hardcore, Health, Inventory, Poise, PoiseState, SkillSet,
         Stats,
-        ability::{AbilityInput, Stance},
+        ability::Stance,
         is_downed,
         item::{
             ItemDesc, ItemI18n, MaterialStatManifest,
@@ -1416,113 +1416,71 @@ impl<'a> Skillbar<'a> {
                 ),
             };
 
-        // Slot M1
+        // Slot M1/M2 -- left/right click. Each is a real hotbar slot: bound,
+        // it overrides the equipped weapon's own primary/secondary combo
+        // (`GameInput::Primary`/`Secondary`) with whatever ability is placed
+        // here; empty, that click keeps behaving exactly as it always has.
+        // Content resolution (icon, greying out on insufficient
+        // energy/combo/requirements) is the same generic `HotbarSlot::
+        // image_key` every numbered slot already goes through -- see
+        // `hud/slots.rs`.
+        //
+        // Known gap: unlike the numbered slots, an empty M1/M2 slot shows no
+        // icon at all (no fallback to the weapon's own ability art) -- a
+        // deliberate scope cut for the first pass, left for a follow-up
+        // visual polish pass.
         Image::new(self.imgs.skillbar_slot)
             .w_h(40.0, 40.0)
             .right_from(state.ids.slot5, slot_offset)
             .set(state.ids.m1_slot_bg, ui);
 
-        let primary_ability_id = self.active_abilities.and_then(|a| {
-            Ability::from(a.primary).ability_id(
-                self.char_state,
-                Some(self.inventory),
-                Some(self.skillset),
-                self.ability_pool,
-                self.stance,
-                self.combo,
-                self.buffs,
-            )
-        });
+        let m1_slot = slot_maker
+            .fabricate(hotbar::Slot::MouseLeft, [36.0; 2], false, false)
+            .filled_slot(self.imgs.skillbar_slot)
+            .middle_of(primary_bg);
+        if let Some(item) = slot_content(hotbar::Slot::MouseLeft) {
+            m1_slot
+                .with_item_tooltip(
+                    self.item_tooltip_manager,
+                    core::iter::once(item as &dyn ItemDesc),
+                    &None,
+                    &item_tooltip,
+                )
+                .set(primary_id, ui);
+        } else if let Some((title, desc)) = tooltip_text(hotbar::Slot::MouseLeft) {
+            m1_slot
+                .with_tooltip(self.tooltip_manager, &title, &desc, &tooltip, TEXT_COLOR)
+                .set(primary_id, ui);
+        } else {
+            m1_slot.set(primary_id, ui);
+        }
 
-        let (primary_ability_title, primary_ability_desc) =
-            util::ability_description(primary_ability_id.unwrap_or(""), self.localized_strings);
-
-        Button::image(
-            primary_ability_id.map_or(self.imgs.nothing, |id| util::ability_image(self.imgs, id)),
-        )
-        .w_h(36.0, 36.0)
-        .middle_of(primary_bg)
-        .with_tooltip(
-            self.tooltip_manager,
-            &primary_ability_title,
-            &primary_ability_desc,
-            &tooltip,
-            TEXT_COLOR,
-        )
-        .set(primary_id, ui);
         // Slot M2
         Image::new(self.imgs.skillbar_slot)
             .w_h(40.0, 40.0)
             .right_from(state.ids.m1_slot_bg, slot_offset)
             .set(state.ids.m2_slot_bg, ui);
 
-        let secondary_ability_id = self.active_abilities.and_then(|a| {
-            Ability::from(a.secondary).ability_id(
-                self.char_state,
-                Some(self.inventory),
-                Some(self.skillset),
-                self.ability_pool,
-                self.stance,
-                self.combo,
-                self.buffs,
-            )
-        });
-
-        let (secondary_ability_title, secondary_ability_desc) =
-            util::ability_description(secondary_ability_id.unwrap_or(""), self.localized_strings);
-
-        Button::image(
-            secondary_ability_id.map_or(self.imgs.nothing, |id| util::ability_image(self.imgs, id)),
-        )
-        .w_h(36.0, 36.0)
-        .middle_of(secondary_bg)
-        .image_color(
-            if self
-                .active_abilities
-                .and_then(|a| {
-                    a.activate_ability(
-                        AbilityInput::Secondary,
-                        Some(self.inventory),
-                        None, // display only; the server gates use (ENG-D2c)
-                        self.skillset,
-                        Some(self.body),
-                        self.char_state,
-                        self.stance,
-                        self.combo,
-                        self.stats,
-                        self.buffs,
-                        self.ability_pool,
-                        self.character_class,
-                        // UI display only: hotbar inputs never resolve against
-                        // a trigger slot.
-                        None,
-                        self.ability_map,
-                    )
-                })
-                .is_some_and(|(a, _, _)| {
-                    self.energy.current() >= a.energy_cost()
-                        && self.combo.is_some_and(|c| c.counter() >= a.combo_cost())
-                        && a.ability_meta().requirements.requirements_met(
-                            self.stance,
-                            Some(self.inventory),
-                            self.oracle_live,
-                            self.skillset.character_level(),
-                        )
-                })
-            {
-                Color::Rgba(1.0, 1.0, 1.0, 1.0)
-            } else {
-                Color::Rgba(0.3, 0.3, 0.3, 0.8)
-            },
-        )
-        .with_tooltip(
-            self.tooltip_manager,
-            &secondary_ability_title,
-            &secondary_ability_desc,
-            &tooltip,
-            TEXT_COLOR,
-        )
-        .set(secondary_id, ui);
+        let m2_slot = slot_maker
+            .fabricate(hotbar::Slot::MouseRight, [36.0; 2], false, false)
+            .filled_slot(self.imgs.skillbar_slot)
+            .middle_of(secondary_bg);
+        if let Some(item) = slot_content(hotbar::Slot::MouseRight) {
+            m2_slot
+                .with_item_tooltip(
+                    self.item_tooltip_manager,
+                    core::iter::once(item as &dyn ItemDesc),
+                    &None,
+                    &item_tooltip,
+                )
+                .set(secondary_id, ui);
+        } else if let Some((title, desc)) = tooltip_text(hotbar::Slot::MouseRight) {
+            m2_slot
+                .with_tooltip(self.tooltip_manager, &title, &desc, &tooltip, TEXT_COLOR)
+                .set(secondary_id, ui);
+        } else {
+            m2_slot.set(secondary_id, ui);
+        }
 
         // M1 and M2 icons
         match self.global_state.window.last_input() {

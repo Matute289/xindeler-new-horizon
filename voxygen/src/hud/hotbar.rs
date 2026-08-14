@@ -19,7 +19,15 @@ pub enum Slot {
     Eight = 7,
     Nine = 8,
     Ten = 9,
+    /// Bound here, this ability replaces the equipped weapon's primary
+    /// (left-click) combo -- unbound, left-click behaves exactly as before.
+    MouseLeft = 10,
+    /// Same as `MouseLeft`, but for the weapon's secondary (right-click)
+    /// combo.
+    MouseRight = 11,
 }
+
+pub const SLOT_COUNT: usize = 12;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SlotContents {
@@ -29,16 +37,16 @@ pub enum SlotContents {
 
 #[derive(Clone, Default)]
 pub struct State {
-    pub slots: [Option<SlotContents>; 10],
-    inputs: [bool; 10],
+    pub slots: [Option<SlotContents>; SLOT_COUNT],
+    inputs: [bool; SLOT_COUNT],
     pub currently_selected_slot: Slot,
 }
 
 impl State {
-    pub fn new(slots: [Option<SlotContents>; 10]) -> Self {
+    pub fn new(slots: [Option<SlotContents>; SLOT_COUNT]) -> Self {
         Self {
             slots,
-            inputs: [false; 10],
+            inputs: [false; SLOT_COUNT],
             currently_selected_slot: Slot::default(),
         }
     }
@@ -132,4 +140,14 @@ impl Slot {
         let previous_slot = (current_slot + 10 - 1) % 10;
         *self = Self::SLOTS[previous_slot];
     }
+}
+
+impl State {
+    /// The ability bound to left-click (if any), overriding the equipped
+    /// weapon's primary combo while it's set.
+    pub fn mouse_left_override(&self) -> Option<SlotContents> { self.get(Slot::MouseLeft) }
+
+    /// The ability bound to right-click (if any), overriding the equipped
+    /// weapon's secondary combo while it's set.
+    pub fn mouse_right_override(&self) -> Option<SlotContents> { self.get(Slot::MouseRight) }
 }
