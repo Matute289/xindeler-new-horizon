@@ -1423,21 +1423,39 @@ impl<'a> Skillbar<'a> {
         // Content resolution (icon, greying out on insufficient
         // energy/combo/requirements) is the same generic `HotbarSlot::
         // image_key` every numbered slot already goes through -- see
-        // `hud/slots.rs`.
-        //
-        // Known gap: unlike the numbered slots, an empty M1/M2 slot shows no
-        // icon at all (no fallback to the weapon's own ability art) -- a
-        // deliberate scope cut for the first pass, left for a follow-up
-        // visual polish pass.
+        // `hud/slots.rs`. `with_icon` supplies the fallback art (the
+        // weapon's own ability) the slot widget draws only when it has no
+        // real content of its own, so an empty M1/M2 looks exactly like it
+        // did before this change.
         Image::new(self.imgs.skillbar_slot)
             .w_h(40.0, 40.0)
             .right_from(state.ids.slot5, slot_offset)
             .set(state.ids.m1_slot_bg, ui);
 
+        let primary_ability_id = self.active_abilities.and_then(|a| {
+            Ability::from(a.primary).ability_id(
+                self.char_state,
+                Some(self.inventory),
+                Some(self.skillset),
+                self.ability_pool,
+                self.stance,
+                self.combo,
+                self.buffs,
+            )
+        });
+
         let m1_slot = slot_maker
             .fabricate(hotbar::Slot::MouseLeft, [36.0; 2], false, false)
             .filled_slot(self.imgs.skillbar_slot)
+            .with_icon(
+                primary_ability_id
+                    .map_or(self.imgs.nothing, |id| util::ability_image(self.imgs, id)),
+                Vec2::new(36.0, 36.0),
+                None,
+            )
             .middle_of(primary_bg);
+        let (primary_ability_title, primary_ability_desc) =
+            util::ability_description(primary_ability_id.unwrap_or(""), self.localized_strings);
         if let Some(item) = slot_content(hotbar::Slot::MouseLeft) {
             m1_slot
                 .with_item_tooltip(
@@ -1452,7 +1470,15 @@ impl<'a> Skillbar<'a> {
                 .with_tooltip(self.tooltip_manager, &title, &desc, &tooltip, TEXT_COLOR)
                 .set(primary_id, ui);
         } else {
-            m1_slot.set(primary_id, ui);
+            m1_slot
+                .with_tooltip(
+                    self.tooltip_manager,
+                    &primary_ability_title,
+                    &primary_ability_desc,
+                    &tooltip,
+                    TEXT_COLOR,
+                )
+                .set(primary_id, ui);
         }
 
         // Slot M2
@@ -1461,10 +1487,30 @@ impl<'a> Skillbar<'a> {
             .right_from(state.ids.m1_slot_bg, slot_offset)
             .set(state.ids.m2_slot_bg, ui);
 
+        let secondary_ability_id = self.active_abilities.and_then(|a| {
+            Ability::from(a.secondary).ability_id(
+                self.char_state,
+                Some(self.inventory),
+                Some(self.skillset),
+                self.ability_pool,
+                self.stance,
+                self.combo,
+                self.buffs,
+            )
+        });
+
         let m2_slot = slot_maker
             .fabricate(hotbar::Slot::MouseRight, [36.0; 2], false, false)
             .filled_slot(self.imgs.skillbar_slot)
+            .with_icon(
+                secondary_ability_id
+                    .map_or(self.imgs.nothing, |id| util::ability_image(self.imgs, id)),
+                Vec2::new(36.0, 36.0),
+                None,
+            )
             .middle_of(secondary_bg);
+        let (secondary_ability_title, secondary_ability_desc) =
+            util::ability_description(secondary_ability_id.unwrap_or(""), self.localized_strings);
         if let Some(item) = slot_content(hotbar::Slot::MouseRight) {
             m2_slot
                 .with_item_tooltip(
@@ -1479,7 +1525,15 @@ impl<'a> Skillbar<'a> {
                 .with_tooltip(self.tooltip_manager, &title, &desc, &tooltip, TEXT_COLOR)
                 .set(secondary_id, ui);
         } else {
-            m2_slot.set(secondary_id, ui);
+            m2_slot
+                .with_tooltip(
+                    self.tooltip_manager,
+                    &secondary_ability_title,
+                    &secondary_ability_desc,
+                    &tooltip,
+                    TEXT_COLOR,
+                )
+                .set(secondary_id, ui);
         }
 
         // M1 and M2 icons

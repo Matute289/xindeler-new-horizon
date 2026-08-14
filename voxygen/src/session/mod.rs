@@ -855,8 +855,20 @@ impl PlayState for SessionState {
 
             // Handle window events.
             for event in events {
+                // Building takes precedence over a mouse-slot ability
+                // override on that same click (see `Event::Primary`/
+                // `Secondary` below): a bound spell must not make block
+                // placement/removal unreachable while actively aiming at a
+                // buildable block. Skipping the HUD entirely for exactly
+                // this press keeps that precedence without the HUD needing
+                // to know about build mode at all.
+                let build_click = matches!(
+                    event,
+                    Event::InputUpdate(GameInput::Primary | GameInput::Secondary, true)
+                ) && build_target.is_some();
+
                 // Pass all events to the ui first.
-                {
+                if !build_click {
                     let client = self.client.borrow();
                     let inventories = client.inventories();
                     let inventory = inventories.get(client.entity());

@@ -84,6 +84,11 @@ impl State {
             .get(info.viewpoint_entity)
         {
             use common::comp::ability::AuxiliaryAbility;
+            // Bounded to the 10 numbered slots explicitly, not just by
+            // `auxiliary_set()` happening to be shorter today -- a future
+            // bump of `BASE_ABILITY_LIMIT` past 10 must not start
+            // auto-syncing over a player's manually-bound `MouseLeft`/
+            // `MouseRight` slots.
             for ((i, ability), hotbar_slot) in active_abilities
                 .auxiliary_set(
                     client.inventories().get(info.viewpoint_entity),
@@ -94,7 +99,7 @@ impl State {
                 )
                 .iter()
                 .enumerate()
-                .zip(self.slots.iter_mut())
+                .zip(self.slots[..10].iter_mut())
             {
                 if matches!(ability, AuxiliaryAbility::Empty) {
                     if matches!(hotbar_slot, Some(SlotContents::Ability(_))) {
@@ -140,14 +145,4 @@ impl Slot {
         let previous_slot = (current_slot + 10 - 1) % 10;
         *self = Self::SLOTS[previous_slot];
     }
-}
-
-impl State {
-    /// The ability bound to left-click (if any), overriding the equipped
-    /// weapon's primary combo while it's set.
-    pub fn mouse_left_override(&self) -> Option<SlotContents> { self.get(Slot::MouseLeft) }
-
-    /// The ability bound to right-click (if any), overriding the equipped
-    /// weapon's secondary combo while it's set.
-    pub fn mouse_right_override(&self) -> Option<SlotContents> { self.get(Slot::MouseRight) }
 }
