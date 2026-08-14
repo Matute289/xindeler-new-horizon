@@ -12,18 +12,27 @@ use tracing::warn;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CharacterProfile {
-    /// Array representing a character's hotbar.
+    /// Array representing a character's hotbar (the 10 numbered slots).
     pub hotbar_slots: [Option<hud::HotbarSlotContents>; 10],
+    /// The left/right mouse-click override slots. Kept as a separate field
+    /// (rather than folded into `hotbar_slots`) so existing `profile.ron`
+    /// files -- which serialize `hotbar_slots` as a fixed 10-element
+    /// sequence -- keep deserializing correctly; a missing field falls back
+    /// to `default_mouse_slots()` via the struct-level `#[serde(default)]`.
+    pub hotbar_mouse_slots: [Option<hud::HotbarSlotContents>; 2],
 }
 
 const fn default_slots() -> [Option<hud::HotbarSlotContents>; 10] {
     [None, None, None, None, None, None, None, None, None, None]
 }
 
+const fn default_mouse_slots() -> [Option<hud::HotbarSlotContents>; 2] { [None, None] }
+
 impl Default for CharacterProfile {
     fn default() -> Self {
         CharacterProfile {
             hotbar_slots: default_slots(),
+            hotbar_mouse_slots: default_mouse_slots(),
         }
     }
 }
@@ -102,16 +111,25 @@ impl Profile {
         &self,
         server: &str,
         character_id: Option<CharacterId>,
-    ) -> [Option<hud::HotbarSlotContents>; 10] {
-        match character_id {
+    ) -> [Option<hud::HotbarSlotContents>; hud::HOTBAR_SLOT_COUNT] {
+        let character = match character_id {
             Some(character_id) => self
                 .servers
                 .get(server)
                 .and_then(|s| s.characters.get(&character_id)),
             None => self.transient_character.as_ref(),
-        }
-        .map(|c| c.hotbar_slots.clone())
-        .unwrap_or_else(default_slots)
+        };
+        let numbered = character
+            .map(|c| c.hotbar_slots.clone())
+            .unwrap_or_else(default_slots);
+        let mouse = character
+            .map(|c| c.hotbar_mouse_slots.clone())
+            .unwrap_or_else(default_mouse_slots);
+
+        let mut combined = std::array::from_fn(|_| None);
+        combined[..10].clone_from_slice(&numbered);
+        combined[10..].clone_from_slice(&mouse);
+        combined
     }
 
     /// Set the hotbar_slots for the requested character_id.
@@ -129,9 +147,10 @@ impl Profile {
         &mut self,
         server: &str,
         character_id: Option<CharacterId>,
-        slots: [Option<hud::HotbarSlotContents>; 10],
+        slots: [Option<hud::HotbarSlotContents>; hud::HOTBAR_SLOT_COUNT],
     ) {
-        match character_id {
+        let [numbered @ .., mouse_left, mouse_right] = slots;
+        let character = match character_id {
             Some(character_id) => self.servers
               .entry(server.to_string())
               .or_default()
@@ -140,8 +159,9 @@ impl Profile {
               .entry(character_id)
               .or_default(),
             None => self.transient_character.get_or_insert_default(),
-        }
-        .hotbar_slots = slots;
+        };
+        character.hotbar_slots = numbered;
+        character.hotbar_mouse_slots = [mouse_left, mouse_right];
     }
 
     /// Get the selected_character for the provided server.
@@ -236,13 +256,41 @@ mod tests {
     fn test_get_slots_with_empty_profile() {
         let profile = Profile::default();
         let slots = profile.get_hotbar_slots("TestServer", Some(CharacterId(12345)));
-        assert_eq!(slots, [(); 10].map(|()| None))
+        assert_eq!(slots, [(); hud::HOTBAR_SLOT_COUNT].map(|()| None))
     }
 
     #[test]
     fn test_set_slots_with_empty_profile() {
         let mut profile = Profile::default();
-        let slots = [(); 10].map(|()| None);
+        let slots = [(); hud::HOTBAR_SLOT_COUNT].map(|()| None);
         profile.set_hotbar_slots("TestServer", Some(CharacterId(12345)), slots);
+    }
+
+    #[test]
+    fn mouse_slots_round_trip_independently_of_the_numbered_slots() {
+        let mut profile = Profile::default();
+        let mut slots = [(); hud::HOTBAR_SLOT_COUNT].map(|()| None);
+        slots[0] = Some(hud::HotbarSlotContents::Ability(3));
+        slots[10] = Some(hud::HotbarSlotContents::Ability(1)); // MouseLeft
+        slots[11] = Some(hud::HotbarSlotContents::Ability(2)); // MouseRight
+
+        profile.set_hotbar_slots("TestServer", Some(CharacterId(12345)), slots.clone());
+
+        assert_eq!(
+            profile.get_hotbar_slots("TestServer", Some(CharacterId(12345))),
+            slots
+        );
+    }
+
+    #[test]
+    fn a_profile_ron_predating_the_mouse_slots_field_still_loads() {
+        let ron = "(servers: {\"TestServer\": (characters: {12345: (hotbar_slots: (None, None, \
+                   None, None, None, None, None, None, None, None))})})";
+        let profile: Profile =
+            ron::de::from_str(ron).expect("pre-mouse-slots profile.ron must still parse");
+        assert_eq!(
+            profile.get_hotbar_slots("TestServer", Some(CharacterId(12345))),
+            [(); hud::HOTBAR_SLOT_COUNT].map(|()| None)
+        );
     }
 }

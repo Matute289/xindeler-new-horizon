@@ -19,7 +19,15 @@ pub enum Slot {
     Eight = 7,
     Nine = 8,
     Ten = 9,
+    /// Bound here, this ability replaces the equipped weapon's primary
+    /// (left-click) combo -- unbound, left-click behaves exactly as before.
+    MouseLeft = 10,
+    /// Same as `MouseLeft`, but for the weapon's secondary (right-click)
+    /// combo.
+    MouseRight = 11,
 }
+
+pub const SLOT_COUNT: usize = 12;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SlotContents {
@@ -29,16 +37,16 @@ pub enum SlotContents {
 
 #[derive(Clone, Default)]
 pub struct State {
-    pub slots: [Option<SlotContents>; 10],
-    inputs: [bool; 10],
+    pub slots: [Option<SlotContents>; SLOT_COUNT],
+    inputs: [bool; SLOT_COUNT],
     pub currently_selected_slot: Slot,
 }
 
 impl State {
-    pub fn new(slots: [Option<SlotContents>; 10]) -> Self {
+    pub fn new(slots: [Option<SlotContents>; SLOT_COUNT]) -> Self {
         Self {
             slots,
-            inputs: [false; 10],
+            inputs: [false; SLOT_COUNT],
             currently_selected_slot: Slot::default(),
         }
     }
@@ -76,6 +84,11 @@ impl State {
             .get(info.viewpoint_entity)
         {
             use common::comp::ability::AuxiliaryAbility;
+            // Bounded to the 10 numbered slots explicitly, not just by
+            // `auxiliary_set()` happening to be shorter today -- a future
+            // bump of `BASE_ABILITY_LIMIT` past 10 must not start
+            // auto-syncing over a player's manually-bound `MouseLeft`/
+            // `MouseRight` slots.
             for ((i, ability), hotbar_slot) in active_abilities
                 .auxiliary_set(
                     client.inventories().get(info.viewpoint_entity),
@@ -86,7 +99,7 @@ impl State {
                 )
                 .iter()
                 .enumerate()
-                .zip(self.slots.iter_mut())
+                .zip(self.slots[..10].iter_mut())
             {
                 if matches!(ability, AuxiliaryAbility::Empty) {
                     if matches!(hotbar_slot, Some(SlotContents::Ability(_))) {
