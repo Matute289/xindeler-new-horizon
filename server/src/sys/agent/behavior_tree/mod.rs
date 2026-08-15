@@ -583,6 +583,17 @@ fn attack_designated_target(bdata: &mut BehaviorData) -> bool {
     let PetCommand::Attack(target_uid) = bdata.agent.pet_command else {
         return false;
     };
+    // A pet holding a `Stay` position (the `V` key, `Agent::stay_pos`) must
+    // not abandon it to chase a designated target, mirroring the same
+    // suppression `attack_if_pet_hurt_while_guarding`/
+    // `engage_hostiles_near_owner_if_guarding` apply to Guard's own
+    // pet-initiated combat below. Left uncleared (rather than dropped like
+    // the illegal-target cases further down) so the order is retried
+    // automatically the moment staying is lifted, instead of silently
+    // vanishing.
+    if bdata.agent.stay_pos.is_some() {
+        return false;
+    }
     // TODO: this only clears the AI-consumed copy (`Agent::pet_command`).
     // The net-synced `CharacterActivity::pet_command` mirror written by
     // `CommandPetEvent` is not cleared here, so it can keep showing a
