@@ -437,6 +437,7 @@ fn get_buff_ident(buff: BuffKind) -> &'static str {
         | BuffKind::Mooncloak
         | BuffKind::Nondetection
         | BuffKind::MagicAura
+        | BuffKind::PactTalisman
         | BuffKind::Sequester => {
             tracing::error!("Player was killed by a positive buff!");
             "mysterious"

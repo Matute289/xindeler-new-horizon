@@ -212,6 +212,13 @@
     // it (chain_pool()'s only caller today is its own unit tests) -- a real
     // player must not be able to spend a real skill point on a node with no
     // observable effect.
+    //
+    // TalismanMastery IS consumed (talisman_protection() feeds the bond
+    // buff's damage reduction) but is held out of the tree for a different
+    // reason: the Warlock tree has no purchasable nodes at all yet, and
+    // shipping exactly one would give the class a lone, prerequisite-less
+    // node ahead of its real tree design. It is grantable and observable via
+    // /skill_point in the meantime.
     Class(Warlock): [],
     Class(Bard): [],
     Class(Paladin): [],

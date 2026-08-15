@@ -886,6 +886,11 @@ pub fn convert_pact_from_database(
         patron: patron.and_then(json_models::db_string_to_patron_id),
         boon: boon.and_then(json_models::db_string_to_pact_boon),
         blade_summoned: blade_summoned.unwrap_or(0) != 0,
+        // Never loaded, because it is never saved: a talisman bond names its
+        // bearer by a session-scoped `Uid` and is dropped when the Warlock
+        // logs out, so no stored value could be correct. The
+        // `pact_talisman_bearer` column is reserved schema only.
+        talisman_bearer: None,
         favour: favour.unwrap_or(0),
     }
 }
@@ -1244,6 +1249,7 @@ mod tests {
             patron: Some(PatronId::VeiledCourt),
             boon: Some(PactBoon::Blade),
             blade_summoned: true,
+            talisman_bearer: None,
             favour: 0,
         };
         let (standing_col, patron_col, boon_col, blade_summoned_col, favour_col) =
@@ -1269,6 +1275,7 @@ mod tests {
             patron: Some(PatronId::HorrorOfTheVoid),
             boon: None,
             blade_summoned: false,
+            talisman_bearer: None,
             favour: 0,
         };
         let (standing_col, patron_col, boon_col, blade_summoned_col, _) =
@@ -1287,8 +1294,52 @@ mod tests {
                 patron: None,
                 boon: None,
                 blade_summoned: false,
+                talisman_bearer: None,
                 favour: 0,
             }
+        );
+    }
+
+    /// A talisman bond is deliberately never persisted: it names its bearer
+    /// by a session-scoped `Uid`, and it is dropped when the Warlock logs out
+    /// anyway, so a stored value could never be correct. Loading always
+    /// yields no bearer, and saving a pact that currently HAS one still emits
+    /// only the five columns that existed before -- the reserved
+    /// `pact_talisman_bearer` column is never written.
+    #[test]
+    fn a_talisman_bond_never_reaches_the_database() {
+        use common::comp::{Pact, PactBoon, PactStanding, PatronId};
+        use std::num::NonZeroU64;
+
+        let bonded = Pact {
+            standing: PactStanding::Bound,
+            patron: Some(PatronId::Archfey),
+            boon: Some(PactBoon::Talisman),
+            blade_summoned: false,
+            talisman_bearer: Some(common::uid::Uid::from(NonZeroU64::new(9).unwrap())),
+            favour: 0,
+        };
+        let (standing_col, patron_col, boon_col, blade_summoned_col, favour_col) =
+            convert_pact_to_database(bonded);
+
+        let reloaded = convert_pact_from_database(
+            standing_col.as_deref(),
+            patron_col.as_deref(),
+            boon_col.as_deref(),
+            blade_summoned_col,
+            favour_col,
+        );
+        assert_eq!(
+            reloaded.talisman_bearer, None,
+            "a bond must never survive a save/load cycle"
+        );
+        assert_eq!(
+            reloaded,
+            Pact {
+                talisman_bearer: None,
+                ..bonded
+            },
+            "everything else about the pact must round-trip unchanged"
         );
     }
 

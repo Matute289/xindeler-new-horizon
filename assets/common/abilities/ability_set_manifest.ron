@@ -1572,4 +1572,13 @@
         secondary: Simple(Some(Rogue(Vanish)), "common.abilities.class.rogue.vanish"),
         abilities: [],
     )),
+    // Held by a bonded talisman BEARER, not by the Warlock, and only while
+    // the bond buff is up. Gated by no `Skill`: the bond's own lifetime is
+    // the gate, and a bearer is not necessarily a Warlock (or any caster) at
+    // all.
+    Custom("class.warlock.pacttalisman.recall"): AbilitySet((
+        primary: Simple(None, "common.abilities.class.warlock.pact_talisman_recall"),
+        secondary: Simple(None, "common.abilities.class.warlock.pact_talisman_recall"),
+        abilities: [],
+    )),
 })

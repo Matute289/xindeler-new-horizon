@@ -51,6 +51,19 @@ pub enum Reagent {
 pub enum Utility {
     Coins,
     Collar,
+    /// The Warlock's Pact-of-the-Talisman token. Carries **no per-instance
+    /// state at all** — this engine has no runtime-mutable item state, so a
+    /// talisman can never remember whose it is. The bond itself lives on the
+    /// Warlock's [`crate::comp::Pact::talisman_bearer`]; the item is only the
+    /// physical token whose possession the server checks when a bond is
+    /// established. Every talisman in the world is interchangeable.
+    ///
+    /// Placed beside `Collar` — the shipped precedent for a `Utility` item
+    /// whose possession drives a bespoke server action. Adding a variant here
+    /// is save-safe: items persist by their `item_definition_id` **string**,
+    /// never by this enum's discriminant (asserted by
+    /// `utility_variant_order_cannot_shift_a_persisted_item`).
+    Talisman,
     Key,
     AbilityReq,
 }
@@ -3208,5 +3221,73 @@ mod tests {
                 "{id}'s {ability_id} leaked in the caster fire kit"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod talisman_persistence_tests {
+    use super::*;
+
+    const TALISMAN: &str = "common.items.utility.talisman";
+
+    /// The talisman is the `Utility` variant it says it is.
+    #[test]
+    fn the_talisman_asset_is_a_utility_talisman() {
+        let item = Item::new_from_asset_expect(TALISMAN);
+        assert!(matches!(&*item.kind(), ItemKind::Utility {
+            kind: Utility::Talisman,
+            ..
+        }));
+    }
+
+    /// Adding a variant to [`Utility`] cannot disturb a saved item.
+    ///
+    /// Asserted, not assumed: an item's entire persisted identity is the
+    /// `item_definition_id` **string** (`Item::persistence_item_id`, which is
+    /// what the character-persistence layer writes and reads back). Nothing
+    /// about the enum -- its ordering, its length, the position a new variant
+    /// was inserted at -- takes part. This test round-trips a talisman AND an
+    /// item whose `Utility` variant now sits *after* the newly-inserted one,
+    /// which is the case a discriminant-based scheme would have broken.
+    #[test]
+    fn utility_variant_order_cannot_shift_a_persisted_item() {
+        for (asset, expected) in [
+            (TALISMAN, Utility::Talisman),
+            // Declared before `Talisman`.
+            ("common.items.utility.collar", Utility::Collar),
+            // Declared after `Talisman` -- the one a discriminant-based
+            // scheme would have silently re-pointed.
+            ("common.items.utility.coins", Utility::Coins),
+        ] {
+            let item = Item::new_from_asset_expect(asset);
+            let persisted = item.persistence_item_id();
+            assert_eq!(
+                persisted, asset,
+                "an item's persisted identity must be its definition-id string"
+            );
+
+            let reloaded = Item::new_from_asset_expect(&persisted);
+            let ItemKind::Utility { kind, .. } = &*reloaded.kind() else {
+                panic!("{asset} did not reload as a Utility item");
+            };
+            assert_eq!(
+                *kind, expected,
+                "{asset} must reload as the same Utility variant it was saved as"
+            );
+        }
+    }
+
+    /// Guards the persisted-identity claim from the other direction: the id
+    /// string is stable across a serde round-trip of the item itself (the
+    /// shape the network and the item cache use), so nothing else could be
+    /// standing in for it.
+    #[test]
+    fn the_talisman_survives_a_serde_round_trip_by_id() {
+        let item = Item::new_from_asset_expect(TALISMAN);
+        let encoded = serde_json::to_string(&item).expect("item serializes");
+        assert!(
+            encoded.contains(TALISMAN),
+            "the definition id must be what travels: {encoded}"
+        );
     }
 }

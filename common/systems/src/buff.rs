@@ -3,9 +3,9 @@ use common::{
     assets::{AssetExt, Ron},
     combat::{self, CombatTuning, DamageContributor},
     comp::{
-        ActiveSense, Alignment, AttunedItems, DerivedStats, Disguise, Energy, Ethos, Group, Health,
-        HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos,
-        Stats,
+        ActiveSense, Alignment, AttunedItems, DamageReflect, DerivedStats, Disguise, Energy, Ethos,
+        Group, Health, HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState,
+        Player, Pos, Stats,
         agent::{Sound, SoundKind},
         attunement::item_effects_active,
         aura::{Auras, EnteredAuras},
@@ -1171,6 +1171,19 @@ fn execute_effect(
         BuffEffect::FalseAura(kind) => stat.false_aura = Some(*kind),
         BuffEffect::Accuracy(acc) => stat.accuracy += *acc,
         BuffEffect::Evasion(eva) => stat.evasion += *eva,
+        // Content-agnostic: the attack path applies whatever lands here
+        // without knowing which buff produced it. `fraction` is floored at 0
+        // so a mis-authored negative can never turn a reflect into a *heal*
+        // for the attacker, and `cap` is floored at 0 for the same reason.
+        BuffEffect::ReflectDamage {
+            fraction,
+            cap,
+            kind,
+        } => stat.damage_reflect.push(DamageReflect {
+            fraction: fraction.max(0.0),
+            cap: cap.max(0.0),
+            kind: *kind,
+        }),
         BuffEffect::Stealth(s) => stat.stealth += *s,
         BuffEffect::CritChance(cc) => stat.crit_chance += *cc,
         BuffEffect::Resistance(kind, amount) => stat.add_resistance(*kind, *amount),

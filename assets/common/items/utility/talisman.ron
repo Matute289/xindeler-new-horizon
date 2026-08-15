@@ -1,0 +1,14 @@
+// The physical token of a Warlock's Pact of the Talisman. Holding one is the
+// range/consent requirement the server checks before it will bond a bearer to
+// a Warlock; the bond itself is stored on the Warlock, never on this item
+// (this engine has no runtime-mutable per-instance item state, so every
+// talisman is interchangeable).
+ItemDef(
+    legacy_name: "Warlock's Talisman",
+    legacy_description: "A patron-touched charm. A Warlock may bind it to whoever carries it.",
+    kind: Utility(
+        kind: Talisman,
+    ),
+    quality: Moderate,
+    tags: [Utility],
+)

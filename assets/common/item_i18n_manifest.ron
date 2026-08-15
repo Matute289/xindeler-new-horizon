@@ -2416,6 +2416,9 @@
             "common.items.utility.collar",
         ): "object-collar",
         Simple(
+            "common.items.utility.talisman",
+        ): "object-warlock_talisman",
+        Simple(
             "common.items.utility.firework_blue",
         ): "weapon-projectile-fireworks_blue",
         Simple(

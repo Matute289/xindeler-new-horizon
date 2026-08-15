@@ -7086,6 +7086,7 @@ fn handle_pact(
                 patron: Some(patron),
                 boon: current.boon,
                 blade_summoned: current.blade_summoned,
+                talisman_bearer: current.talisman_bearer,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7102,8 +7103,11 @@ fn handle_pact(
                 patron: current.patron,
                 boon: current.boon,
                 // The patron's power is gone -- a summoned blade cannot
-                // stay out any more than casting can continue.
+                // stay out any more than casting can continue, and the
+                // talisman's ward is dropped by `set_pact`'s own
+                // normalization for the same reason.
                 blade_summoned: false,
+                talisman_bearer: None,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7133,8 +7137,10 @@ fn handle_pact(
                 patron: current.patron,
                 boon: Some(boon),
                 // A freshly (re)chosen boon always starts un-summoned, even
-                // if the previous boon was also Blade.
+                // if the previous boon was also Blade, and un-bonded even if
+                // it was also Talisman.
                 blade_summoned: false,
+                talisman_bearer: None,
                 favour: current.favour,
             });
             server.notify_client(
@@ -7184,17 +7190,65 @@ fn handle_pact(
                 ),
             );
         },
+        "talisman" => {
+            let talisman_arg = patron_arg.ok_or_else(|| {
+                Content::Plain("talisman requires 'bond' or 'release'.".to_string())
+            })?;
+            match talisman_arg.as_str() {
+                "bond" => {
+                    // The bearer is not named: whoever is standing close by
+                    // holding a talisman is the bearer, the same shape the
+                    // Collar's taming scan uses. Carrying the item -- which
+                    // they had to accept by trade or pickup -- IS the consent
+                    // signal, and being in reach IS the range check.
+                    let bearer = crate::pact::find_talisman_bearer(server, pact_target)
+                        .ok_or_else(|| {
+                            Content::Plain(
+                                crate::pact::BondError::BearerHoldsNoTalisman
+                                    .message()
+                                    .to_string(),
+                            )
+                        })?;
+                    crate::pact::bond_talisman(server, pact_target, bearer)
+                        .map_err(|error| Content::Plain(error.message().to_string()))?;
+                    server.notify_client(
+                        client,
+                        ServerGeneral::server_msg(
+                            ChatType::CommandInfo,
+                            Content::Plain("Talisman bonded.".to_string()),
+                        ),
+                    );
+                },
+                "release" => {
+                    crate::pact::release_talisman(server, pact_target);
+                    server.notify_client(
+                        client,
+                        ServerGeneral::server_msg(
+                            ChatType::CommandInfo,
+                            Content::Plain("Talisman bond released.".to_string()),
+                        ),
+                    );
+                },
+                other => {
+                    return Err(Content::Plain(format!(
+                        "Unknown talisman action '{other}'; use 'bond' or 'release'."
+                    )));
+                },
+            }
+        },
         "status" => {
             server.notify_client(
                 client,
                 ServerGeneral::server_msg(
                     ChatType::CommandInfo,
                     Content::Plain(format!(
-                        "Pact: {:?}, patron: {:?}, boon: {:?}, blade_summoned: {}, favour: {}.",
+                        "Pact: {:?}, patron: {:?}, boon: {:?}, blade_summoned: {}, \
+                         talisman_bearer: {:?}, favour: {}.",
                         current.standing,
                         current.patron,
                         current.boon,
                         current.blade_summoned,
+                        current.talisman_bearer,
                         current.favour
                     )),
                 ),
@@ -7737,7 +7791,8 @@ fn build_buff(
             | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
             | BuffKind::Nondetection
-            | BuffKind::Sequester => {
+            | BuffKind::Sequester
+            | BuffKind::PactTalisman => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {

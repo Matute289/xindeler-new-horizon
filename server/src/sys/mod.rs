@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod msg;
 pub mod object;
 pub mod oracle;
+pub mod pact_talisman;
 pub mod persistence;
 pub mod pets;
 pub mod phantasm;
@@ -78,6 +79,10 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // visible difference. Revisit if `RemoteSensor`'s density or buoyancy
     // handling ever changes.
     dispatch::<remote_sense::Sys>(dispatch_builder, &["Common_buff_sys"]);
+    // Same reason as `remote_sense` above for depending on the buff system by
+    // its computed name: it must see this tick's buff removals before deciding
+    // whether a talisman bond is still sustained.
+    dispatch::<pact_talisman::Sys>(dispatch_builder, &["Common_buff_sys"]);
     // Must run after the buff system, which rebuilds `Stats` (and with it the
     // active-sense declarations this reads) from scratch every tick; running
     // earlier would evaluate the previous tick's declarations and keep honouring

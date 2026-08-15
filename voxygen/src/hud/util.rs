@@ -348,6 +348,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Mooncloak => "buff-mooncloak",
         BuffKind::Nondetection => "buff-nondetection",
         BuffKind::MagicAura => "buff-magicaura",
+        BuffKind::PactTalisman => "buff-pacttalisman",
         BuffKind::Sequester => "buff-sequester",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
@@ -581,6 +582,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Mooncloak
                         | BuffKind::Nondetection
                         | BuffKind::MagicAura
+                        | BuffKind::PactTalisman
                         | BuffKind::Sequester => Cow::Borrowed(""),
                     };
 

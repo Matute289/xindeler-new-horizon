@@ -51,6 +51,11 @@ pub enum WarlockSkill {
     /// Ranked 1-5. Each rank adds one point to the Cadena boon's summon
     /// point pool (`comp::pact::chain_pool`).
     ChainMastery,
+    /// Ranked 1-5. Each rank widens the damage reduction the Talisman boon's
+    /// bond grants its bearer (`comp::pact::talisman_protection`). The bond's
+    /// rebuke fraction and its per-hit cap deliberately do not scale with
+    /// this -- the cap is a safety rail, not a power dial.
+    TalismanMastery,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]

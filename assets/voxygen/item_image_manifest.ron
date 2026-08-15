@@ -1782,6 +1782,12 @@
         "voxel.item.utility.collar",
         (0.1, 0.0, 0.0), (-60.0, 20.0, 10.0), 0.9,
     ),
+    // Reuses the shipped haniwa-talisman model until dedicated pact art
+    // exists -- a charm on a cord is exactly the silhouette wanted.
+    Simple("common.items.utility.talisman"): VoxTrans(
+        "voxel.armor.misc.neck.haniwa_talisman",
+        (0.0, 0.2, 0.0), (-70.0, 20.0, 10.0), 0.9,
+    ),
     Simple("common.items.recipes.potions"): VoxTrans(
         "voxel.item.recipe.recipe_alchemy",
         (1.0, 0.0, 20.0), (30.0, 45.0, 120.0), 1.0,

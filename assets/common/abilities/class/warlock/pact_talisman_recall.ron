@@ -1,0 +1,24 @@
+// The talisman bearer's recall. Granted to whoever carries a bonded talisman
+// (never to the Warlock) and withdrawn the instant the bond drops.
+//
+// Deliberately bearer-activated rather than a reactive yank on damage: a
+// Warlock able to rip an ally out of their own fight, with an item the ally
+// cannot discard mid-combat, is a griefing vector with no counterplay.
+//
+// `anchor` is what makes it a recall rather than an ordinary blink -- it goes
+// to the source of the bond buff, never to whatever the bearer is aiming at.
+// It is still the same `Blink` state, so a dimensional anchor
+// (`Stats.disable_teleport`) fizzles it exactly as it fizzles every other
+// teleport.
+//
+// `max_range` and `cooldown` mirror `assets/common/pact/talisman_tuning.ron`,
+// which is the single source of design truth for both; a test asserts they
+// stay in lockstep.
+Blink(
+    buildup_duration: 0.5,
+    recover_duration: 0.3,
+    max_range: 100.0,
+    frontend_specifier: None,
+    anchor: Some(BuffSource(PactTalisman)),
+    meta: (cooldown: Some(60.0)),
+)

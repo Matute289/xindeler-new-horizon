@@ -338,6 +338,9 @@ buff-sickened = Sickened
     .desc = A baleful sickness saps your focus and wracks your body with pain.
 buff-hexed = Hexed
     .desc = A curse dulls your precision - your blows are less likely to land a telling hit.
+buff-pacttalisman = Bond of the Talisman
+    .desc = A Warlock's pact wards you, turns part of every wound back on whoever dealt it, and lets you call yourself to their side.
+
 ## Util
 buff-mysterious = Mysterious effect
 buff-remove = Click to remove

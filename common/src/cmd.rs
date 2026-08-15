@@ -238,6 +238,7 @@ lazy_static! {
             BuffKind::Nondetection => "nondetection",
             BuffKind::MagicAura => "magic_aura",
             BuffKind::Sequester => "sequester",
+            BuffKind::PactTalisman => "pact_talisman",
         };
         let mut buff_parser = HashMap::new();
         for kind in BuffKind::iter() {
@@ -278,10 +279,10 @@ lazy_static! {
 
     static ref ROLES: Vec<String> = ["admin", "moderator"].iter().copied().map(Into::into).collect();
 
-    /// `bind`'s patron ids, `boon`'s boon ids, and `blade`'s summon/dismiss
-    /// verbs all share the same positional argument slot in `/pact`, so
-    /// tab-completion offers all three; the handler validates against the
-    /// one the chosen action actually expects.
+    /// `bind`'s patron ids, `boon`'s boon ids, `blade`'s summon/dismiss verbs
+    /// and `talisman`'s bond/release verbs all share the same positional
+    /// argument slot in `/pact`, so tab-completion offers all four; the
+    /// handler validates against the one the chosen action actually expects.
     static ref PATRON_OR_BOON_IDS: Vec<String> = crate::comp::pact::PatronId::ALL
         .iter()
         .map(|p| p.keyword().to_string())
@@ -290,7 +291,12 @@ lazy_static! {
                 .iter()
                 .map(|b| b.keyword().to_string())
         )
-        .chain(["summon".to_owned(), "dismiss".to_owned()])
+        .chain([
+            "summon".to_owned(),
+            "dismiss".to_owned(),
+            "bond".to_owned(),
+            "release".to_owned(),
+        ])
         .collect();
 
     /// List of item's asset specifiers. Useful for tab completing.
@@ -1005,12 +1011,13 @@ impl ServerChatCommand {
                             "sever".to_owned(),
                             "boon".to_owned(),
                             "blade".to_owned(),
+                            "talisman".to_owned(),
                             "status".to_owned(),
                         ],
                         Required,
                     ),
                     Enum(
-                        "patron_or_boon_or_blade_action",
+                        "patron_or_boon_or_blade_or_talisman_action",
                         PATRON_OR_BOON_IDS.clone(),
                         Optional,
                     ),

@@ -111,6 +111,7 @@ mod tests {
                 patron: None,
                 boon: None,
                 blade_summoned: false,
+                talisman_bearer: None,
                 favour: 0,
             }),
         );
@@ -155,6 +156,7 @@ mod tests {
                 patron: None,
                 boon: None,
                 blade_summoned: false,
+                talisman_bearer: None,
                 favour: 0,
             }),
         );
