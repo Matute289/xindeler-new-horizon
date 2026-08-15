@@ -10,6 +10,14 @@ hud-warlock-pact-no_patron = no patron
 
 hud-pact-severed-notice = Your pact is severed. Your patron's power no longer answers you.
 
+## The Blade boon's own awakenings
+
+hud-pact-blade-tier-1 = Your pact blade stirs -- for the first time, it is no longer inert.
+hud-pact-blade-tier-2 = Your pact blade grows stronger, a new hunger taking shape within it.
+hud-pact-blade-tier-3 = Your pact blade grows hungrier still, restless for more.
+hud-pact-blade-tier-4 = Your pact blade grows more dangerous yet, its hunger nearly whole.
+hud-pact-blade-tier-5 = Your pact blade speaks its own name at last: { $name }.
+
 ## Patrons
 
 warlock-patron-veiled_court = The Veiled Court

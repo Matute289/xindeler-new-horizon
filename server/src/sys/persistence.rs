@@ -142,7 +142,7 @@ impl<'a> System<'a> for Sys {
                                     character_class.copied().unwrap_or_default(),
                                     ethos.copied().unwrap_or_default(),
                                     background.cloned().unwrap_or_default(),
-                                    pact.copied().unwrap_or_default(),
+                                    pact.cloned().unwrap_or_default(),
                                     trigger_slots.cloned().unwrap_or_default(),
                                     spell_mastery.copied().unwrap_or_default(),
                                 ))

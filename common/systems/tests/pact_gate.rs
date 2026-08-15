@@ -108,10 +108,7 @@ mod tests {
             &mut state,
             Some(Pact {
                 standing: PactStanding::Severed,
-                patron: None,
-                boon: None,
-                blade_summoned: false,
-                favour: 0,
+                ..Pact::default()
             }),
         );
 
@@ -152,10 +149,7 @@ mod tests {
             &mut state,
             Some(Pact {
                 standing: PactStanding::Severed,
-                patron: None,
-                boon: None,
-                blade_summoned: false,
-                favour: 0,
+                ..Pact::default()
             }),
         );
         tick(&mut state);

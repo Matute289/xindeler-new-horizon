@@ -134,4 +134,10 @@
     Feat(GreaterAberrantBloodmark): All({Feat(AberrantBloodmark): 1}),
     Feat(Dragonscarred): All({Feat(DraconicCultInitiate): 1}),
     Feat(SpellfireAdept): All({Feat(SpellfireSpark): 1}),
+    // The Blade pact-boon's tree can only be cleared tier-by-tier:
+    // PactBlade(Voice) has no prerequisite (it's the first node, tier 1).
+    PactBlade(SecondStrike): All({PactBlade(Voice): 1}),
+    PactBlade(Hunger): All({PactBlade(SecondStrike): 1}),
+    PactBlade(Crown): All({PactBlade(Hunger): 1}),
+    PactBlade(Zenith): All({PactBlade(Crown): 1}),
 }

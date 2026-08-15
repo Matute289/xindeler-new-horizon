@@ -1,0 +1,36 @@
+// Curated self-naming pool for a Blade boon's conjured weapon, banded by the
+// wielder's Ethos.moral() at the moment tier 5 ("Nombrada") unlocks -- see
+// common/src/comp/pact.rs's `blade_names_manifest` and `Pact::blade_name`.
+// Never player-authored text: every entry here is pre-approved content, so
+// no profanity/length filter is needed at the call site.
+//
+// Tone: per docs/design/lore/chargen/classes/warlock.md's "Pact of the
+// Blade" entry, the un-awakened weapon is described as having "no opinions,
+// no hunger, and no name to keep secret" -- a nameless tool. Tier 5 is that
+// tool crossing into sentience and choosing what it is. Names below lean on
+// oath/debt/covenant vocabulary shared across all three bands, differing in
+// how that vocabulary reads: Good = a vow kept, Neutral = a bargain whose
+// terms nobody else can read, Evil = a debt collected in full.
+{
+    Good: [
+        "Dawnoath",
+        "Gracehallow",
+        "Sworn Mercy",
+        "Vow-Bright",
+        "Lucent Absolution",
+    ],
+    Neutral: [
+        "Quietus",
+        "Hollowmark",
+        "The Unspoken Edge",
+        "Between-Tide",
+        "Fardebt",
+    ],
+    Evil: [
+        "Gravethirst",
+        "Sinmaw",
+        "The Last Confession",
+        "Bloodcovenant",
+        "Wraithfang",
+    ],
+}
