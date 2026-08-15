@@ -117,10 +117,15 @@ impl<'a> System<'a> for Sys {
         }
 
         // Pass 2 -- a record naming a bearer who is gone (logged out, removed,
-        // or already stripped by pass 1). Left alone, the Warlock could never
-        // bond anyone again without first releasing a bond to a bearer who no
-        // longer exists.
-        let mut dangling: Vec<Entity> = Vec::new();
+        // or already stripped by pass 1) or whose ward was stripped by
+        // something OTHER than pass 1 (e.g. the shipped downed-handler, which
+        // removes every non-`PersistOnDowned` buff -- `PactTalisman` is one --
+        // before this system ever sees it, so pass 1's buff-driven scan never
+        // finds that bearer at all). Left alone, the Warlock could never bond
+        // anyone again without first releasing a bond to a bearer who no
+        // longer exists, AND the bearer would keep the recall key in their
+        // `AbilityPool` forever, since nothing else clears it for this route.
+        let mut dangling: Vec<(Entity, Uid)> = Vec::new();
         for (entity, pact) in (&entities, &pacts).join() {
             let Some(bearer_uid) = pact.talisman_bearer else {
                 continue;
@@ -130,12 +135,15 @@ impl<'a> System<'a> for Sys {
                 .and_then(|bearer| buffs.get(bearer))
                 .is_some_and(|b| b.contains(BuffKind::PactTalisman));
             if !bearer_still_warded {
-                dangling.push(entity);
+                dangling.push((entity, bearer_uid));
             }
         }
-        for entity in dangling {
+        for (entity, bearer_uid) in dangling {
             if let Some(mut pact) = pacts.get_mut(entity) {
                 pact.talisman_bearer = None;
+            }
+            if let Some(bearer) = id_maps.uid_entity(bearer_uid) {
+                set_talisman_pool_key(&mut pools, &mut actives, &mut triggers, bearer, false);
             }
         }
     }

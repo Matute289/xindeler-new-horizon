@@ -12,8 +12,9 @@ mod tests {
     use common::{
         comp::{
             Body, Energy, Health, Inventory, Poise, Stats,
-            buff::{Buff, BuffData, BuffKind, BuffSource, Buffs, DestInfo},
+            buff::{Buff, BuffData, BuffKind, BuffSource, Buffs, DestInfo, MiscBuffData},
             inventory::item::MaterialStatManifest,
+            pact::talisman_tuning_manifest,
             tool::AbilityMap,
         },
         resources::{GameMode, Time},
@@ -82,10 +83,16 @@ mod tests {
         let mut buffs = Buffs::default();
         if warded {
             let time = Time(0.0);
+            let tuning = talisman_tuning_manifest();
+            let data = BuffData::new(strength, None).with_misc_data(MiscBuffData::Reflect {
+                fraction: tuning.0.rebuke_fraction,
+                cap: tuning.0.rebuke_cap,
+                kind: tuning.0.rebuke_kind,
+            });
             buffs.insert(
                 Buff::new(
                     BuffKind::PactTalisman,
-                    BuffData::new(strength, None),
+                    data,
                     Vec::new(),
                     BuffSource::Character {
                         by: Uid(NonZeroU64::new(2).unwrap()),

@@ -626,7 +626,6 @@ mod talisman_tests {
     fn protection_widens_one_step_per_rank() {
         let tuning = talisman_tuning_manifest();
         let (base, step) = (tuning.0.protect_base, tuning.0.protect_per_rank);
-        drop(tuning);
         assert!(step > 0.0, "the mastery track must do something");
         for rank in 0..=5u16 {
             let expected = base + step * f32::from(rank);
