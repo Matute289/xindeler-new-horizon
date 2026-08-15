@@ -20,6 +20,7 @@ event_emitters! {
     struct Events[EventEmitters] {
         mount: event::MountEvent,
         set_pet_stay: event::SetPetStayEvent,
+        command_pet: event::CommandPetEvent,
         lantern: event::SetLanternEvent,
         npc_interact: event::NpcInteractEvent,
         dialogue: event::DialogueEvent,
@@ -96,6 +97,11 @@ impl<'a> System<'a> for Sys {
                         ControlEvent::SetPetStay(pet_uid, stay) => {
                             if let Some(pet_entity) = read_data.id_maps.uid_entity(pet_uid) {
                                 emitters.emit(event::SetPetStayEvent(entity, pet_entity, stay));
+                            }
+                        },
+                        ControlEvent::CommandPet(pet_uid, command) => {
+                            if let Some(pet_entity) = read_data.id_maps.uid_entity(pet_uid) {
+                                emitters.emit(event::CommandPetEvent(entity, pet_entity, command));
                             }
                         },
                         ControlEvent::RemoveBuff(buff_id) => {

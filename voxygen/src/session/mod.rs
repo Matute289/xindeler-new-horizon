@@ -32,6 +32,7 @@ use common::{
     recipe::{self, RecipeBookManifest},
     terrain::{Block, BlockKind},
     trade::TradeResult,
+    uid::Uid,
     util::{Dir, Plane},
     vol::ReadVol,
 };
@@ -1204,6 +1205,93 @@ impl PlayState for SessionState {
                                         .get(pet_entity)
                                         .is_some_and(|activity| activity.is_pet_staying);
                                     client.set_pet_stay(pet_entity, !is_staying);
+                                }
+                            },
+                            // Independent of the `StayFollow` block above by
+                            // design -- reuses the same nearest-owned-pet
+                            // lookup shape but is a fresh implementation, so
+                            // that block (and the `V` key) is left
+                            // byte-for-byte untouched.
+                            GameInput::CommandPet if state => {
+                                let mut client = self.client.borrow_mut();
+                                let player_pos = client
+                                    .state()
+                                    .read_storage::<Pos>()
+                                    .get(client.entity())
+                                    .copied();
+
+                                let mut close_pet = None;
+                                if let Some(player_pos) = player_pos {
+                                    let positions = client.state().read_storage::<Pos>();
+                                    close_pet = client.state().ecs().read_resource::<CachedSpatialGrid>().0
+                                        .in_circle_aabr(player_pos.0.xy(), MAX_MOUNT_RANGE)
+                                        .filter(|e|
+                                            *e != client.entity()
+                                        )
+                                        .filter(|e|
+                                            matches!(client.state().ecs().read_storage::<comp::Alignment>().get(*e),
+                                                Some(comp::Alignment::Owned(owner)) if Some(*owner) == client.uid())
+                                        )
+                                        .filter(|e|
+                                            client.state().ecs().read_storage::<Is<Mount>>().get(*e).is_none()
+                                        )
+                                        .min_by_key(|e| {
+                                            OrderedFloat(positions
+                                                .get(*e)
+                                                .map_or(MAX_MOUNT_RANGE * MAX_MOUNT_RANGE, |x| {
+                                                    player_pos.0.distance_squared(x.0)
+                                                }
+                                            ))
+                                        });
+                                }
+
+                                if let Some(pet_entity) = close_pet {
+                                    // Prefer "attack that one" if the crosshair
+                                    // is over a valid (non-self, has-health)
+                                    // target; otherwise fall back to toggling
+                                    // `Guard`. Final legality (owner, group,
+                                    // PvP) is re-checked server-side.
+                                    let designated_target = self.target_entity.filter(|&target| {
+                                        target != pet_entity
+                                            && client
+                                                .state()
+                                                .read_storage::<comp::Health>()
+                                                .get(target)
+                                                .is_some()
+                                    });
+                                    if let Some(target) = designated_target
+                                        && let Some(target_uid) =
+                                            client.state().read_component_copied::<Uid>(target)
+                                    {
+                                        // No chat toast here: the pet immediately
+                                        // turning to fight is visible feedback
+                                        // enough. `Guard` below gets one because
+                                        // it's a silent mode change with no
+                                        // immediate visual cue.
+                                        client.command_pet(
+                                            pet_entity,
+                                            comp::PetCommand::Attack(target_uid),
+                                        );
+                                    } else {
+                                        let is_guarding = client
+                                            .state()
+                                            .read_storage::<CharacterActivity>()
+                                            .get(pet_entity)
+                                            .is_some_and(|activity| {
+                                                activity.pet_command == comp::PetCommand::Guard
+                                            });
+                                        let new_command = if is_guarding {
+                                            comp::PetCommand::Follow
+                                        } else {
+                                            comp::PetCommand::Guard
+                                        };
+                                        client.command_pet(pet_entity, new_command);
+                                        if !is_guarding {
+                                            self.hud.new_message(ChatType::Meta.into_msg(
+                                                Content::localized("hud-pet-command_guard"),
+                                            ));
+                                        }
+                                    }
                                 }
                             },
                             GameInput::Interact => {

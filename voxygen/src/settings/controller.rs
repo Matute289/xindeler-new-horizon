@@ -483,6 +483,7 @@ impl ControllerSettings {
             GameInput::ToggleLantern => Some(Button::Simple(GilButton::Unknown)),
             GameInput::Mount => Some(Button::Simple(GilButton::South)),
             GameInput::StayFollow => Some(Button::Simple(GilButton::Unknown)),
+            GameInput::CommandPet => Some(Button::Simple(GilButton::Unknown)),
             GameInput::Chat => Some(Button::Simple(GilButton::Unknown)),
             GameInput::Command => Some(Button::Simple(GilButton::Unknown)),
             GameInput::Escape => Some(Button::Simple(GilButton::Start)),
@@ -712,6 +713,11 @@ impl ControllerSettings {
                 mod2: Button::Simple(GilButton::Unknown),
             }),
             GameInput::StayFollow => Some(LayerEntry {
+                button: Button::Simple(GilButton::Unknown),
+                mod1: Button::Simple(GilButton::Unknown),
+                mod2: Button::Simple(GilButton::Unknown),
+            }),
+            GameInput::CommandPet => Some(LayerEntry {
                 button: Button::Simple(GilButton::Unknown),
                 mod1: Button::Simple(GilButton::Unknown),
                 mod2: Button::Simple(GilButton::Unknown),

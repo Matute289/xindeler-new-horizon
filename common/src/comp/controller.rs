@@ -1,6 +1,6 @@
 use crate::{
     comp::{
-        BuffKind, ability,
+        BuffKind, PetCommand, ability,
         inventory::{
             InventorySortOrder,
             item::tool::ToolKind,
@@ -156,6 +156,9 @@ pub enum ControlEvent {
     MountVolume(VolumePos),
     Unmount,
     SetPetStay(Uid, bool),
+    /// Issue a pet-AI command ("attack that one" / "stay alert, guard me")
+    /// to an owned pet, identified by its `Uid`.
+    CommandPet(Uid, PetCommand),
     InventoryEvent(InventoryEvent),
     GroupManip(GroupManip),
     RemoveBuff(BuffKind),

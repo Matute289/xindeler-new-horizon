@@ -19,7 +19,7 @@ use common::{
     comp::{
         self, AdminRole, CharacterState, ChatMode, ControlAction, ControlEvent, Controller,
         ControllerInputs, GroupManip, Hardcore, InputKind, InventoryAction, InventoryEvent,
-        InventoryUpdateEvent, MapMarkerChange, PresenceKind, UtteranceKind,
+        InventoryUpdateEvent, MapMarkerChange, PetCommand, PresenceKind, UtteranceKind,
         chat::KillSource,
         controller::CraftEvent,
         gizmos::Gizmos,
@@ -2130,6 +2130,16 @@ impl Client {
         if let Some(uid) = self.state.read_component_copied(entity) {
             self.send_msg(ClientGeneral::ControlEvent(ControlEvent::SetPetStay(
                 uid, stay,
+            )));
+        }
+    }
+
+    /// Issue a pet-AI command ("attack that one" / "stay alert, guard me")
+    /// to an owned pet.
+    pub fn command_pet(&mut self, pet: EcsEntity, command: PetCommand) {
+        if let Some(uid) = self.state.read_component_copied(pet) {
+            self.send_msg(ClientGeneral::ControlEvent(ControlEvent::CommandPet(
+                uid, command,
             )));
         }
     }

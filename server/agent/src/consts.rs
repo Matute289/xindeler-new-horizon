@@ -6,6 +6,9 @@ pub const MAX_PATH_DIST: f32 = 170.0;
 /// If the pet is any further than this value from its stay position, it will
 /// start walking back there
 pub const MAX_STAY_DISTANCE: f32 = 10.0;
+/// Radius around a `Guard`-commanded pet's owner within which the pet will
+/// proactively engage a detected hostile, rather than waiting to be attacked.
+pub const GUARD_ENGAGE_RADIUS: f32 = 15.0;
 pub const SEPARATION_DIST: f32 = 10.0;
 pub const SEPARATION_BIAS: f32 = 0.8;
 /// The distance within which agents will flee directly away if attacked from
