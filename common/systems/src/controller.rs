@@ -21,6 +21,7 @@ event_emitters! {
         mount: event::MountEvent,
         set_pet_stay: event::SetPetStayEvent,
         command_pet: event::CommandPetEvent,
+        dismiss_summon: event::DismissSummonEvent,
         lantern: event::SetLanternEvent,
         npc_interact: event::NpcInteractEvent,
         dialogue: event::DialogueEvent,
@@ -102,6 +103,11 @@ impl<'a> System<'a> for Sys {
                         ControlEvent::CommandPet(pet_uid, command) => {
                             if let Some(pet_entity) = read_data.id_maps.uid_entity(pet_uid) {
                                 emitters.emit(event::CommandPetEvent(entity, pet_entity, command));
+                            }
+                        },
+                        ControlEvent::DismissSummon(summon_uid) => {
+                            if let Some(summon_entity) = read_data.id_maps.uid_entity(summon_uid) {
+                                emitters.emit(event::DismissSummonEvent(entity, summon_entity));
                             }
                         },
                         ControlEvent::RemoveBuff(buff_id) => {

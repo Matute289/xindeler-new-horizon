@@ -1581,4 +1581,18 @@
         secondary: Simple(None, "common.abilities.class.warlock.pact_talisman_recall"),
         abilities: [],
     )),
+    // N27-O — Pacto de la Cadena: the Warlock Chain boon's summoned fiend.
+    // Not wired into `AbilityPool::for_character`'s automatic per-class
+    // grant yet (out of this task's file scope; see PR body) — reachable
+    // today the same way the Blade boon's own toggle is, for QA/manual
+    // testing, while the point-pool/ledger/anchor/dismiss machinery this
+    // key exercises is the part under test. `Pact::chain_summon_pool`
+    // already reads as 0 for any non-Chain-boon character, so granting this
+    // key pool-wide (as every other class key already is, per the doc
+    // comment above) is safe whenever that follow-up lands.
+    Custom("class.warlock.chainsummon"): AbilitySet((
+        primary: Simple(None, "common.abilities.class.warlock.summon_chain_fiend"),
+        secondary: Simple(None, "common.abilities.class.warlock.summon_chain_fiend"),
+        abilities: [],
+    )),
 })

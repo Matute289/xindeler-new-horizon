@@ -104,6 +104,7 @@ pub fn skill_group_to_db_string(skill_group: comp::skillset::SkillGroupKind) -> 
         Class(ClassKind::Artificer) => "Class Artificer",
         Class(ClassKind::BloodSlayer) => "Class BloodSlayer",
         Feats => "Feats",
+        PactBlade => "PactBlade",
         // Adventurer has no class tree; a Class(Adventurer) group reaching
         // persistence is a bug, consistent with the unsupported-weapon arm.
         Class(ClassKind::Adventurer) => panic!(
@@ -169,6 +170,7 @@ pub fn db_string_to_skill_group(skill_group_string: &str) -> comp::skillset::Ski
         "Class Artificer" => Class(ClassKind::Artificer),
         "Class BloodSlayer" => Class(ClassKind::BloodSlayer),
         "Feats" => Feats,
+        "PactBlade" => PactBlade,
 
         _ => panic!(
             "Tried to convert an unsupported string from the database: {}",
@@ -852,6 +854,7 @@ pub mod tests {
             SkillGroupKind::Class(ClassKind::Mage),
             SkillGroupKind::Class(ClassKind::Cleric),
             SkillGroupKind::Class(ClassKind::Rogue),
+            SkillGroupKind::PactBlade,
         ];
         for kind in kinds {
             assert_eq!(

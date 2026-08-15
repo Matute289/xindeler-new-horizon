@@ -42,8 +42,10 @@ pub fn set_pact(server: &mut Server, target: EcsEntity, pact: Pact) {
         .ecs()
         .read_storage::<Pact>()
         .get(target)
-        .copied();
-    let was_severed = previous.is_some_and(|p| p.standing == PactStanding::Severed);
+        .cloned();
+    let was_severed = previous
+        .as_ref()
+        .is_some_and(|p| p.standing == PactStanding::Severed);
     let now_severed = pact.standing == PactStanding::Severed;
 
     let pact = Pact {
@@ -223,7 +225,7 @@ pub fn bond_talisman(
         .ecs()
         .read_storage::<Pact>()
         .get(warlock)
-        .copied()
+        .cloned()
         .unwrap_or_default();
     if pact.standing != PactStanding::Bound || pact.boon != Some(PactBoon::Talisman) {
         return Err(BondError::NotABoundTalismanWarlock);
@@ -345,7 +347,7 @@ pub fn release_talisman(server: &mut Server, warlock: EcsEntity) {
         .ecs()
         .read_storage::<Pact>()
         .get(warlock)
-        .copied()
+        .cloned()
     else {
         return;
     };

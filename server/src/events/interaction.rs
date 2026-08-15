@@ -19,9 +19,9 @@ use common::{
     },
     consts::{MAX_INTERACT_RANGE, MAX_NPCINTERACT_RANGE, SOUND_TRAVEL_DIST_PER_VOLUME},
     event::{
-        CommandPetEvent, CreateItemDropEvent, CreateSpriteEvent, DialogueEvent, EventBus,
-        MineBlockEvent, NpcInteractEvent, SetLanternEvent, SetPetStayEvent, SoundEvent,
-        TamePetEvent, ToggleSpriteLightEvent,
+        CommandPetEvent, CreateItemDropEvent, CreateSpriteEvent, DeleteEvent, DialogueEvent,
+        DismissSummonEvent, EventBus, MineBlockEvent, NpcInteractEvent, SetLanternEvent,
+        SetPetStayEvent, SoundEvent, TamePetEvent, ToggleSpriteLightEvent,
     },
     link::Is,
     mounting::Mount,
@@ -47,6 +47,7 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<DialogueEvent>(builder, &[]);
     event_dispatch::<SetPetStayEvent>(builder, &[]);
     event_dispatch::<CommandPetEvent>(builder, &[]);
+    event_dispatch::<DismissSummonEvent>(builder, &[]);
     event_dispatch::<MineBlockEvent>(builder, &[]);
     event_dispatch::<SoundEvent>(builder, &[]);
     event_dispatch::<CreateSpriteEvent>(builder, &[]);
@@ -349,6 +350,55 @@ impl ServerEvent for CommandPetEvent {
                 .get_mut(pet)
                 .map(|mut activity| activity.pet_command = command);
             agents.get_mut(pet).map(|agent| agent.pet_command = command);
+        }
+    }
+}
+
+/// N27-O: a player-issued dismiss of one of their own Cadena
+/// (`PactBoon::Chain`) summons. Mirrors `SetPetStayEvent`'s ownership +
+/// mounting-range check, PLUS a check that `summon` is actually on the
+/// command giver's `Summons` ledger -- ownership (`Alignment::Owned`) alone
+/// is not specific to Chain summons, a tamed pet or any other owned entity
+/// would pass that check too. Ledger membership is what makes this "dismiss
+/// my Cadena summon" rather than "delete anything of mine in range". Once
+/// admitted, this does nothing further itself -- it routes through
+/// `DeleteEvent`, the SAME funnel death and lifetime expiry already use, so
+/// `server::events::entity_manipulation::handle_delete` frees the
+/// point-pool charge from exactly one place regardless of which exit route
+/// ended the summon's life.
+impl ServerEvent for DismissSummonEvent {
+    type SystemData<'a> = (
+        ReadStorage<'a, comp::Alignment>,
+        ReadStorage<'a, Uid>,
+        ReadStorage<'a, comp::Pos>,
+        ReadStorage<'a, comp::pact::Summons>,
+        ReadExpect<'a, EventBus<DeleteEvent>>,
+    );
+
+    fn handle(
+        events: impl ExactSizeIterator<Item = Self>,
+        (alignments, uids, positions, summons, delete_events): Self::SystemData<'_>,
+    ) {
+        let mut delete_emitter = delete_events.emitter();
+        for DismissSummonEvent(command_giver, summon) in events {
+            let Some(summon_uid) = uids.get(summon) else {
+                continue;
+            };
+            let is_owner = uids.get(command_giver).is_some_and(|owner_uid| {
+                matches!(
+                    alignments.get(summon),
+                    Some(comp::Alignment::Owned(summon_owner)) if *summon_owner == *owner_uid,
+                )
+            });
+            let is_a_chain_summon = summons
+                .get(command_giver)
+                .is_some_and(|s| s.active.iter().any(|(uid, _)| uid == summon_uid));
+            if is_owner
+                && is_a_chain_summon
+                && within_mounting_range(positions.get(command_giver), positions.get(summon))
+            {
+                delete_emitter.emit(DeleteEvent(summon));
+            }
         }
     }
 }
@@ -924,5 +974,144 @@ mod pet_command_tests {
 
         assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Follow);
         assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Follow);
+    }
+}
+
+/// N27-O: `DismissSummonEvent`'s ownership/range check and its hand-off to
+/// `DeleteEvent`. What happens once `DeleteEvent` is emitted (the actual
+/// point-pool release) is `entity_manipulation::handle_delete`'s job and is
+/// covered separately -- this module only proves dismiss reaches that
+/// funnel exactly when it should, and never for the wrong caller.
+#[cfg(test)]
+mod dismiss_summon_tests {
+    use super::*;
+    use specs::{Builder, Entity as EcsEntity, World, WorldExt};
+
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.insert(IdMaps::new());
+        world.insert(EventBus::<DeleteEvent>::default());
+        world.register::<comp::Pos>();
+        world.register::<comp::Alignment>();
+        world.register::<comp::pact::Summons>();
+        world.register::<Uid>();
+        world
+    }
+
+    fn spawn(world: &mut World, pos: Vec3<f32>) -> (EcsEntity, Uid) {
+        let entity = world.create_entity().with(comp::Pos(pos)).build();
+        let uid = {
+            let mut uids = world.write_component::<Uid>();
+            let mut id_maps = world.write_resource::<IdMaps>();
+            let uid = id_maps.allocate(entity);
+            uids.insert(entity, uid)
+                .expect("fresh entity, insert must succeed");
+            uid
+        };
+        (entity, uid)
+    }
+
+    /// An `Alignment::Owned` entity that is ALSO on `owner`'s `Summons`
+    /// ledger -- a real Cadena summon, the only shape `DismissSummonEvent`
+    /// should ever act on.
+    fn spawn_owned_summon(
+        world: &mut World,
+        owner_entity: EcsEntity,
+        owner: Uid,
+        pos: Vec3<f32>,
+    ) -> EcsEntity {
+        let (summon, summon_uid) = spawn(world, pos);
+        world
+            .write_component::<comp::Alignment>()
+            .insert(summon, comp::Alignment::Owned(owner))
+            .expect("fresh entity, insert must succeed");
+        world
+            .write_component::<comp::pact::Summons>()
+            .entry(owner_entity)
+            .expect("fresh entity, insert must succeed")
+            .or_insert_with(comp::pact::Summons::default)
+            .charge(summon_uid, 1);
+        summon
+    }
+
+    fn dispatch_dismiss(world: &World, giver: EcsEntity, summon: EcsEntity) {
+        let data = world.system_data::<<DismissSummonEvent as ServerEvent>::SystemData<'_>>();
+        DismissSummonEvent::handle(vec![DismissSummonEvent(giver, summon)].into_iter(), data);
+    }
+
+    fn pending_deletes(world: &World) -> Vec<EcsEntity> {
+        world
+            .read_resource::<EventBus<DeleteEvent>>()
+            .recv_all()
+            .map(|DeleteEvent(entity)| entity)
+            .collect()
+    }
+
+    #[test]
+    fn owner_dismissing_their_own_summon_emits_delete() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world, Vec3::zero());
+        let summon = spawn_owned_summon(&mut world, owner, owner_uid, Vec3::zero());
+
+        dispatch_dismiss(&world, owner, summon);
+
+        assert_eq!(pending_deletes(&world), vec![summon]);
+    }
+
+    #[test]
+    fn dismissing_someone_elses_summon_is_refused() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world, Vec3::zero());
+        let (impostor, _) = spawn(&mut world, Vec3::zero());
+        let summon = spawn_owned_summon(&mut world, owner, owner_uid, Vec3::zero());
+
+        dispatch_dismiss(&world, impostor, summon);
+
+        assert!(pending_deletes(&world).is_empty());
+    }
+
+    #[test]
+    fn dismissing_a_non_summon_target_is_refused() {
+        let mut world = mock_world();
+        let (owner, _owner_uid) = spawn(&mut world, Vec3::zero());
+        // No `Alignment` at all -- not owned by anyone, let alone `owner`.
+        let (not_a_summon, _) = spawn(&mut world, Vec3::zero());
+
+        dispatch_dismiss(&world, owner, not_a_summon);
+
+        assert!(pending_deletes(&world).is_empty());
+    }
+
+    #[test]
+    fn dismissing_a_summon_out_of_range_is_refused() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world, Vec3::zero());
+        let far_away = Vec3::new(1000.0, 1000.0, 1000.0);
+        let summon = spawn_owned_summon(&mut world, owner, owner_uid, far_away);
+
+        dispatch_dismiss(&world, owner, summon);
+
+        assert!(pending_deletes(&world).is_empty());
+    }
+
+    /// `Alignment::Owned` alone is not specific to a Chain summon -- a tamed
+    /// pet (or any other owned entity) is `Owned` by its player too, but was
+    /// never charged against that player's `Summons` ledger. Without the
+    /// ledger-membership check, this event would delete it anyway.
+    #[test]
+    fn dismissing_an_owned_entity_absent_from_the_ledger_is_refused() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world, Vec3::zero());
+        let (tamed_pet, _) = spawn(&mut world, Vec3::zero());
+        world
+            .write_component::<comp::Alignment>()
+            .insert(tamed_pet, comp::Alignment::Owned(owner_uid))
+            .expect("fresh entity, insert must succeed");
+        // No `Summons` entry for `tamed_pet` on `owner` -- it was never a
+        // Chain summon.
+
+        dispatch_dismiss(&world, owner, tamed_pet);
+
+        assert!(pending_deletes(&world).is_empty());
     }
 }

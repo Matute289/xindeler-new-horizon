@@ -175,6 +175,8 @@ pub fn load_character_data(
                 c.pact_patron_id,
                 c.pact_boon,
                 c.pact_blade_summoned,
+                c.pact_blade_exp,
+                c.pact_blade_name,
                 c.pact_favour
         FROM    character c
         JOIN    body b ON (c.character_id = b.body_id)
@@ -205,7 +207,9 @@ pub fn load_character_data(
                 pact_patron_id: row.get(17)?,
                 pact_boon: row.get(18)?,
                 pact_blade_summoned: row.get(19)?,
-                pact_favour: row.get(20)?,
+                pact_blade_exp: row.get(20)?,
+                pact_blade_name: row.get(21)?,
+                pact_favour: row.get(22)?,
             };
 
             let body_data = Body {
@@ -390,6 +394,8 @@ pub fn load_character_data(
                 character_data.pact_patron_id.as_deref(),
                 character_data.pact_boon.as_deref(),
                 character_data.pact_blade_summoned,
+                character_data.pact_blade_exp,
+                character_data.pact_blade_name.as_deref(),
                 character_data.pact_favour,
             ),
             trigger_slots: json_models::db_string_to_trigger_slots(
@@ -454,6 +460,8 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 pact_patron_id: None,
                 pact_boon: None,
                 pact_blade_summoned: None,
+                pact_blade_exp: None,
+                pact_blade_name: None,
                 pact_favour: None,
             })
         })?
@@ -1402,8 +1410,15 @@ pub fn update(
 
     let db_waypoint = convert_waypoint_to_database_json(char_waypoint, map_marker);
     let (background_db, background_custom_note_db) = convert_background_to_database(background);
-    let (pact_standing_db, pact_patron_db, pact_boon_db, pact_blade_summoned_db, pact_favour_db) =
-        convert_pact_to_database(pact);
+    let (
+        pact_standing_db,
+        pact_patron_db,
+        pact_boon_db,
+        pact_blade_summoned_db,
+        pact_blade_exp_db,
+        pact_blade_name_db,
+        pact_favour_db,
+    ) = convert_pact_to_database(pact);
 
     let mut stmt = transaction.prepare_cached(
         "
@@ -1423,8 +1438,10 @@ pub fn update(
                 pact_patron_id = ?13,
                 pact_boon = ?14,
                 pact_blade_summoned = ?15,
-                pact_favour = ?16
-        WHERE   character_id = ?17
+                pact_blade_exp = ?16,
+                pact_blade_name = ?17,
+                pact_favour = ?18
+        WHERE   character_id = ?19
     ",
     )?;
 
@@ -1444,6 +1461,8 @@ pub fn update(
         &pact_patron_db,
         &pact_boon_db,
         &pact_blade_summoned_db,
+        &pact_blade_exp_db,
+        &pact_blade_name_db,
         &pact_favour_db,
         &char_id.0,
     ])?;
@@ -1596,7 +1615,7 @@ mod spell_book_persistence_tests {
             loaded.character_class,
             loaded.ethos,
             loaded.background,
-            loaded.pact,
+            loaded.pact.clone(),
             loaded.trigger_slots.clone(),
             loaded.spell_mastery,
             &mut transaction,
@@ -2021,5 +2040,67 @@ mod spell_book_persistence_tests {
         let conn = db.connection();
         conn.execute_batch(include_str!("../../migrations/V78__spell_book.sql"))
             .expect("the backfill SQL runs");
+    }
+
+    /// End-to-end: a Blade boon's `blade_exp`/`blade_name` survive a real
+    /// save/load round trip through SQLite, and switching the boon away and
+    /// back (never touching those two columns in between, exactly like
+    /// `/pact boon`) resumes from the same `blade_exp` rather than resetting
+    /// it -- the persistence half of the "survives a boon change" contract
+    /// (the in-memory half is covered by `conversions.rs`'s own test).
+    #[test]
+    fn pact_blade_exp_and_name_survive_a_save_load_round_trip_and_a_boon_switch() {
+        use common::comp::{Ethos, Pact, PactBoon, PactStanding, ethos::Moral};
+
+        let db = TestDb::new();
+        let id = create(&db, "uuid-blade-xp", &[]);
+
+        let mut loaded = load(&db, "uuid-blade-xp", id);
+        let pool = pool_of(&loaded);
+        loaded.pact = Pact {
+            standing: PactStanding::Bound,
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            blade_exp: 26_500,
+            blade_name: None,
+            ..Pact::default()
+        };
+        loaded.ethos = Ethos::from_box(common::comp::ethos::Order::Neutral, Moral::Good);
+        save(&db, id, &loaded, &pool);
+
+        let reloaded = load(&db, "uuid-blade-xp", id);
+        assert_eq!(reloaded.pact.blade_exp, 26_500);
+        assert_eq!(reloaded.pact.blade_tier(), 2, "25,000 XP is tier 2");
+
+        // Switch the boon away (mirrors `/pact boon chain`, which zeroes
+        // `blade_summoned` but never touches `blade_exp`/`blade_name`) and
+        // save again -- the columns must not reset.
+        let mut switched = reloaded;
+        switched.pact = Pact {
+            boon: Some(PactBoon::Chain),
+            blade_summoned: false,
+            ..switched.pact
+        };
+        save(&db, id, &switched, &pool);
+        let after_switch = load(&db, "uuid-blade-xp", id);
+        assert_eq!(after_switch.pact.boon, Some(PactBoon::Chain));
+        assert_eq!(
+            after_switch.pact.blade_exp, 26_500,
+            "blade_exp must survive a boon change"
+        );
+
+        // Switch back to Blade -- resumes from the same total, not 0.
+        let mut resumed = after_switch;
+        resumed.pact = Pact {
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            ..resumed.pact
+        };
+        save(&db, id, &resumed, &pool);
+        let final_load = load(&db, "uuid-blade-xp", id);
+        assert_eq!(
+            final_load.pact.blade_exp, 26_500,
+            "re-taking Blade must resume, not reset, blade_exp"
+        );
     }
 }

@@ -8,6 +8,7 @@ use crate::{
         body::parts::Heads,
         character_state::OutputEvents,
         item::{MaterialStatManifest, tool::AbilityMap},
+        pact::{Pact, Summons},
     },
     link::Is,
     mounting::{Rider, VolumeRider},
@@ -212,6 +213,15 @@ pub struct JoinData<'a> {
     /// Global lookup of `Is<Follower>` so a grab ability can tell whether an
     /// arbitrary target is already tethered to someone else.
     pub is_followers: &'a ReadStorage<'a, Is<Follower>>,
+    /// The caster's Warlock pact state, if any (N27-O). Read by
+    /// `CharacterAbility::requirements_paid`'s `BasicSummon` arm to gate
+    /// Cadena summons against `Pact::chain_summon_pool` -- `None` for every
+    /// entity without a `Pact`, which reads as "no Chain pool" (see that
+    /// method's doc comment on the deliberate fail-closed default).
+    pub pact: Option<&'a Pact>,
+    /// The caster's live Cadena summons ledger, if any (N27-O). `None` is
+    /// equivalent to an empty ledger -- see `Summons`'s own doc comment.
+    pub summons: Option<&'a Summons>,
 }
 
 pub struct JoinStruct<'a> {
@@ -261,6 +271,10 @@ pub struct JoinStruct<'a> {
     pub pickup_items: &'a ReadStorage<'a, PickupItem>,
     pub immovables: &'a ReadStorage<'a, Immovable>,
     pub is_followers: &'a ReadStorage<'a, Is<Follower>>,
+    /// See [`JoinData::pact`].
+    pub pact: Option<&'a Pact>,
+    /// See [`JoinData::summons`].
+    pub summons: Option<&'a Summons>,
 }
 
 impl<'a> JoinData<'a> {
@@ -323,6 +337,8 @@ impl<'a> JoinData<'a> {
             pickup_items: j.pickup_items,
             immovables: j.immovables,
             is_followers: j.is_followers,
+            pact: j.pact,
+            summons: j.summons,
         }
     }
 }

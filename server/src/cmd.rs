@@ -7055,7 +7055,7 @@ fn handle_pact(
         .ecs()
         .read_storage::<Pact>()
         .get(pact_target)
-        .copied()
+        .cloned()
         .unwrap_or_default();
 
     match action_arg.as_str() {
@@ -7084,10 +7084,7 @@ fn handle_pact(
             crate::pact::set_pact(server, pact_target, Pact {
                 standing: PactStanding::Bound,
                 patron: Some(patron),
-                boon: current.boon,
-                blade_summoned: current.blade_summoned,
-                talisman_bearer: current.talisman_bearer,
-                favour: current.favour,
+                ..current
             });
             server.notify_client(
                 client,
@@ -7100,15 +7097,12 @@ fn handle_pact(
         "sever" => {
             crate::pact::set_pact(server, pact_target, Pact {
                 standing: PactStanding::Severed,
-                patron: current.patron,
-                boon: current.boon,
                 // The patron's power is gone -- a summoned blade cannot
                 // stay out any more than casting can continue, and the
                 // talisman's ward is dropped by `set_pact`'s own
                 // normalization for the same reason.
                 blade_summoned: false,
-                talisman_bearer: None,
-                favour: current.favour,
+                ..current
             });
             server.notify_client(
                 client,
@@ -7133,15 +7127,17 @@ fn handle_pact(
             let boon = PactBoon::from_keyword(&boon_arg)
                 .ok_or_else(|| Content::Plain(format!("Unknown boon '{boon_arg}'.")))?;
             crate::pact::set_pact(server, pact_target, Pact {
-                standing: current.standing,
-                patron: current.patron,
                 boon: Some(boon),
                 // A freshly (re)chosen boon always starts un-summoned, even
                 // if the previous boon was also Blade, and un-bonded even if
-                // it was also Talisman.
+                // it was also Talisman -- re-choosing a boon is always a
+                // fresh start for it, even choosing the same one again.
+                // `blade_exp`/`blade_name` deliberately survive the switch
+                // via `..current` -- re-taking Blade later resumes where it
+                // left off rather than resetting.
                 blade_summoned: false,
                 talisman_bearer: None,
-                favour: current.favour,
+                ..current
             });
             server.notify_client(
                 client,
@@ -7242,12 +7238,15 @@ fn handle_pact(
                 ServerGeneral::server_msg(
                     ChatType::CommandInfo,
                     Content::Plain(format!(
-                        "Pact: {:?}, patron: {:?}, boon: {:?}, blade_summoned: {}, \
-                         talisman_bearer: {:?}, favour: {}.",
+                        "Pact: {:?}, patron: {:?}, boon: {:?}, blade_summoned: {}, blade_exp: {} \
+                         (tier {}), blade_name: {:?}, talisman_bearer: {:?}, favour: {}.",
                         current.standing,
                         current.patron,
                         current.boon,
                         current.blade_summoned,
+                        current.blade_exp,
+                        current.blade_tier(),
+                        current.blade_name,
                         current.talisman_bearer,
                         current.favour
                     )),

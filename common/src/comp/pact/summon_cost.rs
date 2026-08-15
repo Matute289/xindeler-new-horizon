@@ -7,12 +7,14 @@
 use super::SummonTuning;
 use crate::{
     comp::{
-        DerivedStats, Energy, Health, Inventory, Poise,
+        Body, DerivedStats, Energy, Health, Inventory, Poise,
         inventory::{item::MaterialStatManifest, loadout_builder::LoadoutBuilder},
     },
     skillset_builder::SkillSetBuilder,
     states::basic_summon::SummonInfo,
 };
+use hashbrown::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 /// A creature's cost against the Cadena point pool, derived from its combat
 /// rating. Deliberately never hand-authored per creature.
@@ -95,6 +97,52 @@ pub fn npc_summon_cost(
     summon_cost(derived.combat_rating, tuning)
 }
 
+/// Process-lifetime cache backing [`cached_npc_summon_cost`], keyed by
+/// [`Body`] alone: every field `npc_summon_cost` reads other than `body`
+/// (`loadout_config`, `skillset_config`, `has_health`) is `None`/`true` on
+/// every shipped Cadena RON (N27-O), so `Body` already uniquely determines
+/// the cost for this boon's fixed roster. If a future Cadena ability ever
+/// varies loadout/skillset per body, widen the key to
+/// `(Body, Option<Preset>, Option<Preset>, bool)` instead of adding a
+/// second cache.
+fn summon_cost_cache() -> &'static RwLock<HashMap<Body, u16>> {
+    static CACHE: OnceLock<RwLock<HashMap<Body, u16>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// [`npc_summon_cost`], computed once per [`Body`] and memoized for the rest
+/// of the process's life. `npc_summon_cost` itself constructs a throwaway
+/// `Inventory` + `SkillSet` and reads `MaterialStatManifest` -- a real
+/// allocation this must never repeat on every cast or every per-creature
+/// spawn in a batch. Both the client-side activation gate
+/// (`CharacterAbility::requirements_paid`'s `BasicSummon` arm) and the
+/// server's per-spawn authority gate
+/// (`server::events::entity_creation::handle_create_npc`) call this instead
+/// of `npc_summon_cost` directly, so a Cadena summon's cost is identical on
+/// both sides of the gate by construction -- never recomputed independently.
+pub fn cached_npc_summon_cost(
+    summon_info: &SummonInfo,
+    msm: &MaterialStatManifest,
+    tuning: &SummonTuning,
+) -> u16 {
+    let SummonInfo::Npc { body, .. } = summon_info else {
+        return 0;
+    };
+    if let Some(cost) = summon_cost_cache()
+        .read()
+        .expect("summon cost cache poisoned")
+        .get(body)
+    {
+        return *cost;
+    }
+    let cost = npc_summon_cost(summon_info, msm, tuning);
+    summon_cost_cache()
+        .write()
+        .expect("summon cost cache poisoned")
+        .insert(*body, cost);
+    cost
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +167,7 @@ mod tests {
             incorporeal: false,
             phantom_illusion: false,
             delete_after_expiry: false,
+            pact_chain_summon: false,
         }
     }
 
@@ -229,6 +278,38 @@ mod tests {
             mindflayer > 25,
             "a Mindflayer ({mindflayer}) must sit past the 25-point pool ceiling"
         );
+    }
+
+    #[test]
+    fn cached_cost_matches_the_uncached_derivation() {
+        let msm = MaterialStatManifest::load().cloned();
+        let info = npc_summon_info(biped_small(body::biped_small::Species::Husk), true);
+        let uncached = npc_summon_cost(&info, &msm, &tuning());
+        let cached_first_call = cached_npc_summon_cost(&info, &msm, &tuning());
+        let cached_second_call = cached_npc_summon_cost(&info, &msm, &tuning());
+        assert_eq!(uncached, cached_first_call);
+        assert_eq!(cached_first_call, cached_second_call);
+    }
+
+    #[test]
+    fn cached_cost_of_a_non_npc_summon_is_zero_and_uncached() {
+        let msm = MaterialStatManifest::load().cloned();
+        let pillar = SummonInfo::BeamPillar {
+            buildup_duration: 0.5,
+            attack_duration: 1.0,
+            beam_duration: 1.0,
+            target: crate::states::basic_summon::BeamPillarTarget::Single,
+            radius: 1.0,
+            height: 1.0,
+            damage: 1.0,
+            damage_effect: None,
+            dodgeable: Default::default(),
+            tick_rate: 1.0,
+            specifier: crate::comp::beam::FrontendSpecifier::Steam,
+            indicator_specifier:
+                crate::states::basic_summon::BeamPillarIndicatorSpecifier::FirePillar,
+        };
+        assert_eq!(cached_npc_summon_cost(&pillar, &msm, &tuning()), 0);
     }
 
     #[test]

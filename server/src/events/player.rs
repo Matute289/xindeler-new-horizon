@@ -6,7 +6,7 @@ use crate::{
 };
 use common::{
     comp::{self, Content, Presence, PresenceKind, group, pet::is_tameable},
-    event::{DeleteCharacterEvent, PossessEvent, SetBattleModeEvent},
+    event::{DeleteCharacterEvent, DeleteEvent, EventBus, PossessEvent, SetBattleModeEvent},
     resources::Time,
     uid::{IdMaps, Uid},
 };
@@ -40,9 +40,49 @@ pub fn handle_character_delete(server: &mut Server, ev: DeleteCharacterEvent) {
     updater.queue_character_deletion(ev.requesting_player_uuid, ev.character_id);
 }
 
+/// See `handle_exit_ingame`'s call site. Shares its entity-resolution logic
+/// (`entity_manipulation::summons_to_dismiss`) with the owner-death path
+/// (`entity_manipulation`'s `DestroyEvent` handler, in its
+/// `data.clients.contains(ev.entity)` branch) -- a player's own death never
+/// deletes their entity (it resets `CharacterState` and waits for respawn
+/// instead), so summons are not caught by the normal death→`DeleteEvent`
+/// funnel their OWN death would use; both "the owner left" cases dismiss
+/// explicitly instead, each through whichever `DeleteEvent` emitter its own
+/// context provides.
+pub(super) fn dismiss_active_chain_summons(ecs: &specs::World, entity: EcsEntity) {
+    let summons = ecs
+        .read_storage::<comp::pact::Summons>()
+        .get(entity)
+        .cloned();
+    let id_maps = ecs.read_resource::<IdMaps>();
+    let to_dismiss = super::entity_manipulation::summons_to_dismiss(summons.as_ref(), &id_maps);
+    if to_dismiss.is_empty() {
+        return;
+    }
+    let delete_events = ecs.read_resource::<EventBus<DeleteEvent>>();
+    let mut emitter = delete_events.emitter();
+    for summon_entity in to_dismiss {
+        emitter.emit(DeleteEvent(summon_entity));
+    }
+}
+
 pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persistence: bool) {
     span!(_guard, "handle_exit_ingame");
     let state = server.state_mut();
+
+    // N27-O: dismiss every active Cadena (`PactBoon::Chain`) summon before
+    // this character's data is persisted or any of its components are
+    // stripped below. `Summons` itself is never persisted (nor are the
+    // fiends themselves -- see `server/src/sys/persistence.rs`), but
+    // without this their live entities would linger in the world, still
+    // fighting with no controller, until the ordinary chunk-unload sweep
+    // eventually caught them -- and the point-pool charge they hold would
+    // stay stuck on a `Summons` this entity is about to lose all
+    // meaningful access to. Each dismiss routes through the same
+    // `DeleteEvent` funnel death/expiry/player-dismiss already share, so
+    // the ledger is freed identically regardless of exit route -- see
+    // `entity_manipulation::handle_delete`.
+    dismiss_active_chain_summons(state.ecs(), entity);
 
     // Sync the player's character data to the database. This must be done before
     // removing any components from the entity
@@ -415,7 +455,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .ecs()
                         .read_storage::<comp::Pact>()
                         .get(entity)
-                        .copied()
+                        .cloned()
                         .unwrap_or_default();
 
                     // A slot's wait is real-world time, so the logout save is
@@ -741,4 +781,93 @@ pub fn handle_set_battle_mode(
     }: SetBattleModeEvent,
 ) {
     server.set_battle_mode_for(entity, battle_mode);
+}
+
+/// N27-O: the "owner logs out" exit route. `dismiss_active_chain_summons`
+/// itself is a thin read-and-emit wrapper around
+/// `entity_manipulation::summons_to_dismiss` (unit-tested on its own
+/// merits there); this proves the wrapper actually reads the right
+/// entity's ledger and reaches the `DeleteEvent` bus.
+#[cfg(test)]
+mod dismiss_active_chain_summons_tests {
+    use super::*;
+    use common::comp::pact::Summons;
+    use specs::{Builder, World, WorldExt};
+
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.insert(IdMaps::new());
+        world.insert(EventBus::<DeleteEvent>::default());
+        world.register::<Uid>();
+        world.register::<Summons>();
+        world
+    }
+
+    fn spawn(world: &mut World) -> (EcsEntity, Uid) {
+        let entity = world.create_entity().build();
+        let uid = {
+            let mut uids = world.write_component::<Uid>();
+            let mut id_maps = world.write_resource::<IdMaps>();
+            let uid = id_maps.allocate(entity);
+            uids.insert(entity, uid)
+                .expect("fresh entity, insert must succeed");
+            uid
+        };
+        (entity, uid)
+    }
+
+    fn pending_deletes(world: &World) -> Vec<EcsEntity> {
+        world
+            .read_resource::<EventBus<DeleteEvent>>()
+            .recv_all()
+            .map(|DeleteEvent(entity)| entity)
+            .collect()
+    }
+
+    #[test]
+    fn logging_out_dismisses_every_active_summon() {
+        let mut world = mock_world();
+        let (owner, _owner_uid) = spawn(&mut world);
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        let mut summons = Summons::default();
+        summons.charge(summon_a_uid, 1);
+        summons.charge(summon_b_uid, 1);
+        world
+            .write_component::<Summons>()
+            .insert(owner, summons)
+            .unwrap();
+
+        dismiss_active_chain_summons(&world, owner);
+
+        let mut deleted = pending_deletes(&world);
+        deleted.sort_by_key(|e| e.id());
+        let mut expected = vec![summon_a, summon_b];
+        expected.sort_by_key(|e| e.id());
+        assert_eq!(deleted, expected);
+    }
+
+    #[test]
+    fn logging_out_with_no_summons_component_emits_nothing() {
+        let mut world = mock_world();
+        let (owner, _) = spawn(&mut world);
+
+        dismiss_active_chain_summons(&world, owner);
+
+        assert!(pending_deletes(&world).is_empty());
+    }
+
+    #[test]
+    fn logging_out_with_an_empty_ledger_emits_nothing() {
+        let mut world = mock_world();
+        let (owner, _) = spawn(&mut world);
+        world
+            .write_component::<Summons>()
+            .insert(owner, Summons::default())
+            .unwrap();
+
+        dismiss_active_chain_summons(&world, owner);
+
+        assert!(pending_deletes(&world).is_empty());
+    }
 }
