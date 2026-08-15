@@ -1642,73 +1642,6 @@ impl Attack {
                 }
             }
         }
-        // ---------------------------------------------------------------
-        // Damage return ("reflect"/"thorns").
-        //
-        // Structurally the mirror image of the `CombatEffect::Lifesteal` arm
-        // below: both write health onto the *attacker* from inside attack
-        // resolution, off the same post-loop `accumulated_damage`. The one
-        // difference is where the effect comes from — Lifesteal is authored
-        // on the attack, this is read off the DEFENDER's aggregated
-        // `Stats::damage_reflect` (populated each tick from
-        // `BuffEffect::ReflectDamage`). Nothing here knows or cares which
-        // buff, class or item granted it.
-        //
-        // 🔴 THREE INVARIANTS. Do not "improve" any of them away.
-        //
-        // 1. NEVER route this back through `Attack`/`apply_attack`. It emits a raw
-        //    `HealthChangeEvent`, exactly as Lifesteal does, so it can trigger no
-        //    on-hit effect and — critically — no reflect of its own. Two entities that
-        //    both reflect and hit each other would otherwise recurse without bound. The
-        //    termination proof is structural: a raw `HealthChangeEvent` has no path
-        //    back into this function.
-        // 2. The per-hit `cap` is mandatory, not a balance nicety. Applied last, after
-        //    every other term, so it is a true hard ceiling: an uncapped fraction of a
-        //    very large hit kills whoever swung it regardless of the defender's own
-        //    level.
-        // 3. It must clear the same PvP / friendly-fire gate the incoming blow already
-        //    cleared. `permit_pvp` / `allow_friendly_fire` are the flags resolved for
-        //    THIS pair before the attack landed — reusing them, rather than judging
-        //    afresh, is what stops a ward from becoming a way to damage group-mates or
-        //    safezone bystanders who merely bumped into its bearer.
-        //
-        // Deliberately unmitigated by the attacker's armor: the return is a
-        // fraction of damage that was ALREADY mitigated on the way in, and the
-        // cap is what bounds it. The attacker's typed resistance to
-        // `reflect.kind` does apply (an O(1) field read), so the authored
-        // damage kind means something.
-        let reflect_permitted = match target_group {
-            GroupTarget::InGroup => allow_friendly_fire,
-            GroupTarget::OutOfGroup | GroupTarget::All => permit_pvp,
-        };
-        if reflect_permitted
-            && accumulated_damage > 0.0
-            && let Some(attacker) = attacker
-            && let Some(target_stats) = target.stats
-        {
-            for reflect in &target_stats.damage_reflect {
-                let resist = attacker
-                    .stats
-                    .map_or(0.0, |s| s.aoe_resistance(reflect.kind))
-                    .clamp(0.0, combat_tuning.resist_soft_cap);
-                let amount =
-                    (accumulated_damage * reflect.fraction * (1.0 - resist)).min(reflect.cap);
-                if amount > Health::HEALTH_EPSILON {
-                    emitters.emit(HealthChangeEvent {
-                        entity: attacker.entity,
-                        change: HealthChange {
-                            amount: -amount,
-                            by: Some(DamageContributor::new(target.uid, None)),
-                            cause: Some(DamageSource::Other),
-                            magic_source: None,
-                            time,
-                            precise: false,
-                            instance: rand::random(),
-                        },
-                    });
-                }
-            }
-        }
         for effect in self
             .effects
             .iter()
@@ -1993,6 +1926,91 @@ impl Attack {
                             }
                         }
                     },
+                }
+            }
+        }
+        // ---------------------------------------------------------------
+        // Damage return ("reflect"/"thorns").
+        //
+        // Structurally the mirror image of the `CombatEffect::Lifesteal` arm
+        // above: both write health onto the *attacker* from inside attack
+        // resolution, off the same `accumulated_damage`. The one difference is
+        // where the effect comes from — Lifesteal is authored on the attack,
+        // this is read off the DEFENDER's aggregated `Stats::damage_reflect`
+        // (populated each tick from `BuffEffect::ReflectDamage`). Nothing here
+        // knows or cares which buff, class or item granted it.
+        //
+        // Placed after BOTH loops, not after the damages loop alone: the
+        // attack-level `AdditionalDamage` and `DebuffsVulnerable` effects above
+        // still add to `accumulated_damage`, and a return computed before them
+        // would under-reflect exactly the attacks that hit hardest. Once per
+        // attack, never once per damage instance.
+        //
+        // 🔴 THREE INVARIANTS. Do not "improve" any of them away.
+        //
+        // 1. NEVER route this back through `Attack`/`apply_attack`. It emits a raw
+        //    `HealthChangeEvent`, exactly as Lifesteal does, so it can trigger no
+        //    on-hit effect and — critically — no reflect of its own. Two entities that
+        //    both reflect and hit each other would otherwise recurse without bound. The
+        //    termination proof is structural: a raw `HealthChangeEvent` has no path
+        //    back into this function.
+        // 2. The per-hit `cap` is mandatory, not a balance nicety. Applied last, after
+        //    every other term, so it is a true hard ceiling: an uncapped fraction of a
+        //    very large hit kills whoever swung it regardless of the defender's own
+        //    level.
+        // 3. It must clear the same PvP / friendly-fire gate the incoming blow already
+        //    cleared. `permit_pvp` / `allow_friendly_fire` are the flags resolved for
+        //    THIS pair before the attack landed — reusing them, rather than judging
+        //    afresh, is what stops a ward from becoming a way to damage group-mates or
+        //    safezone bystanders who merely bumped into its bearer.
+        //
+        // Deliberately unmitigated by the attacker's armor: the return is a
+        // fraction of damage that was ALREADY mitigated on the way in, and the
+        // cap is what bounds it. The attacker's typed resistance to
+        // `reflect.kind` does apply (an O(1) field read), so the authored
+        // damage kind means something.
+        //
+        // Conditions are ordered cheapest-and-most-discriminating first: almost
+        // no entity is ever reflecting, so the empty-slice test short-circuits
+        // before anything else is computed.
+        if let Some(target_stats) = target.stats
+            && !target_stats.damage_reflect.is_empty()
+            && accumulated_damage > 0.0
+            && let Some(attacker) = attacker
+            && match target_group {
+                GroupTarget::InGroup => allow_friendly_fire,
+                GroupTarget::OutOfGroup | GroupTarget::All => permit_pvp,
+            }
+        {
+            for reflect in &target_stats.damage_reflect {
+                let resist = attacker
+                    .stats
+                    .map_or(0.0, |s| s.aoe_resistance(reflect.kind))
+                    .clamp(0.0, combat_tuning.resist_soft_cap);
+                let amount =
+                    (accumulated_damage * reflect.fraction * (1.0 - resist)).min(reflect.cap);
+                if amount > Health::HEALTH_EPSILON {
+                    emitters.emit(HealthChangeEvent {
+                        entity: attacker.entity,
+                        change: HealthChange {
+                            amount: -amount,
+                            // Always `Solo`: `TargetInfo` carries no `Group`, so
+                            // a reflect that lands the killing blow credits the
+                            // defender alone and their group shares nothing.
+                            // Acceptable while nothing keys loot/XP off a
+                            // reflect; plumbing `group` onto `TargetInfo` is the
+                            // fix if that ever changes.
+                            by: Some(DamageContributor::new(target.uid, None)),
+                            cause: Some(DamageSource::Other),
+                            magic_source: None,
+                            time,
+                            precise: false,
+                            // The `rng` already threaded into this function,
+                            // rather than re-entering the thread-local one, so a
+                            // seeded run is reproducible.
+                            instance: rng.random(),
+                        },
+                    });
                 }
             }
         }

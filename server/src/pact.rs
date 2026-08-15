@@ -10,7 +10,7 @@ use common::{
     comp::{
         ActiveAbilities, ChatType, Content, Inventory, Player, Pos, SkillSet, TriggerSlots,
         ability::AbilityPool,
-        buff::{Buff, BuffChange, BuffData, BuffKind, BuffSource, Buffs, DestInfo},
+        buff::{Buff, BuffChange, BuffData, BuffKind, BuffSource, Buffs, DestInfo, MiscBuffData},
         item::ItemKind,
         pact::{Pact, PactBoon, PactStanding},
         skillset::skills::{Skill, WarlockSkill},
@@ -119,13 +119,18 @@ pub fn set_talisman_pool_key(
     entity: EcsEntity,
     bonded: bool,
 ) {
-    let Some(old_pool) = pools.get(entity).cloned() else {
+    // Membership is tested on the borrowed pool first: this runs on every
+    // bond, release and bond-break tick, and the common answer is "nothing to
+    // do" -- which must not cost two deep clones of a `Vec<String>` holding
+    // every class ability key.
+    let Some(pool) = pools.get(entity) else {
         return;
     };
-    let new_pool = old_pool.clone().with_talisman_bond(bonded);
-    if new_pool.abilities == old_pool.abilities {
+    if pool.has_talisman_bond() == bonded {
         return;
     }
+    let old_pool = pool.clone();
+    let new_pool = old_pool.clone().with_talisman_bond(bonded);
     if let Some(mut active) = actives.get_mut(entity) {
         common::comp::ability::remap_innate_bindings(&mut active, &old_pool, &new_pool);
     }
@@ -224,7 +229,7 @@ pub fn bond_talisman(
         return Err(BondError::NotABoundTalismanWarlock);
     }
 
-    let (bearer_uid, protection) = {
+    let (bearer_uid, ward_data) = {
         let ecs = server.state.ecs();
         // v1 is players only. An NPC bearer costs nothing to allow later, but
         // nothing here (the recall grant, the ward, the cleanup) has been
@@ -260,18 +265,26 @@ pub fn bond_talisman(
                     .ok()
             })
             .unwrap_or(0);
-        (bearer_uid, common::comp::pact::talisman_protection(rank))
+        (
+            bearer_uid,
+            BuffData::new(common::comp::pact::talisman_protection(rank), None).with_misc_data(
+                // The rebuke's three dials are resolved here, at the one
+                // place a bond is granted, rather than inside `BuffKind::
+                // effects()` -- which must stay free of content-specific
+                // asset reads.
+                MiscBuffData::Reflect {
+                    fraction: tuning.0.rebuke_fraction,
+                    cap: tuning.0.rebuke_cap,
+                    kind: tuning.0.rebuke_kind,
+                },
+            ),
+        )
     };
 
-    // One bearer at a time: whoever held it loses the ward before the new
-    // bearer gains it, so a moved bond can never leave two wards standing.
-    if let Some(previous) = pact
-        .talisman_bearer
-        .and_then(|uid| server.state.ecs().read_resource::<IdMaps>().uid_entity(uid))
-    {
-        clear_bearer_state(server, previous);
-    }
-
+    // One bearer at a time. `set_pact` is what strips whoever held it before,
+    // so a moved bond can never leave two wards standing -- and re-bonding the
+    // SAME bearer refreshes rather than removes, since the previous and new
+    // bearer match.
     set_pact(server, warlock, Pact {
         talisman_bearer: Some(bearer_uid),
         ..pact
@@ -295,7 +308,7 @@ pub fn bond_talisman(
                     // No duration: the bond's own lifetime is the ward's
                     // lifetime, and that is governed by the cleanup pass, not
                     // by a timer that could expire out of step with it.
-                    BuffData::new(protection, None),
+                    ward_data,
                     Vec::new(),
                     BuffSource::Character {
                         by: warlock_uid,

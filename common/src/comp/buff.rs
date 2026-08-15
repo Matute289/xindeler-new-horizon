@@ -555,11 +555,12 @@ pub enum BuffKind {
     //    PACT BOND
     // =================
     /// The ward a Warlock's Pact of the Talisman lays on whoever carries the
-    /// talisman. Carries two effects at once, both read from
-    /// `assets/common/pact/talisman_tuning.ron`:
-    /// [`BuffEffect::DamageReduction`] (`data.strength`, resolved by the
-    /// applier from the Warlock's own investment) and
-    /// [`BuffEffect::ReflectDamage`].
+    /// talisman. Carries two effects at once:
+    /// [`BuffEffect::DamageReduction`] from `data.strength`, and
+    /// [`BuffEffect::ReflectDamage`] from a [`MiscBuffData::Reflect`] rider.
+    /// The applier resolves both from
+    /// `assets/common/pact/talisman_tuning.ron`; without the rider only the
+    /// reduction applies.
     ///
     /// Its [`BuffSource::Character`] `by` is the bonding Warlock, and that is
     /// load-bearing twice over: it is how the bearer's recall ability finds
@@ -649,7 +650,6 @@ impl BuffKind {
             | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
             | BuffKind::Nondetection
-            | BuffKind::PactTalisman
             | BuffKind::Sequester => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
@@ -693,6 +693,7 @@ impl BuffKind {
             | BuffKind::TrueSight
             | BuffKind::RemoteSensing
             | BuffKind::Mooncloak
+            | BuffKind::PactTalisman
             | BuffKind::MagicAura => BuffDescriptor::Complex,
         }
     }
@@ -701,13 +702,14 @@ impl BuffKind {
     pub fn is_buff(self) -> bool {
         match self {
             // `differentiate()`'s `Complex` bucket is otherwise assumed
-            // neutral (see its own doc comment) -- these five are Complex
-            // only because their *data* needs an explicit spec, not because
-            // their polarity is ambiguous. They're unconditionally positive.
+            // neutral (see its own doc comment) -- these are Complex only
+            // because their *data* needs an explicit spec, not because their
+            // polarity is ambiguous. They're unconditionally positive.
             BuffKind::Detecting
             | BuffKind::TrueSight
             | BuffKind::RemoteSensing
             | BuffKind::Mooncloak
+            | BuffKind::PactTalisman
             | BuffKind::MagicAura => true,
             _ => match self.differentiate() {
                 BuffDescriptor::SimplePositive => true,
@@ -1520,24 +1522,23 @@ impl BuffKind {
             BuffKind::Sequester => {
                 vec![BuffEffect::Nondetection, BuffEffect::Stealth(data.strength)]
             },
-            // The pact bond's ward: `strength` is the damage-reduction
-            // fraction the applier already resolved from the Warlock's
-            // investment, while the rebuke numbers come straight from the
-            // tuning manifest rather than `misc_data`. Deliberately not
-            // authorable per-application: the per-hit cap is a safety rail
-            // (an uncapped reflect one-shots whoever swings hard), so there
-            // is exactly one place it can be set and it is not a RON an
-            // ability author can get wrong.
+            // The pact bond's ward. `strength` is the damage-reduction
+            // fraction the applier resolved from the Warlock's investment;
+            // the rebuke's three dials are an authored `misc_data` rider,
+            // omitted entirely rather than silently derived if absent (the
+            // same guard `Mooncloak`/`MagicAura` use for their own riders).
+            // An admin `/buff` with no rider therefore grants the reduction
+            // alone, which is a partial ward rather than a wrong one.
             BuffKind::PactTalisman => {
-                let tuning = crate::comp::pact::talisman_tuning_manifest();
-                vec![
-                    BuffEffect::DamageReduction(data.strength),
-                    BuffEffect::ReflectDamage {
-                        fraction: tuning.0.rebuke_fraction,
-                        cap: tuning.0.rebuke_cap,
-                        kind: crate::combat::DamageKind::Psychic,
-                    },
-                ]
+                let mut effects = vec![BuffEffect::DamageReduction(data.strength)];
+                if let Some(MiscBuffData::Reflect { fraction, cap, kind }) = data.misc_data {
+                    effects.push(BuffEffect::ReflectDamage {
+                        fraction,
+                        cap,
+                        kind,
+                    });
+                }
+                effects
             },
         }
     }
@@ -1651,6 +1652,19 @@ impl Default for BuffData {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MiscBuffData {
     Body(Body),
+    /// Parameters for a [`BuffEffect::ReflectDamage`]: the share of damage
+    /// taken returned to the attacker, the hard per-hit ceiling on that
+    /// amount, and the damage kind it is returned as.
+    ///
+    /// Authored per application rather than derived from `strength`, the same
+    /// idiom `Sense`/`FalseAura` use: three unrelated dials cannot be read off
+    /// one number, and the cap in particular is a safety rail whose value must
+    /// be explicit at the point the buff is granted.
+    Reflect {
+        fraction: f32,
+        cap: f32,
+        kind: crate::combat::DamageKind,
+    },
     /// Parameters for a `BuffEffect::Sense`: which sense, its radius, and
     /// whether it snapshots once or re-evaluates continuously.
     Sense(SenseKind, f32, SenseMode),

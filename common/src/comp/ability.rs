@@ -416,6 +416,13 @@ impl AbilityPool {
         }
     }
 
+    /// Whether this pool currently carries the talisman bearer's recall key.
+    pub fn has_talisman_bond(&self) -> bool {
+        self.abilities
+            .iter()
+            .any(|key| key == Self::TALISMAN_RECALL_KEY)
+    }
+
     /// Appends (or withholds) the talisman bearer's recall key.
     ///
     /// The recall is granted to the BEARER, not to the Warlock, and through
@@ -432,6 +439,7 @@ impl AbilityPool {
             .abilities
             .iter()
             .position(|key| key == Self::TALISMAN_RECALL_KEY);
+        // `existing`/`bonded` is exactly `has_talisman_bond()` plus the index.
         match (bonded, existing) {
             (true, None) => {
                 self.abilities.push(Self::TALISMAN_RECALL_KEY.to_string());

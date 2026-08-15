@@ -343,8 +343,10 @@ pub struct TalismanTuning {
     /// Added to [`Self::protect_base`] per rank of
     /// `Skill::Warlock(TalismanMastery)`.
     pub protect_per_rank: f32,
-    /// Fraction of damage taken returned to the attacker as psychic damage.
+    /// Fraction of damage taken returned to the attacker.
     pub rebuke_fraction: f32,
+    /// The damage kind the return is dealt as.
+    pub rebuke_kind: crate::combat::DamageKind,
     /// Hard per-hit ceiling on the returned amount. Deliberately does NOT
     /// scale with investment -- it is a safety rail, not a power dial.
     pub rebuke_cap: f32,
