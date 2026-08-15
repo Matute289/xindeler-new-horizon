@@ -43,6 +43,11 @@ pub enum Skill {
     // `SkillGroupKind::Feats`); `FeatSkill` carries the V1-implementable feat
     // subset locked in `docs/design/plans/2026-07-01-feats-p0-triage.md`.
     Feat(FeatSkill),
+    /// The Blade pact-boon's own investment track (see
+    /// `SkillGroupKind::PactBlade`). All `max_level: 1` -- five nodes, one
+    /// spendable per blade-XP tier crossed, chained by prerequisite so the
+    /// tree can only be cleared in tier order.
+    PactBlade(PactBladeSkill),
     UnlockGroup(SkillGroupKind),
 }
 
@@ -51,6 +56,47 @@ pub enum WarlockSkill {
     /// Ranked 1-5. Each rank adds one point to the Cadena boon's summon
     /// point pool (`comp::pact::chain_pool`).
     ChainMastery,
+}
+
+/// The Blade pact-boon's five investment nodes, one per XP tier from 1
+/// through 5 (tier 0 grants nothing to spend). Chained by prerequisite in
+/// `skill_prerequisites.ron` in this exact order, so the tree can only ever
+/// be cleared tier-by-tier: `Voice -> SecondStrike -> Hunger -> Crown ->
+/// Zenith`. All `max_level: 1`. Nothing outside the skill tree itself reads
+/// these yet -- the blade's actual `InnateAux` ability set (which will read
+/// `SkillSet::skill_level` for these, the same way
+/// `adjusted_by_sceptre_skills` reads `Sceptre(LLifesteal)`) is separate,
+/// unbuilt follow-up work.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+pub enum PactBladeSkill {
+    /// Tier 1 ("Susurrante"). Paired with `Pact::blade_voice_unlocked`,
+    /// which is derived from `blade_exp` directly rather than gated on this
+    /// node being purchased.
+    Voice,
+    /// Tier 2 ("Despierta"): the blade's second attack ability.
+    SecondStrike,
+    /// Tier 3 ("Hambrienta"): the blade's `CombatEffect::Lifesteal` passive.
+    Hunger,
+    /// Tier 4 ("Coronada"): the blade's third, capstone attack ability.
+    Crown,
+    /// Tier 5 ("Nombrada"): the blade at its full investment. Paired with
+    /// (but mechanically separate from) the blade choosing its own name --
+    /// see `Pact::blade_name`.
+    Zenith,
+}
+
+impl PactBladeSkill {
+    /// Every variant, in tier order. A test asserts this stays the same
+    /// length as `blade_tiers.ron`'s grantable tiers (index 1 onward) --
+    /// the ladder grants exactly one skill point per tier crossed, and a
+    /// tier with no matching node here would mint an unspendable point.
+    pub const ALL: [PactBladeSkill; 5] = [
+        PactBladeSkill::Voice,
+        PactBladeSkill::SecondStrike,
+        PactBladeSkill::Hunger,
+        PactBladeSkill::Crown,
+        PactBladeSkill::Zenith,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]

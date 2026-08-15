@@ -165,7 +165,11 @@ impl PactStanding {
 /// `patron: None` means no patron has been chosen yet -- the
 /// creation-time default, mirroring `Background(None)`'s "Uncommitted".
 /// Assign one via `/pact bind <patron_id>`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Copy`: [`Self::blade_name`] is a `String`. Callers that used to rely
+/// on `Copy` (reading a stored value then reusing the read-from storage)
+/// need `.cloned()` instead of `.copied()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pact {
     pub standing: PactStanding,
     pub patron: Option<PatronId>,
@@ -178,15 +182,69 @@ pub struct Pact {
     /// out. Meaningless (and always `false`) for every other boon. Toggled
     /// via `/pact blade <summon|dismiss>`. The blade occupies no
     /// `EquipSlot` and is never a real `Item` -- this flag is its entire
-    /// state. Not yet consumed by any ability or combat code; granting the
-    /// blade's actual attack ability set is separate, unbuilt follow-up
-    /// work.
+    /// state. Gates [`Self::blade_exp`] accrual; granting the blade's
+    /// actual attack ability set is separate, unbuilt follow-up work.
     pub blade_summoned: bool,
+    /// Cumulative XP the Blade boon's own weapon has earned while
+    /// `blade_summoned` was `true` (see the kill-award loop in
+    /// `entity_manipulation.rs`). Meaningless for every other boon, always
+    /// `0`. Drives [`Self::blade_tier`] -- thresholds live in
+    /// `assets/common/pact/blade_tiers.ron`, not here. Survives a boon
+    /// change: re-taking `Blade` after switching away resumes from this
+    /// value rather than resetting it.
+    pub blade_exp: u32,
+    /// The name the blade chose for itself on reaching tier 5 ("Nombrada"),
+    /// picked once from [`blade_names_manifest`]'s band matching the
+    /// wielder's `Ethos.moral()` snapshot at the exact moment of unlock, and
+    /// never revisited afterwards even if the wielder's own alignment later
+    /// drifts. `None` below tier 5, and always `None` for every boon but
+    /// `Blade`.
+    pub blade_name: Option<String>,
     /// Reserved for a future demand/favour mechanic; not read or written by
     /// anything yet. Always `0` for now -- do not add a tick/decay system
     /// against this field without a full design pass, since nothing may set
     /// `Severed` as a side effect of an unrelated, unbounded accumulator.
     pub favour: i32,
+}
+
+/// A Blade boon's XP milestones (`assets/common/pact/blade_tiers.ron`):
+/// cumulative `blade_exp` thresholds, ascending, one per tier. Index 0
+/// ("Muda") is always `0` -- the blade exists the moment the boon is chosen,
+/// nothing to earn there. Index `len() - 1` is the top tier ("Nombrada",
+/// self-naming). Do NOT call per-entity in tick systems -- hoist once per
+/// run, same as `patrons_manifest`.
+pub fn blade_tiers_manifest() -> AssetReadGuard<Ron<Vec<u32>>> {
+    Ron::<Vec<u32>>::load_expect("common.pact.blade_tiers").read()
+}
+
+/// A curated, pre-approved pool of blade self-chosen names
+/// (`assets/common/pact/blade_names.ron`), banded by [`Moral`]. Never
+/// player-authored text -- see [`Pact::blade_name`]. Do NOT call per-entity
+/// in tick systems -- hoist once per run, same as `patrons_manifest`.
+pub fn blade_names_manifest() -> AssetReadGuard<Ron<HashMap<Moral, Vec<String>>>> {
+    Ron::<HashMap<Moral, Vec<String>>>::load_expect("common.pact.blade_names").read()
+}
+
+impl Pact {
+    /// The highest tier index (`0..=5`) whose [`blade_tiers_manifest`]
+    /// threshold is at or below [`Self::blade_exp`]. `0` ("Muda") for a
+    /// fresh or non-Blade pact -- this never panics on an empty/malformed
+    /// manifest, it just reads as tier 0.
+    pub fn blade_tier(&self) -> u8 {
+        blade_tiers_manifest()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, threshold)| **threshold <= self.blade_exp)
+            .map(|(tier, _)| tier as u8)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Tier 1 ("Susurrante") unlocks the blade's narration-channel voice --
+    /// this is that flag, derived from [`Self::blade_tier`] rather than
+    /// stored separately. Always `false` for a non-Blade pact.
+    pub fn blade_voice_unlocked(&self) -> bool { self.blade_tier() >= 1 }
 }
 
 impl Component for Pact {
@@ -414,7 +472,82 @@ mod tests {
         assert_eq!(pact.standing, PactStanding::Bound);
         assert_eq!(pact.patron, None);
         assert_eq!(pact.boon, None);
+        assert_eq!(pact.blade_exp, 0);
+        assert_eq!(pact.blade_name, None);
         assert_eq!(pact.favour, 0);
+    }
+
+    #[test]
+    fn blade_tiers_manifest_is_six_ascending_thresholds_starting_at_zero() {
+        let tiers = blade_tiers_manifest().0.clone();
+        assert_eq!(tiers.len(), 6, "one entry per tier, 0 through 5");
+        assert_eq!(tiers[0], 0, "tier 0 is free -- the blade merely exists");
+        assert!(
+            tiers.windows(2).all(|w| w[0] < w[1]),
+            "thresholds must strictly ascend: {tiers:?}"
+        );
+    }
+
+    /// `accrue_blade_exp` (`entity_manipulation.rs`) grants exactly one
+    /// `PactBlade` skill point per tier crossed. If the ladder here ever
+    /// grows a tier with no corresponding `PactBladeSkill` node, that grant
+    /// becomes a silently unspendable point -- so the tier count (minus
+    /// tier 0, which grants nothing) must always match the node count.
+    #[test]
+    fn every_grantable_tier_has_a_matching_skill_node() {
+        use crate::comp::skillset::skills::PactBladeSkill;
+
+        let grantable_tiers = blade_tiers_manifest().0.len() - 1;
+        assert_eq!(
+            grantable_tiers,
+            PactBladeSkill::ALL.len(),
+            "blade_tiers.ron's tiers 1.. must match PactBladeSkill::ALL 1:1"
+        );
+    }
+
+    #[test]
+    fn blade_names_manifest_covers_every_moral_band_with_at_least_one_name() {
+        let names = blade_names_manifest();
+        for band in [Moral::Good, Moral::Neutral, Moral::Evil] {
+            assert!(
+                names.0.get(&band).is_some_and(|list| !list.is_empty()),
+                "blade_names.ron is missing curated names for {band:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn blade_tier_at_and_below_zero_exp_is_zero() {
+        let pact = Pact::default();
+        assert_eq!(pact.blade_tier(), 0);
+        assert!(!pact.blade_voice_unlocked());
+    }
+
+    #[test]
+    fn blade_tier_tracks_the_manifest_thresholds() {
+        let tiers = blade_tiers_manifest().0.clone();
+        // Just below tier 1's threshold: still tier 0.
+        let just_under = Pact {
+            blade_exp: tiers[1] - 1,
+            ..Pact::default()
+        };
+        assert_eq!(just_under.blade_tier(), 0);
+        assert!(!just_under.blade_voice_unlocked());
+
+        // Exactly at tier 1's threshold: tier 1, voice unlocked.
+        let at_tier_one = Pact {
+            blade_exp: tiers[1],
+            ..Pact::default()
+        };
+        assert_eq!(at_tier_one.blade_tier(), 1);
+        assert!(at_tier_one.blade_voice_unlocked());
+
+        // At or beyond the top threshold: the top tier, and no higher.
+        let maxed = Pact {
+            blade_exp: tiers[5] + 1_000_000,
+            ..Pact::default()
+        };
+        assert_eq!(maxed.blade_tier(), 5);
     }
 
     #[test]

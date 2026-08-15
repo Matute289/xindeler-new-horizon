@@ -39,6 +39,12 @@ pub struct Character {
     pub pact_boon: Option<String>,
     /// `0`/`NULL` -> not summoned. Meaningless for every boon but `Blade`.
     pub pact_blade_summoned: Option<i64>,
+    /// Cumulative Blade-boon weapon XP; `NULL` -> `0`. Survives a boon
+    /// change. Meaningless for every boon but `Blade`.
+    pub pact_blade_exp: Option<i64>,
+    /// The blade's self-chosen name (from a curated list, never player
+    /// input), set once tier 5 unlocks; `NULL` -> not chosen yet.
+    pub pact_blade_name: Option<String>,
     /// Reserved for a future demand/favour mechanic; `NULL` -> `0`. Nothing
     /// reads or writes a non-zero value yet.
     pub pact_favour: Option<i32>,

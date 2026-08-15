@@ -27,16 +27,18 @@ use common::{
     },
     comp::{
         self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterClass,
-        CharacterState, Energy, Group, Hardcore, Health, HealthChange, Inventory, Object,
-        PhantomIllusion, PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind,
-        ProjectileConstructor, Skill, SkillSet, SpellMastery, Stats,
+        CharacterState, ChatType, Content, Energy, Group, Hardcore, Health, HealthChange,
+        Inventory, Object, PhantomIllusion, PickupItem, Player, Poise, PoiseChange, Pos, Presence,
+        PresenceKind, ProjectileConstructor, Skill, SkillSet, SpellMastery, Stats,
         ability::{Dodgeable, MagicSource},
         aura::{self, EnteredAuras},
         buff,
         chat::{KillSource, KillType},
+        ethos::Moral,
         inventory::item::{AbilityMap, MaterialStatManifest},
         item::flatten_counted_items,
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_SLOW},
+        pact::{Pact, PactBoon, blade_names_manifest},
         projectile::{ProjectileAttack, ProjectileConstructorKind, ProjectileExplosionTarget},
         skills::MageSkill,
         spell_mastery::{
@@ -76,7 +78,7 @@ use common::{
 use common_net::{msg::ServerGeneral, sync::WorldSyncExt, synced_components::Heads};
 use common_state::{AreasContainer, BlockChange, NoDurabilityArea, ScheduledBlockChange};
 use hashbrown::HashSet;
-use rand::RngExt;
+use rand::{RngExt, seq::IndexedRandom};
 use specs::{
     DispatcherBuilder, Entities, Entity as EcsEntity, Entity, Join, LendJoin, Read, ReadExpect,
     ReadStorage, SystemData, WorldExt, Write, WriteExpect, WriteStorage, shred,
@@ -648,6 +650,56 @@ impl ServerEvent for KnockbackEvent {
     }
 }
 
+/// Feeds a Blade pact-boon's own weapon-XP track from one already-filtered
+/// entry of the kill-award loop's `exp_awards` -- the same `exp_reward` the
+/// attacker's `SkillSet` is credited with, so this inherits every anti-farm
+/// rule the enclosing loop already enforces (range, no self-kills, no PvP,
+/// the group-XP split, and pets/summons never appearing as their owner's own
+/// `Solo`/`Group` contributor in the first place).
+///
+/// A no-op unless `pact.boon == Some(Blade)` and `pact.blade_summoned` --
+/// the blade only earns while it is actually manifest. Grants exactly one
+/// `SkillGroupKind::PactBlade` skill point per tier threshold crossed by
+/// this call (never more than one per tier, however large a single kill's
+/// reward is), and rolls the tier-5 self-naming exactly once, the moment
+/// tier 5 is first reached, from `moral`'s band in [`blade_names_manifest`].
+///
+/// Returns the highest tier crossed, for the caller to announce over
+/// `ChatType::Meta` -- `None` on every call that doesn't cross a tier (the
+/// overwhelming majority of kills).
+fn accrue_blade_exp(
+    pact: &mut Pact,
+    skill_set: &mut SkillSet,
+    exp_reward: f32,
+    moral: Moral,
+    rng: &mut impl rand::Rng,
+) -> Option<u8> {
+    if pact.boon != Some(PactBoon::Blade) || !pact.blade_summoned {
+        return None;
+    }
+
+    let tier_before = pact.blade_tier();
+    pact.blade_exp = pact.blade_exp.saturating_add(exp_reward.max(0.0) as u32);
+    let tier_after = pact.blade_tier();
+    if tier_after <= tier_before {
+        return None;
+    }
+
+    for _ in tier_before..tier_after {
+        skill_set.grant_skill_point(SkillGroupKind::PactBlade);
+    }
+
+    if tier_after >= 5 && pact.blade_name.is_none() {
+        pact.blade_name = blade_names_manifest()
+            .0
+            .get(&moral)
+            .and_then(|band| band.choose(rng))
+            .cloned();
+    }
+
+    Some(tier_after)
+}
+
 fn handle_exp_gain(
     exp_reward: f32,
     inventory: &Inventory,
@@ -1075,6 +1127,261 @@ mod handle_exp_gain_tests {
             "martial-staff kill XP must not be misrouted to the caster Weapon(Staff) tree, got \
              {xp_pools:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod accrue_blade_exp_tests {
+    use super::*;
+    use common::comp::{PactBoon, PactStanding, ethos::Moral, pact::Pact};
+
+    fn blade_pact(blade_exp: u32) -> Pact {
+        Pact {
+            standing: PactStanding::Bound,
+            patron: None,
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            blade_exp,
+            blade_name: None,
+            favour: 0,
+        }
+    }
+
+    fn available_sp(skill_set: &SkillSet, kind: SkillGroupKind) -> u16 {
+        skill_set
+            .skill_groups()
+            .find(|sg| sg.skill_group_kind == kind)
+            .map_or(0, |sg| sg.available_sp)
+    }
+
+    #[test]
+    fn not_summoned_earns_nothing() {
+        let mut pact = blade_pact(0);
+        pact.blade_summoned = false;
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            10_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 0, "un-summoned kills must not accrue XP");
+        assert_eq!(available_sp(&skill_set, SkillGroupKind::PactBlade), 0);
+    }
+
+    #[test]
+    fn summoned_accrues_xp_and_crosses_tier_one() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(&mut pact, &mut skill_set, 5_000.0, Moral::Neutral, &mut rng);
+
+        assert_eq!(tier, Some(1));
+        assert_eq!(pact.blade_exp, 5_000);
+        assert_eq!(pact.blade_tier(), 1);
+        assert!(pact.blade_voice_unlocked());
+        assert_eq!(
+            available_sp(&skill_set, SkillGroupKind::PactBlade),
+            1,
+            "exactly one PactBlade skill point per tier crossed"
+        );
+    }
+
+    #[test]
+    fn a_below_threshold_gain_earns_xp_but_no_skill_point() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(&mut pact, &mut skill_set, 1_000.0, Moral::Neutral, &mut rng);
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 1_000);
+        assert_eq!(pact.blade_tier(), 0);
+        assert_eq!(available_sp(&skill_set, SkillGroupKind::PactBlade), 0);
+    }
+
+    #[test]
+    fn a_boon_other_than_blade_earns_nothing_even_if_marked_summoned() {
+        let mut pact = blade_pact(0);
+        pact.boon = Some(PactBoon::Chain);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            50_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 0);
+    }
+
+    #[test]
+    fn no_boon_chosen_earns_nothing() {
+        let mut pact = blade_pact(0);
+        pact.boon = None;
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            50_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 0);
+    }
+
+    /// A single huge gain that jumps clean past several thresholds grants
+    /// exactly one skill point per tier crossed, never one lump sum and
+    /// never one point total.
+    #[test]
+    fn a_huge_single_gain_grants_one_skill_point_per_tier_crossed() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        // 0 -> 75,000 crosses tiers 1, 2 and 3 in one call.
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            75_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, Some(3));
+        assert_eq!(available_sp(&skill_set, SkillGroupKind::PactBlade), 3);
+    }
+
+    #[test]
+    fn tier_five_picks_a_name_from_the_wielders_moral_band() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        // Deliberately far above any realistic tier-5 threshold, so this
+        // test stays correct if the ladder in blade_tiers.ron is retuned.
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            1_000_000.0,
+            Moral::Evil,
+            &mut rng,
+        );
+
+        assert_eq!(tier, Some(5));
+        let name = pact.blade_name.clone().expect("tier 5 must pick a name");
+        let names = common::comp::pact::blade_names_manifest();
+        assert!(
+            names.0[&Moral::Evil].contains(&name),
+            "{name:?} must come from the Evil band"
+        );
+    }
+
+    /// The name is a one-time baptism, not a live-updating value: once set,
+    /// it survives further XP gains and even a later change in the moral
+    /// band passed in (modelling the wielder's `Ethos` drifting afterwards).
+    #[test]
+    fn the_blade_name_never_changes_once_set() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            1_000_000.0,
+            Moral::Good,
+            &mut rng,
+        );
+        let first_name = pact.blade_name.clone().expect("tier 5 must pick a name");
+
+        // More XP after tier 5, and a different moral reading -- must not
+        // re-roll the name.
+        accrue_blade_exp(&mut pact, &mut skill_set, 10_000.0, Moral::Evil, &mut rng);
+
+        assert_eq!(pact.blade_name, Some(first_name));
+    }
+
+    /// `accrue_blade_exp` only ever reads/writes the exact `Pact` and
+    /// `SkillSet` references its caller passes in -- there is no owner
+    /// lookup, entity resolution, or global state anywhere inside it. This
+    /// is what makes the production hook's anti-farm guarantee hold: since
+    /// the caller (`DestroyEvent::handle`'s kill-award loop) only ever
+    /// passes the credited `attacker`'s own `Pact`, and a Cadena summon
+    /// never itself has a `Pact` component (only `/pact bind` on a Warlock
+    /// creates one) and never receives a group-XP-award credit of its own
+    /// (`Alignment::Owned` is excluded from `members_in_range` above), a
+    /// summon's kill can only ever reach this function via the OWNER's own
+    /// legitimate group-membership credit -- never as a shortcut that
+    /// bypasses the exclusion. This test proves the isolation half of that
+    /// argument: feeding one `Pact` never mutates a second, unrelated one.
+    #[test]
+    fn feeding_one_pact_never_touches_a_different_pact() {
+        let mut warlocks_pact = blade_pact(0);
+        let some_other_entitys_pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        accrue_blade_exp(
+            &mut warlocks_pact,
+            &mut skill_set,
+            50_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(warlocks_pact.blade_exp, 50_000);
+        assert_eq!(
+            some_other_entitys_pact.blade_exp, 0,
+            "a call that credits one Pact must never credit a different one"
+        );
+    }
+
+    /// Mirrors the group-XP-split's member-eligibility filter in
+    /// `DestroyEvent::handle` (`*member_group == *group && within_range(..)
+    /// && !is_pvp_kill(..) && !matches!(alignment,
+    /// Some(Alignment::Owned(owner)) if owner != uid)`), the rule that
+    /// keeps a Cadena summon from ever being credited its own share of a
+    /// group kill. A summon's `Alignment::Owned(owner)` (owner != the
+    /// summon's own uid) is always excluded; the owning Warlock, who
+    /// typically carries no `Alignment` component at all, is always
+    /// included.
+    #[test]
+    fn owned_summons_are_excluded_from_group_award_eligibility_but_their_owner_is_not() {
+        use common::{comp::Alignment, uid::Uid};
+        use core::num::NonZeroU64;
+
+        fn eligible(alignment: Option<Alignment>, member_uid: Uid) -> bool {
+            // same_group / within_range / !is_pvp_kill are asserted true by
+            // this test's setup; only the alignment clause is exercised.
+            !matches!(alignment, Some(Alignment::Owned(owner)) if owner != member_uid)
+        }
+
+        let warlock_uid = Uid(NonZeroU64::new(1).unwrap());
+        let summon_uid = Uid(NonZeroU64::new(2).unwrap());
+
+        // The Warlock: no Alignment component (the common case for a
+        // player), so the pattern never matches -> eligible.
+        assert!(eligible(None, warlock_uid));
+
+        // The summon: Alignment::Owned(warlock), owner != its own uid ->
+        // excluded.
+        assert!(!eligible(Some(Alignment::Owned(warlock_uid)), summon_uid));
     }
 }
 
@@ -1702,6 +2009,9 @@ pub struct DestroyEventData<'a> {
     groups: ReadStorage<'a, Group>,
     alignments: ReadStorage<'a, Alignment>,
     ethos: WriteStorage<'a, comp::Ethos>,
+    /// The kill-award loop's Blade-boon XP hook reads/writes this alongside
+    /// `skill_sets` for the attacking entity; see `accrue_blade_exp`.
+    pacts: WriteStorage<'a, Pact>,
     stats: ReadStorage<'a, Stats>,
     agents: ReadStorage<'a, Agent>,
     #[cfg(feature = "worldgen")]
@@ -2560,6 +2870,59 @@ impl ServerEvent for DestroyEvent {
                             attacker_uid,
                             &mut outcomes,
                         );
+
+                        // Blade pact-boon: feed the blade's own XP track.
+                        // Reuses this closure's already-filtered
+                        // `exp_reward` entry, so it inherits every anti-farm
+                        // rule the loop above enforces for free -- including
+                        // pets/summons never appearing as their owner's own
+                        // `Solo`/`Group` contributor in the first place.
+                        //
+                        // Gated on an immutable read first: `Pact` is a
+                        // `DerefFlaggedStorage` specifically so *unrelated*
+                        // pact reads/writes don't force a full net resync of
+                        // every field on it (`blade_name` included) to every
+                        // nearby observer. `get_mut` alone doesn't fire that
+                        // -- but passing its `&mut` guard into a function
+                        // expecting `&mut Pact` deref-coerces it, and THAT
+                        // does fire `Modified`, unconditionally, even on
+                        // every non-Blade Warlock's every kill. The
+                        // pre-check keeps that flag reserved for kills that
+                        // actually touch the blade's XP.
+                        let is_summoned_blade = data
+                            .pacts
+                            .get(*attacker)
+                            .is_some_and(|p| p.boon == Some(PactBoon::Blade) && p.blade_summoned);
+                        if is_summoned_blade && let Some(mut pact) = data.pacts.get_mut(*attacker) {
+                            let moral = data
+                                .ethos
+                                .get(*attacker)
+                                .copied()
+                                .unwrap_or_default()
+                                .moral();
+                            if let Some(new_tier) = accrue_blade_exp(
+                                &mut pact,
+                                &mut attacker_skill_set,
+                                *exp_reward,
+                                moral,
+                                &mut rng,
+                            ) && let Some(client) = data.clients.get(*attacker)
+                            {
+                                let key = format!("hud-pact-blade-tier-{new_tier}");
+                                let content = if new_tier == 5 {
+                                    Content::localized_with_args(key, [(
+                                        "name",
+                                        Content::Plain(pact.blade_name.clone().unwrap_or_default()),
+                                    )])
+                                } else {
+                                    Content::localized(key)
+                                };
+                                client.send_fallible(ServerGeneral::server_msg(
+                                    ChatType::Meta,
+                                    content,
+                                ));
+                            }
+                        }
 
                         // Mastery crediting piggybacks on the same
                         // already-filtered `exp_awards` entry: self-kills and
