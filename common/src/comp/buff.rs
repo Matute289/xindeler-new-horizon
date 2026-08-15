@@ -3061,7 +3061,7 @@ pub mod tests {
 #[cfg(test)]
 mod pact_talisman_buff_tests {
     use crate::comp::{
-        buff::{BuffData, BuffEffect, BuffKind},
+        buff::{BuffData, BuffEffect, BuffKind, MiscBuffData},
         pact::talisman_tuning_manifest,
     };
 
@@ -3071,7 +3071,12 @@ mod pact_talisman_buff_tests {
     #[test]
     fn the_bond_ward_grants_reduction_and_a_reflect() {
         let tuning = talisman_tuning_manifest();
-        let effects = BuffKind::PactTalisman.effects(&BuffData::new(0.12, None), None, None);
+        let data = BuffData::new(0.12, None).with_misc_data(MiscBuffData::Reflect {
+            fraction: tuning.0.rebuke_fraction,
+            cap: tuning.0.rebuke_cap,
+            kind: tuning.0.rebuke_kind,
+        });
+        let effects = BuffKind::PactTalisman.effects(&data, None, None);
 
         assert_eq!(effects.len(), 2, "reduction plus reflect, nothing else");
         assert!(matches!(
@@ -3086,10 +3091,26 @@ mod pact_talisman_buff_tests {
             } => {
                 assert!((fraction - tuning.0.rebuke_fraction).abs() < f32::EPSILON);
                 assert!((cap - tuning.0.rebuke_cap).abs() < f32::EPSILON);
-                assert_eq!(kind, crate::combat::DamageKind::Psychic);
+                assert_eq!(kind, tuning.0.rebuke_kind);
             },
             ref other => panic!("expected a reflect, got {other:?}"),
         }
+    }
+
+    /// An application with no `misc_data` rider (e.g. an admin `/buff` with
+    /// no arguments) grants the reduction alone rather than deriving a
+    /// reflect from the tuning manifest -- the rider is the one place the
+    /// per-hit cap can be set, so silently filling it in would let a bare
+    /// `/buff` skip that safety rail.
+    #[test]
+    fn the_bond_ward_without_a_rider_grants_reduction_only() {
+        let effects = BuffKind::PactTalisman.effects(&BuffData::new(0.12, None), None, None);
+
+        assert_eq!(effects.len(), 1, "reduction only, no derived reflect");
+        assert!(matches!(
+            effects[0],
+            BuffEffect::DamageReduction(strength) if (strength - 0.12).abs() < f32::EPSILON
+        ));
     }
 
     /// The cap is a safety rail: it must be a real, finite ceiling, whatever
