@@ -157,7 +157,7 @@ pub use self::{
         MASTERY_XP_FULL, NON_DAMAGE_WEIGHT, POLYGLOT_BONUS_PER_RANK, SpellMastery,
         grant_source_mastery, level_delta_weight, mastery_tier_max_level,
     },
-    stats::{ActiveSense, Stats, StatsModifier},
+    stats::{ActiveSense, DamageReflect, Stats, StatsModifier},
     teleport::Teleporting,
     trigger::{
         MAX_TRIGGER_SLOTS, SlotState, TRIGGER_SLOT_LEVELS, TriggerAbility, TriggerCondition,

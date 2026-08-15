@@ -1198,6 +1198,7 @@ mod accrue_blade_exp_tests {
             blade_summoned: true,
             blade_exp,
             blade_name: None,
+            talisman_bearer: None,
             favour: 0,
         }
     }

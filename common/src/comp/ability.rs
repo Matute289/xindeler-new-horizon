@@ -278,6 +278,9 @@ impl Component for AbilityPool {
 }
 
 impl AbilityPool {
+    /// The pool key a talisman bearer holds while bonded to a Warlock.
+    pub const TALISMAN_RECALL_KEY: &'static str = "class.warlock.pacttalisman.recall";
+
     /// The racial-innate pool granted to a character at load by its body's
     /// species (magic-abilities plan Task 14). Non-humanoids get an empty pool.
     /// Kept here (not inline in the upstream-owned `initialize_character_data`)
@@ -411,6 +414,45 @@ impl AbilityPool {
             abilities,
             spell_gates,
         }
+    }
+
+    /// Whether this pool currently carries the talisman bearer's recall key.
+    pub fn has_talisman_bond(&self) -> bool {
+        self.abilities
+            .iter()
+            .any(|key| key == Self::TALISMAN_RECALL_KEY)
+    }
+
+    /// Appends (or withholds) the talisman bearer's recall key.
+    ///
+    /// The recall is granted to the BEARER, not to the Warlock, and through
+    /// the pool rather than an item — so a bearer needs no free equip slot to
+    /// carry it, and it disappears the moment the bond does.
+    ///
+    /// **Appends after everything [`Self::for_character`] produced**, per this
+    /// type's ordering contract: a granted key must never be inserted into the
+    /// middle, or every legacy positional hotbar binding after it silently
+    /// re-points. Idempotent — calling it twice with `true` adds one key.
+    #[must_use]
+    pub fn with_talisman_bond(mut self, bonded: bool) -> Self {
+        let existing = self
+            .abilities
+            .iter()
+            .position(|key| key == Self::TALISMAN_RECALL_KEY);
+        // `existing`/`bonded` is exactly `has_talisman_bond()` plus the index.
+        match (bonded, existing) {
+            (true, None) => {
+                self.abilities.push(Self::TALISMAN_RECALL_KEY.to_string());
+                self.spell_gates.push(None);
+            },
+            (false, Some(index)) => {
+                self.abilities.remove(index);
+                self.spell_gates.remove(index);
+            },
+            _ => {},
+        }
+        debug_assert_eq!(self.abilities.len(), self.spell_gates.len());
+        self
     }
 
     /// The empty spellbook, for callers that have no [`Inventory`] to read one
@@ -1814,6 +1856,11 @@ pub enum CharacterAbility {
         recover_duration: f32,
         max_range: f32,
         frontend_specifier: Option<blink::FrontendSpecifier>,
+        /// Fixed destination, resolved from the caster's own state rather
+        /// than their aim. Omitted by every aim-driven blink, which is why it
+        /// defaults.
+        #[serde(default)]
+        anchor: Option<blink::BlinkAnchor>,
         #[serde(default)]
         meta: AbilityMeta,
     },
@@ -2830,6 +2877,7 @@ impl CharacterAbility {
                 ref mut recover_duration,
                 ref mut max_range,
                 frontend_specifier: _,
+                anchor: _,
                 meta: _,
             } => {
                 *buildup_duration /= stats.speed;
@@ -4179,6 +4227,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                 recover_duration,
                 max_range,
                 frontend_specifier,
+                anchor,
                 meta: _,
             } => CharacterState::Blink(blink::Data {
                 static_data: blink::StaticData {
@@ -4186,6 +4235,7 @@ impl TryFrom<(&CharacterAbility, AbilityInfo, &JoinData<'_>)> for CharacterState
                     recover_duration: Duration::from_secs_f32(*recover_duration),
                     max_range: *max_range,
                     frontend_specifier: *frontend_specifier,
+                    anchor: *anchor,
                     ability_info,
                 },
                 timer: Duration::default(),
@@ -6289,6 +6339,122 @@ mod spell_gate_tests {
             1,
             AuxiliaryAbility::Innate(9_999)
         ));
+    }
+}
+
+#[cfg(test)]
+mod talisman_pool_tests {
+    use super::AbilityPool;
+    use crate::comp::{CharacterClass, ClassKind, item::tool::AbilityMap, tool::AbilitySpec};
+
+    fn human_body() -> crate::comp::Body {
+        use rand::{SeedableRng, rngs::SmallRng};
+        crate::comp::Body::Humanoid(crate::comp::humanoid::Body::random_with(
+            &mut SmallRng::seed_from_u64(0),
+            &crate::comp::humanoid::Species::Human,
+        ))
+    }
+
+    fn warlock_pool() -> AbilityPool {
+        AbilityPool::for_character(
+            &human_body(),
+            &CharacterClass::single(ClassKind::Warlock),
+            AbilityPool::no_learned_spells(),
+        )
+    }
+
+    /// The ordering contract: a granted key goes at the very end, so no index
+    /// that already existed can move. A legacy positional hotbar binding
+    /// ahead of it therefore still points at the same ability.
+    #[test]
+    fn the_recall_key_is_appended_after_everything_else() {
+        let base = warlock_pool();
+        let bonded = base.clone().with_talisman_bond(true);
+
+        assert_eq!(
+            bonded.abilities.len(),
+            base.abilities.len() + 1,
+            "bonding must add exactly one key"
+        );
+        assert_eq!(
+            &bonded.abilities[..base.abilities.len()],
+            &base.abilities[..],
+            "no pre-existing key may shift"
+        );
+        assert_eq!(
+            bonded.abilities.last().map(String::as_str),
+            Some(AbilityPool::TALISMAN_RECALL_KEY)
+        );
+        assert_eq!(
+            bonded.abilities.len(),
+            bonded.spell_gates.len(),
+            "the parallel arrays must stay the same length"
+        );
+        assert_eq!(
+            bonded.spell_gates.last(),
+            Some(&None),
+            "the recall is not a spell and carries no class-level gate"
+        );
+    }
+
+    /// Bonding twice grants one key, and unbonding removes it again --
+    /// the cleanup pass calls this every tick a bond is broken.
+    #[test]
+    fn granting_the_recall_key_is_idempotent_and_reversible() {
+        let base = warlock_pool();
+        let once = base.clone().with_talisman_bond(true);
+        let twice = once.clone().with_talisman_bond(true);
+        assert_eq!(once.abilities, twice.abilities);
+
+        let released = twice.with_talisman_bond(false);
+        assert_eq!(released.abilities, base.abilities);
+        assert_eq!(released.spell_gates.len(), released.abilities.len());
+
+        // Releasing a bond that was never held changes nothing.
+        assert_eq!(
+            base.clone().with_talisman_bond(false).abilities,
+            base.abilities
+        );
+    }
+
+    /// The granted key must actually resolve to an ability set, or the
+    /// bearer holds a button that does nothing.
+    #[test]
+    fn the_recall_key_has_a_manifest_set() {
+        let map = AbilityMap::load().read();
+        assert!(
+            map.get_ability_set(&AbilitySpec::Custom(
+                AbilityPool::TALISMAN_RECALL_KEY.to_string()
+            ))
+            .is_some(),
+            "'{}' has no manifest set",
+            AbilityPool::TALISMAN_RECALL_KEY
+        );
+    }
+
+    /// The recall is granted by the bond, never by being a Warlock: a bearer
+    /// need not be a Warlock, or any caster, at all.
+    #[test]
+    fn no_class_grants_the_recall_key_on_its_own() {
+        for class in [
+            ClassKind::Warlock,
+            ClassKind::Warrior,
+            ClassKind::Mage,
+            ClassKind::Rogue,
+        ] {
+            let pool = AbilityPool::for_character(
+                &human_body(),
+                &CharacterClass::single(class),
+                AbilityPool::no_learned_spells(),
+            );
+            assert!(
+                !pool
+                    .abilities
+                    .iter()
+                    .any(|key| key == AbilityPool::TALISMAN_RECALL_KEY),
+                "{class:?} must not carry the recall key without a bond"
+            );
+        }
     }
 }
 

@@ -1929,6 +1929,91 @@ impl Attack {
                 }
             }
         }
+        // ---------------------------------------------------------------
+        // Damage return ("reflect"/"thorns").
+        //
+        // Structurally the mirror image of the `CombatEffect::Lifesteal` arm
+        // above: both write health onto the *attacker* from inside attack
+        // resolution, off the same `accumulated_damage`. The one difference is
+        // where the effect comes from — Lifesteal is authored on the attack,
+        // this is read off the DEFENDER's aggregated `Stats::damage_reflect`
+        // (populated each tick from `BuffEffect::ReflectDamage`). Nothing here
+        // knows or cares which buff, class or item granted it.
+        //
+        // Placed after BOTH loops, not after the damages loop alone: the
+        // attack-level `AdditionalDamage` and `DebuffsVulnerable` effects above
+        // still add to `accumulated_damage`, and a return computed before them
+        // would under-reflect exactly the attacks that hit hardest. Once per
+        // attack, never once per damage instance.
+        //
+        // 🔴 THREE INVARIANTS. Do not "improve" any of them away.
+        //
+        // 1. NEVER route this back through `Attack`/`apply_attack`. It emits a raw
+        //    `HealthChangeEvent`, exactly as Lifesteal does, so it can trigger no
+        //    on-hit effect and — critically — no reflect of its own. Two entities that
+        //    both reflect and hit each other would otherwise recurse without bound. The
+        //    termination proof is structural: a raw `HealthChangeEvent` has no path
+        //    back into this function.
+        // 2. The per-hit `cap` is mandatory, not a balance nicety. Applied last, after
+        //    every other term, so it is a true hard ceiling: an uncapped fraction of a
+        //    very large hit kills whoever swung it regardless of the defender's own
+        //    level.
+        // 3. It must clear the same PvP / friendly-fire gate the incoming blow already
+        //    cleared. `permit_pvp` / `allow_friendly_fire` are the flags resolved for
+        //    THIS pair before the attack landed — reusing them, rather than judging
+        //    afresh, is what stops a ward from becoming a way to damage group-mates or
+        //    safezone bystanders who merely bumped into its bearer.
+        //
+        // Deliberately unmitigated by the attacker's armor: the return is a
+        // fraction of damage that was ALREADY mitigated on the way in, and the
+        // cap is what bounds it. The attacker's typed resistance to
+        // `reflect.kind` does apply (an O(1) field read), so the authored
+        // damage kind means something.
+        //
+        // Conditions are ordered cheapest-and-most-discriminating first: almost
+        // no entity is ever reflecting, so the empty-slice test short-circuits
+        // before anything else is computed.
+        if let Some(target_stats) = target.stats
+            && !target_stats.damage_reflect.is_empty()
+            && accumulated_damage > 0.0
+            && let Some(attacker) = attacker
+            && match target_group {
+                GroupTarget::InGroup => allow_friendly_fire,
+                GroupTarget::OutOfGroup | GroupTarget::All => permit_pvp,
+            }
+        {
+            for reflect in &target_stats.damage_reflect {
+                let resist = attacker
+                    .stats
+                    .map_or(0.0, |s| s.aoe_resistance(reflect.kind))
+                    .clamp(0.0, combat_tuning.resist_soft_cap);
+                let amount =
+                    (accumulated_damage * reflect.fraction * (1.0 - resist)).min(reflect.cap);
+                if amount > Health::HEALTH_EPSILON {
+                    emitters.emit(HealthChangeEvent {
+                        entity: attacker.entity,
+                        change: HealthChange {
+                            amount: -amount,
+                            // Always `Solo`: `TargetInfo` carries no `Group`, so
+                            // a reflect that lands the killing blow credits the
+                            // defender alone and their group shares nothing.
+                            // Acceptable while nothing keys loot/XP off a
+                            // reflect; plumbing `group` onto `TargetInfo` is the
+                            // fix if that ever changes.
+                            by: Some(DamageContributor::new(target.uid, None)),
+                            cause: Some(DamageSource::Other),
+                            magic_source: None,
+                            time,
+                            precise: false,
+                            // The `rng` already threaded into this function,
+                            // rather than re-entering the thread-local one, so a
+                            // seeded run is reproducible.
+                            instance: rng.random(),
+                        },
+                    });
+                }
+            }
+        }
         // Emits event to handle things that should happen for any successful attack,
         // regardless of if the attack had any damages or effects in it
         if is_applied {
@@ -6561,6 +6646,411 @@ mod phantom_illusion_dispel_tests {
         assert!(
             dispels.is_empty(),
             "an in-group single-target effect must never dispel a phantasm"
+        );
+    }
+}
+
+#[cfg(test)]
+mod damage_reflect_tests {
+    //! The three mandatory guards on `BuffEffect::ReflectDamage`'s arm in
+    //! [`Attack::apply_attack`]: no recursion, a real per-hit cap, and the
+    //! same PvP / friendly-fire gate the incoming blow already cleared.
+
+    use super::{
+        Attack, AttackDamage, AttackOptions, AttackSource, AttackerInfo, Damage, DamageKind,
+        GroupTarget, TargetInfo,
+    };
+    use crate::{
+        comp::{Body, DamageReflect, Stats},
+        event::{
+            BuffEvent, ComboChangeEvent, DispelIllusionEvent, EnergyChangeEvent,
+            EntityAttackedHookEvent, EventBus, HealthChangeEvent, KnockbackEvent, ParryHookEvent,
+            PoiseChangeEvent, TransformEvent,
+        },
+        event_emitters,
+        resources::Time,
+        uid::Uid,
+    };
+    use specs::{Builder, Entity as EcsEntity, SystemData, WorldExt};
+    use std::num::NonZeroU64;
+    use vek::Vec3;
+
+    event_emitters! {
+        struct ReadEvents[Emitters] {
+            health_change: HealthChangeEvent,
+            energy_change: EnergyChangeEvent,
+            parry_hook: ParryHookEvent,
+            knockback: KnockbackEvent,
+            buff: BuffEvent,
+            poise_change: PoiseChangeEvent,
+            combo_change: ComboChangeEvent,
+            entity_attack_hook: EntityAttackedHookEvent,
+            transform: TransformEvent,
+            dispel_illusion: DispelIllusionEvent,
+        }
+    }
+
+    const ATTACKER_UID: u64 = 1;
+    const DEFENDER_UID: u64 = 2;
+
+    fn uid(n: u64) -> Uid { Uid(NonZeroU64::new(n).unwrap()) }
+
+    fn setup_world() -> specs::World {
+        let mut world = specs::World::new();
+        world.insert(EventBus::<HealthChangeEvent>::default());
+        world.insert(EventBus::<EnergyChangeEvent>::default());
+        world.insert(EventBus::<ParryHookEvent>::default());
+        world.insert(EventBus::<KnockbackEvent>::default());
+        world.insert(EventBus::<BuffEvent>::default());
+        world.insert(EventBus::<PoiseChangeEvent>::default());
+        world.insert(EventBus::<ComboChangeEvent>::default());
+        world.insert(EventBus::<EntityAttackedHookEvent>::default());
+        world.insert(EventBus::<TransformEvent>::default());
+        world.insert(EventBus::<DispelIllusionEvent>::default());
+        world
+    }
+
+    fn body() -> Body {
+        use rand::{SeedableRng, rngs::SmallRng};
+        Body::Humanoid(crate::comp::humanoid::Body::random_with(
+            &mut SmallRng::seed_from_u64(0),
+            &crate::comp::humanoid::Species::Human,
+        ))
+    }
+
+    /// Stats carrying one reflect entry, as the buff system would have
+    /// rebuilt them this tick from a `BuffEffect::ReflectDamage`.
+    fn reflecting_stats(fraction: f32, cap: f32) -> Stats {
+        let mut stats = Stats::empty(body());
+        stats.damage_reflect.push(DamageReflect {
+            fraction,
+            cap,
+            kind: DamageKind::Psychic,
+        });
+        stats
+    }
+
+    fn attacker_info(entity: EcsEntity, stats: Option<&Stats>) -> AttackerInfo<'_> {
+        AttackerInfo {
+            entity,
+            uid: uid(ATTACKER_UID),
+            group: None,
+            energy: None,
+            combo: None,
+            derived: None,
+            stats,
+            mass: None,
+            pos: None,
+            buffs: None,
+            character_class: None,
+        }
+    }
+
+    fn target_info(entity: EcsEntity, stats: Option<&Stats>) -> TargetInfo<'_> {
+        TargetInfo {
+            entity,
+            uid: uid(DEFENDER_UID),
+            inventory: None,
+            derived: None,
+            stats,
+            health: None,
+            pos: Vec3::zero(),
+            ori: None,
+            char_state: None,
+            energy: None,
+            buffs: None,
+            mass: None,
+            player: None,
+            phantom_illusion: false,
+        }
+    }
+
+    fn options(
+        target_group: GroupTarget,
+        permit_pvp: bool,
+        allow_friendly_fire: bool,
+    ) -> AttackOptions {
+        AttackOptions {
+            target_dodging: false,
+            permit_pvp,
+            target_group,
+            allow_friendly_fire,
+            precision_mult: None,
+        }
+    }
+
+    /// `AttackSource::Explosion` on purpose: AoE never rolls to-hit, so these
+    /// assertions are exact rather than probabilistic.
+    fn attack_of(value: f32, damage_target: GroupTarget) -> Attack {
+        Attack::new(None).with_damage(AttackDamage::new(
+            Damage {
+                kind: DamageKind::Piercing,
+                value,
+            },
+            Some(damage_target),
+            0,
+        ))
+    }
+
+    /// Runs one attack and returns every `(entity, amount)` health change it
+    /// produced.
+    fn resolve(
+        world: &specs::World,
+        attack: &Attack,
+        attacker: Option<AttackerInfo>,
+        target: &TargetInfo,
+        options: AttackOptions,
+    ) -> Vec<(EcsEntity, f32)> {
+        let read_events = ReadEvents::fetch(world);
+        let mut emitters: Emitters = read_events.get_emitters();
+        let mut rng = rand::rng();
+        attack.apply_attack(
+            attacker,
+            target,
+            crate::util::Dir::forward(),
+            options,
+            1.0,
+            AttackSource::Explosion,
+            Time(0.0),
+            &mut emitters,
+            |_| {},
+            &mut rng,
+            0,
+        );
+        drop(emitters);
+        world
+            .read_resource::<EventBus<HealthChangeEvent>>()
+            .recv_all()
+            .map(|event| (event.entity, event.change.amount))
+            .collect()
+    }
+
+    fn total_to(changes: &[(EcsEntity, f32)], entity: EcsEntity) -> f32 {
+        changes
+            .iter()
+            .filter(|(e, _)| *e == entity)
+            .map(|(_, amount)| *amount)
+            .sum()
+    }
+
+    #[test]
+    fn a_reflect_returns_its_fraction_to_the_attacker() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let defender_stats = reflecting_stats(0.15, 30.0);
+
+        let changes = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::OutOfGroup),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::OutOfGroup, true, false),
+        );
+
+        let reflected = total_to(&changes, attacker_entity);
+        assert!(
+            (reflected + 15.0).abs() < 0.001,
+            "15% of a 100-damage hit must come back, got {reflected}"
+        );
+    }
+
+    /// Guard 2. Without the cap, a very large hit reflects enough to kill
+    /// whoever swung it regardless of the defender's level.
+    #[test]
+    fn a_large_hit_reflects_no_more_than_the_cap() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let defender_stats = reflecting_stats(0.15, 30.0);
+
+        let changes = resolve(
+            &world,
+            &attack_of(2000.0, GroupTarget::OutOfGroup),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::OutOfGroup, true, false),
+        );
+
+        let reflected = total_to(&changes, attacker_entity);
+        assert!(
+            (reflected + 30.0).abs() < 0.001,
+            "the per-hit cap must hold at 30 regardless of the incoming hit, got {reflected}"
+        );
+    }
+
+    /// Guard 1. Two entities that both reflect, striking each other, must
+    /// terminate. The proof is structural rather than temporal: the reflect
+    /// emits a raw `HealthChangeEvent`, which has no path back into
+    /// `apply_attack`, so exactly two health changes come out of one attack --
+    /// the blow and its single return -- even though BOTH sides reflect.
+    #[test]
+    fn two_reflecting_entities_striking_each_other_terminate() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let attacker_stats = reflecting_stats(0.15, 30.0);
+        let defender_stats = reflecting_stats(0.15, 30.0);
+
+        let changes = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::OutOfGroup),
+            Some(attacker_info(attacker_entity, Some(&attacker_stats))),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::OutOfGroup, true, false),
+        );
+
+        assert_eq!(
+            changes.len(),
+            2,
+            "one blow plus one return, never a chain: {changes:?}"
+        );
+        assert_eq!(changes[0].0, defender_entity, "the blow lands first");
+        assert_eq!(changes[1].0, attacker_entity, "then the single return");
+    }
+
+    /// Guard 3, friendly fire. The blow itself lands (an in-group-targeted
+    /// damage against an in-group target passes both filters), but returning
+    /// damage to a group-mate must not.
+    #[test]
+    fn a_reflect_respects_the_friendly_fire_gate() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let defender_stats = reflecting_stats(0.15, 30.0);
+
+        let blocked = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::InGroup),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::InGroup, true, false),
+        );
+        assert!(
+            blocked.iter().any(|(e, _)| *e == defender_entity),
+            "precondition: the blow itself must land, or this proves nothing"
+        );
+        assert!(
+            !blocked.iter().any(|(e, _)| *e == attacker_entity),
+            "a reflect must not damage a group-mate when friendly fire is off"
+        );
+
+        let allowed = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::InGroup),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::InGroup, true, true),
+        );
+        assert!(
+            allowed.iter().any(|(e, _)| *e == attacker_entity),
+            "with friendly fire allowed the same reflect must land"
+        );
+    }
+
+    /// Guard 3, PvP. A `GroupTarget::All` damage lands even with PvP
+    /// forbidden, so this isolates the reflect's own gate rather than riding
+    /// on the incoming blow being cancelled.
+    #[test]
+    fn a_reflect_respects_the_pvp_gate() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let defender_stats = reflecting_stats(0.15, 30.0);
+
+        let blocked = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::All),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::All, false, false),
+        );
+        assert!(
+            blocked.iter().any(|(e, _)| *e == defender_entity),
+            "precondition: the blow itself must land, or this proves nothing"
+        );
+        assert!(
+            !blocked.iter().any(|(e, _)| *e == attacker_entity),
+            "a reflect must not damage anyone PvP rules protect from this attacker"
+        );
+
+        let allowed = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::All),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::All, true, false),
+        );
+        assert!(
+            allowed.iter().any(|(e, _)| *e == attacker_entity),
+            "with PvP permitted the same reflect must land"
+        );
+    }
+
+    /// An entity with no reflect at all must behave exactly as before: one
+    /// health change, to the defender.
+    #[test]
+    fn an_ordinary_target_reflects_nothing() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let plain = Stats::empty(body());
+
+        let changes = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::OutOfGroup),
+            Some(attacker_info(attacker_entity, None)),
+            &target_info(defender_entity, Some(&plain)),
+            options(GroupTarget::OutOfGroup, true, false),
+        );
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].0, defender_entity);
+    }
+
+    /// An environmental/sourceless hit has no attacker to return damage to;
+    /// the arm must simply not fire rather than panicking or crediting
+    /// someone.
+    #[test]
+    fn a_reflect_without_an_attacker_is_a_no_op() {
+        let mut world = setup_world();
+        let defender_entity = world.create_entity().build();
+        let defender_stats = reflecting_stats(0.15, 30.0);
+
+        let changes = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::OutOfGroup),
+            None,
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::OutOfGroup, true, false),
+        );
+
+        assert!(changes.iter().all(|(e, _)| *e == defender_entity));
+    }
+
+    /// The authored damage kind is not decoration: an attacker resistant to
+    /// it takes proportionally less back.
+    #[test]
+    fn the_attackers_resistance_to_the_reflected_kind_applies() {
+        let mut world = setup_world();
+        let attacker_entity = world.create_entity().build();
+        let defender_entity = world.create_entity().build();
+        let defender_stats = reflecting_stats(0.15, 30.0);
+        let mut resistant = Stats::empty(body());
+        resistant.resist_magic = 0.5;
+
+        let changes = resolve(
+            &world,
+            &attack_of(100.0, GroupTarget::OutOfGroup),
+            Some(attacker_info(attacker_entity, Some(&resistant))),
+            &target_info(defender_entity, Some(&defender_stats)),
+            options(GroupTarget::OutOfGroup, true, false),
+        );
+
+        let reflected = total_to(&changes, attacker_entity);
+        assert!(
+            reflected > -15.0 && reflected < -1.0,
+            "psychic resistance must reduce, but not erase, the return: {reflected}"
         );
     }
 }

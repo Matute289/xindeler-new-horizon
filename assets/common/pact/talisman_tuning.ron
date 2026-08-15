@@ -1,0 +1,33 @@
+// Tunable numbers for the Talisman boon, kept as data (not Rust constants)
+// so a balance pass can retune without a recompile -- the same convention
+// `summon_tuning.ron` and `combat_tuning.ron` use.
+//
+// Only the protection fraction scales with the Warlock's investment
+// (`Skill::Warlock(TalismanMastery)`, max rank 5). The rebuke numbers are
+// deliberately flat: the per-hit cap is a safety rail, not a power dial --
+// letting it grow would re-open exactly the "a boss's 2000-damage swing
+// suicides on a low-level bearer" case it exists to prevent.
+(
+    // How close the Warlock and the talisman's carrier must be for a bond to
+    // be established, in blocks. Matches the Collar's own taming reach --
+    // handing someone a charm is an arm's-length act, not a ranged one.
+    bond_range: 5.0,
+    // How far the bearer may recall to their Warlock, in blocks. "Same fight"
+    // scale; `MAX_EXP_DIST` is 150 for comparison.
+    recall_max_range: 100.0,
+    // Recall cooldown, in seconds.
+    recall_cooldown_secs: 60.0,
+    // Fraction of incoming damage the bond's ward removes, at rank 0.
+    protect_base: 0.10,
+    // Added to `protect_base` per rank of `Skill::Warlock(TalismanMastery)`.
+    protect_per_rank: 0.02,
+    // Fraction of damage taken that is returned to the attacker.
+    rebuke_fraction: 0.15,
+    // The damage kind the return is dealt as. The attacker's own resistance
+    // to this kind applies, so it is a real balance dial, not flavour.
+    rebuke_kind: Psychic,
+    // Hard per-hit ceiling on the returned amount. Mandatory: without it a
+    // large single hit reflects enough to kill whoever swung it, regardless
+    // of the bearer's own level.
+    rebuke_cap: 30.0,
+)

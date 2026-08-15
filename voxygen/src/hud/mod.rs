@@ -6255,6 +6255,9 @@ pub fn get_buff_image(buff: BuffKind, imgs: &Imgs) -> conrod_core::image::Id {
         BuffKind::RestfulSleep => imgs.debuff_asleep,
         // Placeholder icon reuse pending dedicated art.
         BuffKind::OtherworldlyWard => imgs.buff_protecting_ward,
+        // Reuse the ward icon until dedicated pact art ships: the bond's
+        // visible effect is damage reduction, exactly like the other wards.
+        BuffKind::PactTalisman => imgs.buff_protecting_ward,
         BuffKind::Bane | BuffKind::FaerieFire => imgs.debuff_cursed,
         BuffKind::Enfeebled => imgs.debuff_crippled,
         // Same curse-family icon as Bane/FaerieFire pending dedicated art:

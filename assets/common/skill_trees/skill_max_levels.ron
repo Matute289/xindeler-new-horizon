@@ -59,4 +59,5 @@
     Rogue(ToxinTolerance): 3,
     Rogue(Opportunist): 3,
     Warlock(ChainMastery): 5,
+    Warlock(TalismanMastery): 5,
 }

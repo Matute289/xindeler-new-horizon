@@ -341,3 +341,5 @@ buff-sickened = Enfermo
     .desc = Una enfermedad maligna drena tu concentración y castiga tu cuerpo con dolor.
 buff-hexed = Hechizado
     .desc = Una maldición embota tu precisión - tus golpes tienen menos probabilidad de acertar de lleno.
+buff-pacttalisman = Vínculo del Talismán
+    .desc = El pacto de un Brujo te protege, devuelve parte de cada herida a quien te la causó, y te deja volver de un salto a su lado.

@@ -905,6 +905,11 @@ pub fn convert_pact_from_database(
                 None
             }
         }),
+        // Never loaded, because it is never saved: a talisman bond names its
+        // bearer by a session-scoped `Uid` and is dropped when the Warlock
+        // logs out, so no stored value could be correct. The
+        // `pact_talisman_bearer` column is reserved schema only.
+        talisman_bearer: None,
         favour: favour.unwrap_or(0),
     }
 }
@@ -1273,6 +1278,7 @@ mod tests {
             blade_summoned: true,
             blade_exp: 42_000,
             blade_name: Some(curated_name.clone()),
+            talisman_bearer: None,
             favour: 0,
         };
         let (
@@ -1311,6 +1317,7 @@ mod tests {
             blade_summoned: false,
             blade_exp: 0,
             blade_name: None,
+            talisman_bearer: None,
             favour: 0,
         };
         let (standing_col, patron_col, boon_col, blade_summoned_col, _, _, _) =
@@ -1339,8 +1346,63 @@ mod tests {
                 blade_summoned: false,
                 blade_exp: 0,
                 blade_name: None,
+                talisman_bearer: None,
                 favour: 0,
             }
+        );
+    }
+
+    /// A talisman bond is deliberately never persisted: it names its bearer
+    /// by a session-scoped `Uid`, and it is dropped when the Warlock logs out
+    /// anyway, so a stored value could never be correct. Loading always
+    /// yields no bearer, and saving a pact that currently HAS one still emits
+    /// only the columns that existed before -- the reserved
+    /// `pact_talisman_bearer` column is never written.
+    #[test]
+    fn a_talisman_bond_never_reaches_the_database() {
+        use common::comp::{Pact, PactBoon, PactStanding, PatronId};
+        use std::num::NonZeroU64;
+
+        let bonded = Pact {
+            standing: PactStanding::Bound,
+            patron: Some(PatronId::Archfey),
+            boon: Some(PactBoon::Talisman),
+            blade_summoned: false,
+            blade_exp: 0,
+            blade_name: None,
+            talisman_bearer: Some(common::uid::Uid::from(NonZeroU64::new(9).unwrap())),
+            favour: 0,
+        };
+        let (
+            standing_col,
+            patron_col,
+            boon_col,
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col,
+            favour_col,
+        ) = convert_pact_to_database(bonded.clone());
+
+        let reloaded = convert_pact_from_database(
+            standing_col.as_deref(),
+            patron_col.as_deref(),
+            boon_col.as_deref(),
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col.as_deref(),
+            favour_col,
+        );
+        assert_eq!(
+            reloaded.talisman_bearer, None,
+            "a bond must never survive a save/load cycle"
+        );
+        assert_eq!(
+            reloaded,
+            Pact {
+                talisman_bearer: None,
+                ..bonded
+            },
+            "everything else about the pact must round-trip unchanged"
         );
     }
 
@@ -1361,6 +1423,7 @@ mod tests {
             blade_summoned: false,
             blade_exp: 12_345,
             blade_name: None,
+            talisman_bearer: None,
             favour: 0,
         };
         let (
