@@ -583,6 +583,15 @@ fn attack_designated_target(bdata: &mut BehaviorData) -> bool {
     let PetCommand::Attack(target_uid) = bdata.agent.pet_command else {
         return false;
     };
+    // TODO: this only clears the AI-consumed copy (`Agent::pet_command`).
+    // The net-synced `CharacterActivity::pet_command` mirror written by
+    // `CommandPetEvent` is not cleared here, so it can keep showing a
+    // consumed `Attack(uid)` for a while after the AI has moved past it.
+    // Currently inert (nothing client-side reads `pet_command == Attack(_)`,
+    // only `== Guard`), but fixing it properly needs a
+    // `WriteStorage<CharacterActivity>` threaded into `ReadData`/
+    // `BehaviorData`, which is a real structural change -- do that before
+    // any UI ever renders the `Attack` designation itself.
     bdata.agent.pet_command = PetCommand::Follow;
 
     let Some(entity) = get_entity_by_id(target_uid, bdata.read_data) else {
@@ -612,9 +621,13 @@ fn attack_designated_target(bdata: &mut BehaviorData) -> bool {
 /// when the owner is (that case is `attack_if_owner_hurt` below, which
 /// watches the owner's `Health.last_change` and is unaffected by this node).
 /// Same recent-damage/attacker-lookup shape as `attack_if_owner_hurt`, just
-/// sourced from the pet's own health instead of the owner's.
+/// sourced from the pet's own health instead of the owner's. Also mirrors
+/// `attack_if_owner_hurt`'s `stay_pos` suppression: a pet told to stay put
+/// (the `V` key) must not abandon its post to retaliate, even while
+/// `Guard`ing -- `Stay` and `Guard` are independently-settable flags, and
+/// `Stay` takes priority over Guard's reactive/proactive combat-initiation.
 fn attack_if_pet_hurt_while_guarding(bdata: &mut BehaviorData) -> bool {
-    if bdata.agent.pet_command != PetCommand::Guard {
+    if bdata.agent.pet_command != PetCommand::Guard || bdata.agent.stay_pos.is_some() {
         return false;
     }
     let Some(health) = bdata.agent_data.health else {
@@ -657,11 +670,21 @@ fn attack_if_pet_hurt_while_guarding(bdata: &mut BehaviorData) -> bool {
 /// `AgentData::choose_target` already uses for this same kind of proximity
 /// search -- rather than inventing a new one; the only new part is centring
 /// the search on the owner's position instead of the pet's own.
+///
+/// Resolves the owner directly from `agent_data.alignment` +
+/// `read_data.id_maps` rather than reading it off `bdata.agent.target`
+/// (which happens to equal the owner whenever this node runs, since
+/// `do_pet_tree_if_owned` only ever enters the pet tree in that state) --
+/// deliberately not coupled to that invariant, so a future reordering of the
+/// tree can't silently break this node's owner resolution.
 fn engage_hostiles_near_owner_if_guarding(bdata: &mut BehaviorData) -> bool {
-    if bdata.agent.pet_command != PetCommand::Guard {
+    if bdata.agent.pet_command != PetCommand::Guard || bdata.agent.stay_pos.is_some() {
         return false;
     }
-    let Some(Target { target: owner, .. }) = bdata.agent.target else {
+    let Some(Alignment::Owned(owner_uid)) = bdata.agent_data.alignment else {
+        return false;
+    };
+    let Some(owner) = get_entity_by_id(*owner_uid, bdata.read_data) else {
         return false;
     };
     let Some(owner_pos) = bdata.read_data.positions.get(owner) else {

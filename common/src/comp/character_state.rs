@@ -1498,10 +1498,13 @@ impl Component for CharacterState {
 /// persisted to the database/save, so it resets to `Follow` (today's
 /// default) on relog because nothing writes it to storage.
 ///
-/// `Follow` and `Stay` are today's shipped behaviour (`Stay` mirrors
-/// `CharacterActivity::is_pet_staying`, toggled by the `V` key) and must
-/// keep behaving byte-identically -- see `is_pet_staying`'s doc comment for
-/// why that field is kept rather than repurposed.
+/// `Follow` and `Stay` are today's shipped behaviour, toggled by the `V`
+/// key, and must keep behaving byte-identically. The `V` key sets this
+/// field's value purely for it to accurately *reflect* that state; the
+/// stay-in-place behaviour itself is driven exclusively by
+/// `CharacterActivity::is_pet_staying` and `Agent::stay_pos` -- see
+/// `is_pet_staying`'s doc comment for why that field is kept rather than
+/// repurposed.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PetCommand {
     #[default]

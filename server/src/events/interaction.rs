@@ -249,12 +249,27 @@ impl ServerEvent for SetPetStayEvent {
                 && within_mounting_range(positions.get(command_giver), positions.get(pet))
                 && is_mounts.get(pet).is_none()
             {
-                character_activities
-                    .get_mut(pet)
-                    .map(|mut activity| activity.is_pet_staying = stay);
-                agents
-                    .get_mut(pet)
-                    .map(|s| s.stay_pos = current_pet_position.filter(|_| stay));
+                // `is_pet_staying`/`stay_pos` remain the sole drivers of the
+                // actual stay-in-place behaviour, exactly as before this
+                // command existed. `pet_command` is set here purely so it
+                // accurately reflects `Stay` instead of silently staying
+                // `Follow` while the pet is, in fact, staying -- it is not
+                // read by any Stay/Follow logic. `stay == false` resets it
+                // fully to `Follow`, canceling any active `Guard` order:
+                // the `V` key is the "back to normal" key.
+                let pet_command = if stay {
+                    comp::PetCommand::Stay
+                } else {
+                    comp::PetCommand::Follow
+                };
+                character_activities.get_mut(pet).map(|mut activity| {
+                    activity.is_pet_staying = stay;
+                    activity.pet_command = pet_command;
+                });
+                agents.get_mut(pet).map(|agent| {
+                    agent.stay_pos = current_pet_position.filter(|_| stay);
+                    agent.pet_command = pet_command;
+                });
             }
         }
     }
@@ -752,12 +767,14 @@ mod pet_command_tests {
     }
 
     /// Locks in today's `V`-key path: `SetPetStayEvent` must keep driving
-    /// `is_pet_staying` and `Agent::stay_pos` exactly as before, and must
-    /// leave the new `pet_command` field completely untouched (still its
-    /// `Follow` default) -- proving `Stay`/`Follow` are byte-identical to
-    /// before this change, since nothing on that path was modified.
+    /// `is_pet_staying` and `Agent::stay_pos` exactly as before -- the
+    /// actual stay-in-place behaviour is unaffected by this change. It also
+    /// now sets `pet_command` to accurately reflect `Stay`/`Follow` (purely
+    /// descriptive; no Guard/Attack node reads `Stay`, so this does not
+    /// change any AI behaviour), and resets it fully to `Follow` on
+    /// "un-stay", canceling any active `Guard` order.
     #[test]
-    fn set_pet_stay_event_leaves_pet_command_untouched() {
+    fn set_pet_stay_event_drives_is_pet_staying_and_reflects_into_pet_command() {
         let mut world = mock_world();
         let (owner, owner_uid) = spawn(&mut world);
         let pet = spawn_owned_pet(&mut world, owner_uid);
@@ -781,6 +798,21 @@ mod pet_command_tests {
                 .unwrap()
                 .stay_pos,
             Some(comp::Pos(Vec3::zero()))
+        );
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Stay);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Stay);
+
+        // Pressing V again ("un-stay") resets pet_command fully to Follow.
+        {
+            let data = world.system_data::<<SetPetStayEvent as ServerEvent>::SystemData<'_>>();
+            SetPetStayEvent::handle(vec![SetPetStayEvent(owner, pet, false)].into_iter(), data);
+        }
+        assert!(
+            !world
+                .read_component::<comp::CharacterActivity>()
+                .get(pet)
+                .unwrap()
+                .is_pet_staying
         );
         assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Follow);
         assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Follow);
