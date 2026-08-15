@@ -8,6 +8,14 @@ hud-warlock-pact-no_patron = sin patrón
 
 hud-pact-severed-notice = Tu pacto se ha roto. El poder de tu patrón ya no te responde.
 
+## Los despertares de la Espada
+
+hud-pact-blade-tier-1 = Tu espada del pacto despierta: por primera vez, sientes que te habla.
+hud-pact-blade-tier-2 = Tu espada del pacto se fortalece: un segundo golpe responde a tu voluntad.
+hud-pact-blade-tier-3 = Tu espada del pacto se vuelve hambrienta, alimentándose de cada herida que inflige.
+hud-pact-blade-tier-4 = Tu espada del pacto se corona con un tercer golpe, letal.
+hud-pact-blade-tier-5 = Tu espada del pacto pronuncia, por fin, su propio nombre: { $name }.
+
 ## Patrones
 
 warlock-patron-veiled_court = La Corte Velada

@@ -415,7 +415,7 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .ecs()
                         .read_storage::<comp::Pact>()
                         .get(entity)
-                        .copied()
+                        .cloned()
                         .unwrap_or_default();
 
                     // A slot's wait is real-world time, so the logout save is

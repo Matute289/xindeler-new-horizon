@@ -303,4 +303,14 @@
         Feat(VampireTouched),
         Feat(VampiresPlaything),
     ],
+    // The Blade pact-boon's own directly-granted track (comp::pact::Pact's
+    // blade-XP tiers). A NEW group -- no existing group's membership above
+    // is touched by this entry.
+    PactBlade: [
+        PactBlade(Voice),
+        PactBlade(SecondStrike),
+        PactBlade(Hunger),
+        PactBlade(Crown),
+        PactBlade(Zenith),
+    ],
 }

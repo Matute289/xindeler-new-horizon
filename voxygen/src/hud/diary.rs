@@ -4684,6 +4684,7 @@ fn unlock_skill_strings(group: SkillGroupKind) -> SkillStrings<'static> {
         SkillGroupKind::General
         | SkillGroupKind::Class(_)
         | SkillGroupKind::Feats
+        | SkillGroupKind::PactBlade
         | SkillGroupKind::Weapon(
             ToolKind::Dagger
             | ToolKind::Shield

@@ -1,0 +1,32 @@
+// The Blade boon's six awakening tiers, as cumulative `Pact.blade_exp`
+// thresholds (see common/src/comp/pact.rs's `Pact::blade_tier`). Index 0
+// ("Muda") is always 0 -- the blade exists the moment the boon is chosen,
+// nothing to earn there. Every other index is the threshold to reach that
+// tier:
+//   0 -> 0       Muda       (the blade exists, base innate abilities only)
+//   1 -> 5,000   Susurrante (the blade's voice/narration channel goes live)
+//   2 -> 25,000  Despierta  (a second attack ability)
+//   3 -> 75,000  Hambrienta (a Lifesteal passive)
+//   4 -> 175,000 Coronada   (a third, capstone attack ability)
+//   5 -> 525,000 Nombrada   (the blade names itself)
+//
+// `blade_exp` shares its currency 1:1 with a character's own lifetime kill
+// XP (both are fed the same per-kill `exp_reward`), so a tier threshold's
+// pacing can be read directly off `total_exp_for_level(L) = 250*(L-1)^2`
+// (skillset/mod.rs) for a Warlock who keeps the blade summoned for a
+// fraction `f` of their kills: reached around the level where
+// `total_exp_for_level(L) ~= threshold / f`. `/pact blade summon` has no
+// cost or cooldown, so a rational player's `f` trends toward 1.0 rather
+// than some partial uptime -- tier 5's threshold is sized for that case
+// (525,000 lands a full-uptime Warlock around L47, the middle of the
+// "dedicated" L45-50 band the design targets), not the ~L38 a flat 350,000
+// would give at f=1.0. Tiers 1-4 already land in-band at realistic uptime
+// and are unchanged.
+[
+    0,
+    5000,
+    25000,
+    75000,
+    175000,
+    525000,
+]
