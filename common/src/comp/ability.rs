@@ -2149,15 +2149,72 @@ impl CharacterAbility {
                     (data.physics.on_ground.is_none() || buildup_duration.is_some())
                         && update.energy.try_change_by(-*energy_cost).is_ok()
                 },
+                CharacterAbility::BasicSummon { summon_info, .. } => {
+                    Self::chain_summon_batch_affordable(summon_info, data)
+                },
                 CharacterAbility::Boost { .. }
                 | CharacterAbility::GlideBoost { .. }
                 | CharacterAbility::BasicBeam { .. }
                 | CharacterAbility::Blink { .. }
                 | CharacterAbility::Music { .. }
-                | CharacterAbility::BasicSummon { .. }
                 | CharacterAbility::SpriteSummon { .. }
                 | CharacterAbility::Transform { .. } => true,
             }
+    }
+
+    /// N27-O: the client-side (and, since this same code also runs
+    /// server-authoritatively, server-side too -- see `requirements_paid`'s
+    /// doc comment) half of the "enforced at both gates" Cadena point-pool
+    /// check. Every `SummonInfo::Npc` whose `pact_chain_summon` flag is
+    /// unset (i.e. every non-Cadena `BasicSummon` ability: Conjuration
+    /// spells, boss adds, etc.) is unaffected and always returns `true`.
+    /// For a flagged summon, refuses the WHOLE cast up front if the batch's
+    /// total cost (`summon_amount() * cost`, matching the "N × cost, once
+    /// per creature" charge `handle_create_npc` applies as each creature
+    /// actually spawns) would exceed `Pact::chain_summon_pool` minus what is
+    /// already spent -- `handle_create_npc` is still the true last-line
+    /// authority (belt-and-braces against a modified client or any future
+    /// bug here), but this is what makes an unaffordable combination
+    /// genuinely "not activatable" rather than merely partially fulfilled.
+    fn chain_summon_batch_affordable(
+        summon_info: &basic_summon::SummonInfo,
+        data: &JoinData,
+    ) -> bool {
+        let basic_summon::SummonInfo::Npc {
+            pact_chain_summon: true,
+            summoned_amount,
+            ..
+        } = summon_info
+        else {
+            return true;
+        };
+        let pool = data
+            .pact
+            .map_or(0, |pact| pact.chain_summon_pool(data.skill_set));
+        let spent = data.summons.map_or(0, |summons| summons.spent());
+        let per_creature_cost = comp::pact::summon_cost::cached_npc_summon_cost(
+            summon_info,
+            data.msm,
+            &comp::pact::summon_tuning_manifest().0,
+        );
+        Self::chain_batch_within_budget(pool, spent, per_creature_cost, *summoned_amount)
+    }
+
+    /// Pure arithmetic behind [`Self::chain_summon_batch_affordable`]:
+    /// does `pool` minus what is already `spent` cover
+    /// `per_creature_cost * summoned_amount`? Split out so this, the part
+    /// actually worth pinning with cases, is unit-testable without
+    /// constructing a `JoinData`.
+    fn chain_batch_within_budget(
+        pool: u16,
+        spent: u16,
+        per_creature_cost: u16,
+        summoned_amount: u32,
+    ) -> bool {
+        let remaining = pool.saturating_sub(spent);
+        let batch_cost =
+            per_creature_cost.saturating_mul(summoned_amount.try_into().unwrap_or(u16::MAX));
+        batch_cost <= remaining
     }
 
     pub fn default_roll(current_state: Option<&CharacterState>) -> CharacterAbility {
@@ -6232,5 +6289,57 @@ mod spell_gate_tests {
             1,
             AuxiliaryAbility::Innate(9_999)
         ));
+    }
+}
+
+/// N27-O: the pure arithmetic behind `CharacterAbility::requirements_paid`'s
+/// `BasicSummon` arm -- the client-side (and, since the same code runs
+/// server-authoritatively, server-side too) half of the "enforced at both
+/// gates" Cadena point-pool check.
+#[cfg(test)]
+mod chain_batch_within_budget_tests {
+    use super::CharacterAbility;
+
+    #[test]
+    fn a_batch_that_fits_exactly_is_affordable() {
+        assert!(CharacterAbility::chain_batch_within_budget(10, 4, 2, 3));
+    }
+
+    #[test]
+    fn one_point_over_the_remaining_budget_is_refused() {
+        assert!(!CharacterAbility::chain_batch_within_budget(10, 4, 2, 4));
+    }
+
+    #[test]
+    fn cost_is_multiplied_by_the_full_batch_amount_not_charged_once() {
+        // Pool 20, nothing spent, 3 creatures at 7 each = 21 > 20: refused.
+        // A caller that mistakenly charged the per-creature cost only once
+        // (7 <= 20) would wrongly pass this.
+        assert!(!CharacterAbility::chain_batch_within_budget(20, 0, 7, 3));
+        // The same batch at 6 each (18 <= 20) fits.
+        assert!(CharacterAbility::chain_batch_within_budget(20, 0, 6, 3));
+    }
+
+    #[test]
+    fn already_spent_reduces_the_remaining_budget() {
+        assert!(CharacterAbility::chain_batch_within_budget(10, 8, 2, 1));
+        assert!(!CharacterAbility::chain_batch_within_budget(10, 9, 2, 1));
+    }
+
+    #[test]
+    fn a_pool_of_zero_affords_nothing_but_a_free_zero_amount_batch() {
+        assert!(!CharacterAbility::chain_batch_within_budget(0, 0, 1, 1));
+        assert!(
+            CharacterAbility::chain_batch_within_budget(0, 0, 1, 0),
+            "an empty batch costs nothing regardless of pool"
+        );
+    }
+
+    #[test]
+    fn spent_exceeding_pool_never_underflows() {
+        // Should never happen in practice (the ledger can't out-spend the
+        // pool it was charged against), but a defensive `saturating_sub`
+        // must read this as "0 remaining", not panic or wrap.
+        assert!(!CharacterAbility::chain_batch_within_budget(5, 9, 1, 1));
     }
 }

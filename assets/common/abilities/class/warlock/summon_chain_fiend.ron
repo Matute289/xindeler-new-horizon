@@ -1,0 +1,45 @@
+// N27-O — Pacto de la Cadena: the Warlock's Chain-boon summoned fiend.
+//
+// `pact_chain_summon: true` is the only thing that distinguishes this from
+// any other `BasicSummon` ability (Conjuration spells, boss/NPC adds): it
+// opts this specific cast into `common::comp::pact`'s point-pool gate and
+// ledger, both client-side (`CharacterAbility::requirements_paid`) and
+// server-side (`server::events::entity_creation::handle_create_npc`). The
+// per-creature point cost is NEVER authored here — it is derived from the
+// summoned body's combat rating (`comp::pact::summon_cost`), cached once per
+// `Body` and shared by both gates so the two can never disagree.
+//
+// `BipedSmall(Husk)` is the cheapest creature in the shipped Cadena roster
+// (`comp::pact::summon_cost`'s regression test pins `Husk` as the floor of
+// the ordering) — deliberately, so a level-1 Warlock's starting 2-point pool
+// (`chain_pool(1, 0) == 2`) can always afford at least one fiend. Re-casting
+// repeatedly builds up a small chain of fiends, bounded by the pool rather
+// than by a flat count — that IS the boon.
+//
+// `duration: Some(..)` (a lifetime cap) is required alongside the summon
+// dying in combat — see the acceptance bar's "both, not either/or" on
+// leak-freedom. `has_health: true` and the default `with_agent: true` put it
+// on the same real-agent, hittable, pet-behaviour-tree-driven footing as
+// every other owned summon in the game (no new AI, no new anchor/lifetime
+// mechanism — see `basic_summon.rs` and `server/src/pet.rs`).
+BasicSummon(
+    buildup_duration: 0.8,
+    cast_duration: 0.4,
+    recover_duration: 0.5,
+    summon_info: Npc(
+        summoned_amount: 1,
+        summon_distance: (1.5, 3.0),
+        body: BipedSmall((species: Husk, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 300, nanos: 0)),
+        pact_chain_summon: true,
+    ),
+    meta: (
+        requirements: (min_level: Some(1)),
+        cooldown: Some(4.0),
+    ),
+)
