@@ -2,14 +2,15 @@ use std::{f32::consts::PI, ops::Mul};
 
 use common::{comp::loot_owner::ONWERSHIP_TIMEOUT_FAST, rtsim::DialogueKind};
 use common_state::{BlockChange, ScheduledBlockChange};
-use specs::{DispatcherBuilder, Join, ReadExpect, ReadStorage, WriteExpect, WriteStorage};
+use specs::{DispatcherBuilder, Join, Read, ReadExpect, ReadStorage, WriteExpect, WriteStorage};
 use tracing::error;
 use vek::*;
 
 use common::{
     assets::{AssetCombined, AssetHandle, Ron},
+    combat,
     comp::{
-        self, InventoryUpdateEvent,
+        self, EnteredAuras, Group, InventoryUpdateEvent, Player,
         agent::{AgentEvent, Sound, SoundKind},
         inventory::slot::EquipSlot,
         item::{MaterialStatManifest, flatten_counted_items},
@@ -18,16 +19,16 @@ use common::{
     },
     consts::{MAX_INTERACT_RANGE, MAX_NPCINTERACT_RANGE, SOUND_TRAVEL_DIST_PER_VOLUME},
     event::{
-        CreateItemDropEvent, CreateSpriteEvent, DialogueEvent, EventBus, MineBlockEvent,
-        NpcInteractEvent, SetLanternEvent, SetPetStayEvent, SoundEvent, TamePetEvent,
-        ToggleSpriteLightEvent,
+        CommandPetEvent, CreateItemDropEvent, CreateSpriteEvent, DialogueEvent, EventBus,
+        MineBlockEvent, NpcInteractEvent, SetLanternEvent, SetPetStayEvent, SoundEvent,
+        TamePetEvent, ToggleSpriteLightEvent,
     },
     link::Is,
     mounting::Mount,
     outcome::Outcome,
     resources::ProgramTime,
     terrain::{self, Block, SpriteKind, TerrainGrid},
-    uid::Uid,
+    uid::{IdMaps, Uid},
     util::Dir,
     vol::ReadVol,
 };
@@ -45,6 +46,7 @@ pub(super) fn register_event_systems(builder: &mut DispatcherBuilder) {
     event_dispatch::<NpcInteractEvent>(builder, &[]);
     event_dispatch::<DialogueEvent>(builder, &[]);
     event_dispatch::<SetPetStayEvent>(builder, &[]);
+    event_dispatch::<CommandPetEvent>(builder, &[]);
     event_dispatch::<MineBlockEvent>(builder, &[]);
     event_dispatch::<SoundEvent>(builder, &[]);
     event_dispatch::<CreateSpriteEvent>(builder, &[]);
@@ -247,13 +249,106 @@ impl ServerEvent for SetPetStayEvent {
                 && within_mounting_range(positions.get(command_giver), positions.get(pet))
                 && is_mounts.get(pet).is_none()
             {
-                character_activities
-                    .get_mut(pet)
-                    .map(|mut activity| activity.is_pet_staying = stay);
-                agents
-                    .get_mut(pet)
-                    .map(|s| s.stay_pos = current_pet_position.filter(|_| stay));
+                // `is_pet_staying`/`stay_pos` remain the sole drivers of the
+                // actual stay-in-place behaviour, exactly as before this
+                // command existed. `pet_command` is set here purely so it
+                // accurately reflects `Stay` instead of silently staying
+                // `Follow` while the pet is, in fact, staying -- it is not
+                // read by any Stay/Follow logic. `stay == false` resets it
+                // fully to `Follow`, canceling any active `Guard` order:
+                // the `V` key is the "back to normal" key.
+                let pet_command = if stay {
+                    comp::PetCommand::Stay
+                } else {
+                    comp::PetCommand::Follow
+                };
+                character_activities.get_mut(pet).map(|mut activity| {
+                    activity.is_pet_staying = stay;
+                    activity.pet_command = pet_command;
+                });
+                agents.get_mut(pet).map(|agent| {
+                    agent.stay_pos = current_pet_position.filter(|_| stay);
+                    agent.pet_command = pet_command;
+                });
             }
+        }
+    }
+}
+
+impl ServerEvent for CommandPetEvent {
+    type SystemData<'a> = (
+        WriteStorage<'a, comp::Agent>,
+        WriteStorage<'a, comp::CharacterActivity>,
+        ReadStorage<'a, comp::Pos>,
+        ReadStorage<'a, comp::Alignment>,
+        ReadStorage<'a, Is<Mount>>,
+        ReadStorage<'a, Uid>,
+        ReadStorage<'a, Group>,
+        ReadStorage<'a, Player>,
+        ReadStorage<'a, EnteredAuras>,
+        Read<'a, IdMaps>,
+    );
+
+    fn handle(
+        events: impl ExactSizeIterator<Item = Self>,
+        (
+            mut agents,
+            mut character_activities,
+            positions,
+            alignments,
+            is_mounts,
+            uids,
+            groups,
+            players,
+            entered_auras,
+            id_maps,
+        ): Self::SystemData<'_>,
+    ) {
+        for CommandPetEvent(command_giver, pet, command) in events {
+            let is_owner = uids.get(command_giver).is_some_and(|owner_uid| {
+                matches!(
+                    alignments.get(pet),
+                    Some(comp::Alignment::Owned(pet_owner)) if *pet_owner == *owner_uid,
+                )
+            });
+
+            if !is_owner
+                || !within_mounting_range(positions.get(command_giver), positions.get(pet))
+                || is_mounts.get(pet).is_some()
+            {
+                continue;
+            }
+
+            // `Attack` is refused when the designated target is the owner
+            // themselves, is in the owner's group, or is someone the owner
+            // could not legally attack directly -- without these checks,
+            // commanding a pet to attack becomes a PvP-bypass exploit.
+            if let comp::PetCommand::Attack(target_uid) = command {
+                let Some(target_entity) = id_maps.uid_entity(target_uid) else {
+                    continue;
+                };
+                let same_group = groups
+                    .get(command_giver)
+                    .is_some_and(|giver_group| Some(giver_group) == groups.get(target_entity));
+                let legal_target = target_entity != command_giver
+                    && !same_group
+                    && combat::permit_pvp(
+                        &alignments,
+                        &players,
+                        &entered_auras,
+                        &id_maps,
+                        Some(command_giver),
+                        target_entity,
+                    );
+                if !legal_target {
+                    continue;
+                }
+            }
+
+            character_activities
+                .get_mut(pet)
+                .map(|mut activity| activity.pet_command = command);
+            agents.get_mut(pet).map(|agent| agent.pet_command = command);
         }
     }
 }
@@ -583,4 +678,251 @@ pub fn handle_tame_pet(server: &mut Server, ev: TamePetEvent) {
     // TODO: Raise outcome to send to clients to play sound/render an indicator
     // showing taming success?
     tame_pet(server.state.ecs(), ev.pet_entity, ev.owner_entity);
+}
+
+#[cfg(test)]
+mod pet_command_tests {
+    use super::*;
+    use common::{
+        comp::{PetCommand, body::humanoid},
+        resources::BattleMode,
+        uuid::Uuid,
+    };
+    use specs::{Builder, Entity as EcsEntity, World, WorldExt};
+
+    /// Registers every component/resource type `SetPetStayEvent` and
+    /// `CommandPetEvent`'s handlers read or write.
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.insert(IdMaps::new());
+        world.register::<comp::Agent>();
+        world.register::<comp::CharacterActivity>();
+        world.register::<comp::Pos>();
+        world.register::<comp::Alignment>();
+        world.register::<Is<Mount>>();
+        world.register::<Uid>();
+        world.register::<Group>();
+        world.register::<Player>();
+        world.register::<EnteredAuras>();
+        world
+    }
+
+    /// Spawns an entity at the origin (so every spawned pair is trivially
+    /// within mounting range of each other) and allocates it a `Uid`.
+    fn spawn(world: &mut World) -> (EcsEntity, Uid) {
+        let entity = world.create_entity().with(comp::Pos(Vec3::zero())).build();
+        let uid = {
+            let mut uids = world.write_component::<Uid>();
+            let mut id_maps = world.write_resource::<IdMaps>();
+            let uid = id_maps.allocate(entity);
+            uids.insert(entity, uid)
+                .expect("fresh entity, insert must succeed");
+            uid
+        };
+        (entity, uid)
+    }
+
+    /// Spawns a pet owned by `owner`, with a fresh `Agent` and default
+    /// `CharacterActivity` (both start at `PetCommand::Follow`, matching
+    /// `Agent::from_body` and `CharacterActivity::default`).
+    fn spawn_owned_pet(world: &mut World, owner: Uid) -> EcsEntity {
+        let (pet, _) = spawn(world);
+        world
+            .write_component::<comp::Alignment>()
+            .insert(pet, comp::Alignment::Owned(owner))
+            .expect("fresh entity, insert must succeed");
+        world
+            .write_component::<comp::Agent>()
+            .insert(
+                pet,
+                comp::Agent::from_body(&comp::Body::Humanoid(humanoid::Body::random())),
+            )
+            .expect("fresh entity, insert must succeed");
+        world
+            .write_component::<comp::CharacterActivity>()
+            .insert(pet, comp::CharacterActivity::default())
+            .expect("fresh entity, insert must succeed");
+        pet
+    }
+
+    fn pet_command_on_agent(world: &World, pet: EcsEntity) -> PetCommand {
+        world
+            .read_component::<comp::Agent>()
+            .get(pet)
+            .unwrap()
+            .pet_command
+    }
+
+    fn pet_command_on_activity(world: &World, pet: EcsEntity) -> PetCommand {
+        world
+            .read_component::<comp::CharacterActivity>()
+            .get(pet)
+            .unwrap()
+            .pet_command
+    }
+
+    fn dispatch_command_pet(world: &World, giver: EcsEntity, pet: EcsEntity, command: PetCommand) {
+        let data = world.system_data::<<CommandPetEvent as ServerEvent>::SystemData<'_>>();
+        CommandPetEvent::handle(vec![CommandPetEvent(giver, pet, command)].into_iter(), data);
+    }
+
+    /// Locks in today's `V`-key path: `SetPetStayEvent` must keep driving
+    /// `is_pet_staying` and `Agent::stay_pos` exactly as before -- the
+    /// actual stay-in-place behaviour is unaffected by this change. It also
+    /// now sets `pet_command` to accurately reflect `Stay`/`Follow` (purely
+    /// descriptive; no Guard/Attack node reads `Stay`, so this does not
+    /// change any AI behaviour), and resets it fully to `Follow` on
+    /// "un-stay", canceling any active `Guard` order.
+    #[test]
+    fn set_pet_stay_event_drives_is_pet_staying_and_reflects_into_pet_command() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let pet = spawn_owned_pet(&mut world, owner_uid);
+
+        {
+            let data = world.system_data::<<SetPetStayEvent as ServerEvent>::SystemData<'_>>();
+            SetPetStayEvent::handle(vec![SetPetStayEvent(owner, pet, true)].into_iter(), data);
+        }
+
+        assert!(
+            world
+                .read_component::<comp::CharacterActivity>()
+                .get(pet)
+                .unwrap()
+                .is_pet_staying
+        );
+        assert_eq!(
+            world
+                .read_component::<comp::Agent>()
+                .get(pet)
+                .unwrap()
+                .stay_pos,
+            Some(comp::Pos(Vec3::zero()))
+        );
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Stay);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Stay);
+
+        // Pressing V again ("un-stay") resets pet_command fully to Follow.
+        {
+            let data = world.system_data::<<SetPetStayEvent as ServerEvent>::SystemData<'_>>();
+            SetPetStayEvent::handle(vec![SetPetStayEvent(owner, pet, false)].into_iter(), data);
+        }
+        assert!(
+            !world
+                .read_component::<comp::CharacterActivity>()
+                .get(pet)
+                .unwrap()
+                .is_pet_staying
+        );
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Follow);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Follow);
+    }
+
+    /// Positive control: a legal target (not the owner, not in the owner's
+    /// group, and no PvP conflict since neither side is even a `Player`)
+    /// must actually apply the command. Without this, the refusal tests
+    /// below could all be passing vacuously because of an unrelated bug
+    /// (e.g. the `is_owner`/mounting-range gate rejecting everything).
+    #[test]
+    fn attack_is_applied_against_a_legal_target() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let pet = spawn_owned_pet(&mut world, owner_uid);
+        let (_target, target_uid) = spawn(&mut world);
+
+        dispatch_command_pet(&world, owner, pet, PetCommand::Attack(target_uid));
+
+        assert_eq!(
+            pet_command_on_agent(&world, pet),
+            PetCommand::Attack(target_uid)
+        );
+        assert_eq!(
+            pet_command_on_activity(&world, pet),
+            PetCommand::Attack(target_uid)
+        );
+    }
+
+    /// `Guard` is not attack-legality-gated at all, and must reach both
+    /// `Agent` (read by the behaviour tree) and `CharacterActivity`
+    /// (net-synced).
+    #[test]
+    fn guard_command_reaches_agent_and_character_activity() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let pet = spawn_owned_pet(&mut world, owner_uid);
+
+        dispatch_command_pet(&world, owner, pet, PetCommand::Guard);
+
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Guard);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Guard);
+    }
+
+    /// The highest-risk case: commanding a pet to attack its own owner must
+    /// be refused, or "attack that one" would let a pet be used to bypass
+    /// self-harm/PvP protections.
+    #[test]
+    fn attack_is_refused_when_target_is_the_owner() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let pet = spawn_owned_pet(&mut world, owner_uid);
+
+        dispatch_command_pet(&world, owner, pet, PetCommand::Attack(owner_uid));
+
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Follow);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Follow);
+    }
+
+    /// Commanding a pet to attack a member of the owner's own group must be
+    /// refused (a group is presumptively friendly/cooperating).
+    #[test]
+    fn attack_is_refused_when_target_is_in_owners_group() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let pet = spawn_owned_pet(&mut world, owner_uid);
+        let (target, target_uid) = spawn(&mut world);
+
+        let shared_group = common::comp::group::NPC;
+        {
+            let mut groups = world.write_component::<Group>();
+            groups.insert(owner, shared_group).unwrap();
+            groups.insert(target, shared_group).unwrap();
+        }
+
+        dispatch_command_pet(&world, owner, pet, PetCommand::Attack(target_uid));
+
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Follow);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Follow);
+    }
+
+    /// Commanding a pet to attack a player the owner could not legally
+    /// attack directly (opposing `BattleMode`) must be refused -- otherwise
+    /// "attack that one" is a PvP-bypass exploit routed through a pet.
+    #[test]
+    fn attack_is_refused_when_pvp_is_not_permitted() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let pet = spawn_owned_pet(&mut world, owner_uid);
+        let (target, target_uid) = spawn(&mut world);
+
+        {
+            let mut players = world.write_component::<Player>();
+            players
+                .insert(
+                    owner,
+                    Player::new("owner".into(), BattleMode::PvE, Uuid::nil(), None),
+                )
+                .unwrap();
+            players
+                .insert(
+                    target,
+                    Player::new("target".into(), BattleMode::PvP, Uuid::nil(), None),
+                )
+                .unwrap();
+        }
+
+        dispatch_command_pet(&world, owner, pet, PetCommand::Attack(target_uid));
+
+        assert_eq!(pet_command_on_agent(&world, pet), PetCommand::Follow);
+        assert_eq!(pet_command_on_activity(&world, pet), PetCommand::Follow);
+    }
 }

@@ -3,7 +3,8 @@ use crate::{
     character::CharacterId,
     combat::{AttackSource, AttackTarget, CombatEffect, DeathEffects, RiderEffects},
     comp::{
-        self, ArcProperties, DisconnectReason, LootOwner, Ori, Pos, UnresolvedChatMsg, Vel,
+        self, ArcProperties, DisconnectReason, LootOwner, Ori, PetCommand, Pos, UnresolvedChatMsg,
+        Vel,
         ability::Dodgeable,
         agent::Sound,
         beam,
@@ -583,6 +584,11 @@ pub enum MountEvent {
 }
 
 pub struct SetPetStayEvent(pub EcsEntity, pub EcsEntity, pub bool);
+
+/// `(command_giver, pet, command)`. The command giver must be the pet's
+/// owner, in mounting range, for the command to be applied -- see the
+/// handler for the full refusal rules (especially for `PetCommand::Attack`).
+pub struct CommandPetEvent(pub EcsEntity, pub EcsEntity, pub PetCommand);
 
 pub struct PossessEvent(pub Uid, pub Uid);
 

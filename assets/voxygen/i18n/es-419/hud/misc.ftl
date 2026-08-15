@@ -8,6 +8,7 @@ hud-inventory_full = Inventario lleno
 hud-someone_else = alguien más
 hud-another_group = otro grupo
 hud-owned_by_for_secs = Este botín le pertenece a { $name } durante { $secs } segundos
+hud-pet-command_guard = Tu mascota ahora está alerta.
 hud-press_key_to_show_debug_info_fmt = Pulsa { $key } para mostrar la información de depuración
 hud-press_key_to_toggle_keybindings_fmt = Pulsa { $key } para alternar atajos de teclado
 hud-press_key_to_toggle_debug_info_fmt = Pulsa { $key } para alternar la información de depuración

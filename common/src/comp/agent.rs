@@ -1,6 +1,6 @@
 use crate::{
     comp::{
-        Body, UtteranceKind, biped_large, biped_small, bird_medium, humanoid, object,
+        Body, PetCommand, UtteranceKind, biped_large, biped_small, bird_medium, humanoid, object,
         quadruped_low, quadruped_medium, quadruped_small, ship,
     },
     path::Chaser,
@@ -690,6 +690,13 @@ pub struct Agent {
     pub flee_from_pos: Option<Pos>,
     pub awareness: Awareness,
     pub stay_pos: Option<Pos>,
+    /// The owner's current command for this pet (only meaningful when
+    /// `alignment` is `Owned`), mirrored here from
+    /// `CharacterActivity::pet_command` for the behaviour tree to read
+    /// without needing `CharacterActivity` in its read set. See
+    /// `PetCommand`'s doc comment for the full contract, including its
+    /// one-shot `Attack` semantics.
+    pub pet_command: PetCommand,
     /// Inputs sent up to rtsim
     pub rtsim_outbox: Option<VecDeque<NpcInput>>,
 }
@@ -806,6 +813,7 @@ impl Agent {
             multi_pid_controllers: None,
             flee_from_pos: None,
             stay_pos: None,
+            pet_command: PetCommand::default(),
             awareness: Awareness::new(0.0),
             rtsim_outbox: None,
         }

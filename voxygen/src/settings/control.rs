@@ -238,6 +238,9 @@ impl ControlSettings {
             GameInput::ToggleLantern => char("G"),
             GameInput::Mount => char("F"),
             GameInput::StayFollow => char("V"),
+            // Unbound by default -- opt-in via Settings > Controls, same as
+            // ZoomLock/NextSlot/etc below.
+            GameInput::CommandPet => return None,
             GameInput::Map => char("M"),
             GameInput::Inventory => char("I"),
             GameInput::Trade => char("T"),

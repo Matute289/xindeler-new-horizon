@@ -71,6 +71,11 @@ pub enum GameInput {
     Mount,
     #[strum(serialize = "gameinput-stayfollow")]
     StayFollow,
+    /// Issue a pet-AI command: attacks the entity currently under the
+    /// crosshair if one is targeted, otherwise toggles the nearest owned
+    /// pet's `Guard` stance on/off.
+    #[strum(serialize = "gameinput-commandpet")]
+    CommandPet,
     #[strum(serialize = "gameinput-togglewalk")]
     ToggleWalk,
     #[strum(serialize = "gameinput-autowalk")]
