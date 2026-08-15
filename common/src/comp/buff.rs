@@ -1531,7 +1531,12 @@ impl BuffKind {
             // alone, which is a partial ward rather than a wrong one.
             BuffKind::PactTalisman => {
                 let mut effects = vec![BuffEffect::DamageReduction(data.strength)];
-                if let Some(MiscBuffData::Reflect { fraction, cap, kind }) = data.misc_data {
+                if let Some(MiscBuffData::Reflect {
+                    fraction,
+                    cap,
+                    kind,
+                }) = data.misc_data
+                {
                     effects.push(BuffEffect::ReflectDamage {
                         fraction,
                         cap,
