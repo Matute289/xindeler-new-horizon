@@ -111,6 +111,18 @@ pub struct NpcBuilder {
     /// component from this id itself rather than accepting a caller-built
     /// one.
     pub oracle_event_id: Option<Arc<str>>,
+    /// This spawn's cost against its owner's Cadena (`PactBoon::Chain`)
+    /// summon point pool, or `None` for every summon that isn't a Cadena
+    /// fiend -- admin `/spawn`, world/rtsim/ORACLE spawns, riders, tamed
+    /// pets, and every pre-existing non-Cadena `BasicSummon` ability all
+    /// leave this `None` and are completely unaffected by N27-O.
+    /// `handle_create_npc` reads `Some(cost)` as "gate and charge this
+    /// spawn against `owner`'s `Summons` ledger, refusing it if it would
+    /// exceed `Pact::chain_summon_pool`", set only by
+    /// `common::states::basic_summon` when `SummonInfo::Npc`'s
+    /// `pact_chain_summon` flag is set. See
+    /// `common::comp::pact::summon_cost::cached_npc_summon_cost`.
+    pub chain_summon_cost: Option<u16>,
 }
 
 impl NpcBuilder {
@@ -139,6 +151,7 @@ impl NpcBuilder {
             phantom_illusion: false,
             delete_after: None,
             oracle_event_id: None,
+            chain_summon_cost: None,
         }
     }
 
@@ -240,6 +253,11 @@ impl NpcBuilder {
 
     pub fn with_oracle_event_id(mut self, oracle_event_id: impl Into<Option<Arc<str>>>) -> Self {
         self.oracle_event_id = oracle_event_id.into();
+        self
+    }
+
+    pub fn with_chain_summon_cost(mut self, chain_summon_cost: impl Into<Option<u16>>) -> Self {
+        self.chain_summon_cost = chain_summon_cost.into();
         self
     }
 }
@@ -589,6 +607,15 @@ pub struct SetPetStayEvent(pub EcsEntity, pub EcsEntity, pub bool);
 /// owner, in mounting range, for the command to be applied -- see the
 /// handler for the full refusal rules (especially for `PetCommand::Attack`).
 pub struct CommandPetEvent(pub EcsEntity, pub EcsEntity, pub PetCommand);
+
+/// `(owner, summon)`: a player-issued dismiss of one of their own Cadena
+/// (`PactBoon::Chain`) summons (N27-O), mirroring `SetPetStayEvent`'s shape.
+/// The handler verifies `owner` actually owns `summon` before doing
+/// anything, then routes through the same `DeleteEvent` funnel every other
+/// summon exit route uses, so the point-pool ledger is freed exactly once,
+/// from exactly one place -- see `server::events::entity_manipulation::
+/// handle_delete`.
+pub struct DismissSummonEvent(pub EcsEntity, pub EcsEntity);
 
 pub struct PossessEvent(pub Uid, pub Uid);
 

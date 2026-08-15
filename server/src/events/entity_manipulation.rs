@@ -225,10 +225,65 @@ event_emitters! {
 }
 
 pub fn handle_delete(server: &mut Server, DeleteEvent(entity): DeleteEvent) {
+    // N27-O: release this entity's Cadena (`PactBoon::Chain`) summon-pool
+    // charge, if it has one, before it is torn down. `DeleteEvent` is the
+    // single funnel every summon exit route already shares -- creature
+    // death (`DestroyEvent`'s handler emits it), lifetime expiry
+    // (`common_systems::projectile`'s `time_left == ZERO` emits it), and
+    // dismiss (`DismissSummonEvent`'s handler emits it, see
+    // `server::events::interaction`) -- so the ledger is decremented from
+    // exactly one place no matter which route ended this entity's life,
+    // never a second independently-driven timer. A non-summon deletion (the
+    // overwhelming majority of calls here) finds no matching ledger entry
+    // and is a harmless no-op.
+    release_chain_summon_charge(server.state.ecs(), entity);
+
     let _ = server
         .state_mut()
         .delete_entity_recorded(entity)
         .map_err(|e| error!(?e, ?entity, "Failed to delete destroyed entity"));
+}
+
+/// See `handle_delete`'s doc comment. Takes `&specs::World` (not `&mut
+/// Server`) purely so it is unit-testable without constructing a full
+/// `Server` -- mirrors `server::pet::tame_pet`'s own `ecs: &specs::World`
+/// shape for the same reason.
+pub(super) fn release_chain_summon_charge(ecs: &specs::World, entity: EcsEntity) {
+    let Some(summon_uid) = ecs.read_storage::<Uid>().get(entity).copied() else {
+        return;
+    };
+    let owner_uid =
+        ecs.read_storage::<Alignment>()
+            .get(entity)
+            .and_then(|alignment| match alignment {
+                Alignment::Owned(owner_uid) => Some(*owner_uid),
+                _ => None,
+            });
+    let Some(owner) = owner_uid.and_then(|owner_uid| ecs.entity_from_uid(owner_uid)) else {
+        return;
+    };
+    if let Some(mut summons) = ecs.write_storage::<comp::Summons>().get_mut(owner) {
+        summons.release(summon_uid);
+    }
+}
+
+/// Pure: which live entities to dismiss for a dying or logged-out Cadena
+/// Warlock, given their `Summons` ledger and a `Uid` resolver. Both the
+/// owner-death path (this file's `DestroyEvent` handler, below) and the
+/// owner-logout path (`server::events::player::dismiss_active_chain_summons`)
+/// resolve the SAME way through this one function, then each emits
+/// `DeleteEvent` for every entity it returns through whichever emitter their
+/// own handler context provides -- kept pure (no `Server`/`SystemData`) so it
+/// is fully unit-testable on its own.
+pub(crate) fn summons_to_dismiss(
+    summons: Option<&comp::Summons>,
+    id_maps: &IdMaps,
+) -> Vec<EcsEntity> {
+    summons
+        .into_iter()
+        .flat_map(|summons| summons.active.iter())
+        .filter_map(|(summon_uid, _cost)| id_maps.uid_entity(*summon_uid))
+        .collect()
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -1712,6 +1767,10 @@ pub struct DestroyEventData<'a> {
     orientations: ReadStorage<'a, comp::Ori>,
     combos: ReadStorage<'a, comp::Combo>,
     gameplay_metrics: ReadExpect<'a, GameplayMetrics>,
+    /// N27-O: read (never written here) so a dying Warlock's active Cadena
+    /// summons can be dismissed alongside them -- see this handler's
+    /// `data.clients.contains(ev.entity)` branch.
+    summons: ReadStorage<'a, comp::Summons>,
     /// Written, not read: a genuine kill *revokes* the entity's banishment.
     /// Only reachable with `worldgen`, since without rtsim nothing ever
     /// inserts the marker in the first place.
@@ -2605,6 +2664,23 @@ impl ServerEvent for DestroyEvent {
                 }
                 if let Some(mut character_state) = data.character_states.get_mut(ev.entity) {
                     *character_state = CharacterState::default();
+                }
+
+                // N27-O: a player's own death never deletes their entity
+                // (it resets `CharacterState` and waits for respawn, as
+                // above) -- so it never reaches this handler's own
+                // `DeleteEvent` funnel, and a dying Warlock's Cadena
+                // summons would otherwise be orphaned rather than freed.
+                // Dismiss them explicitly, the same way
+                // `player::dismiss_active_chain_summons` does for a
+                // logout, routing through the SAME `DeleteEvent` funnel so
+                // `handle_delete` frees the ledger identically either way.
+                if is_kill {
+                    for summon_entity in
+                        summons_to_dismiss(data.summons.get(ev.entity), &data.id_maps)
+                    {
+                        emitters.emit(DeleteEvent(summon_entity));
+                    }
                 }
 
                 false
@@ -5510,5 +5586,147 @@ pub fn handle_start_interaction(
     let t = interaction.target;
     if let Err(e) = server.state.link(interaction) {
         debug!("Error trying to start interaction between {i:?} and {t:?}: {e:?}");
+    }
+}
+
+/// N27-O: `release_chain_summon_charge` (the `handle_delete` funnel every
+/// summon exit route shares -- death, lifetime expiry, dismiss) and
+/// `summons_to_dismiss` (the pure logic behind the owner-death and
+/// owner-logout exit routes). Together these cover all five exit routes the
+/// acceptance bar names, without needing to construct a full `Server` or a
+/// full `DestroyEventData`/`SystemData`.
+#[cfg(test)]
+mod chain_summon_release_tests {
+    use super::*;
+    use common::comp::pact::Summons;
+    use specs::{Builder, World, WorldExt};
+
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.insert(IdMaps::new());
+        world.register::<Uid>();
+        world.register::<Alignment>();
+        world.register::<Summons>();
+        world
+    }
+
+    fn spawn(world: &mut World) -> (EcsEntity, Uid) {
+        let entity = world.create_entity().build();
+        let uid = {
+            let mut uids = world.write_component::<Uid>();
+            let mut id_maps = world.write_resource::<IdMaps>();
+            let uid = id_maps.allocate(entity);
+            uids.insert(entity, uid)
+                .expect("fresh entity, insert must succeed");
+            uid
+        };
+        (entity, uid)
+    }
+
+    /// Covers the "creature dies" and "lifetime expiry" exit routes at
+    /// once: both funnel into `handle_delete` -> `release_chain_summon_charge`
+    /// identically, regardless of which one actually deleted the entity.
+    #[test]
+    fn releasing_a_charged_summon_frees_exactly_its_own_cost() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        world
+            .write_component::<Alignment>()
+            .insert(summon_a, Alignment::Owned(owner_uid))
+            .unwrap();
+        world
+            .write_component::<Alignment>()
+            .insert(summon_b, Alignment::Owned(owner_uid))
+            .unwrap();
+        {
+            let mut summons = Summons::default();
+            summons.charge(summon_a_uid, 3);
+            summons.charge(summon_b_uid, 7);
+            world
+                .write_component::<Summons>()
+                .insert(owner, summons)
+                .unwrap();
+        }
+
+        release_chain_summon_charge(&world, summon_a);
+
+        let ledger = world.read_component::<Summons>();
+        let ledger = ledger.get(owner).expect("owner still has a ledger");
+        assert_eq!(
+            ledger.spent(),
+            7,
+            "only summon_a's 3 points should be freed"
+        );
+        assert_eq!(ledger.active, vec![(summon_b_uid, 7)]);
+    }
+
+    #[test]
+    fn releasing_a_non_summon_entity_is_a_harmless_no_op() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        {
+            let mut summons = Summons::default();
+            summons.charge(owner_uid, 5);
+            world
+                .write_component::<Summons>()
+                .insert(owner, summons)
+                .unwrap();
+        }
+        // No `Alignment` at all -- the overwhelming-majority case for
+        // `handle_delete`'s callers.
+        let (bystander, _) = spawn(&mut world);
+
+        release_chain_summon_charge(&world, bystander);
+
+        let ledger = world.read_component::<Summons>();
+        assert_eq!(ledger.get(owner).unwrap().spent(), 5);
+    }
+
+    #[test]
+    fn releasing_an_owned_entity_whose_owner_has_no_ledger_is_a_no_op() {
+        let mut world = mock_world();
+        let (_owner, owner_uid) = spawn(&mut world);
+        let (unrelated_pet, _) = spawn(&mut world);
+        world
+            .write_component::<Alignment>()
+            .insert(unrelated_pet, Alignment::Owned(owner_uid))
+            .unwrap();
+        // `owner` has no `Summons` at all -- e.g. a tamed-pet owner who
+        // never took the Chain boon. Must not panic.
+
+        release_chain_summon_charge(&world, unrelated_pet);
+    }
+
+    /// Covers the "owner logs out" and "owner dies" exit routes' shared
+    /// logic: both resolve which live entities to dismiss through
+    /// `summons_to_dismiss`.
+    #[test]
+    fn summons_to_dismiss_resolves_every_still_live_active_uid() {
+        let mut world = mock_world();
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        // A uid never mapped to any entity -- e.g. a summon that already
+        // died and was removed from `IdMaps`, but whose ledger entry hadn't
+        // been cleaned up for some other reason. Must be skipped, not
+        // panic.
+        let stale_uid = Uid::from(core::num::NonZeroU64::new(u64::MAX).unwrap());
+        let mut summons = Summons::default();
+        summons.charge(summon_a_uid, 1);
+        summons.charge(stale_uid, 1);
+        summons.charge(summon_b_uid, 1);
+
+        let id_maps = world.read_resource::<IdMaps>();
+        let to_dismiss = summons_to_dismiss(Some(&summons), &id_maps);
+
+        assert_eq!(to_dismiss, vec![summon_a, summon_b]);
+    }
+
+    #[test]
+    fn summons_to_dismiss_of_none_is_empty() {
+        let world = mock_world();
+        let id_maps = world.read_resource::<IdMaps>();
+        assert!(summons_to_dismiss(None, &id_maps).is_empty());
     }
 }

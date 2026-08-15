@@ -22,7 +22,11 @@ use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
 
 use crate::{
     assets::{AssetExt, AssetReadGuard, Ron},
-    comp::ethos::Moral,
+    comp::{
+        SkillSet,
+        ethos::Moral,
+        skills::{Skill, WarlockSkill},
+    },
 };
 
 /// One variant per canon Warlock patron.
@@ -189,6 +193,26 @@ pub struct Pact {
     pub favour: i32,
 }
 
+impl Pact {
+    /// This Warlock's total Cadena (`PactBoon::Chain`) summon point pool, or
+    /// `0` if their boon isn't `Chain` -- no pact, `patron: None`, or any
+    /// other boon all read as "no pool", which in turn makes every
+    /// `Summons`-gated cast unaffordable by construction. This is the ONE
+    /// place in the pact system that intentionally fails *closed*: the
+    /// module doc's "fail-open by construction" note is about casting
+    /// suppression (`Severed`), not about a resource pool that simply
+    /// doesn't exist for a non-Chain character.
+    pub fn chain_summon_pool(&self, skill_set: &SkillSet) -> u16 {
+        if self.boon != Some(PactBoon::Chain) {
+            return 0;
+        }
+        let chain_rank = skill_set
+            .skill_level(Skill::Warlock(WarlockSkill::ChainMastery))
+            .unwrap_or(0);
+        chain_pool(skill_set.character_level().into(), chain_rank)
+    }
+}
+
 impl Component for Pact {
     // `DenseVecStorage`, not `VecStorage`: rare (only Warlocks who've bound a
     // patron), same class of component as `TriggerSlots`/`SpellMastery` --
@@ -296,6 +320,27 @@ pub struct Summons {
 
 impl Summons {
     pub fn spent(&self) -> u16 { self.active.iter().map(|(_, cost)| *cost).sum() }
+
+    /// Records a newly-spawned summon against the ledger. Callers (currently
+    /// only `server::events::entity_creation::handle_create_npc`) MUST have
+    /// already verified `spent() + cost <= pool` -- this method does not
+    /// re-check the ceiling itself, since the pool figure lives on `Pact`,
+    /// not here, and re-deriving it here would risk the two ever
+    /// disagreeing.
+    pub fn charge(&mut self, summon_uid: crate::uid::Uid, cost: u16) {
+        self.active.push((summon_uid, cost));
+    }
+
+    /// Removes a summon from the ledger (it died, expired, was dismissed, or
+    /// its owner logged out/died) and returns the points it frees, or `None`
+    /// if this uid was never charged -- the common, harmless case for any
+    /// entity deletion that isn't a Cadena summon at all. Idempotent: a
+    /// second release of the same uid (which should never happen given a
+    /// single funnel, but is cheap to make safe) is also `None`.
+    pub fn release(&mut self, summon_uid: crate::uid::Uid) -> Option<u16> {
+        let index = self.active.iter().position(|(uid, _)| *uid == summon_uid)?;
+        Some(self.active.remove(index).1)
+    }
 }
 
 impl Component for Summons {
@@ -431,6 +476,53 @@ mod tests {
     #[test]
     fn unknown_boon_keyword_returns_none() {
         assert_eq!(PactBoon::from_keyword("staff"), None);
+    }
+
+    #[test]
+    fn chain_summon_pool_is_zero_without_the_chain_boon() {
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(60);
+        let no_boon = Pact::default();
+        assert_eq!(no_boon.chain_summon_pool(&skill_set), 0);
+
+        let other_boon = Pact {
+            boon: Some(PactBoon::Tome),
+            ..Pact::default()
+        };
+        assert_eq!(other_boon.chain_summon_pool(&skill_set), 0);
+    }
+
+    #[test]
+    fn chain_summon_pool_reads_the_manifest_through_character_level() {
+        let mut skill_set = SkillSet::default();
+        skill_set.set_level(1);
+        let chain = Pact {
+            boon: Some(PactBoon::Chain),
+            ..Pact::default()
+        };
+        assert_eq!(chain.chain_summon_pool(&skill_set), 2);
+
+        skill_set.set_level(60);
+        assert_eq!(chain.chain_summon_pool(&skill_set), 20);
+    }
+
+    #[test]
+    fn summons_charge_then_release_round_trips_the_ledger() {
+        let uid = |n: u64| crate::uid::Uid::from(std::num::NonZeroU64::new(n).unwrap());
+        let mut summons = Summons::default();
+        summons.charge(uid(1), 3);
+        summons.charge(uid(2), 7);
+        assert_eq!(summons.spent(), 10);
+
+        assert_eq!(summons.release(uid(1)), Some(3));
+        assert_eq!(summons.spent(), 7);
+        assert_eq!(summons.active, vec![(uid(2), 7)]);
+
+        // Releasing an unknown or already-released uid is a harmless no-op,
+        // not an error -- most entity deletions aren't Cadena summons at all.
+        assert_eq!(summons.release(uid(1)), None);
+        assert_eq!(summons.release(uid(99)), None);
+        assert_eq!(summons.spent(), 7);
     }
 
     #[test]

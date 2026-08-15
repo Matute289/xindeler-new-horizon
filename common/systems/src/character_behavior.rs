@@ -17,6 +17,7 @@ use common::{
         character_state::{CharacterStateEvents, OutputEvents},
         controller::{ControlAction, InputKind},
         inventory::item::{MaterialStatManifest, tool::AbilityMap},
+        pact::{Pact, Summons},
         trigger::{FIRING_DEADLINE_SECS, MAX_TRIGGER_SLOTS, unlocked_trigger_slots},
     },
     event::{self, EventBus, KnockbackEvent, LocalEvent},
@@ -83,6 +84,9 @@ pub struct ReadData<'a> {
     pickup_items: ReadStorage<'a, PickupItem>,
     immovables: ReadStorage<'a, Immovable>,
     is_followers: ReadStorage<'a, Is<Follower>>,
+    // N27-O: the Cadena point-pool activation gate reads both.
+    pacts: ReadStorage<'a, Pact>,
+    summons: ReadStorage<'a, Summons>,
 }
 
 /// ## Character Behavior System
@@ -320,6 +324,8 @@ impl<'a> System<'a> for Sys {
                 pickup_items: &read_data.pickup_items,
                 immovables: &read_data.immovables,
                 is_followers: &read_data.is_followers,
+                pact: read_data.pacts.get(entity),
+                summons: read_data.summons.get(entity),
             };
 
             for action in actions {

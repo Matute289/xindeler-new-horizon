@@ -159,6 +159,9 @@ pub enum ControlEvent {
     /// Issue a pet-AI command ("attack that one" / "stay alert, guard me")
     /// to an owned pet, identified by its `Uid`.
     CommandPet(Uid, PetCommand),
+    /// Dismiss one of the caster's own Cadena (`PactBoon::Chain`) summons,
+    /// identified by its `Uid`, freeing the points it charged (N27-O).
+    DismissSummon(Uid),
     InventoryEvent(InventoryEvent),
     GroupManip(GroupManip),
     RemoveBuff(BuffKind),
