@@ -2877,7 +2877,23 @@ impl ServerEvent for DestroyEvent {
                         // rule the loop above enforces for free -- including
                         // pets/summons never appearing as their owner's own
                         // `Solo`/`Group` contributor in the first place.
-                        if let Some(mut pact) = data.pacts.get_mut(*attacker) {
+                        //
+                        // Gated on an immutable read first: `Pact` is a
+                        // `DerefFlaggedStorage` specifically so *unrelated*
+                        // pact reads/writes don't force a full net resync of
+                        // every field on it (`blade_name` included) to every
+                        // nearby observer. `get_mut` alone doesn't fire that
+                        // -- but passing its `&mut` guard into a function
+                        // expecting `&mut Pact` deref-coerces it, and THAT
+                        // does fire `Modified`, unconditionally, even on
+                        // every non-Blade Warlock's every kill. The
+                        // pre-check keeps that flag reserved for kills that
+                        // actually touch the blade's XP.
+                        let is_summoned_blade = data
+                            .pacts
+                            .get(*attacker)
+                            .is_some_and(|p| p.boon == Some(PactBoon::Blade) && p.blade_summoned);
+                        if is_summoned_blade && let Some(mut pact) = data.pacts.get_mut(*attacker) {
                             let moral = data
                                 .ethos
                                 .get(*attacker)
