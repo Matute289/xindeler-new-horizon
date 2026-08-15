@@ -135,6 +135,14 @@ pub struct SessionState {
     key_state: KeyState,
     inputs: comp::ControllerInputs,
     inputs_state: HashSet<GameInput>,
+    /// Which of `Primary`/`Secondary` currently has its held click routed
+    /// past the HUD (to the build/weapon path below) rather than to a bound
+    /// mouse-slot ability. Latched on press and consulted (then cleared) on
+    /// the matching release, so a live `build_target`/mouse-slot-binding
+    /// change mid-hold can't route the release differently than the press
+    /// did -- that mismatch left `inputs_state` never cleared for that
+    /// input, permanently swallowing the next press.
+    click_bypasses_hud: HashSet<GameInput>,
     selected_block: Block,
     walk_forward_dir: Vec2<f32>,
     walk_right_dir: Vec2<f32>,
@@ -233,6 +241,7 @@ impl SessionState {
             key_state: KeyState::default(),
             inputs: comp::ControllerInputs::default(),
             inputs_state: HashSet::new(),
+            click_bypasses_hud: HashSet::new(),
             hud,
             selected_block: Block::new(BlockKind::Misc, Rgb::broadcast(255)),
             walk_forward_dir,
@@ -862,10 +871,35 @@ impl PlayState for SessionState {
                 // buildable block. Skipping the HUD entirely for exactly
                 // this press keeps that precedence without the HUD needing
                 // to know about build mode at all.
-                let build_click = matches!(
-                    event,
-                    Event::InputUpdate(GameInput::Primary | GameInput::Secondary, true)
-                ) && build_target.is_some();
+                //
+                // The routing decision is latched in `click_bypasses_hud`
+                // rather than recomputed from the live `build_target` on
+                // every event: `build_target` depends on where the camera
+                // is aiming *this tick*, so a press and its matching release
+                // can land on opposite sides of `.is_some()` if the player's
+                // aim changes mid-click. Routing the release differently
+                // than the press meant one side of the pair never reached
+                // the `inputs_state` bookkeeping below, leaving that input
+                // stuck "held" and silently swallowing every press after it.
+                let build_click = match event {
+                    Event::InputUpdate(
+                        input @ (GameInput::Primary | GameInput::Secondary),
+                        true,
+                    ) => {
+                        let bypass = build_target.is_some();
+                        if bypass {
+                            self.click_bypasses_hud.insert(input);
+                        } else {
+                            self.click_bypasses_hud.remove(&input);
+                        }
+                        bypass
+                    },
+                    Event::InputUpdate(
+                        input @ (GameInput::Primary | GameInput::Secondary),
+                        false,
+                    ) => self.click_bypasses_hud.remove(&input),
+                    _ => false,
+                };
 
                 // Pass all events to the ui first.
                 if !build_click {
