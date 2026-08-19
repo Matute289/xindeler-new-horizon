@@ -19,8 +19,8 @@ mod tuilog;
 mod web;
 use crate::{
     cli::{
-        Admin, ArgvApp, ArgvCommand, BenchParams, Message, MessageReturn, OracleEventsDto,
-        OracleTarget, ServerInfoDto, SharedCommand, Shutdown,
+        Admin, ArgvApp, ArgvCommand, BenchParams, CharacterSummaryDto, LocationDto, Message,
+        MessageReturn, OracleEventsDto, OracleTarget, ServerInfoDto, SharedCommand, Shutdown,
     },
     settings::Settings,
     shutdown_coordinator::ShutdownCoordinator,
@@ -28,6 +28,7 @@ use crate::{
     tuilog::TuiLog,
 };
 use common::{
+    character::CharacterId,
     clock::Clock,
     comp::{ChatType, Player, Pos},
     consts::MIN_RECOMMENDED_TOKIO_THREADS,
@@ -577,6 +578,44 @@ fn server_loop(
                         .write_resource::<policy::OracleEventsEnabled>() =
                         policy::OracleEventsEnabled(enabled);
                 },
+                Message::ListPlayerCharacters { uuid } => {
+                    match server.list_player_characters(&uuid) {
+                        Ok(characters) => {
+                            let characters = characters
+                                .into_iter()
+                                .map(|c| CharacterSummaryDto {
+                                    character_id: c.character_id.0,
+                                    name: c.alias,
+                                    level: u32::from(c.level),
+                                    class: c.class,
+                                    location: c.location.map(|site| LocationDto {
+                                        site,
+                                        kingdom: None,
+                                        continent: None,
+                                    }),
+                                })
+                                .collect();
+                            let _ = response.send(MessageReturn::PlayerCharacters(characters));
+                        },
+                        Err(err) => {
+                            error!(%err, "list_player_characters failed");
+                            let _ = response.send(MessageReturn::Error(err.public_message()));
+                        },
+                    }
+                },
+                Message::RenameCharacter {
+                    uuid,
+                    character_id,
+                    new_alias,
+                } => match server.rename_character(&uuid, CharacterId(character_id), &new_alias) {
+                    Ok(()) => {
+                        let _ = response.send(MessageReturn::CharacterRenamed);
+                    },
+                    Err(err) => {
+                        error!(%err, "rename_character failed");
+                        let _ = response.send(MessageReturn::Error(err.public_message()));
+                    },
+                },
             }
             false
         };
@@ -608,6 +647,10 @@ fn server_loop(
                             event_id, spawned, ..
                         } => info!(%event_id, spawned, "Oracle event preview"),
                         MessageReturn::Error(err) => error!(%err, "Command failed"),
+                        MessageReturn::PlayerCharacters(characters) => {
+                            info!(count = characters.len(), "Listed player characters")
+                        },
+                        MessageReturn::CharacterRenamed => info!("Character renamed"),
                     };
                 }
             }

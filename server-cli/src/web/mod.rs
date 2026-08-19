@@ -8,6 +8,7 @@ use server::chat::ChatCache;
 use std::{future::IntoFuture, net::SocketAddr};
 
 mod chat;
+mod player_api;
 mod ui;
 
 pub async fn run<S, F, R>(
@@ -32,9 +33,10 @@ where
         .nest("/chat/v1", chat::router(cache, chat_secret))
         .nest(
             "/ui_api/v1",
-            ui::api::router(web_ui_request_s, ui_secret.clone()),
+            ui::api::router(web_ui_request_s.clone(), ui_secret.clone()),
         )
         .nest("/ui", ui::router(ui_secret))
+        .nest("/player_api/v1", player_api::router(web_ui_request_s))
         .nest("/metrics", metrics)
         .route("/health", get(|| async {}));
 
