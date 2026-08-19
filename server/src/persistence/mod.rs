@@ -13,10 +13,10 @@ mod json_models;
 mod models;
 
 use crate::persistence::character_updater::PetPersistenceData;
-use common::comp;
+use common::{character::CharacterId, comp};
 use refinery::Report;
 use rusqlite::{
-    Connection, OpenFlags,
+    Connection, DropBehavior, OpenFlags,
     trace::{TraceEvent, TraceEventCodes},
 };
 use std::{
@@ -209,6 +209,54 @@ pub fn vacuum_database(settings: &DatabaseSettings) {
         .expect("Database vacuuming failed, server startup aborted");
 
     info!("Database vacuumed");
+}
+
+/// The character data needed for NH-79's character-summary endpoint: alias,
+/// class, computed level, and the raw saved waypoint. Deliberately lighter
+/// than `common::character::CharacterItem` (used by `load_character_list`
+/// for the character-select screen) -- no body/inventory/pets, none of which
+/// a summary list needs. `waypoint` is the raw saved-waypoint string;
+/// `Server::list_player_characters` resolves it to a site name via
+/// `Server::parse_locations`, which needs world/index access persistence
+/// doesn't have.
+pub struct CharacterSummary {
+    pub character_id: CharacterId,
+    pub alias: String,
+    pub class: String,
+    pub level: u16,
+    pub waypoint: Option<String>,
+}
+
+/// NH-79: `xindeler-web-landing`'s player-characters endpoint reads
+/// persistence for a uuid that may not even be connected right now, so
+/// there's no live ECS state to read the way `CharacterLoader` serves
+/// currently-loaded characters. Opens its own short-lived, read-only
+/// connection using the same settings `CharacterLoader`'s background thread
+/// already opens from.
+pub fn list_player_characters(
+    uuid: &str,
+    settings: &DatabaseSettings,
+) -> Result<Vec<CharacterSummary>, error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    character::load_character_summaries(uuid, &connection)
+}
+
+/// NH-79: the write half of `list_player_characters`. Opens its own
+/// short-lived, read-write connection and transaction -- unreachable through
+/// `CharacterUpdater`'s background channel since the target player may not be
+/// connected right now.
+pub fn rename_character(
+    uuid: &str,
+    character_id: CharacterId,
+    new_alias: &str,
+    settings: &DatabaseSettings,
+) -> Result<(), error::PersistenceError> {
+    let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    let mut transaction = connection.connection.transaction()?;
+    transaction.set_drop_behavior(DropBehavior::Rollback);
+    character::rename_character(uuid, character_id, new_alias, &mut transaction)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 // This callback uses info logging because it is never enabled by default,

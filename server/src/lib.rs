@@ -231,6 +231,19 @@ pub struct ChunkRequest {
     key: Vec2<i32>,
 }
 
+/// `persistence::CharacterSummary` with its raw waypoint resolved to a site
+/// name (see `Server::resolve_waypoint_site_name`). See
+/// `Server::list_player_characters` (NH-79).
+pub struct ResolvedCharacterSummary {
+    pub character_id: CharacterId,
+    pub alias: String,
+    pub class: String,
+    pub level: u16,
+    /// `None` if this character never sat at a waypoint, or the waypoint's
+    /// site couldn't be resolved.
+    pub location: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum ServerInitStage {
     DbMigrations,
@@ -803,20 +816,27 @@ impl Server {
 
     fn parse_locations(&self, character_list_data: &mut [CharacterItem]) {
         character_list_data.iter_mut().for_each(|c| {
-            let name = c
-                .location
-                .as_ref()
-                .and_then(|s| {
-                    persistence::parse_waypoint(s)
-                        .ok()
-                        .and_then(|(waypoint, _)| waypoint.map(|w| w.get_pos()))
-                })
-                .and_then(|wpos| {
-                    self.world
-                        .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
-                });
-            c.location = name;
+            c.location = self.resolve_waypoint_site_name(c.location.as_deref());
         });
+    }
+
+    /// Resolves a raw saved-waypoint string (as stored in `character.waypoint`)
+    /// to the human-readable site name at that position, if any. Shared by
+    /// `parse_locations` (character-select screen) and NH-79's
+    /// `list_player_characters` (which reads persistence for a uuid that may
+    /// not even be connected right now, so it can't reuse `parse_locations`'
+    /// `CharacterItem`-shaped input).
+    fn resolve_waypoint_site_name(&self, waypoint: Option<&str>) -> Option<String> {
+        waypoint
+            .and_then(|s| {
+                persistence::parse_waypoint(s)
+                    .ok()
+                    .and_then(|(waypoint, _)| waypoint.map(|w| w.get_pos()))
+            })
+            .and_then(|wpos| {
+                self.world
+                    .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
+            })
     }
 
     /// Execute a single server tick, handle input and update the game state by
@@ -1633,6 +1653,60 @@ impl Server {
             .pending_chunks()
             .next()
             .is_some()
+    }
+
+    /// Exposes the persistence connection settings for callers outside this
+    /// crate that need their own short-lived, read-only connection (NH-79's
+    /// player-characters endpoint, which queries persistence for a uuid that
+    /// may not even be connected right now, so there's no live ECS state to
+    /// read the way `Message::ListPlayers` does) — same settings
+    /// `CharacterLoader`'s own background thread already opens its
+    /// connection from.
+    pub fn database_settings(&self) -> Arc<RwLock<DatabaseSettings>> {
+        Arc::clone(&self.database_settings)
+    }
+
+    /// NH-79: lists `uuid`'s characters for `xindeler-web-landing`'s
+    /// player-characters endpoint. Reads persistence directly rather than
+    /// live ECS state, since `uuid` may not currently be connected -- unlike
+    /// `Message::ListPlayers`, this must work for offline players too.
+    pub fn list_player_characters(
+        &self,
+        uuid: &str,
+    ) -> Result<Vec<ResolvedCharacterSummary>, persistence::error::PersistenceError> {
+        let settings = self
+            .database_settings
+            .read()
+            .expect("DatabaseSettings RwLock was poisoned")
+            .clone();
+        let summaries = persistence::list_player_characters(uuid, &settings)?;
+        Ok(summaries
+            .into_iter()
+            .map(|s| ResolvedCharacterSummary {
+                character_id: s.character_id,
+                alias: s.alias,
+                class: s.class,
+                level: s.level,
+                location: self.resolve_waypoint_site_name(s.waypoint.as_deref()),
+            })
+            .collect())
+    }
+
+    /// NH-79: the write half of `list_player_characters`. See
+    /// `persistence::rename_character` for the ownership/validation/
+    /// uniqueness checks.
+    pub fn rename_character(
+        &self,
+        uuid: &str,
+        character_id: CharacterId,
+        new_alias: &str,
+    ) -> Result<(), persistence::error::PersistenceError> {
+        let settings = self
+            .database_settings
+            .read()
+            .expect("DatabaseSettings RwLock was poisoned")
+            .clone();
+        persistence::rename_character(uuid, character_id, new_alias, &settings)
     }
 
     /// Sets the SQL log mode at runtime

@@ -132,6 +132,25 @@ pub enum Message {
     OracleEventsEnabled {
         enabled: bool,
     },
+    /// Lists the characters belonging to `uuid` — the in-process half of
+    /// NH-79's character-data endpoint for `xindeler-web-landing`.
+    /// Read-only; resolves each character's last-saved-waypoint location via
+    /// the same `Server::parse_locations` the character-select screen
+    /// already uses. `uuid` may belong to a player who isn't currently
+    /// connected — this reads persistence directly, not live ECS state.
+    ListPlayerCharacters {
+        uuid: String,
+    },
+    /// Renames one of `uuid`'s own characters — the write half of NH-79.
+    /// Rejects if `character_id` doesn't belong to `uuid`, if `new_alias`
+    /// fails `common::character::validate_character_name`, or if the name is
+    /// already taken by any character (own namespace, never checked against
+    /// account usernames — spec §4.4 of the NH-79 design doc).
+    RenameCharacter {
+        uuid: String,
+        character_id: i64,
+        new_alias: String,
+    },
 }
 
 /// Ids of every currently-loaded ORACLE asset. See `Message::OracleListEvents`.
@@ -150,6 +169,28 @@ pub struct ServerInfoDto {
     /// `Some(seconds)` while a graceful shutdown countdown is in progress
     /// (see `ShutdownCoordinator`); `None` otherwise.
     pub shutdown_pending_secs: Option<u64>,
+}
+
+/// A character's resolved location. Only `site` resolves against real data
+/// today — `kingdom`/`continent` are always `None` until a real hierarchy
+/// exists (NH-79 spec §2.3/§2.4/§4.3); this is a contract decision made
+/// ahead of that world-design work landing, not a per-character gap.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocationDto {
+    pub site: String,
+    pub kingdom: Option<String>,
+    pub continent: Option<String>,
+}
+
+/// See `Message::ListPlayerCharacters`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CharacterSummaryDto {
+    pub character_id: i64,
+    pub name: String,
+    pub level: u32,
+    pub class: String,
+    /// `None` if this character never sat at a waypoint (NH-79 spec §2.5).
+    pub location: Option<LocationDto>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +223,11 @@ pub enum MessageReturn {
     /// send this instead of silently dropping the response sender, or the
     /// caller only ever observes a request timeout with no explanation.
     Error(String),
+    /// Response to `Message::ListPlayerCharacters`.
+    PlayerCharacters(Vec<CharacterSummaryDto>),
+    /// Response to a successful `Message::RenameCharacter`. Failure goes
+    /// through `Error(String)` above, same as every other fallible arm.
+    CharacterRenamed,
 }
 
 #[derive(Parser)]

@@ -33,13 +33,16 @@ use crate::{
     },
 };
 use common::{
-    character::{CharacterId, CharacterItem, MAX_CHARACTERS_PER_PLAYER},
-    comp::Content,
+    character::{
+        CharacterId, CharacterItem, MAX_CHARACTERS_PER_PLAYER, normalize_character_name,
+        validate_character_name,
+    },
+    comp::{Content, skillset::level_from_total_exp},
     event::{PermanentChange, UpdateCharacterMetadata},
     npc::NPC_NAMES,
 };
 use core::ops::Range;
-use rusqlite::{Connection, ToSql, Transaction, types::Value};
+use rusqlite::{Connection, Error as DbError, ErrorCode, ToSql, Transaction, types::Value};
 use std::{num::NonZeroU64, rc::Rc};
 use tracing::{debug, error, trace, warn};
 
@@ -540,6 +543,8 @@ pub fn create_character(
     transaction: &mut Transaction,
 ) -> CharacterCreationResult {
     check_character_limit(uuid, transaction)?;
+    let character_alias = normalize_character_name(character_alias);
+    validate_character_name(&character_alias).map_err(PersistenceError::CharacterNameInvalid)?;
 
     let PersistedComponents {
         body,
@@ -686,7 +691,7 @@ pub fn create_character(
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
 
-    stmt.execute([
+    match stmt.execute([
         &character_id as &dyn ToSql,
         &uuid,
         &character_alias,
@@ -700,7 +705,13 @@ pub fn create_character(
         &convert_secondary_class_to_database(character_class),
         &convert_secondary_class_level_to_database(character_class),
         &convert_future_levels_to_secondary_to_database(character_class),
-    ])?;
+    ]) {
+        Ok(_) => {},
+        Err(DbError::SqliteFailure(error, _)) if error.code == ErrorCode::ConstraintViolation => {
+            return Err(PersistenceError::CharacterNameUnavailable);
+        },
+        Err(error) => return Err(error.into()),
+    }
     drop(stmt);
 
     let db_skill_groups =
@@ -846,10 +857,26 @@ pub fn edit_character(
     drop(stmt);
 
     if let Some(character_alias) = character_alias {
+        // NH-79: the in-game character editor is the other write path that
+        // sets `character.alias` besides creation and the new rename
+        // endpoint -- same normalize/validate/uniqueness handling as those,
+        // so a duplicate/malformed name can't sneak in through this route.
+        let character_alias = normalize_character_name(character_alias);
+        validate_character_name(&character_alias)
+            .map_err(PersistenceError::CharacterNameInvalid)?;
+
         let mut stmt = transaction
             .prepare_cached("UPDATE character SET alias = ?1 WHERE character_id = ?2")?;
 
-        stmt.execute([&character_alias, &character_id.0 as &dyn ToSql])?;
+        match stmt.execute([&character_alias as &dyn ToSql, &character_id.0]) {
+            Ok(_) => {},
+            Err(DbError::SqliteFailure(error, _))
+                if error.code == ErrorCode::ConstraintViolation =>
+            {
+                return Err(PersistenceError::CharacterNameUnavailable);
+            },
+            Err(error) => return Err(error.into()),
+        }
         drop(stmt);
     }
 
@@ -967,6 +994,124 @@ pub fn delete_character(
             char_id.0, deleted_item_count
         )));
     }
+
+    Ok(())
+}
+
+/// Sums `skill_group.earned_exp` for `char_id` and derives the character's
+/// overall level from it, without paying for a full character load
+/// (body/inventory/pets/etc.) the way `load_character_data` does.
+pub fn character_level(
+    char_id: CharacterId,
+    connection: &Connection,
+) -> Result<u16, PersistenceError> {
+    let mut stmt = connection.prepare_cached(
+        "SELECT COALESCE(SUM(earned_exp), 0) FROM skill_group WHERE entity_id = ?1",
+    )?;
+    let total_exp: i64 = stmt.query_row([&char_id.0], |row| row.get(0))?;
+    drop(stmt);
+
+    // Same i64 -> u32 clamp `conversions::convert_skill_groups_to_database`
+    // already applies per-row; this just sums first.
+    Ok(level_from_total_exp(
+        total_exp.clamp(0, i64::from(u32::MAX)) as u32,
+    ))
+}
+
+/// A uuid-only sibling of `load_character_list` for NH-79's
+/// character-summary endpoint -- that one eagerly loads body/inventory/pets/
+/// etc. for the character-select screen, none of which a summary list needs.
+/// `CharacterSummary` itself lives one level up, in `persistence::mod`, since
+/// this module is `pub(in crate::persistence)` and `Server::
+/// list_player_characters` (outside that scope, in `server::lib`) needs to
+/// name the return type. Location resolution (waypoint ->
+/// site/kingdom/continent) also happens up there, since it needs
+/// `Server::parse_locations`' world/index access that persistence doesn't
+/// have.
+pub fn load_character_summaries(
+    player_uuid_: &str,
+    connection: &Connection,
+) -> Result<Vec<super::CharacterSummary>, PersistenceError> {
+    let mut stmt = connection.prepare_cached(
+        "
+            SELECT  character_id,
+                    alias,
+                    class,
+                    waypoint
+            FROM    character
+            WHERE   player_uuid = ?1
+            ORDER BY character_id",
+    )?;
+
+    let rows = stmt
+        .query_map([player_uuid_], |row| {
+            let character_id: i64 = row.get(0)?;
+            let alias: String = row.get(1)?;
+            let class: String = row.get(2)?;
+            let waypoint: Option<String> = row.get(3)?;
+            Ok((character_id, alias, class, waypoint))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+
+    rows.into_iter()
+        .map(|(character_id, alias, class, waypoint)| {
+            let character_id = CharacterId(character_id);
+            let level = character_level(character_id, connection)?;
+            Ok(super::CharacterSummary {
+                character_id,
+                alias,
+                class,
+                level,
+                waypoint,
+            })
+        })
+        .collect()
+}
+
+/// Renames one of `requesting_player_uuid`'s own characters (NH-79). Rejects
+/// with `CharacterNotFound` if `char_id` doesn't exist or belongs to someone
+/// else -- same ownership-check shape as `delete_character`, except a rename
+/// has a real client-facing outcome that must not look like success, so this
+/// returns an explicit `Err` instead of silently no-op'ing.
+pub fn rename_character(
+    requesting_player_uuid: &str,
+    char_id: CharacterId,
+    new_alias: &str,
+    transaction: &mut Transaction,
+) -> Result<(), PersistenceError> {
+    let new_alias = normalize_character_name(new_alias);
+    validate_character_name(&new_alias).map_err(PersistenceError::CharacterNameInvalid)?;
+
+    let mut stmt = transaction.prepare_cached(
+        "
+        SELECT  COUNT(1)
+        FROM    character
+        WHERE   character_id = ?1
+        AND     player_uuid = ?2",
+    )?;
+
+    let owned = stmt.query_row([&char_id.0 as &dyn ToSql, &requesting_player_uuid], |row| {
+        let count: i64 = row.get(0)?;
+        Ok(count)
+    })?;
+    drop(stmt);
+
+    if owned != 1 {
+        return Err(PersistenceError::CharacterNotFound);
+    }
+
+    let mut stmt =
+        transaction.prepare_cached("UPDATE character SET alias = ?1 WHERE character_id = ?2")?;
+
+    match stmt.execute([&new_alias as &dyn ToSql, &char_id.0]) {
+        Ok(_) => {},
+        Err(DbError::SqliteFailure(error, _)) if error.code == ErrorCode::ConstraintViolation => {
+            return Err(PersistenceError::CharacterNameUnavailable);
+        },
+        Err(error) => return Err(error.into()),
+    }
+    drop(stmt);
 
     Ok(())
 }
@@ -2102,5 +2247,196 @@ mod spell_book_persistence_tests {
             final_load.pact.blade_exp, 26_500,
             "re-taking Blade must resume, not reset, blade_exp"
         );
+    }
+}
+
+/// NH-79: end-to-end tests for the character-summary/rename path added in
+/// this phase -- name validation, the new `character.alias` uniqueness
+/// constraint (migration V86), the rename ownership check, and
+/// `load_character_summaries`/`character_level`. Same "run the real
+/// migrations" reasoning as `spell_book_persistence_tests` above: the point
+/// is exercising the interaction with the schema (the actual `UNIQUE INDEX
+/// ... COLLATE NOCASE`), not just the Rust-side validator alone (that's
+/// already covered by `common::character`'s own unit tests).
+#[cfg(test)]
+mod nh79_character_summary_tests {
+    use super::*;
+    use crate::persistence::{ConnectionMode, DatabaseSettings, SqlLogMode, establish_connection};
+    use common::comp::{ActiveAbilities, CharacterClass};
+
+    struct TestDb {
+        _dir: tempfile::TempDir,
+        settings: DatabaseSettings,
+    }
+
+    impl TestDb {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let settings = DatabaseSettings {
+                db_dir: dir.path().to_path_buf(),
+                sql_log_mode: SqlLogMode::Disabled,
+            };
+            crate::persistence::run_migrations(&settings);
+            Self {
+                _dir: dir,
+                settings,
+            }
+        }
+
+        fn connection(&self) -> crate::persistence::VelorenConnection {
+            establish_connection(&self.settings, ConnectionMode::ReadWrite)
+        }
+    }
+
+    fn components() -> PersistedComponents {
+        let body = comp::Body::Humanoid(comp::humanoid::Body::random());
+        PersistedComponents {
+            body,
+            hardcore: None,
+            character_class: CharacterClass::single(comp::ClassKind::Warrior),
+            stats: comp::Stats::new(Content::Plain("Testificate".to_owned()), body),
+            skill_set: comp::SkillSet::default(),
+            inventory: Inventory::with_empty(),
+            waypoint: None,
+            pets: Vec::new(),
+            active_abilities: ActiveAbilities::default(),
+            map_marker: None,
+            ethos: comp::Ethos::default(),
+            background: comp::Background::default(),
+            pact: comp::Pact::default(),
+            trigger_slots: comp::TriggerSlots::default(),
+            spell_mastery: comp::SpellMastery::default(),
+        }
+    }
+
+    /// Creates a character and commits on success; on failure the
+    /// transaction is dropped uncommitted, which rolls it back (rusqlite's
+    /// default `DropBehavior` for an unfinished `Transaction`).
+    fn create(db: &TestDb, uuid: &str, alias: &str) -> Result<CharacterId, PersistenceError> {
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let result =
+            create_character(uuid, alias, components(), &mut transaction).map(|(id, _)| id);
+        if result.is_ok() {
+            transaction.commit().expect("commit");
+        }
+        result
+    }
+
+    #[test]
+    fn create_character_rejects_invalid_name() {
+        let db = TestDb::new();
+        let err = create(&db, "uuid-invalid-name", "   ").unwrap_err();
+        assert!(matches!(err, PersistenceError::CharacterNameInvalid(_)));
+    }
+
+    #[test]
+    fn create_character_rejects_duplicate_name_case_insensitive() {
+        let db = TestDb::new();
+        create(&db, "uuid-a", "Aragorn").expect("first creation succeeds");
+        let err = create(&db, "uuid-b", "aragorn").unwrap_err();
+        assert!(matches!(err, PersistenceError::CharacterNameUnavailable));
+    }
+
+    /// The `character.alias` uniqueness index folds case (`COLLATE NOCASE`)
+    /// but not whitespace, so `create_character`/`rename_character` must
+    /// normalize whitespace themselves before the uniqueness check --
+    /// otherwise `" Aragorn"` and `"Aragorn"` would both be accepted as
+    /// distinct rows, letting a player create a visually-identical name.
+    #[test]
+    fn create_character_rejects_duplicate_name_differing_only_in_whitespace() {
+        let db = TestDb::new();
+        create(&db, "uuid-a", "Aragorn").expect("first creation succeeds");
+        let err = create(&db, "uuid-b", "  Aragorn ").unwrap_err();
+        assert!(matches!(err, PersistenceError::CharacterNameUnavailable));
+    }
+
+    #[test]
+    fn create_character_stores_the_normalized_name() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-normalize", "  Two   Words  ").expect("creation");
+
+        let conn = db.connection();
+        let summaries = load_character_summaries("uuid-normalize", &conn).expect("load");
+        assert_eq!(
+            summaries
+                .iter()
+                .find(|s| s.character_id == id)
+                .unwrap()
+                .alias,
+            "Two Words"
+        );
+    }
+
+    #[test]
+    fn rename_character_happy_path() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-rename", "Original").expect("creation");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        rename_character("uuid-rename", id, "Renamed", &mut transaction).expect("rename");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let summaries = load_character_summaries("uuid-rename", &conn).expect("load");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].alias, "Renamed");
+    }
+
+    #[test]
+    fn rename_character_rejects_when_not_owner() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-owner", "Owned").expect("creation");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let err = rename_character("uuid-not-owner", id, "Stolen", &mut transaction).unwrap_err();
+        assert!(matches!(err, PersistenceError::CharacterNotFound));
+    }
+
+    #[test]
+    fn rename_character_rejects_invalid_name() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-bad-rename", "Fine").expect("creation");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let err = rename_character("uuid-bad-rename", id, "", &mut transaction).unwrap_err();
+        assert!(matches!(err, PersistenceError::CharacterNameInvalid(_)));
+    }
+
+    #[test]
+    fn rename_character_rejects_taken_name_case_insensitive() {
+        let db = TestDb::new();
+        create(&db, "uuid-taken-a", "Foo").expect("first creation");
+        let bar_id = create(&db, "uuid-taken-b", "Bar").expect("second creation");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let err = rename_character("uuid-taken-b", bar_id, "foo", &mut transaction).unwrap_err();
+        assert!(matches!(err, PersistenceError::CharacterNameUnavailable));
+    }
+
+    #[test]
+    fn load_character_summaries_filters_by_uuid_and_computes_level() {
+        let db = TestDb::new();
+        create(&db, "uuid-list-a", "First").expect("creation a");
+        create(&db, "uuid-list-b", "Second").expect("creation b");
+
+        let conn = db.connection();
+        let summaries = load_character_summaries("uuid-list-a", &conn).expect("load");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].alias, "First");
+        assert_eq!(summaries[0].level, 1, "a fresh character starts at level 1");
+        assert_eq!(summaries[0].waypoint, None);
+    }
+
+    #[test]
+    fn load_character_summaries_is_empty_for_unknown_uuid() {
+        let db = TestDb::new();
+        let conn = db.connection();
+        let summaries = load_character_summaries("uuid-does-not-exist", &conn).expect("load");
+        assert!(summaries.is_empty());
     }
 }
