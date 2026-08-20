@@ -84,6 +84,22 @@ impl State {
             .get(info.viewpoint_entity)
         {
             use common::comp::ability::AuxiliaryAbility;
+
+            // Snapshotted before the mutable loop below: which auxiliary
+            // indices the player has explicitly dragged onto a mouse slot.
+            // Without this, the loop's own re-assertion of a still-granted
+            // ability back into its numbered slot would resurrect a second
+            // copy there every time this runs -- turning a drag-to-mouse-
+            // slot into a duplicate instead of the move it looks like.
+            let ability_index = |slot: Slot| match self.slots[slot as usize] {
+                Some(SlotContents::Ability(i)) => Some(i),
+                _ => None,
+            };
+            let mouse_slots = [
+                ability_index(Slot::MouseLeft),
+                ability_index(Slot::MouseRight),
+            ];
+
             // Bounded to the 10 numbered slots explicitly, not just by
             // `auxiliary_set()` happening to be shorter today -- a future
             // bump of `BASE_ABILITY_LIMIT` past 10 must not start
@@ -101,9 +117,13 @@ impl State {
                 .enumerate()
                 .zip(self.slots[..10].iter_mut())
             {
-                if matches!(ability, AuxiliaryAbility::Empty) {
+                if matches!(ability, AuxiliaryAbility::Empty)
+                    || !ability_belongs_in_its_numbered_slot(i, mouse_slots)
+                {
                     if matches!(hotbar_slot, Some(SlotContents::Ability(_))) {
-                        // If ability is empty but hotbar shows an ability, clear it
+                        // If ability is empty but hotbar shows an ability, clear it.
+                        // Also clears a numbered slot's stale copy of an ability
+                        // the player has since moved to a mouse slot.
                         *hotbar_slot = None;
                     }
                 } else {
@@ -118,6 +138,19 @@ impl State {
                 .for_each(|slot| *slot = None)
         }
     }
+}
+
+/// Whether the auxiliary ability at `ability_index` should still be shown in
+/// its own numbered slot, given what the player currently has parked in the
+/// two mouse slots. `false` means a drag has moved this ability onto a mouse
+/// slot -- its old numbered slot must read as empty rather than resurrect a
+/// duplicate, since `maintain_abilities` re-derives every numbered slot from
+/// the underlying ability pool on every call.
+fn ability_belongs_in_its_numbered_slot(
+    ability_index: usize,
+    mouse_slots: [Option<usize>; 2],
+) -> bool {
+    !mouse_slots.contains(&Some(ability_index))
 }
 
 impl Slot {
@@ -144,5 +177,33 @@ impl Slot {
         let current_slot = *self as usize;
         let previous_slot = (current_slot + 10 - 1) % 10;
         *self = Self::SLOTS[previous_slot];
+    }
+}
+
+#[cfg(test)]
+mod ability_belongs_in_its_numbered_slot_tests {
+    use super::ability_belongs_in_its_numbered_slot;
+
+    #[test]
+    fn an_ability_with_neither_mouse_slot_occupied_belongs_in_its_numbered_slot() {
+        assert!(ability_belongs_in_its_numbered_slot(3, [None, None]));
+    }
+
+    #[test]
+    fn an_ability_parked_in_the_left_mouse_slot_no_longer_belongs_in_its_numbered_slot() {
+        assert!(!ability_belongs_in_its_numbered_slot(3, [Some(3), None]));
+    }
+
+    #[test]
+    fn an_ability_parked_in_the_right_mouse_slot_no_longer_belongs_in_its_numbered_slot() {
+        assert!(!ability_belongs_in_its_numbered_slot(3, [None, Some(3)]));
+    }
+
+    #[test]
+    fn a_different_ability_in_a_mouse_slot_does_not_evict_this_one() {
+        // Ability 3's own numbered slot is unaffected by ability 5 sitting in
+        // a mouse slot -- the check is keyed on ability identity, not on
+        // "any mouse slot is occupied."
+        assert!(ability_belongs_in_its_numbered_slot(3, [Some(5), None]));
     }
 }

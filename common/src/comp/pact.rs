@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
 
 use crate::{
-    assets::{AssetExt, AssetReadGuard, Ron},
+    assets::{AssetExt, AssetReadGuard, ReloadId, Ron},
     comp::{
         SkillSet,
         ethos::Moral,
@@ -351,6 +351,17 @@ pub struct SummonTuning {
 /// `patrons_manifest`.
 pub fn summon_tuning_manifest() -> AssetReadGuard<Ron<SummonTuning>> {
     Ron::<SummonTuning>::load_expect("common.pact.summon_tuning").read()
+}
+
+/// The `ReloadId` backing [`summon_tuning_manifest`]'s asset. Cheap (an
+/// already-loaded handle lookup + an atomic read, no I/O) -- unlike
+/// `summon_tuning_manifest` itself, this is safe to call on every
+/// [`summon_cost::cached_npc_summon_cost`] call, since its whole purpose is
+/// letting that process-lifetime cache detect a hot-reload/`asset_tweak`
+/// edit and invalidate itself, instead of silently serving pre-edit numbers
+/// for the rest of the process's life.
+pub fn summon_tuning_reload_id() -> ReloadId {
+    Ron::<SummonTuning>::load_expect("common.pact.summon_tuning").last_reload_id()
 }
 
 /// `(level, base)` milestones for the Cadena point pool, ascending by level.

@@ -56,7 +56,9 @@ pub(crate) mod shared {
     #[cfg(feature = "worldgen")]
     pub(crate) use super::entity_creation::handle_create_npc;
     pub(crate) use super::{
-        entity_manipulation::{TransformEntityError, transform_entity},
+        entity_manipulation::{
+            TransformEntityError, release_chain_summon_charge, transform_entity,
+        },
         group_manip::update_map_markers,
         trade::cancel_trades_for,
     };

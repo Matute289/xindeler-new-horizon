@@ -40,9 +40,9 @@ pub fn handle_character_delete(server: &mut Server, ev: DeleteCharacterEvent) {
     updater.queue_character_deletion(ev.requesting_player_uuid, ev.character_id);
 }
 
-/// See `handle_exit_ingame`'s call site. Shares its entity-resolution logic
-/// (`entity_manipulation::summons_to_dismiss`) with the owner-death path
-/// (`entity_manipulation`'s `DestroyEvent` handler, in its
+/// See `handle_exit_ingame`'s call site. Shares the whole resolve-then-emit
+/// step (`entity_manipulation::dismiss_owners_summons`) with the owner-death
+/// path (`entity_manipulation`'s `DestroyEvent` handler, in its
 /// `data.clients.contains(ev.entity)` branch) -- a player's own death never
 /// deletes their entity (it resets `CharacterState` and waits for respawn
 /// instead), so summons are not caught by the normal death→`DeleteEvent`
@@ -55,15 +55,11 @@ pub(super) fn dismiss_active_chain_summons(ecs: &specs::World, entity: EcsEntity
         .get(entity)
         .cloned();
     let id_maps = ecs.read_resource::<IdMaps>();
-    let to_dismiss = super::entity_manipulation::summons_to_dismiss(summons.as_ref(), &id_maps);
-    if to_dismiss.is_empty() {
-        return;
-    }
     let delete_events = ecs.read_resource::<EventBus<DeleteEvent>>();
     let mut emitter = delete_events.emitter();
-    for summon_entity in to_dismiss {
-        emitter.emit(DeleteEvent(summon_entity));
-    }
+    super::entity_manipulation::dismiss_owners_summons(summons.as_ref(), &id_maps, |ev| {
+        emitter.emit(ev)
+    });
 }
 
 pub fn handle_exit_ingame(server: &mut Server, entity: EcsEntity, skip_persistence: bool) {
