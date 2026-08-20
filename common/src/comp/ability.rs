@@ -278,6 +278,37 @@ impl Component for AbilityPool {
 }
 
 impl AbilityPool {
+    /// The Blade boon's three attack keys, held by the Warlock for exactly as
+    /// long as `Pact::blade_summoned` is true (N27-AB).
+    ///
+    /// In ascending blade tier: the always-available base strike ("Muda"),
+    /// the awakened sweep unlocked by buying `PactBladeSkill::SecondStrike`
+    /// (tier 2), and the capstone unlocked by `PactBladeSkill::Crown` (tier
+    /// 4). All three are granted together the moment the blade is summoned —
+    /// the *tier* gate lives in the ability manifest as
+    /// `Simple(Some(PactBlade(..)), ..)`, never in whether the key is
+    /// present, exactly like every other class key (see
+    /// [`Self::for_character`]'s doc comment): a key that appeared and
+    /// disappeared as the Warlock spent skill points would move every index
+    /// after it every time.
+    ///
+    /// The blade grants no `Item`, occupies no `EquipSlot`, and leaves the
+    /// real weapon in `ActiveMainhand` untouched — it is exactly these three
+    /// pool entries and nothing else.
+    ///
+    /// Power does NOT scale continuously with `PactBlade` skill level:
+    /// `CharacterAbility::adjusted_by_skills` is a no-op for `InnateAux`
+    /// abilities (it passes `tool: None`, and only `Sceptre`/`Pick` have real
+    /// arms), and `adjusted_by_class_synergy` is a hardcoded, `SelfBuff`-only
+    /// path that `debug_assert!`s on a damage ability. Growth is instead
+    /// expressed by WHICH of the three is unlocked, each authored a step
+    /// stronger than the last. A real continuous-scaling hook, if ever
+    /// wanted, is separate follow-up work — do not invent one here.
+    pub const PACT_BLADE_KEYS: [&'static str; 3] = [
+        "class.warlock.pactblade.mute",
+        "class.warlock.pactblade.waking",
+        "class.warlock.pactblade.crowned",
+    ];
     /// The pool key a talisman bearer holds while bonded to a Warlock.
     pub const TALISMAN_RECALL_KEY: &'static str = "class.warlock.pacttalisman.recall";
 
@@ -414,6 +445,88 @@ impl AbilityPool {
             abilities,
             spell_gates,
         }
+    }
+
+    /// [`Self::for_character`] plus whatever the character's own [`Pact`]
+    /// currently projects into the pool — today, the Blade boon's three
+    /// attack keys while `blade_summoned`.
+    ///
+    /// EVERY site that rebuilds a live character's pool must go through this
+    /// rather than `for_character` directly, or a rebuild triggered by
+    /// something unrelated (a relog, `/learn_spells`, `/grant_class`, a
+    /// transcribed spell) would silently drop a summoned blade's abilities
+    /// until the Warlock re-summoned. The load-time and in-world builders
+    /// have to agree exactly anyway — a persisted `Innate:key:<key>` hotbar
+    /// slot is resolved against the pool built at load, so a key missing from
+    /// one side and present on the other loses the binding.
+    ///
+    /// `pact: None` is every entity that has no [`Pact`] at all (non-Warlocks,
+    /// NPCs, character creation) and is exactly `for_character`.
+    ///
+    /// [`Pact`]: crate::comp::pact::Pact
+    pub fn for_character_with_pact(
+        body: &crate::comp::Body,
+        character_class: &crate::comp::CharacterClass,
+        learned_spells: &HashSet<String>,
+        pact: Option<&crate::comp::pact::Pact>,
+    ) -> Self {
+        Self::for_character(body, character_class, learned_spells)
+            .with_blade_bond(pact.is_some_and(|pact| pact.blade_is_manifest()))
+    }
+
+    /// Whether this pool currently carries the summoned blade's attack keys.
+    ///
+    /// All three are granted and released as ONE group, so testing the first
+    /// answers for the set; [`Self::with_blade_bond`] is what maintains that
+    /// invariant.
+    pub fn has_blade_bond(&self) -> bool {
+        self.abilities
+            .iter()
+            .any(|key| key == Self::PACT_BLADE_KEYS[0])
+    }
+
+    /// Appends (or strips) the summoned blade's three attack keys
+    /// ([`Self::PACT_BLADE_KEYS`]) as a single group.
+    ///
+    /// **Appends after everything [`Self::for_character`] produced**, in
+    /// `PACT_BLADE_KEYS` order, per this type's ordering contract — a granted
+    /// key must never be inserted into the middle. Granting all three at once
+    /// (rather than one per tier as the skills are bought) is what keeps the
+    /// pool indices stable as the Warlock spends `PactBlade` skill points:
+    /// the per-tier gate lives in the ability manifest, not here.
+    ///
+    /// Idempotent in both directions. Summon -> dismiss returns the pool to
+    /// byte-identical contents, so re-summoning restores the very same
+    /// indices; a hotbar slot bound to some OTHER key is never disturbed by
+    /// either half of the round trip. (A slot bound to a blade key itself is
+    /// emptied by `remap_innate_bindings` on dismiss, exactly as a released
+    /// talisman bearer's recall slot is — the key genuinely is not in the
+    /// pool while the blade is away.)
+    #[must_use]
+    pub fn with_blade_bond(mut self, summoned: bool) -> Self {
+        let held = self.has_blade_bond();
+        if summoned && !held {
+            for key in Self::PACT_BLADE_KEYS {
+                self.abilities.push(key.to_string());
+                // Not spells: gated by `Skill` inside the ability manifest,
+                // never by a class-level band.
+                self.spell_gates.push(None);
+            }
+        } else if !summoned && held {
+            // Rebuilt as one zipped pass rather than three `Vec::remove`s:
+            // the two arrays must be filtered in lockstep, and each `remove`
+            // would otherwise have to account for the index the previous one
+            // shifted.
+            let (abilities, spell_gates) = std::mem::take(&mut self.abilities)
+                .into_iter()
+                .zip(std::mem::take(&mut self.spell_gates))
+                .filter(|(key, _)| !Self::PACT_BLADE_KEYS.contains(&key.as_str()))
+                .unzip();
+            self.abilities = abilities;
+            self.spell_gates = spell_gates;
+        }
+        debug_assert_eq!(self.abilities.len(), self.spell_gates.len());
+        self
     }
 
     /// Whether this pool currently carries the talisman bearer's recall key.
@@ -6455,6 +6568,377 @@ mod talisman_pool_tests {
                 "{class:?} must not carry the recall key without a bond"
             );
         }
+    }
+}
+
+/// N27-AB — the Warlock Blade boon's three attack keys: how they enter and
+/// leave the pool, that they resolve, and that their per-tier gate is the
+/// manifest's `Simple(Some(PactBlade(..)), ..)` rather than their presence.
+#[cfg(test)]
+mod pact_blade_pool_tests {
+    use super::{AbilityPool, AuxiliaryAbility, remap_innate_bindings};
+    use crate::comp::{
+        ActiveAbilities, CharacterClass, ClassKind, SkillSet,
+        item::tool::AbilityMap,
+        pact::{Pact, PactBoon, PactStanding},
+        skillset::skills::{PactBladeSkill, Skill},
+        tool::AbilitySpec,
+    };
+
+    fn human_body() -> crate::comp::Body {
+        use rand::{SeedableRng, rngs::SmallRng};
+        crate::comp::Body::Humanoid(crate::comp::humanoid::Body::random_with(
+            &mut SmallRng::seed_from_u64(0),
+            &crate::comp::humanoid::Species::Human,
+        ))
+    }
+
+    fn warlock_pool() -> AbilityPool {
+        AbilityPool::for_character(
+            &human_body(),
+            &CharacterClass::single(ClassKind::Warlock),
+            AbilityPool::no_learned_spells(),
+        )
+    }
+
+    fn summoned_blade_pact() -> Pact {
+        Pact {
+            standing: PactStanding::Bound,
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            ..Pact::default()
+        }
+    }
+
+    /// A skillset with `skill` bought. The `PactBlade` group is only
+    /// accessible once blade XP has been earned, so award enough to grant the
+    /// points before spending them.
+    fn skillset_with(skills: &[PactBladeSkill]) -> SkillSet {
+        use crate::comp::skillset::SkillGroupKind;
+        let mut skill_set = SkillSet::default();
+        for _ in 0..skills.len() {
+            skill_set.grant_skill_point(SkillGroupKind::PactBlade);
+        }
+        for skill in skills {
+            skill_set
+                .unlock_skill(Skill::PactBlade(*skill))
+                .unwrap_or_else(|e| panic!("could not unlock {skill:?}: {e:?}"));
+        }
+        skill_set
+    }
+
+    /// The ordering contract: all three keys go at the very end, in
+    /// `PACT_BLADE_KEYS` order, so nothing that already existed can move.
+    #[test]
+    fn the_blade_keys_are_appended_as_a_group_after_everything_else() {
+        let base = warlock_pool();
+        let summoned = base.clone().with_blade_bond(true);
+
+        assert_eq!(
+            summoned.abilities.len(),
+            base.abilities.len() + 3,
+            "summoning must add exactly the three blade keys"
+        );
+        assert_eq!(
+            &summoned.abilities[..base.abilities.len()],
+            &base.abilities[..],
+            "no pre-existing key may shift"
+        );
+        assert_eq!(
+            &summoned.abilities[base.abilities.len()..],
+            &AbilityPool::PACT_BLADE_KEYS.map(String::from)[..],
+            "the three keys must be appended in tier order"
+        );
+        assert_eq!(
+            summoned.abilities.len(),
+            summoned.spell_gates.len(),
+            "the parallel arrays must stay the same length"
+        );
+        assert!(
+            summoned.spell_gates[base.abilities.len()..]
+                .iter()
+                .all(Option::is_none),
+            "the blade's attacks are not spells and carry no class-level gate"
+        );
+    }
+
+    /// Summoning twice grants one set; dismissing returns the pool to exactly
+    /// what it was, so re-summoning restores the very same indices.
+    #[test]
+    fn summoning_the_blade_is_idempotent_and_reversible() {
+        let base = warlock_pool();
+        let once = base.clone().with_blade_bond(true);
+        let twice = once.clone().with_blade_bond(true);
+        assert_eq!(once.abilities, twice.abilities);
+        assert!(once.has_blade_bond());
+
+        let dismissed = twice.with_blade_bond(false);
+        assert_eq!(dismissed.abilities, base.abilities);
+        assert_eq!(dismissed.spell_gates.len(), dismissed.abilities.len());
+        assert!(!dismissed.has_blade_bond());
+
+        // Re-summoning after a dismiss lands on byte-identical contents.
+        assert_eq!(
+            dismissed.with_blade_bond(true).abilities,
+            once.abilities,
+            "summon -> dismiss -> summon must reproduce the same indices"
+        );
+
+        // Dismissing a blade that was never out changes nothing.
+        assert_eq!(
+            base.clone().with_blade_bond(false).abilities,
+            base.abilities
+        );
+    }
+
+    /// The blade is granted by the summon, never by being a Warlock: no
+    /// class's key list may carry these on its own, or a Warlock who never
+    /// took the Blade boon would hold three dead buttons.
+    #[test]
+    fn no_class_grants_the_blade_keys_on_its_own() {
+        for class in [
+            ClassKind::Warlock,
+            ClassKind::Warrior,
+            ClassKind::Mage,
+            ClassKind::Rogue,
+        ] {
+            let pool = AbilityPool::for_character(
+                &human_body(),
+                &CharacterClass::single(class),
+                AbilityPool::no_learned_spells(),
+            );
+            assert!(
+                !pool.has_blade_bond(),
+                "{class:?} must not carry the blade keys without a summon"
+            );
+        }
+    }
+
+    /// `for_character_with_pact` is the one builder every live rebuild goes
+    /// through, so it must derive the grant from the pact rather than from
+    /// the caller remembering to append.
+    #[test]
+    fn the_pool_builder_derives_the_blade_grant_from_the_pact() {
+        let body = human_body();
+        let class = CharacterClass::single(ClassKind::Warlock);
+        let learned = AbilityPool::no_learned_spells();
+
+        let none = AbilityPool::for_character_with_pact(&body, &class, learned, None);
+        assert!(!none.has_blade_bond(), "no Pact grants no blade");
+
+        let out = AbilityPool::for_character_with_pact(
+            &body,
+            &class,
+            learned,
+            Some(&summoned_blade_pact()),
+        );
+        assert!(out.has_blade_bond());
+
+        // `blade_summoned` alone is not enough: a severed pact, or one whose
+        // boon is no longer Blade, has no blade out (`Pact::blade_is_manifest`).
+        for stale in [
+            Pact {
+                standing: PactStanding::Severed,
+                ..summoned_blade_pact()
+            },
+            Pact {
+                boon: Some(PactBoon::Talisman),
+                ..summoned_blade_pact()
+            },
+        ] {
+            assert!(
+                !AbilityPool::for_character_with_pact(&body, &class, learned, Some(&stale))
+                    .has_blade_bond(),
+                "a stored blade_summoned must not survive {:?}/{:?}",
+                stale.standing,
+                stale.boon
+            );
+        }
+    }
+
+    /// A granted key that resolves to nothing is a button that does nothing.
+    #[test]
+    fn every_blade_key_has_a_manifest_set() {
+        let map = AbilityMap::load().read();
+        for key in AbilityPool::PACT_BLADE_KEYS {
+            assert!(
+                map.get_ability_set(&AbilitySpec::Custom(key.to_string()))
+                    .is_some(),
+                "'{key}' has no manifest set"
+            );
+        }
+    }
+
+    /// The per-tier gate: the base strike needs no skill point, the other two
+    /// resolve to nothing until their `PactBladeSkill` node is bought. This is
+    /// `AbilityKind::Simple(Option<Skill>, _)` presence-checking in
+    /// `tool.rs`, NOT a `SpellGate` — every blade key's `spell_gates` entry is
+    /// `None`, so `AbilityPool::is_unlocked` answers `true` for all three.
+    #[test]
+    fn the_second_and_capstone_attacks_need_their_skill_the_base_one_does_not() {
+        let map = AbilityMap::load().read();
+        let resolves = |key: &str, skill_set: &SkillSet| {
+            map.get_ability_set(&AbilitySpec::Custom(key.to_string()))
+                .expect("manifest set exists")
+                .primary(Some(skill_set), None, None, None, None)
+                .is_some()
+        };
+
+        let [mute, waking, crowned] = AbilityPool::PACT_BLADE_KEYS;
+        let nothing_bought = SkillSet::default();
+        assert!(
+            resolves(mute, &nothing_bought),
+            "the tier-0 strike must work the instant the blade is summoned"
+        );
+        assert!(!resolves(waking, &nothing_bought));
+        assert!(!resolves(crowned, &nothing_bought));
+
+        // The tree is chained by prerequisite, so reaching a node means
+        // owning every node below it.
+        let through_second = skillset_with(&[PactBladeSkill::Voice, PactBladeSkill::SecondStrike]);
+        assert!(resolves(waking, &through_second));
+        assert!(
+            !resolves(crowned, &through_second),
+            "the capstone must stay locked until Crown itself is bought"
+        );
+
+        let through_crown = skillset_with(&[
+            PactBladeSkill::Voice,
+            PactBladeSkill::SecondStrike,
+            PactBladeSkill::Hunger,
+            PactBladeSkill::Crown,
+        ]);
+        assert!(resolves(mute, &through_crown));
+        assert!(resolves(waking, &through_crown));
+        assert!(resolves(crowned, &through_crown));
+    }
+
+    /// Every blade key is present in the pool whatever the skillset — the
+    /// gate is in the manifest, never in whether the key is there, or
+    /// spending a blade skill point would move every index after it.
+    #[test]
+    fn spending_a_blade_skill_point_never_changes_the_pool() {
+        let with_nothing = warlock_pool().with_blade_bond(true);
+        // The pool is a pure function of body/class/spellbook/pact — no
+        // `SkillSet` input at all, which is exactly the property under test.
+        let again = warlock_pool().with_blade_bond(true);
+        assert_eq!(with_nothing.abilities, again.abilities);
+        for key in AbilityPool::PACT_BLADE_KEYS {
+            let index = with_nothing
+                .abilities
+                .iter()
+                .position(|k| k == key)
+                .unwrap_or_else(|| panic!("{key} missing from a summoned pool"));
+            assert!(
+                with_nothing.is_unlocked(index, None, 1),
+                "{key} must not carry a SpellGate — its gate is the manifest Skill"
+            );
+        }
+    }
+
+    /// The append-only contract in the terms that actually matter to a
+    /// player: a hotbar slot bound to some OTHER pool key survives a full
+    /// summon -> dismiss -> summon cycle pointing at the same ability.
+    #[test]
+    fn a_hotbar_slot_bound_to_another_key_survives_the_summon_cycle() {
+        let base = warlock_pool();
+        let bound_key = base.abilities[0].clone();
+
+        let mut active = ActiveAbilities::default_limited(5);
+        active.change_ability(
+            0,
+            ActiveAbilities::active_auxiliary_key(None),
+            AuxiliaryAbility::Innate(0),
+            None,
+            None,
+        );
+
+        let summoned = base.clone().with_blade_bond(true);
+        remap_innate_bindings(&mut active, &base, &summoned);
+        let dismissed = summoned.clone().with_blade_bond(false);
+        remap_innate_bindings(&mut active, &summoned, &dismissed);
+
+        let AuxiliaryAbility::Innate(index) = active.auxiliary_set(None, None)[0] else {
+            panic!("the binding must still be an innate one");
+        };
+        assert_eq!(
+            dismissed.abilities[index], bound_key,
+            "an unrelated hotbar binding must survive the whole cycle"
+        );
+    }
+
+    /// The blade never touches equipment: the three keys are the entire
+    /// grant, so nothing here can be dropped, traded, sold, or persisted as
+    /// gear, and no `EquipSlot` is implicated.
+    #[test]
+    fn the_blade_grant_is_pool_keys_and_nothing_else() {
+        let base = warlock_pool();
+        let summoned = base.clone().with_blade_bond(true);
+        let added: Vec<&String> = summoned
+            .abilities
+            .iter()
+            .filter(|key| !base.abilities.contains(key))
+            .collect();
+        assert_eq!(
+            added.len(),
+            3,
+            "summoning must add pool keys only, and exactly three of them"
+        );
+        for key in &added {
+            assert!(
+                AbilityPool::PACT_BLADE_KEYS.contains(&key.as_str()),
+                "{key} is not one of the blade's keys"
+            );
+        }
+    }
+
+    /// Proficiency exemption. The brief's premise (`ability_info.tool` is
+    /// `None` for an `InnateAux`) is FALSE in this engine —
+    /// `states::utils::AbilityInfo::new` stamps every ability, innate or not,
+    /// with whatever tool sits in `ActiveMainhand`. What actually exempts the
+    /// blade is `meta.source`: `Attack::apply_attack` derives `is_magic` from
+    /// it and `Attack::proficiency_multiplier` returns 1.0 unconditionally
+    /// for a magic attack. So the invariant to hold is "all three carry a
+    /// `MagicSource`", and it is a real load-bearing property, not flavour.
+    #[test]
+    fn every_blade_attack_is_magic_sourced_so_weapon_proficiency_never_applies() {
+        use crate::{
+            combat::Attack,
+            comp::{Stats, item::tool::AbilityKind},
+        };
+
+        let map = AbilityMap::load().read();
+        for key in AbilityPool::PACT_BLADE_KEYS {
+            // Read the meta off the raw manifest entry, NOT through
+            // `primary(..)` — that applies the tier gate, which would hide
+            // two of the three behind a skillset this test has no business
+            // constructing.
+            let AbilityKind::Simple(_, item) = &map
+                .get_ability_set(&AbilitySpec::Custom(key.to_string()))
+                .expect("manifest set exists")
+                .primary
+            else {
+                panic!("{key} must be a Simple entry, not a Contextualized one");
+            };
+            assert!(
+                item.ability.ability_meta().source.is_some(),
+                "{key} must carry a MagicSource or a non-proficient weapon in ActiveMainhand \
+                 would scale it down"
+            );
+        }
+
+        // The property that buys: a caster pays no proficiency penalty on a
+        // magic attack, whatever is in their hands. `Stats::empty` is
+        // permissive by default, so the penalty is dialled in explicitly —
+        // otherwise this assertion would pass vacuously.
+        let mut stats = Stats::empty(human_body());
+        stats.non_proficient_damage_mult = 0.40;
+        stats.proficient_tools = crate::comp::class::ClassProficiencies::Only(Vec::new()).mask();
+        assert_eq!(
+            Attack::proficiency_multiplier(Some(&stats), None, true),
+            1.0,
+            "a magic-sourced attack is never scaled by weapon proficiency"
+        );
     }
 }
 
