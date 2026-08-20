@@ -1572,4 +1572,52 @@
         secondary: Simple(Some(Rogue(Vanish)), "common.abilities.class.rogue.vanish"),
         abilities: [],
     )),
+    // Held by a bonded talisman BEARER, not by the Warlock, and only while
+    // the bond buff is up. Gated by no `Skill`: the bond's own lifetime is
+    // the gate, and a bearer is not necessarily a Warlock (or any caster) at
+    // all.
+    Custom("class.warlock.pacttalisman.recall"): AbilitySet((
+        primary: Simple(None, "common.abilities.class.warlock.pact_talisman_recall"),
+        secondary: Simple(None, "common.abilities.class.warlock.pact_talisman_recall"),
+        abilities: [],
+    )),
+    // N27-O — Pacto de la Cadena: the Warlock Chain boon's summoned fiend.
+    // Not wired into `AbilityPool::for_character`'s automatic per-class
+    // grant yet (out of this task's file scope; see PR body) — reachable
+    // today the same way the Blade boon's own toggle is, for QA/manual
+    // testing, while the point-pool/ledger/anchor/dismiss machinery this
+    // key exercises is the part under test. `Pact::chain_summon_pool`
+    // already reads as 0 for any non-Chain-boon character, so granting this
+    // key pool-wide (as every other class key already is, per the doc
+    // comment above) is safe whenever that follow-up lands.
+    Custom("class.warlock.chainsummon"): AbilitySet((
+        primary: Simple(None, "common.abilities.class.warlock.summon_chain_fiend"),
+        secondary: Simple(None, "common.abilities.class.warlock.summon_chain_fiend"),
+        abilities: [],
+    )),
+    // N27-AB — Pacto de la Espada: the Blade boon's three attacks. All three
+    // keys are granted together by `AbilityPool::with_blade_bond` the moment
+    // `Pact::blade_summoned` goes true, and stripped together on dismiss —
+    // the BLADE's presence is what grants them. The per-TIER gate is the
+    // `Simple(Some(PactBlade(..)), ..)` below and nothing else, so spending a
+    // blade skill point never moves a pool index (see `AbilityPool::
+    // PACT_BLADE_KEYS`).
+    //
+    // No `EquipSlot`, no `Item`, no `Loadout` entry is involved anywhere:
+    // these are the whole of the summoned blade.
+    Custom("class.warlock.pactblade.mute"): AbilitySet((
+        primary: Simple(None, "common.abilities.class.warlock.pact_blade_mute"),
+        secondary: Simple(None, "common.abilities.class.warlock.pact_blade_mute"),
+        abilities: [],
+    )),
+    Custom("class.warlock.pactblade.waking"): AbilitySet((
+        primary: Simple(Some(PactBlade(SecondStrike)), "common.abilities.class.warlock.pact_blade_waking"),
+        secondary: Simple(Some(PactBlade(SecondStrike)), "common.abilities.class.warlock.pact_blade_waking"),
+        abilities: [],
+    )),
+    Custom("class.warlock.pactblade.crowned"): AbilitySet((
+        primary: Simple(Some(PactBlade(Crown)), "common.abilities.class.warlock.pact_blade_crowned"),
+        secondary: Simple(Some(PactBlade(Crown)), "common.abilities.class.warlock.pact_blade_crowned"),
+        abilities: [],
+    )),
 })

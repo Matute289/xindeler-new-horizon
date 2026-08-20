@@ -1,0 +1,19 @@
+// "Reinforces your magic" utility buff, no damage in the sheet -- `Hastened`
+// (a generic empowerment stand-in, already reused this pass for non-movement
+// "quickened power" flavor) as the closest existing primitive; the sheet's
+// own light-emission rider is purely visual/non-mechanical.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.25,
+    buffs: [
+        BuffDesc(kind: Hastened, data: BuffData(strength: 0.2, duration: Some(60.0))),
+    ],
+    energy_cost: 110.0,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

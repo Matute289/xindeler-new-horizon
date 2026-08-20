@@ -1,0 +1,35 @@
+// Same `Explosion`->`GroundAoe` deviation as circle_of_death.ron next
+// door, same reasoning (Explosion always self-centers, contradicts this
+// spell's own 46m sheet range). Sheet's `aoe: Cone 9` normalized to a
+// spherical `radius` per the sheet's own `notes` field ("Area normalized
+// to a sphere zone") -- GroundAoe has no cone-shaped falloff either way.
+//
+// Damage retuned along the same hemoclysm.ron-anchored curve
+// circle_of_death.ron uses, one circle higher (L8 vs L6): original 82 was
+// barely above circle_of_death's own (then-)68, despite the 2-circle gap
+// and despite already sitting below hemoclysm.ron itself (150 dmg at L7).
+// Sheet's "constructs and the walking dead feel nothing of its grasp"
+// creature-kind immunity rider dropped, same class of drop as
+// negative_energy_flood.ron's own undead-immunity rider.
+GroundAoe(
+    energy_cost: 200.0,
+    buildup_duration: 1.0,
+    delay: 0.55,
+    recover_duration: 0.6,
+    max_range: 46.0,
+    radius: 9.0,
+    min_falloff: 0.3,
+    damage: 172,
+    poise: 25,
+    knockback: (strength: 10.0, direction: Away),
+    dodgeable: Roll,
+    reagent: Some(Purple),
+    rooted_cast: false,
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        cooldown: Some(55.0),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

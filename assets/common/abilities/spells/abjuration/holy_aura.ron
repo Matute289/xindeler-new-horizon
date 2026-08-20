@@ -1,0 +1,25 @@
+// Group protective ward, same `StaticAura`+`ProtectingWard` shape as
+// circle_of_power.ron, at a higher strength for the higher circle. Sheet's
+// "foes that strike the warded must resist or be left dazzled" on-hit
+// retaliatory rider dropped -- no on-being-attacked trigger primitive
+// exists (same class of drop as shadow_of_moil.ron's own retaliation
+// rider).
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.45,
+    energy_cost: 140.0,
+    targets: InGroup,
+    auras: [
+        (kind: ProtectingWard, strength: 0.4, duration: Some(60), category: Some(Magical)),
+    ],
+    aura_duration: Some(60.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Divine),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

@@ -292,6 +292,8 @@ impl State {
         ecs.register::<comp::CharacterClass>();
         ecs.register::<comp::Ethos>();
         ecs.register::<comp::Background>();
+        ecs.register::<comp::Pact>();
+        ecs.register::<comp::Summons>();
         ecs.register::<comp::body::parts::Heads>();
         ecs.register::<comp::Player>();
         ecs.register::<comp::Stats>();

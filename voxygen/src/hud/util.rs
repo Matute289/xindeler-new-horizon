@@ -348,6 +348,7 @@ fn buff_key(buff: BuffKind) -> &'static str {
         BuffKind::Mooncloak => "buff-mooncloak",
         BuffKind::Nondetection => "buff-nondetection",
         BuffKind::MagicAura => "buff-magicaura",
+        BuffKind::PactTalisman => "buff-pacttalisman",
         BuffKind::Sequester => "buff-sequester",
         // Debuffs
         BuffKind::Bleeding => "buff-bleed",
@@ -581,6 +582,7 @@ pub fn consumable_desc(effects: &Effects, i18n: &Localization) -> Vec<String> {
                         | BuffKind::Mooncloak
                         | BuffKind::Nondetection
                         | BuffKind::MagicAura
+                        | BuffKind::PactTalisman
                         | BuffKind::Sequester => Cow::Borrowed(""),
                     };
 
@@ -965,6 +967,13 @@ pub fn ability_image(imgs: &img_ids::Imgs, ability_id: &str) -> image::Id {
         "class.cleric.radiantchannel" => imgs.buff_plus_0,
         "class.rogue.ambush" => imgs.buff_imminentcritical,
         "class.rogue.vanish" => imgs.buff_haste_0,
+        // N27-AB: the Warlock Blade boon's three attacks. Same "reuse an
+        // existing icon until bespoke art lands" rule as the class keys
+        // above; each borrows the icon of the rider it applies (or, for the
+        // base strike, the class's own damage icon).
+        "class.warlock.pactblade.mute" => imgs.magic_damage_skill,
+        "class.warlock.pactblade.waking" => imgs.debuff_bleed_0,
+        "class.warlock.pactblade.crowned" => imgs.debuff_cursed_0,
         _ => imgs.not_found,
     }
 }

@@ -1,0 +1,31 @@
+// Real-agent companion summon, same `SummonInfo::Npc` shape established this
+// pass (`with_agent`/`incorporeal`/`phantom_illusion` at their
+// `#[serde(default)]` values -- `Owned(caster)`, real AI, hittable).
+// `body: QuadrupedMedium(Wolf)` stands in for this spell's own summon flavor --
+// one fixed already-shipped species, no per-cast form choice exists in the
+// data model. No `QuadrupedMedium`-specific summon loadout/skillset preset exists
+// (unlike HuskSummon/JiangshiSummon for undead), so both stay `None` --
+// deliberate, not an oversight.
+BasicSummon(
+    buildup_duration: 1.0,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    summon_info: Npc(
+        summoned_amount: 2,
+        summon_distance: (1.0, 3.0),
+        body: QuadrupedMedium((species: Wolf, body_type: Male)),
+        scale: None,
+        has_health: true,
+        use_npc_name: true,
+        loadout_config: None,
+        skillset_config: None,
+        duration: Some((secs: 60, nanos: 0)),
+    ),
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Arcane),
+        cooldown: Some(40.0),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

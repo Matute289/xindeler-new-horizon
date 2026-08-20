@@ -1,0 +1,29 @@
+// The sheet's own duration is Concentration(60) ("a blade ... you swing at
+// foes within reach ... until your focus fades"), but there is no
+// persistent-conjured-weapon-summon mechanism anywhere in this engine that
+// would need a real 60 s timer -- this ships as an ordinary repeatable
+// player-triggered melee strike, mechanically identical to any other
+// BasicMelee spell (see booming_blade.ron/green_flame_blade.ron, Wave 1,
+// which are cast on demand with no timer either). The compendium entry
+// below lists duration: Instant rather than Concentration(60) for the same
+// reason divine_favor.ron (Wave 1) does: a 60 s "active" claim in the
+// in-game spellbook tooltip would promise a persistence this ability
+// doesn't have.
+//
+// Sear is used over Stab/Slash/Bash/Hook for its built-in Burning rider
+// (common/src/comp/melee.rs), the closest fire-flavored kind available (see
+// booming_blade.ron for why no MeleeConstructorKind exposes a real Fire
+// damage_kind field -- Sear's own hardcoded kind is Energy, not Fire).
+BasicMelee(
+    energy_cost: 20,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.3,
+    melee_constructor: (
+        kind: Sear(damage: 22, poise: 8, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+    ),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

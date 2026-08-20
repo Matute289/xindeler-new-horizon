@@ -50,6 +50,7 @@ impl Screen {
         selected_language_index: Option<usize>,
         language_metadatas: &[LanguageMetadata],
         button_style: style::button::Style,
+        multiplayer_button_focused: bool,
     ) -> Element<'_, Message> {
         let mut buttons = Vec::new();
         // If the server field is locked, we don't want to show the server selection
@@ -166,6 +167,7 @@ impl Screen {
                     login_info,
                     i18n,
                     button_style,
+                    multiplayer_button_focused,
                 ),
                 Showing::Languages => self.language_selection.view(
                     fonts,
@@ -342,8 +344,18 @@ impl LoginBanner {
         login_info: &LoginInfo,
         i18n: &Localization,
         button_style: style::button::Style,
+        multiplayer_button_focused: bool,
     ) -> Element<'_, Message> {
         let input_text_size = fonts.cyri.scale(INPUT_TEXT_SIZE);
+        // Gamepad/keyboard menu-navigation highlight for the primary action
+        // button — a plain tint override since iced buttons here have no
+        // built-in "focused" visual state (there's no continuous-hover
+        // equivalent for a discrete Up/Down/Apply focus target).
+        let multiplayer_button_style = if multiplayer_button_focused {
+            button_style.image_color(Rgba::new(255, 220, 60, 255))
+        } else {
+            button_style
+        };
 
         let server_field: Element<Message> = if server_field_locked {
             let unlock_style = style::button::Style::new(imgs.unlock)
@@ -438,7 +450,7 @@ impl LoginBanner {
                     &mut self.multiplayer_button,
                     i18n.get_msg("common-multiplayer"),
                     FILL_FRAC_TWO,
-                    button_style,
+                    multiplayer_button_style,
                     Some(Message::Multiplayer),
                 ),
                 #[cfg(feature = "singleplayer")]

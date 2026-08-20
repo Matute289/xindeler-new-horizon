@@ -55,6 +55,7 @@ main-login-authentication_error = Authentication error on server.
 main-login-internal_error = Internal error on client. Hint: The player character might have been deleted.
 main-login-failed_auth_server_url_invalid = Failed to connect to authentication server.
 main-login-insecure_auth_scheme = The HTTP authentication scheme is not supported. It's insecure! For development purposes, HTTP is allowed for 'localhost' or debug builds.
+main-login-2fa_not_supported = This account requires a two-factor authentication code to sign in, which this client version does not yet support. Please try again from a newer client once available.
 main-login-server_full = Server is full.
 main-login-untrusted_auth_server = Authentication server not trusted.
 main-login-timeout = Timeout: Server did not respond in time. Hint: the server might be currently overloaded or there are issues on the network.

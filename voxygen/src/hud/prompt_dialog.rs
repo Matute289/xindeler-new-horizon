@@ -4,6 +4,7 @@ use crate::{
     hud::{Event, PromptDialogSettings},
     settings::Settings,
     ui::fonts::Fonts,
+    window::MenuInput,
 };
 use conrod_core::{
     Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon,
@@ -33,6 +34,7 @@ pub struct PromptDialog<'a> {
     localized_strings: &'a LocalizationHandle,
     settings: &'a Settings,
     prompt_dialog_settings: &'a PromptDialogSettings,
+    menu_events: &'a [MenuInput],
 }
 
 impl<'a> PromptDialog<'a> {
@@ -42,6 +44,7 @@ impl<'a> PromptDialog<'a> {
         localized_strings: &'a LocalizationHandle,
         settings: &'a Settings,
         prompt_dialog_settings: &'a PromptDialogSettings,
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             imgs,
@@ -50,6 +53,7 @@ impl<'a> PromptDialog<'a> {
             common: widget::CommonBuilder::default(),
             settings,
             prompt_dialog_settings,
+            menu_events,
         }
     }
 }
@@ -81,6 +85,20 @@ impl Widget for PromptDialog<'_> {
         let widget::UpdateArgs { state, ui, .. } = args;
         let _localized_strings = &self.localized_strings;
         let mut event: Option<DialogOutcomeEvent> = None;
+
+        // MENU INPUTS: `Back` declines the dialog, same as the Decline
+        // button, when a decline option exists. Accept-only dialogs (e.g.
+        // the persistence-load-error acknowledgement) require the explicit
+        // Accept action, same as they already do for mouse/keyboard.
+        if self.prompt_dialog_settings.negative_option {
+            for key in self.menu_events {
+                if let MenuInput::Back = key {
+                    event = Some(DialogOutcomeEvent::Negative(
+                        self.prompt_dialog_settings.negative_event.as_ref().cloned(),
+                    ));
+                }
+            }
+        }
 
         let accept_key = self
             .settings

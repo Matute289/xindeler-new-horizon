@@ -1,0 +1,34 @@
+// Sheet's own variant is SelfBuff, but range is Touch and the description reads "a willing
+// creature you touch" (third person) -- SelfBuff always lands its effect on the caster only
+// (common/src/states/self_buff.rs), so this uses the touch-ally pattern already shipped for
+// weave_transfusion.ron in this folder instead (a near-inert Stab whose
+// attack_effect_target: InGroup redirects the buff onto whoever is touched).
+//
+// No BuffKind or stat hook models wall/ceiling climbing in this engine (checked
+// common/src/comp/buff.rs in full). FreedomOfMovement (immunity to DifficultTerrain) is the
+// closest existing "moves over any surface without penalty" primitive -- not a literal
+// wall-climb, but the nearest available analog; flagged as a deviation, not a silent
+// reinterpretation.
+BasicMelee(
+    energy_cost: 35.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Buff((
+                kind: FreedomOfMovement,
+                dur_secs: 60.0,
+                strength: Value(1.0),
+                chance: 1.0,
+            )),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Transmutation), source: Some(Arcane)),
+)

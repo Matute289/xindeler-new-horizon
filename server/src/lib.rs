@@ -6,6 +6,12 @@
 #![deny(clippy::clone_on_ref_ptr)]
 #![feature(box_patterns, option_zip, const_type_name, slice_partition_dedup)]
 
+// NH-79 Phase 2: `server-cli`'s `/player_api/v1` auth middleware needs
+// `authc::AuthClient`/`CharacterAccessToken` directly (via
+// `Server::auth_client` below) -- re-exported rather than adding a second,
+// separately-pinned `authc` dependency to `server-cli`'s own `Cargo.toml`.
+pub use authc;
+
 pub mod automod;
 pub mod banishment;
 mod character_creator;
@@ -24,6 +30,7 @@ pub mod lod;
 pub mod login_provider;
 pub mod metrics;
 pub mod oracle;
+pub mod pact;
 pub mod persistence;
 mod pet;
 pub mod presence;
@@ -228,6 +235,19 @@ impl Default for RecentClientIPs {
 pub struct ChunkRequest {
     entity: EcsEntity,
     key: Vec2<i32>,
+}
+
+/// `persistence::CharacterSummary` with its raw waypoint resolved to a site
+/// name (see `Server::resolve_waypoint_site_name`). See
+/// `Server::list_player_characters` (NH-79).
+pub struct ResolvedCharacterSummary {
+    pub character_id: CharacterId,
+    pub alias: String,
+    pub class: String,
+    pub level: u16,
+    /// `None` if this character never sat at a waypoint, or the waypoint's
+    /// site couldn't be resolved.
+    pub location: Option<String>,
 }
 
 #[derive(Debug)]
@@ -454,6 +474,12 @@ impl Server {
         state.ecs_mut().insert(oracle::ChronicleLog::default());
         state
             .ecs_mut()
+            .insert(oracle::OracleEventsEnabled::default());
+        state
+            .ecs_mut()
+            .insert(oracle::OracleTriggerLedger::default());
+        state
+            .ecs_mut()
             .insert(sys::detection::DetectionSnapshots::default());
         state
             .ecs_mut()
@@ -503,6 +529,7 @@ impl Server {
         state.ecs_mut().register::<login_provider::PendingLogin>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
         state.ecs_mut().register::<common::rtsim::ActorId>();
+        state.ecs_mut().register::<oracle::OracleSpawned>();
 
         // Load banned words list
         let banned_words = settings.moderation.load_banned_words(data_dir);
@@ -795,20 +822,27 @@ impl Server {
 
     fn parse_locations(&self, character_list_data: &mut [CharacterItem]) {
         character_list_data.iter_mut().for_each(|c| {
-            let name = c
-                .location
-                .as_ref()
-                .and_then(|s| {
-                    persistence::parse_waypoint(s)
-                        .ok()
-                        .and_then(|(waypoint, _)| waypoint.map(|w| w.get_pos()))
-                })
-                .and_then(|wpos| {
-                    self.world
-                        .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
-                });
-            c.location = name;
+            c.location = self.resolve_waypoint_site_name(c.location.as_deref());
         });
+    }
+
+    /// Resolves a raw saved-waypoint string (as stored in `character.waypoint`)
+    /// to the human-readable site name at that position, if any. Shared by
+    /// `parse_locations` (character-select screen) and NH-79's
+    /// `list_player_characters` (which reads persistence for a uuid that may
+    /// not even be connected right now, so it can't reuse `parse_locations`'
+    /// `CharacterItem`-shaped input).
+    fn resolve_waypoint_site_name(&self, waypoint: Option<&str>) -> Option<String> {
+        waypoint
+            .and_then(|s| {
+                persistence::parse_waypoint(s)
+                    .ok()
+                    .and_then(|(waypoint, _)| waypoint.map(|w| w.get_pos()))
+            })
+            .and_then(|wpos| {
+                self.world
+                    .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
+            })
     }
 
     /// Execute a single server tick, handle input and update the game state by
@@ -1165,6 +1199,7 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        pact,
                                         trigger_slots,
                                         spell_mastery,
                                     } = character_data;
@@ -1181,6 +1216,7 @@ impl Server {
                                         map_marker,
                                         ethos,
                                         background,
+                                        pact,
                                         trigger_slots,
                                         spell_mastery,
                                     );
@@ -1623,6 +1659,73 @@ impl Server {
             .pending_chunks()
             .next()
             .is_some()
+    }
+
+    /// Exposes the persistence connection settings for callers outside this
+    /// crate that need their own short-lived, read-only connection (NH-79's
+    /// player-characters endpoint, which queries persistence for a uuid that
+    /// may not even be connected right now, so there's no live ECS state to
+    /// read the way `Message::ListPlayers` does) — same settings
+    /// `CharacterLoader`'s own background thread already opens its
+    /// connection from.
+    pub fn database_settings(&self) -> Arc<RwLock<DatabaseSettings>> {
+        Arc::clone(&self.database_settings)
+    }
+
+    /// NH-79 Phase 2: exposes the same `authc::AuthClient`
+    /// `login_provider::LoginProvider` (an ECS resource) already holds, for
+    /// `/player_api/v1`'s auth middleware to redeem a `CharacterAccessToken`
+    /// without a second, redundant client instance. See
+    /// `LoginProvider::auth_client`'s own doc comment for the `--no-auth`
+    /// case.
+    pub fn auth_client(&self) -> Option<Arc<authc::AuthClient>> {
+        self.state
+            .ecs()
+            .fetch::<login_provider::LoginProvider>()
+            .auth_client()
+    }
+
+    /// NH-79: lists `uuid`'s characters for `xindeler-web-landing`'s
+    /// player-characters endpoint. Reads persistence directly rather than
+    /// live ECS state, since `uuid` may not currently be connected -- unlike
+    /// `Message::ListPlayers`, this must work for offline players too.
+    pub fn list_player_characters(
+        &self,
+        uuid: &str,
+    ) -> Result<Vec<ResolvedCharacterSummary>, persistence::error::PersistenceError> {
+        let settings = self
+            .database_settings
+            .read()
+            .expect("DatabaseSettings RwLock was poisoned")
+            .clone();
+        let summaries = persistence::list_player_characters(uuid, &settings)?;
+        Ok(summaries
+            .into_iter()
+            .map(|s| ResolvedCharacterSummary {
+                character_id: s.character_id,
+                alias: s.alias,
+                class: s.class,
+                level: s.level,
+                location: self.resolve_waypoint_site_name(s.waypoint.as_deref()),
+            })
+            .collect())
+    }
+
+    /// NH-79: the write half of `list_player_characters`. See
+    /// `persistence::rename_character` for the ownership/validation/
+    /// uniqueness checks.
+    pub fn rename_character(
+        &self,
+        uuid: &str,
+        character_id: CharacterId,
+        new_alias: &str,
+    ) -> Result<(), persistence::error::PersistenceError> {
+        let settings = self
+            .database_settings
+            .read()
+            .expect("DatabaseSettings RwLock was poisoned")
+            .clone();
+        persistence::rename_character(uuid, character_id, new_alias, &settings)
     }
 
     /// Sets the SQL log mode at runtime

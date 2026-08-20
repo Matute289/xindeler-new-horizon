@@ -1,0 +1,36 @@
+// "Reappears beside up to five chosen foes, striking each" -- same
+// `RapidRanged` shape as evocation/eldritch_blast.ron (the established
+// player-spell pilot for this variant). All shots travel the caster's own
+// aim line, not independently-aimed strikes on five separate targets --
+// documented drop, same limitation eldritch_blast.ron's own header
+// establishes. The "caster relocates beside the target" teleport half is
+// also dropped, no combined blink+strike primitive exists.
+// Reviewer correction: total burst damage (20x5=100) exceeded
+// evocation/chain_lightning.ron (22x4=88) despite this being a lower-level
+// (L5 vs L6) spell. Reduced to stay below that level-6 neighbor.
+RapidRanged(
+    energy_cost: 130.0,
+    buildup_duration: 0.45,
+    shoot_duration: 0.05,
+    recover_duration: 0.35,
+    options: (
+        max_projectiles: Some(5),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 16,
+            damage_kind: Force,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 80.0,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Arcane),
+        cooldown: Some(30.0),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

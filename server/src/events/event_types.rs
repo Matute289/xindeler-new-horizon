@@ -1,10 +1,11 @@
 pub use common::event::{
     ArcingEvent, AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
     ChangeStanceEvent, ChatEvent, ClientDisconnectEvent, ClientDisconnectWithoutPersistenceEvent,
-    ComboChangeEvent, CommandEvent, CreateAuraEntityEvent, CreateFloatingDiskEvent,
-    CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent,
-    CreateShipEvent, CreateSpecialEntityEvent, CreateSpriteEvent, DeleteCharacterEvent,
-    DeleteEvent, DestroyEvent, DialogueEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
+    ComboChangeEvent, CommandEvent, CommandPetEvent, CreateAuraEntityEvent,
+    CreateFloatingDiskEvent, CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent,
+    CreateObjectEvent, CreatePoolEvent, CreateShipEvent, CreateSpecialEntityEvent,
+    CreateSpriteEvent, DeleteCharacterEvent, DeleteEvent, DestroyEvent, DialogueEvent,
+    DismissSummonEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
     EntityAttackedHookEvent, EventBus, ExitIngameEvent, ExplosionEvent, GroupManipEvent,
     HealthChangeEvent, HelpDownedEvent, InitializeCharacterEvent, InitializeSpectatorEvent,
     InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
@@ -64,6 +65,8 @@ macro_rules! server_events {
             ProcessTradeActionEvent
             MountEvent
             SetPetStayEvent
+            CommandPetEvent
+            DismissSummonEvent
             PossessEvent
             InitializeCharacterEvent
             InitializeSpectatorEvent

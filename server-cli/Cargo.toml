@@ -54,6 +54,7 @@ ron = { workspace = true }
 serde = { workspace = true, features = ["rc", "derive"] }
 ratatui = { version = "0.30.0", features = ["crossterm"] }
 rand = { workspace = true }
+vek = { workspace = true }
 # ECS
 specs = { workspace = true }
 

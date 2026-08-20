@@ -1,0 +1,39 @@
+// "Each round the imagined threat gnaws at their thoughts" reuses the
+// Bleeding health-change-over-time buff purely for its damage-over-time
+// shape -- the same damage_kind-agnostic reuse hemorrhage.ron already
+// established (Bleeding + damage_kind: Necrotic there; Bleeding +
+// damage_kind: Psychic here -- Bleeding's own effects() never reads
+// damage_kind, see common/src/comp/buff.rs). strength/dur_secs calibrated
+// against every other shipped Bleeding grant (bow/sword/hemomancy siblings):
+// all of them scale strength off the hit via DamageFraction rather than a
+// flat Value, and keep dur_secs in the 5-12s band; this now matches both
+// (a flat Value(3.0)/dur_secs(60) first draft was a real balance outlier --
+// roughly hemorrhage.ron's total drain from a plain no-cooldown bolt).
+BasicRanged(
+    energy_cost: 50.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 8,
+            buff: Some((
+                kind: Bleeding,
+                dur_secs: 10,
+                strength: DamageFraction(0.4),
+                chance: 1.0,
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, the `level * 6` convention (see
+        // sleep.ron).
+        requirements: (min_level: Some(12)),
+    ),
+)

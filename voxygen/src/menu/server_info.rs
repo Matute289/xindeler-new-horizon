@@ -165,6 +165,11 @@ impl PlayState for ServerInfoState {
     fn tick(&mut self, global_state: &mut GlobalState, events: Vec<Event>) -> PlayStateResult {
         span!(_guard, "tick", "<ServerInfoState as PlayState>::tick");
 
+        // The server-info/rules-accept screen is an iced play state exactly
+        // like `MainMenuState`/`CharSelectionState`; see the identical write
+        // there for why this doesn't need to be undone here.
+        global_state.window.menu_open = true;
+
         // Handle window events.
         for event in events {
             // Pass all events to the ui first.

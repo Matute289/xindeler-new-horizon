@@ -1,8 +1,9 @@
 use common::{
+    CachedSpatialGrid,
     comp::{
         Agent, Alignment, BehaviorCapability, BehaviorState, Body, BuffKind, CharacterState,
-        ControlAction, ControlEvent, Controller, InputKind, InventoryEvent, Pos, PresenceKind,
-        UtteranceKind,
+        ControlAction, ControlEvent, Controller, InputKind, InventoryEvent, PetCommand, Pos,
+        PresenceKind, UtteranceKind,
         agent::{
             AgentEvent, AwarenessState, DEFAULT_INTERACTION_TIME, TRADE_INTERACTION_TIME, Target,
             TimerAction,
@@ -29,9 +30,9 @@ use self::interaction::{
 
 use super::{
     consts::{
-        DAMAGE_MEMORY_DURATION, FLEE_DURATION, HEALING_ITEM_THRESHOLD, MAX_PATROL_DIST,
-        MAX_STAY_DISTANCE, NORMAL_FLEE_DIR_DIST, NPC_PICKUP_RANGE, RETARGETING_THRESHOLD_SECONDS,
-        STD_AWARENESS_DECAY_RATE,
+        DAMAGE_MEMORY_DURATION, FLEE_DURATION, GUARD_ENGAGE_RADIUS, HEALING_ITEM_THRESHOLD,
+        MAX_PATROL_DIST, MAX_STAY_DISTANCE, NORMAL_FLEE_DIR_DIST, NPC_PICKUP_RANGE,
+        RETARGETING_THRESHOLD_SECONDS, STD_AWARENESS_DECAY_RATE,
     },
     data::{AgentData, ReadData, TargetData},
     util::{get_entity_by_id, is_dead, is_dead_or_invulnerable, is_invulnerable, stop_pursuing},
@@ -117,10 +118,20 @@ impl BehaviorTree {
 
     /// Pet BehaviorTree
     ///
-    /// Follow the owner and attack enemies
+    /// Follow the owner and attack enemies. `attack_designated_target` and
+    /// the `Guard`-gated nodes run first so an explicit player command (or
+    /// an active guard duty) always takes priority over the default
+    /// follow/retaliate-for-owner behaviour below them.
     pub fn pet() -> Self {
         Self {
-            tree: vec![follow_if_far_away, attack_if_owner_hurt, do_idle_tree],
+            tree: vec![
+                attack_designated_target,
+                attack_if_pet_hurt_while_guarding,
+                engage_hostiles_near_owner_if_guarding,
+                follow_if_far_away,
+                attack_if_owner_hurt,
+                do_idle_tree,
+            ],
         }
     }
 
@@ -550,6 +561,166 @@ fn follow_if_far_away(bdata: &mut BehaviorData) -> bool {
         }
     }
     false
+}
+
+/// Handle a player-issued "attack that one" command.
+///
+/// One-shot: the command is always cleared here, regardless of outcome, so a
+/// stale or invalid designation (already dead, no longer resolvable) is
+/// never retried on a later tick. The owner/group/PvP-legality refusal
+/// checks already ran server-side when the command was issued
+/// (`CommandPetEvent`); this node only re-checks liveness, since the target
+/// may have died in the time between the command being issued and this
+/// tick.
+///
+/// On success this writes `agent.target` in exactly the shape
+/// `attack_target_attacker` uses to hand a designated enemy to the pet, then
+/// stops the tree so the owner-relative nodes below don't run against the
+/// now-changed target on the same tick. From here on, no new pathing, aggro
+/// or disengagement logic is involved -- the hostile tree already handles
+/// all of that.
+fn attack_designated_target(bdata: &mut BehaviorData) -> bool {
+    let PetCommand::Attack(target_uid) = bdata.agent.pet_command else {
+        return false;
+    };
+    // A pet holding a `Stay` position (the `V` key, `Agent::stay_pos`) must
+    // not abandon it to chase a designated target, mirroring the same
+    // suppression `attack_if_pet_hurt_while_guarding`/
+    // `engage_hostiles_near_owner_if_guarding` apply to Guard's own
+    // pet-initiated combat below. Left uncleared (rather than dropped like
+    // the illegal-target cases further down) so the order is retried
+    // automatically the moment staying is lifted, instead of silently
+    // vanishing.
+    if bdata.agent.stay_pos.is_some() {
+        return false;
+    }
+    // TODO: this only clears the AI-consumed copy (`Agent::pet_command`).
+    // The net-synced `CharacterActivity::pet_command` mirror written by
+    // `CommandPetEvent` is not cleared here, so it can keep showing a
+    // consumed `Attack(uid)` for a while after the AI has moved past it.
+    // Currently inert (nothing client-side reads `pet_command == Attack(_)`,
+    // only `== Guard`), but fixing it properly needs a
+    // `WriteStorage<CharacterActivity>` threaded into `ReadData`/
+    // `BehaviorData`, which is a real structural change -- do that before
+    // any UI ever renders the `Attack` designation itself.
+    bdata.agent.pet_command = PetCommand::Follow;
+
+    let Some(entity) = get_entity_by_id(target_uid, bdata.read_data) else {
+        return false;
+    };
+    if is_dead_or_invulnerable(entity, bdata.read_data) {
+        return false;
+    }
+    if let Some(Alignment::Owned(owner_uid)) = bdata.agent_data.alignment
+        && *owner_uid == target_uid
+    {
+        return false;
+    }
+
+    let entity_pos = bdata.read_data.positions.get(entity).map(|pos| pos.0);
+    bdata.agent.target = Some(Target::new(
+        entity,
+        true,
+        bdata.read_data.time.0,
+        true,
+        entity_pos,
+    ));
+    true
+}
+
+/// `Guard` behaviour (a): retaliate when the pet itself is hurt, not only
+/// when the owner is (that case is `attack_if_owner_hurt` below, which
+/// watches the owner's `Health.last_change` and is unaffected by this node).
+/// Same recent-damage/attacker-lookup shape as `attack_if_owner_hurt`, just
+/// sourced from the pet's own health instead of the owner's. Also mirrors
+/// `attack_if_owner_hurt`'s `stay_pos` suppression: a pet told to stay put
+/// (the `V` key) must not abandon its post to retaliate, even while
+/// `Guard`ing -- `Stay` and `Guard` are independently-settable flags, and
+/// `Stay` takes priority over Guard's reactive/proactive combat-initiation.
+fn attack_if_pet_hurt_while_guarding(bdata: &mut BehaviorData) -> bool {
+    if bdata.agent.pet_command != PetCommand::Guard || bdata.agent.stay_pos.is_some() {
+        return false;
+    }
+    let Some(health) = bdata.agent_data.health else {
+        return false;
+    };
+    let hurt_recently =
+        bdata.read_data.time.0 - health.last_change.time.0 < 5.0 && health.last_change.amount < 0.0;
+    if !hurt_recently {
+        return false;
+    }
+    let Some(attacker) = health
+        .last_change
+        .damage_by()
+        .and_then(|by| get_entity_by_id(by.uid(), bdata.read_data))
+    else {
+        return false;
+    };
+    if is_dead_or_invulnerable(attacker, bdata.read_data) {
+        return false;
+    }
+
+    let attacker_pos = bdata.read_data.positions.get(attacker).map(|pos| pos.0);
+    bdata.agent.target = Some(Target::new(
+        attacker,
+        true,
+        bdata.read_data.time.0,
+        true,
+        attacker_pos,
+    ));
+    true
+}
+
+/// `Guard` behaviour (b): proactively engage a hostile that has come within
+/// `GUARD_ENGAGE_RADIUS` of the *owner*, before anyone is hit -- the first
+/// case in which a pet initiates combat rather than only ever reacting once
+/// already targeted or attacked.
+///
+/// Reuses the shipped `AgentData::is_enemy` hostile-detection predicate and
+/// the shipped `CachedSpatialGrid` spatial index -- the same tools
+/// `AgentData::choose_target` already uses for this same kind of proximity
+/// search -- rather than inventing a new one; the only new part is centring
+/// the search on the owner's position instead of the pet's own.
+///
+/// Resolves the owner directly from `agent_data.alignment` +
+/// `read_data.id_maps` rather than reading it off `bdata.agent.target`
+/// (which happens to equal the owner whenever this node runs, since
+/// `do_pet_tree_if_owned` only ever enters the pet tree in that state) --
+/// deliberately not coupled to that invariant, so a future reordering of the
+/// tree can't silently break this node's owner resolution.
+fn engage_hostiles_near_owner_if_guarding(bdata: &mut BehaviorData) -> bool {
+    if bdata.agent.pet_command != PetCommand::Guard || bdata.agent.stay_pos.is_some() {
+        return false;
+    }
+    let Some(Alignment::Owned(owner_uid)) = bdata.agent_data.alignment else {
+        return false;
+    };
+    let Some(owner) = get_entity_by_id(*owner_uid, bdata.read_data) else {
+        return false;
+    };
+    let Some(owner_pos) = bdata.read_data.positions.get(owner) else {
+        return false;
+    };
+
+    let CachedSpatialGrid(grid) = bdata.agent_data.cached_spatial_grid;
+    let enemy = grid
+        .in_circle_aabr(owner_pos.0.xy(), GUARD_ENGAGE_RADIUS)
+        .filter(|&entity| entity != owner && entity != *bdata.agent_data.entity)
+        .filter(|&entity| bdata.agent_data.is_enemy(entity, bdata.read_data))
+        .find(|&entity| !is_dead_or_invulnerable(entity, bdata.read_data));
+
+    let Some(enemy) = enemy else {
+        return false;
+    };
+    let enemy_pos = bdata.read_data.positions.get(enemy).map(|pos| pos.0);
+    bdata.agent.target = Some(Target::new(
+        enemy,
+        true,
+        bdata.read_data.time.0,
+        true,
+        enemy_pos,
+    ));
+    true
 }
 
 /// Attack target's attacker (if there is one)

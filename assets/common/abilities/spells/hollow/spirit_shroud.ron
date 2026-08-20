@@ -1,0 +1,34 @@
+// "Foes struck in melee suffer searing harm" while the shroud holds --
+// grants the caster `CrusadersMantle` (common/src/comp/buff.rs: "Grants the
+// bearer's weapon attacks additional damage for as long as the buff
+// holds... granted by an aura, not a self-buff with RemoveOnAttack"), the
+// only `BuffKind` that already does exactly this. That doc comment
+// describes how it is currently delivered (crusaders_mantle.ron, a
+// `BasicAura` cast on a party), not a restriction on the buff itself --
+// `SelfBuff` granting it to the caster alone is the same underlying effect,
+// just single-target instead of a party aura, matching this spell's own
+// `SelfBuff` sheet variant and `range: Self`.
+//
+// Two riders dropped, both undocumented by any existing primitive: the
+// enemy-healing-hindered effect (same class of gap as chill_touch.ron's own
+// anti-healing rider in this folder -- no `BuffKind` models reduced
+// incoming healing on a target) and the at-cast configurable damage type
+// (radiant/necrotic/cold) -- `CrusadersMantle`'s `AdditionalDamage` effect
+// carries no damage-kind field of its own, it simply adds to whatever the
+// base attack already deals. The sheet's own top-level `damage_type:
+// Radiant` is kept as the spell's flavor/i18n framing even though the
+// mechanical bonus is damage-kind-agnostic.
+//
+// Strength kept in the same order of magnitude as the only other real,
+// shipped use of this `BuffKind` (crusaders_mantle.ron: 0.2) rather than
+// inventing a new scale for a single-target version.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: CrusadersMantle, data: BuffData(strength: 0.25, duration: Some(60.0))),
+    ],
+    energy_cost: 65,
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

@@ -551,6 +551,22 @@ pub enum BuffKind {
     /// "functionally invisible", not a render-hide. See `sequester.ron`'s
     /// own comment for the chosen strength and the resulting multiplier.
     Sequester,
+    // =================
+    //    PACT BOND
+    // =================
+    /// The ward a Warlock's Pact of the Talisman lays on whoever carries the
+    /// talisman. Carries two effects at once:
+    /// [`BuffEffect::DamageReduction`] from `data.strength`, and
+    /// [`BuffEffect::ReflectDamage`] from a [`MiscBuffData::Reflect`] rider.
+    /// The applier resolves both from
+    /// `assets/common/pact/talisman_tuning.ron`; without the rider only the
+    /// reduction applies.
+    ///
+    /// Its [`BuffSource::Character`] `by` is the bonding Warlock, and that is
+    /// load-bearing twice over: it is how the bearer's recall ability finds
+    /// who to teleport to, and it is the only link back to the
+    /// `Pact::talisman_bearer` that must be cleared alongside this buff.
+    PactTalisman,
 }
 
 /// Tells a little more about the buff kind than simple buff/debuff
@@ -630,15 +646,10 @@ impl BuffKind {
             | BuffKind::OtherworldlyWard
             | BuffKind::FreedomOfMovement
             | BuffKind::Fearless
-            | BuffKind::Detecting
             | BuffKind::SeeInvisible
-            | BuffKind::TrueSight
-            | BuffKind::RemoteSensing
             | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
-            | BuffKind::Mooncloak
             | BuffKind::Nondetection
-            | BuffKind::MagicAura
             | BuffKind::Sequester => BuffDescriptor::SimplePositive,
             BuffKind::Bleeding
             | BuffKind::BleedingMark
@@ -676,15 +687,34 @@ impl BuffKind {
             | BuffKind::Agonized
             | BuffKind::Sickened
             | BuffKind::Hexed => BuffDescriptor::SimpleNegative,
-            BuffKind::Polymorphed | BuffKind::Disguised => BuffDescriptor::Complex,
+            BuffKind::Polymorphed
+            | BuffKind::Disguised
+            | BuffKind::Detecting
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing
+            | BuffKind::Mooncloak
+            | BuffKind::PactTalisman
+            | BuffKind::MagicAura => BuffDescriptor::Complex,
         }
     }
 
     /// Checks if buff is buff or debuff.
     pub fn is_buff(self) -> bool {
-        match self.differentiate() {
-            BuffDescriptor::SimplePositive => true,
-            BuffDescriptor::SimpleNegative | BuffDescriptor::Complex => false,
+        match self {
+            // `differentiate()`'s `Complex` bucket is otherwise assumed
+            // neutral (see its own doc comment) -- these are Complex only
+            // because their *data* needs an explicit spec, not because their
+            // polarity is ambiguous. They're unconditionally positive.
+            BuffKind::Detecting
+            | BuffKind::TrueSight
+            | BuffKind::RemoteSensing
+            | BuffKind::Mooncloak
+            | BuffKind::PactTalisman
+            | BuffKind::MagicAura => true,
+            _ => match self.differentiate() {
+                BuffDescriptor::SimplePositive => true,
+                BuffDescriptor::SimpleNegative | BuffDescriptor::Complex => false,
+            },
         }
     }
 
@@ -1492,6 +1522,29 @@ impl BuffKind {
             BuffKind::Sequester => {
                 vec![BuffEffect::Nondetection, BuffEffect::Stealth(data.strength)]
             },
+            // The pact bond's ward. `strength` is the damage-reduction
+            // fraction the applier resolved from the Warlock's investment;
+            // the rebuke's three dials are an authored `misc_data` rider,
+            // omitted entirely rather than silently derived if absent (the
+            // same guard `Mooncloak`/`MagicAura` use for their own riders).
+            // An admin `/buff` with no rider therefore grants the reduction
+            // alone, which is a partial ward rather than a wrong one.
+            BuffKind::PactTalisman => {
+                let mut effects = vec![BuffEffect::DamageReduction(data.strength)];
+                if let Some(MiscBuffData::Reflect {
+                    fraction,
+                    cap,
+                    kind,
+                }) = data.misc_data
+                {
+                    effects.push(BuffEffect::ReflectDamage {
+                        fraction,
+                        cap,
+                        kind,
+                    });
+                }
+                effects
+            },
         }
     }
 
@@ -1604,6 +1657,19 @@ impl Default for BuffData {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MiscBuffData {
     Body(Body),
+    /// Parameters for a [`BuffEffect::ReflectDamage`]: the share of damage
+    /// taken returned to the attacker, the hard per-hit ceiling on that
+    /// amount, and the damage kind it is returned as.
+    ///
+    /// Authored per application rather than derived from `strength`, the same
+    /// idiom `Sense`/`FalseAura` use: three unrelated dials cannot be read off
+    /// one number, and the cap in particular is a safety rail whose value must
+    /// be explicit at the point the buff is granted.
+    Reflect {
+        fraction: f32,
+        cap: f32,
+        kind: crate::combat::DamageKind,
+    },
     /// Parameters for a `BuffEffect::Sense`: which sense, its radius, and
     /// whether it snapshots once or re-evaluates continuously.
     Sense(SenseKind, f32, SenseMode),
@@ -1857,6 +1923,26 @@ pub enum BuffEffect {
     },
     /// Reduces damage after armor is accounted for by this fraction
     DamageReduction(f32),
+    /// Returns part of every hit the buffed entity takes to whoever landed
+    /// it, as `kind` damage.
+    ///
+    /// A **general** effect, deliberately tied to no class, item or content:
+    /// a thorns affix, a spiked-shield buff and a retaliation aura would all
+    /// grant it the same way. `Attack::apply_attack` reads it off the
+    /// defender's [`Stats::damage_reflect`] (which this effect populates) and
+    /// knows nothing about what granted it.
+    ///
+    /// * `fraction` — share of the damage actually taken that is returned.
+    /// * `cap` — hard per-hit ceiling on the returned amount, in health.
+    ///   **Mandatory, not optional polish**: uncapped, a single very large hit
+    ///   reflects enough to kill whoever swung it regardless of the bearer's
+    ///   own level.
+    /// * `kind` — the [`crate::combat::DamageKind`] the return is dealt as.
+    ReflectDamage {
+        fraction: f32,
+        cap: f32,
+        kind: crate::combat::DamageKind,
+    },
     /// Gradually changes an entities max health over time
     MaxHealthChangeOverTime {
         rate: f32,
@@ -2969,5 +3055,76 @@ pub mod tests {
                 .iter()
                 .any(|e| matches!(e, BuffEffect::PierceDarkness))
         );
+    }
+}
+
+#[cfg(test)]
+mod pact_talisman_buff_tests {
+    use crate::comp::{
+        buff::{BuffData, BuffEffect, BuffKind, MiscBuffData},
+        pact::talisman_tuning_manifest,
+    };
+
+    /// The bond's ward carries both of its effects, and the rebuke numbers
+    /// come from the one tuning manifest rather than from anything an ability
+    /// author could get wrong.
+    #[test]
+    fn the_bond_ward_grants_reduction_and_a_reflect() {
+        let tuning = talisman_tuning_manifest();
+        let data = BuffData::new(0.12, None).with_misc_data(MiscBuffData::Reflect {
+            fraction: tuning.0.rebuke_fraction,
+            cap: tuning.0.rebuke_cap,
+            kind: tuning.0.rebuke_kind,
+        });
+        let effects = BuffKind::PactTalisman.effects(&data, None, None);
+
+        assert_eq!(effects.len(), 2, "reduction plus reflect, nothing else");
+        assert!(matches!(
+            effects[0],
+            BuffEffect::DamageReduction(strength) if (strength - 0.12).abs() < f32::EPSILON
+        ));
+        match effects[1] {
+            BuffEffect::ReflectDamage {
+                fraction,
+                cap,
+                kind,
+            } => {
+                assert!((fraction - tuning.0.rebuke_fraction).abs() < f32::EPSILON);
+                assert!((cap - tuning.0.rebuke_cap).abs() < f32::EPSILON);
+                assert_eq!(kind, tuning.0.rebuke_kind);
+            },
+            ref other => panic!("expected a reflect, got {other:?}"),
+        }
+    }
+
+    /// An application with no `misc_data` rider (e.g. an admin `/buff` with
+    /// no arguments) grants the reduction alone rather than deriving a
+    /// reflect from the tuning manifest -- the rider is the one place the
+    /// per-hit cap can be set, so silently filling it in would let a bare
+    /// `/buff` skip that safety rail.
+    #[test]
+    fn the_bond_ward_without_a_rider_grants_reduction_only() {
+        let effects = BuffKind::PactTalisman.effects(&BuffData::new(0.12, None), None, None);
+
+        assert_eq!(effects.len(), 1, "reduction only, no derived reflect");
+        assert!(matches!(
+            effects[0],
+            BuffEffect::DamageReduction(strength) if (strength - 0.12).abs() < f32::EPSILON
+        ));
+    }
+
+    /// The cap is a safety rail: it must be a real, finite ceiling, whatever
+    /// the manifest says.
+    #[test]
+    fn the_rebuke_cap_is_a_real_ceiling() {
+        let tuning = talisman_tuning_manifest();
+        assert!(tuning.0.rebuke_cap.is_finite());
+        assert!(tuning.0.rebuke_cap > 0.0);
+        assert!(tuning.0.rebuke_fraction > 0.0 && tuning.0.rebuke_fraction < 1.0);
+    }
+
+    #[test]
+    fn the_bond_ward_is_a_positive_buff() {
+        assert!(BuffKind::PactTalisman.is_buff(), "should be a buff");
     }
 }

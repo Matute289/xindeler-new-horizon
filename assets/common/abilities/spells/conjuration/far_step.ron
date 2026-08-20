@@ -1,0 +1,27 @@
+// Same `Blink` shape as conjuration/misty_step.ron (the established
+// player-spell pilot for this variant) -- no `energy_cost` field exists on
+// this variant at all (confirmed in common/src/comp/ability.rs), so
+// `cooldown` is the only balance lever. Sheet's own long-distance/plane-
+// crossing/multi-companion framing collapses to the same short-range
+// single-caster blink every other spell using this variant ships as --
+// no cross-plane, long-distance-beyond-max_range, or multi-target
+// teleport primitive exists (`common/src/states/blink.rs` moves only the
+// caster, within `max_range`).
+// Reviewer correction: cooldown 8.0 undercut every lower-level Blink
+// sibling (thunder_step.ron L3/range27/cooldown18,
+// vortex_warp.ron L2/range27/cooldown16) despite this being a strictly
+// higher-level (L5) spell with a smaller range (18) than either. Raised
+// to match thunder_step.ron's cooldown band.
+Blink(
+    buildup_duration: 0.35,
+    recover_duration: 0.25,
+    max_range: 18.0,
+    frontend_specifier: None,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Arcane),
+        cooldown: Some(18.0),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

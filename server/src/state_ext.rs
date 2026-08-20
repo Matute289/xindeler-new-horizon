@@ -705,6 +705,7 @@ impl StateExt for State {
             map_marker,
             ethos,
             background,
+            pact,
             mut trigger_slots,
             spell_mastery,
         } = components;
@@ -753,6 +754,11 @@ impl StateExt for State {
             self.write_component_ignore_entity_dead(entity, character_class);
             self.write_component_ignore_entity_dead(entity, ethos);
             self.write_component_ignore_entity_dead(entity, background);
+            // `Pact` is not `Copy` (it carries `blade_name`), and the pool
+            // below needs to know whether the blade is out, so clone it out
+            // before the component write moves it.
+            let pact_for_pool = pact.clone();
+            self.write_component_ignore_entity_dead(entity, pact);
             self.write_component_ignore_entity_dead(entity, active_abilities);
             self.write_component_ignore_entity_dead(entity, comp::AbilityCooldowns::default());
             // Reactive trigger slots are the opposite of `AbilityCooldowns`
@@ -769,15 +775,19 @@ impl StateExt for State {
             // ready to insert as loaded.
             self.write_component_ignore_entity_dead(entity, spell_mastery);
             // Grant class active-ability keys + racial innate + anything the
-            // character has learned into its spellbook. Built before the
-            // inventory is moved into its component write, since the
-            // spellbook lives on it.
+            // character has learned into its spellbook, plus whatever the
+            // pact projects (a summoned Blade boon's three attack keys).
+            // Built before the inventory is moved into its component write,
+            // since the spellbook lives on it. Must agree exactly with the
+            // pool `persistence::character::load_character_data` built to
+            // resolve the persisted `Innate:key:` hotbar slots against.
             self.write_component_ignore_entity_dead(
                 entity,
-                comp::AbilityPool::for_character(
+                comp::AbilityPool::for_character_with_pact(
                     &body,
                     &character_class_copy,
                     inventory.learned_spells(),
+                    Some(&pact_for_pool),
                 ),
             );
             self.write_component_ignore_entity_dead(entity, skill_set);

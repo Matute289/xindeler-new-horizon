@@ -30,6 +30,24 @@ pub struct Character {
     /// Per-`MagicSource` mastery progress as a small JSON object; `NULL` ->
     /// nothing accrued yet (every source at 0%).
     pub spell_mastery: Option<String>,
+    /// `NULL` -> `PactStanding::Bound` (only an explicit "severed" row
+    /// suppresses casting).
+    pub pact_standing: Option<String>,
+    /// `NULL` -> no patron chosen yet (`Pact::default()`).
+    pub pact_patron_id: Option<String>,
+    /// `NULL` -> no boon chosen yet.
+    pub pact_boon: Option<String>,
+    /// `0`/`NULL` -> not summoned. Meaningless for every boon but `Blade`.
+    pub pact_blade_summoned: Option<i64>,
+    /// Cumulative Blade-boon weapon XP; `NULL` -> `0`. Survives a boon
+    /// change. Meaningless for every boon but `Blade`.
+    pub pact_blade_exp: Option<i64>,
+    /// The blade's self-chosen name (from a curated list, never player
+    /// input), set once tier 5 unlocks; `NULL` -> not chosen yet.
+    pub pact_blade_name: Option<String>,
+    /// Reserved for a future demand/favour mechanic; `NULL` -> `0`. Nothing
+    /// reads or writes a non-zero value yet.
+    pub pact_favour: Option<i32>,
 }
 
 #[derive(Debug)]

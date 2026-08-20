@@ -3,7 +3,8 @@ use crate::{
     character::CharacterId,
     combat::{AttackSource, AttackTarget, CombatEffect, DeathEffects, RiderEffects},
     comp::{
-        self, ArcProperties, DisconnectReason, LootOwner, Ori, Pos, UnresolvedChatMsg, Vel,
+        self, ArcProperties, DisconnectReason, LootOwner, Ori, PetCommand, Pos, UnresolvedChatMsg,
+        Vel,
         ability::Dodgeable,
         agent::Sound,
         beam,
@@ -25,7 +26,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use specs::Entity as EcsEntity;
-use std::{collections::VecDeque, sync::Mutex, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use uuid::Uuid;
 use vek::*;
 
@@ -97,6 +102,27 @@ pub struct NpcBuilder {
     /// (`voxygen`'s `should_flicker`) — the "the illusion is fading" tell a
     /// phantasm wants and a plain `Projectile` timer does not give.
     pub delete_after: Option<Duration>,
+    /// The id of the PROJECT ORACLE `DmEvent` that spawned this entity, if
+    /// any. Carries the raw id rather than a component because the
+    /// attribution component lives server-side (`server::oracle::spawned`)
+    /// and needs a server-authoritative `Time` stamp, exactly like
+    /// `delete_after` above only ever expresses `Object::DeleteAfter`:
+    /// `handle_create_npc` reads its own `Time` resource and builds the
+    /// component from this id itself rather than accepting a caller-built
+    /// one.
+    pub oracle_event_id: Option<Arc<str>>,
+    /// This spawn's cost against its owner's Cadena (`PactBoon::Chain`)
+    /// summon point pool, or `None` for every summon that isn't a Cadena
+    /// fiend -- admin `/spawn`, world/rtsim/ORACLE spawns, riders, tamed
+    /// pets, and every pre-existing non-Cadena `BasicSummon` ability all
+    /// leave this `None` and are completely unaffected by N27-O.
+    /// `handle_create_npc` reads `Some(cost)` as "gate and charge this
+    /// spawn against `owner`'s `Summons` ledger, refusing it if it would
+    /// exceed `Pact::chain_summon_pool`", set only by
+    /// `common::states::basic_summon` when `SummonInfo::Npc`'s
+    /// `pact_chain_summon` flag is set. See
+    /// `common::comp::pact::summon_cost::cached_npc_summon_cost`.
+    pub chain_summon_cost: Option<u16>,
 }
 
 impl NpcBuilder {
@@ -124,6 +150,8 @@ impl NpcBuilder {
             incorporeal: false,
             phantom_illusion: false,
             delete_after: None,
+            oracle_event_id: None,
+            chain_summon_cost: None,
         }
     }
 
@@ -222,6 +250,16 @@ impl NpcBuilder {
         self.delete_after = delete_after.into();
         self
     }
+
+    pub fn with_oracle_event_id(mut self, oracle_event_id: impl Into<Option<Arc<str>>>) -> Self {
+        self.oracle_event_id = oracle_event_id.into();
+        self
+    }
+
+    pub fn with_chain_summon_cost(mut self, chain_summon_cost: impl Into<Option<u16>>) -> Self {
+        self.chain_summon_cost = chain_summon_cost.into();
+        self
+    }
 }
 
 // These events are generated only by server systems
@@ -308,6 +346,7 @@ pub struct UpdateCharacterDataEvent {
         Option<comp::MapMarker>,
         comp::Ethos,
         comp::Background,
+        comp::Pact,
         comp::TriggerSlots,
         comp::SpellMastery,
     ),
@@ -563,6 +602,20 @@ pub enum MountEvent {
 }
 
 pub struct SetPetStayEvent(pub EcsEntity, pub EcsEntity, pub bool);
+
+/// `(command_giver, pet, command)`. The command giver must be the pet's
+/// owner, in mounting range, for the command to be applied -- see the
+/// handler for the full refusal rules (especially for `PetCommand::Attack`).
+pub struct CommandPetEvent(pub EcsEntity, pub EcsEntity, pub PetCommand);
+
+/// `(owner, summon)`: a player-issued dismiss of one of their own Cadena
+/// (`PactBoon::Chain`) summons (N27-O), mirroring `SetPetStayEvent`'s shape.
+/// The handler verifies `owner` actually owns `summon` before doing
+/// anything, then routes through the same `DeleteEvent` funnel every other
+/// summon exit route uses, so the point-pool ledger is freed exactly once,
+/// from exactly one place -- see `server::events::entity_manipulation::
+/// handle_delete`.
+pub struct DismissSummonEvent(pub EcsEntity, pub EcsEntity);
 
 pub struct PossessEvent(pub Uid, pub Uid);
 
@@ -919,5 +972,40 @@ macro_rules! event_emitters {
         $(
             $vis use event_emitters::{$read_data, $emitters};
         )+
+    }
+}
+
+#[cfg(test)]
+mod npc_builder_tests {
+    use super::*;
+
+    fn bare_builder() -> NpcBuilder {
+        NpcBuilder::new(
+            comp::Stats::new(
+                comp::Content::Plain("test".to_string()),
+                comp::Body::default(),
+            ),
+            comp::Body::default(),
+            comp::Alignment::Wild,
+        )
+    }
+
+    #[test]
+    fn oracle_event_id_defaults_to_none() {
+        assert!(bare_builder().oracle_event_id.is_none());
+    }
+
+    #[test]
+    fn with_oracle_event_id_sets_the_field() {
+        let builder = bare_builder().with_oracle_event_id(Arc::from("mist_bound"));
+        assert_eq!(builder.oracle_event_id.as_deref(), Some("mist_bound"));
+    }
+
+    #[test]
+    fn with_oracle_event_id_accepts_none_to_clear() {
+        let builder = bare_builder()
+            .with_oracle_event_id(Arc::from("mist_bound"))
+            .with_oracle_event_id(None);
+        assert!(builder.oracle_event_id.is_none());
     }
 }

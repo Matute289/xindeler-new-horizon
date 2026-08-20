@@ -1,0 +1,28 @@
+// Same `Transform`-variant deviation as guardian_of_nature.ron (see that
+// file's header for the full precedent trail). `Dragon(Reddragon)` is the
+// literal, exact-match `Body` species for this spell's own "scaled hide,
+// broad wings" flavor -- the only `Dragon` species that exists in the
+// engine.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(Dragon((species: Reddragon, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 130,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

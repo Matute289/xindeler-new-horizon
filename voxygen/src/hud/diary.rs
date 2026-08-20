@@ -17,6 +17,7 @@ use crate::{
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
+    window::{LastInput, MenuInput},
 };
 use client::{self, Client};
 use common::{
@@ -35,6 +36,7 @@ use common::{
             },
             slot::EquipSlot,
         },
+        pact::PactStanding,
         skills::{
             self, AxeSkill, BowSkill, ClericSkill, ClimbSkill, HammerSkill, MageSkill, MiningSkill,
             RogueSkill, SKILL_MODIFIERS, SceptreSkill, Skill, SwimSkill, SwordSkill, WarriorSkill,
@@ -48,8 +50,8 @@ use common::{
     uid::Uid,
 };
 use conrod_core::{
-    Color, Colorable, Labelable, Positionable, Sizeable, UiCell, Widget, WidgetCommon, color,
-    image,
+    Borderable, Color, Colorable, Labelable, Positionable, Sizeable, UiCell, Widget, WidgetCommon,
+    color, image,
     position::Relative,
     widget::{self, Button, Image, Rectangle, State, Text},
     widget_ids,
@@ -60,6 +62,20 @@ use std::borrow::Cow;
 use strum::{EnumIter, IntoEnumIterator};
 use vek::*;
 const ART_SIZE: [f64; 2] = [320.0, 320.0];
+
+/// Ability-browse grid layout (`DiarySection::AbilitySelection`): rows per
+/// column, and abilities per page (2 columns). Shared between the render
+/// code and the gamepad/keyboard grid-nav math in `Widget::update` so the
+/// two can't drift out of sync.
+const ABILITY_GRID_ROWS_PER_COL: usize = 6;
+const ABILITIES_PER_PAGE: usize = ABILITY_GRID_ROWS_PER_COL * 2;
+/// Spell-browse grid layout (`DiarySection::Spells`): rows per column
+/// (reduced from the ability tab's 6 to leave room for the per-source
+/// mastery header at the top of each page), and spells per page (2
+/// columns). Shared between the render code and the grid-nav math in
+/// `Widget::update`.
+const SPELL_GRID_ROWS_PER_COL: usize = 5;
+const SPELLS_PER_PAGE: usize = SPELL_GRID_ROWS_PER_COL * 2;
 
 widget_ids! {
     pub struct Ids {
@@ -254,6 +270,8 @@ pub struct Diary<'a> {
     buffs: Option<&'a Buffs>,
     character_class: Option<&'a CharacterClass>,
     spell_mastery: Option<&'a comp::SpellMastery>,
+    pact: Option<&'a comp::Pact>,
+    menu_events: &'a [MenuInput],
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -307,6 +325,8 @@ impl<'a> Diary<'a> {
         buffs: Option<&'a Buffs>,
         character_class: Option<&'a CharacterClass>,
         spell_mastery: Option<&'a comp::SpellMastery>,
+        pact: Option<&'a comp::Pact>,
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             show,
@@ -336,6 +356,8 @@ impl<'a> Diary<'a> {
             buffs,
             character_class,
             spell_mastery,
+            pact,
+            menu_events,
             common: widget::CommonBuilder::default(),
             created_btns_top_l: 0,
             created_btns_top_r: 0,
@@ -446,6 +468,19 @@ pub struct DiaryState {
     /// `ability_page` so the two tabs page independently.
     spell_page: usize,
     recipe_page: usize,
+    // Gamepad/keyboard menu navigation (mirrors bag.rs's `active_content` LocalFocus
+    // cycling). 0 = section list, 1 = active-abilities row (AbilitySelection/Spells
+    // only), 2 = ability-browse grid (AbilitySelection/Spells only). SkillTrees/
+    // Character/Recipes sections only use area 0 — their own content nav is
+    // out of scope for this pass (mouse-emulation click-through still works).
+    active_content: usize,
+    active_section_index: usize,
+    /// Index into the current page's active-abilities row (area 1).
+    active_row_index: usize,
+    /// Index into the current page's ability-browse grid (area 2), shared
+    /// between the AbilitySelection and Spells sections since only one is
+    /// ever visible at a time.
+    active_grid_index: usize,
 }
 
 impl Widget for Diary<'_> {
@@ -459,6 +494,10 @@ impl Widget for Diary<'_> {
             ability_page: 0,
             spell_page: 0,
             recipe_page: 0,
+            active_content: 0,
+            active_section_index: 0,
+            active_row_index: 0,
+            active_grid_index: 0,
         }
     }
 
@@ -468,6 +507,106 @@ impl Widget for Diary<'_> {
         common_base::prof_span!("Diary::update");
         let widget::UpdateArgs { state, ui, .. } = args;
         let mut events = Vec::new();
+
+        // MENU INPUTS: diary navigation, mirroring the SlotGrid/menu_events pattern
+        // the bag already uses (see hud/slot_grid.rs, hud/bag.rs).
+        //
+        // Local focus areas (LocalFocus cycles through them):
+        // - Area 0, section list: Up/Down highlights a section (SkillTrees,
+        //   AbilitySelection, Spells, Character, Recipes), Apply switches to it.
+        // - Area 1, active-abilities row: only meaningful in the AbilitySelection/
+        //   Spells sections (a no-op elsewhere). Left/Right highlights a slot in the
+        //   fixed-size action-bar row, Apply selects it via the shared SlotManager.
+        // - Area 2, ability-browse grid: only meaningful in the AbilitySelection/
+        //   Spells sections. Up/Down/Left/Right highlights a slot in the current page's
+        //   2-column grid, Apply selects it. PageUp/PageDown turns the page (works
+        //   regardless of local focus, while one of these two sections is showing) —
+        //   the existing per-section render code already clamps the page index to the
+        //   real page count each frame, so this need not know the list length up front.
+        //
+        // SkillTrees/Character/Recipes sections only get area 0 (section-switching)
+        // navigation in this pass — their own content (a skill-point node graph, a
+        // stats readout, and a recipe list respectively) is out of scope here; the
+        // existing mouse-emulation fallback still reaches them.
+        //
+        // Back closes the diary, same as the X button.
+        let sections_len = DiarySection::iter().count();
+        let last_input = self.global_state.window.last_input();
+        let menu_active = matches!(last_input, LastInput::Keyboard | LastInput::Controller);
+        let (grid_rows_per_col, grid_per_page) = match self.show.diary_fields.section {
+            DiarySection::Spells => (SPELL_GRID_ROWS_PER_COL, SPELLS_PER_PAGE),
+            _ => (ABILITY_GRID_ROWS_PER_COL, ABILITIES_PER_PAGE),
+        };
+        let mut apply_pressed = false;
+        let mut ability_row_apply = false;
+        let mut ability_grid_apply = false;
+        for key in self.menu_events {
+            match *key {
+                MenuInput::Back => events.push(Event::Close),
+                MenuInput::LocalFocus => state.update(|s| {
+                    s.active_content = (s.active_content + 1) % 3;
+                }),
+                MenuInput::Up if state.active_content == 0 => state.update(|s| {
+                    s.active_section_index = s.active_section_index.saturating_sub(1);
+                }),
+                MenuInput::Down if state.active_content == 0 && sections_len > 0 => {
+                    state.update(|s| {
+                        s.active_section_index = (s.active_section_index + 1).min(sections_len - 1);
+                    });
+                },
+                MenuInput::Apply if state.active_content == 0 => apply_pressed = true,
+                MenuInput::Left if state.active_content == 1 => state.update(|s| {
+                    s.active_row_index = s.active_row_index.saturating_sub(1);
+                }),
+                MenuInput::Right if state.active_content == 1 => state.update(|s| {
+                    s.active_row_index = (s.active_row_index + 1).min(BASE_ABILITY_LIMIT - 1);
+                }),
+                MenuInput::Apply if state.active_content == 1 => ability_row_apply = true,
+                MenuInput::Left if state.active_content == 2 => state.update(|s| {
+                    if s.active_grid_index >= grid_rows_per_col {
+                        s.active_grid_index -= grid_rows_per_col;
+                    }
+                }),
+                MenuInput::Right if state.active_content == 2 => state.update(|s| {
+                    if s.active_grid_index + grid_rows_per_col < grid_per_page {
+                        s.active_grid_index += grid_rows_per_col;
+                    }
+                }),
+                MenuInput::Up if state.active_content == 2 => state.update(|s| {
+                    if s.active_grid_index % grid_rows_per_col > 0 {
+                        s.active_grid_index -= 1;
+                    }
+                }),
+                MenuInput::Down if state.active_content == 2 => state.update(|s| {
+                    if s.active_grid_index % grid_rows_per_col + 1 < grid_rows_per_col {
+                        s.active_grid_index += 1;
+                    }
+                }),
+                MenuInput::Apply if state.active_content == 2 => ability_grid_apply = true,
+                MenuInput::PageUp => match self.show.diary_fields.section {
+                    DiarySection::Spells => state.update(|s| {
+                        s.spell_page = s.spell_page.saturating_sub(1);
+                    }),
+                    DiarySection::AbilitySelection => state.update(|s| {
+                        s.ability_page = s.ability_page.saturating_sub(1);
+                    }),
+                    _ => {},
+                },
+                MenuInput::PageDown => match self.show.diary_fields.section {
+                    DiarySection::Spells => state.update(|s| {
+                        s.spell_page += 1;
+                    }),
+                    DiarySection::AbilitySelection => state.update(|s| {
+                        s.ability_page += 1;
+                    }),
+                    _ => {},
+                },
+                _ => {},
+            }
+        }
+        let active_section_index = state
+            .active_section_index
+            .min(sections_len.saturating_sub(1));
 
         // Tooltips
         let diary_tooltip = Tooltip::new({
@@ -589,11 +728,19 @@ impl Widget for Diary<'_> {
             } else {
                 self.imgs.wpn_icon_border_press
             };
+            let section_menu_highlighted =
+                menu_active && state.active_content == 0 && i == active_section_index;
             let section_buttons = Button::image(border_image)
                 .w_h(50.0, 50.0)
                 .hover_image(hover_image)
                 .press_image(press_image)
                 .middle_of(state.ids.section_imgs[i])
+                .border(if section_menu_highlighted { 2.0 } else { 0.0 })
+                .border_color(if section_menu_highlighted {
+                    color::YELLOW
+                } else {
+                    color::TRANSPARENT
+                })
                 .with_tooltip(
                     self.tooltip_manager,
                     &section_name,
@@ -602,7 +749,7 @@ impl Widget for Diary<'_> {
                     TEXT_COLOR,
                 )
                 .set(state.ids.section_btns[i], ui);
-            if section_buttons.was_clicked() {
+            if section_buttons.was_clicked() || (apply_pressed && section_menu_highlighted) {
                 events.push(Event::ChangeSection(section))
             }
         }
@@ -1096,8 +1243,13 @@ impl Widget for Diary<'_> {
                     let image_offsets = 92.0 * i as f64;
 
                     let slot = AbilitySlot::Slot(i);
-                    let mut ability_slot =
-                        slot_maker.fabricate(slot, [image_size; 2], false, false);
+                    let row_menu_hover = state.active_content == 1 && state.active_row_index == i;
+                    let mut ability_slot = slot_maker.fabricate(
+                        slot,
+                        [image_size; 2],
+                        row_menu_hover,
+                        ability_row_apply && row_menu_hover,
+                    );
 
                     if i == 0 {
                         ability_slot = ability_slot.top_left_with_margins_on(
@@ -1163,8 +1315,6 @@ impl Widget for Diary<'_> {
                     )
                 })
                 .collect();
-
-                const ABILITIES_PER_PAGE: usize = 12;
 
                 let page_indices = (abilities.len().saturating_sub(1)) / ABILITIES_PER_PAGE;
 
@@ -1299,10 +1449,13 @@ impl Widget for Diary<'_> {
                     let (ability_title, ability_desc) =
                         util::ability_description(ability_id.unwrap_or(""), self.localized_strings);
 
-                    let (align_state, image_offsets) = if id_index < 6 {
+                    let (align_state, image_offsets) = if id_index < ABILITY_GRID_ROWS_PER_COL {
                         (state.ids.sb_page_left_align, 120.0 * id_index as f64)
                     } else {
-                        (state.ids.sb_page_right_align, 120.0 * (id_index - 6) as f64)
+                        (
+                            state.ids.sb_page_right_align,
+                            120.0 * (id_index - ABILITY_GRID_ROWS_PER_COL) as f64,
+                        )
                     };
 
                     Image::new(if same_weap_kinds {
@@ -1316,8 +1469,15 @@ impl Widget for Diary<'_> {
                     .set(state.ids.ability_frames[id_index], ui);
 
                     let slot = AbilitySlot::Ability(*ability);
+                    let grid_menu_hover =
+                        state.active_content == 2 && state.active_grid_index == id_index;
                     slot_maker
-                        .fabricate(slot, [100.0; 2], false, false)
+                        .fabricate(
+                            slot,
+                            [100.0; 2],
+                            grid_menu_hover,
+                            ability_grid_apply && grid_menu_hover,
+                        )
                         .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                         .set(state.ids.abilities[id_index], ui);
 
@@ -1375,14 +1535,6 @@ impl Widget for Diary<'_> {
                     spell::SpellCompendium,
                 };
 
-                /// Spell rows per column. Reduced from the ability tab's 6 to
-                /// leave `MASTERY_HEADER_HEIGHT` of clear space at the top of
-                /// each page for the per-source mastery header below, without
-                /// any row spilling past the book art's bottom edge.
-                const ROWS_PER_COL: usize = 5;
-                /// How many spell rows fit on one spread (two columns of
-                /// `ROWS_PER_COL`).
-                const SPELLS_PER_PAGE: usize = ROWS_PER_COL * 2;
                 /// Tint applied to a locked spell's empty slot.
                 const LOCKED_SLOT_COLOR: Color = Color::Rgba(0.35, 0.35, 0.35, 1.0);
                 /// Vertical space reserved at the top of each page for the
@@ -1486,8 +1638,13 @@ impl Widget for Diary<'_> {
                     let image_offsets = 92.0 * i as f64;
 
                     let slot = AbilitySlot::Slot(i);
-                    let mut ability_slot =
-                        slot_maker.fabricate(slot, [image_size; 2], false, false);
+                    let row_menu_hover = state.active_content == 1 && state.active_row_index == i;
+                    let mut ability_slot = slot_maker.fabricate(
+                        slot,
+                        [image_size; 2],
+                        row_menu_hover,
+                        ability_row_apply && row_menu_hover,
+                    );
 
                     if i == 0 {
                         ability_slot = ability_slot.top_left_with_margins_on(
@@ -1788,7 +1945,7 @@ impl Widget for Diary<'_> {
                         .map(String::as_str);
                     let spell = pool_key.and_then(|key| compendium.get(key));
 
-                    let (align_state, image_offsets) = if id_index < ROWS_PER_COL {
+                    let (align_state, image_offsets) = if id_index < SPELL_GRID_ROWS_PER_COL {
                         (
                             state.ids.sp_page_left_align,
                             MASTERY_HEADER_HEIGHT + 120.0 * id_index as f64,
@@ -1796,7 +1953,8 @@ impl Widget for Diary<'_> {
                     } else {
                         (
                             state.ids.sp_page_right_align,
-                            MASTERY_HEADER_HEIGHT + 120.0 * (id_index - ROWS_PER_COL) as f64,
+                            MASTERY_HEADER_HEIGHT
+                                + 120.0 * (id_index - SPELL_GRID_ROWS_PER_COL) as f64,
                         )
                     };
 
@@ -1825,8 +1983,15 @@ impl Widget for Diary<'_> {
                     // real ability slot.
                     let anchor_id = if *unlocked {
                         let slot = AbilitySlot::Ability(*ability);
+                        let grid_menu_hover =
+                            state.active_content == 2 && state.active_grid_index == id_index;
                         slot_maker
-                            .fabricate(slot, [100.0; 2], false, false)
+                            .fabricate(
+                                slot,
+                                [100.0; 2],
+                                grid_menu_hover,
+                                ability_grid_apply && grid_menu_hover,
+                            )
                             .top_left_with_margins_on(align_state, 20.0 + image_offsets, 20.0)
                             .with_tooltip(
                                 self.tooltip_manager,
@@ -2089,6 +2254,36 @@ impl Widget for Diary<'_> {
                                 format!("{}", stats.effect_power * 10.0)
                             },
                             (None, None) => String::new(),
+                        },
+                        CharacterStat::Pact => match self
+                            .character_class
+                            .filter(|cc| cc.classes().any(|c| c == ClassKind::Warlock))
+                        {
+                            Some(_) => {
+                                let standing = match self.pact.map(|p| p.standing) {
+                                    Some(PactStanding::Severed) => {
+                                        self.localized_strings.get_msg("hud-warlock-pact-severed")
+                                    },
+                                    Some(PactStanding::Bound) | None => {
+                                        self.localized_strings.get_msg("hud-warlock-pact-bound")
+                                    },
+                                };
+                                let patron = self
+                                    .pact
+                                    .and_then(|p| p.patron)
+                                    .map(|patron| {
+                                        self.localized_strings
+                                            .get_msg(&patron.name_i18n_key())
+                                            .into_owned()
+                                    })
+                                    .unwrap_or_else(|| {
+                                        self.localized_strings
+                                            .get_msg("hud-warlock-pact-no_patron")
+                                            .into_owned()
+                                    });
+                                format!("{standing} — {patron}")
+                            },
+                            None => String::new(),
                         },
                     };
 
@@ -4489,6 +4684,7 @@ fn unlock_skill_strings(group: SkillGroupKind) -> SkillStrings<'static> {
         SkillGroupKind::General
         | SkillGroupKind::Class(_)
         | SkillGroupKind::Feats
+        | SkillGroupKind::PactBlade
         | SkillGroupKind::Weapon(
             ToolKind::Dagger
             | ToolKind::Shield
@@ -4727,7 +4923,7 @@ impl<'a> SkillStrings<'a> {
 }
 
 /// The number of variants of the [`CharacterStat`] enum.
-const STAT_COUNT: usize = 16;
+const STAT_COUNT: usize = 17;
 
 #[derive(EnumIter)]
 enum CharacterStat {
@@ -4747,6 +4943,10 @@ enum CharacterStat {
     WeaponPower,
     WeaponSpeed,
     WeaponEffectPower,
+    /// Warlock-only: shows the bound patron and pact standing. Blank for
+    /// every other class, same as `WeaponPower`/`WeaponSpeed` blank out
+    /// when there's no weapon to report on.
+    Pact,
 }
 
 impl CharacterStat {
@@ -4770,6 +4970,7 @@ impl CharacterStat {
             WeaponPower => i18n.get_msg("common-stats-power"),
             WeaponSpeed => i18n.get_msg("common-stats-speed"),
             WeaponEffectPower => i18n.get_msg("common-stats-effect-power"),
+            Pact => i18n.get_msg("hud-warlock-pact"),
         }
     }
 }

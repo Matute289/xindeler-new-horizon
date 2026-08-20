@@ -1,7 +1,10 @@
 use super::{TEXT_COLOR, img_ids::Imgs, settings_window::SettingsTab};
-use crate::ui::fonts::Fonts;
+use crate::{
+    ui::fonts::Fonts,
+    window::{LastInput, MenuInput},
+};
 use conrod_core::{
-    Color, Labelable, Positionable, Sizeable, Widget, WidgetCommon,
+    Borderable, Color, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
     widget::{self, Button, Image},
     widget_ids,
 };
@@ -26,17 +29,27 @@ pub struct EscMenu<'a> {
     imgs: &'a Imgs,
     fonts: &'a Fonts,
     localized_strings: &'a Localization,
+    menu_events: &'a [MenuInput],
+    last_input: LastInput,
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
 }
 
 impl<'a> EscMenu<'a> {
-    pub fn new(imgs: &'a Imgs, fonts: &'a Fonts, localized_strings: &'a Localization) -> Self {
+    pub fn new(
+        imgs: &'a Imgs,
+        fonts: &'a Fonts,
+        localized_strings: &'a Localization,
+        menu_events: &'a [MenuInput],
+        last_input: LastInput,
+    ) -> Self {
         Self {
             imgs,
             fonts,
             localized_strings,
+            menu_events,
+            last_input,
             common: widget::CommonBuilder::default(),
         }
     }
@@ -44,7 +57,13 @@ impl<'a> EscMenu<'a> {
 
 pub struct State {
     ids: Ids,
+    // Gamepad/keyboard menu navigation: index into the 7 buttons in visual
+    // (top-to-bottom) order — Resume, Settings, Controls, Characters, Report Bug,
+    // Logout, Quit. Mirrors the `ContextMenu` list-nav shape in `slot_grid.rs`.
+    active_button: usize,
 }
+
+const BUTTON_COUNT: usize = 7;
 
 pub enum Event {
     OpenSettings(SettingsTab),
@@ -63,6 +82,7 @@ impl Widget for EscMenu<'_> {
     fn init_state(&self, id_gen: widget::id::Generator) -> Self::State {
         State {
             ids: Ids::new(id_gen),
+            active_button: 0,
         }
     }
 
@@ -71,6 +91,27 @@ impl Widget for EscMenu<'_> {
     fn update(self, args: widget::UpdateArgs<Self>) -> Self::Event {
         common_base::prof_span!("EscMenu::update");
         let widget::UpdateArgs { state, ui, .. } = args;
+
+        // MENU INPUTS: `Back` closes the esc menu (same as "Resume"); Up/Down moves
+        // the highlighted button (no wrap); Apply activates it — the `ContextMenu`
+        // list-nav shape from `slot_grid.rs`, replicated locally since that struct
+        // isn't exported.
+        let mut apply_pressed = false;
+        for key in self.menu_events {
+            match key {
+                MenuInput::Back => return Some(Event::Close),
+                MenuInput::Up => state.update(|s| {
+                    s.active_button = s.active_button.saturating_sub(1);
+                }),
+                MenuInput::Down => state.update(|s| {
+                    s.active_button = (s.active_button + 1).min(BUTTON_COUNT - 1);
+                }),
+                MenuInput::Apply => apply_pressed = true,
+                _ => {},
+            }
+        }
+        let menu_active = matches!(self.last_input, LastInput::Keyboard | LastInput::Controller);
+        let is_highlighted = |index: usize| menu_active && state.active_button == index;
 
         Image::new(self.imgs.esc_frame)
             .w_h(240.0, 440.0)
@@ -94,8 +135,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(0) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(0) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_1, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(0))
         {
             return Some(Event::Close);
         };
@@ -111,8 +159,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(1) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(1) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_2, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(1))
         {
             return Some(Event::OpenSettings(SettingsTab::Interface));
         };
@@ -127,8 +182,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(2) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(2) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_3, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(2))
         {
             return Some(Event::OpenSettings(SettingsTab::Controls));
         };
@@ -143,8 +205,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(3) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(3) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_4, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(3))
         {
             return Some(Event::CharacterSelection);
         };
@@ -159,8 +228,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(4) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(4) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_7, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(4))
         {
             return Some(Event::ReportBug);
         };
@@ -175,8 +251,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(5) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(5) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_5, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(5))
         {
             return Some(Event::Logout);
         };
@@ -191,8 +274,15 @@ impl Widget for EscMenu<'_> {
             .label_color(TEXT_COLOR)
             .label_font_size(self.fonts.cyri.scale(20))
             .label_font_id(self.fonts.cyri.conrod_id)
+            .border(if is_highlighted(6) { 2.0 } else { 0.0 })
+            .border_color(if is_highlighted(6) {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            })
             .set(state.ids.menu_button_6, ui)
             .was_clicked()
+            || (apply_pressed && is_highlighted(6))
         {
             return Some(Event::Quit);
         };

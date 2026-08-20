@@ -1,0 +1,30 @@
+// D&D's location-tracking rider (while concentrating, the caster always
+// knows the target's exact position, piercing walls/shadow) is dropped: the
+// closest existing primitives (RemoteSensing/SeeInvisible) anchor a sense or
+// pierce concealment generically, neither builds a live position-link to one
+// specific already-targeted entity -- that link is new engine work, out of
+// Lane A scope. Ships as a straightforward single-target psychic bolt; the
+// sheet's Concentration(60) existed only to gate the dropped tracking, so
+// with nothing left to concentrate on this ships as Instant.
+BasicRanged(
+    energy_cost: 45.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 22,
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Divination),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, the `level * 6` convention (see
+        // sleep.ron).
+        requirements: (min_level: Some(12)),
+    ),
+)

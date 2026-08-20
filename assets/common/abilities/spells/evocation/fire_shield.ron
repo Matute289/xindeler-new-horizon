@@ -1,0 +1,18 @@
+// "Wards from temperature, retaliates on melee attackers" -- `ProtectingWard`
+// damage reduction; retaliation rider dropped, no reflect/thorns `BuffEffect`
+// exists.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.3, duration: Some(600.0))),
+    ],
+    energy_cost: 90.0,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

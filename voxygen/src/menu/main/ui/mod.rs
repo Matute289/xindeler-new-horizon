@@ -17,7 +17,7 @@ use crate::{
         ice::{Element, IcedUi as Ui, load_font, style, widget},
         img_ids::ImageGraphic,
     },
-    window,
+    window::{self, MenuInput},
 };
 use i18n::{LanguageMetadata, LocalizationHandle};
 use iced::{Column, Container, HorizontalAlignment, Length, Row, Space, text_input};
@@ -223,6 +223,21 @@ enum Showing {
     Languages,
 }
 
+/// Gamepad/keyboard menu-navigation focus target on the login screen. Cycled
+/// by `Controls::menu_input` (Up/Down), mirroring the existing Tab-key
+/// cycling in `Controls::tab` but extended to also stop on the primary
+/// action button so Apply can activate it without a mouse/cursor-emulation
+/// click. Only the login screen is covered by this pass — the servers list,
+/// credits, and world-selector screens are still mouse-emulation-only (left
+/// stick moves the cursor, a bound button clicks).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoginFocus {
+    Username,
+    Password,
+    Server,
+    MultiplayerButton,
+}
+
 impl Showing {
     fn toggle(&mut self, other: Showing) {
         if *self == other {
@@ -255,6 +270,7 @@ pub struct Controls {
     time: f64,
 
     screen: Screen,
+    login_focus: LoginFocus,
 }
 
 #[derive(Clone)]
@@ -355,6 +371,7 @@ impl Controls {
             time: 0.0,
 
             screen,
+            login_focus: LoginFocus::Username,
         }
     }
 
@@ -413,6 +430,7 @@ impl Controls {
                 self.selected_language_index,
                 &language_metadatas,
                 button_style,
+                self.login_focus == LoginFocus::MultiplayerButton,
             ),
             Screen::Servers { screen } => screen.view(
                 &self.fonts,
@@ -469,12 +487,7 @@ impl Controls {
 
         match message {
             Message::Quit => events.push(Event::Quit),
-            Message::Back => {
-                self.screen = Screen::Login {
-                    screen: Box::default(),
-                    error: None,
-                };
-            },
+            Message::Back => self.reset_to_login_screen(None),
             Message::ShowServers => {
                 if matches!(&self.screen, Screen::Login { .. }) {
                     self.selected_server_index =
@@ -622,11 +635,20 @@ impl Controls {
     // Connection successful of failed
     fn exit_connect_screen(&mut self) {
         if matches!(&self.screen, Screen::Connecting { .. }) {
-            self.screen = Screen::Login {
-                screen: Box::default(),
-                error: None,
-            }
+            self.reset_to_login_screen(None);
         }
+    }
+
+    /// Returns to a fresh login screen (all text fields unfocused, a new
+    /// `login::Screen`), resetting `login_focus` back to its default so a
+    /// stale menu-navigation target (e.g. the multiplayer button, from
+    /// before navigating away) doesn't carry over.
+    fn reset_to_login_screen(&mut self, error: Option<String>) {
+        self.screen = Screen::Login {
+            screen: Box::default(),
+            error,
+        };
+        self.login_focus = LoginFocus::Username;
     }
 
     fn auth_trust_prompt(&mut self, auth_server: String) {
@@ -650,10 +672,7 @@ impl Controls {
         if matches!(&self.screen, Screen::Connecting { .. })
             || matches!(&self.screen, Screen::Login { .. })
         {
-            self.screen = Screen::Login {
-                screen: Box::default(),
-                error: Some(error),
-            }
+            self.reset_to_login_screen(Some(error));
         } else {
             warn!("connection_error invoked on unhandled screen!");
         }
@@ -668,27 +687,120 @@ impl Controls {
     fn tab(&mut self) {
         if let Screen::Login { screen, .. } = &mut self.screen {
             // TODO: add select all function in iced
+            //
+            // Also updates `login_focus` to match, alongside each branch's real
+            // `text_input` focus change: `login_focus` is a second, independent
+            // record of "which field is focused" that `menu_input`'s Up/Down
+            // (`set_login_focus`) reads to compute its own next/previous field.
+            // Moving the real focus here without updating it would leave that
+            // tracked value stale, so a later arrow-key press would compute its
+            // next field from wherever `login_focus` last was instead of from
+            // where Tab actually left real focus.
             if screen.banner.username.is_focused() {
                 screen.banner.username = text_input::State::new();
                 screen.banner.password = text_input::State::focused();
                 screen.banner.password.move_cursor_to_end();
+                self.login_focus = LoginFocus::Password;
             } else if screen.banner.password.is_focused() {
                 screen.banner.password = text_input::State::new();
                 // Skip focusing server field if it isn't editable!
                 if self.server_field_locked {
                     screen.banner.username = text_input::State::focused();
+                    self.login_focus = LoginFocus::Username;
                 } else {
                     screen.banner.server = text_input::State::focused();
+                    self.login_focus = LoginFocus::Server;
                 }
                 screen.banner.server.move_cursor_to_end();
             } else if screen.banner.server.is_focused() {
                 screen.banner.server = text_input::State::new();
                 screen.banner.username = text_input::State::focused();
                 screen.banner.username.move_cursor_to_end();
+                self.login_focus = LoginFocus::Username;
             } else {
                 screen.banner.username = text_input::State::focused();
                 screen.banner.username.move_cursor_to_end();
+                self.login_focus = LoginFocus::Username;
             }
+        }
+    }
+
+    /// The gamepad/keyboard navigation order for `LoginFocus`, skipping the
+    /// server field when it's locked (there is nothing to focus there).
+    fn login_focus_order(server_field_locked: bool) -> Vec<LoginFocus> {
+        let mut order = vec![LoginFocus::Username, LoginFocus::Password];
+        if !server_field_locked {
+            order.push(LoginFocus::Server);
+        }
+        order.push(LoginFocus::MultiplayerButton);
+        order
+    }
+
+    /// Moves gamepad/keyboard menu-navigation focus to `focus`, updating the
+    /// corresponding text field's real iced focus state (same mechanism as
+    /// `tab`) when it lands on a text field, or clearing all three when it
+    /// lands on the multiplayer button (whose highlight is driven purely by
+    /// `login_focus` in `view`).
+    fn set_login_focus(&mut self, focus: LoginFocus) {
+        self.login_focus = focus;
+        if let Screen::Login { screen, .. } = &mut self.screen {
+            screen.banner.username = text_input::State::new();
+            screen.banner.password = text_input::State::new();
+            screen.banner.server = text_input::State::new();
+            match focus {
+                LoginFocus::Username => {
+                    screen.banner.username = text_input::State::focused();
+                    screen.banner.username.move_cursor_to_end();
+                },
+                LoginFocus::Password => {
+                    screen.banner.password = text_input::State::focused();
+                    screen.banner.password.move_cursor_to_end();
+                },
+                LoginFocus::Server => {
+                    screen.banner.server = text_input::State::focused();
+                    screen.banner.server.move_cursor_to_end();
+                },
+                LoginFocus::MultiplayerButton => {},
+            }
+        }
+    }
+
+    /// Handles a `MenuInput` (gamepad or keyboard menu binding) forwarded
+    /// from `MainMenuUi::maintain`. Only the login screen has real focus
+    /// navigation in this pass (see `LoginFocus`); on any other screen, Back
+    /// returns to it (the same `Message::Back` every screen's own close/back
+    /// button already sends) and Up/Down/Apply are no-ops, leaving mouse
+    /// emulation as the only way to interact there for now.
+    fn menu_input(
+        &mut self,
+        input: MenuInput,
+        events: &mut Vec<Event>,
+        settings: &Settings,
+        ui: &mut Ui,
+    ) {
+        let on_login_screen =
+            matches!(self.screen, Screen::Login { .. }) && self.show == Showing::Login;
+        match input {
+            MenuInput::Back if !matches!(self.screen, Screen::Login { .. }) => {
+                self.update(Message::Back, events, settings, ui);
+            },
+            MenuInput::Up | MenuInput::Down if on_login_screen => {
+                let order = Self::login_focus_order(self.server_field_locked);
+                if let Some(pos) = order.iter().position(|f| *f == self.login_focus) {
+                    let new_pos = if matches!(input, MenuInput::Down) {
+                        (pos + 1) % order.len()
+                    } else {
+                        (pos + order.len() - 1) % order.len()
+                    };
+                    self.set_login_focus(order[new_pos]);
+                }
+            },
+            MenuInput::Apply
+                if on_login_screen && self.login_focus == LoginFocus::MultiplayerButton =>
+            {
+                self.update(Message::Multiplayer, events, settings, ui);
+            },
+            _ => {},
         }
     }
 }
@@ -699,6 +811,9 @@ pub struct MainMenuUi {
     // tip_no: u16,
     controls: Controls,
     bg_img_spec: &'static str,
+    // Gamepad/keyboard menu-input presses collected since the last `maintain` call
+    // and drained there, mirroring how `hud::Hud` collects `menu_events`.
+    menu_events: Vec<MenuInput>,
 }
 
 impl MainMenuUi {
@@ -733,6 +848,7 @@ impl MainMenuUi {
             ui,
             controls,
             bg_img_spec,
+            menu_events: Vec::new(),
         }
     }
 
@@ -777,6 +893,15 @@ impl MainMenuUi {
                 self.ui.scale_factor_changed(s);
                 false
             },
+            // Gamepad/keyboard menu navigation, collected here and consumed in
+            // `maintain` (which is where `Controls::update`/`Event` construction
+            // already happens for iced messages, so this reuses the same path
+            // rather than plumbing a second `Vec<Event>` out of `handle_event`).
+            window::Event::MenuInput(key, true) => {
+                self.menu_events.push(key);
+                true
+            },
+            window::Event::MenuInput(_, false) => true,
             _ => false,
         }
     }
@@ -828,6 +953,11 @@ impl MainMenuUi {
             self.controls
                 .update(message, &mut events, &global_state.settings, &mut self.ui)
         });
+
+        for key in self.menu_events.drain(..) {
+            self.controls
+                .menu_input(key, &mut events, &global_state.settings, &mut self.ui);
+        }
 
         events
     }

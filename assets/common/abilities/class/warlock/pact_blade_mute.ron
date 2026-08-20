@@ -1,0 +1,61 @@
+// N27-AB — Pacto de la Espada, tier 0: "Hoja Muda" / "Mute Blade".
+//
+// The blade before it has a voice (`PactBladeSkill::Voice` is tier 1): a
+// patron-forged edge that is simply there, and simply cuts. Available the
+// instant `/pact blade summon` flips `Pact::blade_summoned`, with no skill
+// point spent -- `Simple(None, ..)` in the manifest.
+//
+// This is the Warlock's REAL attack while the blade is out, not a filler: an
+// `InnateAux` ability has no equipped tool backing it, so there is no weapon
+// primary underneath it to fall back on. Hence no cooldown and a repeatable
+// ~0.85 s cycle. Damage sits above the shipped cantrip band (booming_blade
+// 14, eldritch_blast 8x2) and below a class signature burst (rogue ambush 30
+// on a 15 s cooldown), which is where a spammable no-cooldown strike belongs.
+//
+// `energy_cost: 0` is load-bearing, not an oversight (`game-balance-designer`
+// caught this): energy regen zeroes out every tick while mid-swing
+// (`common/systems/src/stats.rs`), and this ability's own `energy_regen: 0`
+// refunds nothing on hit, so any nonzero cost here would be pure drain with
+// no income -- the class's ONLY damage tool while the blade is out would run
+// dry roughly every 10-50 s (scaling with level) and force ~50% idle time.
+// Every other "spam forever, no cooldown" basic attack in this codebase
+// (every `*simple/*.ron` weapon strike, `booming_blade`, `eldritch_blast`) is
+// already zero-cost -- this ability follows that same, consistent shipped
+// convention rather than inventing a new one.
+//
+// `source: Some(Arcane)` is load-bearing, not flavour ("The Veil -- arcane
+// study, bloodline, PACT, or art"). It makes `Attack::apply_attack` treat the
+// swing as magic, which:
+//   * exempts it from the non-proficient weapon penalty
+//     (`combat::Attack::proficiency_multiplier` returns 1.0 for `is_magic`) --
+//     the blade is not a weapon the Warlock is or isn't trained with, and
+//     `AbilityInfo::new` would otherwise stamp it with whatever tool happens
+//     to be in `ActiveMainhand`;
+//   * rolls magic accuracy vs magic evasion, and scales off `spell_power`
+//     rather than raw weapon damage, which is the right channel for a caster;
+//   * makes it suppressible by `Antimagic` / a severed pact's `disable_magic`,
+//     which is correct for patron-granted power.
+// `school` is deliberately unset: this is a boon ability, not a catalogued
+// spell, and it is absent from the spell compendium (so the cast-time class
+// filter and the Tome-possession gate both pass it through untouched).
+//
+// `Slash` hardcodes DamageKind::Slashing in common/src/comp/melee.rs; there is
+// no RON-authorable damage kind on MeleeConstructorKind.
+BasicMelee(
+    energy_cost: 0,
+    buildup_duration: 0.35,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Slash(
+            damage: 20,
+            poise: 10,
+            knockback: 4,
+            energy_regen: 0,
+        ),
+        range: 3.2,
+        angle: 30.0,
+    ),
+    meta: (source: Some(Arcane)),
+)

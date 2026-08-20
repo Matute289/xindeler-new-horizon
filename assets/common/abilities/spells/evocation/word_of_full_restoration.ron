@@ -1,0 +1,29 @@
+// Same single-ally heal shape as heal.ron, the wave's circle-9 healing
+// capstone. Sheet's mind-affecting-condition-cleanse rider dropped, no
+// condition-removal `BuffEffect` exists.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.5,
+    recover_duration: 0.35,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Regeneration,
+            strength: 45.0,
+            duration: Some(3.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3.0),
+    range: 3.0,
+    energy_cost: 220.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        cooldown: Some(30.0),
+        // level 9 spell -> min_level 54, the level * 6 convention.
+        requirements: (min_level: Some(54)),
+    ),
+)

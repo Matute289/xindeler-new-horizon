@@ -56,6 +56,17 @@ pub enum SharedCommand {
     },
 }
 
+/// Where an `OracleTrigger` should resolve its spawn origin.
+#[derive(Clone, Debug, Parser)]
+pub enum OracleTarget {
+    /// Resolve to a currently-online player's position by alias. Fails
+    /// (never silently falls back to the world origin) if no online player
+    /// has this alias.
+    Player { alias: String },
+    /// Use these world-space coordinates verbatim.
+    Coords { x: f32, y: f32, z: f32 },
+}
+
 #[derive(Debug, Clone, Parser)]
 pub enum Message {
     #[command(flatten)]
@@ -86,12 +97,137 @@ pub enum Message {
     SendGlobalMsg {
         msg: String,
     },
+    /// Uptime-adjacent server status not already exported via `/metrics`:
+    /// version, player count, pending-shutdown state.
+    ServerInfo,
+    /// Tail of the ORACLE chronicle log, oldest-first, capped to `limit`
+    /// most-recent entries.
+    ListChronicle {
+        limit: usize,
+    },
+    /// Ids of every currently-loaded ORACLE `.dmevent`/`.entity_template`.
+    OracleListEvents,
+    /// Fire (or, with `dry_run`, preview) a currently-loaded ORACLE
+    /// `DmEvent`. Gated by `crate::web::ui::api`'s HTTP route through
+    /// `server::oracle::policy::gated_trigger_dm_event` -- rate limit,
+    /// per-event cooldown, per-event spawn cap, and the
+    /// `OracleEventsEnabled` kill switch all apply.
+    OracleTrigger {
+        event_id: String,
+        #[command(subcommand)]
+        target: OracleTarget,
+        #[arg(long)]
+        dry_run: bool,
+        /// Raises the per-trigger spawn cap up to the sanitize-time
+        /// ceiling. The caller is responsible for only setting this after
+        /// its own step-up re-auth; this message does not gate who may set
+        /// it.
+        #[arg(long)]
+        high_impact_override: bool,
+    },
+    /// Enables or disables the HTTP ORACLE-trigger kill switch
+    /// (`server::oracle::policy::OracleEventsEnabled`). Distinct from, and
+    /// must never be confused with, `common::resources::OracleLive`, which
+    /// gates player spellcasting and this message never touches.
+    OracleEventsEnabled {
+        enabled: bool,
+    },
+    /// Lists the characters belonging to `uuid` — the in-process half of
+    /// NH-79's character-data endpoint for `xindeler-web-landing`.
+    /// Read-only; resolves each character's last-saved-waypoint location via
+    /// the same `Server::parse_locations` the character-select screen
+    /// already uses. `uuid` may belong to a player who isn't currently
+    /// connected — this reads persistence directly, not live ECS state.
+    ListPlayerCharacters {
+        uuid: String,
+    },
+    /// Renames one of `uuid`'s own characters — the write half of NH-79.
+    /// Rejects if `character_id` doesn't belong to `uuid`, if `new_alias`
+    /// fails `common::character::validate_character_name`, or if the name is
+    /// already taken by any character (own namespace, never checked against
+    /// account usernames — spec §4.4 of the NH-79 design doc).
+    RenameCharacter {
+        uuid: String,
+        character_id: i64,
+        new_alias: String,
+    },
+}
+
+/// Ids of every currently-loaded ORACLE asset. See `Message::OracleListEvents`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OracleEventsDto {
+    pub dm_events: Vec<String>,
+    pub entity_templates: Vec<String>,
+}
+
+/// The subset of server status not already exported via `/metrics`. See
+/// `Message::ServerInfo`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServerInfoDto {
+    pub version: String,
+    pub player_count: usize,
+    /// `Some(seconds)` while a graceful shutdown countdown is in progress
+    /// (see `ShutdownCoordinator`); `None` otherwise.
+    pub shutdown_pending_secs: Option<u64>,
+}
+
+/// A character's resolved location. Only `site` resolves against real data
+/// today — `kingdom`/`continent` are always `None` until a real hierarchy
+/// exists (NH-79 spec §2.3/§2.4/§4.3); this is a contract decision made
+/// ahead of that world-design work landing, not a per-character gap.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocationDto {
+    pub site: String,
+    pub kingdom: Option<String>,
+    pub continent: Option<String>,
+}
+
+/// See `Message::ListPlayerCharacters`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CharacterSummaryDto {
+    pub character_id: i64,
+    pub name: String,
+    pub level: u32,
+    pub class: String,
+    /// `None` if this character never sat at a waypoint (NH-79 spec §2.5).
+    pub location: Option<LocationDto>,
 }
 
 #[derive(Debug, Clone)]
 pub enum MessageReturn {
     Players(Vec<String>),
     Logs(Vec<String>),
+    Info(ServerInfoDto),
+    Chronicle(Vec<String>),
+    OracleEvents(OracleEventsDto),
+    /// A real (non-`dry_run`) `OracleTrigger` fired.
+    OracleTriggered {
+        event_id: String,
+        at: [f32; 3],
+        requested: usize,
+        spawned: usize,
+        clamped: bool,
+    },
+    /// A `dry_run: true` `OracleTrigger` resolved everything and passed
+    /// every check, but emitted nothing.
+    OraclePreview {
+        event_id: String,
+        at: [f32; 3],
+        requested: usize,
+        spawned: usize,
+        clamped: bool,
+        bodies: Vec<String>,
+        distance_to_nearest_player: Option<f32>,
+    },
+    /// A fallible operation failed. Every `Message` arm that can fail must
+    /// send this instead of silently dropping the response sender, or the
+    /// caller only ever observes a request timeout with no explanation.
+    Error(String),
+    /// Response to `Message::ListPlayerCharacters`.
+    PlayerCharacters(Vec<CharacterSummaryDto>),
+    /// Response to a successful `Message::RenameCharacter`. Failure goes
+    /// through `Error(String)` above, same as every other fallible arm.
+    CharacterRenamed,
 }
 
 #[derive(Parser)]

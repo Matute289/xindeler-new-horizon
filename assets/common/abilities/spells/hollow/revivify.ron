@@ -1,0 +1,33 @@
+// "Calls back a soul that left its body only moments ago" -- a true
+// death-reversal, but this engine has no addressable "dead" state to revive
+// into: `Health::revive()` (common/src/comp/health.rs) exists only for
+// admin/banishment/respawn code paths, not as a `CombatEffect` any spell RON
+// can invoke, and adding one is Rust (Lane B), out of scope here. Same
+// class of gap spare_the_dying.ron (this folder) already documents for the
+// lighter "stabilize a dying creature" case -- "no dedicated downed/dying
+// state exists... modeled as a modest instant heal on the touched ally, the
+// closest existing primitive". This spell scales that exact same
+// simplification up: `SelfBuff` cannot reach a touched ally (see
+// spare_the_dying.ron's own header), so `BasicMelee` +
+// `attack_effect_target: InGroup` delivers the largest heal in this cell,
+// reflecting "returns a creature to life" as the strongest revival-adjacent
+// effect this engine can express, one step past life_transference.ron's own
+// touch-ally heal in this same folder.
+BasicMelee(
+    energy_cost: 90.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Heal(150.0),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Necromancy), source: Some(Divine)),
+)

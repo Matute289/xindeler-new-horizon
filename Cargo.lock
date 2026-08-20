@@ -10793,7 +10793,7 @@ dependencies = [
 [[package]]
 name = "xindeler-auth-common"
 version = "0.1.0"
-source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=99afc8ff5ff43d5d69cf06e56117b25ca0623de3#99afc8ff5ff43d5d69cf06e56117b25ca0623de3"
+source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=790aa46e5f9835df13aa5f3d0c477dfad87f5149#790aa46e5f9835df13aa5f3d0c477dfad87f5149"
 dependencies = [
  "hex",
  "rand 0.10.1",
@@ -10805,7 +10805,7 @@ dependencies = [
 [[package]]
 name = "xindeler-authc"
 version = "1.0.0"
-source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=99afc8ff5ff43d5d69cf06e56117b25ca0623de3#99afc8ff5ff43d5d69cf06e56117b25ca0623de3"
+source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=790aa46e5f9835df13aa5f3d0c477dfad87f5149#790aa46e5f9835df13aa5f3d0c477dfad87f5149"
 dependencies = [
  "reqwest",
  "serde",
@@ -11263,6 +11263,7 @@ dependencies = [
  "specs",
  "tokio",
  "tracing",
+ "vek 0.17.2",
  "xindeler-common",
  "xindeler-common-base",
  "xindeler-common-frontend",

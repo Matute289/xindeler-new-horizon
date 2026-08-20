@@ -1,0 +1,46 @@
+// Targets a creature you TOUCH ("cast on self or an ally by touch" per the
+// sheet's own notes), not the caster unconditionally -- `SelfBuff` always
+// lands its effect on the caster (`entity: data.entity` in
+// `common/src/states/self_buff.rs`), never a touched ally, so this uses
+// `BasicMelee` with the established touch-ally pattern (spare_the_dying.ron
+// in this same folder; weave_transfusion.ron / lesser_restoration.ron /
+// greater_restoration.ron in transmutation/abjuration): a near-inert Stab
+// whose `attack_effect_target: InGroup` redirects the effect onto whoever is
+// struck instead of dealing damage.
+//
+// Every existing InGroup precedent delivers `Heal` or `RemoveBuff` via
+// `attack_effect`; this is the first to deliver a plain `CombatEffect::Buff`
+// that way. Same resolution code path (`combat.rs`'s `CombatEffect::Buff`
+// arm reads whatever `target` the attack resolved against, `InGroup` or
+// not), so no new mechanism -- just the first RON to combine two
+// already-real pieces. Flagging for reviewer attention per plan §5 item 1.
+//
+// Grants `Shielded` (temp-HP absorb pool -- see false_life.ron's own use of
+// this buff) on the touched ally, modeling "steadying it against the brink
+// of death". The retaliatory-necrotic-lash-on-attacker rider is dropped: no
+// `BuffKind` models a reactive damage-the-attacker-on-being-hit effect
+// (checked every variant in `common/src/comp/buff.rs`), the same class of
+// gap chill_touch.ron's own header already documents for this school.
+BasicMelee(
+    energy_cost: 45.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Buff((
+                kind: Shielded,
+                dur_secs: 60.0,
+                strength: Value(25.0),
+                chance: 1.0,
+            )),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

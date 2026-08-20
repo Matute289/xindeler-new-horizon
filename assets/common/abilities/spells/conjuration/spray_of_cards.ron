@@ -1,0 +1,35 @@
+// Cone-shaped Force burst, same shape as axiomancy/pulse_wave.ron and
+// hemomancy/crimson_lash.ron (both already-shipped player Shockwave spells,
+// so this variant has real precedent, unlike Blink/SpriteSummon in this
+// batch). `shockwave_speed * shockwave_duration` = 12.5 * 0.4 = 5.0, matching
+// the sheet's "Cone 5" reach. The sheet's blinded-on-failed-save rider is a
+// real, already-shipped primitive here: `damage_effect: Option<CombatEffect>`
+// attaches an arbitrary buff to the shockwave hit, same mechanism
+// conjuration/ensnaring_strike.ron (Wave 1) used for a melee rider.
+Shockwave(
+    energy_cost: 35,
+    buildup_duration: 0.5,
+    swing_duration: 0.3,
+    recover_duration: 0.35,
+    damage: 20.0,
+    poise_damage: 8,
+    knockback: (strength: 3.0, direction: Away),
+    shockwave_angle: 60.0,
+    shockwave_vertical_angle: 45.0,
+    shockwave_speed: 12.5,
+    shockwave_duration: 0.4,
+    dodgeable: Jump,
+    move_efficiency: 0.1,
+    damage_kind: Force,
+    specifier: Ground,
+    ori_rate: 1.0,
+    damage_effect: Some(Buff((
+        kind: Blinded,
+        dur_secs: 4.0,
+        strength: Value(0.4),
+        chance: 1.0,
+    ))),
+    timing: PostBuildup,
+    emit_outcome: true,
+    meta: (school: Some(Conjuration), source: Some(Arcane), cooldown: Some(14.0)),
+)

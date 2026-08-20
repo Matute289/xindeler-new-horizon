@@ -70,6 +70,7 @@ gameinput-currentslot = Usa el espacio actual
 gameinput-controls = Controles
 gameinput-walljump = Salto de Muro
 gameinput-stayfollow = Quedarse/Seguir
+gameinput-commandpet = Ordenar a Mascota
 gameinput-inventory = Inventario
 gameinput-crawl = Arrastrarse
 gameinput-diary = Diario

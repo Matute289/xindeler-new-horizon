@@ -1,0 +1,23 @@
+// "Holds off a fatal blow" -- no death-prevention/last-stand primitive
+// exists anywhere in the engine (checked common/src/comp/buff.rs,
+// common/src/states/). `Shielded` (a temp-HP absorb buff, already shipped
+// on abjuration/shield.ron) is the closest existing approximation: enough
+// of an HP buffer to plausibly "hold off" a blow that would otherwise
+// land as the killing hit, though it doesn't truly guarantee survival the
+// way the sheet's real death-ward mechanic does. Documented as an honest
+// approximation, not the real mechanic.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Shielded, data: BuffData(strength: 60.0, duration: Some(60.0))),
+    ],
+    energy_cost: 75.0,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Divine),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

@@ -91,8 +91,9 @@ pub fn handle_loaded_character_data(server: &mut Server, ev: UpdateCharacterData
         map_marker: ev.components.9,
         ethos: ev.components.10,
         background: ev.components.11,
-        trigger_slots: ev.components.12,
-        spell_mastery: ev.components.13,
+        pact: ev.components.12,
+        trigger_slots: ev.components.13,
+        spell_mastery: ev.components.14,
     };
     if let Some(marker) = loaded_components.map_marker {
         server.notify_client(
@@ -145,6 +146,8 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         incorporeal,
         phantom_illusion,
         delete_after,
+        oracle_event_id,
+        chain_summon_cost,
     } = ev.npc;
     let entity = server
         .state
@@ -173,6 +176,19 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         spawned_at: time,
         timeout,
     }));
+
+    // Attribute this entity to the ORACLE `DmEvent` that spawned it, if any.
+    // Cloned rather than moved: `oracle_event_id` is still needed below to
+    // propagate onto recursively-created rider/pet entities.
+    let entity =
+        entity.maybe_with(
+            oracle_event_id
+                .clone()
+                .map(|event_id| crate::oracle::OracleSpawned {
+                    event_id,
+                    spawned_at: time,
+                }),
+        );
 
     if let Some(agent) = &mut agent
         && let Alignment::Owned(_) = &alignment
@@ -235,6 +251,57 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
             .add_rtsim(rtsim_actor, new_entity);
     }
 
+    // N27-O: the server-authoritative Cadena point-pool gate. Runs BEFORE
+    // group registration, and — if refused — deletes `new_entity` and
+    // returns immediately, before the group/anchor code below ever treats
+    // it as live. `chain_summon_cost` is `None` for every summon that isn't
+    // a Cadena fiend (see its doc comment on `NpcBuilder`), so this is a
+    // no-op for every other caller of `handle_create_npc` (admin `/spawn`,
+    // riders, tamed pets, world/rtsim/ORACLE spawns, every pre-existing
+    // non-Cadena `BasicSummon` ability).
+    //
+    // `CharacterAbility::requirements_paid`'s `BasicSummon` arm already
+    // verified the whole cast's batch cost was affordable before this
+    // character state was ever entered (the "not activatable client-side"
+    // half of the acceptance bar) — this re-check, per creature as it
+    // actually spawns, is the true last-line authority a modified or
+    // desynced client cannot bypass.
+    if let comp::Alignment::Owned(owner_uid) = alignment
+        && let Some(cost) = chain_summon_cost
+    {
+        let ecs = server.state.ecs();
+        let Some(owner) = ecs.entity_from_uid(owner_uid) else {
+            // No resolvable owner at all -- never charge or anchor an
+            // orphaned summon; let it despawn on the very next unload sweep
+            // like any other unowned entity.
+            let _ = server.state.delete_entity_recorded(new_entity);
+            return new_entity;
+        };
+        let new_uid = *ecs
+            .read_storage::<Uid>()
+            .get(new_entity)
+            .expect("create_entity_synced always assigns a Uid");
+        if charge_chain_summon(ecs, owner, new_uid, cost) {
+            // Mirrors `server/src/pet.rs`'s `tame_pet` anchor: without it, a
+            // Cadena fiend standing outside its owner's own load radius
+            // would despawn on the next chunk-unload sweep even while its
+            // owner is still connected. Scoped to `chain_summon_cost.is_some()`
+            // rather than every `Alignment::Owned` NPC on purpose -- see
+            // this block's doc comment.
+            let _ = ecs
+                .write_storage()
+                .insert(new_entity, comp::Anchor::Entity(owner));
+        } else {
+            tracing::warn!(
+                ?owner_uid,
+                cost,
+                "Refusing a Cadena summon: would exceed the owner's chain pool"
+            );
+            let _ = server.state.delete_entity_recorded(new_entity);
+            return new_entity;
+        }
+    }
+
     // Add to group system if a pet
     if let comp::Alignment::Owned(owner_uid) = alignment {
         let state = server.state();
@@ -267,7 +334,12 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
         let _ = server.state.ecs().write_storage().insert(new_entity, group);
     }
 
-    if let Some(rider) = rider {
+    if let Some(mut rider) = rider {
+        // Riders are created via a nested `NpcBuilder` that does not inherit
+        // the parent's ORACLE attribution automatically. Propagate it
+        // explicitly so a mounted rider is still counted against the live
+        // ceiling and shows up under the same event id.
+        rider.oracle_event_id = oracle_event_id.clone();
         let rider_entity = handle_create_npc(server, CreateNpcEvent {
             pos: ev.pos,
             ori: Ori::default(),
@@ -285,7 +357,11 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
             .expect("We just created these entities");
     }
 
-    for (pet, offset) in pets {
+    for (mut pet, offset) in pets {
+        // Same propagation as the rider above: a pet spawned by an ORACLE
+        // trigger must stay tagged and countable, not slip past the ceiling
+        // untagged.
+        pet.oracle_event_id = oracle_event_id.clone();
         let pet_entity = handle_create_npc(server, CreateNpcEvent {
             pos: comp::Pos(ev.pos.0 + offset),
             ori: Ori::from_unnormalized_vec(offset).unwrap_or_default(),
@@ -296,6 +372,40 @@ pub fn handle_create_npc(server: &mut Server, ev: CreateNpcEvent) -> EcsEntity {
     }
 
     new_entity
+}
+
+/// N27-O: the server-authoritative half of the Cadena point-pool gate.
+/// Returns `true` (and has charged `new_entity_uid` against `owner`'s
+/// `Summons` ledger) if `owner`'s pool has room for `cost`; `false` (having
+/// charged nothing) otherwise, in which case the caller must delete the
+/// entity it already built. Takes `&specs::World` rather than `&mut Server`
+/// so it is unit-testable without constructing a full `Server` -- mirrors
+/// `release_chain_summon_charge` in `entity_manipulation`.
+fn charge_chain_summon(
+    ecs: &specs::World,
+    owner: EcsEntity,
+    new_entity_uid: Uid,
+    cost: u16,
+) -> bool {
+    let pool = {
+        let pacts = ecs.read_storage::<comp::Pact>();
+        let skill_sets = ecs.read_storage::<comp::SkillSet>();
+        pacts
+            .get(owner)
+            .zip(skill_sets.get(owner))
+            .map_or(0, |(pact, skill_set)| pact.chain_summon_pool(skill_set))
+    };
+    let mut summons_storage = ecs.write_storage::<comp::Summons>();
+    let spent = summons_storage.get(owner).map_or(0, comp::Summons::spent);
+    if spent.saturating_add(cost) > pool {
+        return false;
+    }
+    summons_storage
+        .entry(owner)
+        .expect("owner entity was just resolved live")
+        .or_insert_with(comp::Summons::default)
+        .charge(new_entity_uid, cost);
+    true
 }
 
 pub fn handle_create_npc_group(server: &mut Server, ev: CreateNpcGroupEvent) {
@@ -951,5 +1061,111 @@ pub fn handle_summon_beam_pillars(server: &mut Server, ev: SummonBeamPillarsEven
                 summon_pillar(server, pos, spawned_at);
             }
         },
+    }
+}
+
+/// N27-O: `charge_chain_summon`, the server-authoritative gate/charge
+/// `handle_create_npc` applies per creature as it actually spawns.
+#[cfg(test)]
+mod charge_chain_summon_tests {
+    use super::*;
+    use common::{
+        comp::{Pact, PactBoon},
+        skillset_builder::SkillSetBuilder,
+    };
+    use specs::{Builder, World, WorldExt};
+
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.register::<comp::Pact>();
+        world.register::<comp::SkillSet>();
+        world.register::<comp::Summons>();
+        world
+    }
+
+    fn chain_warlock(world: &mut World, level: u16) -> EcsEntity {
+        let mut skill_set = SkillSetBuilder::default().build();
+        skill_set.set_level(level);
+        world
+            .create_entity()
+            .with(Pact {
+                boon: Some(PactBoon::Chain),
+                ..Pact::default()
+            })
+            .with(skill_set)
+            .build()
+    }
+
+    fn uid(n: u64) -> Uid { Uid::from(core::num::NonZeroU64::new(n).unwrap()) }
+
+    /// A level-1 Chain Warlock's pool is 2 (`chain_pool(1, 0)`); a
+    /// same-cost second creature must fit exactly, and a third must not.
+    #[test]
+    fn a_fresh_warlocks_pool_admits_exactly_two_one_point_summons() {
+        let mut world = mock_world();
+        let owner = chain_warlock(&mut world, 1);
+        let ecs = &world;
+
+        assert!(charge_chain_summon(ecs, owner, uid(1), 1));
+        assert!(charge_chain_summon(ecs, owner, uid(2), 1));
+        assert!(
+            !charge_chain_summon(ecs, owner, uid(3), 1),
+            "a third point must not fit a pool of 2 with 2 already spent"
+        );
+
+        let summons = world.read_component::<comp::Summons>();
+        assert_eq!(summons.get(owner).unwrap().spent(), 2);
+    }
+
+    /// The single-creature case: a cost that alone exceeds the whole pool
+    /// is refused outright and charges nothing.
+    #[test]
+    fn a_single_summon_costing_more_than_the_whole_pool_is_refused() {
+        let mut world = mock_world();
+        let owner = chain_warlock(&mut world, 1); // pool == 2
+
+        assert!(!charge_chain_summon(&world, owner, uid(1), 3));
+
+        let summons = world.read_component::<comp::Summons>();
+        assert_eq!(
+            summons.get(owner).map(comp::Summons::spent).unwrap_or(0),
+            0,
+            "a refused charge must leave the ledger untouched"
+        );
+    }
+
+    /// A character with no `Pact` at all (never a Warlock) has a pool of 0
+    /// -- refuse rather than panic or default to unlimited.
+    #[test]
+    fn no_pact_component_means_a_pool_of_zero() {
+        let mut world = mock_world();
+        let owner = world
+            .create_entity()
+            .with(SkillSetBuilder::default().build())
+            .build();
+
+        assert!(!charge_chain_summon(&world, owner, uid(1), 1));
+    }
+
+    /// A Warlock with a pact, but a boon OTHER than Chain, also has a pool
+    /// of 0 -- e.g. casting a Conjuration spell must never be charged
+    /// against a pool that doesn't apply to it. Covered end-to-end (which
+    /// abilities even reach this function) by `pact_chain_summon` on
+    /// `SummonInfo::Npc`; this pins the pool side of that guarantee.
+    #[test]
+    fn a_non_chain_boon_also_means_a_pool_of_zero() {
+        let mut world = mock_world();
+        let mut skill_set = SkillSetBuilder::default().build();
+        skill_set.set_level(60);
+        let owner = world
+            .create_entity()
+            .with(Pact {
+                boon: Some(PactBoon::Tome),
+                ..Pact::default()
+            })
+            .with(skill_set)
+            .build();
+
+        assert!(!charge_chain_summon(&world, owner, uid(1), 1));
     }
 }

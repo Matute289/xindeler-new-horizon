@@ -1,0 +1,21 @@
+// Direct-damage terrain burst at a target point (sheet range 120ft -> 37m, a 20-foot cube
+// approximated as a 3m-radius sphere, matching the same cube->sphere approximation already used
+// elsewhere in this folder). Plain damage GroundAoe -- no dexterity-save-for-half system exists
+// in this engine, so the "half damage on a successful reaction" rider is dropped rather than
+// half-modeled.
+GroundAoe(
+    energy_cost: 78.0,
+    buildup_duration: 0.6,
+    delay: 0.5,
+    recover_duration: 0.4,
+    max_range: 37.0,
+    radius: 3.0,
+    min_falloff: 0.4,
+    damage: 45,
+    poise: 10,
+    knockback: (strength: 8, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (school: Some(Transmutation), source: Some(Primordial), cooldown: Some(20.0)),
+)

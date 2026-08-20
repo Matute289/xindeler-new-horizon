@@ -1,0 +1,35 @@
+// Sheet variant is `BasicAura` -- matches directly, same ally-touch delivery
+// shape as `gravesong/bless.ron` (`targets: InGroup`, `aoe: None` in the
+// compendium since the AoE radius IS the `range` field itself, not a
+// separate shape).
+// D&D's Enhance Ability is a choose-one-of-six-attributes buff; no
+// per-attribute `BuffKind` roster exists in this engine. Modeled with
+// `BuffKind::Blessed` ("Sharpens the bearer's attacks and resolve"), the
+// same primitive `bless.ron` already uses for an ally support buff, at the
+// same strength -- a single generic "sharpened" effect rather than six
+// distinct attribute choices.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Blessed,
+            strength: 0.7,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 5.0,
+    energy_cost: 45.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

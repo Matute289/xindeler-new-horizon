@@ -2,7 +2,7 @@ use crate::{persistence::character_updater, sys::SysScheduler};
 use common::{
     comp::{
         ActiveAbilities, Alignment, Background, Body, CharacterClass, Ethos, Inventory, MapMarker,
-        Presence, PresenceKind, SkillSet, SpellMastery, Stats, TriggerSlots, Waypoint,
+        Pact, Presence, PresenceKind, SkillSet, SpellMastery, Stats, TriggerSlots, Waypoint,
         ability::AbilityPool,
         pet::{Pet, is_tameable},
     },
@@ -34,6 +34,7 @@ impl<'a> System<'a> for Sys {
         ReadStorage<'a, CharacterClass>,
         ReadStorage<'a, Ethos>,
         ReadStorage<'a, Background>,
+        ReadStorage<'a, Pact>,
         ReadStorage<'a, TriggerSlots>,
         ReadStorage<'a, SpellMastery>,
         WriteExpect<'a, character_updater::CharacterUpdater>,
@@ -62,6 +63,7 @@ impl<'a> System<'a> for Sys {
             character_classes,
             ethoses,
             backgrounds,
+            pacts,
             trigger_slots,
             spell_masteries,
             mut updater,
@@ -82,6 +84,7 @@ impl<'a> System<'a> for Sys {
                     character_classes.maybe(),
                     ethoses.maybe(),
                     backgrounds.maybe(),
+                    pacts.maybe(),
                     trigger_slots.maybe(),
                     spell_masteries.maybe(),
                 )
@@ -99,6 +102,7 @@ impl<'a> System<'a> for Sys {
                             character_class,
                             ethos,
                             background,
+                            pact,
                             trigger_slots,
                             spell_mastery,
                         )| match presence.kind {
@@ -138,6 +142,7 @@ impl<'a> System<'a> for Sys {
                                     character_class.copied().unwrap_or_default(),
                                     ethos.copied().unwrap_or_default(),
                                     background.cloned().unwrap_or_default(),
+                                    pact.cloned().unwrap_or_default(),
                                     trigger_slots.cloned().unwrap_or_default(),
                                     spell_mastery.copied().unwrap_or_default(),
                                 ))

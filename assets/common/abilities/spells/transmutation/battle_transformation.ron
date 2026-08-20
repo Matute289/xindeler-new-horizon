@@ -1,0 +1,19 @@
+// "Trading spellcasting for martial might, strike harder, weather heavier
+// blows" -- `Reckless` (damage-up/vulnerability-up) stands in for the
+// martial-power-swap, same substitution shillelagh.ron already established
+// for a comparable weapon-empowerment buff.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Reckless, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 115.0,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

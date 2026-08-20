@@ -1,0 +1,32 @@
+// Sheet `variant: Transform` -- does NOT use `CharacterAbility::Transform`,
+// same reasoning alter_self.ron documents in full (that variant disables
+// persistence and is admin-only by its own doc comment, with no revert-
+// after-duration mechanism). Uses the same real, already-shipped-for-
+// players primitive instead: `BuffKind::Polymorphed` +
+// `BuffEffect::BodyChange`, auto-reverting to the caster's own body the
+// instant the buff expires. `QuadrupedMedium(Wolf)` stands in for "savage
+// beast form" -- one fixed shape per cast, no per-cast beast/wood choice
+// exists in the data model.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(QuadrupedMedium((species: Wolf, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 80,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Primordial),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

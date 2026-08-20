@@ -1,0 +1,19 @@
+// Weapon-enhancement buff (touch your own weapon, sheet range: Touch, first-person "a weapon
+// you touch" with no third-party creature named -- read as the caster enchanting their own
+// weapon, so no touch-ally deviation applies here unlike spider_climb.ron in this folder). No
+// BuffKind grants a chosen bonus elemental damage type; modeled with the existing Reckless buff
+// (attack-damage increase) as the nearest "hit harder" primitive, the same "weapon damage bonus
+// (modeled as Reckless interim)" substitution already shipped elsewhere in this project for the
+// identical missing mechanic (e.g. hemomancy/bloodbound_edge.ron). Reckless's paired
+// vulnerability increase isn't in the sheet's description but is Reckless's only shape in this
+// engine.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: Reckless, data: BuffData(strength: 0.15, duration: Some(60.0))),
+    ],
+    energy_cost: 65.0,
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(30.0)),
+)

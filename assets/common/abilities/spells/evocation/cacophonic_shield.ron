@@ -1,0 +1,61 @@
+// NOT the first player-authored StaticAura -- checked before writing this:
+// assets/common/abilities/spells/transmutation/plant_growth.ron already
+// ships StaticAura as a player spell, so this follows that precedent
+// rather than piloting from scratch. Real behavior confirmed by re-reading
+// common/src/comp/ability.rs's `requirements_paid`: a `StaticAura` with
+// `sprite_info: None` (this spell has no sprite -- it's a pure damage
+// emanation, not a terrain effect) takes the plain `energy_cost` gate,
+// same as any other ability; the `on_ground`-gated branch only applies
+// when `sprite_info: Some(_)` (plant_growth's/rampart's case).
+//
+// Self-centered persistent-damage zone: sheet's own notes explicitly
+// choose StaticAura ("the effect is a sustained zone anchored on the
+// caster") even though the flavor text says the field "wraps around you"
+// (implying it moves with the caster) -- StaticAura is anchored at cast
+// position and does NOT follow the caster afterward (same simplification
+// plant_growth.ron already documents: "persists after the caster walks
+// away"). Accepted as-is, matching the sheet's own pre-declared modeling
+// choice.
+//
+// No BuffKind deals literal "Thunder" damage -- `AuraBuffConstructor` only
+// wraps a `BuffKind` (common/src/comp/aura.rs), and the closest generic
+// HP-drain kind is `Bleeding` (`common/src/comp/buff.rs`:
+// `HealthChangeOverTime { rate: -strength, tick_dur: Secs(0.5) }`).
+// **Correction to a doc/impl mismatch found while researching this**:
+// `BuffKind::Bane`'s own doc comment ("Lowers health over time...") reads
+// like a damage-over-time debuff, but its actual `effects()` arm
+// (buff.rs:962) is `Accuracy(-12 * nn_scaling(strength))` only -- no
+// health-drain component at all. `Bane` was NOT used here for that reason;
+// `Bleeding` is the real DPS primitive. Same category of documented
+// flavor-vs-mechanism drift as this batch's other RONs (Explosion/
+// GroundAoe/BasicBeam hardcoding their own DamageKind regardless of RON
+// content).
+//
+// `duration: Some(1.0)` on the applied `Bleeding` tick (not the sheet's
+// full 60s) is deliberate: it makes the debuff re-apply/refresh only while
+// a target keeps standing inside the 3 m emanation (same short-refresh
+// shape plant_growth.ron uses for its `DifficultTerrain` tick), so damage
+// stops shortly after a target steps out, matching "creatures entering or
+// starting their turn within it take damage" rather than a 60s DoT that
+// outlasts leaving the zone. `aura_duration: Some(60.0)` matches the
+// sheet's own `Concentration(60)` for how long the emanation itself
+// persists.
+StaticAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.4,
+    recover_duration: 0.35,
+    energy_cost: 55.0,
+    targets: OutOfGroup,
+    auras: [
+        (
+            kind: Bleeding,
+            strength: 5.0,
+            duration: Some(1.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(60.0),
+    range: 3.0,
+    sprite_info: None,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

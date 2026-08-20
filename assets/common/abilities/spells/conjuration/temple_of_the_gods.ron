@@ -1,0 +1,23 @@
+// Large warded structure, same `SpriteSummon`+`EnsnaringVines`-as-hazard-
+// ground shape as abjuration/private_sanctum.ron. Sheet's sanctuary/
+// consecration/anti-undead riders dropped, same real engine gap
+// glyph_of_warding.ron documents (no damage/buff/trigger field exists).
+SpriteSummon(
+    buildup_duration: 0.8,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    sprite: EnsnaringVines,
+    del_timeout: Some((3600.0, 60.0)),
+    summon_distance: (0.0, 18.0),
+    sparseness: 0.4,
+    angle: 360.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Divine),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

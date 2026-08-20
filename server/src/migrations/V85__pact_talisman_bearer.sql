@@ -1,0 +1,11 @@
+-- Reserved schema for the Talisman boon's bond (comp::Pact::talisman_bearer).
+--
+-- Nullable and, for now, ALWAYS NULL. The bond names its bearer by `Uid`,
+-- which is assigned per session and means nothing after a relog, and the bond
+-- is dropped when the Warlock logs out (or dies, or the pact is severed)
+-- anyway -- so there is no moment at which a stored value could be correct.
+--
+-- It rides now, empty, for the same reason `pact_favour` did in V81: a later
+-- feature that gives the bond a session-stable identity (a character id, an
+-- rtsim NPC id) gets the column without its own schema change.
+ALTER TABLE "character" ADD COLUMN pact_talisman_bearer TEXT;

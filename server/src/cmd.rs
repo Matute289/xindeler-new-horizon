@@ -39,7 +39,11 @@ use common::{
         LightEmitter, LocalizationArg, WaypointArea,
         agent::{FlightMode, PidControllers},
         aura::{AuraKindVariant, AuraTarget},
-        buff::{Buff, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData},
+        buff::{
+            Buff, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData, SenseAnchorKind,
+            SenseMode,
+        },
+        detection::SenseKind,
         inventory::{
             item::{MaterialStatManifest, Quality, all_items_expect, tool::AbilityMap},
             slot::Slot,
@@ -201,6 +205,7 @@ fn do_command(
         ServerChatCommand::Oracle => handle_oracle,
         ServerChatCommand::OracleTrigger => handle_oracle_trigger,
         ServerChatCommand::Outcome => handle_outcome,
+        ServerChatCommand::Pact => handle_pact,
         ServerChatCommand::PermitBuild => handle_permit_build,
         ServerChatCommand::Players => handle_players,
         ServerChatCommand::Poise => handle_poise,
@@ -1395,7 +1400,7 @@ fn handle_oracle(
     Ok(())
 }
 
-/// `/oracle_trigger <dmevent_id>` — admin-only manual trigger for a
+/// `/oracle_trigger <dmevent_id> [clamp]` — admin-only manual trigger for a
 /// currently-loaded ORACLE `.dmevent.ron`/`.dmevent.json` (dropped into the
 /// watched events directory, see `crate::oracle::watcher`): resolves its
 /// `spawning_rules` against currently-loaded entity templates, spawns the
@@ -1403,6 +1408,15 @@ fn handle_oracle(
 /// `world_rumor` to the chronicle, and greets the caller with its
 /// `on_enter_message`. Stands in for the real per-plano entry trigger there
 /// is no plano yet, so a human decides when and where.
+///
+/// The live-entity ceiling is enforced by `crate::oracle::trigger`, which
+/// this command defers to for the lookup/ceiling/spawn sequence itself. By
+/// default a trigger that would exceed the ceiling is refused outright and
+/// reports the live/planned/ceiling numbers so the admin can decide what to
+/// do (wait for the population to decay, despawn something first, ...).
+/// Passing `clamp` (`true`) opts into spawning only as many as fit instead —
+/// an explicit choice the admin makes after seeing those numbers, never a
+/// default this command picks on its own.
 fn handle_oracle_trigger(
     server: &mut Server,
     client: EcsEntity,
@@ -1417,65 +1431,65 @@ fn handle_oracle_trigger(
         ));
     }
 
-    let dmevent_id = parse_cmd_args!(args, String).ok_or_else(|| action.help_content())?;
+    let (dmevent_id, clamp) = parse_cmd_args!(args, String, bool);
+    let dmevent_id = dmevent_id.ok_or_else(|| action.help_content())?;
+    let ceiling_policy = if clamp.unwrap_or(false) {
+        crate::oracle::trigger::CeilingPolicy::Clamp
+    } else {
+        crate::oracle::trigger::CeilingPolicy::Refuse
+    };
     let comp::Pos(pos) = position(server, target, "target")?;
 
-    let dm_event = server
-        .state
-        .ecs()
-        .read_resource::<crate::oracle::OracleWatcher>()
-        .events()
-        .dm_events()
-        .find(|(path, _)| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name == format!("{dmevent_id}.dmevent.ron")
-                        || name == format!("{dmevent_id}.dmevent.json")
-                })
-        })
-        .map(|(_, event)| event.clone())
-        .ok_or_else(|| {
-            Content::Plain(format!(
-                "No loaded ORACLE event named '{dmevent_id}' (drop a .dmevent.ron/.json file in \
-                 the watched events directory first)."
-            ))
-        })?;
-
-    let templates: Vec<_> = server
-        .state
-        .ecs()
-        .read_resource::<crate::oracle::OracleWatcher>()
-        .events()
-        .entity_templates()
-        .map(|(_, template)| template.clone())
-        .collect();
-
-    let mut spawn_rng = rng();
-    let spawns = crate::oracle::factory::spawn_dm_event(
-        &dm_event.spawning_rules,
-        templates.iter(),
+    let outcome = crate::oracle::trigger::trigger_dm_event(
+        server.state.ecs(),
+        &dmevent_id,
         pos,
-        &mut spawn_rng,
-    );
-    let spawn_count = spawns.len();
-    for (pos, ori, npc) in spawns {
-        server
-            .state
-            .ecs()
-            .read_resource::<EventBus<CreateNpcEvent>>()
-            .emit_now(CreateNpcEvent { pos, ori, npc });
+        false,
+        ceiling_policy,
+        // The in-game admin command has no separate per-trigger spawn cap
+        // of its own -- `usize::MAX` defers entirely to whatever
+        // `DmEvent::sanitize` already clamped `spawn_count` to. The tighter
+        // operational cap in `crate::oracle::policy` only applies to the
+        // HTTP-reachable trigger path.
+        usize::MAX,
+    )
+    .map_err(|err| Content::Plain(render_trigger_error(&err)))?;
+
+    if let Some(warning) = &outcome.warning {
+        server.notify_client(
+            client,
+            ServerGeneral::server_msg(
+                ChatType::CommandInfo,
+                Content::Plain(format!(
+                    "WARNING: approaching the ORACLE live-entity ceiling — {live} already live + \
+                     {planned} just spawned = {total} of a ceiling of {ceiling} (warning \
+                     threshold: {threshold}).",
+                    live = warning.live,
+                    planned = warning.planned,
+                    total = warning.live + warning.planned,
+                    ceiling = warning.ceiling,
+                    threshold = warning.threshold,
+                )),
+            ),
+        );
     }
 
-    if let Some(rumor) = &dm_event.narrative.world_rumor {
-        server
-            .state
-            .ecs()
-            .write_resource::<crate::oracle::ChronicleLog>()
-            .push(rumor.clone());
+    if outcome.clamped {
+        server.notify_client(
+            client,
+            ServerGeneral::server_msg(
+                ChatType::CommandInfo,
+                Content::Plain(format!(
+                    "Oracle event '{dmevent_id}' hit the live-entity ceiling: spawned only \
+                     {spawned} of the {requested} requested (clamp was requested explicitly).",
+                    spawned = outcome.spawned,
+                    requested = outcome.requested,
+                )),
+            ),
+        );
     }
 
-    if let Some(message) = &dm_event.narrative.on_enter_message {
+    if let Some(message) = &outcome.on_enter_message {
         crate::oracle::narrative::send_on_enter_message(server, client, message);
     }
 
@@ -1484,12 +1498,50 @@ fn handle_oracle_trigger(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::Plain(format!(
-                "Oracle event '{dmevent_id}' spawned {spawn_count} entities."
+                "Oracle event '{dmevent_id}' spawned {} entities.",
+                outcome.spawned
             )),
         ),
     );
 
     Ok(())
+}
+
+/// Renders every `crate::oracle::trigger::TriggerError` variant as an
+/// admin-facing chat message. `WouldExceedCeiling` always prints all three
+/// numbers plus how the admin can proceed (re-run with `clamp true`, or
+/// despawn/wait for the live count to drop) — an opaque "limit reached" is a
+/// control an operator learns to distrust.
+fn render_trigger_error(err: &crate::oracle::trigger::TriggerError) -> String {
+    use crate::oracle::trigger::TriggerError;
+    match err {
+        TriggerError::UnknownEvent { event_id } => format!(
+            "No loaded ORACLE event named '{event_id}' (drop a .dmevent.ron/.json file in the \
+             watched events directory first)."
+        ),
+        TriggerError::NoTemplatesMatched { event_id } => format!(
+            "Oracle event '{event_id}' names entity templates, but none of them are currently \
+             loaded (drop the matching .entity_template.ron/.json files first)."
+        ),
+        TriggerError::WouldExceedCeiling {
+            live,
+            planned,
+            ceiling,
+        } => format!(
+            "Refused: {live} ORACLE entities are already live, this trigger would add {planned} \
+             more, exceeding the ceiling of {ceiling} by {over}. Re-run with 'clamp true' to \
+             spawn only what fits, or despawn/wait for the live count to drop and try again.",
+            over = (live + planned).saturating_sub(*ceiling),
+        ),
+        // Unreachable via this command: it always passes `usize::MAX` as
+        // its own per-event cap (see the call site above). Kept as a real
+        // arm, not a wildcard, so a future change to that call site can't
+        // silently regress into an unhandled case.
+        TriggerError::WouldExceedPerEventCap { requested, cap } => format!(
+            "Refused: this trigger's resolved plan of {requested} exceeds the per-trigger cap of \
+             {cap}."
+        ),
+    }
 }
 
 fn handle_make_sprite(
@@ -4876,11 +4928,22 @@ fn handle_learn_spells(
             .get(target)
             .copied(),
     ) {
-        (Some(body), Some(character_class)) => Some(comp::AbilityPool::for_character(
-            &body,
-            &character_class,
-            &learned,
-        )),
+        // `for_character_with_pact`, not `for_character`: a Warlock with the
+        // blade out must not lose its three attack keys (and the hotbar slots
+        // bound to them) just because an unrelated rebuild was triggered.
+        // `.with_talisman_bond(..)` chained for the same reason: a bonded
+        // talisman bearer's recall key is keyed on the BEARER's pool, not
+        // derivable from `target`'s own `Pact`, so it has to be re-asserted
+        // from `old_pool` or this rebuild silently drops it.
+        (Some(body), Some(character_class)) => Some(
+            comp::AbilityPool::for_character_with_pact(
+                &body,
+                &character_class,
+                &learned,
+                ecs.read_storage::<comp::Pact>().get(target),
+            )
+            .with_talisman_bond(old_pool.has_talisman_bond()),
+        ),
         _ => None,
     };
     if let Some(pool) = rebuilt {
@@ -6606,7 +6669,20 @@ fn handle_multiclass(
             .get(target)
             .cloned()
             .unwrap_or_default();
-        let pool = comp::AbilityPool::for_character(&body, &character_class, &learned);
+        // `for_character_with_pact`, not `for_character`: a Warlock with the
+        // blade out must not lose its three attack keys (and the hotbar slots
+        // bound to them) just because they multiclassed. `.with_talisman_bond(..)`
+        // chained for the same reason: a bonded talisman bearer's recall key
+        // is keyed on the BEARER's pool, not derivable from `target`'s own
+        // `Pact`, so it has to be re-asserted from `old_pool` or this rebuild
+        // silently drops it.
+        let pool = comp::AbilityPool::for_character_with_pact(
+            &body,
+            &character_class,
+            &learned,
+            ecs.read_storage::<comp::Pact>().get(target),
+        )
+        .with_talisman_bond(old_pool.has_talisman_bond());
         // The live `ActiveAbilities` still holds raw indices into the OLD
         // pool. Re-point them by key before the pool is swapped, or the next
         // save writes each slot under whatever key now sits at its old index.
@@ -6935,6 +7011,283 @@ fn handle_set_ethos(
             Content::Plain(format!("Alignment set to {order:?} {moral:?}.")),
         ),
     );
+    Ok(())
+}
+
+/// `/pact <bind|sever|boon|blade|status> [patron_or_boon_or_blade_action]
+/// [target]` — admin-only: manages a Warlock's [`Pact`]. `bind` requires a
+/// `patron` id and sets `Bound` (used both for a first pact and for
+/// re-pacting after a severance); `sever` flips the current pact to
+/// `Severed` (disabling magic via the `disable_magic` gate in
+/// `common-systems`' `buff::Sys`) while keeping whatever patron identity
+/// was already recorded, and dismisses a summoned blade; `boon` requires a
+/// [`PactBoon`] id, is refused while the pact is `Severed`, and always
+/// dismisses the blade (a freshly chosen boon starts un-summoned); `blade`
+/// requires `summon` or `dismiss`, refused without the `Blade` boon or
+/// while `Severed`; `status` is read-only.
+///
+/// The actual write goes through [`crate::pact::set_pact`], kept free-standing
+/// (and outside this module) so a future quest/event trigger can bind or
+/// sever a pact directly, without going through chat.
+fn handle_pact(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::comp::pact::{Pact, PactBoon, PactStanding, PatronId};
+
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain("Only admins may use /pact.".to_string()));
+    }
+
+    let (Some(action_arg), patron_arg, entity_target) =
+        parse_cmd_args!(args, String, String, EntityTarget)
+    else {
+        return Err(action.help_content());
+    };
+
+    let pact_target = entity_target
+        .map(|entity_target| get_entity_target(entity_target, server))
+        .unwrap_or(Ok(target))?;
+
+    // `bind`/`sever` are refused on a non-Warlock rather than silently
+    // applied -- a `Pact` is meaningless for any other class, and a stray
+    // `Severed` on e.g. a Mage would gate their casting for no in-fiction
+    // reason. `status` stays allowed for anyone: it's read-only and useful
+    // for confirming a target genuinely has no pact.
+    if action_arg != "status"
+        && !server
+            .state
+            .ecs()
+            .read_storage::<common::comp::CharacterClass>()
+            .get(pact_target)
+            .is_some_and(|cc| {
+                cc.classes()
+                    .any(|c| c == common::comp::class::ClassKind::Warlock)
+            })
+    {
+        return Err(Content::Plain(
+            "Target is not a Warlock; a pact would do nothing.".to_string(),
+        ));
+    }
+
+    let current = server
+        .state
+        .ecs()
+        .read_storage::<Pact>()
+        .get(pact_target)
+        .cloned()
+        .unwrap_or_default();
+
+    match action_arg.as_str() {
+        "bind" => {
+            let patron_arg = patron_arg
+                .ok_or_else(|| Content::Plain("bind requires a patron id.".to_string()))?;
+            let patron = PatronId::from_keyword(&patron_arg)
+                .ok_or_else(|| Content::Plain(format!("Unknown patron '{patron_arg}'.")))?;
+
+            let target_moral = server
+                .state
+                .ecs()
+                .read_storage::<common::comp::Ethos>()
+                .get(pact_target)
+                .copied()
+                .unwrap_or_default()
+                .moral();
+            let patron_moral = common::comp::pact::patron_moral(patron);
+            if !patron_moral.compatible_npc_morals().contains(&target_moral) {
+                return Err(Content::Plain(format!(
+                    "{patron:?} would refuse this pact -- the target's alignment \
+                     ({target_moral:?}) is incompatible with this patron's ({patron_moral:?})."
+                )));
+            }
+
+            crate::pact::set_pact(server, pact_target, Pact {
+                standing: PactStanding::Bound,
+                patron: Some(patron),
+                ..current
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(format!("Pact bound to {patron:?}.")),
+                ),
+            );
+        },
+        "sever" => {
+            crate::pact::set_pact(server, pact_target, Pact {
+                standing: PactStanding::Severed,
+                // The patron's power is gone -- a summoned blade cannot
+                // stay out any more than casting can continue, and the
+                // talisman's ward is dropped by `set_pact`'s own
+                // normalization for the same reason.
+                blade_summoned: false,
+                ..current
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain("Pact severed.".to_string()),
+                ),
+            );
+        },
+        "boon" => {
+            // Refused on a Severed pact: the whole point of severing is that
+            // the patron's power is gone, so accepting a fresh boon in that
+            // state would silently pre-configure a pact the Warlock hasn't
+            // actually re-bound yet.
+            if current.standing == PactStanding::Severed {
+                return Err(Content::Plain(
+                    "Cannot choose a boon while the pact is severed.".to_string(),
+                ));
+            }
+            let boon_arg =
+                patron_arg.ok_or_else(|| Content::Plain("boon requires a boon id.".to_string()))?;
+            let boon = PactBoon::from_keyword(&boon_arg)
+                .ok_or_else(|| Content::Plain(format!("Unknown boon '{boon_arg}'.")))?;
+            crate::pact::set_pact(server, pact_target, Pact {
+                boon: Some(boon),
+                // A freshly (re)chosen boon always starts un-summoned, even
+                // if the previous boon was also Blade, and un-bonded even if
+                // it was also Talisman -- re-choosing a boon is always a
+                // fresh start for it, even choosing the same one again.
+                // `blade_exp`/`blade_name` deliberately survive the switch
+                // via `..current` -- re-taking Blade later resumes where it
+                // left off rather than resetting.
+                blade_summoned: false,
+                talisman_bearer: None,
+                ..current
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(format!("Boon set to {boon:?}.")),
+                ),
+            );
+        },
+        "blade" => {
+            if current.boon != Some(PactBoon::Blade) {
+                return Err(Content::Plain(
+                    "Target does not have the Blade boon.".to_string(),
+                ));
+            }
+            if current.standing == PactStanding::Severed {
+                return Err(Content::Plain(
+                    "Cannot summon the blade while the pact is severed.".to_string(),
+                ));
+            }
+            let summon_arg = patron_arg.ok_or_else(|| {
+                Content::Plain("blade requires 'summon' or 'dismiss'.".to_string())
+            })?;
+            let blade_summoned = match summon_arg.as_str() {
+                "summon" => true,
+                "dismiss" => false,
+                _ => {
+                    return Err(Content::Plain(format!(
+                        "Unknown blade action '{summon_arg}'; use 'summon' or 'dismiss'."
+                    )));
+                },
+            };
+            // Only the tier-0 strike is usable without spending a blade skill
+            // point; the other two are gated in the ability manifest on
+            // PactBlade(SecondStrike)/(Crown). Read before `current` is moved
+            // into the write below.
+            let tier = current.blade_tier();
+            crate::pact::set_pact(server, pact_target, Pact {
+                blade_summoned,
+                ..current
+            });
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(if blade_summoned {
+                        format!(
+                            "Blade summoned (tier {tier}) -- Mute Blade granted; Waking Blade \
+                             needs the tier-2 skill, Crowned Blade the tier-4 one."
+                        )
+                    } else {
+                        "Blade dismissed; its abilities are revoked.".to_string()
+                    }),
+                ),
+            );
+        },
+        "talisman" => {
+            let talisman_arg = patron_arg.ok_or_else(|| {
+                Content::Plain("talisman requires 'bond' or 'release'.".to_string())
+            })?;
+            match talisman_arg.as_str() {
+                "bond" => {
+                    // The bearer is not named: whoever is standing close by
+                    // holding a talisman is the bearer, the same shape the
+                    // Collar's taming scan uses. Carrying the item -- which
+                    // they had to accept by trade or pickup -- IS the consent
+                    // signal, and being in reach IS the range check.
+                    let bearer = crate::pact::find_talisman_bearer(server, pact_target)
+                        .ok_or_else(|| {
+                            Content::Plain(
+                                crate::pact::BondError::BearerHoldsNoTalisman
+                                    .message()
+                                    .to_string(),
+                            )
+                        })?;
+                    crate::pact::bond_talisman(server, pact_target, bearer)
+                        .map_err(|error| Content::Plain(error.message().to_string()))?;
+                    server.notify_client(
+                        client,
+                        ServerGeneral::server_msg(
+                            ChatType::CommandInfo,
+                            Content::Plain("Talisman bonded.".to_string()),
+                        ),
+                    );
+                },
+                "release" => {
+                    crate::pact::release_talisman(server, pact_target);
+                    server.notify_client(
+                        client,
+                        ServerGeneral::server_msg(
+                            ChatType::CommandInfo,
+                            Content::Plain("Talisman bond released.".to_string()),
+                        ),
+                    );
+                },
+                other => {
+                    return Err(Content::Plain(format!(
+                        "Unknown talisman action '{other}'; use 'bond' or 'release'."
+                    )));
+                },
+            }
+        },
+        "status" => {
+            server.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::Plain(format!(
+                        "Pact: {:?}, patron: {:?}, boon: {:?}, blade_summoned: {}, blade_exp: {} \
+                         (tier {}), blade_name: {:?}, talisman_bearer: {:?}, favour: {}.",
+                        current.standing,
+                        current.patron,
+                        current.boon,
+                        current.blade_summoned,
+                        current.blade_exp,
+                        current.blade_tier(),
+                        current.blade_name,
+                        current.talisman_bearer,
+                        current.favour
+                    )),
+                ),
+            );
+        },
+        _ => return Err(action.help_content()),
+    }
+
     Ok(())
 }
 
@@ -7302,6 +7655,80 @@ fn build_buff(
                 };
                 MiscBuffData::Body(body())
             },
+            // `<sense_kind>:<radius>:<mode>`, e.g. `magic:20:continuous`.
+            BuffKind::Detecting | BuffKind::TrueSight => {
+                let mut parts = spec.split(':');
+                let (Some(kind), Some(radius), Some(mode)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                let (Some(kind), Ok(radius), Some(mode)) = (
+                    parse_sense_kind(kind),
+                    radius.parse::<f32>(),
+                    parse_sense_mode(mode),
+                ) else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::Sense(kind, radius, mode)
+            },
+            // `<anchor_kind>:<free_look>:<piloted>`, e.g. `sensor:true:false`.
+            // `spawn_range`/`flight_speed`/`behind_dist`/`above_dist` have no
+            // per-field spec here -- every RON-authored spell already covers
+            // the real content, this admin command is for quick testing, so
+            // it just takes the same shipped defaults `common::comp::buff`'s
+            // RON `#[serde(default)]` fns use (`arcane_eye`'s spawn
+            // range/flight speed, `scrying`'s follow offset).
+            BuffKind::RemoteSensing => {
+                let mut parts = spec.split(':');
+                let (Some(anchor), Some(free_look), Some(piloted)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                let (Some(anchor_kind), Ok(free_look), Ok(piloted)) = (
+                    parse_sense_anchor_kind(anchor),
+                    free_look.parse::<bool>(),
+                    piloted.parse::<bool>(),
+                ) else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::RemoteSense {
+                    anchor_kind,
+                    free_look,
+                    piloted,
+                    spawn_range: 9.0,
+                    flight_speed: 6.0,
+                    behind_dist: 3.0,
+                    above_dist: 2.0,
+                }
+            },
+            // A bare float, e.g. `0.15`.
+            BuffKind::Mooncloak => {
+                let Ok(resist) = spec.parse::<f32>() else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::ResistMagic(resist)
+            },
+            // A bare sense kind, e.g. `magic`.
+            BuffKind::MagicAura => {
+                let Some(kind) = parse_sense_kind(&spec) else {
+                    return Err(Content::localized_with_args("command-buff-spec-invalid", [
+                        ("spec", spec.clone()),
+                    ]));
+                };
+                MiscBuffData::FalseAura(kind)
+            },
             BuffKind::Regeneration
             | BuffKind::Saturation
             | BuffKind::Potion
@@ -7391,16 +7818,12 @@ fn build_buff(
             | BuffKind::Blinded
             | BuffKind::Slowed
             | BuffKind::Agonized
-            | BuffKind::Detecting
             | BuffKind::SeeInvisible
-            | BuffKind::TrueSight
-            | BuffKind::RemoteSensing
             | BuffKind::Identifying
             | BuffKind::PassWithoutTrace
-            | BuffKind::Mooncloak
             | BuffKind::Nondetection
-            | BuffKind::MagicAura
-            | BuffKind::Sequester => {
+            | BuffKind::Sequester
+            | BuffKind::PactTalisman => {
                 if buff_kind.is_simple() {
                     unreachable!("is_simple() above")
                 } else {
@@ -7411,6 +7834,42 @@ fn build_buff(
 
         Ok(BuffData::new(strength, Some(Secs(duration))).with_misc_data(misc_data))
     }
+}
+
+fn parse_sense_kind(s: &str) -> Option<SenseKind> {
+    Some(match s {
+        "magic" => SenseKind::Magic,
+        "aberrant" => SenseKind::Aberrant,
+        "affliction" => SenseKind::Affliction,
+        "thought" => SenseKind::Thought,
+        "portal" => SenseKind::Portal,
+        "creature" => SenseKind::Creature,
+        "fauna" => SenseKind::Fauna,
+        "flora" => SenseKind::Flora,
+        "object" => SenseKind::Object,
+        "nature" => SenseKind::Nature,
+        "path" => SenseKind::Path,
+        "true" => SenseKind::True,
+        _ => return None,
+    })
+}
+
+fn parse_sense_mode(s: &str) -> Option<SenseMode> {
+    Some(match s {
+        "snapshot" => SenseMode::Snapshot,
+        "continuous" => SenseMode::Continuous,
+        _ => return None,
+    })
+}
+
+fn parse_sense_anchor_kind(s: &str) -> Option<SenseAnchorKind> {
+    Some(match s {
+        "existing" => SenseAnchorKind::Existing,
+        "sensor" => SenseAnchorKind::Sensor,
+        "piloted" => SenseAnchorKind::Piloted,
+        "tracking" => SenseAnchorKind::Tracking,
+        _ => return None,
+    })
 }
 
 fn cast_buff(buffkind: BuffKind, data: BuffData, server: &mut Server, target: EcsEntity) {

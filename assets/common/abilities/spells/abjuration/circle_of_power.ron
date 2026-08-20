@@ -1,0 +1,29 @@
+// "Advantage on saves vs magic, halved/negated magical effects" for
+// nearby allies -- a lingering group ward, same `StaticAura`+
+// `ProtectingWard` shape as any of this school's other zone spells,
+// group-targeted (`OutOfGroup` is used for hostile zones elsewhere in this
+// pass; allies here, so `targets` stays the aura's own default caster-
+// group reach via `InGroup`-equivalent aura placement). Sheet's save-
+// advantage rider dropped -- no advantage/disadvantage-on-save mechanic
+// exists (this engine has no roll-based save system at all outside
+// `CasterLevelRoll`, which gates whether a debuff lands, not a defender's
+// own resistance roll).
+StaticAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.4,
+    recover_duration: 0.4,
+    energy_cost: 100.0,
+    targets: InGroup,
+    auras: [
+        (kind: ProtectingWard, strength: 0.3, duration: Some(60), category: Some(Magical)),
+    ],
+    aura_duration: Some(60.0),
+    range: 9.0,
+    sprite_info: None,
+    meta: (
+        school: Some(Abjuration),
+        source: Some(Divine),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

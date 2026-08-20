@@ -1,0 +1,39 @@
+// "Mournful keening... wide aura, gnawed by sorrowful energy" -- a
+// lingering damage zone, so this deviates from the sheet's stated
+// `GroundAoe` to `StaticAura`, same reasoning conjuration/entangle.ron
+// already documents (GroundAoe fires once at cast; only StaticAura leaves
+// a real reapplying zone behind). `BuffKind::Burning` reused as a
+// damage-type-agnostic damage-over-time primitive (its own `HealthChange
+// OverTime` effect has no elemental gate), same reuse
+// transmutation/heat_metal.ron already made for non-fire DoT. Sheet's
+// secondary "cannot regain HP" rider dropped -- no heal-block `BuffEffect`
+// exists anywhere in the engine (same class of drop as N76-I's
+// chill_touch anti-healing rider).
+//
+// Reviewer correction: `Burning` resolves as `HealthChangeOverTime { rate:
+// -strength, tick_dur: Secs(0.25) }` (DPS = strength * 4), so an earlier
+// per-application `duration: Some(60)` on a strength-6.0 burn meant one
+// graze alone dealt ~1440 damage over the aura's own 60s lifetime -- ~12x
+// the shipped precedent conjuration/flaming_sphere.ron sets for the same
+// StaticAura+Burning shape (`duration: Some(2)`, a short per-tick burn
+// refreshed by standing in the zone, not a single catastrophic
+// application). Matched to that precedent's duration instead.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 70.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Burning, strength: 6.0, duration: Some(3), category: Some(Magical)),
+    ],
+    aura_duration: Some(60.0),
+    range: 6.0,
+    sprite_info: None,
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

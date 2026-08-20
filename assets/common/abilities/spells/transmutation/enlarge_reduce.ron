@@ -1,0 +1,67 @@
+// 🔴 Same investigation and same conclusion as `alter_self.ron` in this
+// folder: the sheet's `variant` field is `Transform`, but the literal
+// `CharacterAbility::Transform` (full stat/inventory swap, no auto-revert,
+// documented admin-only — see `alter_self.ron`'s comment for the full
+// citation trail) is unsuited to a reversible player spell.
+//
+// Unlike `alter_self`, this spell's actual mechanic — continuously scaling a
+// creature's size up or down — has NO existing primitive at all, not even
+// `BuffKind::Polymorphed`. `Polymorphed` swaps to a different, fully fixed
+// `Body` value; it cannot scale an entity's *own* body larger or smaller.
+// The dedicated size component, `comp::phys::Scale(f32)`, is never written by
+// any `BuffEffect` (checked every `BuffEffect` variant in
+// `common/src/comp/buff.rs` — `MovementSpeed`/`AttackDamage`/`DamageReduction`
+// etc. exist, nothing touches `Scale`). Adding one would be new Rust, out of
+// content-only scope.
+//
+// Kept branch: "enlarge" as a pure combat swing (bigger, hits harder, easier
+// to hit in turn) modeled with `BuffKind::Reckless` (`common/src/comp/
+// buff.rs`: "Increases both attack damage and vulnerability to damage") —
+// the same primitive `magic_weapon.ron` in this folder uses for an unrelated
+// "your strikes hit harder" spell, delivered here as a targeted ranged
+// buff/debuff matching this batch's `earthen_grasp.ron`/`earthbind.ron`
+// single-target-at-range shape (sheet range: 9m, single target) rather than
+// `magic_weapon`'s self-only delivery.
+// Dropped: "reduce" (the sheet's other branch — shrink, weaker attacks,
+// harder to hit) has no mirror-image primitive either (no positive-evasion
+// buff kind exists; `FaerieFire`'s own doc comment calls its evasion penalty
+// "the mirror of `Blur`'s positive evasion", but `Blur` itself is not a real
+// `BuffKind` — the comment describes a hypothetical, not shipped content).
+// Also dropped: the sheet's unwilling-target branch's own save-based debuff
+// framing — `Reckless` is a pure buff (no downside imposed on an unwilling
+// target beyond the vulnerability side-effect built into the kind itself),
+// so this ships as an ally/self-facing enlarge buff, not a hostile debuff.
+// `friendly_fire: true` is required for that: `ProjectileConstructor::
+// create_projectile` (`common/src/comp/projectile.rs`) targets
+// `GroupTarget::OutOfGroup` by default for every `BasicRanged` attack
+// (enemies only) unless `friendly_fire` is set, which switches to
+// `GroupTarget::All` — the only way this school's existing single-target-at-
+// range delivery shape can ever land on a chosen ally.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.35,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 0,
+            buff: Some((
+                kind: Reckless,
+                dur_secs: 60,
+                strength: Value(0.2),
+                chance: 1.0,
+            )),
+            friendly_fire: true,
+            damage_kind: Bludgeoning,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

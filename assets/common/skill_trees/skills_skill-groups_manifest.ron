@@ -207,6 +207,18 @@
     // Classes-wave (BL-04): empty trees now; populated per-class in BL-06.
     Class(Barbarian): [],
     Class(Sorcerer): [],
+    // ChainMastery is defined (skill_max_levels.ron) but deliberately kept
+    // out of this purchasable tree until the Cadena boon actually consumes
+    // it (chain_pool()'s only caller today is its own unit tests) -- a real
+    // player must not be able to spend a real skill point on a node with no
+    // observable effect.
+    //
+    // TalismanMastery IS consumed (talisman_protection() feeds the bond
+    // buff's damage reduction) but is held out of the tree for a different
+    // reason: the Warlock tree has no purchasable nodes at all yet, and
+    // shipping exactly one would give the class a lone, prerequisite-less
+    // node ahead of its real tree design. It is grantable and observable via
+    // /skill_point in the meantime.
     Class(Warlock): [],
     Class(Bard): [],
     Class(Paladin): [],
@@ -297,5 +309,15 @@
         Feat(TreacherousAllure),
         Feat(VampireTouched),
         Feat(VampiresPlaything),
+    ],
+    // The Blade pact-boon's own directly-granted track (comp::pact::Pact's
+    // blade-XP tiers). A NEW group -- no existing group's membership above
+    // is touched by this entry.
+    PactBlade: [
+        PactBlade(Voice),
+        PactBlade(SecondStrike),
+        PactBlade(Hunger),
+        PactBlade(Crown),
+        PactBlade(Zenith),
     ],
 }

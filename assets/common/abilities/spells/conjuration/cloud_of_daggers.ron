@@ -1,0 +1,33 @@
+// Sheet: "persistent AoE control zone; damage-on-enter/start-of-turn rider".
+// This is the first Conjuration zone whose PRIMARY described effect is pure
+// damage-over-time rather than a control debuff (contrast entangle/fog_cloud/
+// grease, all pure control, no damage) -- so unlike those sibling zones, this
+// does NOT collapse to a one-shot GroundAoe burst (that would drop the
+// "shreds anything that enters or remains" persistence, which is this
+// spell's whole identity). `StaticAura` (see transmutation/plant_growth.ron)
+// already supports a `Vec<AuraBuffConstructor>`, and `BuffKind::Bleeding` is
+// a real per-tick HP-drain buff (`common/src/comp/buff.rs`, tick_dur 0.5s) --
+// this is the first time a StaticAura zone in this content pass delivers a
+// damage buff instead of a pure control one, but it's the same primitive
+// pairing, not a new mechanic. Slashing flavor matches Bleeding's own
+// physical-wound framing directly (no flavor mismatch, unlike the
+// Energy-hardcoded GroundAoe spells). `StaticAura` always places the zone at
+// the caster's own position (no aimed placement exists,
+// common/src/states/static_aura.rs) -- the sheet's 18 m cast range isn't
+// mechanically expressed, the same simplification entangle/fog_cloud/grease
+// already ship with. The sheet's true footprint (a 1.5 m cube) is
+// approximated as a small sphere, same as the sheet's own note suggests.
+StaticAura(
+    buildup_duration: 0.6,
+    cast_duration: 0.5,
+    recover_duration: 0.4,
+    energy_cost: 55.0,
+    targets: OutOfGroup,
+    auras: [
+        (kind: Bleeding, strength: 5.0, duration: Some(2), category: Some(Magical)),
+    ],
+    aura_duration: Some(20.0),
+    range: 3.0,
+    sprite_info: None,
+    meta: (school: Some(Conjuration), source: Some(Arcane)),
+)

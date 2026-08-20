@@ -1,0 +1,21 @@
+// Same large-structure shape as temple_of_the_gods.ron. Purely a
+// structural/no-damage conjured keep per the sheet.
+SpriteSummon(
+    buildup_duration: 0.8,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    sprite: EnsnaringVines,
+    del_timeout: Some((3600.0, 60.0)),
+    summon_distance: (0.0, 18.0),
+    sparseness: 0.4,
+    angle: 360.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Arcane),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

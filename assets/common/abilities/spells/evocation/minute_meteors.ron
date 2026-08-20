@@ -1,0 +1,43 @@
+// Fourth player-authored RapidRanged spell in this folder (see
+// eldritch_blast.ron for the full write-up of the variant's real behavior:
+// every projectile travels the same look_dir, no per-projectile aim/spread).
+//
+// Sheet deviations, both documented rather than silently dropped:
+// - `range: Self` in the sheet describes where the orbiting motes are
+//   conjured (around the caster), not the reach of an individual mote once
+//   flung -- the actual attack is a direct-fire ranged burst, same shape as
+//   this folder's other RapidRanged spells, so the compendium `range` is
+//   set to the motes' real projectile reach instead of `SelfOnly`.
+// - `duration: Concentration(60)` / "launches one or two meteors per turn
+//   for the duration" describes a persistent conjuration re-fired every
+//   subsequent turn. RapidRanged has no persistent/re-triggerable state --
+//   `common/src/states/rapid_ranged.rs` fires its whole burst once per cast
+//   and returns to Recover -- so this ships as a single two-meteor burst
+//   per cast (matching eldritch_blast's own fixed-2 precedent for "one or
+//   two"), not a sustained per-turn recast. The concentration duration is
+//   dropped, not modeled.
+//
+// Circle 3, scaled up from eldritch_blast (circle 0: 2 motes, 8 dmg/mote,
+// 0 energy/mote) and wayward_force_darts (circle 1: 3 darts, 6 dmg/dart,
+// 10 energy/dart) -- 2 motes, 15 dmg/mote (30 total), 22 energy/mote (44
+// total). Flagged for wave-close-out balance review.
+RapidRanged(
+    energy_cost: 22,
+    buildup_duration: 0.4,
+    shoot_duration: 0.05,
+    recover_duration: 0.35,
+    options: (
+        max_projectiles: Some(2),
+        fire_all: true,
+    ),
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 15,
+            damage_kind: Fire,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 75.0,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

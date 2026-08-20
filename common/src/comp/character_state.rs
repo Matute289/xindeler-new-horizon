@@ -13,6 +13,7 @@ use crate::{
         utils::{AbilityInfo, StageSection},
         *,
     },
+    uid::Uid,
     util::Dir,
 };
 use serde::{Deserialize, Serialize};
@@ -1492,6 +1493,32 @@ impl Component for CharacterState {
     type Storage = DerefFlaggedStorage<Self, specs::VecStorage<Self>>;
 }
 
+/// The owner's current stance command for a tamed pet -- "attack that one"
+/// (`Attack`) / "stay alert, guard me" (`Guard`). Transient -- never
+/// persisted to the database/save, so it resets to `Follow` (today's
+/// default) on relog because nothing writes it to storage.
+///
+/// `Follow` and `Stay` are today's shipped behaviour, toggled by the `V`
+/// key, and must keep behaving byte-identically. The `V` key sets this
+/// field's value purely for it to accurately *reflect* that state; the
+/// stay-in-place behaviour itself is driven exclusively by
+/// `CharacterActivity::is_pet_staying` and `Agent::stay_pos` -- see
+/// `is_pet_staying`'s doc comment for why that field is kept rather than
+/// repurposed.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PetCommand {
+    #[default]
+    Follow,
+    Stay,
+    /// On top of `Follow`, the pet also retaliates when it is personally
+    /// hurt and engages hostiles that approach its owner.
+    Guard,
+    /// One-shot: the agent behaviour tree consumes this (and resets it back
+    /// to `Follow`) the moment it hands the designated target off to the
+    /// hostile tree.
+    Attack(Uid),
+}
+
 /// Contains information about the visual activity of a character.
 ///
 /// For now this only includes the direction they're looking in, but later it
@@ -1508,8 +1535,18 @@ pub struct CharacterActivity {
     /// a stale value.
     pub steer_dir: f32,
     /// If true, the owner has set this pet to stay at a fixed location and
-    /// to not engage in combat
+    /// to not engage in combat.
+    ///
+    /// Kept alongside `pet_command` rather than folded into it --
+    /// `CharacterActivity` is net-synced, and repurposing this field would
+    /// change the wire format and risk regressing the shipped `V` key
+    /// mid-refactor. The actual stay/follow *behaviour* is still driven
+    /// exclusively by `Agent::stay_pos`, set by the same event that flips
+    /// this bool, independently of `pet_command`. Candidate for removal
+    /// once `pet_command` is proven out.
     pub is_pet_staying: bool,
+    /// See `PetCommand`'s doc comment.
+    pub pet_command: PetCommand,
 }
 
 impl Component for CharacterActivity {

@@ -1,0 +1,36 @@
+// Deviates from the sheet's own `Explosion` variant for the same reason
+// shatter.ron in this folder documents (and acid_splash.ron before it):
+// `CharacterAbility::Explosion` always detonates centered on the caster,
+// with no target-point field, so it cannot express "a bead of flame
+// streaks to a point [up to 45 m away]". Uses `GroundAoe` instead --
+// dark_star.ron (Axiomancy, circle 9) is the sibling shape this was cloned
+// from, the same precedent acid_splash.ron/shatter.ron already establish.
+//
+// `GroundAoe` hardcodes `DamageKind::Energy`
+// (common/src/states/ground_aoe.rs) -- despite the Fire flavor text this
+// deals generic Energy damage under the hood, same drift acid_splash.ron/
+// shatter.ron document.
+//
+// The sheet notes call this "the archetypal scalable burst -- circle 3,
+// scales up cleanly." Calibrated against the closest same-circle sibling,
+// gory_eruption.ron (Hemomancy, `Explosion`, circle 3: damage 50, energy
+// 98, radius 4) -- damage/energy set slightly below it (48/90) to account
+// for `GroundAoe`'s ranged safety (cast from up to 45 m away, vs.
+// `Explosion`'s self-centered melee-range risk), and radius scaled up to
+// match the sheet's own Sphere r6 (vs. gory_eruption's r4). Flagged for
+// wave-close-out balance review.
+GroundAoe(
+    energy_cost: 90.0,
+    buildup_duration: 0.5,
+    delay: 0.35,
+    recover_duration: 0.4,
+    max_range: 45.0,
+    radius: 6.0,
+    min_falloff: 0.3,
+    damage: 48,
+    poise: 20,
+    knockback: (strength: 12, direction: Away),
+    dodgeable: Roll,
+    rooted_cast: false,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

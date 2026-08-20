@@ -1,0 +1,27 @@
+// Reviewer correction: originally authored as Explosion, which always
+// detonates centered on the caster (no target-point field exists) --
+// contradicted this spell own longer cast range. Converted to GroundAoe,
+// the real detonate-at-a-chosen-point primitive.
+// Straight-damage Explosion, scaled to circle 6.
+GroundAoe(
+    energy_cost: 175.0,
+    buildup_duration: 0.75,
+    delay: 0.4,
+    max_range: 91.0,
+    recover_duration: 0.55,
+    damage: 78,
+    poise: 20,
+    knockback: (direction: Away, strength: 5.0),
+    radius: 6,
+    min_falloff: 0.3,
+    dodgeable: Roll,
+    rooted_cast: false,
+    reagent: Some(Blue),
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(40.0),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

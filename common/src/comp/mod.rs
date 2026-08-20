@@ -37,6 +37,7 @@ pub mod loot_owner;
 pub mod melee;
 pub mod misc;
 pub mod ori;
+pub mod pact;
 pub mod pet;
 pub mod phantom_illusion;
 mod phys;
@@ -86,7 +87,7 @@ pub use self::{
         Buff, BuffCategory, BuffChange, BuffData, BuffEffect, BuffKey, BuffKind, BuffSource, Buffs,
         ModifierKind,
     },
-    character_state::{CharacterActivity, CharacterState, StateUpdate},
+    character_state::{CharacterActivity, CharacterState, PetCommand, StateUpdate},
     chat::{
         ChatMode, ChatMsg, ChatType, Faction, SpeechBubble, SpeechBubbleType, UnresolvedChatMsg,
     },
@@ -133,6 +134,7 @@ pub use self::{
     melee::{Melee, MeleeConstructor, MeleeConstructorKind},
     misc::Object,
     ori::Ori,
+    pact::{Pact, PactBoon, PactStanding, PatronId, Summons},
     pet::Pet,
     phantom_illusion::PhantomIllusion,
     phys::{
@@ -155,7 +157,7 @@ pub use self::{
         MASTERY_XP_FULL, NON_DAMAGE_WEIGHT, POLYGLOT_BONUS_PER_RANK, SpellMastery,
         grant_source_mastery, level_delta_weight, mastery_tier_max_level,
     },
-    stats::{ActiveSense, Stats, StatsModifier},
+    stats::{ActiveSense, DamageReflect, Stats, StatsModifier},
     teleport::Teleporting,
     trigger::{
         MAX_TRIGGER_SLOTS, SlotState, TRIGGER_SLOT_LEVELS, TriggerAbility, TriggerCondition,

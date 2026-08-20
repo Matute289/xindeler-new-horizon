@@ -1,0 +1,35 @@
+// D&D's "raises current and max HP by a flat amount for the duration, up to
+// 3 creatures" maps onto `IncreaseMaxHealth` (common/src/comp/buff.rs:
+// "Raises maximum health. Strength should be the effect to max health.",
+// applied as a flat `MaxHealthModifier::Additive`) -- an exact fit for the
+// max-HP half. There is no "also heal them for the same amount" primitive
+// bundled with it (no double-buff stacking precedent for that combination),
+// so the accompanying instant top-up is dropped; the ally only benefits from
+// the raised ceiling going forward, the same "ships without the paired
+// rider" call this school's own wards make elsewhere (frost_ward.ron's
+// dropped retaliation, wardaway.ron's dropped saves).
+//
+// `targets: InGroup` applies to the whole group in aura range, not capped to
+// 3 -- no per-cast max-target-count field exists on `BasicAura`, the same
+// gap protection_from_evil_and_good.ron/shield_of_faith.ron already ship
+// with.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.4,
+    targets: InGroup,
+    auras: [
+        (
+            kind: IncreaseMaxHealth,
+            strength: 25.0,
+            duration: Some(28800.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(28800.0),
+    range: 9.0,
+    energy_cost: 40.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

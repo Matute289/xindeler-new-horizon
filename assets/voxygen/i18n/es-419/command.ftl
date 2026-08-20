@@ -78,6 +78,7 @@ command-motd-desc = Ver la descripción del servidor
 command-mount-desc = Montar una entidad
 command-object-desc = Crear un objeto
 command-outcome-desc = Crear un resultado
+command-pact-desc = (Admin) Gestiona el pacto de un Brujo: 'bind <patrón> [objetivo]' lo vincula a un patrón, 'sever [objetivo]' rompe el pacto (deshabilitando su magia), 'boon <tome|chain|blade|talisman> [objetivo]' fija su boon de pacto, 'blade <summon|dismiss> [objetivo]' invoca/despide su espada (solo boon Blade), 'status [objetivo]' informa su estado
 command-permit_build-desc = Ofrece al jugador un espacio delimitado en el que puede construir
 command-players-desc = Lista los jugadores conectados en este momento
 command-poise-desc = Establece tu equilibrio actual
@@ -255,6 +256,8 @@ command-battlemode-updated = Nuevo modo de batalla: { $battlemode }
 command-buff-body-unknown = Especificación de cuerpo desconocida: { $spec }
 
 command-buff-data = El argumento de potenciador '{ $buff }' requiere datos adicionales
+
+command-buff-spec-invalid = Especificación de datos inválida: { $spec }
 
 command-buff-unknown = Potenciador desconocido: { $buff }
 

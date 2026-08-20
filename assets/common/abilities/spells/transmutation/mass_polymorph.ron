@@ -1,0 +1,28 @@
+// Same `Transform`-variant deviation as guardian_of_nature.ron, same
+// multi/enemy-to-self narrowing as polymorph.ron/animal_shapes.ron.
+// `QuadrupedSmall(Sheep)` reused from polymorph.ron for the "weaker
+// bestial form" flavor at a longer duration/higher energy for the higher
+// circle.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: Polymorphed,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(60.0),
+                misc_data: Some(Body(QuadrupedSmall((species: Sheep, body_type: Male)))),
+            ),
+        ),
+    ],
+    energy_cost: 190,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 9 spell -> min_level 54, the level * 6 convention.
+        requirements: (min_level: Some(54)),
+    ),
+)

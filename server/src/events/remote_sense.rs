@@ -459,7 +459,16 @@ fn resolve_tracking(
         .is_some_and(|health| !health.is_dead);
     let max_range = max_sense_range(data.presences.get(caster));
     let is_in_range = target_pos.0.distance_squared(caster_pos.0) <= max_range * max_range;
-    if !is_alive || !is_in_range {
+    // `sequester`'s own doc comment promises "can't be targeted by
+    // divination, regardless of which sense" -- an unconditional immunity,
+    // not a probabilistic resist, so this is a silent structural gate
+    // alongside is_alive/is_in_range above, not a `scrying_resist_roll`
+    // failure (which alone emits `Outcome::Resisted`).
+    let target_nondetection = data
+        .stats
+        .get(target_entity)
+        .is_some_and(|stats| stats.nondetection);
+    if !is_alive || !is_in_range || target_nondetection {
         return;
     }
     let Some(caster_stats) = data.stats.get(caster) else {
@@ -1332,6 +1341,56 @@ mod tests {
         assert!(
             world.read_storage::<RemoteSense>().get(caster).is_none(),
             "a dead target must not grant a link"
+        );
+    }
+
+    /// `sequester`'s own doc comment promises "can't be targeted by
+    /// divination, regardless of which sense" -- `Stats.nondetection` must
+    /// block `scrying`'s `Tracking` anchor the same way it already blocks
+    /// every `detection.rs` sense. This is a structural gate like
+    /// is_alive/is_in_range above, not a resisted roll, so no
+    /// `Outcome::Resisted` should fire either.
+    #[test]
+    fn tracking_nondetected_target_grants_no_link() {
+        let mut world = setup_world();
+        let caster_uid = uid(1);
+        let target_uid = uid(2);
+        let caster = caster_with_stats(&mut world, caster_uid, Vec3::new(4.0, 4.0, 5.0));
+        let mut target_stats =
+            Stats::new(common_i18n::Content::Plain(String::new()), tameable_body());
+        target_stats.nondetection = true;
+        let target = world
+            .create_entity()
+            .with(Pos(Vec3::new(6.0, 4.0, 5.0)))
+            .with(Health::new(tameable_body()))
+            .with(target_stats)
+            .build();
+        world
+            .write_resource::<IdMaps>()
+            .add_entity(target_uid, target);
+
+        let entities_before = world.entities().join().count();
+
+        dispatch(&world, tracking_event(caster, target_uid));
+
+        assert!(
+            world.read_storage::<RemoteSense>().get(caster).is_none(),
+            "a nondetection-protected target must not grant a link"
+        );
+        assert_eq!(
+            world.entities().join().count(),
+            entities_before,
+            "a nondetection-blocked cast must not spawn a sensor entity"
+        );
+        let resisted: Vec<_> = world
+            .read_resource::<EventBus<Outcome>>()
+            .recv_all()
+            .filter(|o| matches!(o, Outcome::Resisted { target, .. } if *target == target_uid))
+            .collect();
+        assert!(
+            resisted.is_empty(),
+            "nondetection is an unconditional immunity, not a resisted roll -- no \
+             Outcome::Resisted should fire"
         );
     }
 

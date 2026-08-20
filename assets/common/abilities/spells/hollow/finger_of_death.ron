@@ -1,0 +1,27 @@
+// Single-target necrotic bolt, same BasicRanged shape as harm.ron scaled
+// for circle 7. Sheet's "a target slain by this rises as a zombie under
+// the caster's command" on-kill-raise rider dropped -- no on-kill trigger
+// exists anywhere in the ability system (same class of drop as
+// negative_energy_flood.ron's own on-kill rider, this cell's other
+// killing-blow necrotic bolt).
+BasicRanged(
+    energy_cost: 175.0,
+    buildup_duration: 0.6,
+    recover_duration: 0.45,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 72,
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 60.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

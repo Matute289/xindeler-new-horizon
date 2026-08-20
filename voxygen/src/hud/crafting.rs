@@ -15,6 +15,7 @@ use crate::{
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
+    window::{LastInput, MenuInput},
 };
 use client::{self, Client};
 use common::{
@@ -35,7 +36,8 @@ use common::{
     terrain::SpriteKind,
 };
 use conrod_core::{
-    Color, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color, image,
+    Borderable, Color, Colorable, Labelable, Positionable, Sizeable, Widget, WidgetCommon, color,
+    image,
     position::{Dimension, Place},
     widget::{self, Button, Image, Line, Rectangle, Scrollbar, Text, TextEdit},
     widget_ids,
@@ -174,6 +176,7 @@ pub struct Crafting<'a> {
     tooltip_manager: &'a mut TooltipManager,
     show: &'a mut Show,
     settings: &'a Settings,
+    menu_events: &'a Vec<MenuInput>,
 }
 
 impl<'a> Crafting<'a> {
@@ -197,6 +200,7 @@ impl<'a> Crafting<'a> {
         tooltip_manager: &'a mut TooltipManager,
         show: &'a mut Show,
         settings: &'a Settings,
+        menu_events: &'a Vec<MenuInput>,
     ) -> Self {
         Self {
             client,
@@ -218,6 +222,7 @@ impl<'a> Crafting<'a> {
             show,
             common: widget::CommonBuilder::default(),
             settings,
+            menu_events,
         }
     }
 }
@@ -311,6 +316,11 @@ impl CraftingTab {
 pub struct State {
     ids: Ids,
     selected_recipe: Option<String>,
+    // Gamepad/keyboard menu navigation (mirrors bag.rs's `active_content` LocalFocus
+    // cycling). 0 = recipe list, 1 = ingredient/craft slots, 2 = craft button.
+    active_content: usize,
+    active_recipe_index: usize,
+    active_ingredient_slot: usize,
 }
 
 enum SearchFilter {
@@ -337,6 +347,9 @@ impl Widget for Crafting<'_> {
         State {
             ids: Ids::new(id_gen),
             selected_recipe: None,
+            active_content: 0,
+            active_recipe_index: 0,
+            active_ingredient_slot: 0,
         }
     }
 
@@ -780,6 +793,80 @@ impl Widget for Crafting<'_> {
             )
         });
 
+        // MENU INPUTS: crafting window navigation, mirroring the SlotGrid/menu_events
+        // pattern the bag already uses (see hud/slot_grid.rs, hud/bag.rs).
+        //
+        // Local focus areas (LocalFocus cycles through them):
+        // - Area 0, recipe list: Up/Down highlights an entry, Apply selects/deselects
+        //   it (same as clicking `recipe_list_btns[i]`).
+        // - Area 1, ingredient slots: Left/Right highlights a slot, Apply selects the
+        //   highlighted slot via the shared SlotManager, same as the bag's own
+        //   inventory grid. Only meaningful for modular-weapon/component/repair
+        //   recipes; a no-op for simple recipes, which have none. Placing a new item
+        //   into the slot still requires a mouse drag from the inventory — see the note
+        //   below.
+        // - Area 2, craft button: Apply crafts, same as clicking it.
+        //
+        // Back always closes the window, from any local focus.
+        //
+        // Note: like the bag's own SlotGrid, this reads `self.menu_events` whenever
+        // the crafting window is open, with no cross-window arbitration against Bag
+        // (which can be open at the same time, e.g. to browse ingredients).
+        // `Show::focus` (`hud/mod.rs`) tracks which windows are open but does not yet
+        // gate which one consumes `menu_events` per frame. Selecting a slot is
+        // therefore best-effort when multiple windows are open: whichever window
+        // renders last in a given frame "wins" the shared SlotManager's selection.
+        // This is a pre-existing gap in how `menu_events` is dispatched, not
+        // something introduced here — it's also why cross-window item placement
+        // (e.g. dragging a bag item into one of these slots) is deliberately left
+        // mouse-only rather than wired through a menu-driven select-to-swap, which
+        // would let one stray keypress fire a real inventory move against whatever
+        // slot happened to be selected in another window.
+        // Filtered once and reused for both the dpad-nav clamp below and the
+        // render loop further down, rather than re-running `satisfies()` over
+        // the full recipe list twice per frame.
+        let visible_recipes: Vec<_> = ordered_recipes
+            .into_iter()
+            .filter(|(_, recipe, _, _, _)| self.show.crafting_fields.crafting_tab.satisfies(recipe))
+            .collect();
+        let visible_recipe_count = visible_recipes.len();
+        let last_input = self.global_state.window.last_input();
+        let mut recipe_list_apply = false;
+        let mut ingredient_slot_apply = false;
+        let mut craft_button_apply = false;
+        for event in self.menu_events {
+            match *event {
+                MenuInput::Back => events.push(Event::Close),
+                MenuInput::LocalFocus => state.update(|s| {
+                    s.active_content = (s.active_content + 1) % 3;
+                }),
+                MenuInput::Up if state.active_content == 0 => state.update(|s| {
+                    s.active_recipe_index = s.active_recipe_index.saturating_sub(1);
+                }),
+                MenuInput::Down if state.active_content == 0 && visible_recipe_count > 0 => {
+                    state.update(|s| {
+                        s.active_recipe_index =
+                            (s.active_recipe_index + 1).min(visible_recipe_count - 1);
+                    });
+                },
+                MenuInput::Apply if state.active_content == 0 => recipe_list_apply = true,
+                MenuInput::Left if state.active_content == 1 => state.update(|s| {
+                    s.active_ingredient_slot = s.active_ingredient_slot.saturating_sub(1);
+                }),
+                MenuInput::Right if state.active_content == 1 => state.update(|s| {
+                    s.active_ingredient_slot = (s.active_ingredient_slot + 1).min(1);
+                }),
+                MenuInput::Apply if state.active_content == 1 => ingredient_slot_apply = true,
+                MenuInput::Apply if state.active_content == 2 => craft_button_apply = true,
+                _ => {},
+            }
+        }
+        let active_recipe_index = state
+            .active_recipe_index
+            .min(visible_recipe_count.saturating_sub(1));
+        let recipe_list_menu_active =
+            matches!(last_input, LastInput::Keyboard | LastInput::Controller);
+
         // Recipe list
         let recipe_list_length = if self.settings.gameplay.show_all_recipes {
             self.rbm.iter().count()
@@ -819,11 +906,12 @@ impl Widget for Crafting<'_> {
                     .resize(recipe_list_length, &mut ui.widget_id_generator())
             });
         }
-        for (i, (name, recipe, is_craftable, has_materials, knows_recipe)) in ordered_recipes
-            .into_iter()
-            .filter(|(_, recipe, _, _, _)| self.show.crafting_fields.crafting_tab.satisfies(recipe))
-            .enumerate()
+        for (i, (name, recipe, is_craftable, has_materials, knows_recipe)) in
+            visible_recipes.into_iter().enumerate()
         {
+            let is_menu_highlighted =
+                recipe_list_menu_active && state.active_content == 0 && i == active_recipe_index;
+
             let button = Button::image(if state.selected_recipe.as_ref() == Some(name) {
                 self.imgs.selection
             } else {
@@ -839,7 +927,13 @@ impl Widget for Crafting<'_> {
             .w(171.0)
             .hover_image(self.imgs.selection_hover)
             .press_image(self.imgs.selection_press)
-            .image_color(color::rgba(1.0, 0.82, 0.27, 1.0));
+            .image_color(color::rgba(1.0, 0.82, 0.27, 1.0))
+            .border(if is_menu_highlighted { 2.0 } else { 0.0 })
+            .border_color(if is_menu_highlighted {
+                color::YELLOW
+            } else {
+                color::TRANSPARENT
+            });
 
             let title;
             let recipe_name =
@@ -877,6 +971,7 @@ impl Widget for Crafting<'_> {
                 .h(button_height)
                 .set(state.ids.recipe_list_btns[i], ui)
                 .was_clicked()
+                || (recipe_list_apply && is_menu_highlighted)
             {
                 if state.selected_recipe.as_ref() == Some(name) {
                     state.update(|s| s.selected_recipe = None);
@@ -1056,7 +1151,7 @@ impl Widget for Crafting<'_> {
                 content_source: self.inventory,
                 image_source: self.item_imgs,
                 slot_manager: Some(self.slot_manager),
-                last_input: &self.global_state.window.last_input(),
+                last_input: &last_input,
                 pulse: self.pulse,
             };
 
@@ -1122,7 +1217,12 @@ impl Widget for Crafting<'_> {
                     };
 
                     let primary_slot_widget = slot_maker
-                        .fabricate(primary_slot, [40.0; 2], false, false)
+                        .fabricate(
+                            primary_slot,
+                            [40.0; 2],
+                            state.active_content == 1 && state.active_ingredient_slot == 0,
+                            ingredient_slot_apply && state.active_ingredient_slot == 0,
+                        )
                         .top_left_with_margins_on(state.ids.modular_art, 4.0, 4.0)
                         .parent(state.ids.align_ing);
 
@@ -1210,7 +1310,12 @@ impl Widget for Crafting<'_> {
                     };
 
                     let secondary_slot_widget = slot_maker
-                        .fabricate(secondary_slot, [40.0; 2], false, false)
+                        .fabricate(
+                            secondary_slot,
+                            [40.0; 2],
+                            state.active_content == 1 && state.active_ingredient_slot == 1,
+                            ingredient_slot_apply && state.active_ingredient_slot == 1,
+                        )
                         .top_right_with_margins_on(state.ids.modular_art, 4.0, 4.0)
                         .parent(state.ids.align_ing);
 
@@ -1553,7 +1658,12 @@ impl Widget for Crafting<'_> {
                     };
 
                     let repair_slot_widget = slot_maker
-                        .fabricate(repair_slot, [80.0; 2], false, false)
+                        .fabricate(
+                            repair_slot,
+                            [80.0; 2],
+                            state.active_content == 1,
+                            ingredient_slot_apply,
+                        )
                         .down_from(state.ids.modular_desc_txt, 15.0)
                         .align_middle_x()
                         .parent(state.ids.align_ing);
@@ -1705,6 +1815,8 @@ impl Widget for Crafting<'_> {
                     .get_msg("hud-crafting-repair-selection"),
                 _ => self.localized_strings.get_msg("hud-crafting-craft"),
             };
+            let craft_button_menu_highlighted =
+                recipe_list_menu_active && state.active_content == 2;
             let craft_button_init = Button::image(self.imgs.button)
                 .w_h(105.0, 25.0)
                 .hover_image(if can_perform {
@@ -1730,6 +1842,16 @@ impl Widget for Crafting<'_> {
                     TEXT_COLOR
                 } else {
                     TEXT_GRAY_COLOR
+                })
+                .border(if craft_button_menu_highlighted {
+                    2.0
+                } else {
+                    0.0
+                })
+                .border_color(if craft_button_menu_highlighted {
+                    color::YELLOW
+                } else {
+                    color::TRANSPARENT
                 })
                 .and(|b| match recipe_kind {
                     RecipeKind::Repair => b
@@ -1759,7 +1881,9 @@ impl Widget for Crafting<'_> {
                 craft_button_init.set(state.ids.btn_craft, ui)
             };
 
-            if craft_button.was_clicked() && can_perform {
+            if (craft_button.was_clicked() || (craft_button_apply && craft_button_menu_highlighted))
+                && can_perform
+            {
                 match recipe_kind {
                     RecipeKind::ModularWeapon => {
                         if let (

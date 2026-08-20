@@ -136,6 +136,13 @@ pub enum SkillGroupKind {
     // (parallel to `General`). Points are granted via level-milestone
     // (`grant_skill_point`), never via the XP-per-group economy.
     Feats,
+    /// The Blade pact-boon's own experience track: a third
+    /// directly-granted group, sibling to `Class(_)`/`Feats`. Points arrive
+    /// only from the blade's own kill-XP hook (the award loop in
+    /// `entity_manipulation.rs`, gated on `Pact.blade_summoned`), never from
+    /// `add_skill_points`/the normal XP-per-group economy -- see
+    /// `is_directly_granted` below.
+    PactBlade,
     /// A second skill tree for a `ToolKind` that already has a `Weapon(..)`
     /// tree under a *different* role — e.g. `Weapon(Staff)` is the caster
     /// (fire) tree, so a martial-role Staff needs `WeaponRoled(Staff,
@@ -203,7 +210,10 @@ impl SkillGroupKind {
     /// level-milestone) rather than earned through the skill tree. These need
     /// their `UnlockGroup` skill re-seeded on `load_from_database`.
     pub fn is_directly_granted(&self) -> bool {
-        matches!(self, SkillGroupKind::Class(_) | SkillGroupKind::Feats)
+        matches!(
+            self,
+            SkillGroupKind::Class(_) | SkillGroupKind::Feats | SkillGroupKind::PactBlade
+        )
         // Future: add `| SkillGroupKind::EpicBoons` (spec 2026-06-27 §3 Q5).
     }
 }
@@ -1063,8 +1073,9 @@ mod class_tree_tests {
 
     #[test]
     fn class_skill_groups_have_defs_and_stable_hashes() {
-        // BL-06 proof slice: these 4 trees are populated; the other 10 are still
-        // empty stubs until they are authored in a later phase.
+        // These 4 trees are populated; the other 9 (including Warlock,
+        // whose only defined skill is deliberately kept out of its tree
+        // until something consumes it) are still empty stubs.
         const POPULATED: [ClassKind; 4] = [
             ClassKind::Warrior,
             ClassKind::Mage,

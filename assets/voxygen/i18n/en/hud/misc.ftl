@@ -9,6 +9,7 @@ hud-inventory_full = Inventory Full
 hud-someone_else = someone else
 hud-another_group = another group
 hud-owned_by_for_secs = Owned by { $name } for { $secs } secs
+hud-pet-command_guard = Your pet is now on guard.
 hud-press_key_to_show_debug_info_fmt = Press { $key } to show debug info
 hud-press_key_to_toggle_keybindings_fmt = Press { $key } to toggle key bindings
 hud-press_key_to_toggle_debug_info_fmt = Press { $key } to toggle debug info
@@ -128,6 +129,13 @@ hud-compass-south = S
 hud-compass-southwest = SW
 hud-compass-west = W
 hud-compass-northwest = NW
+
+## Gamepad hotplug notices
+hud-gamepad-connected = Controller connected: { $name }
+hud-gamepad-disconnected = Controller disconnected: { $name }
+
+## Chat on-screen keyboard (controller text entry)
+hud-osk-title = On-Screen Keyboard
 
 ## Identify inspect card (creature half; the item half reuses the ordinary
 ## item tooltip verbatim)

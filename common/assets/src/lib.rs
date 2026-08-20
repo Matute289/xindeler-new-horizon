@@ -12,7 +12,7 @@ use std::{
 };
 
 pub use assets_manager::{
-    Asset, AssetCache, BoxedError, Error, FileAsset, SharedString,
+    Asset, AssetCache, BoxedError, Error, FileAsset, ReloadId, SharedString,
     asset::{DirLoadable, Ron, load_bincode_legacy, load_ron},
     source::{self, Source},
 };

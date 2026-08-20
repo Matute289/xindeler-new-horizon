@@ -1,0 +1,33 @@
+// "Part of the stolen life flows back to mend your own wounds" -- a plain
+// self-heal-on-hit rider, delivered with `CombatEffect::Lifesteal(f32)`
+// (common/src/combat.rs), which always credits the health change to the
+// *attacker* regardless of what/who was hit (see its resolution arms: `if
+// let Some(attacker_entity) = attacker...`). Already real and shipped on a
+// `BasicBeam` via the same-named `damage_effect` field
+// (hemomancy/exsanguinate.ron's `damage_effect: Some(Lifesteal(0.3))`);
+// `MeleeConstructor` carries an identical `damage_effect: Option<CombatEffect>`
+// field that attaches to the normal `OutOfGroup` damage attack the same way
+// (`damage.with_effect(damage_effect)` in common/src/comp/melee.rs) -- no
+// `attack_effect`/`attack_effect_target` override needed, unlike the
+// touch-ally spells elsewhere in this folder, since vampiric_touch hits a
+// foe, not an ally.
+//
+// `MeleeConstructorKind::Stab` has no `damage_kind` field of its own (see
+// inflict_wounds.ron/spare_the_dying.ron in this folder, both flavored as
+// necrotic/radiant melee hits with no such field either) -- the sheet's
+// `damage_type: Necrotic` is kept as flavor/i18n only, same as those
+// siblings.
+BasicMelee(
+    energy_cost: 40.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 24, poise: 5, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        damage_effect: Some(Lifesteal(0.35)),
+    ),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

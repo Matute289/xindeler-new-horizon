@@ -1,0 +1,24 @@
+// Sustained single-target beam, same shape as immolation.ron scaled to
+// circle 7. `specifier: Lightning` reused as a generic energy-beam
+// frontend -- no dedicated Force-flavored beam specifier exists.
+BasicBeam(
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    beam_duration: 60,
+    damage: 20.0,
+    tick_rate: 3.0,
+    range: 18.0,
+    max_angle: 5.0,
+    damage_effect: None,
+    energy_regen: 0,
+    energy_drain: 30,
+    move_efficiency: 0.3,
+    ori_rate: 0.3,
+    specifier: Lightning,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        // level 7 spell -> min_level 42, the level * 6 convention.
+        requirements: (min_level: Some(42)),
+    ),
+)

@@ -118,6 +118,10 @@ pub enum Event {
     AnalogGameInput(AnalogGameInput),
     /// We tried to save a screenshot
     ScreenshotMessage(String),
+    /// A gamepad has been connected (at any point after startup)
+    GamepadConnected { name: String },
+    /// A gamepad has been disconnected
+    GamepadDisconnected { name: String },
 }
 
 pub type MouseButton = winit::event::MouseButton;
@@ -201,13 +205,46 @@ pub enum RemappingMode {
     None,
 }
 
-// TODO: implement controller layout detection/configuration
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControllerType {
     Xbox,
     Nintendo,
     Playstation,
     None,
+}
+
+impl ControllerType {
+    /// Identify the controller family from its USB vendor id, falling back to
+    /// case-insensitive name substrings. Defaults to `Xbox` for unknown pads
+    /// (matching the previous hardcoded assumption) so they still get sensible
+    /// button glyphs — most generic pads use the Xbox layout.
+    pub fn detect(vendor_id: Option<u16>, name: &str) -> Self {
+        const VID_SONY: u16 = 0x054C;
+        const VID_NINTENDO: u16 = 0x057E;
+        const VID_MICROSOFT: u16 = 0x045E;
+
+        match vendor_id {
+            Some(VID_SONY) => return ControllerType::Playstation,
+            Some(VID_NINTENDO) => return ControllerType::Nintendo,
+            Some(VID_MICROSOFT) => return ControllerType::Xbox,
+            _ => {},
+        }
+
+        let name = name.to_lowercase();
+        if ["dualshock", "dualsense", "playstation", "sony"]
+            .iter()
+            .any(|s| name.contains(s))
+        {
+            ControllerType::Playstation
+        } else if ["joy-con", "joycon", "switch", "nintendo", "pro controller"]
+            .iter()
+            .any(|s| name.contains(s))
+        {
+            ControllerType::Nintendo
+        } else {
+            ControllerType::Xbox
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -327,6 +364,24 @@ impl Window {
             },
         };
 
+        // Identify a gamepad that was already connected before launch; pads
+        // (dis)connected later are handled via gilrs hotplug events in
+        // `fetch_events`.
+        let controller_type = gilrs
+            .as_ref()
+            .and_then(|gilrs| gilrs.gamepads().next())
+            .map(|(_, gamepad)| {
+                let detected = ControllerType::detect(gamepad.vendor_id(), gamepad.name());
+                tracing::info!(
+                    name = gamepad.name(),
+                    vendor_id = ?gamepad.vendor_id(),
+                    ?detected,
+                    "Gamepad detected at startup"
+                );
+                detected
+            })
+            .unwrap_or(ControllerType::Xbox);
+
         let (message_sender, message_receiver): (
             channel::Sender<String>,
             channel::Receiver<String>,
@@ -356,7 +411,7 @@ impl Window {
             menu_open: false,
             cursor_position: winit::dpi::PhysicalPosition::new(0.0, 0.0),
             mouse_emulation_vec: Vec2::zero(),
-            controller_type: ControllerType::Xbox,
+            controller_type,
             last_input: LastInput::Mouse,
             // Currently used to send and receive screenshot result messages
             message_sender,
@@ -652,6 +707,24 @@ impl Window {
                             }
                         }
                     },
+                    EventType::Connected => {
+                        let gamepad = gilrs.gamepad(event.id);
+                        let name = gamepad.name().to_string();
+                        self.controller_type = ControllerType::detect(gamepad.vendor_id(), &name);
+                        tracing::info!(
+                            %name,
+                            controller_type = ?self.controller_type,
+                            "Gamepad connected"
+                        );
+                        self.events.push(Event::GamepadConnected { name });
+                    },
+                    EventType::Disconnected => {
+                        // Keep the last-known `controller_type` so button
+                        // glyphs stay stable if the pad reconnects.
+                        let name = gilrs.gamepad(event.id).name().to_string();
+                        tracing::info!(%name, "Gamepad disconnected");
+                        self.events.push(Event::GamepadDisconnected { name });
+                    },
                     _ => {},
                 }
             }
@@ -661,6 +734,16 @@ impl Window {
         // Mouse emulation for the menus, to be removed when a proper menu navigation
         // system is available
         if !self.cursor_grabbed {
+            // Emulated clicks also need to reach the `iced` UIs (the main
+            // menu and character selection), which only consume
+            // `Event::IcedUi`. The cursor position already flows there via
+            // the real (emulation-moved) OS cursor producing a winit
+            // `CursorMoved`, so only the button press/release needs
+            // synthesizing here, alongside the existing conrod emission
+            // below. Collected separately because the `filter_map` below
+            // only produces one output event per input event.
+            let mut emulated_iced_clicks = Vec::new();
+
             events = events
                 .into_iter()
                 .filter_map(|event| match event {
@@ -687,6 +770,15 @@ impl Window {
                             },
                             _ => return Some(event),
                         };
+                        let iced_button = match menu_input {
+                            MenuInput::EmulateLeftClick => iced::mouse::Button::Left,
+                            MenuInput::EmulateRightClick => iced::mouse::Button::Right,
+                            _ => unreachable!("checked above"),
+                        };
+                        emulated_iced_clicks.push(Event::IcedUi(iced::Event::Mouse(match state {
+                            true => iced::mouse::Event::ButtonPressed(iced_button),
+                            false => iced::mouse::Event::ButtonReleased(iced_button),
+                        })));
                         Some(match state {
                             true => Event::Ui(ui::Event(conrod_core::event::Input::Press(
                                 conrod_core::input::Button::Mouse(mouse_button),
@@ -699,6 +791,7 @@ impl Window {
                     _ => Some(event),
                 })
                 .collect();
+            events.extend(emulated_iced_clicks);
 
             let sensitivity = controller.mouse_emulation_sensitivity;
             // TODO: make this independent of framerate
@@ -1470,5 +1563,56 @@ impl Default for FullScreenSettings {
             bit_depth: None,
             refresh_rate_millihertz: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ControllerType;
+
+    #[test]
+    fn controller_type_detect_by_vendor_id() {
+        assert_eq!(
+            ControllerType::detect(Some(0x054C), "Wireless Controller"),
+            ControllerType::Playstation
+        );
+        assert_eq!(
+            ControllerType::detect(Some(0x057E), "Pro Controller"),
+            ControllerType::Nintendo
+        );
+        assert_eq!(
+            ControllerType::detect(Some(0x045E), "Xbox Wireless Controller"),
+            ControllerType::Xbox
+        );
+    }
+
+    #[test]
+    fn controller_type_detect_by_name_fallback() {
+        assert_eq!(
+            ControllerType::detect(None, "Sony DualSense Edge"),
+            ControllerType::Playstation
+        );
+        assert_eq!(
+            ControllerType::detect(None, "DUALSHOCK 4"),
+            ControllerType::Playstation
+        );
+        assert_eq!(
+            ControllerType::detect(None, "Nintendo Switch Pro Controller"),
+            ControllerType::Nintendo
+        );
+        assert_eq!(
+            ControllerType::detect(None, "Joy-Con (L)"),
+            ControllerType::Nintendo
+        );
+        // Unknown pads default to the Xbox layout, matching the previous
+        // hardcoded assumption.
+        assert_eq!(
+            ControllerType::detect(None, "Generic USB Gamepad"),
+            ControllerType::Xbox
+        );
+        assert_eq!(
+            ControllerType::detect(Some(0x1234), "8BitDo SN30 Pro"),
+            ControllerType::Xbox
+        );
     }
 }

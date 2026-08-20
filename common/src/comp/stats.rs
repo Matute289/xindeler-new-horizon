@@ -104,6 +104,22 @@ pub struct ActiveSense {
     pub mode: SenseMode,
 }
 
+/// One active damage-return effect, rebuilt each tick from a
+/// [`crate::comp::BuffEffect::ReflectDamage`] buff.
+///
+/// Entirely content-agnostic: `Attack::apply_attack` applies whatever is in
+/// this list without knowing which buff, class or item produced it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DamageReflect {
+    /// Share of the damage actually taken that is returned to the attacker.
+    pub fraction: f32,
+    /// Hard per-hit ceiling on the returned amount, in health. Mandatory —
+    /// see [`crate::comp::BuffEffect::ReflectDamage`].
+    pub cap: f32,
+    /// The damage kind the return is dealt as.
+    pub kind: DamageKind,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Stats {
     pub name: Content,
@@ -181,8 +197,14 @@ pub struct Stats {
     /// skipped entirely by `server/src/sys/detection.rs`'s per-`SenseKind`
     /// predicate — "can't be targeted by divination," unconditionally,
     /// regardless of which sense is queried or what `false_aura` below
-    /// claims. Same boolean shape as `disable_magic` above. Set by
-    /// `BuffEffect::Nondetection`.
+    /// claims. Also checked by `scrying`'s `Tracking` anchor, both at cast
+    /// time (`resolve_tracking`, `server/src/events/remote_sense.rs`) and
+    /// every tick thereafter (`server/src/sys/remote_sense.rs`'s own
+    /// per-tick upkeep, so a target gaining this flag *after* a link already
+    /// formed still ends it) — the "regardless of which sense" promise holds
+    /// for scrying's targeted divination too, not just the area/passive
+    /// senses `detection.rs` governs. Same boolean shape as `disable_magic`
+    /// above. Set by `BuffEffect::Nondetection`.
     pub nondetection: bool,
     /// `magic_aura`'s lie: when set, `server/src/sys/detection.rs`'s
     /// predicate reports this entity as revealed by the given `SenseKind`
@@ -294,6 +316,17 @@ pub struct Stats {
     /// separate from the detection *result*.
     #[serde(default)]
     pub senses: Vec<ActiveSense>,
+    /// Damage-return effects currently active on this entity, populated each
+    /// tick from active `BuffEffect::ReflectDamage` buffs.
+    ///
+    /// Read by `Attack::apply_attack` on the *defender* to return part of a
+    /// hit to whoever landed it. A `Vec` rather than a single slot so two
+    /// independent sources (a thorns affix and a ward, say) both apply; each
+    /// entry is capped on its own. Empty for essentially every entity, and an
+    /// empty `Vec` neither allocates nor costs anything to walk, so the
+    /// attack path pays nothing when nobody is reflecting.
+    #[serde(default)]
+    pub damage_reflect: Vec<DamageReflect>,
     /// This entity's creature kind, defaulted from
     /// `original_body.creature_kind()` at construction and overridable
     /// per-entity by `EntityConfig`'s `creature_type` field (an authored
@@ -409,6 +442,7 @@ impl Stats {
             projectile_constructor_effects: Vec::new(),
             marked_entities: Vec::new(),
             senses: Vec::new(),
+            damage_reflect: Vec::new(),
             // Permissive by construction: an entity with no `CharacterClass`
             // (every NPC, summon and boss) must stay fully able to swing
             // any weapon. Narrowed only inside the per-tick class block for
@@ -545,6 +579,7 @@ impl Stats {
         self.projectile_constructor_effects.clear();
         self.marked_entities.clear();
         self.senses.clear();
+        self.damage_reflect.clear();
         self.proficient_tools = ToolKindMask::all();
         self.non_proficient_damage_mult = 1.0;
     }
@@ -741,6 +776,11 @@ mod tests {
             radius: 10.0,
             mode: SenseMode::Snapshot,
         });
+        stats.damage_reflect.push(DamageReflect {
+            fraction: 0.15,
+            cap: 30.0,
+            kind: DamageKind::Psychic,
+        });
         stats.proficient_tools = ToolKindMask::empty();
         stats.non_proficient_damage_mult = 0.4;
 
@@ -898,6 +938,11 @@ mod tests {
         assert_eq!(stats.marked_entities.len(), expected.marked_entities.len());
         assert!(stats.senses.is_empty());
         assert_eq!(stats.senses.len(), expected.senses.len());
+        assert_eq!(
+            stats.damage_reflect.len(),
+            expected.damage_reflect.len(),
+            "a stale reflect would keep returning damage after its buff ended"
+        );
         assert_eq!(stats.proficient_tools, expected.proficient_tools);
         assert_eq!(
             stats.non_proficient_damage_mult,

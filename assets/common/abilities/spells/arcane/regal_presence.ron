@@ -1,0 +1,44 @@
+// Self-centered fey-majesty aura, same `pooled_debuff` GroundAoe shape as
+// sleep.ron (a self/near-self AoE that resolves once at cast, granting its
+// buff to everyone caught in range rather than dealing a normal hit).
+// Sheet rider is "prone-and-pushed (awe) OR charmed, plus minor psychic
+// damage" -- `BuffKind::Charmed` was checked and rejected: it resolves to
+// an empty effects list for player-controlled/most targets
+// (`common/src/comp/buff.rs` ~line 1209, `Charmed | Dominated | Maddened =>
+// vec![]`) -- it's an NPC-alignment-flip marker, not a real player-facing
+// debuff, so it would do nothing here. `Rooted` (can't move) stands in for
+// "cowed/held by awe" instead, the same substitution already used
+// elsewhere in this pass for "held in place" riders. The minor-damage half
+// is dropped: `pooled_debuff` fully replaces the strike's normal damage
+// path (see GroundAoe's own doc comment), so a real hit and a pooled debuff
+// can't coexist on one cast.
+GroundAoe(
+    energy_cost: 80.0,
+    buildup_duration: 0.5,
+    delay: 0.4,
+    recover_duration: 0.4,
+    max_range: 3.0,
+    radius: 3.0,
+    min_falloff: 0.4,
+    damage: 0.0,
+    poise: 0.0,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: No,
+    reagent: None,
+    rooted_cast: true,
+    pooled_debuff: Some((
+        pool: 60.0,
+        buff: (
+            kind: Rooted,
+            dur_secs: 8,
+            strength: Value(1.0),
+            chance: 1.0,
+        ),
+    )),
+    meta: (
+        school: Some(Enchantment),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

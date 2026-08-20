@@ -1,0 +1,29 @@
+// Multi-ally ranged buff (sheet range 9m, aoe multi-target, up to ten allies). No drowning,
+// suffocation, or breath-meter system exists anywhere in this engine (checked
+// common/src/comp/health.rs and common/src/comp/buff.rs in full -- no Drowning/Waterlogged
+// BuffKind, no breath resource). The spell's actual mechanical premise therefore has no engine
+// hook to grant immunity from. FreedomOfMovement (immunity to DifficultTerrain) is used instead
+// as the nearest "moves freely through an otherwise-hostile medium" primitive, echoing the
+// sheet's own "moving freely between surface and depths" phrasing -- ships as a defensible
+// utility buff rather than a literal no-op, but flagged clearly as a deviation from the sheet's
+// stated effect, not a mechanical equivalent.
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: FreedomOfMovement,
+            strength: 1.0,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(1.0),
+    range: 9.0,
+    energy_cost: 55.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Transmutation), source: Some(Primordial), cooldown: Some(20.0)),
+)

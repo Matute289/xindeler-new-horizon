@@ -108,6 +108,13 @@ impl PlayState for MainMenuState {
     fn tick(&mut self, global_state: &mut GlobalState, events: Vec<Event>) -> PlayStateResult {
         span!(_guard, "tick", "<MainMenuState as PlayState>::tick");
 
+        // The main menu is always "a menu" for gamepad/keyboard menu-input
+        // routing (mouse-emulation clicks, and eventually native focus nav).
+        // The in-session HUD is the only other writer of this flag and
+        // restores it to the correct value every frame once a session
+        // starts (`Hud::maintain`), so this doesn't need to be undone here.
+        global_state.window.menu_open = true;
+
         // Pull in localizations
         let localized_strings = &global_state.i18n.read();
 
@@ -708,6 +715,15 @@ pub(crate) fn get_client_msg_error(
             client::AuthClientError::InsecureUrl => localization
                 .get_msg("main-login-insecure_auth_scheme")
                 .into(),
+            // The auth server can answer a login with a request for a TOTP
+            // code instead of a token. Redeeming that challenge and the
+            // client-side prompt to collect the code are not implemented
+            // yet, so any account with 2FA enabled hits this arm on every
+            // login attempt -- tell the player plainly rather than showing a
+            // generic network-failure message.
+            client::AuthClientError::TwoFactorRequired(_) => {
+                localization.get_msg("main-login-2fa_not_supported").into()
+            },
         },
         Error::AuthServerUrlInvalid(e) => {
             format!(

@@ -1,0 +1,20 @@
+// Simple single-target poison bolt cantrip, same shape as
+// hollow/poison_spray.ron. The sheet's Constitution-save/toxic-effect rider
+// is deferred (no distinct rider fits beyond the base poison damage at
+// cantrip tier).
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 16,
+            damage_kind: Poison,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 45.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Conjuration), source: Some(Primordial)),
+)

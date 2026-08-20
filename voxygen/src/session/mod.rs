@@ -32,6 +32,7 @@ use common::{
     recipe::{self, RecipeBookManifest},
     terrain::{Block, BlockKind},
     trade::TradeResult,
+    uid::Uid,
     util::{Dir, Plane},
     vol::ReadVol,
 };
@@ -135,6 +136,14 @@ pub struct SessionState {
     key_state: KeyState,
     inputs: comp::ControllerInputs,
     inputs_state: HashSet<GameInput>,
+    /// Which of `Primary`/`Secondary` currently has its held click routed
+    /// past the HUD (to the build/weapon path below) rather than to a bound
+    /// mouse-slot ability. Latched on press and consulted (then cleared) on
+    /// the matching release, so a live `build_target`/mouse-slot-binding
+    /// change mid-hold can't route the release differently than the press
+    /// did -- that mismatch left `inputs_state` never cleared for that
+    /// input, permanently swallowing the next press.
+    click_bypasses_hud: HashSet<GameInput>,
     selected_block: Block,
     walk_forward_dir: Vec2<f32>,
     walk_right_dir: Vec2<f32>,
@@ -233,6 +242,7 @@ impl SessionState {
             key_state: KeyState::default(),
             inputs: comp::ControllerInputs::default(),
             inputs_state: HashSet::new(),
+            click_bypasses_hud: HashSet::new(),
             hud,
             selected_block: Block::new(BlockKind::Misc, Rgb::broadcast(255)),
             walk_forward_dir,
@@ -855,8 +865,45 @@ impl PlayState for SessionState {
 
             // Handle window events.
             for event in events {
+                // Building takes precedence over a mouse-slot ability
+                // override on that same click (see `Event::Primary`/
+                // `Secondary` below): a bound spell must not make block
+                // placement/removal unreachable while actively aiming at a
+                // buildable block. Skipping the HUD entirely for exactly
+                // this press keeps that precedence without the HUD needing
+                // to know about build mode at all.
+                //
+                // The routing decision is latched in `click_bypasses_hud`
+                // rather than recomputed from the live `build_target` on
+                // every event: `build_target` depends on where the camera
+                // is aiming *this tick*, so a press and its matching release
+                // can land on opposite sides of `.is_some()` if the player's
+                // aim changes mid-click. Routing the release differently
+                // than the press meant one side of the pair never reached
+                // the `inputs_state` bookkeeping below, leaving that input
+                // stuck "held" and silently swallowing every press after it.
+                let build_click = match event {
+                    Event::InputUpdate(
+                        input @ (GameInput::Primary | GameInput::Secondary),
+                        true,
+                    ) => {
+                        let bypass = build_target.is_some();
+                        if bypass {
+                            self.click_bypasses_hud.insert(input);
+                        } else {
+                            self.click_bypasses_hud.remove(&input);
+                        }
+                        bypass
+                    },
+                    Event::InputUpdate(
+                        input @ (GameInput::Primary | GameInput::Secondary),
+                        false,
+                    ) => self.click_bypasses_hud.remove(&input),
+                    _ => false,
+                };
+
                 // Pass all events to the ui first.
-                {
+                if !build_click {
                     let client = self.client.borrow();
                     let inventories = client.inventories();
                     let inventory = inventories.get(client.entity());
@@ -1158,6 +1205,93 @@ impl PlayState for SessionState {
                                         .get(pet_entity)
                                         .is_some_and(|activity| activity.is_pet_staying);
                                     client.set_pet_stay(pet_entity, !is_staying);
+                                }
+                            },
+                            // Independent of the `StayFollow` block above by
+                            // design -- reuses the same nearest-owned-pet
+                            // lookup shape but is a fresh implementation, so
+                            // that block (and the `V` key) is left
+                            // byte-for-byte untouched.
+                            GameInput::CommandPet if state => {
+                                let mut client = self.client.borrow_mut();
+                                let player_pos = client
+                                    .state()
+                                    .read_storage::<Pos>()
+                                    .get(client.entity())
+                                    .copied();
+
+                                let mut close_pet = None;
+                                if let Some(player_pos) = player_pos {
+                                    let positions = client.state().read_storage::<Pos>();
+                                    close_pet = client.state().ecs().read_resource::<CachedSpatialGrid>().0
+                                        .in_circle_aabr(player_pos.0.xy(), MAX_MOUNT_RANGE)
+                                        .filter(|e|
+                                            *e != client.entity()
+                                        )
+                                        .filter(|e|
+                                            matches!(client.state().ecs().read_storage::<comp::Alignment>().get(*e),
+                                                Some(comp::Alignment::Owned(owner)) if Some(*owner) == client.uid())
+                                        )
+                                        .filter(|e|
+                                            client.state().ecs().read_storage::<Is<Mount>>().get(*e).is_none()
+                                        )
+                                        .min_by_key(|e| {
+                                            OrderedFloat(positions
+                                                .get(*e)
+                                                .map_or(MAX_MOUNT_RANGE * MAX_MOUNT_RANGE, |x| {
+                                                    player_pos.0.distance_squared(x.0)
+                                                }
+                                            ))
+                                        });
+                                }
+
+                                if let Some(pet_entity) = close_pet {
+                                    // Prefer "attack that one" if the crosshair
+                                    // is over a valid (non-self, has-health)
+                                    // target; otherwise fall back to toggling
+                                    // `Guard`. Final legality (owner, group,
+                                    // PvP) is re-checked server-side.
+                                    let designated_target = self.target_entity.filter(|&target| {
+                                        target != pet_entity
+                                            && client
+                                                .state()
+                                                .read_storage::<comp::Health>()
+                                                .get(target)
+                                                .is_some()
+                                    });
+                                    if let Some(target) = designated_target
+                                        && let Some(target_uid) =
+                                            client.state().read_component_copied::<Uid>(target)
+                                    {
+                                        // No chat toast here: the pet immediately
+                                        // turning to fight is visible feedback
+                                        // enough. `Guard` below gets one because
+                                        // it's a silent mode change with no
+                                        // immediate visual cue.
+                                        client.command_pet(
+                                            pet_entity,
+                                            comp::PetCommand::Attack(target_uid),
+                                        );
+                                    } else {
+                                        let is_guarding = client
+                                            .state()
+                                            .read_storage::<CharacterActivity>()
+                                            .get(pet_entity)
+                                            .is_some_and(|activity| {
+                                                activity.pet_command == comp::PetCommand::Guard
+                                            });
+                                        let new_command = if is_guarding {
+                                            comp::PetCommand::Follow
+                                        } else {
+                                            comp::PetCommand::Guard
+                                        };
+                                        client.command_pet(pet_entity, new_command);
+                                        if !is_guarding {
+                                            self.hud.new_message(ChatType::Meta.into_msg(
+                                                Content::localized("hud-pet-command_guard"),
+                                            ));
+                                        }
+                                    }
                                 }
                             },
                             GameInput::Interact => {
@@ -1472,6 +1606,29 @@ impl PlayState for SessionState {
                     Event::ScreenshotMessage(screenshot_msg) => self
                         .hud
                         .new_message(ChatType::CommandInfo.into_plain_msg(screenshot_msg)),
+
+                    Event::GamepadConnected { name } => {
+                        let msg = global_state
+                            .i18n
+                            .read()
+                            .get_msg_ctx("hud-gamepad-connected", &i18n::fluent_args! {
+                                "name" => name,
+                            })
+                            .into_owned();
+                        self.hud
+                            .new_message(ChatType::CommandInfo.into_plain_msg(msg));
+                    },
+                    Event::GamepadDisconnected { name } => {
+                        let msg = global_state
+                            .i18n
+                            .read()
+                            .get_msg_ctx("hud-gamepad-disconnected", &i18n::fluent_args! {
+                                "name" => name,
+                            })
+                            .into_owned();
+                        self.hud
+                            .new_message(ChatType::CommandInfo.into_plain_msg(msg));
+                    },
 
                     Event::Zoom(delta) if self.zoom_lock => {
                         // only fire this Hud event when player has "intent" to zoom

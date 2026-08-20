@@ -35,6 +35,7 @@ gameinput-roll = Roll
 gameinput-togglelantern = Toggle Lantern
 gameinput-mount = Mount
 gameinput-stayfollow = Stay/Follow
+gameinput-commandpet = Command Pet
 gameinput-chat = Chat
 gameinput-command = Command
 gameinput-escape = Escape

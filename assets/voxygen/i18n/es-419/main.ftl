@@ -35,6 +35,7 @@ main-login-authentication_error = Error de autenticación al servidor.
 main-login-internal_error = Error interno en el cliente. Consejo: puede ser que el personaje esté borrado.
 main-login-failed_auth_server_url_invalid = Fallo al conectar con el servidor de autenticación.
 main-login-insecure_auth_scheme = El esquema de autenticación mediante HTTP no está soportado. ¡Es inseguro! Solo se permite para asuntos de desarrollo, para 'localhost' o en versiones de depuración.
+main-login-2fa_not_supported = Esta cuenta requiere un código de autenticación de dos factores para iniciar sesión, algo que esta versión del cliente todavía no soporta. Probá de nuevo con una versión más nueva del cliente cuando esté disponible.
 main-login-server_full = El servidor está lleno.
 main-login-untrusted_auth_server = El servidor de autenticación no es de confianza.
 main-login-timeout = Timeout: El servidor no respondió a tiempo. Consejo: el servidor podría estar sobrecargado en este momento o el problema podría ser con la red.

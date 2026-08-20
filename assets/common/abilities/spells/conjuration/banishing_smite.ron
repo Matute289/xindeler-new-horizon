@@ -1,0 +1,22 @@
+// "Next strike deals extra force damage" -- one-shot weapon-empowerment
+// rider, same `SelfBuff` + `buff_cat: RemoveOnAttack` shape as
+// transmutation/shining_smite.ron/evocation/branding_smite.ron. Sheet's
+// "banish briefly if brought low enough" rider dropped, no HP-threshold-
+// triggered banish/removal primitive exists.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.25,
+    buffs: [
+        BuffDesc(kind: BrandingSmite, data: BuffData(strength: 9.0, duration: None)),
+    ],
+    buff_cat: Some(RemoveOnAttack),
+    energy_cost: 90,
+    enforced_limit: true,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Divine),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

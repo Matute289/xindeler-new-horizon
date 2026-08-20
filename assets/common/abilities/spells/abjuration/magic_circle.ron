@@ -1,0 +1,34 @@
+// A 1-hour warded boundary, not a one-shot burst -- corrected from the
+// sheet's own `GroundAoe` tag to `StaticAura`, the same variant correction
+// this school's Wave-1 batch already made for entangle.ron/fog_cloud.ron/
+// grease.ron: `GroundAoe` resolves a single strike (damage/poise/knockback
+// or a `pooled_debuff`) once at cast and has no standalone lingering-zone
+// entity or `aura_duration` field, so it cannot express a boundary that goes
+// on reapplying its effect to anyone who crosses it for a full hour.
+// `StaticAura` (plant_growth.ron's own precedent for a left-behind zone
+// entity) is the real fit. D&D's "repels/hinders a chosen creature type,
+// invertible to trap them instead" has no creature-kind-conditional
+// targeting or invert-the-boundary primitive, so it ships as a flat
+// `DifficultTerrain` zone against `OutOfGroup` targets (the caster's own
+// allies pass through freely) -- "hindering any that try to cross the
+// boundary" is the one half of the sheet's own effect this maps onto
+// directly.
+StaticAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.4,
+    recover_duration: 0.4,
+    energy_cost: 50.0,
+    targets: OutOfGroup,
+    auras: [
+        (
+            kind: DifficultTerrain,
+            strength: 0.5,
+            duration: Some(2.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(3600.0),
+    range: 3.0,
+    sprite_info: None,
+    meta: (school: Some(Abjuration), source: Some(Divine)),
+)

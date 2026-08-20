@@ -1,0 +1,37 @@
+// Same narrowing already established by `divination/true_seeing.ron`: the
+// sheet's `range: Touch` has no touch-a-willing-target mechanism for a
+// `SelfBuff`-shaped sensory spell (that ability variant always lands on the
+// caster), so this grants the caster their own darkvision rather than a
+// willing ally's -- the closest already-shipped sibling for this effect
+// family, followed over the `InGroup`-melee-redirect pattern used elsewhere
+// in this folder since it's the nearer match for "grant a sense", not "apply
+// a combat buff".
+// No `BuffKind` models plain night vision specifically -- `TrueSight`
+// ("pierces concealment, illusion and darkness... for as long as it lasts")
+// is the nearest available primitive and the only one with a darkness-piercing
+// clause; it over-grants relative to real darkvision (also pierces
+// illusion/concealment, not just literal darkness), flagged as a deviation
+// rather than a silent reinterpretation.
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(
+            kind: TrueSight,
+            data: BuffData(
+                strength: 0.0,
+                duration: Some(28800.0),
+                misc_data: Some(Sense(True, 18.0, Continuous)),
+            ),
+        ),
+    ],
+    energy_cost: 30,
+    enforced_limit: true,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 2 spell -> min_level 12, same `level * 6` convention.
+        requirements: (min_level: Some(12)),
+    ),
+)

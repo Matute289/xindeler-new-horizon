@@ -123,6 +123,7 @@ impl CharacterBehavior for Data {
                                 incorporeal,
                                 phantom_illusion,
                                 delete_after_expiry,
+                                pact_chain_summon,
                             } => {
                                 let loadout = {
                                     let loadout_builder =
@@ -236,6 +237,23 @@ impl CharacterBehavior for Data {
 
                                 let delete_after = delete_after_expiry.then(|| *duration).flatten();
 
+                                // N27-O: computed once per `Body` and memoized
+                                // (`cached_npc_summon_cost`), never
+                                // reconstructed per creature -- see that
+                                // function's doc comment. `handle_create_npc`
+                                // reads this same number back to gate and
+                                // charge the Cadena point pool with server
+                                // authority; `requirements_paid` already
+                                // verified the whole batch was affordable
+                                // before this state was ever entered.
+                                let chain_summon_cost = pact_chain_summon.then(|| {
+                                    comp::pact::summon_cost::cached_npc_summon_cost(
+                                        &self.static_data.summon_info,
+                                        data.msm,
+                                        &comp::pact::summon_tuning_manifest().0,
+                                    )
+                                });
+
                                 let mut rng = rand::rng();
                                 // Send server event to create npc
                                 output_events.emit_server(CreateNpcEvent {
@@ -260,7 +278,8 @@ impl CharacterBehavior for Data {
                                     .with_projectile(projectile)
                                     .with_incorporeal(*incorporeal)
                                     .with_phantom_illusion(*phantom_illusion)
-                                    .with_delete_after(delete_after),
+                                    .with_delete_after(delete_after)
+                                    .with_chain_summon_cost(chain_summon_cost),
                                 });
 
                                 // Send local event used for frontend shenanigans
@@ -512,6 +531,14 @@ pub enum SummonInfo {
         /// behaviour unchanged.
         #[serde(default)]
         delete_after_expiry: bool,
+        /// Whether this creature counts against its summoner's Cadena
+        /// (`PactBoon::Chain`) point pool (N27-O). `#[serde(default)]` so
+        /// every pre-existing summon RON -- Conjuration spells, boss/NPC
+        /// adds, admin `/spawn` -- keeps costing nothing; only the new
+        /// `class/warlock/*.ron` Cadena abilities opt in. See
+        /// `comp::pact::summon_cost`.
+        #[serde(default)]
+        pact_chain_summon: bool,
     },
     BeamPillar {
         buildup_duration: f32,

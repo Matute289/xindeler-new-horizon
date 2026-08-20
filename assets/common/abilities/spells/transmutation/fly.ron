@@ -1,0 +1,28 @@
+// Ally-touch buff (sheet range: Touch, "a touched willing ally lifts into the air"). No flight
+// or gravity-ignore system exists anywhere in this engine (checked common/src/comp/buff.rs and
+// common/src/comp/body/mod.rs in full -- no Fly/Levitate BuffKind, no gravity-disable hook).
+// Modeled with the existing Hastened buff (movement speed) as the nearest "moves faster than
+// normal" primitive; the actual vertical/airborne component and the "falls if the buff ends
+// mid-air" rider are both dropped, not silently reinterpreted as anything airborne.
+// Same ally-touch delivery shape as water_breathing.ron in this folder (BasicAura, InGroup, a
+// short-lived aura entity whose own duration is just long enough to land the touch).
+BasicAura(
+    buildup_duration: 0.5,
+    cast_duration: 0.3,
+    recover_duration: 0.3,
+    targets: InGroup,
+    auras: [
+        (
+            kind: Hastened,
+            strength: 0.15,
+            duration: Some(60.0),
+            category: Some(Magical),
+        ),
+    ],
+    aura_duration: Some(1.0),
+    range: 3.0,
+    energy_cost: 70.0,
+    scales_with_combo: false,
+    specifier: None,
+    meta: (school: Some(Transmutation), source: Some(Arcane), cooldown: Some(35.0)),
+)

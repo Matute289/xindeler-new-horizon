@@ -1,0 +1,34 @@
+// "Unable to move without seeming to suffer harm" -- a hold, not a stun;
+// `BuffKind::Rooted` is the closest existing "can't move" primitive
+// (already used this same way by conjuration/entangle.ron and
+// arcane/regal_presence.ron), attached to a BasicRanged psychic hit the
+// same shape as phantasmal_killer.ron/dream.ron. Sheet's "sears its mind
+// with searing pain if it forces its way out" secondary rider dropped --
+// no on-attempt-to-break-free trigger exists as a primitive.
+BasicRanged(
+    energy_cost: 105.0,
+    buildup_duration: 0.55,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 42,
+            buff: Some((
+                kind: Rooted,
+                dur_secs: 10,
+                strength: Value(1.0),
+                chance: 1.0,
+            )),
+            damage_kind: Psychic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Illusion),
+        source: Some(Arcane),
+        // level 6 spell -> min_level 36, the level * 6 convention.
+        requirements: (min_level: Some(36)),
+    ),
+)

@@ -3,9 +3,9 @@ use common::{
     assets::{AssetExt, Ron},
     combat::{self, CombatTuning, DamageContributor},
     comp::{
-        ActiveSense, Alignment, AttunedItems, DerivedStats, Disguise, Energy, Ethos, Group, Health,
-        HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState, Player, Pos,
-        Stats,
+        ActiveSense, Alignment, AttunedItems, DamageReflect, DerivedStats, Disguise, Energy, Ethos,
+        Group, Health, HealthChange, Inventory, LightEmitter, Mass, ModifierKind, PhysicsState,
+        Player, Pos, Stats,
         agent::{Sound, SoundKind},
         attunement::item_effects_active,
         aura::{Auras, EnteredAuras},
@@ -16,6 +16,7 @@ use common::{
         },
         fluid_dynamics::{Fluid, LiquidKind},
         item_condition_buff_data,
+        pact::PactStanding,
     },
     event::{
         BuffEvent, ChangeBodyEvent, ComboChangeEvent, CreateSpriteEvent, EmitExt,
@@ -135,6 +136,7 @@ pub struct ReadData<'a> {
     // BL-01: per-class + per-level permanent attribute scaling (applied with racial passives).
     character_classes: ReadStorage<'a, common::comp::CharacterClass>,
     skill_sets: ReadStorage<'a, common::comp::SkillSet>,
+    pacts: ReadStorage<'a, common::comp::Pact>,
 }
 
 #[derive(Default)]
@@ -647,6 +649,22 @@ impl<'a> System<'a> for Sys {
             // Call to reset stats to base values
             stat.reset_temp_modifiers();
 
+            // A Warlock whose pact is severed can't draw on their patron.
+            // Reuses the same `disable_magic` flag an antimagic field sets
+            // (`BuffEffect::DisableMagic` below): every ability whose
+            // `source` is `Some(_)` already refuses to fire while it's set
+            // (`states/utils.rs`), while `source: None` (physical) abilities
+            // are untouched. Unlike a buff this has no expiry to manage: it
+            // simply re-applies every tick for as long as the pact stays
+            // severed.
+            if read_data
+                .pacts
+                .get(entity)
+                .is_some_and(|pact| pact.standing == PactStanding::Severed)
+            {
+                stat.disable_magic = true;
+            }
+
             // Racial passives re-apply each tick right after the reset so
             // they stack with buffs and need no persistence (spec §6).
             if let Body::Humanoid(humanoid_body) = *body {
@@ -1153,6 +1171,19 @@ fn execute_effect(
         BuffEffect::FalseAura(kind) => stat.false_aura = Some(*kind),
         BuffEffect::Accuracy(acc) => stat.accuracy += *acc,
         BuffEffect::Evasion(eva) => stat.evasion += *eva,
+        // Content-agnostic: the attack path applies whatever lands here
+        // without knowing which buff produced it. `fraction` is floored at 0
+        // so a mis-authored negative can never turn a reflect into a *heal*
+        // for the attacker, and `cap` is floored at 0 for the same reason.
+        BuffEffect::ReflectDamage {
+            fraction,
+            cap,
+            kind,
+        } => stat.damage_reflect.push(DamageReflect {
+            fraction: fraction.max(0.0),
+            cap: cap.max(0.0),
+            kind: *kind,
+        }),
         BuffEffect::Stealth(s) => stat.stealth += *s,
         BuffEffect::CritChance(cc) => stat.crit_chance += *cc,
         BuffEffect::Resistance(kind, amount) => stat.add_resistance(*kind, *amount),

@@ -1,0 +1,32 @@
+// Second `SpriteSummon` player spell -- see glyph_of_warding.ron's own
+// comment for the full pilot writeup of what this variant can and can't do
+// (no energy_cost field, no damage/buff/trigger capability at all, only
+// `CreateSpriteEvent` placement). Same real gap applies here, plus one more:
+// D&D's "a second glyph elsewhere, linked so triggering one fires the
+// other's stored effect" has no cross-reference mechanism between two
+// separate ability casts whatsoever -- there is no way for one `SpriteSummon`
+// invocation to know about, or affect, sprites placed by an earlier one.
+// That entire "linked" half of the spell's concept is dropped, not
+// approximated.
+//
+// The sheet gives no aoe/range for this spell (unlike glyph_of_warding's
+// explicit `Sphere r6`), consistent with "a single trigger-glyph" rather
+// than a warded area -- so this ships as a single, dense marker at the
+// touched spot (`summon_distance: (0, 1)`, `sparseness: 0.0`) instead of
+// glyph_of_warding's wider ring, using the same `EnsnaringVines` obstruction
+// sprite for the same "physically awkward to walk through" secondary
+// footprint, and the same long `del_timeout` lingering window.
+SpriteSummon(
+    buildup_duration: 0.6,
+    cast_duration: 0.4,
+    recover_duration: 0.4,
+    sprite: EnsnaringVines,
+    del_timeout: Some((600.0, 60.0)),
+    summon_distance: (0.0, 1.0),
+    sparseness: 0.0,
+    angle: 360.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (school: Some(Abjuration), source: Some(Arcane)),
+)

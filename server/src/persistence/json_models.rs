@@ -104,6 +104,7 @@ pub fn skill_group_to_db_string(skill_group: comp::skillset::SkillGroupKind) -> 
         Class(ClassKind::Artificer) => "Class Artificer",
         Class(ClassKind::BloodSlayer) => "Class BloodSlayer",
         Feats => "Feats",
+        PactBlade => "PactBlade",
         // Adventurer has no class tree; a Class(Adventurer) group reaching
         // persistence is a bug, consistent with the unsupported-weapon arm.
         Class(ClassKind::Adventurer) => panic!(
@@ -169,6 +170,7 @@ pub fn db_string_to_skill_group(skill_group_string: &str) -> comp::skillset::Ski
         "Class Artificer" => Class(ClassKind::Artificer),
         "Class BloodSlayer" => Class(ClassKind::BloodSlayer),
         "Feats" => Feats,
+        "PactBlade" => PactBlade,
 
         _ => panic!(
             "Tried to convert an unsupported string from the database: {}",
@@ -227,6 +229,57 @@ pub fn db_string_to_background(
         tracing::warn!(
             unknown = ?background_string,
             "Unknown background in database, defaulting to Uncommitted (None)"
+        );
+        None
+    })
+}
+
+/// db-string for `PactStanding` variants.
+pub fn pact_standing_to_db_string(standing: comp::pact::PactStanding) -> String {
+    standing.keyword().to_string()
+}
+
+/// Unlike the skill-group converter this never panics: unknown strings fall
+/// back to `Bound` with a warning, matching `Pact`'s own fail-open default.
+pub fn db_string_to_pact_standing(standing_string: &str) -> comp::pact::PactStanding {
+    comp::pact::PactStanding::from_keyword(standing_string).unwrap_or_else(|| {
+        tracing::warn!(
+            unknown = ?standing_string,
+            "Unknown pact standing in database, defaulting to Bound"
+        );
+        comp::pact::PactStanding::Bound
+    })
+}
+
+/// db-string for `PatronId` variants.
+pub fn patron_id_to_db_string(patron: comp::pact::PatronId) -> String {
+    patron.keyword().to_string()
+}
+
+/// Unlike the skill-group converter this never panics: unknown or
+/// unrecognized strings fall back to `None` (no patron chosen) with a
+/// warning so a DB downgrade never bricks a save.
+pub fn db_string_to_patron_id(patron_string: &str) -> Option<comp::pact::PatronId> {
+    comp::pact::PatronId::from_keyword(patron_string).or_else(|| {
+        tracing::warn!(
+            unknown = ?patron_string,
+            "Unknown pact patron in database, defaulting to None"
+        );
+        None
+    })
+}
+
+/// db-string for `PactBoon` variants.
+pub fn pact_boon_to_db_string(boon: comp::pact::PactBoon) -> String { boon.keyword().to_string() }
+
+/// Unlike the skill-group converter this never panics: unknown or
+/// unrecognized strings fall back to `None` (no boon chosen) with a warning
+/// so a DB downgrade never bricks a save.
+pub fn db_string_to_pact_boon(boon_string: &str) -> Option<comp::pact::PactBoon> {
+    comp::pact::PactBoon::from_keyword(boon_string).or_else(|| {
+        tracing::warn!(
+            unknown = ?boon_string,
+            "Unknown pact boon in database, defaulting to None"
         );
         None
     })
@@ -801,6 +854,7 @@ pub mod tests {
             SkillGroupKind::Class(ClassKind::Mage),
             SkillGroupKind::Class(ClassKind::Cleric),
             SkillGroupKind::Class(ClassKind::Rogue),
+            SkillGroupKind::PactBlade,
         ];
         for kind in kinds {
             assert_eq!(

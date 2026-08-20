@@ -524,6 +524,23 @@ fn grant_skill_point_unlocks_group_if_missing() {
     assert_eq!(skill_set.earned_sp(SkillGroupKind::Feats), 1);
 }
 
+/// The Blade pact-boon's skill group is the same "directly granted" shape
+/// as `Feats`: before its first `grant_skill_point` call (the blade's own
+/// XP-track hook), the group does not exist at all, so a stray
+/// `add_experience` call -- nothing in the game ever makes one for this
+/// group -- is a no-op rather than silently creating a purchasable pool.
+#[test]
+fn pact_blade_points_cannot_be_earned_via_the_normal_exp_economy_before_first_grant() {
+    let mut skill_set = SkillSet::default();
+    assert!(!skill_set.skill_group_accessible(SkillGroupKind::PactBlade));
+
+    let earned = skill_set.add_experience(SkillGroupKind::PactBlade, 1_000_000);
+
+    assert_eq!(earned, None);
+    assert!(!skill_set.skill_group_accessible(SkillGroupKind::PactBlade));
+    assert_eq!(skill_set.available_sp(SkillGroupKind::PactBlade), 0);
+}
+
 #[test]
 fn feat_modifiers_manifest_integrity() {
     // Every modifier entry must be a real skill living in the Feats skill

@@ -1,0 +1,36 @@
+// Second `SpriteSummon` wall in this folder -- see wall_of_sand.ron's
+// header for the full write-up of the variant's real behavior (no
+// `energy_cost` field, no attack/aura field so all riders drop, no line-
+// shaped placement primitive). This spell's "quenching flames" /
+// "slowing ranged projectiles" riders are dropped for the same reason:
+// `SpriteSummon` cannot attach any effect, only place solid terrain.
+//
+// No liquid-water solid sprite exists in the terrain catalogue (still
+// water isn't represented as a `solid_height` sprite at all).
+// `SpriteKind::SeaDecorBlock` (`solid_height: 1.00` --
+// common/src/terrain/sprite/mod.rs) is the closest available *solid*,
+// sea-themed sprite -- a documented flavor drift, same as wall_of_sand's
+// `TallCactus` choice and this batch's hardcoded-`DamageKind` notes.
+// (Deliberately not `IceSpike`, also solid: that reads as a frost/ice
+// effect, which would misrepresent this spell's water flavor even more
+// than a neutral sea-decor block does.)
+//
+// Sheet's "up to 9 m long, 3 m high, 0.3 m thick" collapses to the same
+// `summon_distance`/`sparseness`/`angle` shape as wall_of_sand.ron -- the
+// engine has no separate length/height/thickness controls, only a radial
+// scatter band, so the precise dimensions aren't separately modelable.
+// `anchor: Target` matches the sheet's 18 m cast range.
+SpriteSummon(
+    buildup_duration: 0.8,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    sprite: SeaDecorBlock,
+    del_timeout: Some((58, 4)),
+    summon_distance: (0, 3),
+    sparseness: 0.25,
+    angle: 90.0,
+    anchor: Target,
+    move_efficiency: 0.3,
+    ori_modifier: 1.0,
+    meta: (school: Some(Evocation), source: Some(Arcane), cooldown: Some(24.0)),
+)

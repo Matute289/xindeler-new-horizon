@@ -1,0 +1,26 @@
+// Poison bolt plus a sickened-on-hit rider, modeled with the existing
+// Sickened BuffKind (see eyebite_sickened.ron for this school's own
+// precedent use of this buff). Weaker/shorter than eyebite_sickened's
+// application since that is a much higher-circle spell.
+BasicRanged(
+    energy_cost: 30.0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 16,
+            buff: Some((
+                kind: Sickened,
+                dur_secs: 6,
+                strength: Value(0.3),
+                chance: 1.0,
+            )),
+            damage_kind: Poison,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

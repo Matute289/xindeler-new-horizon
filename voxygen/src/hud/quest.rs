@@ -18,6 +18,7 @@ use std::{
 use crate::{
     GlobalState,
     ui::{TooltipManager, fonts::Fonts},
+    window::MenuInput,
 };
 use inline_tweak::*;
 
@@ -67,6 +68,7 @@ pub struct Quest<'a> {
     dialogue: &'a rtsim::Dialogue<true>,
     recv_time: Instant,
     pulse: f32,
+    menu_events: &'a [MenuInput],
 
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
@@ -87,6 +89,7 @@ impl<'a> Quest<'a> {
         dialogue: &'a rtsim::Dialogue<true>,
         recv_time: Instant,
         pulse: f32,
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             _show,
@@ -102,6 +105,7 @@ impl<'a> Quest<'a> {
             dialogue,
             recv_time,
             pulse,
+            menu_events,
             common: widget::CommonBuilder::default(),
         }
     }
@@ -174,6 +178,14 @@ impl Widget for Quest<'_> {
     fn update(self, args: widget::UpdateArgs<Self>) -> Self::Event {
         let widget::UpdateArgs { state, ui, .. } = args;
         let mut event = None;
+
+        // MENU INPUTS: `Back` closes the quest window, same as the X button.
+        // No dpad navigation of the response list yet (later phase).
+        for key in self.menu_events {
+            if let MenuInput::Back = key {
+                event = Some(Event::Close);
+            }
+        }
 
         // Window BG
         // TODO: It would be nice to use `RoundedRectangle` here, but unfortunately it

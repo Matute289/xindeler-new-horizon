@@ -1,0 +1,21 @@
+// The sheet's own notes flag the random-element-roll and chain-on-matching-
+// roll rider as unsupported by BasicRanged; ships as a fixed single-target
+// Acid bolt (the sheet's own "listed as Acid as the first element"
+// convention), same drop already flagged at the content-sheet stage rather
+// than discovered here.
+BasicRanged(
+    energy_cost: 30,
+    buildup_duration: 0.4,
+    recover_duration: 0.35,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 20,
+            damage_kind: Acid,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

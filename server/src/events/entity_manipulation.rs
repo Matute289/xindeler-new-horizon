@@ -27,16 +27,18 @@ use common::{
     },
     comp::{
         self, Alignment, Auras, BASE_ABILITY_LIMIT, Body, BuffCategory, BuffEffect, CharacterClass,
-        CharacterState, Energy, Group, Hardcore, Health, HealthChange, Inventory, Object,
-        PhantomIllusion, PickupItem, Player, Poise, PoiseChange, Pos, Presence, PresenceKind,
-        ProjectileConstructor, Skill, SkillSet, SpellMastery, Stats,
+        CharacterState, ChatType, Content, Energy, Group, Hardcore, Health, HealthChange,
+        Inventory, Object, PhantomIllusion, PickupItem, Player, Poise, PoiseChange, Pos, Presence,
+        PresenceKind, ProjectileConstructor, Skill, SkillSet, SpellMastery, Stats,
         ability::{Dodgeable, MagicSource},
         aura::{self, EnteredAuras},
         buff,
         chat::{KillSource, KillType},
+        ethos::Moral,
         inventory::item::{AbilityMap, MaterialStatManifest},
         item::flatten_counted_items,
         loot_owner::{LootOwnerKind, ONWERSHIP_TIMEOUT_SLOW},
+        pact::{Pact, PactBoon, blade_names_manifest},
         projectile::{ProjectileAttack, ProjectileConstructorKind, ProjectileExplosionTarget},
         skills::MageSkill,
         spell_mastery::{
@@ -76,7 +78,7 @@ use common::{
 use common_net::{msg::ServerGeneral, sync::WorldSyncExt, synced_components::Heads};
 use common_state::{AreasContainer, BlockChange, NoDurabilityArea, ScheduledBlockChange};
 use hashbrown::HashSet;
-use rand::RngExt;
+use rand::{RngExt, seq::IndexedRandom};
 use specs::{
     DispatcherBuilder, Entities, Entity as EcsEntity, Entity, Join, LendJoin, Read, ReadExpect,
     ReadStorage, SystemData, WorldExt, Write, WriteExpect, WriteStorage, shred,
@@ -225,10 +227,90 @@ event_emitters! {
 }
 
 pub fn handle_delete(server: &mut Server, DeleteEvent(entity): DeleteEvent) {
+    // N27-O: release this entity's Cadena (`PactBoon::Chain`) summon-pool
+    // charge, if it has one, before it is torn down. `DeleteEvent` is the
+    // single funnel every summon exit route already shares -- creature
+    // death (`DestroyEvent`'s handler emits it), lifetime expiry
+    // (`common_systems::projectile`'s `time_left == ZERO` emits it), and
+    // dismiss (`DismissSummonEvent`'s handler emits it, see
+    // `server::events::interaction`) -- so the ledger is decremented from
+    // exactly one place no matter which route ended this entity's life,
+    // never a second independently-driven timer. A non-summon deletion (the
+    // overwhelming majority of calls here) finds no matching ledger entry
+    // and is a harmless no-op.
+    release_chain_summon_charge(server.state.ecs(), entity);
+
     let _ = server
         .state_mut()
         .delete_entity_recorded(entity)
         .map_err(|e| error!(?e, ?entity, "Failed to delete destroyed entity"));
+}
+
+/// See `handle_delete`'s doc comment. Takes `&specs::World` (not `&mut
+/// Server`) purely so it is unit-testable without constructing a full
+/// `Server` -- mirrors `server::pet::tame_pet`'s own `ecs: &specs::World`
+/// shape for the same reason. `pub(crate)`, not `pub(super)`: also called
+/// from `banishment::park_newly_banished` -- `/banish`-ing a live Cadena
+/// summon parks rather than deletes it (never reaching `handle_delete`'s own
+/// call to this), and without a second call site here that charge would
+/// otherwise sit stuck on the owner's ledger for as long as the summon
+/// stays parked, since nothing else ever frees it for that exit route.
+pub(crate) fn release_chain_summon_charge(ecs: &specs::World, entity: EcsEntity) {
+    let Some(summon_uid) = ecs.read_storage::<Uid>().get(entity).copied() else {
+        return;
+    };
+    let owner_uid =
+        ecs.read_storage::<Alignment>()
+            .get(entity)
+            .and_then(|alignment| match alignment {
+                Alignment::Owned(owner_uid) => Some(*owner_uid),
+                _ => None,
+            });
+    let Some(owner) = owner_uid.and_then(|owner_uid| ecs.entity_from_uid(owner_uid)) else {
+        return;
+    };
+    if let Some(mut summons) = ecs.write_storage::<comp::Summons>().get_mut(owner) {
+        summons.release(summon_uid);
+    }
+}
+
+/// Pure: which live entities to dismiss for a dying or logged-out Cadena
+/// Warlock, given their `Summons` ledger and a `Uid` resolver. Both the
+/// owner-death path (this file's `DestroyEvent` handler, below) and the
+/// owner-logout path (`server::events::player::dismiss_active_chain_summons`)
+/// resolve the SAME way through this one function, then each emits
+/// `DeleteEvent` for every entity it returns through whichever emitter their
+/// own handler context provides -- kept pure (no `Server`/`SystemData`) so it
+/// is fully unit-testable on its own.
+pub(crate) fn summons_to_dismiss(
+    summons: Option<&comp::Summons>,
+    id_maps: &IdMaps,
+) -> Vec<EcsEntity> {
+    summons
+        .into_iter()
+        .flat_map(|summons| summons.active.iter())
+        .filter_map(|(summon_uid, _cost)| id_maps.uid_entity(*summon_uid))
+        .collect()
+}
+
+/// Resolves via [`summons_to_dismiss`] and emits a `DeleteEvent` for each --
+/// the entire "the owner is gone" step, shared by both call sites (a real
+/// death, this file's `DestroyEvent` handler, and a logout,
+/// `server::events::player::dismiss_active_chain_summons`) so the two routes
+/// share not just the resolution logic but the emission step too, and can
+/// never independently drift in what "dismiss the owner's summons" means.
+/// Takes a closure rather than a concrete `Emitter` type because the two
+/// call sites hold different emitter shapes (a single-event `Emitter<'_,
+/// DeleteEvent>` for the logout path, a multi-event bundle for the death
+/// path) with no common trait to abstract over otherwise.
+pub(crate) fn dismiss_owners_summons(
+    summons: Option<&comp::Summons>,
+    id_maps: &IdMaps,
+    mut emit_delete: impl FnMut(DeleteEvent),
+) {
+    for summon_entity in summons_to_dismiss(summons, id_maps) {
+        emit_delete(DeleteEvent(summon_entity));
+    }
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -646,6 +728,56 @@ impl ServerEvent for KnockbackEvent {
             }
         }
     }
+}
+
+/// Feeds a Blade pact-boon's own weapon-XP track from one already-filtered
+/// entry of the kill-award loop's `exp_awards` -- the same `exp_reward` the
+/// attacker's `SkillSet` is credited with, so this inherits every anti-farm
+/// rule the enclosing loop already enforces (range, no self-kills, no PvP,
+/// the group-XP split, and pets/summons never appearing as their owner's own
+/// `Solo`/`Group` contributor in the first place).
+///
+/// A no-op unless `pact.boon == Some(Blade)` and `pact.blade_summoned` --
+/// the blade only earns while it is actually manifest. Grants exactly one
+/// `SkillGroupKind::PactBlade` skill point per tier threshold crossed by
+/// this call (never more than one per tier, however large a single kill's
+/// reward is), and rolls the tier-5 self-naming exactly once, the moment
+/// tier 5 is first reached, from `moral`'s band in [`blade_names_manifest`].
+///
+/// Returns the highest tier crossed, for the caller to announce over
+/// `ChatType::Meta` -- `None` on every call that doesn't cross a tier (the
+/// overwhelming majority of kills).
+fn accrue_blade_exp(
+    pact: &mut Pact,
+    skill_set: &mut SkillSet,
+    exp_reward: f32,
+    moral: Moral,
+    rng: &mut impl rand::Rng,
+) -> Option<u8> {
+    if pact.boon != Some(PactBoon::Blade) || !pact.blade_summoned {
+        return None;
+    }
+
+    let tier_before = pact.blade_tier();
+    pact.blade_exp = pact.blade_exp.saturating_add(exp_reward.max(0.0) as u32);
+    let tier_after = pact.blade_tier();
+    if tier_after <= tier_before {
+        return None;
+    }
+
+    for _ in tier_before..tier_after {
+        skill_set.grant_skill_point(SkillGroupKind::PactBlade);
+    }
+
+    if tier_after >= 5 && pact.blade_name.is_none() {
+        pact.blade_name = blade_names_manifest()
+            .0
+            .get(&moral)
+            .and_then(|band| band.choose(rng))
+            .cloned();
+    }
+
+    Some(tier_after)
 }
 
 fn handle_exp_gain(
@@ -1075,6 +1207,262 @@ mod handle_exp_gain_tests {
             "martial-staff kill XP must not be misrouted to the caster Weapon(Staff) tree, got \
              {xp_pools:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod accrue_blade_exp_tests {
+    use super::*;
+    use common::comp::{PactBoon, PactStanding, ethos::Moral, pact::Pact};
+
+    fn blade_pact(blade_exp: u32) -> Pact {
+        Pact {
+            standing: PactStanding::Bound,
+            patron: None,
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            blade_exp,
+            blade_name: None,
+            talisman_bearer: None,
+            favour: 0,
+        }
+    }
+
+    fn available_sp(skill_set: &SkillSet, kind: SkillGroupKind) -> u16 {
+        skill_set
+            .skill_groups()
+            .find(|sg| sg.skill_group_kind == kind)
+            .map_or(0, |sg| sg.available_sp)
+    }
+
+    #[test]
+    fn not_summoned_earns_nothing() {
+        let mut pact = blade_pact(0);
+        pact.blade_summoned = false;
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            10_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 0, "un-summoned kills must not accrue XP");
+        assert_eq!(available_sp(&skill_set, SkillGroupKind::PactBlade), 0);
+    }
+
+    #[test]
+    fn summoned_accrues_xp_and_crosses_tier_one() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(&mut pact, &mut skill_set, 5_000.0, Moral::Neutral, &mut rng);
+
+        assert_eq!(tier, Some(1));
+        assert_eq!(pact.blade_exp, 5_000);
+        assert_eq!(pact.blade_tier(), 1);
+        assert!(pact.blade_voice_unlocked());
+        assert_eq!(
+            available_sp(&skill_set, SkillGroupKind::PactBlade),
+            1,
+            "exactly one PactBlade skill point per tier crossed"
+        );
+    }
+
+    #[test]
+    fn a_below_threshold_gain_earns_xp_but_no_skill_point() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(&mut pact, &mut skill_set, 1_000.0, Moral::Neutral, &mut rng);
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 1_000);
+        assert_eq!(pact.blade_tier(), 0);
+        assert_eq!(available_sp(&skill_set, SkillGroupKind::PactBlade), 0);
+    }
+
+    #[test]
+    fn a_boon_other_than_blade_earns_nothing_even_if_marked_summoned() {
+        let mut pact = blade_pact(0);
+        pact.boon = Some(PactBoon::Chain);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            50_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 0);
+    }
+
+    #[test]
+    fn no_boon_chosen_earns_nothing() {
+        let mut pact = blade_pact(0);
+        pact.boon = None;
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            50_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, None);
+        assert_eq!(pact.blade_exp, 0);
+    }
+
+    /// A single huge gain that jumps clean past several thresholds grants
+    /// exactly one skill point per tier crossed, never one lump sum and
+    /// never one point total.
+    #[test]
+    fn a_huge_single_gain_grants_one_skill_point_per_tier_crossed() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        // 0 -> 75,000 crosses tiers 1, 2 and 3 in one call.
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            75_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(tier, Some(3));
+        assert_eq!(available_sp(&skill_set, SkillGroupKind::PactBlade), 3);
+    }
+
+    #[test]
+    fn tier_five_picks_a_name_from_the_wielders_moral_band() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        // Deliberately far above any realistic tier-5 threshold, so this
+        // test stays correct if the ladder in blade_tiers.ron is retuned.
+        let tier = accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            1_000_000.0,
+            Moral::Evil,
+            &mut rng,
+        );
+
+        assert_eq!(tier, Some(5));
+        let name = pact.blade_name.clone().expect("tier 5 must pick a name");
+        let names = common::comp::pact::blade_names_manifest();
+        assert!(
+            names.0[&Moral::Evil].contains(&name),
+            "{name:?} must come from the Evil band"
+        );
+    }
+
+    /// The name is a one-time baptism, not a live-updating value: once set,
+    /// it survives further XP gains and even a later change in the moral
+    /// band passed in (modelling the wielder's `Ethos` drifting afterwards).
+    #[test]
+    fn the_blade_name_never_changes_once_set() {
+        let mut pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        accrue_blade_exp(
+            &mut pact,
+            &mut skill_set,
+            1_000_000.0,
+            Moral::Good,
+            &mut rng,
+        );
+        let first_name = pact.blade_name.clone().expect("tier 5 must pick a name");
+
+        // More XP after tier 5, and a different moral reading -- must not
+        // re-roll the name.
+        accrue_blade_exp(&mut pact, &mut skill_set, 10_000.0, Moral::Evil, &mut rng);
+
+        assert_eq!(pact.blade_name, Some(first_name));
+    }
+
+    /// `accrue_blade_exp` only ever reads/writes the exact `Pact` and
+    /// `SkillSet` references its caller passes in -- there is no owner
+    /// lookup, entity resolution, or global state anywhere inside it. This
+    /// is what makes the production hook's anti-farm guarantee hold: since
+    /// the caller (`DestroyEvent::handle`'s kill-award loop) only ever
+    /// passes the credited `attacker`'s own `Pact`, and a Cadena summon
+    /// never itself has a `Pact` component (only `/pact bind` on a Warlock
+    /// creates one) and never receives a group-XP-award credit of its own
+    /// (`Alignment::Owned` is excluded from `members_in_range` above), a
+    /// summon's kill can only ever reach this function via the OWNER's own
+    /// legitimate group-membership credit -- never as a shortcut that
+    /// bypasses the exclusion. This test proves the isolation half of that
+    /// argument: feeding one `Pact` never mutates a second, unrelated one.
+    #[test]
+    fn feeding_one_pact_never_touches_a_different_pact() {
+        let mut warlocks_pact = blade_pact(0);
+        let some_other_entitys_pact = blade_pact(0);
+        let mut skill_set = SkillSet::default();
+        let mut rng = rand::rng();
+
+        accrue_blade_exp(
+            &mut warlocks_pact,
+            &mut skill_set,
+            50_000.0,
+            Moral::Neutral,
+            &mut rng,
+        );
+
+        assert_eq!(warlocks_pact.blade_exp, 50_000);
+        assert_eq!(
+            some_other_entitys_pact.blade_exp, 0,
+            "a call that credits one Pact must never credit a different one"
+        );
+    }
+
+    /// Mirrors the group-XP-split's member-eligibility filter in
+    /// `DestroyEvent::handle` (`*member_group == *group && within_range(..)
+    /// && !is_pvp_kill(..) && !matches!(alignment,
+    /// Some(Alignment::Owned(owner)) if owner != uid)`), the rule that
+    /// keeps a Cadena summon from ever being credited its own share of a
+    /// group kill. A summon's `Alignment::Owned(owner)` (owner != the
+    /// summon's own uid) is always excluded; the owning Warlock, who
+    /// typically carries no `Alignment` component at all, is always
+    /// included.
+    #[test]
+    fn owned_summons_are_excluded_from_group_award_eligibility_but_their_owner_is_not() {
+        use common::{comp::Alignment, uid::Uid};
+        use core::num::NonZeroU64;
+
+        fn eligible(alignment: Option<Alignment>, member_uid: Uid) -> bool {
+            // same_group / within_range / !is_pvp_kill are asserted true by
+            // this test's setup; only the alignment clause is exercised.
+            !matches!(alignment, Some(Alignment::Owned(owner)) if owner != member_uid)
+        }
+
+        let warlock_uid = Uid(NonZeroU64::new(1).unwrap());
+        let summon_uid = Uid(NonZeroU64::new(2).unwrap());
+
+        // The Warlock: no Alignment component (the common case for a
+        // player), so the pattern never matches -> eligible.
+        assert!(eligible(None, warlock_uid));
+
+        // The summon: Alignment::Owned(warlock), owner != its own uid ->
+        // excluded.
+        assert!(!eligible(Some(Alignment::Owned(warlock_uid)), summon_uid));
     }
 }
 
@@ -1702,6 +2090,9 @@ pub struct DestroyEventData<'a> {
     groups: ReadStorage<'a, Group>,
     alignments: ReadStorage<'a, Alignment>,
     ethos: WriteStorage<'a, comp::Ethos>,
+    /// The kill-award loop's Blade-boon XP hook reads/writes this alongside
+    /// `skill_sets` for the attacking entity; see `accrue_blade_exp`.
+    pacts: WriteStorage<'a, Pact>,
     stats: ReadStorage<'a, Stats>,
     agents: ReadStorage<'a, Agent>,
     #[cfg(feature = "worldgen")]
@@ -1712,6 +2103,10 @@ pub struct DestroyEventData<'a> {
     orientations: ReadStorage<'a, comp::Ori>,
     combos: ReadStorage<'a, comp::Combo>,
     gameplay_metrics: ReadExpect<'a, GameplayMetrics>,
+    /// N27-O: read (never written here) so a dying Warlock's active Cadena
+    /// summons can be dismissed alongside them -- see this handler's
+    /// `data.clients.contains(ev.entity)` branch.
+    summons: ReadStorage<'a, comp::Summons>,
     /// Written, not read: a genuine kill *revokes* the entity's banishment.
     /// Only reachable with `worldgen`, since without rtsim nothing ever
     /// inserts the marker in the first place.
@@ -2561,6 +2956,59 @@ impl ServerEvent for DestroyEvent {
                             &mut outcomes,
                         );
 
+                        // Blade pact-boon: feed the blade's own XP track.
+                        // Reuses this closure's already-filtered
+                        // `exp_reward` entry, so it inherits every anti-farm
+                        // rule the loop above enforces for free -- including
+                        // pets/summons never appearing as their owner's own
+                        // `Solo`/`Group` contributor in the first place.
+                        //
+                        // Gated on an immutable read first: `Pact` is a
+                        // `DerefFlaggedStorage` specifically so *unrelated*
+                        // pact reads/writes don't force a full net resync of
+                        // every field on it (`blade_name` included) to every
+                        // nearby observer. `get_mut` alone doesn't fire that
+                        // -- but passing its `&mut` guard into a function
+                        // expecting `&mut Pact` deref-coerces it, and THAT
+                        // does fire `Modified`, unconditionally, even on
+                        // every non-Blade Warlock's every kill. The
+                        // pre-check keeps that flag reserved for kills that
+                        // actually touch the blade's XP.
+                        let is_summoned_blade = data
+                            .pacts
+                            .get(*attacker)
+                            .is_some_and(|p| p.boon == Some(PactBoon::Blade) && p.blade_summoned);
+                        if is_summoned_blade && let Some(mut pact) = data.pacts.get_mut(*attacker) {
+                            let moral = data
+                                .ethos
+                                .get(*attacker)
+                                .copied()
+                                .unwrap_or_default()
+                                .moral();
+                            if let Some(new_tier) = accrue_blade_exp(
+                                &mut pact,
+                                &mut attacker_skill_set,
+                                *exp_reward,
+                                moral,
+                                &mut rng,
+                            ) && let Some(client) = data.clients.get(*attacker)
+                            {
+                                let key = format!("hud-pact-blade-tier-{new_tier}");
+                                let content = if new_tier == 5 {
+                                    Content::localized_with_args(key, [(
+                                        "name",
+                                        Content::Plain(pact.blade_name.clone().unwrap_or_default()),
+                                    )])
+                                } else {
+                                    Content::localized(key)
+                                };
+                                client.send_fallible(ServerGeneral::server_msg(
+                                    ChatType::Meta,
+                                    content,
+                                ));
+                            }
+                        }
+
                         // Mastery crediting piggybacks on the same
                         // already-filtered `exp_awards` entry: self-kills and
                         // PvP never reach this closure at all (filtered
@@ -2605,6 +3053,23 @@ impl ServerEvent for DestroyEvent {
                 }
                 if let Some(mut character_state) = data.character_states.get_mut(ev.entity) {
                     *character_state = CharacterState::default();
+                }
+
+                // N27-O: a player's own death never deletes their entity
+                // (it resets `CharacterState` and waits for respawn, as
+                // above) -- so it never reaches this handler's own
+                // `DeleteEvent` funnel, and a dying Warlock's Cadena
+                // summons would otherwise be orphaned rather than freed.
+                // Dismiss them explicitly, through the SAME shared helper
+                // `player::dismiss_active_chain_summons` calls for a
+                // logout (not just the same underlying resolution logic --
+                // the identical resolve-then-emit step), routing through
+                // the SAME `DeleteEvent` funnel so `handle_delete` frees
+                // the ledger identically either way.
+                if is_kill {
+                    dismiss_owners_summons(data.summons.get(ev.entity), &data.id_maps, |ev| {
+                        emitters.emit(ev)
+                    });
                 }
 
                 false
@@ -5510,5 +5975,181 @@ pub fn handle_start_interaction(
     let t = interaction.target;
     if let Err(e) = server.state.link(interaction) {
         debug!("Error trying to start interaction between {i:?} and {t:?}: {e:?}");
+    }
+}
+
+/// N27-O: `release_chain_summon_charge` (the `handle_delete` funnel every
+/// summon exit route shares -- death, lifetime expiry, dismiss) and
+/// `summons_to_dismiss` (the pure logic behind the owner-death and
+/// owner-logout exit routes). Together these cover all five exit routes the
+/// acceptance bar names, without needing to construct a full `Server` or a
+/// full `DestroyEventData`/`SystemData`.
+#[cfg(test)]
+mod chain_summon_release_tests {
+    use super::*;
+    use common::comp::pact::Summons;
+    use specs::{Builder, World, WorldExt};
+
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.insert(IdMaps::new());
+        world.register::<Uid>();
+        world.register::<Alignment>();
+        world.register::<Summons>();
+        world
+    }
+
+    fn spawn(world: &mut World) -> (EcsEntity, Uid) {
+        let entity = world.create_entity().build();
+        let uid = {
+            let mut uids = world.write_component::<Uid>();
+            let mut id_maps = world.write_resource::<IdMaps>();
+            let uid = id_maps.allocate(entity);
+            uids.insert(entity, uid)
+                .expect("fresh entity, insert must succeed");
+            uid
+        };
+        (entity, uid)
+    }
+
+    /// Covers the "creature dies" and "lifetime expiry" exit routes at
+    /// once: both funnel into `handle_delete` -> `release_chain_summon_charge`
+    /// identically, regardless of which one actually deleted the entity.
+    #[test]
+    fn releasing_a_charged_summon_frees_exactly_its_own_cost() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        world
+            .write_component::<Alignment>()
+            .insert(summon_a, Alignment::Owned(owner_uid))
+            .unwrap();
+        world
+            .write_component::<Alignment>()
+            .insert(summon_b, Alignment::Owned(owner_uid))
+            .unwrap();
+        {
+            let mut summons = Summons::default();
+            summons.charge(summon_a_uid, 3);
+            summons.charge(summon_b_uid, 7);
+            world
+                .write_component::<Summons>()
+                .insert(owner, summons)
+                .unwrap();
+        }
+
+        release_chain_summon_charge(&world, summon_a);
+
+        let ledger = world.read_component::<Summons>();
+        let ledger = ledger.get(owner).expect("owner still has a ledger");
+        assert_eq!(
+            ledger.spent(),
+            7,
+            "only summon_a's 3 points should be freed"
+        );
+        assert_eq!(ledger.active, vec![(summon_b_uid, 7)]);
+    }
+
+    #[test]
+    fn releasing_a_non_summon_entity_is_a_harmless_no_op() {
+        let mut world = mock_world();
+        let (owner, owner_uid) = spawn(&mut world);
+        {
+            let mut summons = Summons::default();
+            summons.charge(owner_uid, 5);
+            world
+                .write_component::<Summons>()
+                .insert(owner, summons)
+                .unwrap();
+        }
+        // No `Alignment` at all -- the overwhelming-majority case for
+        // `handle_delete`'s callers.
+        let (bystander, _) = spawn(&mut world);
+
+        release_chain_summon_charge(&world, bystander);
+
+        let ledger = world.read_component::<Summons>();
+        assert_eq!(ledger.get(owner).unwrap().spent(), 5);
+    }
+
+    #[test]
+    fn releasing_an_owned_entity_whose_owner_has_no_ledger_is_a_no_op() {
+        let mut world = mock_world();
+        let (_owner, owner_uid) = spawn(&mut world);
+        let (unrelated_pet, _) = spawn(&mut world);
+        world
+            .write_component::<Alignment>()
+            .insert(unrelated_pet, Alignment::Owned(owner_uid))
+            .unwrap();
+        // `owner` has no `Summons` at all -- e.g. a tamed-pet owner who
+        // never took the Chain boon. Must not panic.
+
+        release_chain_summon_charge(&world, unrelated_pet);
+    }
+
+    /// Covers the "owner logs out" and "owner dies" exit routes' shared
+    /// logic: both resolve which live entities to dismiss through
+    /// `summons_to_dismiss`.
+    #[test]
+    fn summons_to_dismiss_resolves_every_still_live_active_uid() {
+        let mut world = mock_world();
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        // A uid never mapped to any entity -- e.g. a summon that already
+        // died and was removed from `IdMaps`, but whose ledger entry hadn't
+        // been cleaned up for some other reason. Must be skipped, not
+        // panic.
+        let stale_uid = Uid::from(core::num::NonZeroU64::new(u64::MAX).unwrap());
+        let mut summons = Summons::default();
+        summons.charge(summon_a_uid, 1);
+        summons.charge(stale_uid, 1);
+        summons.charge(summon_b_uid, 1);
+
+        let id_maps = world.read_resource::<IdMaps>();
+        let to_dismiss = summons_to_dismiss(Some(&summons), &id_maps);
+
+        assert_eq!(to_dismiss, vec![summon_a, summon_b]);
+    }
+
+    #[test]
+    fn summons_to_dismiss_of_none_is_empty() {
+        let world = mock_world();
+        let id_maps = world.read_resource::<IdMaps>();
+        assert!(summons_to_dismiss(None, &id_maps).is_empty());
+    }
+
+    /// `dismiss_owners_summons` is the shared step BOTH the owner-death
+    /// branch (this file's `DestroyEvent` handler) and the owner-logout
+    /// route (`player::dismiss_active_chain_summons`) call -- proving it
+    /// resolves and emits correctly here is what makes both routes provably
+    /// identical, without needing to construct either handler's full (and,
+    /// for `DestroyEvent`, worldgen-heavy) `SystemData` just to exercise
+    /// this one step.
+    #[test]
+    fn dismiss_owners_summons_emits_one_delete_event_per_resolved_summon() {
+        let mut world = mock_world();
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        let mut summons = Summons::default();
+        summons.charge(summon_a_uid, 1);
+        summons.charge(summon_b_uid, 1);
+
+        let id_maps = world.read_resource::<IdMaps>();
+        let mut emitted = Vec::new();
+        dismiss_owners_summons(Some(&summons), &id_maps, |DeleteEvent(entity)| {
+            emitted.push(entity)
+        });
+
+        assert_eq!(emitted, vec![summon_a, summon_b]);
+    }
+
+    #[test]
+    fn dismiss_owners_summons_of_none_emits_nothing() {
+        let world = mock_world();
+        let id_maps = world.read_resource::<IdMaps>();
+        let mut emitted = Vec::new();
+        dismiss_owners_summons(None, &id_maps, |DeleteEvent(entity)| emitted.push(entity));
+        assert!(emitted.is_empty());
     }
 }

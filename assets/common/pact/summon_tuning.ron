@@ -1,0 +1,10 @@
+// Tunables for deriving a Cadena-boon summon's point-pool cost from its
+// combat rating (common/src/comp/pact/summon_cost.rs), and the pool's hard
+// ceiling (common/src/comp/pact.rs's chain_pool()). Calibrated so a
+// Legendary-band creature (combat rating >= 10.4) never fits even a fully
+// invested pool -- see the design plan's worked table for the derivation.
+(
+    cost_multiplier: 2.0,
+    cost_floor: 1.0,
+    pool_ceiling: 25,
+)

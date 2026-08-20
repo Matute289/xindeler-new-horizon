@@ -1,0 +1,23 @@
+// Same wall-shaped lingering hazard shape as evocation/wall_of_fire.ron,
+// scaled for circle 8. Sheet's crushing-wave-collapse damage rider
+// dropped, same real engine gap (no damage/buff field exists on
+// `SpriteSummon`).
+SpriteSummon(
+    buildup_duration: 0.8,
+    cast_duration: 0.6,
+    recover_duration: 0.5,
+    sprite: EnsnaringVines,
+    del_timeout: Some((60.0, 30.0)),
+    summon_distance: (0.0, 18.0),
+    sparseness: 0.35,
+    angle: 90.0,
+    anchor: Summoner,
+    move_efficiency: 1.0,
+    ori_modifier: 1.0,
+    meta: (
+        school: Some(Conjuration),
+        source: Some(Primordial),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

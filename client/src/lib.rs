@@ -19,7 +19,7 @@ use common::{
     comp::{
         self, AdminRole, CharacterState, ChatMode, ControlAction, ControlEvent, Controller,
         ControllerInputs, GroupManip, Hardcore, InputKind, InventoryAction, InventoryEvent,
-        InventoryUpdateEvent, MapMarkerChange, PresenceKind, UtteranceKind,
+        InventoryUpdateEvent, MapMarkerChange, PetCommand, PresenceKind, UtteranceKind,
         chat::KillSource,
         controller::CraftEvent,
         gizmos::Gizmos,
@@ -1306,23 +1306,12 @@ impl Client {
             Some(addr) => {
                 // Query whether this is a trusted auth server
                 if auth_trusted(addr) {
-                    // The client now takes the whole URL, and rejects plain
-                    // http for anything that is not loopback.
-                    let auth = match authc::AuthClient::new(addr.as_str()) {
-                        Ok(auth) => auth,
-                        Err(_) => return Err(Error::AuthServerUrlInvalid(addr.to_string())),
-                    };
-
-                    // Signing in is blocking and expensive: it derives an
-                    // Argon2i prehash before the HTTPS round-trip. Running it
-                    // directly would stall every other task sharing this
-                    // reactor thread.
-                    let username = username.to_owned();
-                    let password = password.to_owned();
-                    let token =
-                        tokio::task::spawn_blocking(move || auth.sign_in(&username, &password))
-                            .await
-                            .map_err(|err| Error::AuthErr(err.to_string()))??;
+                    let token = Self::acquire_auth_token(
+                        addr.clone(),
+                        username.to_owned(),
+                        password.to_owned(),
+                    )
+                    .await?;
 
                     Ok(token.serialize())
                 } else {
@@ -1351,6 +1340,50 @@ impl Client {
                 Ok(())
             },
         }
+    }
+
+    /// Sign in against `auth_addr` and return the resulting auth token.
+    ///
+    /// EVERYTHING that touches `authc::AuthClient` — constructing it, using it,
+    /// *and* dropping it — happens inside a single `spawn_blocking`, and it
+    /// must stay that way. Two independent reasons, either of which is
+    /// sufficient:
+    ///
+    /// 1. **Correctness (this used to abort the client).** `authc` wraps
+    ///    `reqwest::blocking`, whose guard against being called from async is
+    ///    to build a throwaway current-thread `tokio::runtime::Runtime` and
+    ///    immediately drop it (`reqwest::blocking::wait::enter`, compiled in
+    ///    whenever `debug_assertions` is on — i.e. all of our `dev` profile).
+    ///    Dropping *any* runtime while the current thread is inside a tokio
+    ///    async context panics with "Cannot drop a runtime in a context where
+    ///    blocking is not allowed", and tokio aborts the whole process when one
+    ///    of its worker threads panics. `AuthClient::new` reaches that guard
+    ///    via `ClientHandle::new` -> `wait::timeout`, so merely *building* the
+    ///    client on the reactor killed voxygen a few ms after "Connected to
+    ///    server", for every server that advertises an auth provider.
+    ///    `spawn_blocking` closures run on the blocking pool, which tokio never
+    ///    marks as "entered", so blocking (and runtime drops) are allowed
+    ///    there.
+    /// 2. **Latency.** `sign_in` derives an Argon2i prehash and then does an
+    ///    HTTPS round-trip, both synchronous. On the reactor that stalls every
+    ///    other task sharing the worker thread.
+    ///
+    /// The same reasoning is why `server::login_provider` wraps its `authc`
+    /// calls in `spawn_blocking` too.
+    async fn acquire_auth_token(
+        auth_addr: String,
+        username: String,
+        password: String,
+    ) -> Result<authc::AuthToken, Error> {
+        tokio::task::spawn_blocking(move || {
+            // `authc` takes the whole URL, and rejects plain http for anything
+            // that is not loopback.
+            let auth = authc::AuthClient::new(auth_addr.as_str())
+                .map_err(|_| Error::AuthServerUrlInvalid(auth_addr.clone()))?;
+            Ok::<_, Error>(auth.sign_in(&username, &password)?)
+        })
+        .await
+        .map_err(|err| Error::AuthErr(err.to_string()))?
     }
 
     fn send_msg_err<S>(&mut self, msg: S) -> Result<(), network::StreamError>
@@ -2097,6 +2130,16 @@ impl Client {
         if let Some(uid) = self.state.read_component_copied(entity) {
             self.send_msg(ClientGeneral::ControlEvent(ControlEvent::SetPetStay(
                 uid, stay,
+            )));
+        }
+    }
+
+    /// Issue a pet-AI command ("attack that one" / "stay alert, guard me")
+    /// to an owned pet.
+    pub fn command_pet(&mut self, pet: EcsEntity, command: PetCommand) {
+        if let Some(uid) = self.state.read_component_copied(pet) {
+            self.send_msg(ClientGeneral::ControlEvent(ControlEvent::CommandPet(
+                uid, command,
             )));
         }
     }
@@ -3856,5 +3899,40 @@ mod tests {
             client.cleanup();
             clock.tick();
         });
+    }
+
+    /// Regression test: acquiring an auth token must never drop a tokio runtime
+    /// while the calling thread is inside an async context.
+    ///
+    /// `authc` wraps `reqwest::blocking`, which — under `debug_assertions` —
+    /// builds and immediately drops a throwaway current-thread runtime as its
+    /// "am I being called from async?" guard. Doing that from a tokio context
+    /// panics with "Cannot drop a runtime in a context where blocking is not
+    /// allowed"; on a runtime *worker* thread tokio turns that panic into a
+    /// process abort, which is exactly how voxygen died a few ms after
+    /// "Connected to server" against any server advertising an auth provider.
+    /// See [`Client::acquire_auth_token`].
+    ///
+    /// `block_on` puts this thread in the same "entered" state the real caller
+    /// is in, so if the `authc` work ever moves back out of `spawn_blocking`
+    /// this test panics instead of returning an error.
+    #[test]
+    fn acquire_auth_token_does_not_drop_a_runtime_on_the_reactor() {
+        let runtime = Runtime::new().expect("failed to build the test runtime");
+
+        // Loopback (so `authc` accepts the URL without real TLS) on a port
+        // nothing listens on, so the request fails fast and locally: we are
+        // testing the threading, not the auth server.
+        let result = runtime.block_on(Client::acquire_auth_token(
+            "https://127.0.0.1:1".to_string(),
+            "regression-test".to_string(),
+            "regression-test".to_string(),
+        ));
+
+        let err = result.expect_err("signing in against a closed loopback port should fail");
+        assert!(
+            matches!(err, Error::AuthClientError(_)),
+            "expected a transport error from the closed loopback port, got {err:?}"
+        );
     }
 }

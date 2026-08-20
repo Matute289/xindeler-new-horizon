@@ -1,0 +1,20 @@
+// D&D's healing-block rider is dropped: no existing BuffKind models a
+// general anti-healing debuff (checked every variant in
+// common/src/comp/buff.rs; PotionSickness only reduces potion healing
+// specifically, not a fit). Ships as a plain necrotic damage bolt.
+BasicRanged(
+    energy_cost: 0,
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 14,
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 65.0,
+    num_projectiles: Value(1),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

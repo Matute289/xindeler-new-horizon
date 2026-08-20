@@ -1,0 +1,25 @@
+// Same straight-damage GroundAoe shape as earthquake.ron, same circle.
+// Sheet's light-snuffing rider dropped, no lighting-manipulation primitive
+// exists to hook into from a spell.
+GroundAoe(
+    energy_cost: 195.0,
+    buildup_duration: 0.8,
+    delay: 0.55,
+    recover_duration: 0.55,
+    max_range: 46.0,
+    radius: 6.0,
+    min_falloff: 0.3,
+    damage: 92,
+    poise: 25,
+    knockback: (strength: 0.0, direction: Away),
+    dodgeable: Roll,
+    reagent: None,
+    rooted_cast: false,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Arcane),
+        cooldown: Some(55.0),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

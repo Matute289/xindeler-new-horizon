@@ -1,0 +1,39 @@
+// Heal-delivery to a living ally, not damage to a foe. `BasicBeam`
+// (common/src/states/basic_beam.rs) always resolves its damage against
+// `Some(GroupTarget::OutOfGroup)` -- hardcoded, not a RON-configurable
+// field -- so it can never land on an ally regardless of the sheet's own
+// variant pick. This is the exact situation weave_transfusion.ron
+// (transmutation) already hit and documents in full: "`SelfBuff` cannot
+// deliver this... Shipped instead as `BasicMelee` using the exact
+// touch-ally pattern already shipped for lesser_restoration.ron/
+// greater_restoration.ron". Same fix here: `BasicMelee` with
+// `attack_effect_target: Some(InGroup)` on a near-inert Stab.
+//
+// The sheet's self-cost half of the rider ("caster wounds their own life
+// essence... cannot be lessened") is dropped rather than modeled with
+// `meta.hp_cost`: that field is a Hemomancy-only convention (see
+// `AbilityMeta::form`'s own doc comment -- `hp_cost` is the meta-school's
+// blood-cost flavor, tied to `Hemomancy(<classic school>)`), not a generic
+// Necromancy mechanic, and this is classic Necromancy, not the Hemomancy
+// meta-school. The self-sacrifice flavor is represented instead by a
+// steeper `energy_cost` than a plain heal of this size would otherwise
+// carry. Magnitude scaled up from spare_the_dying.ron's own Heal(20.0) at
+// level 0 to this spell's level 3.
+BasicMelee(
+    energy_cost: 70.0,
+    buildup_duration: 0.4,
+    swing_duration: 0.1,
+    hit_timing: 0.5,
+    recover_duration: 0.4,
+    melee_constructor: (
+        kind: Stab(damage: 1, poise: 0, knockback: 0, energy_regen: 0),
+        range: 3.0,
+        angle: 20.0,
+        attack_effect: Some((
+            Heal(90.0),
+            AttackSource(Melee),
+        )),
+        attack_effect_target: Some(InGroup),
+    ),
+    meta: (school: Some(Necromancy), source: Some(Arcane)),
+)

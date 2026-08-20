@@ -1,0 +1,31 @@
+// Instantaneous line pulse, not a sustained channel -- the school's own
+// first "quick pulse" BasicBeam player-spell (contrast
+// assets/common/abilities/spells/evocation/caustic_brew.ron/witch_bolt.ron,
+// Wave 1, both genuinely sustained Concentration channels). A very short
+// `beam_duration` (0.5 s) caps this to essentially one tick regardless of
+// how long the input is held, approximating the sheet's single resolved
+// line-attack; `energy_drain` is set so that single short window consumes
+// roughly this batch's circle-2 single-target energy anchor (acid_arrow.ron,
+// 45) rather than draining like a real sustain.
+//
+// BasicBeam hardcodes DamageKind::Energy in
+// common/src/states/basic_beam.rs (no RON-configurable damage_kind field
+// exists on this variant) -- so despite the Fire flavor text, this deals
+// generic Energy damage under the hood, same drift already documented on
+// caustic_brew.ron for its own BasicBeam use.
+BasicBeam(
+    buildup_duration: 0.4,
+    recover_duration: 0.3,
+    beam_duration: 0.5,
+    damage: 24.0,
+    tick_rate: 2.0,
+    range: 9.0,
+    max_angle: 5.0,
+    damage_effect: None,
+    energy_regen: 0,
+    energy_drain: 90,
+    move_efficiency: 0.1,
+    ori_rate: 1.0,
+    specifier: Flamethrower,
+    meta: (school: Some(Evocation), source: Some(Arcane)),
+)

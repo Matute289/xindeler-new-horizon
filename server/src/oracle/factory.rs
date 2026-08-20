@@ -97,6 +97,36 @@ pub fn spawn_entity_template(
 }
 
 /// Resolves every `spawning_rules.entity_templates` id in `dm_event` against
+/// `templates`, in declared order. Ids with no matching loaded template are
+/// skipped rather than aborting the whole batch. Shared between
+/// `spawn_dm_event` (the scatter loop) and `has_matching_templates` (a plain
+/// "would this event resolve to nothing?" check) so the two never drift.
+fn matching_templates<'a>(
+    spawning_rules: &common_oracle::SpawningRules,
+    templates: impl Iterator<Item = &'a EntityTemplate> + Clone,
+) -> Vec<&'a EntityTemplate> {
+    spawning_rules
+        .entity_templates
+        .iter()
+        .filter_map(|id| templates.clone().find(|t| &t.entity_template_id == id))
+        .collect()
+}
+
+/// Whether any `spawning_rules.entity_templates` id names a currently-loaded
+/// template. `spawn_dm_event`'s result is empty both when this is false
+/// (nothing to spawn from) and when it's true but `spawn_count` sanitizes to
+/// zero (a legitimate zero-entity request) — callers that need to tell those
+/// two cases apart (e.g. to report a real configuration problem only in the
+/// first case) should check this rather than inferring it from an empty
+/// `spawn_dm_event` result.
+pub fn has_matching_templates<'a>(
+    spawning_rules: &common_oracle::SpawningRules,
+    templates: impl Iterator<Item = &'a EntityTemplate> + Clone,
+) -> bool {
+    !matching_templates(spawning_rules, templates).is_empty()
+}
+
+/// Resolves every `spawning_rules.entity_templates` id in `dm_event` against
 /// `templates`, scattering `spawn_count` (rounded down) spawns within
 /// `spawn_radius` of `origin`. Ids with no matching loaded template are
 /// skipped (logged by the caller if desired) rather than aborting the whole
@@ -107,11 +137,7 @@ pub fn spawn_dm_event<'a>(
     origin: Vec3<f32>,
     rng: &mut impl Rng,
 ) -> Vec<(comp::Pos, comp::Ori, NpcBuilder)> {
-    let matches: Vec<&EntityTemplate> = spawning_rules
-        .entity_templates
-        .iter()
-        .filter_map(|id| templates.clone().find(|t| &t.entity_template_id == id))
-        .collect();
+    let matches = matching_templates(spawning_rules, templates);
     if matches.is_empty() {
         return Vec::new();
     }

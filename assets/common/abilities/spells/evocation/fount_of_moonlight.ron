@@ -1,0 +1,18 @@
+// "Cloak in moonfire, lash out with radiant flares against nearby foes" --
+// `ProtectingWard` damage reduction; the offensive retaliatory-flare rider
+// dropped, no on-trigger-attack primitive exists.
+SelfBuff(
+    buildup_duration: 0.4,
+    cast_duration: 0.2,
+    recover_duration: 0.3,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.3, duration: Some(60.0))),
+    ],
+    energy_cost: 85.0,
+    meta: (
+        school: Some(Evocation),
+        source: Some(Divine),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

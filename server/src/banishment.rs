@@ -411,6 +411,17 @@ fn park_newly_banished(server: &mut Server) {
         for entity in &plain {
             reset_transient_state(ecs, *entity);
         }
+
+        // N27-O: a parked entity never reaches `handle_delete` -- it is
+        // deliberately kept alive, not deleted -- so a Cadena summon
+        // banished here would otherwise sit stuck on its owner's point
+        // pool for as long as it stays parked, with nothing else ever
+        // freeing that charge. A non-summon entity (the overwhelming
+        // majority) finds no matching ledger entry and this is a no-op,
+        // same as `handle_delete`'s own call.
+        for entity in &plain {
+            crate::events::shared::release_chain_summon_charge(ecs, *entity);
+        }
     }
 
     #[cfg(feature = "worldgen")]

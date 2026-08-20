@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use specs::{Component, DerefFlaggedStorage, VecStorage};
 
 /// Moral axis (Good–Evil), derived from `Ethos.good_evil`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// `Hash` is needed so this can key a `HashMap` in a manifest asset (a
+// per-alignment-band content table).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Moral {
     Good,
     Neutral,

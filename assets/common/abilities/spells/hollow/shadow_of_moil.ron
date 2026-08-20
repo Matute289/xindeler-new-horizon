@@ -1,0 +1,22 @@
+// "Writhing shadow coils around the caster... those who strike the
+// shrouded form are lashed by the clinging dark" -- a defensive self-buff.
+// `ProtectingWard`'s flat damage reduction stands in for the shroud's
+// protective half (same primitive shield_of_faith.ron/mage_armor.ron use).
+// The retaliatory-damage-on-attacker half is dropped -- no reflect/thorns
+// `BuffEffect` exists anywhere in the engine (same class of drop as
+// abjuration/frost_ward.ron's own cold-retaliation rider).
+SelfBuff(
+    buildup_duration: 0.5,
+    cast_duration: 0.2,
+    recover_duration: 0.35,
+    buffs: [
+        BuffDesc(kind: ProtectingWard, data: BuffData(strength: 0.35, duration: Some(60.0))),
+    ],
+    energy_cost: 80.0,
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        // level 4 spell -> min_level 24, the level * 6 convention.
+        requirements: (min_level: Some(24)),
+    ),
+)

@@ -1,0 +1,21 @@
+// Pure social/utility spell ("guaranteed strong social checks, immune to
+// truth-detection") -- no dialogue/skill-check system exists to hook a
+// guaranteed-success grant into, same category of gap as the deferred
+// Necromancy revive spells. `Fearless` (confidence flavor) is the closest
+// existing thematic stand-in shipped, not a mechanical match for the
+// sheet's real effect -- documented as an honest approximation.
+SelfBuff(
+    buildup_duration: 0.3,
+    cast_duration: 0.15,
+    recover_duration: 0.25,
+    buffs: [
+        BuffDesc(kind: Fearless, data: BuffData(strength: 0.0, duration: Some(3600.0))),
+    ],
+    energy_cost: 60.0,
+    meta: (
+        school: Some(Transmutation),
+        source: Some(Arcane),
+        // level 8 spell -> min_level 48, the level * 6 convention.
+        requirements: (min_level: Some(48)),
+    ),
+)

@@ -868,6 +868,82 @@ pub fn convert_background_to_database(
     }
 }
 
+/// `pact_standing`/`pact_patron_id`/`pact_boon` NULL or unrecognized fall
+/// back to `Bound`/`None`/`None` respectively, matching `Pact`'s own
+/// fail-open default. `pact_blade_summoned` NULL -> `false`.
+/// `pact_blade_exp` NULL -> `0`. `pact_blade_name` NULL, or a string that
+/// matches no entry in any band of `blade_names_manifest()`, -> `None`
+/// (never a panic -- a future-version name or a hand-edited DB row must
+/// degrade, not brick the load). `pact_favour` is reserved for a future
+/// mechanic; NULL -> `0`.
+pub fn convert_pact_from_database(
+    standing: Option<&str>,
+    patron: Option<&str>,
+    boon: Option<&str>,
+    blade_summoned: Option<i64>,
+    blade_exp: Option<i64>,
+    blade_name: Option<&str>,
+    favour: Option<i32>,
+) -> common::comp::Pact {
+    common::comp::Pact {
+        standing: standing
+            .map(json_models::db_string_to_pact_standing)
+            .unwrap_or_default(),
+        patron: patron.and_then(json_models::db_string_to_patron_id),
+        boon: boon.and_then(json_models::db_string_to_pact_boon),
+        blade_summoned: blade_summoned.unwrap_or(0) != 0,
+        blade_exp: blade_exp.unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32,
+        blade_name: blade_name.and_then(|name| {
+            let names = common::comp::pact::blade_names_manifest();
+            if names.0.values().any(|band| band.iter().any(|n| n == name)) {
+                Some(name.to_string())
+            } else {
+                tracing::warn!(
+                    unknown = ?name,
+                    "Unknown pact blade name in database, discarding"
+                );
+                None
+            }
+        }),
+        // Never loaded, because it is never saved: a talisman bond names its
+        // bearer by a session-scoped `Uid` and is dropped when the Warlock
+        // logs out, so no stored value could be correct. The
+        // `pact_talisman_bearer` column is reserved schema only.
+        talisman_bearer: None,
+        favour: favour.unwrap_or(0),
+    }
+}
+
+/// Inverse of [`convert_pact_from_database`]. A pact still at its fail-open
+/// default (untouched -- `Bound`, no patron, no boon, not summoned, no
+/// blade XP/name, no favour) writes all seven columns as `NULL` rather than
+/// spelling the default out, matching `convert_background_to_database`'s
+/// "unset stays unset" contract.
+pub fn convert_pact_to_database(
+    pact: common::comp::Pact,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    Option<i32>,
+) {
+    if pact == common::comp::Pact::default() {
+        return (None, None, None, None, None, None, None);
+    }
+    (
+        Some(json_models::pact_standing_to_db_string(pact.standing)),
+        pact.patron.map(json_models::patron_id_to_db_string),
+        pact.boon.map(json_models::pact_boon_to_db_string),
+        Some(pact.blade_summoned as i64),
+        Some(i64::from(pact.blade_exp)),
+        pact.blade_name,
+        Some(pact.favour),
+    )
+}
+
 /// BL-33: the two moral-alignment scores are stored verbatim; the discrete
 /// 9-box is derived in `comp::Ethos`. To-database is just reading the public
 /// fields, so no symmetric helper is needed.
@@ -1171,6 +1247,206 @@ mod tests {
             convert_background_from_database(Some("custom")),
             Background(None)
         );
+    }
+
+    /// `NULL` columns and a fixed `standing`/`patron` pair both round-trip
+    /// through their keywords; unrecognized strings degrade rather than
+    /// panic, matching `background`'s own contract.
+    #[test]
+    fn pact_persistence_round_trips_none_and_fixed() {
+        use common::comp::{Pact, PactBoon, PactStanding, PatronId};
+
+        // Legacy / unset: NULL columns -> the fail-open default, and the
+        // untouched default writes back out as NULL too (matching
+        // `background`'s "unset stays unset" contract).
+        let none = convert_pact_from_database(None, None, None, None, None, None, None);
+        assert_eq!(none, Pact::default());
+        assert_eq!(
+            convert_pact_to_database(none),
+            (None, None, None, None, None, None, None)
+        );
+
+        // A fully-set pact, including blade XP and a curated name, round-
+        // trips through its keywords.
+        let curated_name = common::comp::pact::blade_names_manifest().0
+            [&common::comp::ethos::Moral::Good][0]
+            .clone();
+        let bound_court = Pact {
+            standing: PactStanding::Bound,
+            patron: Some(PatronId::VeiledCourt),
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            blade_exp: 42_000,
+            blade_name: Some(curated_name.clone()),
+            talisman_bearer: None,
+            favour: 0,
+        };
+        let (
+            standing_col,
+            patron_col,
+            boon_col,
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col,
+            favour_col,
+        ) = convert_pact_to_database(bound_court.clone());
+        assert_eq!(standing_col.as_deref(), Some("bound"));
+        assert_eq!(patron_col.as_deref(), Some("veiled_court"));
+        assert_eq!(boon_col.as_deref(), Some("blade"));
+        assert_eq!(blade_summoned_col, Some(1));
+        assert_eq!(blade_exp_col, Some(42_000));
+        assert_eq!(blade_name_col.as_deref(), Some(curated_name.as_str()));
+        assert_eq!(favour_col, Some(0));
+        assert_eq!(
+            convert_pact_from_database(
+                standing_col.as_deref(),
+                patron_col.as_deref(),
+                boon_col.as_deref(),
+                blade_summoned_col,
+                blade_exp_col,
+                blade_name_col.as_deref(),
+                favour_col
+            ),
+            bound_court
+        );
+
+        let severed = Pact {
+            standing: PactStanding::Severed,
+            patron: Some(PatronId::HorrorOfTheVoid),
+            boon: None,
+            blade_summoned: false,
+            blade_exp: 0,
+            blade_name: None,
+            talisman_bearer: None,
+            favour: 0,
+        };
+        let (standing_col, patron_col, boon_col, blade_summoned_col, _, _, _) =
+            convert_pact_to_database(severed);
+        assert_eq!(standing_col.as_deref(), Some("severed"));
+        assert_eq!(patron_col.as_deref(), Some("horror_of_the_void"));
+        assert_eq!(boon_col, None);
+        assert_eq!(blade_summoned_col, Some(0));
+
+        // Unrecognized strings (future-version downgrade) degrade instead
+        // of panicking -- including an unrecognized blade name.
+        assert_eq!(
+            convert_pact_from_database(
+                Some("cursed"),
+                Some("cthulhu"),
+                Some("staff"),
+                None,
+                None,
+                Some("not a real blade name"),
+                None
+            ),
+            Pact {
+                standing: PactStanding::Bound,
+                patron: None,
+                boon: None,
+                blade_summoned: false,
+                blade_exp: 0,
+                blade_name: None,
+                talisman_bearer: None,
+                favour: 0,
+            }
+        );
+    }
+
+    /// A talisman bond is deliberately never persisted: it names its bearer
+    /// by a session-scoped `Uid`, and it is dropped when the Warlock logs out
+    /// anyway, so a stored value could never be correct. Loading always
+    /// yields no bearer, and saving a pact that currently HAS one still emits
+    /// only the columns that existed before -- the reserved
+    /// `pact_talisman_bearer` column is never written.
+    #[test]
+    fn a_talisman_bond_never_reaches_the_database() {
+        use common::comp::{Pact, PactBoon, PactStanding, PatronId};
+        use std::num::NonZeroU64;
+
+        let bonded = Pact {
+            standing: PactStanding::Bound,
+            patron: Some(PatronId::Archfey),
+            boon: Some(PactBoon::Talisman),
+            blade_summoned: false,
+            blade_exp: 0,
+            blade_name: None,
+            talisman_bearer: Some(common::uid::Uid::from(NonZeroU64::new(9).unwrap())),
+            favour: 0,
+        };
+        let (
+            standing_col,
+            patron_col,
+            boon_col,
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col,
+            favour_col,
+        ) = convert_pact_to_database(bonded.clone());
+
+        let reloaded = convert_pact_from_database(
+            standing_col.as_deref(),
+            patron_col.as_deref(),
+            boon_col.as_deref(),
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col.as_deref(),
+            favour_col,
+        );
+        assert_eq!(
+            reloaded.talisman_bearer, None,
+            "a bond must never survive a save/load cycle"
+        );
+        assert_eq!(
+            reloaded,
+            Pact {
+                talisman_bearer: None,
+                ..bonded
+            },
+            "everything else about the pact must round-trip unchanged"
+        );
+    }
+
+    /// A boon change (e.g. Blade -> Chain) must not reset the blade's
+    /// accrued XP or chosen name -- only re-picking the Blade boon fresh
+    /// (via `/pact boon`, which explicitly zeroes `blade_summoned` but
+    /// leaves `blade_exp`/`blade_name` untouched) can do that, and this PR
+    /// never does. Persistence itself is boon-agnostic: whatever `blade_exp`
+    /// the live `Pact` holds round-trips regardless of the current boon.
+    #[test]
+    fn pact_persistence_preserves_blade_exp_across_a_boon_change() {
+        use common::comp::{Pact, PactBoon, PactStanding};
+
+        let switched_away = Pact {
+            standing: PactStanding::Bound,
+            patron: None,
+            boon: Some(PactBoon::Chain),
+            blade_summoned: false,
+            blade_exp: 12_345,
+            blade_name: None,
+            talisman_bearer: None,
+            favour: 0,
+        };
+        let (
+            standing_col,
+            patron_col,
+            boon_col,
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col,
+            favour_col,
+        ) = convert_pact_to_database(switched_away.clone());
+        assert_eq!(blade_exp_col, Some(12_345));
+        let reloaded = convert_pact_from_database(
+            standing_col.as_deref(),
+            patron_col.as_deref(),
+            boon_col.as_deref(),
+            blade_summoned_col,
+            blade_exp_col,
+            blade_name_col.as_deref(),
+            favour_col,
+        );
+        assert_eq!(reloaded, switched_away);
+        assert_eq!(reloaded.blade_exp, 12_345);
     }
 
     #[test]

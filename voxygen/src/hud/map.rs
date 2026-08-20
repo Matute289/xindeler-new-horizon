@@ -8,7 +8,7 @@ use crate::{
     game_input::GameInput,
     session::settings_change::{Interface as InterfaceChange, Interface::*},
     ui::{ImageFrame, Tooltip, TooltipManager, Tooltipable, fonts::Fonts, img_ids},
-    window::KeyMouse,
+    window::{KeyMouse, MenuInput},
 };
 use client::{self, Client, SiteMarker};
 use common::{
@@ -131,6 +131,7 @@ pub struct Map<'a> {
     location_markers: &'a MapMarkers,
     map_drag: Vec2<f64>,
     extra_markers: &'a [ExtraMarker],
+    menu_events: &'a [MenuInput],
 }
 impl<'a> Map<'a> {
     pub fn new(
@@ -146,6 +147,7 @@ impl<'a> Map<'a> {
         location_markers: &'a MapMarkers,
         map_drag: Vec2<f64>,
         extra_markers: &'a [ExtraMarker],
+        menu_events: &'a [MenuInput],
     ) -> Self {
         Self {
             imgs,
@@ -161,6 +163,7 @@ impl<'a> Map<'a> {
             location_markers,
             map_drag,
             extra_markers,
+            menu_events,
         }
     }
 }
@@ -272,6 +275,50 @@ impl Widget for Map<'_> {
             .flatten()
             .unwrap_or(KeyMouse::Mouse(MouseButton::Middle));
         let mut events = Vec::new();
+
+        // MENU INPUTS: `Back` closes the map, same as the X button. Up/Down/Left/
+        // Right pans the view (a fixed step scaled by the current zoom, matching
+        // the mouse-drag delta's own `dragged / zoom` scaling below); Apply drops a
+        // location marker at the player's own position — a simple, always-
+        // well-defined action that doesn't depend on knowing where the (emulated)
+        // cursor is, unlike the mouse click-to-place-marker path.
+        //
+        // The plan's original mention of driving map pan through
+        // `AnalogMenuInput::ScrollX/Y` doesn't hold up: that event is emitted by
+        // `window.rs`'s gilrs axis handling but nothing downstream
+        // (`session/mod.rs`, `hud/mod.rs`) ever consumes it — verified dead code,
+        // not wired end-to-end anywhere. Reusing the same discrete Left/Right/Up/
+        // Down every other window's dpad nav already relies on avoids adding that
+        // missing plumbing just for this one window.
+        const MAP_PAN_STEP: f64 = 40.0;
+        let marker_player_pos = self
+            .client
+            .state()
+            .ecs()
+            .read_storage::<comp::Pos>()
+            .get(self.client.entity())
+            .map_or(Vec3::zero(), |pos| pos.0);
+        for key in self.menu_events {
+            match *key {
+                MenuInput::Back => events.push(Event::Close),
+                MenuInput::Left => events.push(Event::MapDrag(
+                    self.map_drag + Vec2::new(MAP_PAN_STEP / zoom, 0.0),
+                )),
+                MenuInput::Right => events.push(Event::MapDrag(
+                    self.map_drag - Vec2::new(MAP_PAN_STEP / zoom, 0.0),
+                )),
+                MenuInput::Up => events.push(Event::MapDrag(
+                    self.map_drag + Vec2::new(0.0, MAP_PAN_STEP / zoom),
+                )),
+                MenuInput::Down => events.push(Event::MapDrag(
+                    self.map_drag - Vec2::new(0.0, MAP_PAN_STEP / zoom),
+                )),
+                MenuInput::Apply => {
+                    events.push(Event::SetLocationMarker(marker_player_pos.xy().as_()));
+                },
+                _ => {},
+            }
+        }
         let i18n = &self.localized_strings;
         // Tooltips
         let site_tooltip = Tooltip::new({

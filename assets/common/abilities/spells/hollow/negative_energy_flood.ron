@@ -1,0 +1,27 @@
+// Single-target necrotic bolt, same BasicRanged shape as blight.ron.
+// Sheet's two secondary riders both dropped: "undead are immune" (no
+// creature-kind-conditional damage primitive exists, same class of drop as
+// abjuration/wardaway.ron's own undead-immunity rider) and "a target slain
+// by this rises as an undead minion" (no on-kill trigger exists anywhere
+// in the ability system).
+BasicRanged(
+    energy_cost: 88.0,
+    buildup_duration: 0.5,
+    recover_duration: 0.4,
+    projectile: (
+        kind: Simple,
+        attack: Some((
+            damage: 40,
+            damage_kind: Necrotic,
+        )),
+    ),
+    projectile_body: Object(BoltFire),
+    projectile_speed: 55.0,
+    num_projectiles: Value(1),
+    meta: (
+        school: Some(Necromancy),
+        source: Some(Arcane),
+        // level 5 spell -> min_level 30, the level * 6 convention.
+        requirements: (min_level: Some(30)),
+    ),
+)

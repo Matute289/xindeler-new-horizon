@@ -56,7 +56,9 @@ pub(crate) mod shared {
     #[cfg(feature = "worldgen")]
     pub(crate) use super::entity_creation::handle_create_npc;
     pub(crate) use super::{
-        entity_manipulation::{TransformEntityError, transform_entity},
+        entity_manipulation::{
+            TransformEntityError, release_chain_summon_charge, transform_entity,
+        },
         group_manip::update_map_markers,
         trade::cancel_trades_for,
     };
@@ -280,5 +282,40 @@ mod dispatcher_tests {
                 .expect("thread pool"),
         );
         let _ = Server::create_event_dispatcher(pools);
+    }
+
+    /// `interaction::register_event_systems` wires `DismissSummonEvent` into
+    /// the dispatcher, but `EventBus<T>` insertion at server start-up is
+    /// driven *separately*, by whether `T` also appears in
+    /// `event_types::server_events!`'s own list -- nothing calls
+    /// `SendDispatcher::setup()` in production (which would auto-insert a
+    /// missing bus and paper over exactly this gap), so a type wired into
+    /// the dispatcher but left out of that list has its bus reads panic on
+    /// the very first live dispatch, before any player connects. This
+    /// reproduces that exact path -- the real registration function, the
+    /// real dispatcher system, nothing hand-rolled -- so a future addition
+    /// forgetting one half of that pair fails here instead of at server
+    /// start-up.
+    #[test]
+    fn every_dispatcher_registered_event_bus_exists_after_registration() {
+        use common::{comp, event::DismissSummonEvent, uid::Uid};
+        use specs::{World, WorldExt};
+
+        let mut world = World::new();
+        world.register::<comp::Alignment>();
+        world.register::<Uid>();
+        world.register::<comp::Pos>();
+        world.register::<comp::pact::Summons>();
+        event_types::register_event_busses(&mut world);
+        world.insert(
+            crate::metrics::ServerEventMetrics::new(&prometheus::Registry::new())
+                .expect("metric registration"),
+        );
+        world.insert(common_ecs::SysMetrics::default());
+
+        // Would panic with "resource does not exist" if DismissSummonEvent's
+        // bus (or anything else its own SystemData reads) were missing --
+        // exactly the shape of the bug this test locks in.
+        common_ecs::run_now::<EventHandler<DismissSummonEvent>>(&world);
     }
 }

@@ -1114,7 +1114,12 @@ fn render_chat_line(chat_type: &ChatType<String>, imgs: &Imgs) -> (Color, conrod
     }
 }
 
-fn parse_cmd(msg: &str) -> Result<(&str, Vec<String>), String> {
+/// Parses a chat command's name and arguments out of the text after the
+/// command prefix has already been stripped. Exposed to the parent `hud`
+/// module so the on-screen keyboard (`osk.rs`) can submit a composed
+/// command through the exact same parsing this widget's own Enter-key
+/// handling uses, rather than re-implementing it.
+pub(super) fn parse_cmd(msg: &str) -> Result<(&str, Vec<String>), String> {
     use chumsky::{extra::Err, prelude::*, text::unicode::ident};
 
     let escape = just::<_, _, Err<Simple<char>>>('\\').ignore_then(
