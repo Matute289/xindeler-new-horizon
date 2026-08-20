@@ -1957,7 +1957,10 @@ impl Attack {
         // 2. The per-hit `cap` is mandatory, not a balance nicety. Applied last, after
         //    every other term, so it is a true hard ceiling: an uncapped fraction of a
         //    very large hit kills whoever swung it regardless of the defender's own
-        //    level.
+        //    level. The cap is per SOURCE, not summed across `damage_reflect` -- with
+        //    today's only source (the Talisman boon's ward) that is the same thing,
+        //    since a bearer can only ever carry one. Revisit if a second stacking
+        //    reflect source ever ships (N27-W).
         // 3. It must clear the same PvP / friendly-fire gate the incoming blow already
         //    cleared. `permit_pvp` / `allow_friendly_fire` are the flags resolved for
         //    THIS pair before the attack landed — reusing them, rather than judging

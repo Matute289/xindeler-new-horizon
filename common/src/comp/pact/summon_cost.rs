@@ -4,8 +4,9 @@
 //! hand-authoring a second difficulty axis that would drift from it on every
 //! future stat/loadout rebalance.
 
-use super::SummonTuning;
+use super::{SummonTuning, summon_tuning_reload_id};
 use crate::{
+    assets::ReloadId,
     comp::{
         Body, DerivedStats, Energy, Health, Inventory, Poise,
         inventory::{item::MaterialStatManifest, loadout_builder::LoadoutBuilder},
@@ -18,10 +19,17 @@ use std::sync::{OnceLock, RwLock};
 
 /// A creature's cost against the Cadena point pool, derived from its combat
 /// rating. Deliberately never hand-authored per creature.
+///
+/// Hard-floored to 1 in code, not just via `tuning.cost_floor`: the point
+/// pool's own boundedness (`Summons::active` can never exceed
+/// `pool_ceiling / cost_floor` entries) depends on every charge costing at
+/// least one point. A future balance pass that sets `cost_floor` below 1 in
+/// `summon_tuning.ron` must not silently make the ledger unbounded.
 pub fn summon_cost(combat_rating: f32, tuning: &SummonTuning) -> u16 {
     (combat_rating * tuning.cost_multiplier)
         .round()
-        .max(tuning.cost_floor) as u16
+        .max(tuning.cost_floor)
+        .max(1.0) as u16
 }
 
 /// The cost of the creature a `SummonInfo::Npc` would spawn. Constructs the
@@ -105,16 +113,34 @@ pub fn npc_summon_cost(
 /// varies loadout/skillset per body, widen the key to
 /// `(Body, Option<Preset>, Option<Preset>, bool)` instead of adding a
 /// second cache.
-fn summon_cost_cache() -> &'static RwLock<HashMap<Body, u16>> {
-    static CACHE: OnceLock<RwLock<HashMap<Body, u16>>> = OnceLock::new();
-    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+///
+/// `tuning_reload_id` is what keeps this from serving stale numbers forever
+/// after a `summon_tuning.ron` hot-reload/`asset_tweak` edit: every lookup
+/// compares it against the manifest's current `ReloadId` first, and the
+/// whole map is thrown away (not just the one body being looked up) the
+/// moment they disagree, since a tuning edit invalidates every entry at
+/// once, not just the one that happened to be requested next.
+struct SummonCostCache {
+    tuning_reload_id: ReloadId,
+    costs: HashMap<Body, u16>,
+}
+
+fn summon_cost_cache() -> &'static RwLock<SummonCostCache> {
+    static CACHE: OnceLock<RwLock<SummonCostCache>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        RwLock::new(SummonCostCache {
+            tuning_reload_id: summon_tuning_reload_id(),
+            costs: HashMap::new(),
+        })
+    })
 }
 
 /// [`npc_summon_cost`], computed once per [`Body`] and memoized for the rest
-/// of the process's life. `npc_summon_cost` itself constructs a throwaway
-/// `Inventory` + `SkillSet` and reads `MaterialStatManifest` -- a real
-/// allocation this must never repeat on every cast or every per-creature
-/// spawn in a batch. Both the client-side activation gate
+/// of the process's life -- or until `summon_tuning.ron` reloads, whichever
+/// comes first. `npc_summon_cost` itself constructs a throwaway `Inventory`
+/// and `SkillSet` and reads `MaterialStatManifest` -- a real allocation this
+/// must never repeat on every cast or every per-creature spawn in a batch.
+/// Both the client-side activation gate
 /// (`CharacterAbility::requirements_paid`'s `BasicSummon` arm) and the
 /// server's per-spawn authority gate
 /// (`server::events::entity_creation::handle_create_npc`) call this instead
@@ -128,18 +154,26 @@ pub fn cached_npc_summon_cost(
     let SummonInfo::Npc { body, .. } = summon_info else {
         return 0;
     };
-    if let Some(cost) = summon_cost_cache()
-        .read()
-        .expect("summon cost cache poisoned")
-        .get(body)
+    let current_reload_id = summon_tuning_reload_id();
     {
-        return *cost;
+        let cache = summon_cost_cache()
+            .read()
+            .expect("summon cost cache poisoned");
+        if cache.tuning_reload_id == current_reload_id
+            && let Some(cost) = cache.costs.get(body)
+        {
+            return *cost;
+        }
     }
     let cost = npc_summon_cost(summon_info, msm, tuning);
-    summon_cost_cache()
+    let mut cache = summon_cost_cache()
         .write()
-        .expect("summon cost cache poisoned")
-        .insert(*body, cost);
+        .expect("summon cost cache poisoned");
+    if cache.tuning_reload_id != current_reload_id {
+        cache.costs.clear();
+        cache.tuning_reload_id = current_reload_id;
+    }
+    cache.costs.insert(*body, cost);
     cost
 }
 
@@ -190,6 +224,20 @@ mod tests {
     fn zero_combat_rating_still_floors_to_a_cost_of_one() {
         // A degenerate/zero rating must never be free to summon.
         assert_eq!(summon_cost(0.0, &tuning()), 1);
+    }
+
+    #[test]
+    fn the_code_level_floor_holds_even_if_the_ron_floor_were_set_to_zero() {
+        // The pool's boundedness must not depend on `summon_tuning.ron`
+        // keeping `cost_floor >= 1` -- a future balance edit setting it to 0
+        // (or negative, in principle) must not make the ledger unbounded.
+        let mut degenerate = tuning();
+        degenerate.cost_floor = 0.0;
+        assert_eq!(
+            summon_cost(0.0, &degenerate),
+            1,
+            "a summon must cost at least 1 point regardless of the tuning manifest"
+        );
     }
 
     #[test]

@@ -249,8 +249,13 @@ pub fn handle_delete(server: &mut Server, DeleteEvent(entity): DeleteEvent) {
 /// See `handle_delete`'s doc comment. Takes `&specs::World` (not `&mut
 /// Server`) purely so it is unit-testable without constructing a full
 /// `Server` -- mirrors `server::pet::tame_pet`'s own `ecs: &specs::World`
-/// shape for the same reason.
-pub(super) fn release_chain_summon_charge(ecs: &specs::World, entity: EcsEntity) {
+/// shape for the same reason. `pub(crate)`, not `pub(super)`: also called
+/// from `banishment::park_newly_banished` -- `/banish`-ing a live Cadena
+/// summon parks rather than deletes it (never reaching `handle_delete`'s own
+/// call to this), and without a second call site here that charge would
+/// otherwise sit stuck on the owner's ledger for as long as the summon
+/// stays parked, since nothing else ever frees it for that exit route.
+pub(crate) fn release_chain_summon_charge(ecs: &specs::World, entity: EcsEntity) {
     let Some(summon_uid) = ecs.read_storage::<Uid>().get(entity).copied() else {
         return;
     };
@@ -286,6 +291,26 @@ pub(crate) fn summons_to_dismiss(
         .flat_map(|summons| summons.active.iter())
         .filter_map(|(summon_uid, _cost)| id_maps.uid_entity(*summon_uid))
         .collect()
+}
+
+/// Resolves via [`summons_to_dismiss`] and emits a `DeleteEvent` for each --
+/// the entire "the owner is gone" step, shared by both call sites (a real
+/// death, this file's `DestroyEvent` handler, and a logout,
+/// `server::events::player::dismiss_active_chain_summons`) so the two routes
+/// share not just the resolution logic but the emission step too, and can
+/// never independently drift in what "dismiss the owner's summons" means.
+/// Takes a closure rather than a concrete `Emitter` type because the two
+/// call sites hold different emitter shapes (a single-event `Emitter<'_,
+/// DeleteEvent>` for the logout path, a multi-event bundle for the death
+/// path) with no common trait to abstract over otherwise.
+pub(crate) fn dismiss_owners_summons(
+    summons: Option<&comp::Summons>,
+    id_maps: &IdMaps,
+    mut emit_delete: impl FnMut(DeleteEvent),
+) {
+    for summon_entity in summons_to_dismiss(summons, id_maps) {
+        emit_delete(DeleteEvent(summon_entity));
+    }
 }
 
 #[derive(Hash, Eq, PartialEq)]
@@ -3035,16 +3060,16 @@ impl ServerEvent for DestroyEvent {
                 // above) -- so it never reaches this handler's own
                 // `DeleteEvent` funnel, and a dying Warlock's Cadena
                 // summons would otherwise be orphaned rather than freed.
-                // Dismiss them explicitly, the same way
-                // `player::dismiss_active_chain_summons` does for a
-                // logout, routing through the SAME `DeleteEvent` funnel so
-                // `handle_delete` frees the ledger identically either way.
+                // Dismiss them explicitly, through the SAME shared helper
+                // `player::dismiss_active_chain_summons` calls for a
+                // logout (not just the same underlying resolution logic --
+                // the identical resolve-then-emit step), routing through
+                // the SAME `DeleteEvent` funnel so `handle_delete` frees
+                // the ledger identically either way.
                 if is_kill {
-                    for summon_entity in
-                        summons_to_dismiss(data.summons.get(ev.entity), &data.id_maps)
-                    {
-                        emitters.emit(DeleteEvent(summon_entity));
-                    }
+                    dismiss_owners_summons(data.summons.get(ev.entity), &data.id_maps, |ev| {
+                        emitters.emit(ev)
+                    });
                 }
 
                 false
@@ -6092,5 +6117,39 @@ mod chain_summon_release_tests {
         let world = mock_world();
         let id_maps = world.read_resource::<IdMaps>();
         assert!(summons_to_dismiss(None, &id_maps).is_empty());
+    }
+
+    /// `dismiss_owners_summons` is the shared step BOTH the owner-death
+    /// branch (this file's `DestroyEvent` handler) and the owner-logout
+    /// route (`player::dismiss_active_chain_summons`) call -- proving it
+    /// resolves and emits correctly here is what makes both routes provably
+    /// identical, without needing to construct either handler's full (and,
+    /// for `DestroyEvent`, worldgen-heavy) `SystemData` just to exercise
+    /// this one step.
+    #[test]
+    fn dismiss_owners_summons_emits_one_delete_event_per_resolved_summon() {
+        let mut world = mock_world();
+        let (summon_a, summon_a_uid) = spawn(&mut world);
+        let (summon_b, summon_b_uid) = spawn(&mut world);
+        let mut summons = Summons::default();
+        summons.charge(summon_a_uid, 1);
+        summons.charge(summon_b_uid, 1);
+
+        let id_maps = world.read_resource::<IdMaps>();
+        let mut emitted = Vec::new();
+        dismiss_owners_summons(Some(&summons), &id_maps, |DeleteEvent(entity)| {
+            emitted.push(entity)
+        });
+
+        assert_eq!(emitted, vec![summon_a, summon_b]);
+    }
+
+    #[test]
+    fn dismiss_owners_summons_of_none_emits_nothing() {
+        let world = mock_world();
+        let id_maps = world.read_resource::<IdMaps>();
+        let mut emitted = Vec::new();
+        dismiss_owners_summons(None, &id_maps, |DeleteEvent(entity)| emitted.push(entity));
+        assert!(emitted.is_empty());
     }
 }
