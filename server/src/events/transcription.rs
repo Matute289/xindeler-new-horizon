@@ -13,8 +13,8 @@ use crate::client::Client;
 use common::{
     assets::AssetExt,
     comp::{
-        AbilityPool, ActiveAbilities, Body, CharacterClass, ChatType, Content, Inventory, Skill,
-        SkillSet, SpellMastery, TriggerSlots,
+        AbilityPool, ActiveAbilities, Body, CharacterClass, ChatType, Content, Inventory, Pact,
+        Skill, SkillSet, SpellMastery, TriggerSlots,
         ability::remap_innate_bindings,
         class::ClassKind,
         inventory::{
@@ -87,6 +87,9 @@ pub struct TranscribeSpellEventData<'a> {
     bodies: ReadStorage<'a, Body>,
     skill_sets: ReadStorage<'a, SkillSet>,
     spell_masteries: ReadStorage<'a, SpellMastery>,
+    /// Read only so the pool rebuild below keeps a summoned pact blade's
+    /// attack keys; nothing here ever mutates a `Pact`.
+    pacts: ReadStorage<'a, Pact>,
     inventories: WriteStorage<'a, Inventory>,
     ability_pools: WriteStorage<'a, AbilityPool>,
     active_abilities: WriteStorage<'a, ActiveAbilities>,
@@ -244,7 +247,16 @@ impl ServerEvent for TranscribeSpellEvent {
                 data.bodies.get(ev.entity).copied(),
                 data.character_classes.get(ev.entity).copied(),
             ) {
-                let new_pool = AbilityPool::for_character(&body, &character_class, &learned);
+                // `for_character_with_pact`, not `for_character`: a Warlock
+                // with the blade out must not lose its three attack keys (and
+                // the hotbar slots bound to them) just because they
+                // transcribed a spell.
+                let new_pool = AbilityPool::for_character_with_pact(
+                    &body,
+                    &character_class,
+                    &learned,
+                    data.pacts.get(ev.entity),
+                );
                 if let Some(mut active) = data.active_abilities.get_mut(ev.entity) {
                     remap_innate_bindings(&mut active, &old_pool, &new_pool);
                 }
