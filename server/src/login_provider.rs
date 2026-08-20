@@ -257,4 +257,13 @@ impl LoginProvider {
             None => Ok(fallback_alias.into()),
         }
     }
+
+    /// NH-79 Phase 2: exposes the same `authc::AuthClient` this provider
+    /// already holds (same `AUTH_SERVICE_TOKEN` credential, same auth server
+    /// address) so `server-cli`'s `/player_api/v1` auth middleware can
+    /// redeem a `CharacterAccessToken` without instantiating a second,
+    /// redundant client. `None` if this server was started with `--no-auth`
+    /// (no `auth_server_address` configured) -- the middleware must refuse
+    /// every request in that case, not fall back to a weaker check.
+    pub fn auth_client(&self) -> Option<Arc<AuthClient>> { self.auth_server.clone() }
 }

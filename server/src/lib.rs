@@ -6,6 +6,12 @@
 #![deny(clippy::clone_on_ref_ptr)]
 #![feature(box_patterns, option_zip, const_type_name, slice_partition_dedup)]
 
+// NH-79 Phase 2: `server-cli`'s `/player_api/v1` auth middleware needs
+// `authc::AuthClient`/`CharacterAccessToken` directly (via
+// `Server::auth_client` below) -- re-exported rather than adding a second,
+// separately-pinned `authc` dependency to `server-cli`'s own `Cargo.toml`.
+pub use authc;
+
 pub mod automod;
 pub mod banishment;
 mod character_creator;
@@ -1664,6 +1670,19 @@ impl Server {
     /// connection from.
     pub fn database_settings(&self) -> Arc<RwLock<DatabaseSettings>> {
         Arc::clone(&self.database_settings)
+    }
+
+    /// NH-79 Phase 2: exposes the same `authc::AuthClient`
+    /// `login_provider::LoginProvider` (an ECS resource) already holds, for
+    /// `/player_api/v1`'s auth middleware to redeem a `CharacterAccessToken`
+    /// without a second, redundant client instance. See
+    /// `LoginProvider::auth_client`'s own doc comment for the `--no-auth`
+    /// case.
+    pub fn auth_client(&self) -> Option<Arc<authc::AuthClient>> {
+        self.state
+            .ecs()
+            .fetch::<login_provider::LoginProvider>()
+            .auth_client()
     }
 
     /// NH-79: lists `uuid`'s characters for `xindeler-web-landing`'s

@@ -77,7 +77,11 @@ portpicker = { git = "https://github.com/xMAC94x/portpicker-rs", rev = "e04e3a61
 # authentication, so a routine `cargo update` must never silently change its
 # behavior. Bump the rev deliberately when xindeler-auth ships something this
 # repo needs.
-authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "99afc8ff5ff43d5d69cf06e56117b25ca0623de3" }
+#
+# NH-79 Phase 2 (2026-08-19): PR #40 (AuthClient::verify_character_access_token)
+# merged to xindeler-auth's main -- re-pinned here from the feature-branch
+# commit used during this phase's own development.
+authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "2ba6c8c4fbaa6ed52203290fefafab912e2ce51a" }
 enum-map = { workspace = true }
 noise = { workspace = true }
 censor = "0.3"

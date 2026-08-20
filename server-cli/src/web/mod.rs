@@ -4,8 +4,8 @@ use core::{future::Future, ops::Deref};
 use http_body_util::Full;
 use hyper::{StatusCode, header, http};
 use prometheus::{Registry, TextEncoder};
-use server::chat::ChatCache;
-use std::{future::IntoFuture, net::SocketAddr};
+use server::{authc::AuthClient, chat::ChatCache};
+use std::{future::IntoFuture, net::SocketAddr, sync::Arc};
 
 mod chat;
 mod player_api;
@@ -17,6 +17,7 @@ pub async fn run<S, F, R>(
     chat_secret: Option<String>,
     ui_secret: String,
     web_ui_request_s: UiRequestSender,
+    auth_client: Option<Arc<AuthClient>>,
     addr: S,
     shutdown: F,
 ) -> Result<(), hyper::Error>
@@ -36,7 +37,10 @@ where
             ui::api::router(web_ui_request_s.clone(), ui_secret.clone()),
         )
         .nest("/ui", ui::router(ui_secret))
-        .nest("/player_api/v1", player_api::router(web_ui_request_s))
+        .nest(
+            "/player_api/v1",
+            player_api::router(web_ui_request_s, auth_client),
+        )
         .nest("/metrics", metrics)
         .route("/health", get(|| async {}));
 

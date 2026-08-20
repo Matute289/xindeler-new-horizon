@@ -284,6 +284,7 @@ fn main() -> io::Result<()> {
 
     let registry = Arc::clone(server.metrics_registry());
     let chat = server.chat_cache().clone();
+    let auth_client = server.auth_client();
     let metrics_shutdown = Arc::new(Notify::new());
     let metrics_shutdown_clone = Arc::clone(&metrics_shutdown);
     let web_chat_secret = settings.web_chat_secret.clone();
@@ -303,6 +304,7 @@ fn main() -> io::Result<()> {
             web_chat_secret,
             ui_api_secret,
             web_ui_request_s,
+            auth_client,
             settings.web_address,
             metrics_shutdown_clone.notified(),
         )
