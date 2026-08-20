@@ -1,0 +1,51 @@
+// N27-AB — Pacto de la Espada, tier 4: "Hoja Coronada" / "Crowned Blade".
+// Unlocked by spending the tier-4 point on `PactBladeSkill::Crown`
+// (`Simple(Some(PactBlade(Crown)), ..)` in the manifest). Tier 4 is 175,000
+// blade XP -- near-total investment -- so this is the strongest of the three
+// by a clear margin, and priced to match: the longest windup in the set, the
+// highest energy cost, and a 24 s cooldown.
+//
+// A single committed thrust, not a sweep: the crowned blade picks one thing
+// and finishes it. `Stab` (DamageKind::Piercing, hardcoded in
+// common/src/comp/melee.rs) at a longer reach than either sibling.
+//
+// The `Cursed` rider is the crown itself -- what the blade takes, it keeps.
+// `Cursed` drags the victim's MAXIMUM health down toward `1.0 - strength`
+// while it lasts (see BuffKind::Cursed in common/src/comp/buff.rs), so
+// `Value(0.15)` is a 15% max-health bite for 20 s, well under the shipped
+// `bestow_curse` spell's `Value(0.3)` for 60 s. Guaranteed rather than
+// chanced, because this is a capstone on a long cooldown, not a rider on a
+// spammable strike.
+//
+// Damage sits just above the level-5 spell band (destructive_wave 78) --
+// appropriate for a capstone gated behind an entire boon's XP ladder rather
+// than a class level, and the only thing in this set that is meant to compete
+// with a big spell. See pact_blade_mute.ron for why `source: Some(Arcane)` is
+// load-bearing and why `school` is unset.
+BasicMelee(
+    energy_cost: 45,
+    buildup_duration: 0.7,
+    swing_duration: 0.12,
+    hit_timing: 0.5,
+    recover_duration: 0.6,
+    melee_constructor: (
+        kind: Stab(
+            damage: 68,
+            poise: 32,
+            knockback: 10,
+            energy_regen: 0,
+        ),
+        range: 4.0,
+        angle: 20.0,
+        damage_effect: Some(Buff((
+            kind: Cursed,
+            dur_secs: 20.0,
+            strength: Value(0.15),
+            chance: 1.0,
+        ))),
+    ),
+    meta: (
+        source: Some(Arcane),
+        cooldown: Some(24.0),
+    ),
+)
