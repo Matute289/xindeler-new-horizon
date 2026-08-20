@@ -185,6 +185,33 @@ git diff --check
 ```
 Expected: no output. If output appears, open each listed file and remove remaining `<<<<<<<` / `=======` / `>>>>>>>` markers.
 
+### 3e. Re-apply the Veloren→Xindeler rename mapper
+
+Every `gitlab/master` commit is authored against upstream's own `veloren-*` package/binary
+names and `veloren_*` Rust identifiers. A clean merge reintroduces them verbatim wherever
+upstream touched a renamed file — this is expected, not a conflict, and `tools/xindeler-rename.sh`
+exists specifically to undo it after each sync (its own header comment says so). Run it now,
+before Phase 4's build check, or the workspace won't compile against our actual crate names:
+
+```bash
+bash tools/xindeler-rename.sh
+cargo fmt --all
+git status --short
+```
+
+Idempotent — an up-to-date tree prints `xindeler-rename: nothing to do (idempotent no-op)` and
+`git status` shows no changes. If it DID rewrite files, review the diff briefly (`git diff`) to
+confirm it only touched the scopes the script documents (Cargo package/binary names, Rust
+identifier forms, dylib hot-reload init strings — never `assets/**` paths, the WASM plugin ABI,
+wire-protocol strings, DB schema, or userdata dir names), then include those changes in this
+same integration branch/commit.
+
+If the merge added a **new** upstream crate we didn't have before (a new `[[workspace]] members`
+entry), check whether it needs its own `MAP` entry in the script — most of our own crates
+(e.g. `common/oracle`) never existed upstream and never had a `veloren-*` name to begin with, so
+absence from `MAP` is often correct, not a gap. Only add an entry for a crate that genuinely
+carries an upstream `veloren-*` name we're keeping and rebranding.
+
 ---
 
 ## Phase 4: Validate
