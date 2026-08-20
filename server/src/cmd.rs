@@ -4928,11 +4928,22 @@ fn handle_learn_spells(
             .get(target)
             .copied(),
     ) {
-        (Some(body), Some(character_class)) => Some(comp::AbilityPool::for_character(
-            &body,
-            &character_class,
-            &learned,
-        )),
+        // `for_character_with_pact`, not `for_character`: a Warlock with the
+        // blade out must not lose its three attack keys (and the hotbar slots
+        // bound to them) just because an unrelated rebuild was triggered.
+        // `.with_talisman_bond(..)` chained for the same reason: a bonded
+        // talisman bearer's recall key is keyed on the BEARER's pool, not
+        // derivable from `target`'s own `Pact`, so it has to be re-asserted
+        // from `old_pool` or this rebuild silently drops it.
+        (Some(body), Some(character_class)) => Some(
+            comp::AbilityPool::for_character_with_pact(
+                &body,
+                &character_class,
+                &learned,
+                ecs.read_storage::<comp::Pact>().get(target),
+            )
+            .with_talisman_bond(old_pool.has_talisman_bond()),
+        ),
         _ => None,
     };
     if let Some(pool) = rebuilt {
@@ -6658,7 +6669,20 @@ fn handle_multiclass(
             .get(target)
             .cloned()
             .unwrap_or_default();
-        let pool = comp::AbilityPool::for_character(&body, &character_class, &learned);
+        // `for_character_with_pact`, not `for_character`: a Warlock with the
+        // blade out must not lose its three attack keys (and the hotbar slots
+        // bound to them) just because they multiclassed. `.with_talisman_bond(..)`
+        // chained for the same reason: a bonded talisman bearer's recall key
+        // is keyed on the BEARER's pool, not derivable from `target`'s own
+        // `Pact`, so it has to be re-asserted from `old_pool` or this rebuild
+        // silently drops it.
+        let pool = comp::AbilityPool::for_character_with_pact(
+            &body,
+            &character_class,
+            &learned,
+            ecs.read_storage::<comp::Pact>().get(target),
+        )
+        .with_talisman_bond(old_pool.has_talisman_bond());
         // The live `ActiveAbilities` still holds raw indices into the OLD
         // pool. Re-point them by key before the pool is swapped, or the next
         // save writes each slot under whatever key now sits at its old index.
@@ -7170,6 +7194,11 @@ fn handle_pact(
                     )));
                 },
             };
+            // Only the tier-0 strike is usable without spending a blade skill
+            // point; the other two are gated in the ability manifest on
+            // PactBlade(SecondStrike)/(Crown). Read before `current` is moved
+            // into the write below.
+            let tier = current.blade_tier();
             crate::pact::set_pact(server, pact_target, Pact {
                 blade_summoned,
                 ..current
@@ -7179,9 +7208,12 @@ fn handle_pact(
                 ServerGeneral::server_msg(
                     ChatType::CommandInfo,
                     Content::Plain(if blade_summoned {
-                        "Blade flag set (no ability/weapon granted yet).".to_string()
+                        format!(
+                            "Blade summoned (tier {tier}) -- Mute Blade granted; Waking Blade \
+                             needs the tier-2 skill, Crowned Blade the tier-4 one."
+                        )
                     } else {
-                        "Blade flag cleared.".to_string()
+                        "Blade dismissed; its abilities are revoked.".to_string()
                     }),
                 ),
             );

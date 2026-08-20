@@ -614,6 +614,15 @@ class-rogue-ambush = Ambush
 class-rogue-vanish = Vanish
     .desc = A sudden burst of mobility to slip away. Stronger with more ranks in Deadly Precision.
 
+## N27-AB — the Warlock Blade boon's three attacks, held only while the pact
+## blade is summoned. Named for the canon tiers: Muda / Despierta / Coronada.
+class-warlock-pactblade-mute = Mute Blade
+    .desc = The pact blade has no voice yet, and needs none. A patron-forged cut, always at hand while the blade is out.
+class-warlock-pactblade-waking = Waking Blade
+    .desc = The woken blade sweeps a full circle on its own, opening wounds that are slow to close. Requires the tier-2 Second Strike.
+class-warlock-pactblade-crowned = Crowned Blade
+    .desc = One committed thrust from a blade that wears its hunger like a crown - what it takes, it keeps. Requires the tier-4 Crown.
+
 ## Upstream bow abilities (archer rework)
 common-abilities-bow-thorn_stake = Thorn Stake
     .desc = Fire a large spiky arrow into the ground. Any future targets that walk into the stake take damage from the thorns.

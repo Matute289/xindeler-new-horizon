@@ -284,6 +284,26 @@ impl Pact {
     /// this is that flag, derived from [`Self::blade_tier`] rather than
     /// stored separately. Always `false` for a non-Blade pact.
     pub fn blade_voice_unlocked(&self) -> bool { self.blade_tier() >= 1 }
+
+    /// Is the pact blade actually out right now?
+    ///
+    /// [`Self::blade_summoned`] alone is not the answer: it is a stored flag,
+    /// and a pact can be severed or its boon changed underneath it. This is
+    /// the single rule -- the blade is manifest only on a still-`Bound`
+    /// `Blade` pact -- and it is what [`crate::comp::ability::AbilityPool`]'s
+    /// blade keys and the blade's XP accrual are both derived from, so the
+    /// two can never disagree. Mirrors how `bond_is_intact` is the one rule
+    /// behind the Talisman boon's ward.
+    ///
+    /// `server::pact::set_pact` normalizes `blade_summoned` against exactly
+    /// this rule on write, so a stored `true` on a severed pact is not
+    /// reachable in practice -- this stays defensive anyway, since `Pact` is
+    /// also loaded straight out of the database.
+    pub fn blade_is_manifest(&self) -> bool {
+        self.blade_summoned
+            && self.standing == PactStanding::Bound
+            && self.boon == Some(PactBoon::Blade)
+    }
 }
 
 impl Component for Pact {
@@ -675,6 +695,54 @@ mod tests {
         let pact = Pact::default();
         assert_eq!(pact.blade_tier(), 0);
         assert!(!pact.blade_voice_unlocked());
+    }
+
+    /// N27-AB: the one rule behind both the blade's ability keys and its XP
+    /// accrual. `blade_summoned` on its own is a stored flag and can go stale
+    /// -- only a still-`Bound` `Blade` pact actually has a blade out.
+    #[test]
+    fn a_blade_is_only_manifest_on_a_bound_blade_pact_that_summoned_it() {
+        let out = Pact {
+            standing: PactStanding::Bound,
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            ..Pact::default()
+        };
+        assert!(out.blade_is_manifest());
+
+        for stale in [
+            Pact {
+                blade_summoned: false,
+                ..out.clone()
+            },
+            Pact {
+                standing: PactStanding::Severed,
+                ..out.clone()
+            },
+            Pact {
+                boon: Some(PactBoon::Talisman),
+                ..out.clone()
+            },
+            Pact {
+                boon: Some(PactBoon::Chain),
+                ..out.clone()
+            },
+            Pact {
+                boon: None,
+                ..out.clone()
+            },
+        ] {
+            assert!(
+                !stale.blade_is_manifest(),
+                "{:?}/{:?}/summoned={} must have no blade out",
+                stale.standing,
+                stale.boon,
+                stale.blade_summoned
+            );
+        }
+
+        // A pact nobody ever bound has no blade either.
+        assert!(!Pact::default().blade_is_manifest());
     }
 
     #[test]

@@ -36,6 +36,15 @@ use crate::Server;
 /// the ward and the recall key the moment the bond stops naming them. Every
 /// `/pact` action therefore gets sever/boon-change cleanup for free rather
 /// than each remembering to do it.
+///
+/// The Blade boon's `blade_summoned` is normalized against
+/// [`Pact::blade_is_manifest`] on the same principle, and the summoned
+/// blade's three attack keys are added to (or stripped from) the Warlock's
+/// own [`AbilityPool`] here. Being the single choke point every `/pact`
+/// action already routes through, this covers `blade summon`, `blade
+/// dismiss`, `sever` and `boon` (the latter two force `blade_summoned: false`
+/// themselves) without a hook per route -- the same reason `set_pact` owns
+/// the talisman cleanup.
 pub fn set_pact(server: &mut Server, target: EcsEntity, pact: Pact) {
     let previous = server
         .state
@@ -52,17 +61,36 @@ pub fn set_pact(server: &mut Server, target: EcsEntity, pact: Pact) {
         talisman_bearer: pact.talisman_bearer.filter(|_| {
             pact.standing == PactStanding::Bound && pact.boon == Some(PactBoon::Talisman)
         }),
+        // Same normalization, one boon over: a blade cannot be out on a
+        // severed pact or under a boon that isn't Blade. Callers already
+        // force this on those routes; doing it here too means the pool grant
+        // below can be derived from the stored flag alone.
+        blade_summoned: pact.blade_is_manifest(),
         ..pact
     };
     let dropped_bearer = previous
         .and_then(|p| p.talisman_bearer)
         .filter(|old| Some(*old) != pact.talisman_bearer);
+    let blade_manifest = pact.blade_summoned;
 
     let _ = server
         .state
         .ecs_mut()
         .write_storage::<Pact>()
         .insert(target, pact);
+
+    // The Warlock's own pool, not a bearer's: the blade is granted to whoever
+    // holds the pact.
+    {
+        let ecs = server.state.ecs();
+        set_blade_pool_keys(
+            &mut ecs.write_storage::<AbilityPool>(),
+            &mut ecs.write_storage::<ActiveAbilities>(),
+            &mut ecs.write_storage::<TriggerSlots>(),
+            target,
+            blade_manifest,
+        );
+    }
 
     let dropped_entity = dropped_bearer.and_then(|dropped| {
         server
@@ -133,6 +161,48 @@ pub fn set_talisman_pool_key(
     }
     let old_pool = pool.clone();
     let new_pool = old_pool.clone().with_talisman_bond(bonded);
+    if let Some(mut active) = actives.get_mut(entity) {
+        common::comp::ability::remap_innate_bindings(&mut active, &old_pool, &new_pool);
+    }
+    // A live trigger slot holds raw pool indices too; a re-pointed one would
+    // mint its cooldown-bypass token for the wrong ability.
+    if let Some(mut slots) = triggers.get_mut(entity) {
+        slots.remap_innate_bindings(&old_pool, &new_pool);
+    }
+    let _ = pools.insert(entity, new_pool);
+}
+
+/// Adds or removes the summoned blade's three attack keys, re-pointing every
+/// index-based binding that survives the rebuild at the same ability.
+///
+/// Structurally identical to [`set_talisman_pool_key`] above -- the same
+/// membership pre-check (this is reached on every `/pact` action, and the
+/// common answer is "nothing to do", which must not cost two deep clones of a
+/// `Vec<String>` holding every class ability key) and the same two remaps.
+/// All three keys are appended after everything else the pool holds, never
+/// inserted mid-list (see [`AbilityPool::with_blade_bond`]).
+///
+/// Note what this does NOT do: no `EquipSlot` is touched, no `Item` is
+/// created, `ActiveMainhand` keeps whatever real weapon was already there,
+/// and nothing here has a lifetime or expiry -- the blade stays out until the
+/// Warlock dismisses it, severs the pact, or changes boon. The individual
+/// abilities' own cast cooldowns are authored in their RONs and are a
+/// separate thing entirely.
+pub fn set_blade_pool_keys(
+    pools: &mut WriteStorage<AbilityPool>,
+    actives: &mut WriteStorage<ActiveAbilities>,
+    triggers: &mut WriteStorage<TriggerSlots>,
+    entity: EcsEntity,
+    summoned: bool,
+) {
+    let Some(pool) = pools.get(entity) else {
+        return;
+    };
+    if pool.has_blade_bond() == summoned {
+        return;
+    }
+    let old_pool = pool.clone();
+    let new_pool = old_pool.clone().with_blade_bond(summoned);
     if let Some(mut active) = actives.get_mut(entity) {
         common::comp::ability::remap_innate_bindings(&mut active, &old_pool, &new_pool);
     }
@@ -371,5 +441,224 @@ pub fn release_talisman(server: &mut Server, warlock: EcsEntity) {
 
     if let Some(bearer) = bearer {
         clear_bearer_state(server, bearer);
+    }
+}
+
+/// N27-AB — the ECS half of granting the summoned blade: that
+/// [`set_blade_pool_keys`] adds and removes all three keys together, and that
+/// it re-points (or clears) the bindings that hold raw pool indices.
+///
+/// Driven against a real `World`'s storages rather than through [`set_pact`],
+/// which needs a whole `Server`; the normalization `set_pact` layers on top is
+/// covered by `Pact::blade_is_manifest`'s own tests in `common`.
+#[cfg(test)]
+mod blade_pool_tests {
+    use common::comp::ability::{AbilityPool, AuxiliaryAbility};
+    use specs::{Builder, World, WorldExt};
+
+    use super::*;
+
+    fn human_body() -> common::comp::Body {
+        use rand::{SeedableRng, rngs::SmallRng};
+        common::comp::Body::Humanoid(common::comp::humanoid::Body::random_with(
+            &mut SmallRng::seed_from_u64(0),
+            &common::comp::humanoid::Species::Human,
+        ))
+    }
+
+    fn warlock_pool() -> AbilityPool {
+        AbilityPool::for_character(
+            &human_body(),
+            &common::comp::CharacterClass::single(common::comp::ClassKind::Warlock),
+            AbilityPool::no_learned_spells(),
+        )
+    }
+
+    fn mock_world() -> World {
+        let mut world = World::new();
+        world.register::<AbilityPool>();
+        world.register::<ActiveAbilities>();
+        world.register::<TriggerSlots>();
+        world
+    }
+
+    fn toggle(world: &World, entity: EcsEntity, summoned: bool) {
+        set_blade_pool_keys(
+            &mut world.write_storage::<AbilityPool>(),
+            &mut world.write_storage::<ActiveAbilities>(),
+            &mut world.write_storage::<TriggerSlots>(),
+            entity,
+            summoned,
+        );
+    }
+
+    /// Summoning appends the three keys; dismissing takes exactly those three
+    /// back out and leaves the rest of the pool byte-identical.
+    #[test]
+    fn summon_and_dismiss_add_and_remove_all_three_keys_together() {
+        let mut world = mock_world();
+        let base = warlock_pool();
+        let entity = world.create_entity().with(base.clone()).build();
+
+        toggle(&world, entity, true);
+        let summoned = world
+            .read_storage::<AbilityPool>()
+            .get(entity)
+            .cloned()
+            .expect("pool still present");
+        assert!(summoned.has_blade_bond());
+        assert_eq!(summoned.abilities.len(), base.abilities.len() + 3);
+        assert_eq!(
+            &summoned.abilities[..base.abilities.len()],
+            &base.abilities[..],
+            "no pre-existing key may shift"
+        );
+
+        toggle(&world, entity, false);
+        let dismissed = world
+            .read_storage::<AbilityPool>()
+            .get(entity)
+            .cloned()
+            .expect("pool still present");
+        assert!(!dismissed.has_blade_bond());
+        assert_eq!(dismissed.abilities, base.abilities);
+    }
+
+    /// A hotbar slot bound to an unrelated pool key must be untouched by the
+    /// whole summon -> dismiss cycle, while a slot bound to a blade key is
+    /// emptied on dismiss (the key genuinely is not in the pool any more,
+    /// exactly as a released talisman bearer's recall slot is).
+    #[test]
+    fn the_cycle_repoints_unrelated_bindings_and_empties_the_blades_own() {
+        let mut world = mock_world();
+        let base = warlock_pool();
+        let unrelated_key = base.abilities[0].clone();
+
+        let mut active = ActiveAbilities::default_limited(5);
+        active.change_ability(
+            0,
+            ActiveAbilities::active_auxiliary_key(None),
+            AuxiliaryAbility::Innate(0),
+            None,
+            None,
+        );
+        let entity = world.create_entity().with(base).with(active).build();
+
+        toggle(&world, entity, true);
+
+        // Bind slot 1 to the blade's base strike now that it exists.
+        let blade_index = world
+            .read_storage::<AbilityPool>()
+            .get(entity)
+            .expect("pool")
+            .abilities
+            .iter()
+            .position(|key| key == AbilityPool::PACT_BLADE_KEYS[0])
+            .expect("the base strike is in the pool");
+        world
+            .write_storage::<ActiveAbilities>()
+            .get_mut(entity)
+            .expect("active abilities")
+            .change_ability(
+                1,
+                ActiveAbilities::active_auxiliary_key(None),
+                AuxiliaryAbility::Innate(blade_index),
+                None,
+                None,
+            );
+
+        toggle(&world, entity, false);
+
+        let pools = world.read_storage::<AbilityPool>();
+        let actives = world.read_storage::<ActiveAbilities>();
+        let pool = pools.get(entity).expect("pool");
+        let active = actives.get(entity).expect("active");
+        let set = active.auxiliary_set(None, None);
+
+        let AuxiliaryAbility::Innate(index) = set[0] else {
+            panic!(
+                "the unrelated binding must still be innate, got {:?}",
+                set[0]
+            );
+        };
+        assert_eq!(
+            pool.abilities[index], unrelated_key,
+            "an unrelated hotbar binding must survive the whole cycle"
+        );
+        assert!(
+            matches!(set[1], AuxiliaryAbility::Empty),
+            "a slot bound to a dismissed blade key must be emptied, not left pointing at whatever \
+             moved into its index, got {:?}",
+            set[1]
+        );
+    }
+
+    /// Cheap no-op paths: an entity with no pool at all, and a redundant
+    /// toggle. `set_pact` reaches this on EVERY `/pact` action, so "nothing
+    /// to do" must stay free.
+    #[test]
+    fn a_redundant_toggle_and_a_poolless_entity_are_both_no_ops() {
+        let mut world = mock_world();
+        let poolless = world.create_entity().build();
+        let entity = world.create_entity().with(warlock_pool()).build();
+
+        // Must not panic, and must insert nothing.
+        toggle(&world, poolless, true);
+        // Already dismissed; dismissing again changes nothing.
+        toggle(&world, entity, false);
+
+        assert!(world.read_storage::<AbilityPool>().get(poolless).is_none());
+        assert_eq!(
+            world
+                .read_storage::<AbilityPool>()
+                .get(entity)
+                .expect("pool")
+                .abilities,
+            warlock_pool().abilities
+        );
+    }
+
+    /// The blade is exactly three pool keys: no `EquipSlot` is touched, no
+    /// `Item` is created, and nothing that could be dropped, traded, sold or
+    /// persisted as gear comes into existence. An `Inventory` sitting on the
+    /// same entity comes out of a summon untouched.
+    #[test]
+    fn summoning_the_blade_never_touches_the_inventory_or_a_loadout_slot() {
+        use common::comp::inventory::slot::EquipSlot;
+
+        let mut world = mock_world();
+        world.register::<Inventory>();
+        let entity = world
+            .create_entity()
+            .with(warlock_pool())
+            .with(Inventory::with_empty())
+            .build();
+
+        let before = world
+            .read_storage::<Inventory>()
+            .get(entity)
+            .map(|inv| inv.slots().flatten().count())
+            .expect("inventory");
+
+        toggle(&world, entity, true);
+
+        let inventories = world.read_storage::<Inventory>();
+        let after = inventories.get(entity).expect("inventory");
+        assert_eq!(
+            before,
+            after.slots().flatten().count(),
+            "summoning the blade must not add an item"
+        );
+        for slot in [
+            EquipSlot::ActiveMainhand,
+            EquipSlot::ActiveOffhand,
+            EquipSlot::InactiveMainhand,
+            EquipSlot::InactiveOffhand,
+        ] {
+            assert!(
+                after.equipped(slot).is_none(),
+                "the blade must never occupy {slot:?}"
+            );
+        }
     }
 }

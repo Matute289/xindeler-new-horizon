@@ -11,9 +11,9 @@ hud-pact-severed-notice = Tu pacto se ha roto. El poder de tu patrón ya no te r
 ## Los despertares de la Espada
 
 hud-pact-blade-tier-1 = Tu espada del pacto se agita: por primera vez, deja de estar inerte.
-hud-pact-blade-tier-2 = Tu espada del pacto se fortalece, un nuevo hambre tomando forma en su interior.
+hud-pact-blade-tier-2 = Tu espada del pacto despierta y gira en tu mano. Gastá su punto en Segundo Filo para desatar la Hoja Despierta.
 hud-pact-blade-tier-3 = Tu espada del pacto se vuelve aún más hambrienta, inquieta por más.
-hud-pact-blade-tier-4 = Tu espada del pacto se vuelve aún más peligrosa, su hambre casi completa.
+hud-pact-blade-tier-4 = Tu espada del pacto lleva su hambre como una corona. Gastá su punto en Corona para desatar la Hoja Coronada.
 hud-pact-blade-tier-5 = Tu espada del pacto pronuncia, por fin, su propio nombre: { $name }.
 
 ## Patrones

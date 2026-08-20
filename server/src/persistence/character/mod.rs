@@ -364,13 +364,26 @@ pub fn load_character_data(
     // Xindeler: persisted `Innate` hotbar slots name pool keys, so resolving
     // them needs the pool. Nothing here holds one yet — the component is only
     // inserted once the character is applied to its entity — so rebuild it from
-    // the body, class and spellbook we just decoded, exactly as `state_ext`
-    // will. Both sites must agree, or a slot would resolve to a different
-    // ability than the one it was saved against.
-    let ability_pool = comp::ability::AbilityPool::for_character(
+    // the body, class, spellbook and pact we just decoded, exactly as
+    // `state_ext` will. Both sites must agree, or a slot would resolve to a
+    // different ability than the one it was saved against — which is why both
+    // go through `for_character_with_pact` rather than `for_character`: a
+    // Warlock who logged out with the blade summoned keeps its three attack
+    // keys across the relog, and so keeps the hotbar slots bound to them.
+    let pact = convert_pact_from_database(
+        character_data.pact_standing.as_deref(),
+        character_data.pact_patron_id.as_deref(),
+        character_data.pact_boon.as_deref(),
+        character_data.pact_blade_summoned,
+        character_data.pact_blade_exp,
+        character_data.pact_blade_name.as_deref(),
+        character_data.pact_favour,
+    );
+    let ability_pool = comp::ability::AbilityPool::for_character_with_pact(
         &body,
         &character_class,
         inventory.learned_spells(),
+        Some(&pact),
     );
     Ok((
         PersistedComponents {
@@ -392,15 +405,7 @@ pub fn load_character_data(
                 character_data.ethos_law_chaos,
             ),
             background: convert_background_from_database(character_data.background.as_deref()),
-            pact: convert_pact_from_database(
-                character_data.pact_standing.as_deref(),
-                character_data.pact_patron_id.as_deref(),
-                character_data.pact_boon.as_deref(),
-                character_data.pact_blade_summoned,
-                character_data.pact_blade_exp,
-                character_data.pact_blade_name.as_deref(),
-                character_data.pact_favour,
-            ),
+            pact,
             trigger_slots: json_models::db_string_to_trigger_slots(
                 character_data.trigger_slots.as_deref(),
                 &ability_pool,
@@ -1770,10 +1775,11 @@ mod spell_book_persistence_tests {
     }
 
     fn pool_of(loaded: &PersistedComponents) -> comp::AbilityPool {
-        comp::ability::AbilityPool::for_character(
+        comp::ability::AbilityPool::for_character_with_pact(
             &loaded.body,
             &loaded.character_class,
             loaded.inventory.learned_spells(),
+            Some(&loaded.pact),
         )
     }
 
@@ -1871,6 +1877,79 @@ mod spell_book_persistence_tests {
         assert_eq!(
             reloaded_pool.abilities[reloaded_index], bound_key,
             "the hotbar slot re-pointed at a different ability across a reload"
+        );
+    }
+
+    /// N27-AB: a Warlock who logs out with the pact blade summoned gets it
+    /// back on login, and a hotbar slot bound to one of its three attacks
+    /// still names the SAME attack.
+    ///
+    /// This is the load-side half of the "both builders must agree" rule:
+    /// `load_character_data` resolves the persisted `Innate:key:` slots
+    /// against a pool it rebuilds itself, and `state_ext` builds the live
+    /// component separately. If either one used `for_character` instead of
+    /// `for_character_with_pact`, the blade keys would be missing from that
+    /// side and the binding would silently empty.
+    #[test]
+    fn a_summoned_blade_and_its_hotbar_slot_survive_a_relog() {
+        use common::comp::{
+            ability::AbilityPool,
+            pact::{PactBoon, PactStanding},
+        };
+
+        let db = TestDb::new();
+        let id = create(&db, "uuid-blade", &[]);
+
+        // A brand-new character has no pact (`create_character` skips those
+        // columns), so bind the blade on the first save instead.
+        let mut loaded = load(&db, "uuid-blade", id);
+        loaded.character_class = CharacterClass::single(comp::ClassKind::Warlock);
+        loaded.pact = comp::Pact {
+            standing: PactStanding::Bound,
+            boon: Some(PactBoon::Blade),
+            blade_summoned: true,
+            ..comp::Pact::default()
+        };
+        let pool = pool_of(&loaded);
+        assert!(
+            pool.has_blade_bond(),
+            "a summoned blade must put its keys in the pool"
+        );
+
+        // Bind the capstone: the LAST of the three appended keys, the most
+        // fragile position.
+        let bound_key = AbilityPool::PACT_BLADE_KEYS[2];
+        let index = pool
+            .abilities
+            .iter()
+            .position(|key| key == bound_key)
+            .expect("the capstone key is in the pool");
+        let mut sets = hashbrown::HashMap::new();
+        sets.insert((None, None), vec![AuxiliaryAbility::Innate(index)]);
+        loaded.active_abilities = ActiveAbilities::from_auxiliary(sets, None);
+
+        save(&db, id, &loaded, &pool);
+
+        let reloaded = load(&db, "uuid-blade", id);
+        assert!(
+            reloaded.pact.blade_is_manifest(),
+            "blade_summoned must survive the round trip"
+        );
+        let reloaded_pool = pool_of(&reloaded);
+        assert!(reloaded_pool.has_blade_bond());
+        let slot = reloaded
+            .active_abilities
+            .auxiliary_sets
+            .get(&(None, None))
+            .and_then(|set| set.first())
+            .copied()
+            .expect("the bound set survives");
+        let AuxiliaryAbility::Innate(reloaded_index) = slot else {
+            panic!("the slot must still be an innate binding, got {slot:?}")
+        };
+        assert_eq!(
+            reloaded_pool.abilities[reloaded_index], bound_key,
+            "the hotbar slot re-pointed off the blade's capstone across a relog"
         );
     }
 

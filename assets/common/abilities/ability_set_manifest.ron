@@ -1595,4 +1595,29 @@
         secondary: Simple(None, "common.abilities.class.warlock.summon_chain_fiend"),
         abilities: [],
     )),
+    // N27-AB — Pacto de la Espada: the Blade boon's three attacks. All three
+    // keys are granted together by `AbilityPool::with_blade_bond` the moment
+    // `Pact::blade_summoned` goes true, and stripped together on dismiss —
+    // the BLADE's presence is what grants them. The per-TIER gate is the
+    // `Simple(Some(PactBlade(..)), ..)` below and nothing else, so spending a
+    // blade skill point never moves a pool index (see `AbilityPool::
+    // PACT_BLADE_KEYS`).
+    //
+    // No `EquipSlot`, no `Item`, no `Loadout` entry is involved anywhere:
+    // these are the whole of the summoned blade.
+    Custom("class.warlock.pactblade.mute"): AbilitySet((
+        primary: Simple(None, "common.abilities.class.warlock.pact_blade_mute"),
+        secondary: Simple(None, "common.abilities.class.warlock.pact_blade_mute"),
+        abilities: [],
+    )),
+    Custom("class.warlock.pactblade.waking"): AbilitySet((
+        primary: Simple(Some(PactBlade(SecondStrike)), "common.abilities.class.warlock.pact_blade_waking"),
+        secondary: Simple(Some(PactBlade(SecondStrike)), "common.abilities.class.warlock.pact_blade_waking"),
+        abilities: [],
+    )),
+    Custom("class.warlock.pactblade.crowned"): AbilitySet((
+        primary: Simple(Some(PactBlade(Crown)), "common.abilities.class.warlock.pact_blade_crowned"),
+        secondary: Simple(Some(PactBlade(Crown)), "common.abilities.class.warlock.pact_blade_crowned"),
+        abilities: [],
+    )),
 })
