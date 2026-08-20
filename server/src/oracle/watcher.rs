@@ -23,7 +23,7 @@ pub const ORACLE_EVENTS_DIR_ENV: &str = "XINDELER_ORACLE_EVENTS_DIR";
 
 /// Default runtime directory ORACLE writes `.dmevent.ron`/`.dmevent.json`/
 /// `.entity_template.ron`/`.entity_template.json` files into. Resolved
-/// independently of `common_base::userdata_dir()`/`XINDELER_USERDATA` — a
+/// independently of `common_base::userdata_dir()`/`VELOREN_USERDATA` — a
 /// deployment that relocates userdata via those still needs
 /// `XINDELER_ORACLE_EVENTS_DIR` set explicitly to follow.
 #[must_use]

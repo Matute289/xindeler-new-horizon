@@ -5,16 +5,17 @@ pub use common::event::{
     CreateFloatingDiskEvent, CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent,
     CreateObjectEvent, CreatePoolEvent, CreateShipEvent, CreateSpecialEntityEvent,
     CreateSpriteEvent, DeleteCharacterEvent, DeleteEvent, DestroyEvent, DialogueEvent,
-    DispelIllusionEvent, DownedEvent, EnergyChangeEvent, EntityAttackedHookEvent, EventBus,
-    ExitIngameEvent, ExplosionEvent, GroupManipEvent, HealthChangeEvent, HelpDownedEvent,
-    InitializeCharacterEvent, InitializeSpectatorEvent, InitiateInviteEvent, InventoryManipEvent,
-    InviteResponseEvent, KillEvent, KnockbackEvent, LandOnGroundEvent, MakeAdminEvent,
-    MineBlockEvent, MountEvent, NpcInteractEvent, ParryHookEvent, PoiseChangeEvent, PossessEvent,
-    ProcessTradeActionEvent, RegrowHeadEvent, RemoteUnlockEvent, RemoveLightEmitterEvent,
-    RequestSiteInfoEvent, ResolveIdentifyEvent, ResolveRemoteSenseEvent, RespawnEvent,
-    SetAbilityCooldownEvent, SetBattleModeEvent, SetLanternEvent, SetPetStayEvent, ShockwaveEvent,
-    ShootEvent, SoundEvent, StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent,
-    TamePetEvent, TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent,
+    DismissSummonEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
+    EntityAttackedHookEvent, EventBus, ExitIngameEvent, ExplosionEvent, GroupManipEvent,
+    HealthChangeEvent, HelpDownedEvent, InitializeCharacterEvent, InitializeSpectatorEvent,
+    InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
+    LandOnGroundEvent, MakeAdminEvent, MineBlockEvent, MountEvent, NpcInteractEvent,
+    ParryHookEvent, PoiseChangeEvent, PossessEvent, ProcessTradeActionEvent, RegrowHeadEvent,
+    RemoteUnlockEvent, RemoveLightEmitterEvent, RequestSiteInfoEvent, ResolveIdentifyEvent,
+    ResolveRemoteSenseEvent, RespawnEvent, SetAbilityCooldownEvent, SetBattleModeEvent,
+    SetLanternEvent, SetPetStayEvent, ShockwaveEvent, ShootEvent, SoundEvent,
+    StartInteractionEvent, StartTeleportingEvent, SummonBeamPillarsEvent, TamePetEvent,
+    TeleportToEvent, TeleportToPositionEvent, ThrowEvent, ToggleSpriteLightEvent,
     TranscribeSpellEvent, TransformEvent, UpdateCharacterDataEvent, UpdateMapMarkerEvent,
 };
 
@@ -65,6 +66,7 @@ macro_rules! server_events {
             MountEvent
             SetPetStayEvent
             CommandPetEvent
+            DismissSummonEvent
             PossessEvent
             InitializeCharacterEvent
             InitializeSpectatorEvent
