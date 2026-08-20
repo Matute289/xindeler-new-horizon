@@ -566,6 +566,15 @@ class-rogue-ambush = Emboscada
     .desc = Un golpe de apertura preciso - devastador desde atrás.
 class-rogue-vanish = Desvanecimiento
     .desc = Una repentina ráfaga de movilidad para escapar. Más potente con más rangos en Precisión Mortal.
+
+## N27-AB — los tres ataques de la Espada del Brujo, sólo mientras la espada
+## del pacto está invocada. Nombrados por los niveles del canon.
+class-warlock-pactblade-mute = Hoja Muda
+    .desc = La espada del pacto todavía no tiene voz, y no la necesita. Un tajo forjado por el patrón, siempre a mano mientras la hoja esté afuera.
+class-warlock-pactblade-waking = Hoja Despierta
+    .desc = La hoja despierta barre un círculo completo por sí sola, abriendo heridas que tardan en cerrar. Requiere el Segundo Filo del nivel 2.
+class-warlock-pactblade-crowned = Hoja Coronada
+    .desc = Una estocada decidida de una hoja que lleva su hambre como una corona: lo que toma, se lo queda. Requiere la Corona del nivel 4.
 common-abilities-bow-thorn_stake = Estaca de Espinas
     .desc = Dispara una gran flecha puntiaguda en el suelo. Cualquier objetivo futuro que camine sobre la estaca recibe daño de las espinas.
 common-abilities-bow-burning_thorn_stake = Estaca de Espinas Ardiente
