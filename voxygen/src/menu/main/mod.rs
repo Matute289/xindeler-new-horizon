@@ -715,6 +715,15 @@ pub(crate) fn get_client_msg_error(
             client::AuthClientError::InsecureUrl => localization
                 .get_msg("main-login-insecure_auth_scheme")
                 .into(),
+            // The auth server can answer a login with a request for a TOTP
+            // code instead of a token. Redeeming that challenge and the
+            // client-side prompt to collect the code are not implemented
+            // yet, so any account with 2FA enabled hits this arm on every
+            // login attempt -- tell the player plainly rather than showing a
+            // generic network-failure message.
+            client::AuthClientError::TwoFactorRequired(_) => {
+                localization.get_msg("main-login-2fa_not_supported").into()
+            },
         },
         Error::AuthServerUrlInvalid(e) => {
             format!(
