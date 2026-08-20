@@ -62,7 +62,13 @@ hashbrown = { workspace = true }
 # authentication, so a routine `cargo update` must never silently change its
 # behavior. Bump the rev deliberately when xindeler-auth ships something this
 # repo needs.
-authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "99afc8ff5ff43d5d69cf06e56117b25ca0623de3" }
+#
+# NH-78 Phase 0 (2026-08-20): bumped past xindeler-auth's Fase L (G-03) --
+# `sign_in()` now recognizes a 202/challenge_id response and fails with
+# `AuthClientError::TwoFactorRequired` instead of an opaque parse error.
+# Redeeming the challenge (POST /login/2fa) is not yet implemented in this
+# crate; wiring it up client-side is NH-78 Phase 2, not part of this bump.
+authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "790aa46e5f9835df13aa5f3d0c477dfad87f5149" }
 
 #TODO: put bot in a different crate
 #bot only
