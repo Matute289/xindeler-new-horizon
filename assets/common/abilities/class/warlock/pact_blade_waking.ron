@@ -6,9 +6,12 @@
 // full circle on its own, biting everything in reach. Deliberately a
 // DIFFERENT tactical role from the tier-0 strike rather than a bigger version
 // of it -- `angle: 360` + `multi_target: Some(Normal)` against the base's
-// 30-degree single-target cut -- so buying the tier adds an option instead of
-// obsoleting the one below it. It is the crowd answer; the base strike stays
-// the better single-target dps once the cooldown is spent.
+// 30-degree single-target cut -- so buying the tier adds an option (crowd
+// answer, on an 8 s cooldown) rather than obsoleting the free-to-spam base
+// strike, which stays the only thing available once this is on cooldown.
+// Per-cast single-target dps is close between the two (base ~23.5, this
+// ~23.6 plus the Bleeding rider) -- the real tradeoff is availability, not a
+// single-target/AoE damage penalty.
 //
 // The `Bleeding` rider is the first hint of the tier-3 hunger to come
 // (`PactBladeSkill::Hunger`) -- wounds this thing opens do not close. Kept at

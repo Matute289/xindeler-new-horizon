@@ -8,10 +8,20 @@
 // This is the Warlock's REAL attack while the blade is out, not a filler: an
 // `InnateAux` ability has no equipped tool backing it, so there is no weapon
 // primary underneath it to fall back on. Hence no cooldown and a repeatable
-// ~0.85 s cycle, priced in energy rather than time. Damage sits above the
-// shipped cantrip band (booming_blade 14, eldritch_blast 8x2) and below a
-// class signature burst (rogue ambush 30 on a 15 s cooldown), which is where
-// a spammable no-cooldown strike belongs.
+// ~0.85 s cycle. Damage sits above the shipped cantrip band (booming_blade
+// 14, eldritch_blast 8x2) and below a class signature burst (rogue ambush 30
+// on a 15 s cooldown), which is where a spammable no-cooldown strike belongs.
+//
+// `energy_cost: 0` is load-bearing, not an oversight (`game-balance-designer`
+// caught this): energy regen zeroes out every tick while mid-swing
+// (`common/systems/src/stats.rs`), and this ability's own `energy_regen: 0`
+// refunds nothing on hit, so any nonzero cost here would be pure drain with
+// no income -- the class's ONLY damage tool while the blade is out would run
+// dry roughly every 10-50 s (scaling with level) and force ~50% idle time.
+// Every other "spam forever, no cooldown" basic attack in this codebase
+// (every `*simple/*.ron` weapon strike, `booming_blade`, `eldritch_blast`) is
+// already zero-cost -- this ability follows that same, consistent shipped
+// convention rather than inventing a new one.
 //
 // `source: Some(Arcane)` is load-bearing, not flavour ("The Veil -- arcane
 // study, bloodline, PACT, or art"). It makes `Attack::apply_attack` treat the
@@ -32,7 +42,7 @@
 // `Slash` hardcodes DamageKind::Slashing in common/src/comp/melee.rs; there is
 // no RON-authorable damage kind on MeleeConstructorKind.
 BasicMelee(
-    energy_cost: 10,
+    energy_cost: 0,
     buildup_duration: 0.35,
     swing_duration: 0.1,
     hit_timing: 0.5,

@@ -250,13 +250,21 @@ impl ServerEvent for TranscribeSpellEvent {
                 // `for_character_with_pact`, not `for_character`: a Warlock
                 // with the blade out must not lose its three attack keys (and
                 // the hotbar slots bound to them) just because they
-                // transcribed a spell.
+                // transcribed a spell. `.with_talisman_bond(..)` chained the
+                // same way: `for_character_with_pact` only knows about ITS
+                // OWN entity's `Pact` (the blade grant), never about a live
+                // talisman bond, which is keyed on the BEARER's pool and can
+                // belong to an entity with no `Pact` of its own at all --
+                // without re-asserting it here from `old_pool`, a bonded
+                // bearer who transcribes a spell would silently lose their
+                // recall key and its hotbar slot.
                 let new_pool = AbilityPool::for_character_with_pact(
                     &body,
                     &character_class,
                     &learned,
                     data.pacts.get(ev.entity),
-                );
+                )
+                .with_talisman_bond(old_pool.has_talisman_bond());
                 if let Some(mut active) = data.active_abilities.get_mut(ev.entity) {
                     remap_innate_bindings(&mut active, &old_pool, &new_pool);
                 }

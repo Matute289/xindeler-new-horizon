@@ -463,6 +463,19 @@ impl AbilityPool {
     /// `pact: None` is every entity that has no [`Pact`] at all (non-Warlocks,
     /// NPCs, character creation) and is exactly `for_character`.
     ///
+    /// **Does NOT re-derive a live talisman bond.**
+    /// `AbilityPool::TALISMAN_RECALL_KEY` is granted to the BEARER, keyed
+    /// on the bearer's own bond state, not on anything readable from `pact`
+    /// here (the bearer need not even have a `Pact` of their own) — a
+    /// caller rebuilding an existing entity's pool must separately chain
+    /// `.with_talisman_bond(old_pool.has_talisman_bond())` if that entity
+    /// might be a live bearer, exactly as every in-world rebuild site
+    /// (`server/src/cmd.rs`'s `/learn_spells` and `/grant_class`,
+    /// `server/src/events/transcription.rs`) already does. Load-time builders
+    /// (character creation, DB load) correctly skip this: a talisman bond is
+    /// deliberately never persisted, so a freshly loaded character starts
+    /// with none to preserve.
+    ///
     /// [`Pact`]: crate::comp::pact::Pact
     pub fn for_character_with_pact(
         body: &crate::comp::Body,
@@ -6754,6 +6767,34 @@ mod pact_blade_pool_tests {
                 stale.boon
             );
         }
+    }
+
+    /// `for_character_with_pact` cannot itself re-derive a live talisman
+    /// bond (it is keyed on the BEARER's own bond state, not on anything
+    /// readable from that entity's `Pact`) -- every call site that rebuilds
+    /// an existing entity's pool must chain
+    /// `.with_talisman_bond(old_pool.has_talisman_bond())` afterwards.
+    /// Regression test for exactly the gap `ecs-design-reviewer` caught in
+    /// N27-AB: a bonded bearer transcribing a spell (or hit by
+    /// `/learn_spells`/`/grant_class`) rebuilt through
+    /// `for_character_with_pact` ALONE would silently lose their recall key.
+    #[test]
+    fn a_rebuild_through_for_character_with_pact_preserves_a_chained_talisman_bond() {
+        let body = human_body();
+        let class = CharacterClass::single(ClassKind::Warrior);
+        let learned = AbilityPool::no_learned_spells();
+
+        let old_pool = AbilityPool::for_character(&body, &class, learned).with_talisman_bond(true);
+        assert!(old_pool.has_talisman_bond(), "test setup sanity check");
+
+        // The exact shape every real rebuild site now uses.
+        let rebuilt = AbilityPool::for_character_with_pact(&body, &class, learned, None)
+            .with_talisman_bond(old_pool.has_talisman_bond());
+        assert!(
+            rebuilt.has_talisman_bond(),
+            "a rebuild that forgot to re-chain .with_talisman_bond(..) would silently drop a live \
+             bearer's recall key here"
+        );
     }
 
     /// A granted key that resolves to nothing is a button that does nothing.

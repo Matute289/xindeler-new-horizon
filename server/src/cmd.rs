@@ -4931,12 +4931,19 @@ fn handle_learn_spells(
         // `for_character_with_pact`, not `for_character`: a Warlock with the
         // blade out must not lose its three attack keys (and the hotbar slots
         // bound to them) just because an unrelated rebuild was triggered.
-        (Some(body), Some(character_class)) => Some(comp::AbilityPool::for_character_with_pact(
-            &body,
-            &character_class,
-            &learned,
-            ecs.read_storage::<comp::Pact>().get(target),
-        )),
+        // `.with_talisman_bond(..)` chained for the same reason: a bonded
+        // talisman bearer's recall key is keyed on the BEARER's pool, not
+        // derivable from `target`'s own `Pact`, so it has to be re-asserted
+        // from `old_pool` or this rebuild silently drops it.
+        (Some(body), Some(character_class)) => Some(
+            comp::AbilityPool::for_character_with_pact(
+                &body,
+                &character_class,
+                &learned,
+                ecs.read_storage::<comp::Pact>().get(target),
+            )
+            .with_talisman_bond(old_pool.has_talisman_bond()),
+        ),
         _ => None,
     };
     if let Some(pool) = rebuilt {
@@ -6664,13 +6671,18 @@ fn handle_multiclass(
             .unwrap_or_default();
         // `for_character_with_pact`, not `for_character`: a Warlock with the
         // blade out must not lose its three attack keys (and the hotbar slots
-        // bound to them) just because they multiclassed.
+        // bound to them) just because they multiclassed. `.with_talisman_bond(..)`
+        // chained for the same reason: a bonded talisman bearer's recall key
+        // is keyed on the BEARER's pool, not derivable from `target`'s own
+        // `Pact`, so it has to be re-asserted from `old_pool` or this rebuild
+        // silently drops it.
         let pool = comp::AbilityPool::for_character_with_pact(
             &body,
             &character_class,
             &learned,
             ecs.read_storage::<comp::Pact>().get(target),
-        );
+        )
+        .with_talisman_bond(old_pool.has_talisman_bond());
         // The live `ActiveAbilities` still holds raw indices into the OLD
         // pool. Re-point them by key before the pool is swapped, or the next
         // save writes each slot under whatever key now sits at its old index.

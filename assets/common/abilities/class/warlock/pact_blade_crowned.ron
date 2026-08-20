@@ -3,7 +3,12 @@
 // (`Simple(Some(PactBlade(Crown)), ..)` in the manifest). Tier 4 is 175,000
 // blade XP -- near-total investment -- so this is the strongest of the three
 // by a clear margin, and priced to match: the longest windup in the set, the
-// highest energy cost, and a 24 s cooldown.
+// highest energy cost, and a 32 s cooldown -- `game-balance-designer`
+// compared this against every shipped class capstone (45-60 s) and flagged
+// an initial 24 s as an outlier giving ~83% curse uptime on a priority
+// target; 32 s brings uptime down to the ~60% band those capstones sit in
+// without touching the damage or curse numbers, which independently checked
+// out fine against their own precedents (see below).
 //
 // A single committed thrust, not a sweep: the crowned blade picks one thing
 // and finishes it. `Stab` (DamageKind::Piercing, hardcoded in
@@ -46,6 +51,6 @@ BasicMelee(
     ),
     meta: (
         source: Some(Arcane),
-        cooldown: Some(24.0),
+        cooldown: Some(32.0),
     ),
 )
