@@ -24,7 +24,10 @@ use common::{
         ActiveAbilities, Buffs, Health, Mass, Player, SkillSet, Stats, TriggerSlots,
         ability::AbilityPool,
         buff::{Buff, BuffChange, BuffData, BuffKind, BuffSource, DestInfo, MiscBuffData},
-        pact::{Pact, bond_is_intact, talisman_protection, talisman_tuning_manifest},
+        pact::{
+            Pact, TalismanTuning, bond_is_intact, talisman_protection_with_tuning,
+            talisman_tuning_manifest,
+        },
         skillset::skills::{Skill, WarlockSkill},
     },
     event::{BuffEvent, EmitExt},
@@ -166,6 +169,13 @@ impl<'a> System<'a> for Sys {
         // every tick and, on a mismatch, replaces the whole buff (never a
         // live in-place field mutation, since `strength` is not the only
         // thing `Buff::new` derives from it).
+        // Fetched once for the whole pass, not per entity: `stale_ward_strength`
+        // needs it on every bonded entity to know whether a mismatch even
+        // exists, so gating the lookup behind the mismatch check itself isn't
+        // possible -- an unconditional per-entity `AssetCache` lookup here
+        // would otherwise run every tick for every intact bond, not just the
+        // ones actually being corrected.
+        let tuning = talisman_tuning_manifest();
         let mut stale_strength: Vec<(Entity, Entity, Uid, f32)> = Vec::new();
         for (warlock, pact) in (&entities, &pacts).join() {
             let Some(bearer_uid) = pact.talisman_bearer else {
@@ -174,6 +184,20 @@ impl<'a> System<'a> for Sys {
             let Some(bearer) = id_maps.uid_entity(bearer_uid) else {
                 continue;
             };
+            // `pact.talisman_bearer` alone doesn't mean the bond is still
+            // intact -- pass 1 above only *queues* the strip (an async
+            // `BuffEvent`, not applied until this system's `run()` returns),
+            // and pass 2 only clears this field once the bearer's ward is
+            // already gone. A Warlock who died or was severed THIS SAME tick
+            // therefore still has `talisman_bearer` set and a live ward buff
+            // right here -- without this check, a strength mismatch (e.g.
+            // every bonded ward desyncing for one tick on a `TalismanTuning`
+            // hot-reload) would have this pass resurrect the very ward pass 1
+            // just decided to strip.
+            let warlock_alive = healths.get(warlock).is_none_or(|h| !h.is_dead);
+            if !bond_is_intact(Some(pact), warlock_alive, bearer_uid) {
+                continue;
+            }
             // No entry yet, or the ward was just stripped this same tick by
             // pass 1/2 above -- either way, not this pass's job.
             let Some(current_strength) = buffs
@@ -191,7 +215,8 @@ impl<'a> System<'a> for Sys {
                         .ok()
                 })
                 .unwrap_or(0);
-            if let Some(expected_strength) = stale_ward_strength(current_strength, rank) {
+            if let Some(expected_strength) = stale_ward_strength(current_strength, rank, &tuning.0)
+            {
                 stale_strength.push((warlock, bearer, bearer_uid, expected_strength));
             }
         }
@@ -199,7 +224,6 @@ impl<'a> System<'a> for Sys {
             let Some(warlock_uid) = uids.get(warlock).copied() else {
                 continue;
             };
-            let tuning = talisman_tuning_manifest();
             let ward_data = BuffData::new(strength, None).with_misc_data(MiscBuffData::Reflect {
                 fraction: tuning.0.rebuke_fraction,
                 cap: tuning.0.rebuke_cap,
@@ -243,28 +267,32 @@ impl<'a> System<'a> for Sys {
 /// should be replaced because the Warlock's `rank` now derives a different
 /// value -- and if so, what to replace it with. Kept free of `specs` so the
 /// actual mismatch arithmetic (not just the ECS wiring around it) is
-/// unit-testable on its own.
-fn stale_ward_strength(current_strength: f32, rank: u16) -> Option<f32> {
-    let expected = talisman_protection(rank);
+/// unit-testable on its own. Takes `tuning` by reference rather than
+/// resolving it itself so `Sys::run`'s per-entity loop can hoist the asset
+/// lookup once per tick instead of paying it per bonded entity.
+fn stale_ward_strength(current_strength: f32, rank: u16, tuning: &TalismanTuning) -> Option<f32> {
+    let expected = talisman_protection_with_tuning(tuning, rank);
     ((current_strength - expected).abs() > f32::EPSILON).then_some(expected)
 }
 
 #[cfg(test)]
 mod stale_ward_strength_tests {
     use super::stale_ward_strength;
-    use common::comp::pact::talisman_protection;
+    use common::comp::pact::{talisman_protection, talisman_tuning_manifest};
 
     #[test]
     fn a_ward_below_the_ranks_true_strength_is_flagged_for_replacement() {
+        let tuning = talisman_tuning_manifest();
         let stale = talisman_protection(0);
         let correct = talisman_protection(3);
-        assert_eq!(stale_ward_strength(stale, 3), Some(correct));
+        assert_eq!(stale_ward_strength(stale, 3, &tuning.0), Some(correct));
     }
 
     #[test]
     fn a_ward_already_at_the_ranks_true_strength_is_left_alone() {
+        let tuning = talisman_tuning_manifest();
         let strength = talisman_protection(2);
-        assert_eq!(stale_ward_strength(strength, 2), None);
+        assert_eq!(stale_ward_strength(strength, 2, &tuning.0), None);
     }
 
     #[test]
@@ -272,9 +300,10 @@ mod stale_ward_strength_tests {
         // The common real-world case: the bond was established before any
         // `TalismanMastery` investment, then the Warlock spent points --
         // rank 0 -> rank N is exactly the drift this pass exists to catch.
+        let tuning = talisman_tuning_manifest();
         let never_invested = talisman_protection(0);
         assert_eq!(
-            stale_ward_strength(never_invested, 5),
+            stale_ward_strength(never_invested, 5, &tuning.0),
             Some(talisman_protection(5))
         );
     }
@@ -291,7 +320,7 @@ mod stale_ward_strength_tests {
 #[cfg(test)]
 mod exit_route_tests {
     use common::{
-        comp::{self, PactBoon, PactStanding},
+        comp::{self, PactBoon, PactStanding, pact::talisman_protection},
         event::EventBus,
         resources::BattleMode,
         uuid::Uuid,
@@ -344,13 +373,16 @@ mod exit_route_tests {
     /// A ward exactly matching rank-0 `talisman_protection`, so pass 3 never
     /// treats it as stale and adds noise to a test aimed at passes 1/2.
     fn talisman_ward_buff(warlock_uid: Uid, bearer_uid: Uid) -> Buff {
+        talisman_ward_buff_with_strength(warlock_uid, bearer_uid, talisman_protection(0))
+    }
+
+    fn talisman_ward_buff_with_strength(warlock_uid: Uid, bearer_uid: Uid, strength: f32) -> Buff {
         let tuning = talisman_tuning_manifest();
-        let data =
-            BuffData::new(talisman_protection(0), None).with_misc_data(MiscBuffData::Reflect {
-                fraction: tuning.0.rebuke_fraction,
-                cap: tuning.0.rebuke_cap,
-                kind: tuning.0.rebuke_kind,
-            });
+        let data = BuffData::new(strength, None).with_misc_data(MiscBuffData::Reflect {
+            fraction: tuning.0.rebuke_fraction,
+            cap: tuning.0.rebuke_cap,
+            kind: tuning.0.rebuke_kind,
+        });
         Buff::new(
             BuffKind::PactTalisman,
             data,
@@ -417,6 +449,63 @@ mod exit_route_tests {
             .recv_all()
             .collect();
         assert_eq!(events.len(), 1, "expected exactly one strip event");
+        assert_eq!(events[0].entity, bearer);
+        assert_eq!(
+            events[0].buff_change,
+            BuffChange::RemoveByKind(BuffKind::PactTalisman)
+        );
+    }
+
+    #[test]
+    fn pass_3_does_not_resurrect_a_ward_for_a_warlock_who_died_this_tick() {
+        // Regression test: pass 3 used to check only `talisman_bearer.is_some()`,
+        // not `bond_is_intact`. Pass 1's strip is an async `BuffEvent`, not
+        // yet applied to `buffs` within this same `run()`, so a dead
+        // Warlock's bearer still carries a live (and here, deliberately
+        // mismatched) ward when pass 3 reaches it -- without the
+        // `bond_is_intact` gate, pass 3 would "correct" the mismatch and
+        // queue its own `Add`, undoing pass 1's strip for one tick.
+        let mut world = mock_world();
+        let (warlock, warlock_uid) = spawn(&mut world);
+        let (bearer, bearer_uid) = spawn(&mut world);
+
+        let mut health = Health::new(humanoid_body());
+        health.is_dead = true;
+        world
+            .write_component::<Health>()
+            .insert(warlock, health)
+            .expect("fresh entity, insert must succeed");
+        world
+            .write_component::<Pact>()
+            .insert(warlock, bound_talisman_pact(bearer_uid))
+            .expect("fresh entity, insert must succeed");
+
+        world
+            .write_component::<Player>()
+            .insert(
+                bearer,
+                Player::new("bearer".to_string(), BattleMode::PvE, Uuid::nil(), None),
+            )
+            .expect("fresh entity, insert must succeed");
+        let mismatched_strength = talisman_protection(0) + 0.5;
+        let mut buffs = Buffs::default();
+        buffs.insert(
+            talisman_ward_buff_with_strength(warlock_uid, bearer_uid, mismatched_strength),
+            Time(0.0),
+        );
+        world
+            .write_component::<Buffs>()
+            .insert(bearer, buffs)
+            .expect("fresh entity, insert must succeed");
+
+        common_ecs::run_now::<Sys>(&world);
+
+        let events: Vec<BuffEvent> = world
+            .read_resource::<EventBus<BuffEvent>>()
+            .recv_all()
+            .collect();
+        // Pass 1's strip, and nothing from pass 3 re-adding it.
+        assert_eq!(events.len(), 1, "expected only pass 1's strip event");
         assert_eq!(events[0].entity, bearer);
         assert_eq!(
             events[0].buff_change,

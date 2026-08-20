@@ -457,7 +457,17 @@ pub fn talisman_tuning_manifest() -> AssetReadGuard<Ron<TalismanTuning>> {
 /// invulnerability (`>= 1.0`) or a damage *amplifier* (`< 0.0`).
 pub fn talisman_protection(talisman_rank: u16) -> f32 {
     let tuning = talisman_tuning_manifest();
-    (tuning.0.protect_base + tuning.0.protect_per_rank * f32::from(talisman_rank)).clamp(0.0, 1.0)
+    talisman_protection_with_tuning(&tuning.0, talisman_rank)
+}
+
+/// Same formula as [`talisman_protection`], but takes an already-fetched
+/// [`TalismanTuning`] instead of resolving the asset itself -- for a caller
+/// that re-derives this once per entity per tick (`pact_talisman::Sys`'s
+/// Pass 3), hoisting a single [`talisman_tuning_manifest`] call above the
+/// loop avoids paying `assets_manager`'s cache lookup on every bonded
+/// entity, not just the ones whose strength actually turns out stale.
+pub fn talisman_protection_with_tuning(tuning: &TalismanTuning, talisman_rank: u16) -> f32 {
+    (tuning.protect_base + tuning.protect_per_rank * f32::from(talisman_rank)).clamp(0.0, 1.0)
 }
 
 /// A summoner's live Cadena summons ledger: which entities they currently
