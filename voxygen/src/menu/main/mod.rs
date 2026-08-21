@@ -276,6 +276,9 @@ impl PlayState for MainMenuState {
                     self.main_menu_ui.auth_trust_prompt(auth_server);
                 }
             },
+            Some(InitMsg::TwoFaRequired) => {
+                self.main_menu_ui.two_fa_prompt();
+            },
             None => {},
         }
 
@@ -539,6 +542,9 @@ impl PlayState for MainMenuState {
                         .client()
                         .map(|init| init.auth_trust(auth_server, trust));
                 },
+                MainMenuEvent::TwoFaCodeSubmit(code) => {
+                    self.init.client().map(|init| init.submit_2fa_code(code));
+                },
                 MainMenuEvent::DeleteServer { server_index } => {
                     let net_settings = &mut global_state.settings.networking;
                     net_settings.servers.remove(server_index);
@@ -618,6 +624,24 @@ pub(crate) fn get_client_msg_error(
             localization.get_msg("main-login-authentication_error"),
             e
         ),
+        // Redeeming a 2FA login challenge (POST /login/2fa) failed. Never a
+        // cancelled prompt -- that aborts the connect attempt before this
+        // error can be constructed (see `Client::acquire_auth_token`).
+        Error::TwoFaFailed(failure) => match failure {
+            client::TwoFaFailure::WrongCode => {
+                localization.get_msg("main-login-2fa-wrong_code").into()
+            },
+            client::TwoFaFailure::ChallengeExpired => {
+                localization.get_msg("main-login-2fa-expired").into()
+            },
+            client::TwoFaFailure::AccountLocked => {
+                localization.get_msg("main-login-2fa-locked").into()
+            },
+            // Network/transport failure or an unrecognized error code -- the
+            // existing generic connection-error copy, not a 2FA-specific
+            // message (the player can't act on the difference).
+            client::TwoFaFailure::Other(e) => net_error(e, mismatched_server_info),
+        },
         Error::Kicked(reason) => localization
             .get_msg_ctx("main-login-kicked", &fluent_args! {
                 "reason" => reason,
@@ -715,12 +739,13 @@ pub(crate) fn get_client_msg_error(
             client::AuthClientError::InsecureUrl => localization
                 .get_msg("main-login-insecure_auth_scheme")
                 .into(),
-            // The auth server can answer a login with a request for a TOTP
-            // code instead of a token. Redeeming that challenge and the
-            // client-side prompt to collect the code are not implemented
-            // yet, so any account with 2FA enabled hits this arm on every
-            // login attempt -- tell the player plainly rather than showing a
-            // generic network-failure message.
+            // `Client::acquire_auth_token` intercepts this variant before it
+            // can propagate this far -- it prompts for a code and redeems
+            // the challenge itself, surfacing any failure as
+            // `Error::TwoFaFailed` instead (handled above `AuthClientError`
+            // entirely, not in this nested match). Unreachable in normal
+            // operation; kept only because `AuthClientError` is an external
+            // enum this match must stay exhaustive against.
             client::AuthClientError::TwoFactorRequired(_) => {
                 localization.get_msg("main-login-2fa_not_supported").into()
             },

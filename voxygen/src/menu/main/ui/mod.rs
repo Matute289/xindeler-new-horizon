@@ -174,6 +174,8 @@ pub enum Event {
     // Note: Keeping in case we re-add the disclaimer
     //DisclaimerAccepted,
     AuthServerTrust(String, bool),
+    /// The player submitted a code on the 2FA prompt.
+    TwoFaCodeSubmit(String),
     DeleteServer {
         server_index: usize,
     },
@@ -187,7 +189,16 @@ pub struct LoginInfo {
 
 enum ConnectionState {
     InProgress,
-    AuthTrustPrompt { auth_server: String, msg: String },
+    AuthTrustPrompt {
+        auth_server: String,
+        msg: String,
+    },
+    /// The account has 2FA enabled and the password was correct. Does not
+    /// carry the challenge id or an attempt counter -- neither is meant to
+    /// be player-visible (spec: don't reveal remaining attempts).
+    TwoFaPrompt {
+        code: String,
+    },
 }
 
 enum Screen {
@@ -305,6 +316,9 @@ enum Message {
     CancelConnect,
     TrustPromptAdd,
     TrustPromptCancel,
+    TwoFaCodeChanged(String),
+    TwoFaSubmit,
+    TwoFaCancel,
     CloseError,
     DeleteServer,
     /* Note: Keeping in case we re-add the disclaimer
@@ -608,6 +622,38 @@ impl Controls {
                     events.push(Event::AuthServerTrust(auth_server, added));
                 }
             },
+            Message::TwoFaCodeChanged(new_code) => {
+                if let Screen::Connecting {
+                    connection_state: ConnectionState::TwoFaPrompt { code },
+                    ..
+                } = &mut self.screen
+                {
+                    *code = new_code;
+                }
+            },
+            Message::TwoFaSubmit => {
+                if let Screen::Connecting {
+                    connection_state, ..
+                } = &mut self.screen
+                    && let ConnectionState::TwoFaPrompt { code } = connection_state
+                {
+                    let code = std::mem::take(code);
+                    // Deliberately no `ConnectionState::InProgress` reset here (unlike the
+                    // trust prompt above): a wrong/expired code ends the whole connect
+                    // attempt (see `Event::TwoFaCodeSubmit`'s handling in `menu/main/mod.rs`
+                    // -- routes through the existing `Msg::Done(Err(..))` failure path,
+                    // never back to this screen), so there is no in-place retry loop to
+                    // reset into.
+                    events.push(Event::TwoFaCodeSubmit(code));
+                }
+            },
+            // Same "abandon the whole connect attempt" path `CancelConnect` already
+            // uses -- not a new teardown path. No error message is shown for this,
+            // unlike a wrong/expired code.
+            Message::TwoFaCancel => {
+                self.exit_connect_screen();
+                events.push(Event::CancelLoginAttempt);
+            },
             Message::CloseError => {
                 if let Screen::Login { error, .. } = &mut self.screen {
                     *error = None;
@@ -665,6 +711,17 @@ impl Controls {
             );
 
             *connection_state = ConnectionState::AuthTrustPrompt { auth_server, msg };
+        }
+    }
+
+    fn two_fa_prompt(&mut self) {
+        if let Screen::Connecting {
+            connection_state, ..
+        } = &mut self.screen
+        {
+            *connection_state = ConnectionState::TwoFaPrompt {
+                code: String::new(),
+            };
         }
     }
 
@@ -870,6 +927,8 @@ impl MainMenuUi {
     pub fn auth_trust_prompt(&mut self, auth_server: String) {
         self.controls.auth_trust_prompt(auth_server);
     }
+
+    pub fn two_fa_prompt(&mut self) { self.controls.two_fa_prompt(); }
 
     pub fn show_info(&mut self, msg: String) { self.controls.connection_error(msg); }
 

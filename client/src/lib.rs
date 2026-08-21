@@ -5,7 +5,7 @@ pub mod addr;
 pub mod error;
 
 // Reexports
-pub use crate::error::Error;
+pub use crate::error::{Error, TwoFaFailure};
 pub use authc::AuthClientError;
 pub use common_net::msg::ServerInfo;
 pub use specs::{
@@ -465,6 +465,7 @@ impl Client {
         password: &str,
         locale: Option<String>,
         auth_trusted: impl FnMut(&str) -> bool,
+        two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
         init_stage_update: &(dyn Fn(ClientInitStage) + Send + Sync),
         add_foreign_systems: impl Fn(&mut DispatcherBuilder) + Send + 'static,
         #[cfg_attr(not(feature = "plugins"), expect(unused_variables))] config_dir: PathBuf,
@@ -670,6 +671,7 @@ impl Client {
             password,
             locale,
             auth_trusted,
+            two_fa_code,
             &server_info,
             &mut register_stream,
         )
@@ -1298,6 +1300,7 @@ impl Client {
         password: &str,
         locale: Option<String>,
         mut auth_trusted: impl FnMut(&str) -> bool,
+        two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
         server_info: &ServerInfo,
         register_stream: &mut Stream,
     ) -> Result<(), Error> {
@@ -1310,6 +1313,7 @@ impl Client {
                         addr.clone(),
                         username.to_owned(),
                         password.to_owned(),
+                        two_fa_code,
                     )
                     .await?;
 
@@ -1374,16 +1378,97 @@ impl Client {
         auth_addr: String,
         username: String,
         password: String,
+        mut two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
     ) -> Result<authc::AuthToken, Error> {
         tokio::task::spawn_blocking(move || {
             // `authc` takes the whole URL, and rejects plain http for anything
             // that is not loopback.
             let auth = authc::AuthClient::new(auth_addr.as_str())
                 .map_err(|_| Error::AuthServerUrlInvalid(auth_addr.clone()))?;
-            Ok::<_, Error>(auth.sign_in(&username, &password)?)
+            match auth.sign_in(&username, &password) {
+                Ok(token) => Ok(token),
+                // The account has 2FA enabled and the password was correct --
+                // block (same as the `sign_in` call just above) until the UI
+                // supplies a code, then redeem the challenge. `two_fa_code`
+                // returning `None` means the player cancelled; that aborts
+                // the whole connect attempt the same way `CancelConnect`
+                // already does elsewhere, so the exact error here is never
+                // shown to the player.
+                Err(authc::AuthClientError::TwoFactorRequired(challenge)) => {
+                    let Some(code) = two_fa_code() else {
+                        return Err(Error::Other("2FA prompt cancelled".to_owned()));
+                    };
+                    Self::submit_2fa_code(&auth_addr, challenge.challenge_id, &code)
+                        .map_err(Error::TwoFaFailed)
+                },
+                Err(other) => Err(Error::from(other)),
+            }
         })
         .await
         .map_err(|err| Error::AuthErr(err.to_string()))?
+    }
+
+    /// Redeems a 2FA login challenge against `POST {auth_addr}/login/2fa`.
+    /// Must be called from the same blocking context as `sign_in` (see
+    /// `acquire_auth_token`'s doc comment) -- this is a second synchronous
+    /// HTTPS round trip.
+    ///
+    /// `xindeler-authc` recognizes the 202/`challenge_id` intermediate state
+    /// (`AuthClientError::TwoFactorRequired`) but does not implement this
+    /// second call itself -- its own doc comment on that variant says so.
+    /// Hand-rolled here with `reqwest::blocking` directly, the same library
+    /// `authc` itself wraps. `challenge_id` is generic over `Serialize`
+    /// rather than a named type because `authc` doesn't publicly export
+    /// `ChallengeId` -- only the value inside `TwoFactorRequired` is
+    /// reachable, not its type name.
+    ///
+    /// The `code`/`message` shape of a failure response, and the specific
+    /// strings matched below, mirror `xindeler-auth`'s
+    /// `server/src/error.rs` `public_fields()` -- the source of truth for
+    /// this wire contract.
+    fn submit_2fa_code<T: serde::Serialize>(
+        auth_addr: &str,
+        challenge_id: T,
+        code: &str,
+    ) -> Result<authc::AuthToken, TwoFaFailure> {
+        #[derive(serde::Deserialize)]
+        struct TokenResponse {
+            token: authc::AuthToken,
+        }
+        #[derive(serde::Deserialize)]
+        struct ErrorResponse {
+            code: String,
+        }
+
+        let url = format!("{}/login/2fa", auth_addr.trim_end_matches('/'));
+        let http = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|e| TwoFaFailure::Other(e.to_string()))?;
+        let resp = http
+            .post(url)
+            .json(&serde_json::json!({ "challenge_id": challenge_id, "code": code }))
+            .send()
+            .map_err(|e| TwoFaFailure::Other(e.to_string()))?;
+
+        if resp.status().is_success() {
+            resp.json::<TokenResponse>()
+                .map(|body| body.token)
+                .map_err(|e| TwoFaFailure::Other(e.to_string()))
+        } else {
+            match resp.json::<ErrorResponse>() {
+                Ok(body) => match body.code.as_str() {
+                    "TOTP_INVALID_CODE" => Err(TwoFaFailure::WrongCode),
+                    "TOTP_CHALLENGE_INVALID" => Err(TwoFaFailure::ChallengeExpired),
+                    "ACCOUNT_2FA_LOCKED" => Err(TwoFaFailure::AccountLocked),
+                    other => Err(TwoFaFailure::Other(format!(
+                        "unrecognized error code: {other}"
+                    ))),
+                },
+                Err(e) => Err(TwoFaFailure::Other(e.to_string())),
+            }
+        }
     }
 
     fn send_msg_err<S>(&mut self, msg: S) -> Result<(), network::StreamError>
@@ -3851,6 +3936,7 @@ mod tests {
             password,
             None,
             |suggestion: &str| suggestion == auth_server,
+            || None,
             &|_| {},
             |_| {},
             PathBuf::default(),
@@ -3927,6 +4013,7 @@ mod tests {
             "https://127.0.0.1:1".to_string(),
             "regression-test".to_string(),
             "regression-test".to_string(),
+            || None,
         ));
 
         let err = result.expect_err("signing in against a closed loopback port should fail");
@@ -3934,5 +4021,61 @@ mod tests {
             matches!(err, Error::AuthClientError(_)),
             "expected a transport error from the closed loopback port, got {err:?}"
         );
+    }
+
+    /// Serves exactly one HTTP request with a canned raw response, mirroring
+    /// `authc`'s own `serve_once` test helper (that crate doesn't expose it,
+    /// so this is a separate copy, not a shared one).
+    fn serve_once(response: String) -> String {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let _ = stream.read(&mut request);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    fn http_response(status_line: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[test]
+    fn submit_2fa_code_maps_each_known_error_code_and_a_successful_token() {
+        let ok = serve_once(http_response("200 OK", r#"{"token":"abcd"}"#));
+        let err = Client::submit_2fa_code(&ok, "challenge", "123456")
+            .expect_err("\"abcd\" is not a 32-hex-char AuthToken, so this must fail to parse");
+        assert!(
+            matches!(err, TwoFaFailure::Other(_)),
+            "an unparseable success body should surface as Other, not silently succeed: {err:?}"
+        );
+
+        for (code, expected) in [
+            ("TOTP_INVALID_CODE", "WrongCode"),
+            ("TOTP_CHALLENGE_INVALID", "ChallengeExpired"),
+            ("ACCOUNT_2FA_LOCKED", "AccountLocked"),
+            ("SOMETHING_NEW", "Other"),
+        ] {
+            let body = format!(r#"{{"code":"{code}","message":"x","request_id":"y"}}"#);
+            let addr = serve_once(http_response("400 Bad Request", &body));
+            let err = Client::submit_2fa_code(&addr, "challenge", "000000")
+                .expect_err("a 400 response must never resolve to a token");
+            let actual = match err {
+                TwoFaFailure::WrongCode => "WrongCode",
+                TwoFaFailure::ChallengeExpired => "ChallengeExpired",
+                TwoFaFailure::AccountLocked => "AccountLocked",
+                TwoFaFailure::Other(_) => "Other",
+            };
+            assert_eq!(actual, expected, "wrong mapping for error code {code}");
+        }
     }
 }

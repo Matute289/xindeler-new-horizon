@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-21
+
+### Added
+
+- Login now supports two-factor authentication (2FA/TOTP): accounts with 2FA enabled are prompted for a code after password validation, before entering the game.
+- Server admins can now kick, ban, and unban players, and look up any player's characters, over the trusted `/ui_api/v1` HTTP API (previously only available as in-game chat commands).
+
 ## [0.19.0] - 2026-08-20
 
 ### Added

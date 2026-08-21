@@ -124,6 +124,7 @@ fn run_client(
             "",
             None,                      // locale
             |_| false,                 // auth_trusted
+            || None,                   // two_fa_code
             &|_| {},                   // init_stage_update
             |_| {},                    // add_foreign_systems
             std::path::PathBuf::new(), // config_dir

@@ -5,6 +5,29 @@ use network::{ParticipantError, StreamError};
 use rustls::Error as RustlsError;
 use specs::error::Error as SpecsError;
 
+/// The result of redeeming a 2FA login challenge (`POST /login/2fa` against
+/// the auth server) once the player has submitted a code. Distinct from
+/// `AuthClientError` -- the auth server exposes this as a `code` string in
+/// its error body rather than as a status this client's transport layer
+/// (`authc`) already models, so this repo maps it directly rather than
+/// routing it back through that enum.
+#[derive(Debug)]
+pub enum TwoFaFailure {
+    /// `TOTP_INVALID_CODE` -- the code was wrong.
+    WrongCode,
+    /// `TOTP_CHALLENGE_INVALID` -- the challenge doesn't exist or its TTL
+    /// elapsed. The server does not distinguish "expired" from "unknown
+    /// challenge id" any further than this.
+    ChallengeExpired,
+    /// `ACCOUNT_2FA_LOCKED` -- too many wrong codes across challenges.
+    AccountLocked,
+    /// Anything else: an unrecognized error `code`, a network failure, or a
+    /// response that didn't parse. Carries a raw description for logging;
+    /// the player sees the existing generic connection-error copy for this
+    /// case, not the raw string.
+    Other(String),
+}
+
 #[derive(Debug)]
 pub enum Error {
     Kicked(String),
@@ -19,6 +42,11 @@ pub enum Error {
     AuthClientError(AuthClientError),
     AuthServerUrlInvalid(String),
     AuthServerNotTrusted,
+    /// Redeeming a 2FA login challenge (`POST /login/2fa`) failed. See
+    /// `TwoFaFailure`. Never constructed for a cancelled prompt -- that
+    /// aborts the whole connect attempt the same way `CancelConnect`
+    /// already does, without an error to display.
+    TwoFaFailed(TwoFaFailure),
     HostnameLookupFailed(std::io::Error),
     Banned(BanInfo),
     /// Persisted character data is invalid or missing

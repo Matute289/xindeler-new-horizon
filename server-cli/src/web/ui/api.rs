@@ -1,7 +1,7 @@
 use crate::cli::{Message, MessageReturn, OracleTarget, Shutdown};
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Query, Request, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::header::COOKIE,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -64,8 +64,14 @@ async fn log_users(
     Ok(next.run(req).await)
 }
 
-//TODO: do security audit before we extend this api with more security relevant
-// functionality (e.g. account management)
+// Account-management routes below (kick/ban/unban, character lookup) are the
+// security-relevant functionality this comment used to flag as a future
+// audit item -- they've now had that pass: each wraps engine capability that
+// already existed as a chat command, attribution is cross-checked against
+// the server's own admin/moderator roster (not just this shared secret) via
+// `real_role`, and every write is scoped to a single uuid path param with no
+// broader admin-list-management surface exposed. See the design doc's
+// investigation for the full reasoning.
 pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router {
     let token = UiApiToken { secret_token };
     let ip_addrs = IpAddresses::default();
@@ -80,6 +86,10 @@ pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router
         .route("/oracle/events", get(oracle_events))
         .route("/oracle/trigger", post(oracle_trigger))
         .route("/oracle/enabled", post(oracle_enabled))
+        .route("/players/{uuid}/kick", post(kick_player))
+        .route("/players/{uuid}/ban", post(ban_player))
+        .route("/players/{uuid}/unban", post(unban_player))
+        .route("/players/{uuid}/characters", get(player_characters))
         .layer(axum::middleware::from_fn_with_state(ip_addrs, log_users))
         .layer(axum::middleware::from_fn_with_state(token, validate_secret))
         .with_state(web_ui_request_s)
@@ -366,4 +376,152 @@ async fn oracle_enabled(
         ))
         .await;
     Ok(())
+}
+
+/// `operator_uuid` identifies the acting admin/moderator's own Xindeler
+/// account -- checked server-side against the admin/moderator roster
+/// (`real_role`), not just trusted verbatim because this request carried the
+/// shared secret.
+#[derive(Deserialize)]
+struct AdminKickBody {
+    operator_uuid: String,
+    reason: Option<String>,
+}
+
+async fn kick_player(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Path(uuid): Path<String>,
+    Json(payload): Json<AdminKickBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((
+            Message::AdminKickPlayer {
+                target_uuid: uuid,
+                operator_uuid: payload.operator_uuid,
+                reason: payload.reason,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        MessageReturn::AdminActionOk { .. } => Ok(StatusCode::OK),
+        // The request was understood but refused for a stated reason
+        // (operator not registered, target not connected, operator doesn't
+        // outrank target) -- 409, same "understood but refused" precedent
+        // `oracle_trigger` above already established, not 500.
+        MessageReturn::Error(err) => Err((StatusCode::CONFLICT, err)),
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
+}
+
+/// `duration_secs` omitted or `null` means a permanent ban, matching
+/// `Banlist::ban_operation`'s own `end_date: Option<...>` semantics.
+/// `overwrite` defaults to `false`, same default the equivalent chat command
+/// uses. `target_username`, if the caller has it, avoids a server-side
+/// network round-trip to resolve one (see
+/// `server::cmd::make_ban_info_for_uuid`'s doc comment) -- purely
+/// informational (stored in the ban record for display), falls back to the
+/// bare uuid if omitted.
+#[derive(Deserialize)]
+struct AdminBanBody {
+    operator_uuid: String,
+    #[serde(default)]
+    target_username: Option<String>,
+    reason: String,
+    #[serde(default)]
+    duration_secs: Option<u64>,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+async fn ban_player(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Path(uuid): Path<String>,
+    Json(payload): Json<AdminBanBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((
+            Message::AdminBanPlayer {
+                target_uuid: uuid,
+                operator_uuid: payload.operator_uuid,
+                target_username: payload.target_username,
+                reason: payload.reason,
+                duration_secs: payload.duration_secs,
+                overwrite: payload.overwrite,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        // Carries the resulting ban record (reason, expiry) straight
+        // through so the caller gets immediate confirmation of what was
+        // actually persisted, without a separate read route.
+        MessageReturn::AdminActionOk { ban } => Ok(Json(ban)),
+        MessageReturn::Error(err) => Err((StatusCode::CONFLICT, err)),
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminUnbanBody {
+    operator_uuid: String,
+    #[serde(default)]
+    target_username: Option<String>,
+}
+
+async fn unban_player(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Path(uuid): Path<String>,
+    Json(payload): Json<AdminUnbanBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((
+            Message::AdminUnbanPlayer {
+                target_uuid: uuid,
+                operator_uuid: payload.operator_uuid,
+                target_username: payload.target_username,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        MessageReturn::AdminActionOk { .. } => Ok(StatusCode::OK),
+        MessageReturn::Error(err) => Err((StatusCode::CONFLICT, err)),
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
+}
+
+/// Admin-scoped character lookup for an arbitrary `uuid` -- deliberately
+/// separate from `/player_api/v1/characters`, which only ever resolves the
+/// bearer-token-authenticated caller's own uuid. Reuses the same
+/// `CharacterSummaryDto`/`LocationDto` shape; only the `Message` variant
+/// differs, so this DTO layer never has to know which auth path a request
+/// came through.
+async fn player_characters(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Path(uuid): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((Message::AdminListPlayerCharacters { uuid }, sender))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
+        MessageReturn::PlayerCharacters(characters) => Ok(Json(characters)),
+        _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }

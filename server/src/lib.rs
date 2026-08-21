@@ -1754,6 +1754,55 @@ impl Server {
         persistence::rename_character(uuid, character_id, new_alias, &settings)
     }
 
+    /// Kicks `target_uuid`'s live session on behalf of `operator_uuid`, a
+    /// registered admin/moderator with no live in-game session of its own
+    /// (e.g. an HTTP-triggered admin action rather than a connected
+    /// player's chat command). See `cmd::admin_kick_player`.
+    pub fn admin_kick_player(
+        &mut self,
+        target_uuid: Uuid,
+        operator_uuid: Uuid,
+        reason: Option<String>,
+    ) -> Result<(), String> {
+        cmd::admin_kick_player(self, target_uuid, operator_uuid, reason)
+    }
+
+    /// Bans `target_uuid` on behalf of `operator_uuid`, a registered
+    /// admin/moderator with no live in-game session of its own.
+    /// `duration_secs` of `None` means a permanent ban. See
+    /// `cmd::admin_ban_player`.
+    pub fn admin_ban_player(
+        &mut self,
+        target_uuid: Uuid,
+        operator_uuid: Uuid,
+        target_username: Option<String>,
+        reason: String,
+        duration_secs: Option<u64>,
+        overwrite: bool,
+    ) -> Result<Option<common_net::msg::server::BanInfo>, String> {
+        cmd::admin_ban_player(
+            self,
+            target_uuid,
+            operator_uuid,
+            target_username,
+            reason,
+            duration_secs,
+            overwrite,
+        )
+    }
+
+    /// Unbans `target_uuid` on behalf of `operator_uuid`, a registered
+    /// admin/moderator with no live in-game session of its own. See
+    /// `cmd::admin_unban_player`.
+    pub fn admin_unban_player(
+        &mut self,
+        target_uuid: Uuid,
+        operator_uuid: Uuid,
+        target_username: Option<String>,
+    ) -> Result<(), String> {
+        cmd::admin_unban_player(self, target_uuid, operator_uuid, target_username)
+    }
+
     /// Sets the SQL log mode at runtime
     pub fn set_sql_log_mode(&mut self, sql_log_mode: SqlLogMode) {
         // Unwrap is safe here because we only perform a variable assignment with the
