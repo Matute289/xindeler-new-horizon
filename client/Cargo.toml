@@ -85,6 +85,11 @@ serde_json = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 base64 = "0.22"
+# BL-85: opens the auth server's authorize URL in the system browser. Same
+# crate and same call voxygen already uses for `Message::CreateAccount`; it
+# lives here because the whole OAuth attempt runs inside `client`'s
+# `spawn_blocking`, not on the UI thread.
+open = "5.3.2"
 
 #TODO: put bot in a different crate
 #bot only

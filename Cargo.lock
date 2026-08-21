@@ -10827,6 +10827,7 @@ dependencies = [
  "hickory-resolver",
  "image",
  "num 0.4.3",
+ "open",
  "quinn",
  "rand 0.10.1",
  "rayon",

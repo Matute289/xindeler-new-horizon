@@ -100,6 +100,122 @@ pub fn validate_authorize_url(authorize_url: &str) -> Result<(), OAuthFailure> {
     Ok(())
 }
 
+use loopback::{Delivery, LoopbackListener, choose_delivery};
+use std::time::{Duration, Instant};
+
+/// Overall attempt window (spec §3.3), matching the bumped native-origin
+/// `OAuthStateCache` TTL on the server side (spec §4.6).
+pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Poll cadence for the fallback path (spec §2.2).
+pub const POLL_INTERVAL: Duration = Duration::from_millis(1500);
+
+/// The callbacks a native OAuth attempt needs from the frontend. Boxed rather
+/// than generic so `Client::new` gains one plain parameter instead of two more
+/// type parameters. Built from crossbeam channel clones on the voxygen side,
+/// the same way the existing password-login `code_fn` is.
+pub struct OAuthLogin {
+    pub provider: OAuthProvider,
+    /// Reads `ClientInit`'s existing `cancel: Arc<AtomicBool>`, which its
+    /// `Drop` impl sets -- so cancel stays cancel-by-drop, with no second
+    /// teardown path.
+    pub cancelled: Box<dyn Fn() -> bool + Send + Sync + 'static>,
+    pub on_browser_opened: Box<dyn FnMut(OAuthDeliveryMode) + Send + 'static>,
+    /// Given the server's suggested username, returns the player's choice, or
+    /// `None` if the prompt was cancelled.
+    pub pick_username: Box<dyn FnMut(String) -> Option<String> + Send + 'static>,
+}
+
+pub enum OAuthOutcome {
+    Token(authc::AuthToken),
+    /// The linked account has TOTP enabled. Redeemed by the caller through the
+    /// already-shipped `Client::submit_2fa_code`, so OAuth-then-2FA reuses
+    /// the existing 2FA network and UI code unchanged.
+    TotpRequired(serde_json::Value),
+}
+
+pub fn wait_for_pickup_by_polling(
+    http: &reqwest::blocking::Client,
+    auth_addr: &str,
+    state: &str,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, OAuthFailure> {
+    loop {
+        if cancelled() {
+            return Err(OAuthFailure::Cancelled);
+        }
+        if Instant::now() >= deadline {
+            return Err(OAuthFailure::Timeout);
+        }
+        if let Some(pickup) = api::poll_pickup(http, auth_addr, state)? {
+            return Ok(pickup);
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Runs one whole native OAuth attempt. Blocking throughout -- the caller must
+/// already be inside a blocking context, the same way the existing
+/// password-based token acquisition is.
+pub fn run_oauth_login(
+    auth_addr: &str,
+    login: &mut OAuthLogin,
+) -> Result<OAuthOutcome, OAuthFailure> {
+    let deadline = Instant::now() + ATTEMPT_TIMEOUT;
+    let pkce = Pkce::generate();
+    let http = api::http_client()?;
+
+    let delivery = choose_delivery(LoopbackListener::bind());
+    let mode = delivery.mode();
+    let port = match &delivery {
+        Delivery::Loopback(listener) => Some(listener.port()),
+        Delivery::Poll => None,
+    };
+
+    let started = api::start(
+        &http,
+        auth_addr,
+        login.provider,
+        &pkce.challenge,
+        mode,
+        port,
+    )?;
+    validate_authorize_url(&started.authorize_url)?;
+
+    open::that_detached(&started.authorize_url).map_err(|e| OAuthFailure::Other(e.to_string()))?;
+    (login.on_browser_opened)(mode);
+
+    let pickup = match delivery {
+        Delivery::Loopback(listener) => {
+            listener.wait_for_pickup(deadline, login.cancelled.as_ref())?
+        },
+        Delivery::Poll => wait_for_pickup_by_polling(
+            &http,
+            auth_addr,
+            &started.state,
+            deadline,
+            login.cancelled.as_ref(),
+        )?,
+    };
+
+    match api::exchange(&http, auth_addr, &pickup, &pkce.verifier)? {
+        api::ExchangeResponse::SignedIn { token } => Ok(OAuthOutcome::Token(token)),
+        api::ExchangeResponse::TotpRequired { challenge_id } => {
+            Ok(OAuthOutcome::TotpRequired(challenge_id))
+        },
+        api::ExchangeResponse::PendingRegistration {
+            pending_token,
+            suggested_username,
+        } => {
+            let Some(username) = (login.pick_username)(suggested_username) else {
+                return Err(OAuthFailure::Cancelled);
+            };
+            api::complete_registration(&http, auth_addr, &pending_token, &username)
+                .map(OAuthOutcome::Token)
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +302,45 @@ mod tests {
         assert!(validate_authorize_url("javascript:alert(1)").is_err());
         assert!(validate_authorize_url("file:///etc/passwd").is_err());
         assert!(validate_authorize_url("not a url at all").is_err());
+    }
+
+    #[test]
+    fn attempt_timeout_matches_the_five_minute_spec_value() {
+        assert_eq!(ATTEMPT_TIMEOUT, std::time::Duration::from_secs(300));
+    }
+
+    #[test]
+    fn poll_interval_matches_the_spec_value() {
+        assert_eq!(POLL_INTERVAL, std::time::Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn polling_gives_up_at_the_deadline_without_a_reachable_server() {
+        let http = api::http_client().expect("http client");
+        let err = wait_for_pickup_by_polling(
+            &http,
+            "http://127.0.0.1:1",
+            "state-1",
+            std::time::Instant::now(),
+            &|| false,
+        )
+        .expect_err("an already-elapsed deadline must time out");
+        assert!(matches!(err, OAuthFailure::Timeout));
+    }
+
+    #[test]
+    fn polling_stops_immediately_when_cancelled() {
+        let http = api::http_client().expect("http client");
+        let started = std::time::Instant::now();
+        let err = wait_for_pickup_by_polling(
+            &http,
+            "http://127.0.0.1:1",
+            "state-1",
+            std::time::Instant::now() + ATTEMPT_TIMEOUT,
+            &|| true,
+        )
+        .expect_err("cancel must abort polling");
+        assert!(matches!(err, OAuthFailure::Cancelled));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }
