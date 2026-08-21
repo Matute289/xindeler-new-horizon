@@ -28,17 +28,27 @@ escribible.
 
 ```bash
 ssh greenmountain.dev
-bash /opt/xindeler-server/src/deploy/deploy.sh
+bash /opt/xindeler-server/src/deploy/deploy.sh          # último development
+bash /opt/xindeler-server/src/deploy/deploy.sh v0.19.0  # un tag/ref específico
 ```
 
-El script hace backup de la base y del save de rtsim, actualiza el código, compila (nightly,
+El script hace backup de la base y del save de rtsim, actualiza el código (o hace checkout
+del ref pasado como argumento, si se pasa uno — queda en detached HEAD), compila (nightly,
 pinned por `rust-toolchain` — no hace falta `+toolchain`, `cargo` lo resuelve solo), guarda
 el binario anterior, reinicia y verifica salud contra `http://127.0.0.1:14005/health`. Si el
 binario nuevo no responde en 60 segundos, restaura el anterior automáticamente y sale con
 error.
 
-**La build tarda ~30 minutos** en la VPS (2 vCPU) — correrlo en una sesión que no se vaya a
+**La build tarda ~10-30 minutos** en la VPS (2 vCPU) — correrlo en una sesión que no se vaya a
 cortar, o con `nohup`/`tmux`.
+
+## Releases taggeados
+
+`build-release.sh` (server-side, `/srv/git-lfs/scripts/`, no versionado en este repo) es lo
+que dispara `release.yml` en cada push de un tag `v*`. Es un wrapper fino sobre este mismo
+`deploy.sh` — le pasa el tag como ref, y después empaqueta el binario resultante en
+`/srv/git-lfs/releases/`. No duplica la lógica de build/instalación/health-check/rollback;
+toda esa lógica vive acá, en un solo lugar revisable.
 
 ## Migraciones
 

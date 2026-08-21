@@ -105,7 +105,7 @@ use common_net::{
     msg::{ClientType, DisconnectReason, PlayerListUpdate, ServerGeneral, ServerInfo, ServerMsg},
     sync::WorldSyncExt,
 };
-use common_state::{AreasContainer, BlockDiff, BuildArea, State};
+use common_state::{AreasContainer, BattleModeChangeArea, BlockDiff, BuildArea, State};
 use common_systems::add_local_systems;
 use metrics::{EcsSystemMetrics, GameplayMetrics, PhysicsMetrics, TickMetrics};
 use network::{ListenAddr, Network, Pid};
@@ -820,18 +820,48 @@ impl Server {
     /// Get a reference to the Chat Cache
     pub fn chat_cache(&self) -> &ChatCache { &self.chat_cache }
 
-    fn parse_locations(&self, character_list_data: &mut [CharacterItem]) {
-        character_list_data.iter_mut().for_each(|c| {
-            c.location = self.resolve_waypoint_site_name(c.location.as_deref());
-        });
+    /// The human-readable site name at a world position, if any. The one
+    /// place both `get_location_names` and `resolve_waypoint_site_name` read
+    /// off `self.world`, so the two callers -- resolving a pre-parsed
+    /// position vs. a raw DB string, see their own doc comments -- can't
+    /// silently drift on how a position becomes a name.
+    fn location_name_at(&self, wpos: Vec3<f32>) -> Option<String> {
+        self.world
+            .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
+    }
+
+    /// Converts positions to location names for a list of characters.
+    fn get_location_names(
+        &self,
+        character_list: Vec<CharacterItem<Vec3<f32>>>,
+    ) -> Vec<CharacterItem<Content>> {
+        character_list
+            .into_iter()
+            .map(|c| {
+                #[expect(deprecated, reason = "i18n location name")]
+                let name = c
+                    .location
+                    .as_ref()
+                    .and_then(|wpos| self.location_name_at(*wpos))
+                    .map(Content::legacy);
+                CharacterItem {
+                    character: c.character,
+                    body: c.body,
+                    hardcore: c.hardcore,
+                    inventory: c.inventory,
+                    location: name,
+                }
+            })
+            .collect()
     }
 
     /// Resolves a raw saved-waypoint string (as stored in `character.waypoint`)
-    /// to the human-readable site name at that position, if any. Shared by
-    /// `parse_locations` (character-select screen) and NH-79's
-    /// `list_player_characters` (which reads persistence for a uuid that may
-    /// not even be connected right now, so it can't reuse `parse_locations`'
-    /// `CharacterItem`-shaped input).
+    /// to the human-readable site name at that position, if any. The
+    /// character-select screen resolves a pre-parsed `Vec3<f32>` position via
+    /// `get_location_names` instead of this -- this helper stays for callers
+    /// that only have the raw DB string on hand (e.g. reading persistence for
+    /// a player who isn't currently connected, with no live `CharacterItem`
+    /// to resolve a position from).
     fn resolve_waypoint_site_name(&self, waypoint: Option<&str>) -> Option<String> {
         waypoint
             .and_then(|s| {
@@ -839,10 +869,7 @@ impl Server {
                     .ok()
                     .and_then(|(waypoint, _)| waypoint.map(|w| w.get_pos()))
             })
-            .and_then(|wpos| {
-                self.world
-                    .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
-            })
+            .and_then(|wpos| self.location_name_at(wpos))
     }
 
     /// Execute a single server tick, handle input and update the game state by
@@ -1137,24 +1164,22 @@ impl Server {
                 CharacterUpdaterMessage::CharacterScreenResponse(response) => {
                     match response.response_kind {
                         CharacterScreenResponseKind::CharacterList(result) => match result {
-                            Ok(mut character_list_data) => {
-                                self.parse_locations(&mut character_list_data);
-                                self.notify_client(
-                                    response.target_entity,
-                                    ServerGeneral::CharacterListUpdate(character_list_data),
-                                )
-                            },
+                            Ok(list) => self.notify_client(
+                                response.target_entity,
+                                ServerGeneral::CharacterListUpdate(self.get_location_names(list)),
+                            ),
                             Err(error) => self.notify_client(
                                 response.target_entity,
                                 ServerGeneral::CharacterActionError(error.to_string()),
                             ),
                         },
                         CharacterScreenResponseKind::CharacterCreation(result) => match result {
-                            Ok((character_id, mut list)) => {
-                                self.parse_locations(&mut list);
+                            Ok((character_id, list)) => {
                                 self.notify_client(
                                     response.target_entity,
-                                    ServerGeneral::CharacterListUpdate(list),
+                                    ServerGeneral::CharacterListUpdate(
+                                        self.get_location_names(list),
+                                    ),
                                 );
                                 self.notify_client(
                                     response.target_entity,
@@ -1167,11 +1192,12 @@ impl Server {
                             ),
                         },
                         CharacterScreenResponseKind::CharacterEdit(result) => match result {
-                            Ok((character_id, mut list)) => {
-                                self.parse_locations(&mut list);
+                            Ok((character_id, list)) => {
                                 self.notify_client(
                                     response.target_entity,
-                                    ServerGeneral::CharacterListUpdate(list),
+                                    ServerGeneral::CharacterListUpdate(
+                                        self.get_location_names(list),
+                                    ),
                                 );
                                 self.notify_client(
                                     response.target_entity,
@@ -1822,30 +1848,30 @@ impl Server {
             return;
         }
 
+        let pos = if let Some(pos) = self
+            .state
+            .ecs()
+            .read_storage::<comp::Pos>()
+            .get(client)
+            .copied()
+        {
+            pos
+        } else {
+            self.notify_client(
+                client,
+                ServerGeneral::server_msg(
+                    ChatType::CommandInfo,
+                    Content::localized_with_args("command-position-unavailable", [(
+                        "target", "target",
+                    )]),
+                ),
+            );
+
+            return;
+        };
+
         #[cfg(feature = "worldgen")]
         let in_town = {
-            let pos = if let Some(pos) = self
-                .state
-                .ecs()
-                .read_storage::<comp::Pos>()
-                .get(client)
-                .copied()
-            {
-                pos
-            } else {
-                self.notify_client(
-                    client,
-                    ServerGeneral::server_msg(
-                        ChatType::CommandInfo,
-                        Content::localized_with_args("command-position-unavailable", [(
-                            "target", "target",
-                        )]),
-                    ),
-                );
-
-                return;
-            };
-
             let wpos = pos.0.xy().map(|x| x as i32);
             let chunk_pos = wpos.wpos_to_cpos();
             self.world.civs().sites().any(|site| {
@@ -1862,7 +1888,19 @@ impl Server {
         #[cfg(not(feature = "worldgen"))]
         let in_town = true;
 
-        if !in_town {
+        let in_battlemode_change = {
+            let areas = self
+                .state
+                .ecs()
+                .read_resource::<AreasContainer<BattleModeChangeArea>>();
+
+            areas
+                .areas()
+                .iter()
+                .any(|(_id, aabb)| aabb.contains_point(pos.0.as_()))
+        };
+
+        if !in_town && !in_battlemode_change {
             self.notify_client(
                 client,
                 ServerGeneral::server_msg(

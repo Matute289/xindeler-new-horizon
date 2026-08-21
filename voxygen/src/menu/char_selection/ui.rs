@@ -37,6 +37,7 @@ use common::{
     terrain::TerrainChunkSize,
     vol::RectVolSize,
 };
+use common_i18n::Content;
 use common_net::msg::world_msg::SiteId;
 use i18n::{Localization, LocalizationHandle};
 use rand::{RngExt, rng};
@@ -1187,9 +1188,9 @@ impl Controls {
                                                         i18n.get_msg(
                                                             "char_selection-uncanny_valley",
                                                         )
-                                                        .to_string()
+                                                        .into_owned()
                                                     },
-                                                    |s| s.clone(),
+                                                    |c| i18n.get_content(c),
                                                 ))
                                                 .into(),
                                             ]),
@@ -3089,7 +3090,12 @@ impl Controls {
         .into()
     }
 
-    fn update(&mut self, message: Message, events: &mut Vec<Event>, characters: &[CharacterItem]) {
+    fn update(
+        &mut self,
+        message: Message,
+        events: &mut Vec<Event>,
+        characters: &[CharacterItem<Content>],
+    ) {
         match message {
             Message::Back => {
                 if matches!(&self.mode, Mode::CreateOrEdit { .. }) {
@@ -3447,7 +3453,7 @@ impl Controls {
         &mut self,
         input: MenuInput,
         events: &mut Vec<Event>,
-        characters: &[CharacterItem],
+        characters: &[CharacterItem<Content>],
     ) {
         if matches!(input, MenuInput::Back) {
             if matches!(self.mode, Mode::CreateOrEdit { .. }) {
@@ -3493,7 +3499,7 @@ impl Controls {
     /// Get the character to display
     pub fn display_body_inventory<'a>(
         &'a self,
-        characters: &'a [CharacterItem],
+        characters: &'a [CharacterItem<Content>],
     ) -> Option<(comp::Body, &'a Inventory)> {
         match &self.mode {
             Mode::Select { .. } => self
@@ -3580,7 +3586,7 @@ impl CharSelectionUi {
 
     pub fn display_body_inventory<'a>(
         &'a self,
-        characters: &'a [CharacterItem],
+        characters: &'a [CharacterItem<Content>],
     ) -> Option<(comp::Body, &'a Inventory)> {
         self.controls.display_body_inventory(characters)
     }

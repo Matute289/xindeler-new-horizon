@@ -2,18 +2,29 @@
 #
 # Deploys the game server on the VPS.
 #
-#   bash /opt/xindeler-server/src/deploy/deploy.sh
+#   bash /opt/xindeler-server/src/deploy/deploy.sh          # latest development
+#   bash /opt/xindeler-server/src/deploy/deploy.sh v0.19.0  # a specific tag/ref
 #
 # Modelled directly on xindeler-auth's deploy/deploy.sh (same VPS, same
 # systemd/sudoers shape). Takes a database + rtsim-save backup, keeps the
 # previous binary, health-checks after restarting, and restores the previous
 # binary automatically if the new one does not come up.
 #
-# BL-83: no deploy script existed for this repo before this -- the VPS binary
-# was updated by hand, in place, with no rollback path.
+# No deploy script existed for this repo before this one -- the VPS binary
+# was updated by hand, in place, with no rollback path. The tagged-release
+# path (`build-release.sh` on the VPS, triggered by a `v*` tag push via
+# release.yml) reuses this same script rather than duplicating its build/
+# install/health-check/rollback logic in a second, separately-maintained
+# copy -- see that script's own header for why.
+#
+# An optional $1 is a ref (tag or branch) to check out instead of pulling
+# `development`'s tip. Passing a tag leaves $SRC in detached HEAD; the next
+# no-arg run needs a branch checked out first (`build-release.sh` handles
+# this itself after a tagged build).
 
 set -euo pipefail
 
+REF="${1:-}"
 ROOT="${SERVER_ROOT:-/opt/xindeler-server}"
 SRC="$ROOT/src"
 BIN="$ROOT/xindeler-server-cli"
@@ -118,8 +129,14 @@ cd "$SRC"
 previous_commit="$(git rev-parse --short HEAD)"
 log "current commit $previous_commit"
 
-log "pulling latest code"
-git pull --ff-only
+if [ -n "$REF" ]; then
+    log "fetching and checking out $REF"
+    git fetch origin --tags
+    git checkout "$REF"
+else
+    log "pulling latest code"
+    git pull --ff-only
+fi
 
 new_commit="$(git rev-parse --short HEAD)"
 if [ "$previous_commit" = "$new_commit" ]; then

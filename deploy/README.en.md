@@ -27,17 +27,27 @@ Runs under systemd as `xindeler-server-cli.service`, **not Docker**. Runs as use
 
 ```bash
 ssh greenmountain.dev
-bash /opt/xindeler-server/src/deploy/deploy.sh
+bash /opt/xindeler-server/src/deploy/deploy.sh          # latest development
+bash /opt/xindeler-server/src/deploy/deploy.sh v0.19.0  # a specific tag/ref
 ```
 
-The script backs up the database and the rtsim save, pulls the code, builds (nightly, pinned
-by `rust-toolchain` — no `+toolchain` needed, plain `cargo` resolves it), keeps the previous
-binary, restarts, and health-checks against `http://127.0.0.1:14005/health`. If the new
-binary doesn't answer within 60 seconds, it automatically restores the previous one and exits
-with an error.
+The script backs up the database and the rtsim save, pulls the code (or checks out the ref
+passed as an argument, if given — leaves the checkout in detached HEAD), builds (nightly,
+pinned by `rust-toolchain` — no `+toolchain` needed, plain `cargo` resolves it), keeps the
+previous binary, restarts, and health-checks against `http://127.0.0.1:14005/health`. If the
+new binary doesn't answer within 60 seconds, it automatically restores the previous one and
+exits with an error.
 
-**The build takes ~30 minutes** on the VPS (2 vCPU) — run it from a session that won't drop,
-or under `nohup`/`tmux`.
+**The build takes ~10-30 minutes** on the VPS (2 vCPU) — run it from a session that won't
+drop, or under `nohup`/`tmux`.
+
+## Tagged releases
+
+`build-release.sh` (server-side, `/srv/git-lfs/scripts/`, not versioned in this repo) is what
+`release.yml` triggers on every `v*` tag push. It's a thin wrapper around this same
+`deploy.sh` — passes the tag as the ref, then packages the resulting binary into
+`/srv/git-lfs/releases/`. It doesn't duplicate the build/install/health-check/rollback logic;
+all of that lives here, in one reviewable place.
 
 ## Migrations
 
