@@ -21,20 +21,17 @@ impl OAuthProvider {
     }
 }
 
-/// How the client expects to receive the pickup code. Chosen locally before
-/// the auth server is contacted, because only the client can know whether its
-/// loopback bind succeeded (spec §2.2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OAuthDeliveryMode {
-    Loopback,
-    Poll,
-}
-
 #[derive(Debug)]
 pub enum OAuthFailure {
     /// The game server advertises no auth provider, so there is nothing to
     /// sign in against.
     NoAuthServer,
+    /// `127.0.0.1:0` could not be bound (firewall, sandbox, hardened desktop),
+    /// so the browser has nowhere to deliver the pickup code. Loopback is the
+    /// only delivery path (2026-08-21 erratum), so this ends the attempt
+    /// immediately -- there is nothing to fall back to. Carries the io error's
+    /// message for the log line, never shown verbatim to the player.
+    ListenerBindFailed(String),
     /// The auth server returned an `authorize_url` that is not https, or whose
     /// host is not the auth server the player already trusted. Never opened.
     UntrustedAuthorizeUrl(String),
@@ -100,14 +97,12 @@ pub fn validate_authorize_url(authorize_url: &str) -> Result<(), OAuthFailure> {
     Ok(())
 }
 
-use loopback::{Delivery, LoopbackListener, choose_delivery};
+use loopback::{LoopbackListener, bind_failure};
 use std::time::{Duration, Instant};
 
 /// Overall attempt window (spec §3.3), matching the bumped native-origin
 /// `OAuthStateCache` TTL on the server side (spec §4.6).
 pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
-/// Poll cadence for the fallback path (spec §2.2).
-pub const POLL_INTERVAL: Duration = Duration::from_millis(1500);
 
 /// The callbacks a native OAuth attempt needs from the frontend. Boxed rather
 /// than generic so `Client::new` gains one plain parameter instead of two more
@@ -119,7 +114,9 @@ pub struct OAuthLogin {
     /// `Drop` impl sets -- so cancel stays cancel-by-drop, with no second
     /// teardown path.
     pub cancelled: Box<dyn Fn() -> bool + Send + Sync + 'static>,
-    pub on_browser_opened: Box<dyn FnMut(OAuthDeliveryMode) + Send + 'static>,
+    /// Called once the system browser has actually been handed the authorize
+    /// URL, so the frontend can switch to its "finish in your browser" state.
+    pub on_browser_opened: Box<dyn FnMut() + Send + 'static>,
     /// Given the server's suggested username, returns the player's choice, or
     /// `None` if the prompt was cancelled.
     pub pick_username: Box<dyn FnMut(String) -> Option<String> + Send + 'static>,
@@ -133,27 +130,6 @@ pub enum OAuthOutcome {
     TotpRequired(serde_json::Value),
 }
 
-pub fn wait_for_pickup_by_polling(
-    http: &reqwest::blocking::Client,
-    auth_addr: &str,
-    state: &str,
-    deadline: Instant,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String, OAuthFailure> {
-    loop {
-        if cancelled() {
-            return Err(OAuthFailure::Cancelled);
-        }
-        if Instant::now() >= deadline {
-            return Err(OAuthFailure::Timeout);
-        }
-        if let Some(pickup) = api::poll_pickup(http, auth_addr, state)? {
-            return Ok(pickup);
-        }
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
 /// Runs one whole native OAuth attempt. Blocking throughout -- the caller must
 /// already be inside a blocking context, the same way the existing
 /// password-based token acquisition is.
@@ -165,38 +141,20 @@ pub fn run_oauth_login(
     let pkce = Pkce::generate();
     let http = api::http_client()?;
 
-    let delivery = choose_delivery(LoopbackListener::bind());
-    let mode = delivery.mode();
-    let port = match &delivery {
-        Delivery::Loopback(listener) => Some(listener.port()),
-        Delivery::Poll => None,
-    };
+    // Bind before anything is sent: the port is part of the `/start` request,
+    // and a bind failure is the end of the attempt (2026-08-21 erratum), so
+    // failing here means no state was ever parked server-side and no browser
+    // window was ever opened.
+    let listener = LoopbackListener::bind().map_err(bind_failure)?;
+    let port = listener.port();
 
-    let started = api::start(
-        &http,
-        auth_addr,
-        login.provider,
-        &pkce.challenge,
-        mode,
-        port,
-    )?;
+    let started = api::start(&http, auth_addr, login.provider, &pkce.challenge, port)?;
     validate_authorize_url(&started.authorize_url)?;
 
     open::that_detached(&started.authorize_url).map_err(|e| OAuthFailure::Other(e.to_string()))?;
-    (login.on_browser_opened)(mode);
+    (login.on_browser_opened)();
 
-    let pickup = match delivery {
-        Delivery::Loopback(listener) => {
-            listener.wait_for_pickup(deadline, login.cancelled.as_ref())?
-        },
-        Delivery::Poll => wait_for_pickup_by_polling(
-            &http,
-            auth_addr,
-            &started.state,
-            deadline,
-            login.cancelled.as_ref(),
-        )?,
-    };
+    let pickup = listener.wait_for_pickup(deadline, login.cancelled.as_ref())?;
 
     match api::exchange(&http, auth_addr, &pickup, &pkce.verifier)? {
         api::ExchangeResponse::SignedIn { token } => Ok(OAuthOutcome::Token(token)),
@@ -307,40 +265,5 @@ mod tests {
     #[test]
     fn attempt_timeout_matches_the_five_minute_spec_value() {
         assert_eq!(ATTEMPT_TIMEOUT, std::time::Duration::from_secs(300));
-    }
-
-    #[test]
-    fn poll_interval_matches_the_spec_value() {
-        assert_eq!(POLL_INTERVAL, std::time::Duration::from_millis(1500));
-    }
-
-    #[test]
-    fn polling_gives_up_at_the_deadline_without_a_reachable_server() {
-        let http = api::http_client().expect("http client");
-        let err = wait_for_pickup_by_polling(
-            &http,
-            "http://127.0.0.1:1",
-            "state-1",
-            std::time::Instant::now(),
-            &|| false,
-        )
-        .expect_err("an already-elapsed deadline must time out");
-        assert!(matches!(err, OAuthFailure::Timeout));
-    }
-
-    #[test]
-    fn polling_stops_immediately_when_cancelled() {
-        let http = api::http_client().expect("http client");
-        let started = std::time::Instant::now();
-        let err = wait_for_pickup_by_polling(
-            &http,
-            "http://127.0.0.1:1",
-            "state-1",
-            std::time::Instant::now() + ATTEMPT_TIMEOUT,
-            &|| true,
-        )
-        .expect_err("cancel must abort polling");
-        assert!(matches!(err, OAuthFailure::Cancelled));
-        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }

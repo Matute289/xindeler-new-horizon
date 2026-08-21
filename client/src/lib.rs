@@ -1364,7 +1364,8 @@ impl Client {
     /// Runs a native OAuth attempt against `auth_addr` and returns the
     /// resulting auth token. Same `spawn_blocking` requirement as
     /// `acquire_auth_token` below, for the same two reasons -- and doubly so
-    /// here: the loopback listener and the poll loop both block for minutes.
+    /// here: the loopback listener blocks until the player finishes in their
+    /// browser, up to the full 5-minute window.
     ///
     /// A TOTP-required outcome is redeemed through the very same
     /// `submit_2fa_code` path password login already uses, so OAuth-then-2FA

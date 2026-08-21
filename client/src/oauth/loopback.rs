@@ -1,4 +1,4 @@
-use crate::oauth::{OAuthDeliveryMode, OAuthFailure};
+use crate::oauth::OAuthFailure;
 use std::{
     io::{ErrorKind, Read, Write},
     net::TcpListener,
@@ -13,7 +13,9 @@ pub const CALLBACK_PAGE: &str = "<!doctype html><meta charset=\"utf-8\"><title>X
                                  this tab and return to the game.</p>";
 
 /// How long to wait between non-blocking `accept` attempts. Short enough that
-/// cancel feels immediate, long enough not to spin a core.
+/// cancel feels immediate, long enough not to spin a core. This is the accept
+/// loop's own retry cadence against its own socket -- nothing to do with any
+/// network polling of the auth server.
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Cap on the bytes read from the browser before giving up. A real redirect
@@ -94,33 +96,13 @@ impl LoopbackListener {
     }
 }
 
-pub enum Delivery {
-    Loopback(LoopbackListener),
-    Poll,
-}
-
-impl Delivery {
-    pub fn mode(&self) -> OAuthDeliveryMode {
-        match self {
-            Delivery::Loopback(_) => OAuthDeliveryMode::Loopback,
-            Delivery::Poll => OAuthDeliveryMode::Poll,
-        }
-    }
-}
-
-/// Bind failure is expected and non-fatal (firewall, sandbox, hardened
-/// desktop) -- the whole point of the polling fallback (spec §2.2).
-pub fn choose_delivery(bind_result: std::io::Result<LoopbackListener>) -> Delivery {
-    match bind_result {
-        Ok(listener) => Delivery::Loopback(listener),
-        Err(e) => {
-            tracing::warn!(
-                ?e,
-                "loopback bind failed, falling back to OAuth polling mode"
-            );
-            Delivery::Poll
-        },
-    }
+/// A bind failure (firewall, sandbox, hardened desktop) used to be a fork into
+/// polling delivery; polling was removed as remotely exploitable (2026-08-21
+/// erratum), so loopback is the only path and this is now simply where the
+/// attempt ends. Logged here, surfaced to the player by the caller.
+pub fn bind_failure(e: std::io::Error) -> OAuthFailure {
+    tracing::warn!(?e, "loopback bind failed; native OAuth cannot continue");
+    OAuthFailure::ListenerBindFailed(e.to_string())
 }
 
 /// A pickup code is server-minted base64url. Anything longer is not something
@@ -246,23 +228,20 @@ mod tests {
     fn never_cancelled() -> impl Fn() -> bool { || false }
 
     #[test]
-    fn bind_failure_falls_back_to_poll_mode() {
-        let failed = Err(std::io::Error::new(
+    fn bind_failure_is_a_hard_error_with_no_fallback() {
+        let err = bind_failure(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "denied",
         ));
-        let delivery = choose_delivery(failed);
-        assert_eq!(delivery.mode(), OAuthDeliveryMode::Poll);
-        assert!(matches!(delivery, Delivery::Poll));
+        let OAuthFailure::ListenerBindFailed(detail) = err else {
+            panic!("a bind failure must surface as ListenerBindFailed");
+        };
+        assert!(detail.contains("denied"));
     }
 
     #[test]
-    fn successful_bind_stays_in_loopback_mode() {
-        let delivery = choose_delivery(LoopbackListener::bind());
-        assert_eq!(delivery.mode(), OAuthDeliveryMode::Loopback);
-        let Delivery::Loopback(listener) = delivery else {
-            panic!("expected loopback delivery");
-        };
+    fn a_successful_bind_yields_an_ephemeral_port() {
+        let listener = LoopbackListener::bind().expect("bind 127.0.0.1:0");
         assert_ne!(listener.port(), 0);
     }
 

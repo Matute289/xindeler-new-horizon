@@ -1,4 +1,4 @@
-use crate::oauth::{OAuthDeliveryMode, OAuthFailure, OAuthProvider};
+use crate::oauth::{OAuthFailure, OAuthProvider};
 use reqwest::blocking::Client;
 use std::time::Duration;
 
@@ -10,11 +10,6 @@ pub struct StartResponse {
 #[derive(serde::Deserialize)]
 pub struct TokenResponse {
     pub token: authc::AuthToken,
-}
-
-#[derive(serde::Deserialize)]
-struct PollResponse {
-    pickup_code: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -48,7 +43,7 @@ pub enum ExchangeResponse {
 /// round-trips to the same auth server. `redirect::Policy::none()` matches
 /// `authc`'s own client (`authc/src/lib.rs:83`) and is required here: `start()`
 /// needs the raw `302` and its `Location` header, not an auto-followed
-/// response from Discord/Google's own authorize page. `poll`/`exchange`/
+/// response from Discord/Google's own authorize page. `exchange` and
 /// `complete_registration` never redirect in practice, so sharing one client
 /// with this policy costs them nothing.
 pub fn http_client() -> Result<Client, OAuthFailure> {
@@ -60,24 +55,13 @@ pub fn http_client() -> Result<Client, OAuthFailure> {
         .map_err(|e| OAuthFailure::Other(e.to_string()))
 }
 
-fn start_url(
-    auth_addr: &str,
-    provider: OAuthProvider,
-    code_challenge: &str,
-    mode: OAuthDeliveryMode,
-    port: Option<u16>,
-) -> String {
+fn start_url(auth_addr: &str, provider: OAuthProvider, code_challenge: &str, port: u16) -> String {
     let base = auth_addr.trim_end_matches('/');
     let slug = provider.slug();
-    match (mode, port) {
-        (OAuthDeliveryMode::Loopback, Some(port)) => format!(
-            "{base}/oauth/{slug}/start?client=native&code_challenge={code_challenge}&\
-             redirect_port={port}"
-        ),
-        _ => format!(
-            "{base}/oauth/{slug}/start?client=native&code_challenge={code_challenge}&mode=poll"
-        ),
-    }
+    format!(
+        "{base}/oauth/{slug}/start?client=native&code_challenge={code_challenge}&\
+         redirect_port={port}"
+    )
 }
 
 fn error_from_body(body: &str) -> String {
@@ -91,11 +75,13 @@ fn transport(e: reqwest::Error) -> OAuthFailure { OAuthFailure::Other(e.to_strin
 /// `/oauth/{provider}/start` is a plain `302` for native callers too (spec
 /// S4.2's correction -- it does NOT grow a `200 JSON` contract). The
 /// `Location` header's value IS the `authorize_url`; its `state` query param
-/// is the same CSRF `state` this flow threads through the rest of the exchange
-/// -- both extracted here, matching how `oauth_start`'s own server-side test
-/// extracts `state` from the exact same header
-/// (`server/src/web.rs`'s `native_start`-style tests, in the canonical
-/// xindeler-auth-side plan).
+/// is kept here as a structural check that the redirect really is a provider
+/// authorize URL rather than the web frontend's error page. The native client
+/// never sends `state` anywhere itself -- with polling delivery gone
+/// (2026-08-21 erratum) the result is keyed by the pickup code the browser
+/// hands to the loopback listener. Extraction matches how `oauth_start`'s own
+/// server-side test reads `state` from the same header (`server/src/web.rs`'s
+/// `native_start`-style tests, in the canonical xindeler-auth-side plan).
 fn parse_start_location(location: &str) -> Result<StartResponse, OAuthFailure> {
     let fail = || OAuthFailure::Other("malformed /start redirect".to_owned());
     let url = reqwest::Url::parse(location).map_err(|_| fail())?;
@@ -110,16 +96,18 @@ fn parse_start_location(location: &str) -> Result<StartResponse, OAuthFailure> {
     })
 }
 
+/// `port` is required, never optional: the loopback listener is already bound
+/// by the time this is called, or the attempt never got here (2026-08-21
+/// erratum -- there is no delivery mode without a bound port to fall back to).
 pub fn start(
     http: &Client,
     auth_addr: &str,
     provider: OAuthProvider,
     code_challenge: &str,
-    mode: OAuthDeliveryMode,
-    port: Option<u16>,
+    port: u16,
 ) -> Result<StartResponse, OAuthFailure> {
     let resp = http
-        .get(start_url(auth_addr, provider, code_challenge, mode, port))
+        .get(start_url(auth_addr, provider, code_challenge, port))
         .send()
         .map_err(transport)?;
     if !resp.status().is_redirection() {
@@ -133,30 +121,6 @@ pub fn start(
         .ok_or_else(|| OAuthFailure::Other("missing Location header on /start".to_owned()))?
         .to_owned();
     parse_start_location(&location)
-}
-
-/// `Ok(None)` means "not ready yet" (the server answers 404 until
-/// `oauth_callback()` has minted a pickup code, spec §4.5).
-pub fn poll_pickup(
-    http: &Client,
-    auth_addr: &str,
-    state: &str,
-) -> Result<Option<String>, OAuthFailure> {
-    let url = format!(
-        "{}/oauth/native/poll?state={state}",
-        auth_addr.trim_end_matches('/')
-    );
-    let resp = http.get(url).send().map_err(transport)?;
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    if !resp.status().is_success() {
-        let body = resp.text().unwrap_or_default();
-        return Err(OAuthFailure::Other(error_from_body(&body)));
-    }
-    resp.json::<PollResponse>()
-        .map(|body| Some(body.pickup_code))
-        .map_err(transport)
 }
 
 pub fn exchange(
@@ -289,33 +253,17 @@ mod tests {
     }
 
     #[test]
-    fn start_url_carries_the_loopback_port_and_no_poll_mode() {
+    fn start_url_carries_the_loopback_port() {
         let url = start_url(
             "https://auth.xindeler.com/",
             OAuthProvider::Discord,
             "chal",
-            OAuthDeliveryMode::Loopback,
-            Some(51234),
+            51234,
         );
         assert!(url.starts_with("https://auth.xindeler.com/oauth/discord/start?"));
         assert!(url.contains("client=native"));
         assert!(url.contains("code_challenge=chal"));
         assert!(url.contains("redirect_port=51234"));
-        assert!(!url.contains("mode=poll"));
-    }
-
-    #[test]
-    fn start_url_carries_poll_mode_and_no_port() {
-        let url = start_url(
-            "https://auth.xindeler.com",
-            OAuthProvider::Google,
-            "chal",
-            OAuthDeliveryMode::Poll,
-            None,
-        );
-        assert!(url.starts_with("https://auth.xindeler.com/oauth/google/start?"));
-        assert!(url.contains("mode=poll"));
-        assert!(!url.contains("redirect_port"));
     }
 
     #[test]

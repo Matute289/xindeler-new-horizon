@@ -2,7 +2,7 @@ use client::{
     Client, ClientInitStage, ServerInfo,
     addr::ConnectionArgs,
     error::{Error as ClientError, NetworkConnectError, NetworkError},
-    oauth::{OAuthDeliveryMode, OAuthLogin, OAuthProvider},
+    oauth::{OAuthLogin, OAuthProvider},
 };
 use common_net::msg::ClientType;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
@@ -36,11 +36,10 @@ pub enum Msg {
     /// `ClientInit::submit_2fa_code`.
     TwoFaRequired,
     /// A native OAuth attempt has opened the system browser and is now waiting
-    /// for the player to finish there. `mode` is only for the wording of the
-    /// waiting message -- polling mode has no visible behavior difference.
+    /// for the player to finish there. `provider` is only for the wording of
+    /// the waiting message.
     OAuthPending {
         provider: OAuthProvider,
-        mode: OAuthDeliveryMode,
     },
     /// The provider account isn't linked to any Xindeler account yet -- the
     /// background task is blocked on `oauth_username_rx.recv()`, waiting for
@@ -132,8 +131,8 @@ impl ClientInit {
                     OAuthLogin {
                         provider,
                         cancelled: Box::new(move || cancel3.load(Ordering::Relaxed)),
-                        on_browser_opened: Box::new(move |mode| {
-                            let _ = opened_tx.send(Msg::OAuthPending { provider, mode });
+                        on_browser_opened: Box::new(move || {
+                            let _ = opened_tx.send(Msg::OAuthPending { provider });
                         }),
                         pick_username: Box::new(move |suggested| {
                             let _ = username_tx.send(Msg::OAuthUsernameRequired { suggested });
