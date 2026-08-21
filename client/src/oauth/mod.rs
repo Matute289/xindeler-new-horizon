@@ -66,6 +66,38 @@ impl Pkce {
     }
 }
 
+/// The two real OAuth provider authorize hosts, mirroring
+/// `DiscordProvider`/`GoogleProvider::authorize_url()` in `xindeler-auth`'s
+/// `server/src/oauth.rs` verbatim. Fixed, not configurable -- unlike the auth
+/// server's own address, these are never something a player or a `settings.ron`
+/// entry should be able to widen.
+const TRUSTED_OAUTH_PROVIDER_HOSTS: &[&str] = &["discord.com", "accounts.google.com"];
+
+/// The `authorize_url` comes from `/oauth/{provider}/start`'s redirect
+/// `Location` header (OAUTHN-C-5's `start()`), not a constant, so it is never
+/// handed to the system browser unchecked (spec S5). It always points
+/// directly at the OAuth provider, never at the auth server -- if `start()`'s
+/// redirect target does NOT match this allowlist, that means `/start` itself
+/// failed server-side and redirected to the web frontend's own error page
+/// instead (xindeler-auth's `oauth_start` falls back to `oauth_error_redirect`
+/// on validation failure even for native callers) -- this function rejects
+/// that case too, surfacing it as a generic start failure rather than opening
+/// a web page in the player's browser.
+pub fn validate_authorize_url(authorize_url: &str) -> Result<(), OAuthFailure> {
+    let reject = || OAuthFailure::UntrustedAuthorizeUrl(authorize_url.to_owned());
+
+    let url = reqwest::Url::parse(authorize_url).map_err(|_| reject())?;
+    if url.scheme() != "https" {
+        return Err(reject());
+    }
+    let host = url.host_str().ok_or_else(reject)?;
+    if !TRUSTED_OAUTH_PROVIDER_HOSTS.contains(&host) {
+        return Err(reject());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +130,55 @@ mod tests {
     #[test]
     fn two_generated_pkce_pairs_differ() {
         assert_ne!(Pkce::generate().verifier, Pkce::generate().verifier);
+    }
+
+    #[test]
+    fn accepts_the_real_discord_authorize_host() {
+        assert!(validate_authorize_url(
+            "https://discord.com/oauth2/authorize?client_id=1&state=x"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn accepts_the_real_google_authorize_host() {
+        assert!(validate_authorize_url(
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=x"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_a_different_host() {
+        let err = validate_authorize_url("https://evil.example/steal?state=x")
+            .expect_err("different host must be rejected");
+        assert!(matches!(err, OAuthFailure::UntrustedAuthorizeUrl(_)));
+    }
+
+    #[test]
+    fn rejects_the_auth_servers_own_host() {
+        // authorize_url never points at auth.xindeler.com itself -- if it
+        // does, /start's redirect was an error page, not a real authorize
+        // URL (spec S3.2 step 4's note on how start() surfaces failures).
+        assert!(validate_authorize_url("https://auth.xindeler.com/oauth/callback#error=x").is_err());
+    }
+
+    #[test]
+    fn rejects_a_lookalike_subdomain() {
+        assert!(validate_authorize_url("https://discord.com.evil.example/x").is_err());
+        assert!(validate_authorize_url("https://evil.discord.com/x").is_err());
+        assert!(validate_authorize_url("https://accounts.google.com.evil.example/x").is_err());
+    }
+
+    #[test]
+    fn rejects_plain_http_even_on_a_real_provider_host() {
+        assert!(validate_authorize_url("http://discord.com/oauth2/authorize").is_err());
+    }
+
+    #[test]
+    fn rejects_non_http_schemes_and_garbage() {
+        assert!(validate_authorize_url("javascript:alert(1)").is_err());
+        assert!(validate_authorize_url("file:///etc/passwd").is_err());
+        assert!(validate_authorize_url("not a url at all").is_err());
     }
 }
