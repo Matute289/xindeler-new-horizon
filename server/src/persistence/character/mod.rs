@@ -51,13 +51,17 @@ use tracing::{debug, error, trace, warn};
 /// called--do not assume it's safe to make these public!
 mod conversions;
 
-/// Re-exported at `pub(crate)` (this module itself is only
-/// `pub(in crate::persistence)`, but the crate root re-exports this one
-/// further, see `persistence::parse_waypoint`) for
-/// `Server::resolve_waypoint_site_name`, which needs to parse a raw waypoint
-/// JSON string with no `CharacterId` on hand to log against on a parse
-/// failure -- unlike every in-module caller, which goes through
-/// `convert_waypoint_or_warn` instead.
+/// `pub(crate)`, not `pub(in crate::persistence)`: this module itself is
+/// only `pub(in crate::persistence)`, but the actual caller,
+/// `Server::resolve_waypoint_site_name`, lives at the crate root in
+/// `server/src/lib.rs` -- outside `crate::persistence` entirely -- and
+/// re-exports can never widen visibility past their target's own, so
+/// `persistence::mod.rs`'s own `pub(crate) use character::
+/// convert_waypoint_from_database_json as parse_waypoint;` requires this to
+/// already be `pub(crate)` here, not narrower. `resolve_waypoint_site_name`
+/// needs to parse a raw waypoint JSON string with no `CharacterId` on hand to
+/// log against on a parse failure -- unlike every in-module caller, which
+/// goes through `convert_waypoint_or_warn` instead.
 pub(crate) use conversions::convert_waypoint_from_database_json;
 
 pub(crate) type EntityId = i64;
