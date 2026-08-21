@@ -151,6 +151,54 @@ pub enum Message {
         character_id: i64,
         new_alias: String,
     },
+    /// Kicks `target_uuid`'s live session on behalf of `operator_uuid`, a
+    /// registered admin/moderator with no live in-game session of its own.
+    /// Fails if the operator isn't a real admin/moderator, if the target
+    /// isn't currently connected, or if the operator's role doesn't outrank
+    /// the target's.
+    AdminKickPlayer {
+        target_uuid: String,
+        #[arg(long)]
+        operator_uuid: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Bans `target_uuid` on behalf of `operator_uuid`, a registered
+    /// admin/moderator with no live in-game session of its own.
+    /// `duration_secs` of `None` means a permanent ban. `target_username`,
+    /// if the caller has it, avoids a network round-trip to resolve it (see
+    /// `server::cmd::admin_ban_player`'s doc comment) -- purely
+    /// informational, falls back to the bare uuid if omitted.
+    AdminBanPlayer {
+        target_uuid: String,
+        #[arg(long)]
+        operator_uuid: String,
+        #[arg(long)]
+        target_username: Option<String>,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        duration_secs: Option<u64>,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Unbans `target_uuid` on behalf of `operator_uuid`, a registered
+    /// admin/moderator with no live in-game session of its own.
+    AdminUnbanPlayer {
+        target_uuid: String,
+        #[arg(long)]
+        operator_uuid: String,
+        #[arg(long)]
+        target_username: Option<String>,
+    },
+    /// Lists the characters belonging to an arbitrary `uuid`, for a trusted
+    /// admin caller. Unlike `ListPlayerCharacters` (whose HTTP route
+    /// restricts it to the caller's own uuid), this variant is reachable
+    /// with any uuid by design — it is only ever wired to an
+    /// admin-secret-authenticated route.
+    AdminListPlayerCharacters {
+        uuid: String,
+    },
 }
 
 /// Ids of every currently-loaded ORACLE asset. See `Message::OracleListEvents`.
@@ -228,6 +276,13 @@ pub enum MessageReturn {
     /// Response to a successful `Message::RenameCharacter`. Failure goes
     /// through `Error(String)` above, same as every other fallible arm.
     CharacterRenamed,
+    /// Response to a successful `Message::AdminKickPlayer` /
+    /// `Message::AdminUnbanPlayer` (`ban: None`) or `Message::AdminBanPlayer`
+    /// (`ban: Some(..)`, the resulting ban record). Failure goes through
+    /// `Error(String)` above, same as every other fallible arm.
+    AdminActionOk {
+        ban: Option<common_net::msg::server::BanInfo>,
+    },
 }
 
 #[derive(Parser)]

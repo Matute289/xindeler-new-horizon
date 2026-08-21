@@ -68,6 +68,20 @@ fn dmevent_id_from_path(path: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Parses the target/operator uuid strings carried by the admin HTTP `Message`
+/// variants, returning an operator-facing error message (for
+/// `MessageReturn::Error`) naming which one failed to parse.
+fn parse_admin_uuids(
+    target_uuid: &str,
+    operator_uuid: &str,
+) -> Result<(server::authc::Uuid, server::authc::Uuid), String> {
+    let target_uuid = server::authc::Uuid::parse_str(target_uuid)
+        .map_err(|_| "target_uuid is not a valid uuid".to_string())?;
+    let operator_uuid = server::authc::Uuid::parse_str(operator_uuid)
+        .map_err(|_| "operator_uuid is not a valid uuid".to_string())?;
+    Ok((target_uuid, operator_uuid))
+}
+
 /// Renders a `server::oracle::policy::PolicyError` as an operator-facing
 /// message for `MessageReturn::Error`.
 fn render_policy_error(err: &PolicyError) -> String {
@@ -618,6 +632,102 @@ fn server_loop(
                         let _ = response.send(MessageReturn::Error(err.public_message()));
                     },
                 },
+                Message::AdminKickPlayer {
+                    target_uuid,
+                    operator_uuid,
+                    reason,
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => {
+                        match server.admin_kick_player(target_uuid, operator_uuid, reason) {
+                            Ok(()) => {
+                                let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                            },
+                            Err(err) => {
+                                error!(%err, "admin_kick_player failed");
+                                let _ = response.send(MessageReturn::Error(err));
+                            },
+                        }
+                    },
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
+                    },
+                },
+                Message::AdminBanPlayer {
+                    target_uuid,
+                    operator_uuid,
+                    target_username,
+                    reason,
+                    duration_secs,
+                    overwrite,
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => {
+                        match server.admin_ban_player(
+                            target_uuid,
+                            operator_uuid,
+                            target_username,
+                            reason,
+                            duration_secs,
+                            overwrite,
+                        ) {
+                            Ok(ban) => {
+                                let _ = response.send(MessageReturn::AdminActionOk { ban });
+                            },
+                            Err(err) => {
+                                error!(%err, "admin_ban_player failed");
+                                let _ = response.send(MessageReturn::Error(err));
+                            },
+                        }
+                    },
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
+                    },
+                },
+                Message::AdminUnbanPlayer {
+                    target_uuid,
+                    operator_uuid,
+                    target_username,
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => {
+                        match server.admin_unban_player(target_uuid, operator_uuid, target_username)
+                        {
+                            Ok(()) => {
+                                let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                            },
+                            Err(err) => {
+                                error!(%err, "admin_unban_player failed");
+                                let _ = response.send(MessageReturn::Error(err));
+                            },
+                        }
+                    },
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
+                    },
+                },
+                Message::AdminListPlayerCharacters { uuid } => {
+                    match server.list_player_characters(&uuid) {
+                        Ok(characters) => {
+                            let characters = characters
+                                .into_iter()
+                                .map(|c| CharacterSummaryDto {
+                                    character_id: c.character_id.0,
+                                    name: c.alias,
+                                    level: u32::from(c.level),
+                                    class: c.class,
+                                    location: c.location.map(|site| LocationDto {
+                                        site,
+                                        kingdom: None,
+                                        continent: None,
+                                    }),
+                                })
+                                .collect();
+                            let _ = response.send(MessageReturn::PlayerCharacters(characters));
+                        },
+                        Err(err) => {
+                            error!(%err, "admin list_player_characters failed");
+                            let _ = response.send(MessageReturn::Error(err.public_message()));
+                        },
+                    }
+                },
             }
             false
         };
@@ -653,6 +763,9 @@ fn server_loop(
                             info!(count = characters.len(), "Listed player characters")
                         },
                         MessageReturn::CharacterRenamed => info!("Character renamed"),
+                        MessageReturn::AdminActionOk { ban } => {
+                            info!(?ban, "Admin action completed")
+                        },
                     };
                 }
             }
