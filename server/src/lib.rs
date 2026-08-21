@@ -820,6 +820,16 @@ impl Server {
     /// Get a reference to the Chat Cache
     pub fn chat_cache(&self) -> &ChatCache { &self.chat_cache }
 
+    /// The human-readable site name at a world position, if any. The one
+    /// place both `get_location_names` and `resolve_waypoint_site_name` read
+    /// off `self.world`, so the two callers -- resolving a pre-parsed
+    /// position vs. a raw DB string, see their own doc comments -- can't
+    /// silently drift on how a position becomes a name.
+    fn location_name_at(&self, wpos: Vec3<f32>) -> Option<String> {
+        self.world
+            .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
+    }
+
     /// Converts positions to location names for a list of characters.
     fn get_location_names(
         &self,
@@ -832,10 +842,7 @@ impl Server {
                 let name = c
                     .location
                     .as_ref()
-                    .and_then(|wpos| {
-                        self.world
-                            .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
-                    })
+                    .and_then(|wpos| self.location_name_at(*wpos))
                     .map(Content::legacy);
                 CharacterItem {
                     character: c.character,
@@ -862,10 +869,7 @@ impl Server {
                     .ok()
                     .and_then(|(waypoint, _)| waypoint.map(|w| w.get_pos()))
             })
-            .and_then(|wpos| {
-                self.world
-                    .get_location_name(self.index.as_index_ref(), wpos.xy().as_::<i32>())
-            })
+            .and_then(|wpos| self.location_name_at(wpos))
     }
 
     /// Execute a single server tick, handle input and update the game state by
