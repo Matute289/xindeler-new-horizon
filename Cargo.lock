@@ -10779,7 +10779,7 @@ checksum = "a67300977d3dc3f8034dae89778f502b6ba20b269527b3223ba59c0cf393bb8a"
 
 [[package]]
 name = "xindeler-anim"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "bytemuck",
  "inline_tweak",
@@ -10817,7 +10817,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-client"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "async-channel",
  "byteorder",
@@ -10851,7 +10851,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-client-i18n"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "clap",
  "fluent",
@@ -10868,7 +10868,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "ahash 0.8.12",
  "approx 0.5.1",
@@ -10920,7 +10920,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-assets"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "assets_manager",
  "dot_vox",
@@ -10937,7 +10937,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-base"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "directories-next",
  "profiling",
@@ -10946,7 +10946,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-dynlib"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "find_folder",
  "libloading 0.9.0",
@@ -10956,7 +10956,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-ecs"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "float-cmp",
  "specs",
@@ -10966,7 +10966,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-frontend"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "criterion",
@@ -10982,7 +10982,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-i18n"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "hashbrown 0.17.1",
  "rand 0.10.1",
@@ -10991,7 +10991,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-net"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "bincode",
  "flate2",
@@ -11008,7 +11008,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-oracle"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "ron",
  "serde",
@@ -11018,7 +11018,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-state"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "async-trait",
  "atomic_refcell",
@@ -11050,7 +11050,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-common-systems"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "chrono",
  "hashbrown 0.17.1",
@@ -11070,7 +11070,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-i18n-helpers"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "rand 0.10.1",
  "tracing",
@@ -11141,7 +11141,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-rtsim"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anymap2",
  "atomic_refcell",
@@ -11167,7 +11167,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-server"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "atomicwrites",
  "bincode",
@@ -11224,7 +11224,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-server-agent"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "itertools 0.14.0",
  "lazy_static",
@@ -11241,7 +11241,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-server-cli"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "axum",
  "cansi",
@@ -11275,7 +11275,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-voxygen"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "backtrace",
  "bitflags 2.13.0",
@@ -11358,7 +11358,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-voxygen-egui"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "egui",
  "egui-winit",
@@ -11372,7 +11372,7 @@ dependencies = [
 
 [[package]]
 name = "xindeler-world"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "arr_macro",
  "bincode",
