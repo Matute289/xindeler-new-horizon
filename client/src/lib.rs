@@ -467,6 +467,7 @@ impl Client {
         locale: Option<String>,
         auth_trusted: impl FnMut(&str) -> bool,
         two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+        oauth: Option<oauth::OAuthLogin>,
         init_stage_update: &(dyn Fn(ClientInitStage) + Send + Sync),
         add_foreign_systems: impl Fn(&mut DispatcherBuilder) + Send + 'static,
         #[cfg_attr(not(feature = "plugins"), expect(unused_variables))] config_dir: PathBuf,
@@ -673,6 +674,7 @@ impl Client {
             locale,
             auth_trusted,
             two_fa_code,
+            oauth,
             &server_info,
             &mut register_stream,
         )
@@ -1302,12 +1304,24 @@ impl Client {
         locale: Option<String>,
         mut auth_trusted: impl FnMut(&str) -> bool,
         two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+        oauth: Option<oauth::OAuthLogin>,
         server_info: &ServerInfo,
         register_stream: &mut Stream,
     ) -> Result<(), Error> {
         // Authentication
-        let token_or_username = match &server_info.auth_provider {
-            Some(addr) => {
+        let token_or_username = match (&server_info.auth_provider, oauth) {
+            (Some(addr), Some(oauth)) => {
+                if auth_trusted(addr) {
+                    let token = Self::acquire_oauth_token(addr.clone(), oauth, two_fa_code).await?;
+                    Ok(token.serialize())
+                } else {
+                    Err(Error::AuthServerNotTrusted)
+                }
+            },
+            // A server with no auth provider has no OAuth flow to run and no
+            // account to link the provider to.
+            (None, Some(_)) => Err(Error::OAuthFailed(oauth::OAuthFailure::NoAuthServer)),
+            (Some(addr), None) => {
                 // Query whether this is a trusted auth server
                 if auth_trusted(addr) {
                     let token = Self::acquire_auth_token(
@@ -1323,7 +1337,7 @@ impl Client {
                     Err(Error::AuthServerNotTrusted)
                 }
             },
-            None => Ok(username.to_owned()),
+            (None, None) => Ok(username.to_owned()),
         }?;
 
         debug!("Registering client...");
@@ -1345,6 +1359,35 @@ impl Client {
                 Ok(())
             },
         }
+    }
+
+    /// Runs a native OAuth attempt against `auth_addr` and returns the
+    /// resulting auth token. Same `spawn_blocking` requirement as
+    /// `acquire_auth_token` below, for the same two reasons -- and doubly so
+    /// here: the loopback listener and the poll loop both block for minutes.
+    ///
+    /// A TOTP-required outcome is redeemed through the very same
+    /// `submit_2fa_code` path password login already uses, so OAuth-then-2FA
+    /// adds no second 2FA implementation.
+    async fn acquire_oauth_token(
+        auth_addr: String,
+        mut oauth: oauth::OAuthLogin,
+        mut two_fa_code: impl FnMut() -> Option<String> + Send + 'static,
+    ) -> Result<authc::AuthToken, Error> {
+        tokio::task::spawn_blocking(move || {
+            match oauth::run_oauth_login(&auth_addr, &mut oauth).map_err(Error::OAuthFailed)? {
+                oauth::OAuthOutcome::Token(token) => Ok(token),
+                oauth::OAuthOutcome::TotpRequired(challenge_id) => {
+                    let Some(code) = two_fa_code() else {
+                        return Err(Error::OAuthFailed(oauth::OAuthFailure::Cancelled));
+                    };
+                    Self::submit_2fa_code(&auth_addr, challenge_id, &code)
+                        .map_err(Error::TwoFaFailed)
+                },
+            }
+        })
+        .await
+        .map_err(|err| Error::AuthErr(err.to_string()))?
     }
 
     /// Sign in against `auth_addr` and return the resulting auth token.
@@ -3938,6 +3981,7 @@ mod tests {
             None,
             |suggestion: &str| suggestion == auth_server,
             || None,
+            None,
             &|_| {},
             |_| {},
             PathBuf::default(),
@@ -4078,5 +4122,41 @@ mod tests {
             };
             assert_eq!(actual, expected, "wrong mapping for error code {code}");
         }
+    }
+
+    /// `Client::new` must accept an OAuth request in the slot right after the
+    /// 2FA callback. This pins the parameter position that
+    /// `voxygen/src/menu/main/client_init.rs` depends on.
+    #[test]
+    fn client_new_accepts_an_oauth_login_request() {
+        fn assert_signature<F>(_: F)
+        where
+            F: FnOnce(Option<crate::oauth::OAuthLogin>),
+        {
+        }
+
+        assert_signature(|oauth: Option<crate::oauth::OAuthLogin>| {
+            let runtime = Arc::new(Runtime::new().unwrap());
+            let runtime2 = Arc::clone(&runtime);
+            let mut mismatched_server_info = None;
+            let _fut = Client::new(
+                ConnectionArgs::Tcp {
+                    hostname: "127.0.0.1:9000".to_owned(),
+                    prefer_ipv6: false,
+                },
+                runtime2,
+                &mut mismatched_server_info,
+                "Foo",
+                "Bar",
+                None,
+                |_: &str| false,
+                || None,
+                oauth,
+                &|_| {},
+                |_| {},
+                PathBuf::default(),
+                ClientType::ChatOnly,
+            );
+        });
     }
 }

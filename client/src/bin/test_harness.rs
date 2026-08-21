@@ -178,6 +178,7 @@ fn apply_spec(spec: &TestCharSpec, opt: &Opt, runtime: &Arc<Runtime>) -> Result<
             None,
             |_| false,
             || None,
+            None,
             &|_| {},
             |_| {},
             PathBuf::new(),
