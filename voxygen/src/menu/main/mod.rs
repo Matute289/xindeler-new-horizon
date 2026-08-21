@@ -750,6 +750,9 @@ pub(crate) fn get_client_msg_error(
                 localization.get_msg("main-login-2fa_not_supported").into()
             },
         },
+        Error::OAuthFailed(_) => {
+            localization.get_msg("main-login-internal_error").into()
+        },
         Error::AuthServerUrlInvalid(e) => {
             format!(
                 "{}: https://{}",

@@ -3,6 +3,7 @@
 
 pub mod addr;
 pub mod error;
+pub mod oauth;
 
 // Reexports
 pub use crate::error::{Error, TwoFaFailure};

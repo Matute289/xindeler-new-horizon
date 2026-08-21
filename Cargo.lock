@@ -10820,6 +10820,7 @@ name = "xindeler-client"
 version = "0.20.0"
 dependencies = [
  "async-channel",
+ "base64",
  "byteorder",
  "clap",
  "hashbrown 0.17.1",
@@ -10827,6 +10828,7 @@ dependencies = [
  "image",
  "num 0.4.3",
  "quinn",
+ "rand 0.10.1",
  "rayon",
  "reqwest",
  "ron",
@@ -10834,6 +10836,7 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "specs",
  "tokio",
  "tracing",

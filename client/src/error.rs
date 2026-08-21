@@ -1,3 +1,4 @@
+use crate::oauth::OAuthFailure;
 use authc::AuthClientError;
 use common_net::msg::server::BanInfo;
 pub use network::{InitProtocolError, NetworkConnectError, NetworkError};
@@ -47,6 +48,10 @@ pub enum Error {
     /// aborts the whole connect attempt the same way `CancelConnect`
     /// already does, without an error to display.
     TwoFaFailed(TwoFaFailure),
+    /// Native OAuth login failed. `OAuthFailure::Cancelled`
+    /// is never displayed -- cancelling aborts the whole connect attempt the
+    /// same way `CancelConnect` already does.
+    OAuthFailed(OAuthFailure),
     HostnameLookupFailed(std::io::Error),
     Banned(BanInfo),
     /// Persisted character data is invalid or missing

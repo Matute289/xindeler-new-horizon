@@ -79,6 +79,13 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 serde_json = { workspace = true }
 
+# BL-85: PKCE-style code_verifier/code_challenge for native OAuth login.
+# `code_verifier` is 32 random bytes, base64url; `code_challenge` is the
+# base64url SHA-256 of it. All three already resolve in Cargo.lock.
+rand = { workspace = true }
+sha2 = { workspace = true }
+base64 = "0.22"
+
 #TODO: put bot in a different crate
 #bot only
 async-channel = { version = "2.1", optional = true }
