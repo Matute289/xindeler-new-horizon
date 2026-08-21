@@ -77,7 +77,10 @@ use common_net::{
     msg::{DisconnectReason, Notification, PlayerListUpdate, ServerGeneral},
     sync::WorldSyncExt,
 };
-use common_state::{Areas, AreasContainer, BuildArea, NoDurabilityArea, SpecialAreaError, State};
+use common_state::{
+    Areas, AreasContainer, BattleModeChangeArea, BuildArea, NoDurabilityArea, SpecialAreaError,
+    State,
+};
 use core::{cmp::Ordering, convert::TryFrom};
 use hashbrown::{HashMap, HashSet};
 use humantime::Duration as HumanDuration;
@@ -3496,6 +3499,9 @@ fn get_areas_mut<'l>(kind: &str, state: &'l mut State) -> CmdResult<&'l mut Area
         Some(AreaKind::NoDurability) => state
             .mut_resource::<AreasContainer<NoDurabilityArea>>()
             .deref_mut(),
+        Some(AreaKind::BattleModeChange) => state
+            .mut_resource::<AreasContainer<BattleModeChangeArea>>()
+            .deref_mut(),
         None => Err(Content::Plain(format!("Invalid area type '{kind}'")))?,
     })
 }
@@ -4445,6 +4451,8 @@ fn handle_set_waypoint(
     );
 
     if let Some(location_name) = location_name {
+        #[expect(deprecated, reason = "i18n location name")]
+        let location_name = Content::legacy(location_name);
         server.notify_client(
             target,
             ServerGeneral::Notification(Notification::WaypointSaved { location_name }),
