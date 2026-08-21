@@ -134,18 +134,20 @@ mod tests {
 
     #[test]
     fn accepts_the_real_discord_authorize_host() {
-        assert!(validate_authorize_url(
-            "https://discord.com/oauth2/authorize?client_id=1&state=x"
-        )
-        .is_ok());
+        assert!(
+            validate_authorize_url("https://discord.com/oauth2/authorize?client_id=1&state=x")
+                .is_ok()
+        );
     }
 
     #[test]
     fn accepts_the_real_google_authorize_host() {
-        assert!(validate_authorize_url(
-            "https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=x"
-        )
-        .is_ok());
+        assert!(
+            validate_authorize_url(
+                "https://accounts.google.com/o/oauth2/v2/auth?client_id=1&state=x"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -160,7 +162,9 @@ mod tests {
         // authorize_url never points at auth.xindeler.com itself -- if it
         // does, /start's redirect was an error page, not a real authorize
         // URL (spec S3.2 step 4's note on how start() surfaces failures).
-        assert!(validate_authorize_url("https://auth.xindeler.com/oauth/callback#error=x").is_err());
+        assert!(
+            validate_authorize_url("https://auth.xindeler.com/oauth/callback#error=x").is_err()
+        );
     }
 
     #[test]
