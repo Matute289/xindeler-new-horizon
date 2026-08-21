@@ -408,6 +408,21 @@ fn can_send_message(target: EcsEntity, server: &mut Server) -> CmdResult<()> {
     }
 }
 
+/// Compares (perm, temp) role pairs the same way `verify_above_role` does,
+/// without requiring either side to have a live `EcsEntity`. Prefer sourcing
+/// both sides from an actual `EcsEntity` when one exists (`verify_above_role`
+/// does exactly that) -- this exists for callers that may not have one for
+/// every side, such as an HTTP-triggered admin action operating on behalf of
+/// a possibly-disconnected operator.
+fn role_outranks(
+    client: (Option<AdminRole>, Option<AdminRole>),
+    player: (Option<AdminRole>, Option<AdminRole>),
+) -> bool {
+    let (client_perm, client_temp) = client;
+    let (player_perm, player_temp) = player;
+    client_perm > player_perm || client_perm == player_perm && client_temp > player_temp
+}
+
 /// Ensure that client role is above target role, for the purpose of performing
 /// some (often permanent) administrative action on the target.  Note that this
 /// function is *not* a replacement for actually verifying that the client
@@ -434,16 +449,16 @@ fn verify_above_role(
         .editable_settings()
         .admins
         .get(&client_uuid)
-        .map(|record| record.role);
+        .map(|record| record.role.into());
 
     let player_temp = server.entity_admin_role(player);
     let player_perm = server
         .editable_settings()
         .admins
         .get(&player_uuid)
-        .map(|record| record.role);
+        .map(|record| record.role.into());
 
-    if client_perm > player_perm || client_perm == player_perm && client_temp > player_temp {
+    if role_outranks((client_perm, client_temp), (player_perm, player_temp)) {
         Ok(())
     } else {
         Err(reason)
@@ -5877,6 +5892,24 @@ fn handle_whitelist(
     }
 }
 
+/// Disconnects `target_player`'s live session with `reason`. Callers are
+/// responsible for authorizing the disconnect before calling this -- it
+/// performs no role check itself.
+pub(crate) fn disconnect_player(
+    server: &mut Server,
+    target_player: EcsEntity,
+    reason: DisconnectReason,
+) {
+    server.notify_client(target_player, ServerGeneral::Disconnect(reason));
+    server
+        .state
+        .mut_resource::<EventBus<ClientDisconnectEvent>>()
+        .emit_now(ClientDisconnectEvent(
+            target_player,
+            comp::DisconnectReason::Kicked,
+        ));
+}
+
 fn kick_player(
     server: &mut Server,
     (client, client_uuid): (EcsEntity, Uuid),
@@ -5889,14 +5922,7 @@ fn kick_player(
         (target_player, target_player_uuid),
         Content::localized("command-kick-higher-role"),
     )?;
-    server.notify_client(target_player, ServerGeneral::Disconnect(reason));
-    server
-        .state
-        .mut_resource::<EventBus<ClientDisconnectEvent>>()
-        .emit_now(ClientDisconnectEvent(
-            target_player,
-            comp::DisconnectReason::Kicked,
-        ));
+    disconnect_player(server, target_player, reason);
     Ok(())
 }
 
@@ -5944,6 +5970,263 @@ fn make_ban_info(server: &mut Server, client: EcsEntity, client_uuid: Uuid) -> C
         performed_by_role: client_role.into(),
     };
     Ok(ban_info)
+}
+
+/// Builds a `BanInfo` for an admin action with no live in-game session for the
+/// acting admin (e.g. one triggered over HTTP by a trusted external caller
+/// rather than a connected player typing a chat command). `operator_uuid` must
+/// already be a registered admin/moderator -- this is enforced here via
+/// `real_role`'s own error case, so a caller cannot attribute an action to
+/// an arbitrary/unregistered uuid just because it knows one.
+///
+/// Note this proves `operator_uuid` names *some* registered admin/moderator,
+/// not that the HTTP caller *is* that admin -- there is no per-operator
+/// credential at this layer, only the single shared `/ui_api/v1` secret. Any
+/// holder of that secret can attribute an action to any other registered
+/// admin's uuid. Acceptable under the stated trust model (a single trusted
+/// gateway holds the secret), but real for audit-trail integrity: this
+/// authorizes the *privilege level* used, not the *identity* of the caller.
+///
+/// Deliberately does **not** call `uuid_to_username` (unlike `make_ban_info`,
+/// its live-session counterpart) -- that goes out to the configured auth
+/// server synchronously, and this runs on the tick thread. `BanInfo`'s
+/// username field is informational/audit-trail only (the actual permission
+/// check is `performed_by_role`, resolved above with no network access), so
+/// the locally-stored `username_when_admined` snapshot is a fine value here;
+/// it just may not reflect a very recent username change.
+pub(crate) fn make_ban_info_for_uuid(server: &Server, operator_uuid: Uuid) -> CmdResult<BanInfo> {
+    let role = real_role(server, operator_uuid, "operator")?;
+    let username = server
+        .editable_settings()
+        .admins
+        .get(&operator_uuid)
+        .and_then(|record| record.username_when_admined.clone())
+        .unwrap_or_else(|| operator_uuid.to_string());
+    Ok(BanInfo {
+        performed_by: operator_uuid,
+        performed_by_username: username,
+        performed_by_role: role.into(),
+    })
+}
+
+/// Resolves an HTTP-triggered `operator_uuid`'s (perm, temp) role pair for
+/// `role_outranks`. If the operator also happens to be connected right now,
+/// their *live* (session-only) role is used for the temp slot -- an active
+/// session-only demotion (via `/adminify`, never written to
+/// `editable_settings().admins`) is still honored, even though this call itself
+/// has no `EcsEntity`. If the operator has no live session, temp falls back to
+/// their permanent role (there is no session-scoped grant to speak of for a
+/// disconnected user).
+fn operator_role_pair(
+    server: &Server,
+    operator_uuid: Uuid,
+    operator_role: AdminRole,
+) -> (Option<AdminRole>, Option<AdminRole>) {
+    let live_temp = find_uuid(server.state.ecs(), operator_uuid)
+        .ok()
+        .map(|entity| server.entity_admin_role(entity));
+    (
+        Some(operator_role),
+        live_temp.unwrap_or(Some(operator_role)),
+    )
+}
+
+/// Resolves `target_uuid`'s (perm, temp) role pair for `role_outranks`, whether
+/// or not they're currently connected -- `temp` is `None` if they aren't.
+fn target_role_pair(server: &Server, target_uuid: Uuid) -> (Option<AdminRole>, Option<AdminRole>) {
+    let perm = server
+        .editable_settings()
+        .admins
+        .get(&target_uuid)
+        .map(|record| record.role.into());
+    let temp = find_uuid(server.state.ecs(), target_uuid)
+        .ok()
+        .and_then(|entity| server.entity_admin_role(entity));
+    (perm, temp)
+}
+
+/// Kicks `target_uuid`'s live session on behalf of `operator_uuid`, with no
+/// live session of its own for the operator. Errors if the operator isn't a
+/// registered admin/moderator, if the target isn't currently connected (there
+/// is nothing to disconnect), or if the operator's role doesn't outrank the
+/// target's.
+pub(crate) fn admin_kick_player(
+    server: &mut Server,
+    target_uuid: Uuid,
+    operator_uuid: Uuid,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let operator_role = real_role(server, operator_uuid, "operator")
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+    let ecs = server.state.ecs();
+    let target_player = find_uuid(ecs, target_uuid)
+        .map_err(|_| "target player is not currently connected".to_string())?;
+    let target_pair = (
+        server
+            .editable_settings()
+            .admins
+            .get(&target_uuid)
+            .map(|record| record.role.into()),
+        server.entity_admin_role(target_player),
+    );
+    if !role_outranks(
+        operator_role_pair(server, operator_uuid, operator_role),
+        target_pair,
+    ) {
+        return Err("operator does not outrank target".to_string());
+    }
+    disconnect_player(
+        server,
+        target_player,
+        DisconnectReason::Kicked(reason.unwrap_or_default()),
+    );
+    Ok(())
+}
+
+/// Bans `target_uuid` on behalf of `operator_uuid`, with no live session for
+/// either. Mirrors `handle_ban`'s persistence-layer behavior, including its
+/// existing quirk: a soft disk-write failure (`SettingError::Io`) still counts
+/// as a successful ban (logged as a warning, not surfaced as an error) but the
+/// returned frontend `BanInfo` is `None` in that case, same as the
+/// chat-command path -- so the best-effort re-kick below sends
+/// `DisconnectReason::Shutdown` rather than `Banned(..)` in that one edge case,
+/// unchanged from existing behavior.
+///
+/// Unlike `handle_ban` (which never checks the operator outranks the target
+/// -- only the best-effort re-kick at the end does, and its failure is
+/// silently swallowed), this checks `role_outranks` up front and refuses the
+/// whole ban if the operator doesn't outrank the target. Deliberately
+/// stricter than the chat-command baseline: this route is reachable by
+/// anyone holding the shared `/ui_api/v1` secret plus an arbitrary
+/// `operator_uuid`, a much lower bar than needing an actual live low-
+/// privilege session in-game, so closing this gap here rather than
+/// inheriting it silently.
+pub(crate) fn admin_ban_player(
+    server: &mut Server,
+    target_uuid: Uuid,
+    operator_uuid: Uuid,
+    target_username: Option<String>,
+    reason: String,
+    duration_secs: Option<u64>,
+    overwrite: bool,
+) -> Result<Option<common_net::msg::server::BanInfo>, String> {
+    let operator_role = real_role(server, operator_uuid, "operator")
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+    if !role_outranks(
+        operator_role_pair(server, operator_uuid, operator_role),
+        target_role_pair(server, target_uuid),
+    ) {
+        return Err("operator does not outrank target".to_string());
+    }
+    let ban_info = make_ban_info_for_uuid(server, operator_uuid)
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+    // No network round-trip to resolve this (see `make_ban_info_for_uuid`'s doc
+    // comment) -- `username_when_performed` is informational only, so the
+    // caller-supplied value (or the bare uuid if it didn't supply one) is good
+    // enough.
+    let target_username = target_username.unwrap_or_else(|| target_uuid.to_string());
+
+    let now = Utc::now();
+    let parse_duration = duration_secs.map(|secs| HumanDuration::from(Duration::from_secs(secs)));
+    let end_date =
+        ban_end_date(now, parse_duration).map_err(|_| "invalid ban duration".to_string())?;
+
+    let (result, frontend_info) = match server.editable_settings_mut().banlist.ban_operation(
+        server.data_dir().as_ref(),
+        now,
+        target_uuid,
+        target_username,
+        BanOperation::Ban {
+            reason,
+            info: ban_info,
+            upgrade_to_ip: false,
+            end_date,
+        },
+        overwrite,
+    ) {
+        Ok(info) => (Ok(()), info),
+        Err(err) => (Err(err), None),
+    };
+    match result {
+        Ok(()) => {},
+        Err(BanOperationError::NoEffect) => {
+            return Err(
+                "ban would have no effect (already banned; pass overwrite=true to change \
+                 reason/duration)"
+                    .to_string(),
+            );
+        },
+        Err(BanOperationError::EditFailed(SettingError::Io(err))) => {
+            warn!(
+                ?err,
+                "Failed to write banlist to disk, but the ban took effect in memory"
+            );
+        },
+        Err(BanOperationError::EditFailed(SettingError::Integrity(err))) => {
+            return Err(format!("failed to validate ban: {err:?}"));
+        },
+    }
+
+    // Best-effort re-kick if currently online, mirroring `handle_ban`'s own
+    // behavior (also best-effort there: it ignores this call's own error, e.g.
+    // a hardcoded admin who can still log in despite being on the ban list).
+    let ecs = server.state.ecs();
+    if let Ok(target_player) = find_uuid(ecs, target_uuid) {
+        disconnect_player(
+            server,
+            target_player,
+            frontend_info
+                .clone()
+                .map_or(DisconnectReason::Shutdown, DisconnectReason::Banned),
+        );
+    }
+    Ok(frontend_info)
+}
+
+/// Unbans `target_uuid` on behalf of `operator_uuid`, with no live session for
+/// either. Mirrors `handle_unban`'s persistence-layer behavior, plus the same
+/// up-front `role_outranks` check `admin_ban_player` adds over its own
+/// chat-command baseline -- see that function's doc comment for why.
+pub(crate) fn admin_unban_player(
+    server: &mut Server,
+    target_uuid: Uuid,
+    operator_uuid: Uuid,
+    target_username: Option<String>,
+) -> Result<(), String> {
+    let operator_role = real_role(server, operator_uuid, "operator")
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+    if !role_outranks(
+        operator_role_pair(server, operator_uuid, operator_role),
+        target_role_pair(server, target_uuid),
+    ) {
+        return Err("operator does not outrank target".to_string());
+    }
+    let ban_info = make_ban_info_for_uuid(server, operator_uuid)
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+    let target_username = target_username.unwrap_or_else(|| target_uuid.to_string());
+
+    let now = Utc::now();
+    match server.editable_settings_mut().banlist.ban_operation(
+        server.data_dir().as_ref(),
+        now,
+        target_uuid,
+        target_username,
+        BanOperation::Unban { info: ban_info },
+        false,
+    ) {
+        Ok(_) => Ok(()),
+        Err(BanOperationError::NoEffect) => Err("player is already unbanned".to_string()),
+        Err(BanOperationError::EditFailed(SettingError::Io(err))) => {
+            warn!(
+                ?err,
+                "Failed to write banlist to disk, but the unban took effect in memory"
+            );
+            Ok(())
+        },
+        Err(BanOperationError::EditFailed(SettingError::Integrity(err))) => {
+            Err(format!("failed to validate unban: {err:?}"))
+        },
+    }
 }
 
 fn ban_end_date(
