@@ -2234,25 +2234,22 @@ impl ParticleMgr {
                         && let Some(target) = c.target_pos
                     {
                         let radius = c.static_data.radius;
-                        self.particles.resize_with(
-                            self.particles.len()
-                                + usize::from(self.scheduler.heartbeats(Duration::from_millis(5))),
-                            || {
-                                let theta = rng.random::<f32>() * std::f32::consts::TAU;
-                                let edge =
-                                    target + Vec3::new(theta.cos(), theta.sin(), 0.0) * radius;
-                                // TODO(magic-v1 polish): dedicated decal/ParticleMode;
-                                // CultistFlame is a readable placeholder ring.
-                                Particle::new_directed(
-                                    Duration::from_secs_f32(0.4),
-                                    time,
-                                    ParticleMode::CultistFlame,
-                                    edge,
-                                    edge + Vec3::unit_z() * 1.5,
-                                    scene_data,
-                                )
-                            },
-                        );
+                        let amount =
+                            usize::from(self.scheduler.heartbeats(Duration::from_millis(5)));
+                        self.add_particles(scene_data.particles_chance, amount, || {
+                            let theta = rng.random::<f32>() * std::f32::consts::TAU;
+                            let edge = target + Vec3::new(theta.cos(), theta.sin(), 0.0) * radius;
+                            // TODO(magic-v1 polish): dedicated decal/ParticleMode;
+                            // CultistFlame is a readable placeholder ring.
+                            Particle::new_directed(
+                                Duration::from_secs_f32(0.4),
+                                time,
+                                ParticleMode::CultistFlame,
+                                edge,
+                                edge + Vec3::unit_z() * 1.5,
+                                scene_data,
+                            )
+                        });
                     }
                 },
                 CharacterState::SelfBuff(c) => {

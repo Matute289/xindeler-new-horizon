@@ -3453,7 +3453,7 @@ impl Controls {
         &mut self,
         input: MenuInput,
         events: &mut Vec<Event>,
-        characters: &[CharacterItem],
+        characters: &[CharacterItem<Content>],
     ) {
         if matches!(input, MenuInput::Back) {
             if matches!(self.mode, Mode::CreateOrEdit { .. }) {

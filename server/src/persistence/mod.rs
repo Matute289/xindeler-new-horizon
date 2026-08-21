@@ -5,6 +5,7 @@
 // nya~
 
 pub(in crate::persistence) mod character;
+pub(crate) use character::convert_waypoint_from_database_json as parse_waypoint;
 pub mod character_loader;
 pub mod character_updater;
 mod diesel_to_rusqlite;
