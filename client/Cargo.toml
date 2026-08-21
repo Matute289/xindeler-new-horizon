@@ -11,7 +11,6 @@ workspace = true
 simd = ["vek/platform_intrinsics"]
 plugins = ["common-state/plugins"]
 bin_bot = [
-    "serde",
     "ron",
     "clap",
     "rustyline",
@@ -69,6 +68,16 @@ hashbrown = { workspace = true }
 # Redeeming the challenge (POST /login/2fa) is not yet implemented in this
 # crate; wiring it up client-side is NH-78 Phase 2, not part of this bump.
 authc = { package = "xindeler-authc", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "790aa46e5f9835df13aa5f3d0c477dfad87f5149" }
+# NH-78 Phase 2: redeems a 2FA login challenge (POST /login/2fa) directly,
+# since `authc` doesn't implement that call itself (see the comment above).
+# Same reqwest feature set `authc` itself uses (blocking + json + rustls),
+# to avoid pulling in a second TLS backend.
+reqwest = { version = "0.13", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls",
+] }
+serde_json = { workspace = true }
 
 #TODO: put bot in a different crate
 #bot only
@@ -76,7 +85,7 @@ async-channel = { version = "2.1", optional = true }
 voxygen-i18n-helpers = { package = "xindeler-i18n-helpers", path = "../voxygen/i18n-helpers", optional = true }
 client-i18n = { package = "xindeler-client-i18n", path = "i18n", optional = true }
 common-i18n = { package = "xindeler-common-i18n", path = "../common/i18n"}
-serde = { workspace = true, features = ["rc"], optional = true }
+serde = { workspace = true, features = ["rc"] }
 ron = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 rustyline = { version = "18", optional = true }

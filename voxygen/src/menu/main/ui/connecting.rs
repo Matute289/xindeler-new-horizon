@@ -13,7 +13,7 @@ use crate::{
 use client::ClientInitStage;
 use common::assets::{self, AssetExt, Ron};
 use i18n::Localization;
-use iced::{Align, Column, Container, Length, Row, Space, Text, button};
+use iced::{Align, Column, Container, Length, Row, Space, Text, TextInput, button, text_input};
 #[cfg(feature = "singleplayer")]
 use server::{ServerInitStage, WorldCivStage, WorldGenerateStage, WorldSimStage};
 
@@ -50,6 +50,9 @@ impl LoadingAnimation {
 pub struct Screen {
     cancel_button: button::State,
     add_button: button::State,
+    two_fa_input: text_input::State,
+    two_fa_confirm_button: button::State,
+    two_fa_cancel_button: button::State,
     tip_number: u16,
     loading_animation: LoadingAnimation,
 }
@@ -64,6 +67,9 @@ impl Screen {
         Self {
             cancel_button: Default::default(),
             add_button: Default::default(),
+            two_fa_input: Default::default(),
+            two_fa_confirm_button: Default::default(),
+            two_fa_cancel_button: Default::default(),
             tip_number: rand::random(),
             loading_animation: LoadingAnimation::new(
                 &animations[(rand::random::<u64>() as usize) % animations.len()],
@@ -323,6 +329,72 @@ impl Screen {
                     text.into(),
                     Container::new(
                         Row::with_children(vec![cancel, add])
+                            .spacing(20)
+                            .height(Length::Units(25)),
+                    )
+                    .align_x(Align::End)
+                    .width(Length::Fill)
+                    .into(),
+                ])
+                .spacing(4)
+                .max_width(520)
+                .width(Length::Fill)
+                .height(Length::Fill);
+
+                let prompt_window = Container::new(content)
+                    .style(
+                        style::container::Style::color_with_double_cornerless_border(
+                            (22, 18, 16, 255).into(),
+                            (11, 11, 11, 255).into(),
+                            (54, 46, 38, 255).into(),
+                        ),
+                    )
+                    .padding(20);
+
+                let container = Container::new(prompt_window)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .center_x()
+                    .center_y();
+
+                vec![
+                    container.into(),
+                    Space::new(Length::Fill, Length::Units(fonts.cyri.scale(15))).into(),
+                ]
+            },
+            ConnectionState::TwoFaPrompt { code } => {
+                let text =
+                    Text::new(i18n.get_msg("main-login-2fa-prompt")).size(fonts.cyri.scale(25));
+
+                let input = TextInput::new(
+                    &mut self.two_fa_input,
+                    &i18n.get_msg("main-login-2fa-code_placeholder"),
+                    code,
+                    Message::TwoFaCodeChanged,
+                )
+                .size(fonts.cyri.scale(25))
+                .on_submit(Message::TwoFaSubmit);
+
+                let cancel = neat_button(
+                    &mut self.two_fa_cancel_button,
+                    i18n.get_msg("common-cancel"),
+                    0.7,
+                    button_style,
+                    Some(Message::TwoFaCancel),
+                );
+                let confirm = neat_button(
+                    &mut self.two_fa_confirm_button,
+                    i18n.get_msg("common-confirm"),
+                    0.7,
+                    button_style,
+                    Some(Message::TwoFaSubmit),
+                );
+
+                let content = Column::with_children(vec![
+                    text.into(),
+                    Container::new(input).width(Length::Fill).into(),
+                    Container::new(
+                        Row::with_children(vec![cancel, confirm])
                             .spacing(20)
                             .height(Length::Units(25)),
                     )

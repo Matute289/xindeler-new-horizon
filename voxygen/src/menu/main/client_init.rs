@@ -30,6 +30,10 @@ pub enum Error {
 #[expect(clippy::large_enum_variant)]
 pub enum Msg {
     IsAuthTrusted(String),
+    /// The account has 2FA enabled and the password was correct -- the
+    /// background task is now blocked on `code_rx.recv()`, waiting for
+    /// `ClientInit::submit_2fa_code`.
+    TwoFaRequired,
     Done(Result<Client, Error>),
 }
 
@@ -42,6 +46,7 @@ pub struct ClientInit {
     rx: Receiver<Msg>,
     stage_rx: Receiver<ClientInitStage>,
     trust_tx: Sender<AuthTrust>,
+    code_tx: Sender<String>,
     cancel: Arc<AtomicBool>,
 }
 impl ClientInit {
@@ -56,6 +61,7 @@ impl ClientInit {
     ) -> Self {
         let (tx, rx) = unbounded();
         let (trust_tx, trust_rx) = unbounded();
+        let (code_tx, code_rx) = unbounded();
         let (init_stage_tx, init_stage_rx) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel2 = Arc::clone(&cancel);
@@ -80,6 +86,21 @@ impl ClientInit {
                     break;
                 }
                 let mut mismatched_server_info = None;
+                // Rebuilt fresh each attempt (unlike `trust_fn`, which only borrows `tx`/
+                // `trust_rx` and so is implicitly `Copy`): this closure runs inside
+                // `Client::acquire_auth_token`'s `spawn_blocking`, which requires
+                // `Send + 'static`, so it must own its captures -- `tx`/`code_rx` are
+                // cloned in (crossbeam channels are cheap to clone and MPMC, so whichever
+                // clone is actively blocked on `code_rx.recv()` still receives the one
+                // `code_tx.send` a real submission produces).
+                let code_fn = {
+                    let tx = tx.clone();
+                    let code_rx = code_rx.clone();
+                    move || -> Option<String> {
+                        let _ = tx.send(Msg::TwoFaRequired);
+                        code_rx.recv().ok()
+                    }
+                };
                 match Client::new(
                     connection_args.clone(),
                     Arc::clone(&runtime2),
@@ -88,6 +109,7 @@ impl ClientInit {
                     &password,
                     locale.clone(),
                     trust_fn,
+                    code_fn,
                     &|stage| {
                         let _ = init_stage_tx.send(stage);
                     },
@@ -141,6 +163,7 @@ impl ClientInit {
             rx,
             stage_rx: init_stage_rx,
             trust_tx,
+            code_tx,
             cancel,
         }
     }
@@ -163,6 +186,13 @@ impl ClientInit {
     pub fn auth_trust(&self, auth_server: String, trusted: bool) {
         let _ = self.trust_tx.send(AuthTrust(auth_server, trusted));
     }
+
+    /// Answers a pending `Msg::TwoFaRequired` with the code the player
+    /// entered. There is no cancel-specific method here -- like any other
+    /// mid-connect abort, cancelling the 2FA prompt drops this whole
+    /// `ClientInit` (see `Drop`/`cancel`), which drops `code_tx` and
+    /// unblocks the background task's `code_rx.recv()` with a clean `Err`.
+    pub fn submit_2fa_code(&self, code: String) { let _ = self.code_tx.send(code); }
 
     pub fn cancel(&mut self) { self.cancel.store(true, Ordering::Relaxed); }
 }
