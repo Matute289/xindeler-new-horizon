@@ -3,7 +3,7 @@
 )]
 
 use clap::{Parser, builder::ValueParser};
-use common::comp;
+use common::{comp, uuid::Uuid};
 use server::persistence::SqlLogMode;
 use std::{str::FromStr, sync::mpsc::Sender};
 use tracing::error;
@@ -90,7 +90,8 @@ pub enum Message {
     },
     /// Disconnects all connected clients
     DisconnectAllClients,
-    /// returns active player names
+    /// Returns who's online right now and what they're doing (alias, uuid,
+    /// position, active character) -- see `PlayerDto`.
     ListPlayers,
     ListLogs,
     /// sends a msg to everyone on the server
@@ -230,6 +231,25 @@ pub struct LocationDto {
     pub continent: Option<String>,
 }
 
+/// See `Message::ListPlayers`. Deliberately live-ECS-only, not
+/// persistence-backed -- this route answers "who's online and what are they
+/// doing right now", the complement of `AdminListPlayerCharacters`'s
+/// persistence-backed "which characters does this account have" (works
+/// offline, doesn't know what's active). A future account-listing source
+/// (online or not) is expected to live elsewhere; this DTO never grows an
+/// offline-accounts case.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlayerDto {
+    pub alias: String,
+    pub uuid: Uuid,
+    /// `None` if the player has no `Pos` component (should not normally
+    /// happen for a connected player, but the join is defensive).
+    pub position: Option<[f32; 3]>,
+    /// The character currently being played, if any. `None` if the player
+    /// is connected but not in a character (e.g. at character select).
+    pub character_id: Option<i64>,
+}
+
 /// See `Message::ListPlayerCharacters`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CharacterSummaryDto {
@@ -243,7 +263,7 @@ pub struct CharacterSummaryDto {
 
 #[derive(Debug, Clone)]
 pub enum MessageReturn {
-    Players(Vec<String>),
+    Players(Vec<PlayerDto>),
     Logs(Vec<String>),
     Info(ServerInfoDto),
     Chronicle(Vec<String>),
