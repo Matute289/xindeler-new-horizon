@@ -12,6 +12,7 @@ use crate::ui::{
     },
 };
 
+use client::oauth::OAuthProvider;
 use i18n::{LanguageMetadata, Localization};
 use iced::{
     Align, Button, Column, Container, Length, Row, Scrollable, Space, Text, TextInput, button,
@@ -331,6 +332,8 @@ pub struct LoginBanner {
     #[cfg(feature = "singleplayer")]
     singleplayer_button: button::State,
     create_account_button: button::State,
+    discord_login_button: button::State,
+    google_login_button: button::State,
 
     unlock_server_field_button: button::State,
 }
@@ -468,9 +471,27 @@ impl LoginBanner {
                     button_style,
                     Some(Message::CreateAccount),
                 ),
+                neat_button(
+                    &mut self.discord_login_button,
+                    i18n.get_msg("main-login-oauth-discord"),
+                    FILL_FRAC_TWO,
+                    button_style,
+                    Some(Message::OAuthLogin {
+                        provider: OAuthProvider::Discord,
+                    }),
+                ),
+                neat_button(
+                    &mut self.google_login_button,
+                    i18n.get_msg("main-login-oauth-google"),
+                    FILL_FRAC_TWO,
+                    button_style,
+                    Some(Message::OAuthLogin {
+                        provider: OAuthProvider::Google,
+                    }),
+                ),
             ])
             .max_width(170)
-            .height(Length::Units(200))
+            .height(Length::Units(300))
             .spacing(8)
             .into(),
         ])

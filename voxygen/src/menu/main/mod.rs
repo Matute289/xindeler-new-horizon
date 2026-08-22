@@ -16,6 +16,7 @@ use client::{
     Client, ClientInitStage, ServerInfo,
     addr::ConnectionArgs,
     error::{InitProtocolError, NetworkConnectError, NetworkError},
+    oauth::OAuthProvider,
 };
 use client_init::{ClientInit, Error as InitError, Msg as InitMsg};
 use common::{comp, event::UpdateCharacterMetadata};
@@ -68,6 +69,10 @@ pub struct MainMenuState {
     main_menu_ui: MainMenuUi,
     init: InitState,
     scene: Scene,
+    /// Provider of the OAuth attempt currently in flight, so the
+    /// username-prompt message (which the server-side flow does not repeat it
+    /// in) can be labelled correctly.
+    oauth_provider: Option<OAuthProvider>,
 }
 
 impl MainMenuState {
@@ -77,6 +82,7 @@ impl MainMenuState {
             main_menu_ui: MainMenuUi::new(global_state),
             init: InitState::None,
             scene: Scene::new(global_state.window.renderer_mut()),
+            oauth_provider: None,
         }
     }
 }
@@ -278,6 +284,20 @@ impl PlayState for MainMenuState {
             },
             Some(InitMsg::TwoFaRequired) => {
                 self.main_menu_ui.two_fa_prompt();
+            },
+            Some(InitMsg::OAuthPending { provider }) => {
+                self.oauth_provider = Some(provider);
+                self.main_menu_ui.oauth_pending(provider);
+            },
+            Some(InitMsg::OAuthUsernameRequired { suggested }) => {
+                self.main_menu_ui.oauth_username_prompt(
+                    // The provider is already known from the `OAuthPending`
+                    // message that always precedes this one; re-reading it
+                    // from the current screen would be a second source of
+                    // truth, so it is carried forward here instead.
+                    self.oauth_provider.unwrap_or(OAuthProvider::Discord),
+                    suggested,
+                );
             },
             None => {},
         }
@@ -545,6 +565,61 @@ impl PlayState for MainMenuState {
                 MainMenuEvent::TwoFaCodeSubmit(code) => {
                     self.init.client().map(|init| init.submit_2fa_code(code));
                 },
+                MainMenuEvent::OAuthLoginAttempt {
+                    provider,
+                    server_address,
+                } => {
+                    let net_settings = &mut global_state.settings.networking;
+                    let use_srv = net_settings.use_srv;
+                    let use_quic = net_settings.use_quic;
+                    let validate_tls = net_settings.validate_tls;
+                    net_settings.default_server.clone_from(&server_address);
+                    if !server_address.is_empty() && !net_settings.servers.contains(&server_address)
+                    {
+                        net_settings.servers.push(server_address.clone());
+                    }
+                    global_state
+                        .settings
+                        .save_to_file_warn(&global_state.config_dir);
+
+                    let connection_args = if use_srv {
+                        ConnectionArgs::Srv {
+                            hostname: server_address,
+                            prefer_ipv6: false,
+                            validate_tls,
+                            use_quic,
+                        }
+                    } else if use_quic {
+                        ConnectionArgs::Quic {
+                            hostname: server_address,
+                            prefer_ipv6: false,
+                            validate_tls,
+                        }
+                    } else {
+                        ConnectionArgs::Tcp {
+                            hostname: server_address,
+                            prefer_ipv6: false,
+                        }
+                    };
+                    attempt_oauth_login(
+                        provider,
+                        connection_args,
+                        &mut self.init,
+                        &global_state.tokio_runtime,
+                        global_state
+                            .settings
+                            .language
+                            .send_to_server
+                            .then_some(global_state.settings.language.selected_language.clone()),
+                        &global_state.config_dir,
+                        global_state.args.client_type.0,
+                    );
+                },
+                MainMenuEvent::OAuthUsernameSubmit(username) => {
+                    self.init
+                        .client()
+                        .map(|init| init.submit_oauth_username(username));
+                },
                 MainMenuEvent::DeleteServer { server_index } => {
                     let net_settings = &mut global_state.settings.networking;
                     net_settings.servers.remove(server_index);
@@ -750,6 +825,43 @@ pub(crate) fn get_client_msg_error(
                 localization.get_msg("main-login-2fa_not_supported").into()
             },
         },
+        // Cancelled is unreachable here: cancelling drops the whole
+        // `ClientInit` before any error can be reported, exactly like
+        // `CancelConnect`. It maps to the generic copy anyway rather than
+        // adding an unreachable!().
+        Error::OAuthFailed(failure) => match failure {
+            client::oauth::OAuthFailure::NoAuthServer => localization
+                .get_msg("main-login-oauth-no_auth_server")
+                .into(),
+            // Loopback is the only delivery path (2026-08-21 erratum), so this
+            // ends the attempt. This is deterministic -- a firewall/sandbox
+            // blocking a local port will fail identically on retry -- so it
+            // gets its own copy instead of the generic "try again" string,
+            // pointing at username/password and the website as alternatives.
+            // The io error itself is only ever logged.
+            client::oauth::OAuthFailure::ListenerBindFailed(e) => {
+                error!(?e, "could not bind the OAuth loopback listener");
+                localization
+                    .get_msg("main-login-oauth-listener_failed")
+                    .into()
+            },
+            client::oauth::OAuthFailure::UntrustedAuthorizeUrl(url) => {
+                error!(?url, "auth server returned an untrusted authorize_url");
+                localization
+                    .get_msg("main-login-oauth-untrusted_url")
+                    .into()
+            },
+            client::oauth::OAuthFailure::Timeout => {
+                localization.get_msg("main-login-oauth-timeout").into()
+            },
+            client::oauth::OAuthFailure::Cancelled => {
+                localization.get_msg("main-login-oauth-failed").into()
+            },
+            client::oauth::OAuthFailure::Other(e) => {
+                error!(?e, "native OAuth login failed");
+                localization.get_msg("main-login-oauth-failed").into()
+            },
+        },
         Error::AuthServerUrlInvalid(e) => {
             format!(
                 "{}: https://{}",
@@ -821,6 +933,33 @@ fn attempt_login(
             locale,
             config_dir,
             client_type,
+            None,
+        ));
+    }
+}
+
+/// The OAuth sibling of `attempt_login`. Deliberately does not validate a
+/// username up front -- there isn't one yet; for a brand-new account the
+/// player picks it mid-flow and the auth server is the one that validates it.
+fn attempt_oauth_login(
+    provider: OAuthProvider,
+    connection_args: ConnectionArgs,
+    init: &mut InitState,
+    runtime: &Arc<runtime::Runtime>,
+    locale: Option<String>,
+    config_dir: &Path,
+    client_type: ClientType,
+) {
+    if let InitState::None = init {
+        *init = InitState::Client(ClientInit::new(
+            connection_args,
+            String::new(),
+            String::new(),
+            Arc::clone(runtime),
+            locale,
+            config_dir,
+            client_type,
+            Some(provider),
         ));
     }
 }
