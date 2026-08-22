@@ -90,7 +90,8 @@ pub enum Message {
     },
     /// Disconnects all connected clients
     DisconnectAllClients,
-    /// returns active player names
+    /// Returns who's online right now and what they're doing (alias, uuid,
+    /// position, active character) -- see `PlayerDto`.
     ListPlayers,
     ListLogs,
     /// sends a msg to everyone on the server
@@ -230,7 +231,13 @@ pub struct LocationDto {
     pub continent: Option<String>,
 }
 
-/// See `Message::ListPlayers`.
+/// See `Message::ListPlayers`. Deliberately live-ECS-only, not
+/// persistence-backed -- this route answers "who's online and what are they
+/// doing right now", the complement of `AdminListPlayerCharacters`'s
+/// persistence-backed "which characters does this account have" (works
+/// offline, doesn't know what's active). A future account-listing source
+/// (online or not) is expected to live elsewhere; this DTO never grows an
+/// offline-accounts case.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PlayerDto {
     pub alias: String,
