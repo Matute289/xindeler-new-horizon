@@ -20,7 +20,8 @@ mod web;
 use crate::{
     cli::{
         Admin, ArgvApp, ArgvCommand, BenchParams, CharacterSummaryDto, LocationDto, Message,
-        MessageReturn, OracleEventsDto, OracleTarget, ServerInfoDto, SharedCommand, Shutdown,
+        MessageReturn, OracleEventsDto, OracleTarget, PlayerDto, ServerInfoDto, SharedCommand,
+        Shutdown,
     },
     settings::Settings,
     shutdown_coordinator::ShutdownCoordinator,
@@ -30,7 +31,7 @@ use crate::{
 use common::{
     character::CharacterId,
     clock::Clock,
-    comp::{ChatType, Player, Pos},
+    comp::{ChatType, Player, Pos, Presence},
     consts::MIN_RECOMMENDED_TOKIO_THREADS,
 };
 use common_base::span;
@@ -418,7 +419,7 @@ fn server_loop(
         }
 
         let mut handle_msg = |msg, response: tokio::sync::oneshot::Sender<MessageReturn>| {
-            use specs::{Join, WorldExt};
+            use specs::{Join, LendJoin, WorldExt};
             match msg {
                 Message::Shutdown {
                     command: Shutdown::Cancel,
@@ -458,12 +459,21 @@ fn server_loop(
                     server.disconnect_all_clients();
                 },
                 Message::ListPlayers => {
-                    let players: Vec<String> = server
-                        .state()
-                        .ecs()
-                        .read_storage::<Player>()
+                    let ecs = server.state().ecs();
+                    let players: Vec<PlayerDto> = (
+                        &ecs.read_storage::<Player>(),
+                        ecs.read_storage::<Pos>().maybe(),
+                        ecs.read_storage::<Presence>().maybe(),
+                    )
                         .join()
-                        .map(|p| p.alias.clone())
+                        .map(|(player, pos, presence)| PlayerDto {
+                            alias: player.alias.clone(),
+                            uuid: player.uuid(),
+                            position: pos.map(|p| [p.0.x, p.0.y, p.0.z]),
+                            character_id: presence
+                                .and_then(|p| p.kind.character_id())
+                                .map(|id| id.0),
+                        })
                         .collect();
                     let _ = response.send(MessageReturn::Players(players));
                 },

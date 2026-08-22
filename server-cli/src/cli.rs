@@ -3,7 +3,7 @@
 )]
 
 use clap::{Parser, builder::ValueParser};
-use common::comp;
+use common::{comp, uuid::Uuid};
 use server::persistence::SqlLogMode;
 use std::{str::FromStr, sync::mpsc::Sender};
 use tracing::error;
@@ -230,6 +230,19 @@ pub struct LocationDto {
     pub continent: Option<String>,
 }
 
+/// See `Message::ListPlayers`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlayerDto {
+    pub alias: String,
+    pub uuid: Uuid,
+    /// `None` if the player has no `Pos` component (should not normally
+    /// happen for a connected player, but the join is defensive).
+    pub position: Option<[f32; 3]>,
+    /// The character currently being played, if any. `None` if the player
+    /// is connected but not in a character (e.g. at character select).
+    pub character_id: Option<i64>,
+}
+
 /// See `Message::ListPlayerCharacters`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CharacterSummaryDto {
@@ -243,7 +256,7 @@ pub struct CharacterSummaryDto {
 
 #[derive(Debug, Clone)]
 pub enum MessageReturn {
-    Players(Vec<String>),
+    Players(Vec<PlayerDto>),
     Logs(Vec<String>),
     Info(ServerInfoDto),
     Chronicle(Vec<String>),
