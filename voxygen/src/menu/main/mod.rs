@@ -834,11 +834,16 @@ pub(crate) fn get_client_msg_error(
                 .get_msg("main-login-oauth-no_auth_server")
                 .into(),
             // Loopback is the only delivery path (2026-08-21 erratum), so this
-            // ends the attempt. The generic copy already points the player at
-            // username/password; the io error itself is only ever logged.
+            // ends the attempt. This is deterministic -- a firewall/sandbox
+            // blocking a local port will fail identically on retry -- so it
+            // gets its own copy instead of the generic "try again" string,
+            // pointing at username/password and the website as alternatives.
+            // The io error itself is only ever logged.
             client::oauth::OAuthFailure::ListenerBindFailed(e) => {
                 error!(?e, "could not bind the OAuth loopback listener");
-                localization.get_msg("main-login-oauth-failed").into()
+                localization
+                    .get_msg("main-login-oauth-listener_failed")
+                    .into()
             },
             client::oauth::OAuthFailure::UntrustedAuthorizeUrl(url) => {
                 error!(?url, "auth server returned an untrusted authorize_url");

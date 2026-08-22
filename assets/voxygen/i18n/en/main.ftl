@@ -69,6 +69,7 @@ main-login-oauth-username_placeholder = Username
 main-login-oauth-timeout = The sign-in attempt timed out. Please try again.
 main-login-oauth-no_auth_server = This server does not use authentication, so provider sign-in is not available here.
 main-login-oauth-untrusted_url = The authentication server returned an unexpected sign-in address, so the attempt was stopped. Please report this.
+main-login-oauth-listener_failed = Xindeler could not open a local port to receive the sign-in result -- a firewall or sandbox may be blocking it. Sign in with your username and password, or link your account on the website.
 main-login-oauth-failed = Provider sign-in failed. Please try again, or sign in with your username and password.
 main-login-server_full = Server is full.
 main-login-untrusted_auth_server = Authentication server not trusted.

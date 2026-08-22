@@ -668,21 +668,39 @@ impl Client {
 
         init_stage_update(ClientInitStage::Authentication);
         // Register client
-        Self::register(
-            username,
-            password,
-            locale,
-            auth_trusted,
-            two_fa_code,
-            oauth,
-            &server_info,
-            &mut register_stream,
-        )
-        .await?;
+        //
+        // This can take a long time: for OAuth logins, `register` waits on the player
+        // completing an entire browser-based provider consent flow, which can easily
+        // exceed the server's default `client_timeout` (40s). Keep sending pings on the
+        // usual ~1-second cadence while registration is in flight so the server doesn't
+        // time out the connection for going silent (mirrors the ping loop used below
+        // while waiting for the initial sync).
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(1));
+        // Scoped so the pinned future (and its borrows of `server_info` and
+        // `register_stream`) is dropped as soon as registration finishes,
+        // freeing both for use below.
+        {
+            let register_fut = Self::register(
+                username,
+                password,
+                locale,
+                auth_trusted,
+                two_fa_code,
+                oauth,
+                &server_info,
+                &mut register_stream,
+            );
+            tokio::pin!(register_fut);
+            loop {
+                tokio::select! {
+                    res = &mut register_fut => break res?,
+                    _ = ping_interval.tick() => ping_stream.send(PingMsg::Ping)?,
+                }
+            }
+        }
 
         init_stage_update(ClientInitStage::LoadingInitData);
         // Wait for initial sync
-        let mut ping_interval = tokio::time::interval(Duration::from_secs(1));
         let ServerInit::GameSync {
             entity_package,
             time_of_day,

@@ -32,8 +32,11 @@ pub enum OAuthFailure {
     /// immediately -- there is nothing to fall back to. Carries the io error's
     /// message for the log line, never shown verbatim to the player.
     ListenerBindFailed(String),
-    /// The auth server returned an `authorize_url` that is not https, or whose
-    /// host is not the auth server the player already trusted. Never opened.
+    /// The auth server returned an `authorize_url` that is not https, or
+    /// whose host is not one of the small fixed set of real OAuth provider
+    /// hosts (see `TRUSTED_OAUTH_PROVIDER_HOSTS`) -- notably, this rejects
+    /// the auth server's own host too; the authorize URL must always point
+    /// directly at the provider, never back at the auth server. Never opened.
     UntrustedAuthorizeUrl(String),
     /// The 5-minute attempt window elapsed.
     Timeout,
@@ -97,6 +100,44 @@ pub fn validate_authorize_url(authorize_url: &str) -> Result<(), OAuthFailure> {
     Ok(())
 }
 
+/// The password-login path gets this same rule for free through
+/// `authc::AuthClient::new`, which refuses to build a client for a plain
+/// `http://` provider address unless the host is loopback (see `authc`'s
+/// `is_loopback_url`/`AuthClientError::InsecureUrl`). The OAuth path never
+/// constructs an `AuthClient` -- it talks to `auth_addr` directly via
+/// `client/src/oauth/api.rs` -- so without this check a server advertising a
+/// non-loopback `http://` `auth_provider` would send the whole OAuth
+/// exchange, including the final `AuthToken` and any TOTP code, in
+/// cleartext. Mirrors `authc`'s rule exactly: `https://` on any host, or
+/// `http://` only for `127.0.0.1`, `::1`, or `localhost`.
+fn validate_auth_addr(auth_addr: &str) -> Result<(), OAuthFailure> {
+    let fail = || {
+        OAuthFailure::Other(format!(
+            "refusing to run the OAuth exchange over plain http against a non-loopback auth \
+             server ({auth_addr})"
+        ))
+    };
+
+    let url = reqwest::Url::parse(auth_addr).map_err(|_| fail())?;
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    let is_loopback = url.host_str().is_some_and(|host| {
+        // `Url::host_str` brackets IPv6 addresses (e.g. `[::1]`), which
+        // `IpAddr::from_str` rejects -- strip them before parsing so IPv6
+        // loopback addresses are recognized correctly too.
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host);
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    if is_loopback { Ok(()) } else { Err(fail()) }
+}
+
 use loopback::{LoopbackListener, bind_failure};
 use std::time::{Duration, Instant};
 
@@ -137,6 +178,8 @@ pub fn run_oauth_login(
     auth_addr: &str,
     login: &mut OAuthLogin,
 ) -> Result<OAuthOutcome, OAuthFailure> {
+    validate_auth_addr(auth_addr)?;
+
     let deadline = Instant::now() + ATTEMPT_TIMEOUT;
     let pkce = Pkce::generate();
     let http = api::http_client()?;
@@ -265,5 +308,32 @@ mod tests {
     #[test]
     fn attempt_timeout_matches_the_five_minute_spec_value() {
         assert_eq!(ATTEMPT_TIMEOUT, std::time::Duration::from_secs(300));
+    }
+
+    #[test]
+    fn validate_auth_addr_accepts_https_on_any_host() {
+        assert!(validate_auth_addr("https://auth.xindeler.com").is_ok());
+        assert!(validate_auth_addr("https://example.com").is_ok());
+    }
+
+    #[test]
+    fn validate_auth_addr_accepts_http_on_loopback_variants() {
+        assert!(validate_auth_addr("http://127.0.0.1:19253").is_ok());
+        assert!(validate_auth_addr("http://localhost:19253").is_ok());
+        assert!(validate_auth_addr("http://[::1]:19253").is_ok());
+        // Host matching is case-insensitive, same as `authc`'s rule.
+        assert!(validate_auth_addr("http://LOCALHOST:19253").is_ok());
+    }
+
+    #[test]
+    fn validate_auth_addr_rejects_http_on_a_real_host() {
+        let err = validate_auth_addr("http://auth.xindeler.com")
+            .expect_err("plain http to a non-loopback host must be rejected");
+        assert!(matches!(err, OAuthFailure::Other(_)));
+    }
+
+    #[test]
+    fn validate_auth_addr_rejects_garbage() {
+        assert!(validate_auth_addr("not a url at all").is_err());
     }
 }

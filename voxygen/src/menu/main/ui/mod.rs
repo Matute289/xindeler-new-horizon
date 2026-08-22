@@ -718,11 +718,10 @@ impl Controls {
                     connection_state, ..
                 } = &mut self.screen
                     && let ConnectionState::OAuthUsernamePrompt { username, .. } = connection_state
+                    && !username.trim().is_empty()
                 {
                     let username = std::mem::take(username);
-                    if !username.trim().is_empty() {
-                        events.push(Event::OAuthUsernameSubmit(username.trim().to_owned()));
-                    }
+                    events.push(Event::OAuthUsernameSubmit(username.trim().to_owned()));
                 }
             },
             Message::CloseError => {
