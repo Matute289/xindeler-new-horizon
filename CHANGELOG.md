@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-23
+
+### Added
+
+- Native login now also supports Discord/Google OAuth, alongside the existing username/password flow.
+- Server admins can now suspend or unsuspend a single character rather than the whole account: a suspended character can't be selected, its live session is kicked if it's being played when the suspension starts, and the affected player sees the real reason and end date on their own character list.
+- The players directory available to admin tooling now includes each online player's account uuid, live position, and active character id, not just their alias.
+- The native client is now prepared to route its login/2FA/OAuth traffic through a dedicated login gateway instead of calling the auth server directly, ahead of that gateway's own deployment.
+
 ## [0.20.0] - 2026-08-21
 
 ### Added
