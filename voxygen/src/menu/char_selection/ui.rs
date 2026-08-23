@@ -1197,10 +1197,15 @@ impl Controls {
                                         // reject.
                                         if let Some(suspension) = &character.suspended {
                                             lines.push(
-                                                Text::new(format!(
-                                                    "Suspended: {}",
-                                                    suspension.reason
-                                                ))
+                                                Text::new(
+                                                    i18n.get_msg_ctx(
+                                                        "char_selection-suspended",
+                                                        &i18n::fluent_args! {
+                                                            "reason" => suspension.reason.clone(),
+                                                        },
+                                                    )
+                                                    .into_owned(),
+                                                )
                                                 .size(fonts.cyri.scale(14))
                                                 .into(),
                                             );

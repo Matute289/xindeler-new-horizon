@@ -6232,33 +6232,69 @@ pub(crate) fn admin_unban_player(
 }
 
 /// Resolves `character_id`'s owning account uuid for the admin
-/// suspend/unsuspend commands below. Suspension is character-scoped, but
-/// `role_outranks` is still an account-level concept, so both commands need
-/// this lookup to find the account behind a bare character id.
+/// suspend/unsuspend commands below, and confirms it matches
+/// `expected_target_uuid` -- the uuid the caller believes owns this
+/// character (e.g. the account whose page an ops console had open). A
+/// mismatch almost certainly means the caller has stale or wrong
+/// information, not a deliberate cross-account request, so this refuses the
+/// action rather than silently acting on whatever account the character
+/// really belongs to. `role_outranks` is also an account-level concept, so
+/// both commands need the resolved owner for that check regardless.
 fn suspension_target_account(
     character_id: CharacterId,
+    expected_target_uuid: Uuid,
     settings: &persistence::DatabaseSettings,
 ) -> Result<Uuid, String> {
     let owner_uuid = persistence::character_owner_uuid(character_id, settings)
         .map_err(|_| "failed to resolve the character's owning account".to_string())?
         .ok_or_else(|| "character does not exist".to_string())?;
-    Uuid::parse_str(&owner_uuid)
-        .map_err(|_| "character's owning account uuid is malformed".to_string())
+    let owner_uuid = Uuid::parse_str(&owner_uuid)
+        .map_err(|_| "character's owning account uuid is malformed".to_string())?;
+    if owner_uuid != expected_target_uuid {
+        return Err("character does not belong to the specified target_uuid".to_string());
+    }
+    Ok(owner_uuid)
+}
+
+/// Resolves a suspension's `end_date` from an admin-supplied `duration_secs`,
+/// where `0` means permanent. Deliberately avoids `duration_secs as i64`:
+/// that cast would wrap negative for any value past `i64::MAX` seconds,
+/// silently producing an already-expired `end_date` for what the caller
+/// meant as "as long as possible". Routing through
+/// `std::time::Duration::from_secs` (always non-negative, takes the `u64`
+/// directly) and `chrono::Duration::from_std` (which errors rather than
+/// wrapping on genuine overflow) avoids that. Any overflow anywhere in this
+/// chain -- either conversion, or the date arithmetic itself -- falls back
+/// to a permanent suspension, mirroring `ban_end_date`'s own "an outlandish
+/// duration just becomes infinite" behavior.
+fn suspension_end_date(
+    now: chrono::DateTime<Utc>,
+    duration_secs: u64,
+) -> Option<chrono::DateTime<Utc>> {
+    if duration_secs == 0 {
+        return None;
+    }
+    chrono::Duration::from_std(std::time::Duration::from_secs(duration_secs))
+        .ok()
+        .and_then(|duration| now.checked_add_signed(duration))
 }
 
 /// Suspends a single character on behalf of `operator_uuid`, with no live
 /// session for either. Unlike `admin_ban_player` (account-wide), this
 /// freezes one character only, leaving the rest of the account untouched.
-/// `duration_secs` of `0` means a permanent suspension (lasts until a manual
-/// unsuspend) -- the admin surface requires this explicitly rather than
-/// accepting an omitted duration, so a caller can never end up with an
-/// accidental permanent suspension by forgetting a parameter.
+/// `target_uuid` must be the account that actually owns `character_id` (see
+/// `suspension_target_account`'s doc comment). `duration_secs` of `0` means a
+/// permanent suspension (lasts until a manual unsuspend) -- the admin
+/// surface requires this explicitly rather than accepting an omitted
+/// duration, so a caller can never end up with an accidental permanent
+/// suspension by forgetting a parameter.
 ///
 /// Same up-front `role_outranks` check `admin_ban_player`/`admin_unban_player`
 /// already apply (see their doc comments for why), resolved against the
 /// *account* that owns `character_id`.
 pub(crate) fn admin_suspend_character(
     server: &mut Server,
+    target_uuid: Uuid,
     character_id: CharacterId,
     operator_uuid: Uuid,
     reason: String,
@@ -6272,7 +6308,7 @@ pub(crate) fn admin_suspend_character(
         .read()
         .expect("DatabaseSettings RwLock was poisoned")
         .clone();
-    let target_uuid = suspension_target_account(character_id, &settings)?;
+    let target_uuid = suspension_target_account(character_id, target_uuid, &settings)?;
 
     if !role_outranks(
         operator_role_pair(server, operator_uuid, operator_role),
@@ -6282,11 +6318,7 @@ pub(crate) fn admin_suspend_character(
     }
 
     let now = Utc::now();
-    let end_date = if duration_secs == 0 {
-        None
-    } else {
-        now.checked_add_signed(chrono::Duration::seconds(duration_secs as i64))
-    };
+    let end_date = suspension_end_date(now, duration_secs);
 
     persistence::suspend_character(
         character_id,
@@ -6324,11 +6356,13 @@ pub(crate) fn admin_suspend_character(
 
 /// Lifts a suspension on a single character on behalf of `operator_uuid`,
 /// with no live session for either. Idempotent, same as
-/// `persistence::unsuspend_character`. Same up-front `role_outranks` check
+/// `persistence::unsuspend_character`. Same `target_uuid`-must-own-
+/// `character_id` check and up-front `role_outranks` check
 /// `admin_suspend_character` applies, resolved against the account that owns
 /// `character_id`.
 pub(crate) fn admin_unsuspend_character(
     server: &mut Server,
+    target_uuid: Uuid,
     character_id: CharacterId,
     operator_uuid: Uuid,
 ) -> Result<(), String> {
@@ -6340,7 +6374,7 @@ pub(crate) fn admin_unsuspend_character(
         .read()
         .expect("DatabaseSettings RwLock was poisoned")
         .clone();
-    let target_uuid = suspension_target_account(character_id, &settings)?;
+    let target_uuid = suspension_target_account(character_id, target_uuid, &settings)?;
 
     if !role_outranks(
         operator_role_pair(server, operator_uuid, operator_role),
@@ -8925,4 +8959,31 @@ fn handle_spot(
     _: &ServerChatCommand,
 ) -> CmdResult<()> {
     Err(Content::localized("command-spot-world_feature"))
+}
+
+#[cfg(test)]
+mod suspension_end_date_tests {
+    use super::*;
+
+    #[test]
+    fn zero_duration_is_permanent() {
+        assert_eq!(suspension_end_date(Utc::now(), 0), None);
+    }
+
+    #[test]
+    fn a_normal_duration_lands_in_the_future() {
+        let now = Utc::now();
+        let end_date = suspension_end_date(now, 3600).expect("must produce an end date");
+        assert_eq!(end_date, now + chrono::Duration::seconds(3600));
+    }
+
+    #[test]
+    fn a_duration_past_i64_max_seconds_falls_back_to_permanent_rather_than_wrapping_negative() {
+        let now = Utc::now();
+        let end_date = suspension_end_date(now, u64::MAX);
+        assert_eq!(
+            end_date, None,
+            "an out-of-range duration must become permanent, never an already-expired date"
+        );
+    }
 }

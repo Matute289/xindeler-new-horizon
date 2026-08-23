@@ -739,12 +739,14 @@ fn server_loop(
                     }
                 },
                 Message::AdminSuspendCharacter {
+                    target_uuid,
                     character_id,
                     operator_uuid,
                     reason,
                     duration_secs,
-                } => match server::authc::Uuid::parse_str(&operator_uuid) {
-                    Ok(operator_uuid) => match server.admin_suspend_character(
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => match server.admin_suspend_character(
+                        target_uuid,
                         CharacterId(character_id),
                         operator_uuid,
                         reason,
@@ -758,33 +760,30 @@ fn server_loop(
                             let _ = response.send(MessageReturn::Error(err));
                         },
                     },
-                    Err(_) => {
-                        let _ = response.send(MessageReturn::Error(
-                            "operator_uuid is not a valid uuid".to_string(),
-                        ));
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
                     },
                 },
                 Message::AdminUnsuspendCharacter {
+                    target_uuid,
                     character_id,
                     operator_uuid,
-                } => match server::authc::Uuid::parse_str(&operator_uuid) {
-                    Ok(operator_uuid) => {
-                        match server
-                            .admin_unsuspend_character(CharacterId(character_id), operator_uuid)
-                        {
-                            Ok(()) => {
-                                let _ = response.send(MessageReturn::AdminActionOk { ban: None });
-                            },
-                            Err(err) => {
-                                error!(%err, "admin_unsuspend_character failed");
-                                let _ = response.send(MessageReturn::Error(err));
-                            },
-                        }
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => match server.admin_unsuspend_character(
+                        target_uuid,
+                        CharacterId(character_id),
+                        operator_uuid,
+                    ) {
+                        Ok(()) => {
+                            let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                        },
+                        Err(err) => {
+                            error!(%err, "admin_unsuspend_character failed");
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
                     },
-                    Err(_) => {
-                        let _ = response.send(MessageReturn::Error(
-                            "operator_uuid is not a valid uuid".to_string(),
-                        ));
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
                     },
                 },
             }

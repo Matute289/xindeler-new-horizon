@@ -514,9 +514,11 @@ async fn unban_player(
 
 /// Freezes a single character, leaving the rest of `uuid`'s account
 /// untouched -- unlike `/players/{uuid}/ban`, which acts on the whole
-/// account. `duration_secs` is required: `0` means permanent (i.e. lasts
-/// until a manual unsuspend), so an omitted value can never silently mean
-/// "forever".
+/// account. Refuses the request if `character_id` doesn't actually belong to
+/// `uuid` (see `cmd::admin_suspend_character`'s doc comment), rather than
+/// silently acting on whatever account it really belongs to. `duration_secs`
+/// is required: `0` means permanent (i.e. lasts until a manual unsuspend),
+/// so an omitted value can never silently mean "forever".
 #[derive(Deserialize)]
 struct AdminSuspendBody {
     operator_uuid: String,
@@ -526,13 +528,14 @@ struct AdminSuspendBody {
 
 async fn suspend_character(
     State(web_ui_request_s): State<UiRequestSender>,
-    Path((_uuid, character_id)): Path<(String, i64)>,
+    Path((uuid, character_id)): Path<(String, i64)>,
     Json(payload): Json<AdminSuspendBody>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let _ = web_ui_request_s
         .send((
             Message::AdminSuspendCharacter {
+                target_uuid: uuid,
                 character_id,
                 operator_uuid: payload.operator_uuid,
                 reason: payload.reason,
@@ -558,13 +561,14 @@ struct AdminUnsuspendBody {
 
 async fn unsuspend_character(
     State(web_ui_request_s): State<UiRequestSender>,
-    Path((_uuid, character_id)): Path<(String, i64)>,
+    Path((uuid, character_id)): Path<(String, i64)>,
     Json(payload): Json<AdminUnsuspendBody>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let _ = web_ui_request_s
         .send((
             Message::AdminUnsuspendCharacter {
+                target_uuid: uuid,
                 character_id,
                 operator_uuid: payload.operator_uuid,
             },

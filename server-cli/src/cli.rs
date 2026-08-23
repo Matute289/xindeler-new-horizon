@@ -204,10 +204,16 @@ pub enum Message {
     /// Suspends `character_id` on behalf of `operator_uuid`, a registered
     /// admin/moderator with no live in-game session of its own. Unlike
     /// `AdminBanPlayer` (account-wide), this freezes one character only.
-    /// `duration_secs` is required -- `0` means permanent (i.e. lasts until a
-    /// manual unsuspend); there is deliberately no way to omit it and get a
-    /// permanent suspension by accident.
+    /// `target_uuid` must be the account that actually owns `character_id` --
+    /// this refuses the action rather than silently acting on whatever
+    /// account the character really belongs to, since a caller with a stale
+    /// or mismatched `target_uuid` almost certainly has the wrong page open,
+    /// not a deliberate cross-account request. `duration_secs` is required --
+    /// `0` means permanent (i.e. lasts until a manual unsuspend); there is
+    /// deliberately no way to omit it and get a permanent suspension by
+    /// accident.
     AdminSuspendCharacter {
+        target_uuid: String,
         character_id: i64,
         #[arg(long)]
         operator_uuid: String,
@@ -218,7 +224,10 @@ pub enum Message {
     },
     /// Lifts a suspension on `character_id` on behalf of `operator_uuid`, a
     /// registered admin/moderator with no live in-game session of its own.
+    /// Same `target_uuid`-must-own-`character_id` check as
+    /// `AdminSuspendCharacter`.
     AdminUnsuspendCharacter {
+        target_uuid: String,
         character_id: i64,
         #[arg(long)]
         operator_uuid: String,

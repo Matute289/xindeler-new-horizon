@@ -1834,30 +1834,41 @@ impl Server {
     }
 
     /// Suspends a single character on behalf of `operator_uuid`, a registered
-    /// admin/moderator with no live in-game session of its own.
+    /// admin/moderator with no live in-game session of its own. `target_uuid`
+    /// must be the account that actually owns `character_id`, or this refuses
+    /// the action -- see `cmd::admin_suspend_character`'s doc comment for why.
     /// `duration_secs` of `0` means a permanent suspension (i.e. lasts until a
     /// manual unsuspend) -- unlike `admin_ban_player`, there is no `None` case
-    /// here; the caller must say so explicitly. See
-    /// `cmd::admin_suspend_character`.
+    /// here; the caller must say so explicitly.
     pub fn admin_suspend_character(
         &mut self,
+        target_uuid: Uuid,
         character_id: CharacterId,
         operator_uuid: Uuid,
         reason: String,
         duration_secs: u64,
     ) -> Result<(), String> {
-        cmd::admin_suspend_character(self, character_id, operator_uuid, reason, duration_secs)
+        cmd::admin_suspend_character(
+            self,
+            target_uuid,
+            character_id,
+            operator_uuid,
+            reason,
+            duration_secs,
+        )
     }
 
     /// Lifts a suspension on a single character on behalf of `operator_uuid`,
     /// a registered admin/moderator with no live in-game session of its own.
-    /// See `cmd::admin_unsuspend_character`.
+    /// Same `target_uuid`-must-own-`character_id` check as
+    /// `admin_suspend_character`. See `cmd::admin_unsuspend_character`.
     pub fn admin_unsuspend_character(
         &mut self,
+        target_uuid: Uuid,
         character_id: CharacterId,
         operator_uuid: Uuid,
     ) -> Result<(), String> {
-        cmd::admin_unsuspend_character(self, character_id, operator_uuid)
+        cmd::admin_unsuspend_character(self, target_uuid, character_id, operator_uuid)
     }
 
     /// Sets the SQL log mode at runtime
