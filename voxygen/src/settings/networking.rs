@@ -1,6 +1,11 @@
 use hashbrown::HashSet;
 use serde::{Deserialize, Serialize};
 
+/// Auth host pre-trusted ahead of the server-side cutover to it, so it's
+/// present in both `NetworkingSettings::default()` and the `Settings::load`
+/// migration that inserts it into already-persisted `settings.ron` files.
+pub const VINZCLORTHO_AUTH_HOST: &str = "https://vinzclortho.xindeler.com";
+
 /// `NetworkingSettings` stores server and networking settings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -24,7 +29,10 @@ impl Default for NetworkingSettings {
             username: "".to_string(),
             servers: vec!["server.xindeler.com".to_string()],
             default_server: "server.xindeler.com".to_string(),
-            trusted_auth_servers: ["https://auth.xindeler.com"]
+            // Trusted ahead of the server-side cutover to this host so fresh
+            // installs don't hit the untrusted-auth-server prompt the moment
+            // a server starts advertising it as `auth_provider`.
+            trusted_auth_servers: ["https://auth.xindeler.com", VINZCLORTHO_AUTH_HOST]
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),

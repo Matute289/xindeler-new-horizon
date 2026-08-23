@@ -76,6 +76,8 @@ pub fn make_client(
             // Bots don't have anyone to prompt for a code; a bot account
             // hitting a 2FA challenge just fails the connection.
             || None,
+            // Bots never sign in through a browser.
+            None,
             &|_| {},
             |_| {},
             Default::default(),

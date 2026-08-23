@@ -66,6 +66,7 @@ fn main() {
             None,
             |provider| provider == "https://auth.xindeler.com",
             || None,
+            None,
             &|_| {},
             |_| {},
             Default::default(),
