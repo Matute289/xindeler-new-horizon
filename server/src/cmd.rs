@@ -8,6 +8,7 @@ use crate::{
     client::Client,
     location::Locations,
     login_provider::LoginProvider,
+    persistence,
     settings::{
         BanInfo, BanOperation, BanOperationError, EditableSetting, SettingError, WhitelistInfo,
         WhitelistRecord,
@@ -29,6 +30,7 @@ use common::{
     CachedSpatialGrid, Damage, DamageKind, Explosion, GroupTarget, LoadoutBuilder, RadiusEffect,
     assets,
     calendar::Calendar,
+    character::CharacterId,
     cmd::{
         AreaKind, BUFF_PACK, BUFF_PARSER, CommandEnumArg, EntityTarget, KIT_MANIFEST_PATH, KitSpec,
         PRESET_MANIFEST_PATH, ServerChatCommand,
@@ -6227,6 +6229,131 @@ pub(crate) fn admin_unban_player(
             Err(format!("failed to validate unban: {err:?}"))
         },
     }
+}
+
+/// Resolves `character_id`'s owning account uuid for the admin
+/// suspend/unsuspend commands below. Suspension is character-scoped, but
+/// `role_outranks` is still an account-level concept, so both commands need
+/// this lookup to find the account behind a bare character id.
+fn suspension_target_account(
+    character_id: CharacterId,
+    settings: &persistence::DatabaseSettings,
+) -> Result<Uuid, String> {
+    let owner_uuid = persistence::character_owner_uuid(character_id, settings)
+        .map_err(|_| "failed to resolve the character's owning account".to_string())?
+        .ok_or_else(|| "character does not exist".to_string())?;
+    Uuid::parse_str(&owner_uuid)
+        .map_err(|_| "character's owning account uuid is malformed".to_string())
+}
+
+/// Suspends a single character on behalf of `operator_uuid`, with no live
+/// session for either. Unlike `admin_ban_player` (account-wide), this
+/// freezes one character only, leaving the rest of the account untouched.
+/// `duration_secs` of `0` means a permanent suspension (lasts until a manual
+/// unsuspend) -- the admin surface requires this explicitly rather than
+/// accepting an omitted duration, so a caller can never end up with an
+/// accidental permanent suspension by forgetting a parameter.
+///
+/// Same up-front `role_outranks` check `admin_ban_player`/`admin_unban_player`
+/// already apply (see their doc comments for why), resolved against the
+/// *account* that owns `character_id`.
+pub(crate) fn admin_suspend_character(
+    server: &mut Server,
+    character_id: CharacterId,
+    operator_uuid: Uuid,
+    reason: String,
+    duration_secs: u64,
+) -> Result<(), String> {
+    let operator_role = real_role(server, operator_uuid, "operator")
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+
+    let settings = server
+        .database_settings
+        .read()
+        .expect("DatabaseSettings RwLock was poisoned")
+        .clone();
+    let target_uuid = suspension_target_account(character_id, &settings)?;
+
+    if !role_outranks(
+        operator_role_pair(server, operator_uuid, operator_role),
+        target_role_pair(server, target_uuid),
+    ) {
+        return Err("operator does not outrank target".to_string());
+    }
+
+    let now = Utc::now();
+    let end_date = if duration_secs == 0 {
+        None
+    } else {
+        now.checked_add_signed(chrono::Duration::seconds(duration_secs as i64))
+    };
+
+    persistence::suspend_character(
+        character_id,
+        &reason,
+        &operator_uuid.to_string(),
+        now,
+        end_date,
+        &settings,
+    )
+    .map_err(|err| format!("failed to persist suspension: {err}"))?;
+
+    server
+        .character_suspensions_mut()
+        .insert(character_id, persistence::SuspensionRecord {
+            reason: reason.clone(),
+            suspended_by_operator_uuid: operator_uuid.to_string(),
+            suspended_at: now,
+            end_date,
+        });
+
+    // Best-effort kick if the character is being played right now --
+    // `character_entity` returns `None` if the account is offline or playing
+    // a *different* character, in which case there is nothing to disconnect.
+    let target_entity = server
+        .state
+        .ecs()
+        .read_resource::<common::uid::IdMaps>()
+        .character_entity(character_id);
+    if let Some(entity) = target_entity {
+        disconnect_player(server, entity, DisconnectReason::Kicked(reason));
+    }
+
+    Ok(())
+}
+
+/// Lifts a suspension on a single character on behalf of `operator_uuid`,
+/// with no live session for either. Idempotent, same as
+/// `persistence::unsuspend_character`. Same up-front `role_outranks` check
+/// `admin_suspend_character` applies, resolved against the account that owns
+/// `character_id`.
+pub(crate) fn admin_unsuspend_character(
+    server: &mut Server,
+    character_id: CharacterId,
+    operator_uuid: Uuid,
+) -> Result<(), String> {
+    let operator_role = real_role(server, operator_uuid, "operator")
+        .map_err(|_| "operator is not a registered admin/moderator".to_string())?;
+
+    let settings = server
+        .database_settings
+        .read()
+        .expect("DatabaseSettings RwLock was poisoned")
+        .clone();
+    let target_uuid = suspension_target_account(character_id, &settings)?;
+
+    if !role_outranks(
+        operator_role_pair(server, operator_uuid, operator_role),
+        target_role_pair(server, target_uuid),
+    ) {
+        return Err("operator does not outrank target".to_string());
+    }
+
+    persistence::unsuspend_character(character_id, &settings)
+        .map_err(|err| format!("failed to clear suspension: {err}"))?;
+    server.character_suspensions_mut().remove(character_id);
+
+    Ok(())
 }
 
 fn ban_end_date(

@@ -15,6 +15,7 @@ pub use authc;
 pub mod automod;
 pub mod banishment;
 mod character_creator;
+pub mod character_suspension;
 pub mod chat;
 pub mod chunk_generator;
 mod chunk_serialize;
@@ -248,6 +249,7 @@ pub struct ResolvedCharacterSummary {
     /// `None` if this character never sat at a waypoint, or the waypoint's
     /// site couldn't be resolved.
     pub location: Option<String>,
+    pub suspended: Option<persistence::SuspensionRecord>,
 }
 
 #[derive(Debug)]
@@ -300,6 +302,13 @@ impl Server {
         // Vacuum database
         debug!("Vacuuming database...");
         persistence::vacuum_database(&database_settings);
+
+        // Warms the in-memory suspension cache from the database, same as
+        // `EditableSettings::load` above warms its own file-backed caches --
+        // done here, before `database_settings` moves behind the `Arc<RwLock<_>>`
+        // every other DB access after startup goes through.
+        let character_suspensions =
+            character_suspension::CharacterSuspensions::load(&database_settings);
 
         let database_settings = Arc::new(RwLock::new(database_settings));
 
@@ -391,6 +400,7 @@ impl Server {
         state.ecs_mut().insert(RecentClientIPs::default());
         state.ecs_mut().insert(settings.clone());
         state.ecs_mut().insert(editable_settings);
+        state.ecs_mut().insert(character_suspensions);
         state.ecs_mut().insert(DataDir {
             path: data_dir.to_owned(),
         });
@@ -800,6 +810,24 @@ impl Server {
         self.state.ecs().fetch::<EditableSettings>()
     }
 
+    /// Get a mutable reference to the in-memory character suspension cache.
+    pub fn character_suspensions_mut(
+        &self,
+    ) -> impl DerefMut<Target = character_suspension::CharacterSuspensions> + '_ {
+        self.state
+            .ecs()
+            .fetch_mut::<character_suspension::CharacterSuspensions>()
+    }
+
+    /// Get a reference to the in-memory character suspension cache.
+    pub fn character_suspensions(
+        &self,
+    ) -> impl Deref<Target = character_suspension::CharacterSuspensions> + '_ {
+        self.state
+            .ecs()
+            .fetch::<character_suspension::CharacterSuspensions>()
+    }
+
     /// Get path to the directory that the server info into
     pub fn data_dir(&self) -> impl Deref<Target = DataDir> + '_ {
         self.state.ecs().fetch::<DataDir>()
@@ -850,6 +878,7 @@ impl Server {
                     hardcore: c.hardcore,
                     inventory: c.inventory,
                     location: name,
+                    suspended: c.suspended,
                 }
             })
             .collect()
@@ -1733,6 +1762,7 @@ impl Server {
                 class: s.class,
                 level: s.level,
                 location: self.resolve_waypoint_site_name(s.waypoint.as_deref()),
+                suspended: s.suspended,
             })
             .collect())
     }
@@ -1801,6 +1831,33 @@ impl Server {
         target_username: Option<String>,
     ) -> Result<(), String> {
         cmd::admin_unban_player(self, target_uuid, operator_uuid, target_username)
+    }
+
+    /// Suspends a single character on behalf of `operator_uuid`, a registered
+    /// admin/moderator with no live in-game session of its own.
+    /// `duration_secs` of `0` means a permanent suspension (i.e. lasts until a
+    /// manual unsuspend) -- unlike `admin_ban_player`, there is no `None` case
+    /// here; the caller must say so explicitly. See
+    /// `cmd::admin_suspend_character`.
+    pub fn admin_suspend_character(
+        &mut self,
+        character_id: CharacterId,
+        operator_uuid: Uuid,
+        reason: String,
+        duration_secs: u64,
+    ) -> Result<(), String> {
+        cmd::admin_suspend_character(self, character_id, operator_uuid, reason, duration_secs)
+    }
+
+    /// Lifts a suspension on a single character on behalf of `operator_uuid`,
+    /// a registered admin/moderator with no live in-game session of its own.
+    /// See `cmd::admin_unsuspend_character`.
+    pub fn admin_unsuspend_character(
+        &mut self,
+        character_id: CharacterId,
+        operator_uuid: Uuid,
+    ) -> Result<(), String> {
+        cmd::admin_unsuspend_character(self, character_id, operator_uuid)
     }
 
     /// Sets the SQL log mode at runtime

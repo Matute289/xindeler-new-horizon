@@ -21,7 +21,7 @@ use crate::{
     cli::{
         Admin, ArgvApp, ArgvCommand, BenchParams, CharacterSummaryDto, LocationDto, Message,
         MessageReturn, OracleEventsDto, OracleTarget, PlayerDto, ServerInfoDto, SharedCommand,
-        Shutdown,
+        Shutdown, SuspensionDto,
     },
     settings::Settings,
     shutdown_coordinator::ShutdownCoordinator,
@@ -67,6 +67,30 @@ fn dmevent_id_from_path(path: &std::path::Path) -> Option<String> {
     name.strip_suffix(".dmevent.ron")
         .or_else(|| name.strip_suffix(".dmevent.json"))
         .map(str::to_owned)
+}
+
+/// Converts a resolved persistence-layer character summary into the
+/// wire-facing DTO, shared by `ListPlayerCharacters` and
+/// `AdminListPlayerCharacters` since both build the same shape from the same
+/// source.
+fn character_summary_dto(c: server::ResolvedCharacterSummary) -> CharacterSummaryDto {
+    CharacterSummaryDto {
+        character_id: c.character_id.0,
+        name: c.alias,
+        level: u32::from(c.level),
+        class: c.class,
+        location: c.location.map(|site| LocationDto {
+            site,
+            kingdom: None,
+            continent: None,
+        }),
+        suspended: c.suspended.map(|s| SuspensionDto {
+            reason: s.reason,
+            suspended_by_operator_uuid: s.suspended_by_operator_uuid,
+            suspended_at: s.suspended_at,
+            end_date: s.end_date,
+        }),
+    }
 }
 
 /// Parses the target/operator uuid strings carried by the admin HTTP `Message`
@@ -607,20 +631,8 @@ fn server_loop(
                 Message::ListPlayerCharacters { uuid } => {
                     match server.list_player_characters(&uuid) {
                         Ok(characters) => {
-                            let characters = characters
-                                .into_iter()
-                                .map(|c| CharacterSummaryDto {
-                                    character_id: c.character_id.0,
-                                    name: c.alias,
-                                    level: u32::from(c.level),
-                                    class: c.class,
-                                    location: c.location.map(|site| LocationDto {
-                                        site,
-                                        kingdom: None,
-                                        continent: None,
-                                    }),
-                                })
-                                .collect();
+                            let characters =
+                                characters.into_iter().map(character_summary_dto).collect();
                             let _ = response.send(MessageReturn::PlayerCharacters(characters));
                         },
                         Err(err) => {
@@ -716,20 +728,8 @@ fn server_loop(
                 Message::AdminListPlayerCharacters { uuid } => {
                     match server.list_player_characters(&uuid) {
                         Ok(characters) => {
-                            let characters = characters
-                                .into_iter()
-                                .map(|c| CharacterSummaryDto {
-                                    character_id: c.character_id.0,
-                                    name: c.alias,
-                                    level: u32::from(c.level),
-                                    class: c.class,
-                                    location: c.location.map(|site| LocationDto {
-                                        site,
-                                        kingdom: None,
-                                        continent: None,
-                                    }),
-                                })
-                                .collect();
+                            let characters =
+                                characters.into_iter().map(character_summary_dto).collect();
                             let _ = response.send(MessageReturn::PlayerCharacters(characters));
                         },
                         Err(err) => {
@@ -737,6 +737,55 @@ fn server_loop(
                             let _ = response.send(MessageReturn::Error(err.public_message()));
                         },
                     }
+                },
+                Message::AdminSuspendCharacter {
+                    character_id,
+                    operator_uuid,
+                    reason,
+                    duration_secs,
+                } => match server::authc::Uuid::parse_str(&operator_uuid) {
+                    Ok(operator_uuid) => match server.admin_suspend_character(
+                        CharacterId(character_id),
+                        operator_uuid,
+                        reason,
+                        duration_secs,
+                    ) {
+                        Ok(()) => {
+                            let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                        },
+                        Err(err) => {
+                            error!(%err, "admin_suspend_character failed");
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
+                    },
+                    Err(_) => {
+                        let _ = response.send(MessageReturn::Error(
+                            "operator_uuid is not a valid uuid".to_string(),
+                        ));
+                    },
+                },
+                Message::AdminUnsuspendCharacter {
+                    character_id,
+                    operator_uuid,
+                } => match server::authc::Uuid::parse_str(&operator_uuid) {
+                    Ok(operator_uuid) => {
+                        match server
+                            .admin_unsuspend_character(CharacterId(character_id), operator_uuid)
+                        {
+                            Ok(()) => {
+                                let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                            },
+                            Err(err) => {
+                                error!(%err, "admin_unsuspend_character failed");
+                                let _ = response.send(MessageReturn::Error(err));
+                            },
+                        }
+                    },
+                    Err(_) => {
+                        let _ = response.send(MessageReturn::Error(
+                            "operator_uuid is not a valid uuid".to_string(),
+                        ));
+                    },
                 },
             }
             false

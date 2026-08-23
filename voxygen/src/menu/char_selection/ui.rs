@@ -1176,24 +1176,38 @@ impl Controls {
                                     }))
                                     .padding(4),
                                     // Select Button
-                                    AspectRatioContainer::new(
-                                        Button::new(
-                                            select_button,
-                                            Column::with_children(vec![
-                                                Text::new(&character.character.alias)
-                                                    .size(fonts.cyri.scale(26))
-                                                    .into(),
-                                                Text::new(character.location.as_ref().map_or_else(
-                                                    || {
-                                                        i18n.get_msg(
-                                                            "char_selection-uncanny_valley",
-                                                        )
-                                                        .into_owned()
-                                                    },
-                                                    |c| i18n.get_content(c),
-                                                ))
+                                    AspectRatioContainer::new({
+                                        let mut lines = vec![
+                                            Text::new(&character.character.alias)
+                                                .size(fonts.cyri.scale(26))
                                                 .into(),
-                                            ]),
+                                            Text::new(character.location.as_ref().map_or_else(
+                                                || {
+                                                    i18n.get_msg("char_selection-uncanny_valley")
+                                                        .into_owned()
+                                                },
+                                                |c| i18n.get_content(c),
+                                            ))
+                                            .into(),
+                                        ];
+                                        // A suspended character shows its real reason rather
+                                        // than a generic placeholder, and cannot be selected --
+                                        // enforcement is server-side either way, this just keeps
+                                        // the client from sending a request the server will
+                                        // reject.
+                                        if let Some(suspension) = &character.suspended {
+                                            lines.push(
+                                                Text::new(format!(
+                                                    "Suspended: {}",
+                                                    suspension.reason
+                                                ))
+                                                .size(fonts.cyri.scale(14))
+                                                .into(),
+                                            );
+                                        }
+                                        let button = Button::new(
+                                            select_button,
+                                            Column::with_children(lines),
                                         )
                                         .padding(10)
                                         .style(
@@ -1212,9 +1226,13 @@ impl Controls {
                                             )),
                                         )
                                         .width(Length::Fill)
-                                        .height(Length::Fill)
-                                        .on_press(Message::Select(character_id)),
-                                    )
+                                        .height(Length::Fill);
+                                        if character.suspended.is_some() {
+                                            button
+                                        } else {
+                                            button.on_press(Message::Select(character_id))
+                                        }
+                                    })
                                     .ratio_of_image(imgs.char_selection),
                                 )
                                 .padding(0)

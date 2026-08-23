@@ -64,14 +64,15 @@ async fn log_users(
     Ok(next.run(req).await)
 }
 
-// Account-management routes below (kick/ban/unban, character lookup) are the
-// security-relevant functionality this comment used to flag as a future
-// audit item -- they've now had that pass: each wraps engine capability that
-// already existed as a chat command, attribution is cross-checked against
-// the server's own admin/moderator roster (not just this shared secret) via
-// `real_role`, and every write is scoped to a single uuid path param with no
-// broader admin-list-management surface exposed. See the design doc's
-// investigation for the full reasoning.
+// Account- and character-management routes below (kick/ban/unban, character
+// lookup, per-character suspend/unsuspend) are the security-relevant
+// functionality this comment used to flag as a future audit item -- they've
+// now had that pass: each wraps engine capability that already existed as a
+// chat command, attribution is cross-checked against the server's own
+// admin/moderator roster (not just this shared secret) via `real_role`, and
+// every write is scoped to a single uuid (or uuid + character id) path param
+// with no broader admin-list-management surface exposed. See the design
+// doc's investigation for the full reasoning.
 pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router {
     let token = UiApiToken { secret_token };
     let ip_addrs = IpAddresses::default();
@@ -90,6 +91,14 @@ pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router
         .route("/players/{uuid}/ban", post(ban_player))
         .route("/players/{uuid}/unban", post(unban_player))
         .route("/players/{uuid}/characters", get(player_characters))
+        .route(
+            "/players/{uuid}/characters/{character_id}/suspend",
+            post(suspend_character),
+        )
+        .route(
+            "/players/{uuid}/characters/{character_id}/unsuspend",
+            post(unsuspend_character),
+        )
         .layer(axum::middleware::from_fn_with_state(ip_addrs, log_users))
         .layer(axum::middleware::from_fn_with_state(token, validate_secret))
         .with_state(web_ui_request_s)
@@ -489,6 +498,75 @@ async fn unban_player(
                 target_uuid: uuid,
                 operator_uuid: payload.operator_uuid,
                 target_username: payload.target_username,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        MessageReturn::AdminActionOk { .. } => Ok(StatusCode::OK),
+        MessageReturn::Error(err) => Err((StatusCode::CONFLICT, err)),
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
+}
+
+/// Freezes a single character, leaving the rest of `uuid`'s account
+/// untouched -- unlike `/players/{uuid}/ban`, which acts on the whole
+/// account. `duration_secs` is required: `0` means permanent (i.e. lasts
+/// until a manual unsuspend), so an omitted value can never silently mean
+/// "forever".
+#[derive(Deserialize)]
+struct AdminSuspendBody {
+    operator_uuid: String,
+    reason: String,
+    duration_secs: u64,
+}
+
+async fn suspend_character(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Path((_uuid, character_id)): Path<(String, i64)>,
+    Json(payload): Json<AdminSuspendBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((
+            Message::AdminSuspendCharacter {
+                character_id,
+                operator_uuid: payload.operator_uuid,
+                reason: payload.reason,
+                duration_secs: payload.duration_secs,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        MessageReturn::AdminActionOk { .. } => Ok(StatusCode::OK),
+        MessageReturn::Error(err) => Err((StatusCode::CONFLICT, err)),
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminUnsuspendBody {
+    operator_uuid: String,
+}
+
+async fn unsuspend_character(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Path((_uuid, character_id)): Path<(String, i64)>,
+    Json(payload): Json<AdminUnsuspendBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((
+            Message::AdminUnsuspendCharacter {
+                character_id,
+                operator_uuid: payload.operator_uuid,
             },
             sender,
         ))
