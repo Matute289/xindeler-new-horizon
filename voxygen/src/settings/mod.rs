@@ -28,7 +28,7 @@ pub use hud_position::HudPositionSettings;
 pub use interface::InterfaceSettings;
 pub use inventory::InventorySettings;
 pub use language::LanguageSettings;
-pub use networking::NetworkingSettings;
+pub use networking::{NetworkingSettings, VINZCLORTHO_AUTH_HOST};
 
 /// `Settings` contains everything that can be configured in the settings.ron
 /// file.
@@ -96,7 +96,17 @@ impl Settings {
     pub fn load(config_dir: &Path) -> Self {
         let path = Self::get_path(config_dir);
 
-        let settings = common::util::ron_from_path_recoverable::<Self>(&path);
+        let mut settings = common::util::ron_from_path_recoverable::<Self>(&path);
+
+        // `trusted_auth_servers` is already present in any settings.ron written
+        // by a prior version, so a `Default` change alone never reaches it here
+        // -- insert new trusted hosts explicitly so already-persisted files
+        // pick them up too, not just brand-new ones.
+        settings
+            .networking
+            .trusted_auth_servers
+            .insert(VINZCLORTHO_AUTH_HOST.to_string());
+
         // Save settings to add new fields or create the file if it is not already there
         settings.save_to_file_warn(config_dir);
         settings
