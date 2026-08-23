@@ -8,6 +8,7 @@ char_selection-create_new_character = Create new character
 char_selection-creating_character = Creating character...
 char_selection-editing_character = Saving Character...
 char_selection-uncanny_valley = Wilderness
+char_selection-suspended = Suspended: { $reason }
 char_selection-beard = Beard
 char_selection-hair_style = Hair Style
 char_selection-hair_color = Hair Color

@@ -69,6 +69,20 @@ pub struct Character {
     pub alias: String,
 }
 
+/// A character's current suspension, as surfaced to the owning player's own
+/// client at character select. Carries the real reason and end date rather
+/// than a generic placeholder -- the player is entitled to know why one of
+/// their characters is frozen. Mirrors `common_net::msg::server::BanInfo`'s
+/// shape (plain strings and a unix timestamp rather than a richer type) for
+/// the same reason: it travels over the wire and needs nothing fancier.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CharacterSuspension {
+    pub reason: String,
+    /// Unix timestamp the suspension lifts, `None` if permanent (i.e. lasts
+    /// until a manual unsuspend).
+    pub end_date: Option<i64>,
+}
+
 /// Data needed to render a single character item in the character list
 /// presented during character selection.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -78,6 +92,9 @@ pub struct CharacterItem<Location> {
     pub hardcore: bool,
     pub inventory: Inventory,
     pub location: Option<Location>,
+    /// `Some(_)` if this character is currently suspended and therefore
+    /// cannot be selected. See `CharacterSuspension`.
+    pub suspended: Option<CharacterSuspension>,
 }
 
 #[cfg(test)]

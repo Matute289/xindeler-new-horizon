@@ -7,9 +7,11 @@ use crate::{
     EditableSettings,
     automod::AutoMod,
     character_creator,
+    character_suspension::CharacterSuspensions,
     client::Client,
     persistence::{character_loader::CharacterLoader, character_updater::CharacterUpdater},
 };
+use chrono::Utc;
 #[cfg(feature = "worldgen")]
 use common::terrain::TerrainChunkSize;
 use common::{
@@ -41,7 +43,7 @@ event_emitters! {
 }
 
 impl Sys {
-    #[cfg_attr(feature = "worldgen", expect(clippy::too_many_arguments))] // Shhhh, go bother someone else clippy
+    #[expect(clippy::too_many_arguments)] // Shhhh, go bother someone else clippy
     fn handle_client_character_screen_msg(
         emitters: &mut Emitters,
         entity: specs::Entity,
@@ -53,6 +55,7 @@ impl Sys {
         admins: &ReadStorage<'_, Admin>,
         presences: &ReadStorage<'_, Presence>,
         editable_settings: &ReadExpect<'_, EditableSettings>,
+        character_suspensions: &ReadExpect<'_, CharacterSuspensions>,
         censor: &ReadExpect<'_, Arc<censor::Censor>>,
         automod: &AutoMod,
         msg: ClientGeneral,
@@ -139,6 +142,18 @@ impl Sys {
                              seconds and try again"
                                 .to_string(),
                         )))?;
+                    } else if let Some(suspension) =
+                        character_suspensions.current(character_id, Utc::now())
+                    {
+                        debug!(?character_id, "rejected character selection: suspended");
+                        let end_date = suspension.end_date.map_or_else(
+                            || "no end date (permanent)".to_string(),
+                            |d| d.to_rfc3339(),
+                        );
+                        client.send(ServerGeneral::CharacterDataLoadResult(Err(format!(
+                            "This character is suspended: {} (until: {})",
+                            suspension.reason, end_date
+                        ))))?;
                     } else {
                         // Send a request to load the character's component data from the
                         // DB. Once loaded, persisted components such as stats and inventory
@@ -306,6 +321,7 @@ pub struct Data<'a> {
     admins: ReadStorage<'a, Admin>,
     presences: ReadStorage<'a, Presence>,
     editable_settings: ReadExpect<'a, EditableSettings>,
+    character_suspensions: ReadExpect<'a, CharacterSuspensions>,
     censor: ReadExpect<'a, Arc<censor::Censor>>,
     automod: ReadExpect<'a, AutoMod>,
     time: ReadExpect<'a, Time>,
@@ -340,6 +356,7 @@ impl<'a> System<'a> for Sys {
                     &data.admins,
                     &data.presences,
                     &data.editable_settings,
+                    &data.character_suspensions,
                     &data.censor,
                     &data.automod,
                     msg,

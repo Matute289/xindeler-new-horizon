@@ -113,6 +113,9 @@ cargo clippy --all-targets --locked \
 # Clippy for voxygen publish profile (no hot-reloading)
 cargo clippy -p xindeler-voxygen --locked --no-default-features --features="default-publish" -- -D warnings
 
+# Ensure xindeler-server-cli compiles standalone with the simd feature (matches CI)
+cargo clippy --locked --bin xindeler-server-cli --no-default-features -F simd -- -D warnings
+
 # Format check
 cargo fmt --all -- --check
 
@@ -125,31 +128,36 @@ cargo build --release --no-default-features --features default-publish
 The project separates into four layers:
 
 **Executables**
-- `voxygen/` — GUI client. Owns rendering (wgpu), windowing (winit), UI (egui + conrod), audio, and asset hot-reloading. The `hot-reloading` feature (on by default in dev) loads animation and agent code as dynamic libraries via `common-dynlib`.
+- `voxygen/` — GUI client. Owns rendering (wgpu), windowing (winit), the primary UI (conrod), audio, and asset hot-reloading. `voxygen/egui` is a separate debug/admin overlay (admin console, character-state inspector, shader experiments), not the main UI. The `hot-reloading` feature (on by default in dev) loads animation and agent code as dynamic libraries via `common/dynlib`.
 - `server-cli/` — Headless server binary wrapping the `server` crate.
 
 **Game logic**
 - `server/` — Authoritative game state: ECS tick, player connections, persistence, economy.
 - `client/` — Client-side game logic and networking (no graphics).
-- `server-agent/` — NPC AI behavior, compiled as a hot-reloadable dylib in dev.
-- `rtsim/` — Long-running world simulation (NPC migrations, factions, civilization events).
+- `server/agent/` (crate `xindeler-server-agent`) — NPC AI behavior, compiled as a hot-reloadable dylib in dev.
+- `rtsim/` — Long-running world simulation (NPC migrations, factions, civilization events, quests).
 - `world/` — Procedural world generation: terrain, sites (towns/dungeons), caves, trees.
 
-**Common layer** (`common/` + sub-crates)
+**Common layer** (`common/` + sub-crates — crate names are hyphenated, e.g. `xindeler-common-state`, but the directories are nested under `common/`, e.g. `common/state/`; there is no top-level `common-state/` directory)
 - `common/` — Core game types: components, items, recipes, combat formulas, terrain chunks.
-- `common-state/` — ECS world setup; integrates plugins; shared between client and server.
-- `common-systems/` — ECS systems (physics, buffs, projectiles, etc.) run on both sides.
-- `common-net/` — Network message types and compression.
-- `common-assets/` — Asset loading abstraction over the `assets_manager` crate.
-- `common-ecs/` — ECS utility traits on top of `specs`.
+- `common/state/` — ECS world setup; integrates plugins; shared between client and server.
+- `common/systems/` — ECS systems (physics, buffs, projectiles, etc.) run on both sides.
+- `common/net/` — Network message types and compression.
+- `common/assets/` — Asset loading abstraction over the `assets_manager` crate.
+- `common/ecs/` — ECS utility traits on top of `specs`.
+- `common/oracle/`, `common/query_server/` — small internal-subsystem/protocol crates; see the pointer below for what consumes `common/oracle/`.
+- `common/base/`, `common/dynlib/`, `common/frontend/` — small foundational crates: shared macros/paths, the hot-reload dylib loader, and shared logging/telemetry setup, respectively.
+- `common/i18n/`, `client/i18n/`, `voxygen/i18n-helpers/` — three-layer localization stack: `common/i18n` is the wire schema (`Content`/`LocalizationArg`, server → client), `client/i18n` (crate `i18n`) is the Fluent engine that resolves it (also home to the `i18n_check`/`i18n_csv` CLI tools), `voxygen/i18n-helpers` is display-layer glue for voxygen call sites.
 
 **Network**
 - `network/` — Low-level multiplayer transport (TCP, QUIC via Quinn, optional metrics).
-- `network-protocol/` — Wire format and message serialization.
+- `network/protocol/` (crate `xindeler-network-protocol`) — Wire format and message serialization.
+
+**PROJECT ORACLE / PROJECT AURORA** — internal subsystems; don't assume a module exists (or doesn't) from a grep alone. Code-location map moved to `docs/design/engine-notes/2026-08-21-oracle-aurora-implementation-map.md` (private) — read it before working on either.
 
 ## ECS Pattern
 
-The codebase uses `specs`. Components live in `common/src/comp/`, resources in `common/src/resources.rs`. Systems in `common-systems/` are registered in `common-state/`. Server-only systems are in `server/src/sys/`. Always check existing comp/system patterns before adding new ones.
+The codebase uses `specs`. Components live in `common/src/comp/`, resources in `common/src/resources.rs`. Systems in `common/systems/` are registered in `common/state/`. Server-only systems are in `server/src/sys/`. Always check existing comp/system patterns before adding new ones.
 
 ## Assets
 

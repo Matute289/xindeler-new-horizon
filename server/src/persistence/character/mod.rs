@@ -32,16 +32,18 @@ use crate::{
         json_models,
     },
 };
+use chrono::{DateTime, Utc};
 use common::{
     character::{
-        CharacterId, CharacterItem, MAX_CHARACTERS_PER_PLAYER, normalize_character_name,
-        validate_character_name,
+        CharacterId, CharacterItem, CharacterSuspension, MAX_CHARACTERS_PER_PLAYER,
+        normalize_character_name, validate_character_name,
     },
     comp::{Content, skillset::level_from_total_exp},
     event::{PermanentChange, UpdateCharacterMetadata},
     npc::NPC_NAMES,
 };
 use core::ops::Range;
+use hashbrown::HashMap;
 use rusqlite::{Connection, Error as DbError, ErrorCode, ToSql, Transaction, types::Value};
 use std::{num::NonZeroU64, rc::Rc};
 use tracing::{debug, error, trace, warn};
@@ -545,6 +547,13 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
             );
             let location = char_waypoint.map(|w| w.get_pos());
 
+            let suspended =
+                get_character_suspension(CharacterId(character_data.character_id), connection)?
+                    .map(|record| CharacterSuspension {
+                        reason: record.reason,
+                        end_date: record.end_date.map(|d| d.timestamp()),
+                    });
+
             // Xindeler: the spell book is deliberately NOT loaded here. Nothing
             // on the character-select screen reads it, and looking its
             // pseudo-container up would make the whole character LIST fail for
@@ -557,6 +566,7 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 inventory: Inventory::with_loadout(loadout, char_body)
                     .with_recipe_book(recipe_book),
                 location,
+                suspended,
             })
         })
         .collect()
@@ -1084,12 +1094,14 @@ pub fn load_character_summaries(
         .map(|(character_id, alias, class, waypoint)| {
             let character_id = CharacterId(character_id);
             let level = character_level(character_id, connection)?;
+            let suspended = get_character_suspension(character_id, connection)?;
             Ok(super::CharacterSummary {
                 character_id,
                 alias,
                 class,
                 level,
                 waypoint,
+                suspended,
             })
         })
         .collect()
@@ -1140,6 +1152,167 @@ pub fn rename_character(
     drop(stmt);
 
     Ok(())
+}
+
+/// Renders a `DateTime<Utc>` the way every `character_suspensions` timestamp
+/// column is stored: RFC3339, always round-trippable through
+/// `parse_suspension_timestamp` below.
+fn format_suspension_timestamp(at: DateTime<Utc>) -> String { at.to_rfc3339() }
+
+/// The inverse of `format_suspension_timestamp`. A parse failure here means
+/// the column holds something that didn't come from this module -- treated as
+/// a database error rather than silently defaulting to some placeholder time,
+/// since either a suspension's start or its expiry being wrong is exactly the
+/// kind of silent bug this feature exists to avoid.
+fn parse_suspension_timestamp(raw: &str) -> Result<DateTime<Utc>, PersistenceError> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|err| {
+            PersistenceError::OtherError(format!(
+                "invalid character_suspensions timestamp {raw:?}: {err}"
+            ))
+        })
+}
+
+/// Suspends `character_id`, replacing any existing suspension on it (`REPLACE
+/// INTO` on the single-column primary key -- a re-suspend overwrites rather
+/// than stacking, matching the schema's "one row per currently-suspended
+/// character" cardinality).
+pub fn suspend_character(
+    character_id: CharacterId,
+    reason: &str,
+    suspended_by_operator_uuid: &str,
+    suspended_at: DateTime<Utc>,
+    end_date: Option<DateTime<Utc>>,
+    transaction: &mut Transaction,
+) -> Result<(), PersistenceError> {
+    let mut stmt = transaction.prepare_cached(
+        "
+        REPLACE
+        INTO    character_suspensions (character_id,
+                                        reason,
+                                        suspended_by_operator_uuid,
+                                        suspended_at,
+                                        end_date)
+        VALUES  (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    stmt.execute([
+        &character_id.0 as &dyn ToSql,
+        &reason,
+        &suspended_by_operator_uuid,
+        &format_suspension_timestamp(suspended_at),
+        &end_date.map(format_suspension_timestamp),
+    ])?;
+    Ok(())
+}
+
+/// Lifts any suspension on `character_id`. Idempotent: deleting a row that
+/// isn't there is not an error.
+pub fn unsuspend_character(
+    character_id: CharacterId,
+    transaction: &mut Transaction,
+) -> Result<(), PersistenceError> {
+    let mut stmt =
+        transaction.prepare_cached("DELETE FROM character_suspensions WHERE character_id = ?1")?;
+    stmt.execute([&character_id.0])?;
+    Ok(())
+}
+
+/// The current suspension row for `character_id`, if any.
+pub fn get_character_suspension(
+    character_id: CharacterId,
+    connection: &Connection,
+) -> Result<Option<super::SuspensionRecord>, PersistenceError> {
+    let mut stmt = connection.prepare_cached(
+        "
+        SELECT  reason,
+                suspended_by_operator_uuid,
+                suspended_at,
+                end_date
+        FROM    character_suspensions
+        WHERE   character_id = ?1",
+    )?;
+    let row = stmt.query_row([character_id.0], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    });
+    match row {
+        Ok((reason, suspended_by_operator_uuid, suspended_at, end_date)) => {
+            Ok(Some(super::SuspensionRecord {
+                reason,
+                suspended_by_operator_uuid,
+                suspended_at: parse_suspension_timestamp(&suspended_at)?,
+                end_date: end_date
+                    .as_deref()
+                    .map(parse_suspension_timestamp)
+                    .transpose()?,
+            }))
+        },
+        Err(DbError::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Every currently-suspended character, for `CharacterSuspensions::load` at
+/// server startup.
+pub fn load_all_character_suspensions(
+    connection: &Connection,
+) -> Result<HashMap<CharacterId, super::SuspensionRecord>, PersistenceError> {
+    let mut stmt = connection.prepare_cached(
+        "
+        SELECT  character_id,
+                reason,
+                suspended_by_operator_uuid,
+                suspended_at,
+                end_date
+        FROM    character_suspensions",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    rows.into_iter()
+        .map(
+            |(character_id, reason, suspended_by_operator_uuid, suspended_at, end_date)| {
+                Ok((CharacterId(character_id), super::SuspensionRecord {
+                    reason,
+                    suspended_by_operator_uuid,
+                    suspended_at: parse_suspension_timestamp(&suspended_at)?,
+                    end_date: end_date
+                        .as_deref()
+                        .map(parse_suspension_timestamp)
+                        .transpose()?,
+                }))
+            },
+        )
+        .collect()
+}
+
+/// Resolves the account uuid that owns `character_id`, or `None` if no such
+/// character exists.
+pub fn character_owner_uuid(
+    character_id: CharacterId,
+    connection: &Connection,
+) -> Result<Option<String>, PersistenceError> {
+    let mut stmt =
+        connection.prepare_cached("SELECT player_uuid FROM character WHERE character_id = ?1")?;
+    match stmt.query_row([character_id.0], |row| row.get::<_, String>(0)) {
+        Ok(uuid) => Ok(Some(uuid)),
+        Err(DbError::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Before creating a character, we ensure that the limit on the number of
@@ -2538,5 +2711,230 @@ mod nh79_character_summary_tests {
         let conn = db.connection();
         let summaries = load_character_summaries("uuid-does-not-exist", &conn).expect("load");
         assert!(summaries.is_empty());
+    }
+}
+
+/// End-to-end persistence tests for per-character suspension: suspend, check
+/// it's visible everywhere it needs to be, unsuspend, check it's gone.
+#[cfg(test)]
+mod character_suspension_persistence_tests {
+    use super::*;
+    use crate::persistence::{ConnectionMode, DatabaseSettings, SqlLogMode, establish_connection};
+    use chrono::SubsecRound;
+    use common::comp::{ActiveAbilities, CharacterClass};
+
+    struct TestDb {
+        _dir: tempfile::TempDir,
+        settings: DatabaseSettings,
+    }
+
+    impl TestDb {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let settings = DatabaseSettings {
+                db_dir: dir.path().to_path_buf(),
+                sql_log_mode: SqlLogMode::Disabled,
+            };
+            crate::persistence::run_migrations(&settings);
+            Self {
+                _dir: dir,
+                settings,
+            }
+        }
+
+        fn connection(&self) -> crate::persistence::VelorenConnection {
+            establish_connection(&self.settings, ConnectionMode::ReadWrite)
+        }
+    }
+
+    fn components() -> PersistedComponents {
+        let body = comp::Body::Humanoid(comp::humanoid::Body::random());
+        PersistedComponents {
+            body,
+            hardcore: None,
+            character_class: CharacterClass::single(comp::ClassKind::Warrior),
+            stats: comp::Stats::new(Content::Plain("Testificate".to_owned()), body),
+            skill_set: comp::SkillSet::default(),
+            inventory: Inventory::with_empty(),
+            waypoint: None,
+            pets: Vec::new(),
+            active_abilities: ActiveAbilities::default(),
+            map_marker: None,
+            ethos: comp::Ethos::default(),
+            background: comp::Background::default(),
+            pact: comp::Pact::default(),
+            trigger_slots: comp::TriggerSlots::default(),
+            spell_mastery: comp::SpellMastery::default(),
+        }
+    }
+
+    fn create(db: &TestDb, uuid: &str, alias: &str) -> CharacterId {
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let (id, _) =
+            create_character(uuid, alias, components(), &mut transaction).expect("creation");
+        transaction.commit().expect("commit");
+        id
+    }
+
+    /// Truncated to whole seconds: `to_rfc3339`/`parse_from_rfc3339` round
+    /// trips exactly at that resolution, but a raw `Utc::now()` carries
+    /// sub-second precision that would make an `assert_eq!` against the
+    /// reloaded value flaky.
+    fn now() -> DateTime<Utc> { Utc::now().trunc_subsecs(0) }
+
+    #[test]
+    fn a_suspended_character_is_visible_in_the_character_list_with_its_reason() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-list", "Suspecto");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(
+            id,
+            "duped items via a bugged trade",
+            "operator-uuid",
+            now(),
+            None,
+            &mut transaction,
+        )
+        .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let list = load_character_list("uuid-suspend-list", &conn).expect("load list");
+        let entry = list.iter().find(|c| c.character.id == Some(id)).unwrap();
+        let suspension = entry
+            .suspended
+            .as_ref()
+            .expect("the character list must surface the real suspension");
+        assert_eq!(suspension.reason, "duped items via a bugged trade");
+        assert_eq!(
+            suspension.end_date, None,
+            "a permanent suspension has no end date"
+        );
+    }
+
+    #[test]
+    fn suspend_check_unsuspend_check_round_trip() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-roundtrip", "Roundtrip");
+        let suspended_at = now();
+        let end_date = suspended_at + chrono::Duration::seconds(3600);
+
+        // Not suspended yet.
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_none()
+        );
+        drop(conn);
+
+        // Suspend it.
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(
+            id,
+            "bugged into invincibility",
+            "operator-uuid",
+            suspended_at,
+            Some(end_date),
+            &mut transaction,
+        )
+        .expect("suspend");
+        transaction.commit().expect("commit");
+
+        // Enforced: visible via the direct lookup and via the startup-load path.
+        let conn = db.connection();
+        let record = get_character_suspension(id, &conn)
+            .expect("query")
+            .expect("must be suspended now");
+        assert_eq!(record.reason, "bugged into invincibility");
+        assert_eq!(record.suspended_by_operator_uuid, "operator-uuid");
+        assert_eq!(record.suspended_at, suspended_at);
+        assert_eq!(record.end_date, Some(end_date));
+
+        let all = load_all_character_suspensions(&conn).expect("load all");
+        assert_eq!(all.get(&id).map(|r| r.reason.clone()), Some(record.reason));
+        drop(conn);
+
+        // Unsuspend it.
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        unsuspend_character(id, &mut transaction).expect("unsuspend");
+        transaction.commit().expect("commit");
+
+        // Cleared: neither lookup nor the character list shows it anymore.
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_none()
+        );
+        let all = load_all_character_suspensions(&conn).expect("load all");
+        assert!(!all.contains_key(&id));
+        let list = load_character_list("uuid-suspend-roundtrip", &conn).expect("load list");
+        let entry = list.iter().find(|c| c.character.id == Some(id)).unwrap();
+        assert!(entry.suspended.is_none());
+    }
+
+    #[test]
+    fn a_re_suspend_replaces_rather_than_stacks() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-replace", "Repeato");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(id, "first reason", "op-1", now(), None, &mut transaction)
+            .expect("first suspend");
+        transaction.commit().expect("commit");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(id, "second reason", "op-2", now(), None, &mut transaction)
+            .expect("second suspend");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let record = get_character_suspension(id, &conn)
+            .expect("query")
+            .expect("still suspended");
+        assert_eq!(record.reason, "second reason");
+        assert_eq!(record.suspended_by_operator_uuid, "op-2");
+        assert_eq!(
+            load_all_character_suspensions(&conn)
+                .expect("load all")
+                .len(),
+            1,
+            "a re-suspend must replace the row, not add a second one"
+        );
+    }
+
+    #[test]
+    fn unsuspend_an_already_clear_character_is_not_an_error() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-idempotent", "Clearskies");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        unsuspend_character(id, &mut transaction).expect("unsuspend never-suspended character");
+        transaction.commit().expect("commit");
+    }
+
+    #[test]
+    fn character_owner_uuid_resolves_the_owning_account() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-owner", "Owned");
+
+        let conn = db.connection();
+        assert_eq!(
+            character_owner_uuid(id, &conn).expect("query"),
+            Some("uuid-suspend-owner".to_owned())
+        );
+        assert_eq!(
+            character_owner_uuid(CharacterId(id.0 + 1_000_000), &conn).expect("query"),
+            None
+        );
     }
 }

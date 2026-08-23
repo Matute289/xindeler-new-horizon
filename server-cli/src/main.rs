@@ -20,7 +20,8 @@ mod web;
 use crate::{
     cli::{
         Admin, ArgvApp, ArgvCommand, BenchParams, CharacterSummaryDto, LocationDto, Message,
-        MessageReturn, OracleEventsDto, OracleTarget, ServerInfoDto, SharedCommand, Shutdown,
+        MessageReturn, OracleEventsDto, OracleTarget, PlayerDto, ServerInfoDto, SharedCommand,
+        Shutdown, SuspensionDto,
     },
     settings::Settings,
     shutdown_coordinator::ShutdownCoordinator,
@@ -30,7 +31,7 @@ use crate::{
 use common::{
     character::CharacterId,
     clock::Clock,
-    comp::{ChatType, Player, Pos},
+    comp::{ChatType, Player, Pos, Presence},
     consts::MIN_RECOMMENDED_TOKIO_THREADS,
 };
 use common_base::span;
@@ -66,6 +67,30 @@ fn dmevent_id_from_path(path: &std::path::Path) -> Option<String> {
     name.strip_suffix(".dmevent.ron")
         .or_else(|| name.strip_suffix(".dmevent.json"))
         .map(str::to_owned)
+}
+
+/// Converts a resolved persistence-layer character summary into the
+/// wire-facing DTO, shared by `ListPlayerCharacters` and
+/// `AdminListPlayerCharacters` since both build the same shape from the same
+/// source.
+fn character_summary_dto(c: server::ResolvedCharacterSummary) -> CharacterSummaryDto {
+    CharacterSummaryDto {
+        character_id: c.character_id.0,
+        name: c.alias,
+        level: u32::from(c.level),
+        class: c.class,
+        location: c.location.map(|site| LocationDto {
+            site,
+            kingdom: None,
+            continent: None,
+        }),
+        suspended: c.suspended.map(|s| SuspensionDto {
+            reason: s.reason,
+            suspended_by_operator_uuid: s.suspended_by_operator_uuid,
+            suspended_at: s.suspended_at,
+            end_date: s.end_date,
+        }),
+    }
 }
 
 /// Parses the target/operator uuid strings carried by the admin HTTP `Message`
@@ -418,7 +443,7 @@ fn server_loop(
         }
 
         let mut handle_msg = |msg, response: tokio::sync::oneshot::Sender<MessageReturn>| {
-            use specs::{Join, WorldExt};
+            use specs::{Join, LendJoin, WorldExt};
             match msg {
                 Message::Shutdown {
                     command: Shutdown::Cancel,
@@ -458,12 +483,21 @@ fn server_loop(
                     server.disconnect_all_clients();
                 },
                 Message::ListPlayers => {
-                    let players: Vec<String> = server
-                        .state()
-                        .ecs()
-                        .read_storage::<Player>()
+                    let ecs = server.state().ecs();
+                    let players: Vec<PlayerDto> = (
+                        &ecs.read_storage::<Player>(),
+                        ecs.read_storage::<Pos>().maybe(),
+                        ecs.read_storage::<Presence>().maybe(),
+                    )
                         .join()
-                        .map(|p| p.alias.clone())
+                        .map(|(player, pos, presence)| PlayerDto {
+                            alias: player.alias.clone(),
+                            uuid: player.uuid(),
+                            position: pos.map(|p| [p.0.x, p.0.y, p.0.z]),
+                            character_id: presence
+                                .and_then(|p| p.kind.character_id())
+                                .map(|id| id.0),
+                        })
                         .collect();
                     let _ = response.send(MessageReturn::Players(players));
                 },
@@ -597,20 +631,8 @@ fn server_loop(
                 Message::ListPlayerCharacters { uuid } => {
                     match server.list_player_characters(&uuid) {
                         Ok(characters) => {
-                            let characters = characters
-                                .into_iter()
-                                .map(|c| CharacterSummaryDto {
-                                    character_id: c.character_id.0,
-                                    name: c.alias,
-                                    level: u32::from(c.level),
-                                    class: c.class,
-                                    location: c.location.map(|site| LocationDto {
-                                        site,
-                                        kingdom: None,
-                                        continent: None,
-                                    }),
-                                })
-                                .collect();
+                            let characters =
+                                characters.into_iter().map(character_summary_dto).collect();
                             let _ = response.send(MessageReturn::PlayerCharacters(characters));
                         },
                         Err(err) => {
@@ -706,20 +728,8 @@ fn server_loop(
                 Message::AdminListPlayerCharacters { uuid } => {
                     match server.list_player_characters(&uuid) {
                         Ok(characters) => {
-                            let characters = characters
-                                .into_iter()
-                                .map(|c| CharacterSummaryDto {
-                                    character_id: c.character_id.0,
-                                    name: c.alias,
-                                    level: u32::from(c.level),
-                                    class: c.class,
-                                    location: c.location.map(|site| LocationDto {
-                                        site,
-                                        kingdom: None,
-                                        continent: None,
-                                    }),
-                                })
-                                .collect();
+                            let characters =
+                                characters.into_iter().map(character_summary_dto).collect();
                             let _ = response.send(MessageReturn::PlayerCharacters(characters));
                         },
                         Err(err) => {
@@ -727,6 +737,54 @@ fn server_loop(
                             let _ = response.send(MessageReturn::Error(err.public_message()));
                         },
                     }
+                },
+                Message::AdminSuspendCharacter {
+                    target_uuid,
+                    character_id,
+                    operator_uuid,
+                    reason,
+                    duration_secs,
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => match server.admin_suspend_character(
+                        target_uuid,
+                        CharacterId(character_id),
+                        operator_uuid,
+                        reason,
+                        duration_secs,
+                    ) {
+                        Ok(()) => {
+                            let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                        },
+                        Err(err) => {
+                            error!(%err, "admin_suspend_character failed");
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
+                    },
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
+                    },
+                },
+                Message::AdminUnsuspendCharacter {
+                    target_uuid,
+                    character_id,
+                    operator_uuid,
+                } => match parse_admin_uuids(&target_uuid, &operator_uuid) {
+                    Ok((target_uuid, operator_uuid)) => match server.admin_unsuspend_character(
+                        target_uuid,
+                        CharacterId(character_id),
+                        operator_uuid,
+                    ) {
+                        Ok(()) => {
+                            let _ = response.send(MessageReturn::AdminActionOk { ban: None });
+                        },
+                        Err(err) => {
+                            error!(%err, "admin_unsuspend_character failed");
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
+                    },
+                    Err(err) => {
+                        let _ = response.send(MessageReturn::Error(err));
+                    },
                 },
             }
             false

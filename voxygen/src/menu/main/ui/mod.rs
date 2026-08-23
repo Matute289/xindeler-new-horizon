@@ -23,6 +23,7 @@ use i18n::{LanguageMetadata, LocalizationHandle};
 use iced::{Column, Container, HorizontalAlignment, Length, Row, Space, text_input};
 //ImageFrame, Tooltip,
 use crate::settings::Settings;
+use client::oauth::OAuthProvider;
 use common::assets::{AssetExt, Image, Ron};
 use rand::{rng, seq::IndexedRandom};
 use std::time::Duration;
@@ -176,6 +177,17 @@ pub enum Event {
     AuthServerTrust(String, bool),
     /// The player submitted a code on the 2FA prompt.
     TwoFaCodeSubmit(String),
+    /// The player pressed one of the provider buttons. Carries the server
+    /// address because the OAuth flow runs inside the normal connect attempt:
+    /// the auth server's address only becomes known from `ServerInfo` after
+    /// connecting, and it is the trust anchor the `authorize_url` is validated
+    /// against.
+    OAuthLoginAttempt {
+        provider: OAuthProvider,
+        server_address: String,
+    },
+    /// The player picked a username on the first-time-OAuth prompt.
+    OAuthUsernameSubmit(String),
     DeleteServer {
         server_index: usize,
     },
@@ -198,6 +210,19 @@ enum ConnectionState {
     /// be player-visible (spec: don't reveal remaining attempts).
     TwoFaPrompt {
         code: String,
+    },
+    /// A native OAuth attempt is waiting for the player to finish in their
+    /// browser. Cancelling is `Message::OAuthCancel`, which drops the whole
+    /// `ClientInit` -- there is no handle to keep here.
+    OAuthPending {
+        provider: OAuthProvider,
+    },
+    /// First OAuth sign-in with this provider: no linked account exists yet,
+    /// so the player picks a username. Minimal by design (spec §1) -- one
+    /// field, no email/password parity with the web registration screen.
+    OAuthUsernamePrompt {
+        username: String,
+        provider: OAuthProvider,
     },
 }
 
@@ -319,6 +344,12 @@ enum Message {
     TwoFaCodeChanged(String),
     TwoFaSubmit,
     TwoFaCancel,
+    OAuthLogin {
+        provider: OAuthProvider,
+    },
+    OAuthCancel,
+    OAuthUsernameChanged(String),
+    OAuthUsernameSubmit,
     CloseError,
     DeleteServer,
     /* Note: Keeping in case we re-add the disclaimer
@@ -654,6 +685,45 @@ impl Controls {
                 self.exit_connect_screen();
                 events.push(Event::CancelLoginAttempt);
             },
+            Message::OAuthLogin { provider } => {
+                self.screen = Screen::Connecting {
+                    screen: connecting::Screen::new(ui),
+                    connection_state: ConnectionState::InProgress,
+                    init_stage: DetailedInitializationStage::StartingMultiplayer,
+                };
+
+                events.push(Event::OAuthLoginAttempt {
+                    provider,
+                    server_address: self.login_info.server.trim().to_string(),
+                });
+            },
+            // Same "abandon the whole connect attempt" path `TwoFaCancel`
+            // uses: dropping `ClientInit` is what closes the loopback listener
+            // (spec §3.3).
+            Message::OAuthCancel => {
+                self.exit_connect_screen();
+                events.push(Event::CancelLoginAttempt);
+            },
+            Message::OAuthUsernameChanged(new_username) => {
+                if let Screen::Connecting {
+                    connection_state: ConnectionState::OAuthUsernamePrompt { username, .. },
+                    ..
+                } = &mut self.screen
+                {
+                    *username = new_username;
+                }
+            },
+            Message::OAuthUsernameSubmit => {
+                if let Screen::Connecting {
+                    connection_state, ..
+                } = &mut self.screen
+                    && let ConnectionState::OAuthUsernamePrompt { username, .. } = connection_state
+                    && !username.trim().is_empty()
+                {
+                    let username = std::mem::take(username);
+                    events.push(Event::OAuthUsernameSubmit(username.trim().to_owned()));
+                }
+            },
             Message::CloseError => {
                 if let Screen::Login { error, .. } = &mut self.screen {
                     *error = None;
@@ -721,6 +791,27 @@ impl Controls {
         {
             *connection_state = ConnectionState::TwoFaPrompt {
                 code: String::new(),
+            };
+        }
+    }
+
+    fn oauth_pending(&mut self, provider: OAuthProvider) {
+        if let Screen::Connecting {
+            connection_state, ..
+        } = &mut self.screen
+        {
+            *connection_state = ConnectionState::OAuthPending { provider };
+        }
+    }
+
+    fn oauth_username_prompt(&mut self, provider: OAuthProvider, suggested: String) {
+        if let Screen::Connecting {
+            connection_state, ..
+        } = &mut self.screen
+        {
+            *connection_state = ConnectionState::OAuthUsernamePrompt {
+                username: suggested,
+                provider,
             };
         }
     }
@@ -929,6 +1020,14 @@ impl MainMenuUi {
     }
 
     pub fn two_fa_prompt(&mut self) { self.controls.two_fa_prompt(); }
+
+    pub fn oauth_pending(&mut self, provider: OAuthProvider) {
+        self.controls.oauth_pending(provider);
+    }
+
+    pub fn oauth_username_prompt(&mut self, provider: OAuthProvider, suggested: String) {
+        self.controls.oauth_username_prompt(provider, suggested);
+    }
 
     pub fn show_info(&mut self, msg: String) { self.controls.connection_error(msg); }
 

@@ -2,6 +2,7 @@ use client::{
     Client, ClientInitStage, ServerInfo,
     addr::ConnectionArgs,
     error::{Error as ClientError, NetworkConnectError, NetworkError},
+    oauth::{OAuthLogin, OAuthProvider},
 };
 use common_net::msg::ClientType;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
@@ -34,6 +35,18 @@ pub enum Msg {
     /// background task is now blocked on `code_rx.recv()`, waiting for
     /// `ClientInit::submit_2fa_code`.
     TwoFaRequired,
+    /// A native OAuth attempt has opened the system browser and is now waiting
+    /// for the player to finish there. `provider` is only for the wording of
+    /// the waiting message.
+    OAuthPending {
+        provider: OAuthProvider,
+    },
+    /// The provider account isn't linked to any Xindeler account yet -- the
+    /// background task is blocked on `oauth_username_rx.recv()`, waiting for
+    /// `ClientInit::submit_oauth_username`.
+    OAuthUsernameRequired {
+        suggested: String,
+    },
     Done(Result<Client, Error>),
 }
 
@@ -47,6 +60,7 @@ pub struct ClientInit {
     stage_rx: Receiver<ClientInitStage>,
     trust_tx: Sender<AuthTrust>,
     code_tx: Sender<String>,
+    oauth_username_tx: Sender<String>,
     cancel: Arc<AtomicBool>,
 }
 impl ClientInit {
@@ -58,10 +72,12 @@ impl ClientInit {
         locale: Option<String>,
         config_dir: &Path,
         client_type: ClientType,
+        oauth: Option<OAuthProvider>,
     ) -> Self {
         let (tx, rx) = unbounded();
         let (trust_tx, trust_rx) = unbounded();
         let (code_tx, code_rx) = unbounded();
+        let (oauth_username_tx, oauth_username_rx) = unbounded();
         let (init_stage_tx, init_stage_rx) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel2 = Arc::clone(&cancel);
@@ -101,6 +117,29 @@ impl ClientInit {
                         code_rx.recv().ok()
                     }
                 };
+                // Rebuilt per attempt for the same reason `code_fn` is: the
+                // boxed closures must own their captures to be `Send +
+                // 'static` inside `spawn_blocking`. `cancel2` is the very
+                // `Arc<AtomicBool>` that `Drop for ClientInit` sets, so
+                // cancelling an OAuth attempt is the existing cancel-by-drop
+                // idiom with nothing new bolted on.
+                let oauth_login = oauth.map(|provider| {
+                    let opened_tx = tx.clone();
+                    let username_tx = tx.clone();
+                    let username_rx = oauth_username_rx.clone();
+                    let cancel3 = Arc::clone(&cancel2);
+                    OAuthLogin {
+                        provider,
+                        cancelled: Box::new(move || cancel3.load(Ordering::Relaxed)),
+                        on_browser_opened: Box::new(move || {
+                            let _ = opened_tx.send(Msg::OAuthPending { provider });
+                        }),
+                        pick_username: Box::new(move |suggested| {
+                            let _ = username_tx.send(Msg::OAuthUsernameRequired { suggested });
+                            username_rx.recv().ok()
+                        }),
+                    }
+                });
                 match Client::new(
                     connection_args.clone(),
                     Arc::clone(&runtime2),
@@ -110,6 +149,7 @@ impl ClientInit {
                     locale.clone(),
                     trust_fn,
                     code_fn,
+                    oauth_login,
                     &|stage| {
                         let _ = init_stage_tx.send(stage);
                     },
@@ -164,6 +204,7 @@ impl ClientInit {
             stage_rx: init_stage_rx,
             trust_tx,
             code_tx,
+            oauth_username_tx,
             cancel,
         }
     }
@@ -193,6 +234,14 @@ impl ClientInit {
     /// `ClientInit` (see `Drop`/`cancel`), which drops `code_tx` and
     /// unblocks the background task's `code_rx.recv()` with a clean `Err`.
     pub fn submit_2fa_code(&self, code: String) { let _ = self.code_tx.send(code); }
+
+    /// Answers a pending `Msg::OAuthUsernameRequired` with the username the
+    /// player chose. Like `submit_2fa_code`, there is no cancel-specific
+    /// method: cancelling drops this whole `ClientInit`, which drops
+    /// `oauth_username_tx` and unblocks the background task's `recv()`.
+    pub fn submit_oauth_username(&self, username: String) {
+        let _ = self.oauth_username_tx.send(username);
+    }
 
     pub fn cancel(&mut self) { self.cancel.store(true, Ordering::Relaxed); }
 }
