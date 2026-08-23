@@ -2,6 +2,7 @@
     clippy::needless_pass_by_ref_mut //until we find a better way for specs
 )]
 
+use chrono::{DateTime, Utc};
 use clap::{Parser, builder::ValueParser};
 use common::{comp, uuid::Uuid};
 use server::persistence::SqlLogMode;
@@ -200,6 +201,37 @@ pub enum Message {
     AdminListPlayerCharacters {
         uuid: String,
     },
+    /// Suspends `character_id` on behalf of `operator_uuid`, a registered
+    /// admin/moderator with no live in-game session of its own. Unlike
+    /// `AdminBanPlayer` (account-wide), this freezes one character only.
+    /// `target_uuid` must be the account that actually owns `character_id` --
+    /// this refuses the action rather than silently acting on whatever
+    /// account the character really belongs to, since a caller with a stale
+    /// or mismatched `target_uuid` almost certainly has the wrong page open,
+    /// not a deliberate cross-account request. `duration_secs` is required --
+    /// `0` means permanent (i.e. lasts until a manual unsuspend); there is
+    /// deliberately no way to omit it and get a permanent suspension by
+    /// accident.
+    AdminSuspendCharacter {
+        target_uuid: String,
+        character_id: i64,
+        #[arg(long)]
+        operator_uuid: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        duration_secs: u64,
+    },
+    /// Lifts a suspension on `character_id` on behalf of `operator_uuid`, a
+    /// registered admin/moderator with no live in-game session of its own.
+    /// Same `target_uuid`-must-own-`character_id` check as
+    /// `AdminSuspendCharacter`.
+    AdminUnsuspendCharacter {
+        target_uuid: String,
+        character_id: i64,
+        #[arg(long)]
+        operator_uuid: String,
+    },
 }
 
 /// Ids of every currently-loaded ORACLE asset. See `Message::OracleListEvents`.
@@ -250,6 +282,17 @@ pub struct PlayerDto {
     pub character_id: Option<i64>,
 }
 
+/// A character's current suspension, for ops tooling. See
+/// `Message::AdminSuspendCharacter`/`AdminUnsuspendCharacter`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SuspensionDto {
+    pub reason: String,
+    pub suspended_by_operator_uuid: String,
+    pub suspended_at: DateTime<Utc>,
+    /// `None` means permanent (i.e. lasts until a manual unsuspend).
+    pub end_date: Option<DateTime<Utc>>,
+}
+
 /// See `Message::ListPlayerCharacters`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CharacterSummaryDto {
@@ -257,8 +300,10 @@ pub struct CharacterSummaryDto {
     pub name: String,
     pub level: u32,
     pub class: String,
-    /// `None` if this character never sat at a waypoint (NH-79 spec §2.5).
+    /// `None` if this character never sat at a waypoint.
     pub location: Option<LocationDto>,
+    /// `Some(_)` if this character is currently suspended.
+    pub suspended: Option<SuspensionDto>,
 }
 
 #[derive(Debug, Clone)]

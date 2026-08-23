@@ -14,7 +14,9 @@ mod json_models;
 mod models;
 
 use crate::persistence::character_updater::PetPersistenceData;
+use chrono::{DateTime, Utc};
 use common::{character::CharacterId, comp};
+use hashbrown::HashMap;
 use refinery::Report;
 use rusqlite::{
     Connection, DropBehavior, OpenFlags,
@@ -223,6 +225,21 @@ pub struct CharacterSummary {
     pub class: String,
     pub level: u16,
     pub waypoint: Option<String>,
+    pub suspended: Option<SuspensionRecord>,
+}
+
+/// A character's suspension, as stored in the `character_suspensions` table
+/// and cached in the server's in-memory `CharacterSuspensions` resource.
+/// `end_date` of `None` means permanent (i.e. lasts until a manual
+/// unsuspend) -- never "the admin forgot to set one", since the admin
+/// surface requires an explicit `duration_secs` up front (`0` spells out
+/// permanent).
+#[derive(Debug, Clone)]
+pub struct SuspensionRecord {
+    pub reason: String,
+    pub suspended_by_operator_uuid: String,
+    pub suspended_at: DateTime<Utc>,
+    pub end_date: Option<DateTime<Utc>>,
 }
 
 /// NH-79: `xindeler-web-landing`'s player-characters endpoint reads
@@ -255,6 +272,89 @@ pub fn rename_character(
     character::rename_character(uuid, character_id, new_alias, &mut transaction)?;
     transaction.commit()?;
     Ok(())
+}
+
+/// Suspends `character_id`, replacing any existing suspension on it (a
+/// re-suspend overwrites, it does not stack). Opens its own short-lived,
+/// read-write connection -- unreachable through `CharacterUpdater`'s
+/// background channel since the target character's owning player may not be
+/// connected right now.
+pub fn suspend_character(
+    character_id: CharacterId,
+    reason: &str,
+    suspended_by_operator_uuid: &str,
+    suspended_at: DateTime<Utc>,
+    end_date: Option<DateTime<Utc>>,
+    settings: &DatabaseSettings,
+) -> Result<(), error::PersistenceError> {
+    let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    let mut transaction = connection.connection.transaction()?;
+    transaction.set_drop_behavior(DropBehavior::Rollback);
+    character::suspend_character(
+        character_id,
+        reason,
+        suspended_by_operator_uuid,
+        suspended_at,
+        end_date,
+        &mut transaction,
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Lifts any suspension on `character_id`. Idempotent -- deleting a row that
+/// doesn't exist is not an error, same as `Banlist::ban_operation`'s unban
+/// side (except that one distinguishes "no effect" for the caller; this one
+/// doesn't need to, since re-unsuspending an already-clear character has no
+/// meaningfully different outcome to report).
+pub fn unsuspend_character(
+    character_id: CharacterId,
+    settings: &DatabaseSettings,
+) -> Result<(), error::PersistenceError> {
+    let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    let mut transaction = connection.connection.transaction()?;
+    transaction.set_drop_behavior(DropBehavior::Rollback);
+    character::unsuspend_character(character_id, &mut transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// The current suspension row for `character_id`, if any, read straight from
+/// the database rather than the in-memory cache. The server's live
+/// enforcement path (character selection) never calls this -- it reads the
+/// in-memory `CharacterSuspensions` resource instead, since a DB round-trip
+/// on every character-select attempt would be needless latency for something
+/// already cached. This exists for callers without ECS access, or that want
+/// a ground-truth read independent of the cache.
+pub fn get_character_suspension(
+    character_id: CharacterId,
+    settings: &DatabaseSettings,
+) -> Result<Option<SuspensionRecord>, error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    character::get_character_suspension(character_id, &connection)
+}
+
+/// Every currently-suspended character, for `CharacterSuspensions::load` at
+/// server startup -- the one time the in-memory cache is built from the
+/// database rather than kept in sync incrementally.
+pub fn load_all_character_suspensions(
+    settings: &DatabaseSettings,
+) -> Result<HashMap<CharacterId, SuspensionRecord>, error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    character::load_all_character_suspensions(&connection)
+}
+
+/// Resolves the account uuid that owns `character_id`. Suspension is
+/// character-scoped, but `role_outranks` (the same operator-must-outrank-
+/// target check `admin_ban_player`/`admin_unban_player` already apply) is
+/// still an account-level concept, so the admin command needs this lookup to
+/// find the account behind a bare character id.
+pub fn character_owner_uuid(
+    character_id: CharacterId,
+    settings: &DatabaseSettings,
+) -> Result<Option<String>, error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    character::character_owner_uuid(character_id, &connection)
 }
 
 // This callback uses info logging because it is never enabled by default,
