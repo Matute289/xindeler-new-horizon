@@ -13,6 +13,21 @@ use tracing::{error, warn};
 /// Jobs run here, will reduce the ammount of threads rayon can use during the
 /// main tick.
 ///
+/// ## The one accepted I/O exception
+/// `CHRONICLE_LOG` (`server::oracle::trigger`) does block on disk: it commits
+/// a single ORACLE narrative rumor to SQLite. It is allowed here because it is
+/// rare (only fires when an operator triggers a `DmEvent` that carries a
+/// `world_rumor`), configured with concurrency 1 so at most one such job ever
+/// occupies a thread, and bounded (one short row, plus a prune of the same
+/// small table). Note that the pool does not drain outstanding jobs when
+/// dropped, so that job tracks its own in-flight writes to wait on at
+/// shutdown; a new I/O job would need the same treatment.
+///
+/// Treat that as the exception, not the precedent: a job that blocks for
+/// longer, fires per-tick, or scales its I/O with world size still belongs on
+/// its own thread (the way `CharacterUpdater` does), not here, since occupying
+/// a pool thread on I/O starves the CPU work this pool exists to run.
+///
 /// ## Configuration
 /// This Pool allows you to configure certain names of jobs and assign them a
 /// maximum number of threads # Example

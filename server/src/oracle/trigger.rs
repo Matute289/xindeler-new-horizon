@@ -47,7 +47,7 @@ use std::sync::{Arc, RwLock};
 use tracing::error;
 use vek::Vec3;
 
-use super::{ChronicleLog, OracleWatcher, factory, spawned};
+use super::{ChronicleLog, ChronicleWrites, OracleWatcher, factory, spawned};
 
 /// What a caller wants `trigger_dm_event` to do when the requested spawn
 /// would push the live count over [`MAX_LIVE_ORACLE_ENTITIES`]. Never
@@ -245,25 +245,54 @@ pub fn trigger_dm_event(
 /// part of an ECS system during the tick, so the write must never happen
 /// here: enqueueing onto the [`SlowJobPool`] is a cheap mutex-guarded push
 /// that touches no disk, and the actual connection/transaction happens on a
-/// pool thread. The job name is configured with concurrency 1, so appends
-/// stay ordered relative to one another.
+/// pool thread.
 ///
-/// A failed write is logged and dropped rather than propagated: the in-memory
-/// push already succeeded, the caller's trigger genuinely happened, and the
-/// only consequence is that this one rumor won't survive the next restart --
-/// not something worth failing an operator's trigger over, and certainly not
-/// worth unwinding a job-pool worker thread.
+/// **This is write-behind, and deliberately weaker than the write-through
+/// convention `CharacterSuspensions` uses.** There, the database write
+/// happens first and the in-memory cache is only updated once it succeeds, so
+/// the two can never disagree. Here the in-memory push has already happened,
+/// synchronously, by the time this is called; the database write is
+/// asynchronous and may fail or be dropped on its own. So a rumor can exist
+/// in the live [`ChronicleLog`] and never reach the table -- it would then
+/// vanish at the next restart. That is acceptable for a narrative log in a
+/// way it would not be for moderation state, but a caller must not read the
+/// two as equivalent guarantees.
+///
+/// A failed write is therefore logged and dropped rather than propagated: the
+/// caller's trigger genuinely happened, and the only consequence is one lost
+/// rumor -- not something worth failing an operator's trigger over, and
+/// certainly not worth unwinding a job-pool worker thread.
+///
+/// Ordering: the job name is configured with concurrency 1, so the writes
+/// themselves never overlap. That the *enqueue* order matches the in-memory
+/// push order additionally relies on every current caller reaching here from
+/// the same thread (the chat-command dispatch and `Message::OracleTrigger`
+/// both funnel through the server's single-threaded tick). Nothing enforces
+/// that; a future genuinely concurrent caller would need its own ordering
+/// story, since concurrency 1 alone only serializes the writes, it does not
+/// decide which of two racing callers queued first.
 fn persist_chronicle_entry(ecs: &World, rumor: &str) {
     let settings = {
         let settings = ecs.read_resource::<Arc<RwLock<DatabaseSettings>>>();
         Arc::clone(&settings)
     };
+    // Registered before the spawn, so a shutdown that begins between here and
+    // the job actually running still sees this write as outstanding.
+    let in_flight = ecs.read_resource::<ChronicleWrites>().begin();
     let text = rumor.to_owned();
     let created_at = Utc::now();
 
     ecs.read_resource::<SlowJobPool>()
         .spawn("CHRONICLE_LOG", move || {
+            // Dropped on every exit path below, so the shutdown drain can
+            // never be left waiting on a write that already gave up.
+            let _in_flight = in_flight;
             let settings = match settings.read() {
+                // Unlike every other `DatabaseSettings` call site, this one
+                // does not `.expect()` on a poisoned lock: the release profile
+                // is `panic = "abort"`, so panicking here -- on a background
+                // job-pool thread, over a narrative log -- would take the
+                // whole server process down rather than just this one write.
                 Ok(settings) => settings,
                 Err(_) => {
                     error!("DatabaseSettings RwLock was poisoned; chronicle entry not persisted");
@@ -757,6 +786,7 @@ mod trigger_dm_event_tests {
 
         world.insert(pool);
         world.insert(Arc::new(RwLock::new(settings.clone())));
+        world.insert(ChronicleWrites::default());
 
         (world, event_dir, db_dir, settings)
     }
@@ -785,18 +815,25 @@ mod trigger_dm_event_tests {
             "the in-memory push is synchronous and must have already happened"
         );
 
-        // The database write is deliberately off the tick thread, so it lands
-        // whenever the job pool gets to it.
-        let persisted = wait_until(
-            || {
-                persistence::load_chronicle_log_tail(&settings)
-                    .expect("load")
-                    .front()
-                    .is_some_and(|text| text == "A cold mist swallows the village.")
-            },
-            Duration::from_secs(5),
+        // The database write is deliberately off the tick thread. Draining it
+        // the same way the server's shutdown path does, rather than polling
+        // the table, is what proves that path actually covers this write --
+        // if the job were never registered as in-flight, this would return
+        // instantly and the assert below would catch the empty table.
+        assert!(
+            world
+                .read_resource::<ChronicleWrites>()
+                .wait_until_idle(Duration::from_secs(5)),
+            "the queued chronicle write never drained"
         );
-        assert!(persisted, "the rumor never reached the chronicle_log table");
+        assert_eq!(
+            persistence::load_chronicle_log_tail(&settings)
+                .expect("load")
+                .front()
+                .map(String::as_str),
+            Some("A cold mist swallows the village."),
+            "the rumor never reached the chronicle_log table"
+        );
     }
 
     #[test]

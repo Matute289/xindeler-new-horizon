@@ -498,6 +498,10 @@ impl Server {
                 .read()
                 .expect("DatabaseSettings RwLock was poisoned"),
         ));
+        // Lets shutdown wait for chronicle writes still queued on the slow-job
+        // pool; without it a rumor triggered just before a restart could be
+        // dropped unwritten, which is the exact case persisting it addresses.
+        state.ecs_mut().insert(oracle::ChronicleWrites::default());
         state
             .ecs_mut()
             .insert(oracle::OracleEventsEnabled::default());
