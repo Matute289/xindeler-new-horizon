@@ -469,6 +469,10 @@ impl Server {
         }
         {
             let pool = state.ecs_mut().write_resource::<SlowJobPool>();
+            // Concurrency 1: chronicle writes stay strictly serialized, so the
+            // `chronicle_log` table's insertion order (and therefore its
+            // AUTOINCREMENT ids) can never disagree with `created_at` order.
+            pool.configure("CHRONICLE_LOG", |_| 1);
             pool.configure("CHUNK_DROP", |_n| 1);
             pool.configure("CHUNK_GENERATOR", |n| n / 2 + n / 4);
             pool.configure("CHUNK_SERIALIZER", |n| n / 2);
@@ -481,7 +485,19 @@ impl Server {
         state.ecs_mut().insert(oracle::OracleWatcher::new(
             &oracle::watcher::default_events_dir(),
         ));
-        state.ecs_mut().insert(oracle::ChronicleLog::default());
+        // `CharacterUpdater`/`CharacterLoader` below each keep their own clone
+        // from construction and never re-fetch, so nothing had put the
+        // database settings in the ECS before now. The chronicle's write path
+        // needs them from a plain `&specs::World` (`oracle::trigger`), hence
+        // this registration.
+        state
+            .ecs_mut()
+            .insert(Arc::<RwLock<DatabaseSettings>>::clone(&database_settings));
+        state.ecs_mut().insert(oracle::ChronicleLog::load(
+            &database_settings
+                .read()
+                .expect("DatabaseSettings RwLock was poisoned"),
+        ));
         state
             .ecs_mut()
             .insert(oracle::OracleEventsEnabled::default());
