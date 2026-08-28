@@ -172,6 +172,7 @@ pub enum Interface {
     ToggleChat(bool),
     ToggleDraggableWindows(bool),
     ToggleTips(bool),
+    ToggleBiomeChangePopups(bool),
 
     CrosshairTransp(f32),
     CrosshairType(CrosshairType),
@@ -777,6 +778,9 @@ impl SettingsChange {
                     },
                     Interface::ToggleTips(loading_tips) => {
                         settings.interface.loading_tips = loading_tips;
+                    },
+                    Interface::ToggleBiomeChangePopups(toggle_biome_change_popups) => {
+                        settings.interface.toggle_biome_change_popups = toggle_biome_change_popups;
                     },
                     Interface::CrosshairTransp(crosshair_opacity) => {
                         settings.interface.crosshair_opacity = crosshair_opacity;
