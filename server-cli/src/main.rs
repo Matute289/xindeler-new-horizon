@@ -519,10 +519,20 @@ fn server_loop(
                 },
                 Message::ServerInfo => {
                     let player_count = server.state().ecs().read_storage::<Player>().join().count();
+                    let entity_count = server
+                        .state()
+                        .ecs()
+                        .read_resource::<server::metrics::TickMetrics>()
+                        .entity_count
+                        .get() as usize;
                     let info = ServerInfoDto {
                         version: common::util::DISPLAY_VERSION.clone(),
                         player_count,
                         shutdown_pending_secs: shutdown_coordinator.pending_shutdown_secs(),
+                        entity_count,
+                        tick_time_ms: server.last_tick_time().as_millis() as u64,
+                        uptime_secs: server.uptime().as_secs(),
+                        shutdown_reason: shutdown_coordinator.shutdown_reason().map(str::to_owned),
                     };
                     let _ = response.send(MessageReturn::Info(info));
                 },
