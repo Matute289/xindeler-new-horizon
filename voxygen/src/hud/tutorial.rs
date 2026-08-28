@@ -2,6 +2,7 @@ use crate::{
     GlobalState, Settings,
     hud::controller_icons as icon_utils,
     session::interactable::{EntityInteraction, Interactable},
+    settings::{Button as ControllerButton, controller::LayerEntry},
     ui::{ImageFrame, RichText, Tooltip, TooltipManager, Tooltipable, fonts::Fonts},
     window::{ControllerType, KeyMouse, LastInput},
 };
@@ -732,6 +733,87 @@ widget_ids! {
     }
 }
 
+/// The most actions any single [`HintContext`] advertises.
+const MAX_DYN_HINTS: usize = 3;
+
+/// Which set of contextual action hints applies to what the player is doing
+/// right now.
+///
+/// Deriving this is cheap — three component/resource reads. Turning it into
+/// drawable text is not: each line costs at least two heap allocations, and one
+/// of the two input-label paths builds a `Vec` and several intermediate
+/// `String`s of its own. Since this widget renders on every frame of normal
+/// gameplay (it replaced the always-on corner button bar), the context doubles
+/// as part of [`HintCache`]'s key so the text is only rebuilt when it can
+/// actually have changed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HintContext {
+    Climbing,
+    Swimming,
+    Wielding,
+    Night,
+    Day,
+}
+
+impl HintContext {
+    /// The actions this context advertises: the input whose key or controller
+    /// glyph is drawn, paired with the i18n key naming what it does. Order is
+    /// the render order, bottom-up.
+    fn actions(self) -> &'static [(GameInput, &'static str)] {
+        match self {
+            HintContext::Climbing => &[
+                (GameInput::WallJump, "gameinput-walljump"),
+                (GameInput::CancelClimb, "hud-context-menu-drop"),
+            ],
+            HintContext::Swimming => &[
+                (GameInput::SwimDown, "gameinput-swimdown"),
+                (GameInput::SwimUp, "gameinput-swimup"),
+            ],
+            HintContext::Wielding => &[
+                (GameInput::ToggleWield, "gameinput-togglewield"),
+                (GameInput::Block, "gameinput-block"),
+                (GameInput::Roll, "gameinput-roll"),
+            ],
+            HintContext::Night => &[
+                (GameInput::Glide, "gameinput-glide"),
+                (GameInput::Sneak, "gameinput-sneak"),
+                (GameInput::ToggleLantern, "common-kind-lantern"),
+            ],
+            HintContext::Day => &[
+                (GameInput::Glide, "gameinput-glide"),
+                (GameInput::Sneak, "gameinput-sneak"),
+            ],
+        }
+    }
+}
+
+/// The binding behind one hint's label, in whichever form the currently active
+/// input device resolves it. Comparing these is how the cache decides a rebuild
+/// is needed without formatting anything: every lookup here is a hash-map read
+/// returning `Copy` data (or, for keyboard, a `KeyMouse` whose only owned field
+/// is a short inline string).
+#[derive(Clone, PartialEq)]
+enum HintBinding {
+    Key(Option<KeyMouse>),
+    Controller {
+        layer: Option<LayerEntry>,
+        button: Option<ControllerButton>,
+    },
+}
+
+/// The rendered hint lines plus every input they were derived from. None of
+/// these inputs changes per frame — the character state moves between contexts
+/// occasionally, the rest only when the player edits settings — so in the
+/// steady state this widget allocates nothing.
+struct HintCache {
+    context: HintContext,
+    last_input: LastInput,
+    controller_type: ControllerType,
+    bindings: [Option<HintBinding>; MAX_DYN_HINTS],
+    language: String,
+    lines: Vec<String>,
+}
+
 #[derive(WidgetCommon)]
 pub struct DynamicTutorial<'a> {
     global_state: &'a GlobalState,
@@ -745,6 +827,7 @@ pub struct DynamicTutorial<'a> {
 
 pub struct DynTutorialState {
     ids: DynTutorialIds,
+    cache: Option<HintCache>,
 }
 
 impl<'a> DynamicTutorial<'a> {
@@ -774,6 +857,7 @@ impl Widget for DynamicTutorial<'_> {
     fn init_state(&self, id_gen: widget::id::Generator) -> Self::State {
         DynTutorialState {
             ids: DynTutorialIds::new(id_gen),
+            cache: None,
         }
     }
 
@@ -783,7 +867,6 @@ impl Widget for DynamicTutorial<'_> {
         common_base::prof_span!("DynamicTutorial::update");
         let widget::UpdateArgs { state, ui, .. } = args;
         let i18n = &self.localized_strings;
-        let mut action_txt: Vec<String> = Vec::new();
 
         // Fetch the GameInput
         let get_input_str = |input: GameInput| -> String {
@@ -819,52 +902,18 @@ impl Widget for DynamicTutorial<'_> {
                 (matches!(cs, comp::CharacterState::Climb(_)), cs.is_wield())
             });
 
-        // Fetch action text based on current state
-        if is_climbing {
-            // Climbing actions
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::WallJump),
-                i18n.get_msg("gameinput-walljump")
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::CancelClimb),
-                i18n.get_msg("hud-context-menu-drop")
-            ));
+        // Which hints apply. The branches are ordered by priority, and the
+        // `PhysicsState`/`TimeOfDay` reads stay behind the cheaper checks.
+        let context = if is_climbing {
+            HintContext::Climbing
         } else if self
             .client
             .current::<comp::PhysicsState>()
-            .map_or(false, |ps| ps.in_liquid().is_some())
+            .is_some_and(|ps| ps.in_liquid().is_some())
         {
-            // Swimming actions
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::SwimDown),
-                i18n.get_msg("gameinput-swimdown")
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::SwimUp),
-                i18n.get_msg("gameinput-swimup")
-            ));
+            HintContext::Swimming
         } else if is_wielding {
-            // Combat actions
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::ToggleWield),
-                i18n.get_msg("gameinput-togglewield"),
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::Block),
-                i18n.get_msg("gameinput-block")
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::Roll),
-                i18n.get_msg("gameinput-roll")
-            ));
+            HintContext::Wielding
         } else if self
             .client
             .state()
@@ -873,45 +922,76 @@ impl Widget for DynamicTutorial<'_> {
             .day_period()
             .is_dark()
         {
-            // Generic actions (night)
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::Glide),
-                i18n.get_msg("gameinput-glide"),
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::Sneak),
-                i18n.get_msg("gameinput-sneak"),
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::ToggleLantern),
-                i18n.get_msg("common-kind-lantern"),
-            ));
+            HintContext::Night
         } else {
-            // Generic actions (day)
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::Glide),
-                i18n.get_msg("gameinput-glide"),
-            ));
-            action_txt.push(format!(
-                "{} {}",
-                get_input_str(GameInput::Sneak),
-                i18n.get_msg("gameinput-sneak"),
-            ));
+            HintContext::Day
+        };
+
+        let actions = context.actions();
+        let last_input = self.global_state.window.last_input();
+        let controller_type = self.global_state.window.controller_type();
+        let language = &i18n.metadata().language_identifier;
+
+        // Snapshot the bindings the hints would render. Allocation-free, unlike
+        // rendering them.
+        let mut bindings: [Option<HintBinding>; MAX_DYN_HINTS] = Default::default();
+        for (slot, (input, _)) in bindings.iter_mut().zip(actions) {
+            *slot = Some(match last_input {
+                LastInput::Controller => HintBinding::Controller {
+                    layer: self
+                        .global_state
+                        .settings
+                        .controller
+                        .get_layer_button_binding(*input),
+                    button: self
+                        .global_state
+                        .settings
+                        .controller
+                        .get_game_button_binding(*input),
+                },
+                LastInput::Keyboard | LastInput::Mouse => {
+                    HintBinding::Key(self.global_state.settings.controls.get_binding(*input))
+                },
+            });
         }
 
-        // Widget IDs
-        state.update(|s| {
-            s.ids
-                .txt_ids
-                .resize(action_txt.len(), &mut ui.widget_id_generator());
-            s.ids
-                .dropshadow_txt_ids
-                .resize(action_txt.len(), &mut ui.widget_id_generator());
+        let stale = state.cache.as_ref().is_none_or(|cache| {
+            cache.context != context
+                || cache.last_input != last_input
+                || cache.controller_type != controller_type
+                || cache.bindings != bindings
+                || &cache.language != language
         });
+
+        if stale {
+            let lines = actions
+                .iter()
+                .map(|(input, action_key)| {
+                    format!("{} {}", get_input_str(*input), i18n.get_msg(action_key))
+                })
+                .collect::<Vec<_>>();
+
+            state.update(|s| {
+                s.ids
+                    .txt_ids
+                    .resize(lines.len(), &mut ui.widget_id_generator());
+                s.ids
+                    .dropshadow_txt_ids
+                    .resize(lines.len(), &mut ui.widget_id_generator());
+                s.cache = Some(HintCache {
+                    context,
+                    last_input,
+                    controller_type,
+                    bindings,
+                    language: language.clone(),
+                    lines,
+                });
+            });
+        }
+
+        let Some(action_txt) = state.cache.as_ref().map(|cache| &cache.lines) else {
+            return;
+        };
 
         // Place text widgets
         for (i, text) in action_txt.iter().enumerate() {

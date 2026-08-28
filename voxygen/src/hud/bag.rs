@@ -1844,6 +1844,13 @@ pub struct GearMenu<'a> {
 impl<'a> GearMenu<'a> {
     /// Displays an entities equipped gear, while showing their stats (and gear
     /// inventory as well if viewed as a bag tab)
+    ///
+    /// Note: this deliberately carries no
+    /// `#[expect(clippy::too_many_arguments)]` — at 14 parameters it sits
+    /// just under this workspace's `too-many-arguments-threshold` of 15, so
+    /// the attribute would fail as an unfulfilled lint expectation. Adding
+    /// a 15th parameter re-trips the lint; put the attribute back if that
+    /// happens.
     pub fn new(
         tab_package: &'a TabPackage,
         inventory: &'a Inventory,
