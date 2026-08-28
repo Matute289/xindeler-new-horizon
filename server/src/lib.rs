@@ -275,6 +275,11 @@ pub struct Server {
     disconnect_all_clients_requested: bool,
 
     event_dispatcher: SendDispatcher<'static>,
+
+    started_at: Instant,
+    /// Wall-clock duration of the most recently completed tick.
+    /// `Duration::ZERO` until the first tick finishes.
+    last_tick_time: Duration,
 }
 
 impl Server {
@@ -784,6 +789,9 @@ impl Server {
             disconnect_all_clients_requested: false,
 
             event_dispatcher: Self::create_event_dispatcher(pools),
+
+            started_at: Instant::now(),
+            last_tick_time: Duration::ZERO,
         };
 
         debug!(?settings, "created veloren server with");
@@ -798,6 +806,16 @@ impl Server {
 
         Ok(this)
     }
+
+    /// How long this `Server` has been running for. Used by
+    /// `Message::ServerInfo`'s handler; kept as a plain `Instant` rather than
+    /// read back out of the `veloren_start_time` Prometheus gauge, which
+    /// isn't meant to be queried from application code.
+    pub fn uptime(&self) -> Duration { self.started_at.elapsed() }
+
+    /// Wall-clock duration of the most recently completed tick.
+    /// `Duration::ZERO` until the first tick finishes.
+    pub fn last_tick_time(&self) -> Duration { self.last_tick_time }
 
     pub fn get_server_info(&self) -> ServerInfo {
         let settings = self.state.ecs().fetch::<Settings>();
@@ -1431,6 +1449,7 @@ impl Server {
                     .as_secs_f64(),
             );
         }
+        self.last_tick_time = end_of_server_tick.duration_since(before_state_tick);
 
         // 9) Finish the tick, pass control back to the frontend.
 
