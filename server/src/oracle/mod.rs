@@ -12,7 +12,7 @@ pub mod spawned;
 pub mod trigger;
 pub mod watcher;
 
-pub use chronicle::ChronicleLog;
+pub use chronicle::{ChronicleLog, ChronicleWrites};
 pub use policy::{OracleEventsEnabled, OracleTriggerLedger};
 pub use spawned::OracleSpawned;
 pub use watcher::{OracleAsset, OracleEvents, OracleWatcher};

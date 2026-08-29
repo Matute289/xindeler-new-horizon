@@ -151,6 +151,15 @@ impl ShutdownCoordinator {
             .map(|d| d.as_secs_f64().round() as u64)
     }
 
+    /// The message a pending graceful shutdown was initiated with, or `None`
+    /// if no shutdown is currently in progress. Public read-only view of
+    /// `shutdown_message`, mirroring `pending_shutdown_secs` above.
+    pub fn shutdown_reason(&self) -> Option<&str> {
+        self.shutdown_initiated_at
+            .is_some()
+            .then_some(self.shutdown_message.as_str())
+    }
+
     /// Calculates the remaining time before the shutdown grace period expires
     fn time_until_shutdown(&self) -> Option<Duration> {
         let shutdown_initiated_at = self.shutdown_initiated_at?;

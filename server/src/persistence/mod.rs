@@ -8,6 +8,7 @@ pub(in crate::persistence) mod character;
 pub(crate) use character::convert_waypoint_from_database_json as parse_waypoint;
 pub mod character_loader;
 pub mod character_updater;
+pub(in crate::persistence) mod chronicle;
 mod diesel_to_rusqlite;
 pub mod error;
 mod json_models;
@@ -23,6 +24,7 @@ use rusqlite::{
     trace::{TraceEvent, TraceEventCodes},
 };
 use std::{
+    collections::VecDeque,
     fs,
     ops::Deref,
     path::PathBuf,
@@ -355,6 +357,44 @@ pub fn character_owner_uuid(
 ) -> Result<Option<String>, error::PersistenceError> {
     let connection = establish_connection(settings, ConnectionMode::ReadOnly);
     character::character_owner_uuid(character_id, &connection)
+}
+
+/// Persists one ORACLE chronicle entry, pruning the table back to
+/// [`crate::oracle::chronicle::bounds::MAX_ENTRIES`] in the same transaction
+/// so the durable window always mirrors the in-memory one.
+///
+/// Opens its own short-lived, read-write connection rather than going through
+/// `CharacterUpdater`'s background channel: that channel is sized for
+/// frequent, batched, per-character writes keyed to entities, which is the
+/// wrong shape for a rare, single-string, no-response-needed append. This
+/// blocks on disk I/O, so it must only ever be called off the ECS tick thread
+/// -- in the server that means from inside the "CHRONICLE_LOG" slow-job.
+pub fn append_chronicle_entry(
+    text: &str,
+    created_at: DateTime<Utc>,
+    settings: &DatabaseSettings,
+) -> Result<(), error::PersistenceError> {
+    let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    let mut transaction = connection.connection.transaction()?;
+    transaction.set_drop_behavior(DropBehavior::Rollback);
+    chronicle::insert_and_prune_chronicle_entry(
+        text,
+        created_at,
+        crate::oracle::chronicle::bounds::MAX_ENTRIES,
+        &mut transaction,
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// The persisted chronicle entries, oldest-first, for `ChronicleLog::load` at
+/// server startup -- the one time the in-memory log is built from the database
+/// rather than appended to incrementally.
+pub fn load_chronicle_log_tail(
+    settings: &DatabaseSettings,
+) -> Result<VecDeque<String>, error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    chronicle::load_chronicle_tail(crate::oracle::chronicle::bounds::MAX_ENTRIES, &connection)
 }
 
 // This callback uses info logging because it is never enabled by default,

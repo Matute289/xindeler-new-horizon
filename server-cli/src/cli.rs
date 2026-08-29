@@ -241,8 +241,11 @@ pub struct OracleEventsDto {
     pub entity_templates: Vec<String>,
 }
 
-/// The subset of server status not already exported via `/metrics`. See
-/// `Message::ServerInfo`.
+/// Server status for ops consumers that can't scrape Prometheus (e.g. an
+/// admin console talking through `xindeler-zuul`). Some fields (`entity_count`,
+/// `tick_time_ms`) mirror gauges already on `/metrics`; others
+/// (`shutdown_pending_secs`, `uptime_secs`, `shutdown_reason`) exist only
+/// here. See `Message::ServerInfo`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ServerInfoDto {
     pub version: String,
@@ -250,6 +253,17 @@ pub struct ServerInfoDto {
     /// `Some(seconds)` while a graceful shutdown countdown is in progress
     /// (see `ShutdownCoordinator`); `None` otherwise.
     pub shutdown_pending_secs: Option<u64>,
+    /// Number of ECS entities currently active on the server. Mirrors the
+    /// `entity_count` Prometheus gauge (`TickMetrics::entity_count`).
+    pub entity_count: usize,
+    /// Wall-clock duration of the most recently completed tick, in
+    /// milliseconds.
+    pub tick_time_ms: u64,
+    /// Seconds since this server process started.
+    pub uptime_secs: u64,
+    /// The message a pending graceful shutdown was initiated with, or `None`
+    /// if no shutdown is currently in progress.
+    pub shutdown_reason: Option<String>,
 }
 
 /// A character's resolved location. Only `site` resolves against real data

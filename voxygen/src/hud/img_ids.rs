@@ -174,9 +174,9 @@ image_ids! {
         pvp_on: "voxygen.element.ui.social.pvp_on",
         pvp_off: "voxygen.element.ui.social.pvp_off",
 
-        map_button: "voxygen.element.ui.generic.buttons.map",
-        map_hover: "voxygen.element.ui.generic.buttons.map_hover",
-        map_press: "voxygen.element.ui.generic.buttons.map_press",
+        map_button: "voxygen.element.ui.generic.buttons.map", // unused
+        map_hover: "voxygen.element.ui.generic.buttons.map_hover", // unused
+        map_press: "voxygen.element.ui.generic.buttons.map_press", // unused
 
         spellbook_button: "voxygen.element.ui.generic.buttons.spellbook",
         spellbook_hover: "voxygen.element.ui.generic.buttons.spellbook_hover", // unused
@@ -573,7 +573,7 @@ image_ids! {
         m2_ico: "voxygen.element.ui.generic.icons.m2",
         m_scroll_ico: "voxygen.element.ui.generic.icons.m_scroll",
         m_move_ico: "voxygen.element.ui.generic.icons.m_move",
-        m_click_ico: "voxygen.element.ui.generic.icons.m_click", // unused
+        m_click_ico: "voxygen.element.ui.generic.icons.m_click",
         skillbar_slot: "voxygen.element.ui.skillbar.slot",
         bag_ico: "voxygen.element.ui.generic.buttons.bag",
         skillbar_index: "voxygen.element.ui.generic.buttons.hotbar_index",
@@ -749,6 +749,10 @@ image_ids! {
         disable_bell_btn: "voxygen.element.ui.generic.buttons.disable_bell_btn",
 
         // Inventory
+        bag_tab: "voxygen.element.ui.bag.icons.bag_tab",
+        bag_tab_press: "voxygen.element.ui.bag.icons.bag_tab_press",
+        gear_tab: "voxygen.element.ui.bag.icons.character",
+        gear_tab_press: "voxygen.element.ui.bag.icons.character_press",
         grid_btn: "voxygen.element.ui.bag.buttons.inv_grid",
         grid_btn_hover: "voxygen.element.ui.bag.buttons.inv_grid_hover",
         grid_btn_press: "voxygen.element.ui.bag.buttons.inv_grid_press",
@@ -779,7 +783,6 @@ image_ids! {
         player_inv_bg_bag: "voxygen.element.ui.bag.player_inv_bg_bag",
         inv_middle_bg_bag: "voxygen.element.ui.bag.inv_middle_bg_bag",
         inv_middle_frame: "voxygen.element.ui.bag.inv_middle_frame",
-        char_art: "voxygen.element.ui.bag.icons.character",
         inv_slot: "voxygen.element.ui.bag.buttons.inv_slot",
         inv_slot_grey: "voxygen.element.ui.bag.buttons.inv_slot_grey",
         inv_slot_common: "voxygen.element.ui.bag.buttons.inv_slot_common",
@@ -793,10 +796,6 @@ image_ids! {
         scrollbar_bg: "voxygen.element.ui.generic.slider.scrollbar",
         scrollbar_bg_big: "voxygen.element.ui.generic.slider.scrollbar_1",
         second_phase_scrollbar_bg: "voxygen.element.ui.bag.second_phase_scrollbar_bg",
-        inv_tab_active: "voxygen.element.ui.bag.buttons.inv_tab_active", // unused
-        inv_tab_inactive: "voxygen.element.ui.bag.buttons.inv_tab_inactive", // unused
-        inv_tab_inactive_hover: "voxygen.element.ui.bag.buttons.inv_tab_inactive", // unused
-        inv_tab_inactive_press: "voxygen.element.ui.bag.buttons.inv_tab_inactive", // unused
         armor_slot: "voxygen.element.ui.generic.buttons.armor_slot",
         armor_slot_sel: "voxygen.element.ui.generic.buttons.armor_slot_selected",
         armor_slot_empty: "voxygen.element.ui.generic.buttons.armor_slot_empty",

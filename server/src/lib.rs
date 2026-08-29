@@ -275,6 +275,11 @@ pub struct Server {
     disconnect_all_clients_requested: bool,
 
     event_dispatcher: SendDispatcher<'static>,
+
+    started_at: Instant,
+    /// Wall-clock duration of the most recently completed tick.
+    /// `Duration::ZERO` until the first tick finishes.
+    last_tick_time: Duration,
 }
 
 impl Server {
@@ -469,6 +474,10 @@ impl Server {
         }
         {
             let pool = state.ecs_mut().write_resource::<SlowJobPool>();
+            // Concurrency 1: chronicle writes stay strictly serialized, so the
+            // `chronicle_log` table's insertion order (and therefore its
+            // AUTOINCREMENT ids) can never disagree with `created_at` order.
+            pool.configure("CHRONICLE_LOG", |_| 1);
             pool.configure("CHUNK_DROP", |_n| 1);
             pool.configure("CHUNK_GENERATOR", |n| n / 2 + n / 4);
             pool.configure("CHUNK_SERIALIZER", |n| n / 2);
@@ -481,7 +490,23 @@ impl Server {
         state.ecs_mut().insert(oracle::OracleWatcher::new(
             &oracle::watcher::default_events_dir(),
         ));
-        state.ecs_mut().insert(oracle::ChronicleLog::default());
+        // `CharacterUpdater`/`CharacterLoader` below each keep their own clone
+        // from construction and never re-fetch, so nothing had put the
+        // database settings in the ECS before now. The chronicle's write path
+        // needs them from a plain `&specs::World` (`oracle::trigger`), hence
+        // this registration.
+        state
+            .ecs_mut()
+            .insert(Arc::<RwLock<DatabaseSettings>>::clone(&database_settings));
+        state.ecs_mut().insert(oracle::ChronicleLog::load(
+            &database_settings
+                .read()
+                .expect("DatabaseSettings RwLock was poisoned"),
+        ));
+        // Lets shutdown wait for chronicle writes still queued on the slow-job
+        // pool; without it a rumor triggered just before a restart could be
+        // dropped unwritten, which is the exact case persisting it addresses.
+        state.ecs_mut().insert(oracle::ChronicleWrites::default());
         state
             .ecs_mut()
             .insert(oracle::OracleEventsEnabled::default());
@@ -764,6 +789,9 @@ impl Server {
             disconnect_all_clients_requested: false,
 
             event_dispatcher: Self::create_event_dispatcher(pools),
+
+            started_at: Instant::now(),
+            last_tick_time: Duration::ZERO,
         };
 
         debug!(?settings, "created veloren server with");
@@ -778,6 +806,16 @@ impl Server {
 
         Ok(this)
     }
+
+    /// How long this `Server` has been running for. Used by
+    /// `Message::ServerInfo`'s handler; kept as a plain `Instant` rather than
+    /// read back out of the `veloren_start_time` Prometheus gauge, which
+    /// isn't meant to be queried from application code.
+    pub fn uptime(&self) -> Duration { self.started_at.elapsed() }
+
+    /// Wall-clock duration of the most recently completed tick.
+    /// `Duration::ZERO` until the first tick finishes.
+    pub fn last_tick_time(&self) -> Duration { self.last_tick_time }
 
     pub fn get_server_info(&self) -> ServerInfo {
         let settings = self.state.ecs().fetch::<Settings>();
@@ -1411,6 +1449,7 @@ impl Server {
                     .as_secs_f64(),
             );
         }
+        self.last_tick_time = end_of_server_tick.duration_since(before_state_tick);
 
         // 9) Finish the tick, pass control back to the frontend.
 

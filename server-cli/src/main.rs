@@ -49,7 +49,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Notify;
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 use vek::Vec3;
 
 lazy_static::lazy_static! {
@@ -519,10 +519,20 @@ fn server_loop(
                 },
                 Message::ServerInfo => {
                     let player_count = server.state().ecs().read_storage::<Player>().join().count();
+                    let entity_count = server
+                        .state()
+                        .ecs()
+                        .read_resource::<server::metrics::TickMetrics>()
+                        .entity_count
+                        .get() as usize;
                     let info = ServerInfoDto {
                         version: common::util::DISPLAY_VERSION.clone(),
                         player_count,
                         shutdown_pending_secs: shutdown_coordinator.pending_shutdown_secs(),
+                        entity_count,
+                        tick_time_ms: server.last_tick_time().as_millis() as u64,
+                        uptime_secs: server.uptime().as_secs(),
+                        shutdown_reason: shutdown_coordinator.shutdown_reason().map(str::to_owned),
                     };
                     let _ = response.send(MessageReturn::Info(info));
                 },
@@ -842,5 +852,35 @@ fn server_loop(
         #[cfg(feature = "tracy")]
         common_base::tracy_client::frame_mark();
     }
+
+    // Chronicle writes are handed to the slow-job pool and are not awaited by
+    // the tick that triggered them, and nothing in `SlowJobPool` drains
+    // outstanding jobs when it is dropped. So a rumor triggered moments before
+    // shutdown can still be queued right now, and would be lost the instant
+    // `server` (and with it the pool) goes out of scope below -- which is
+    // exactly the restart case persisting the chronicle exists to survive.
+    //
+    // Deliberately placed after the loop rather than at any single `break`, so
+    // every way out is covered: the graceful `ShutdownCoordinator` path, an
+    // operator's `Shutdown::Immediate` (the one-click restart, and the most
+    // likely to race a fresh write), and the benchmark exit.
+    //
+    // `CharacterUpdater` needs nothing here -- it owns a dedicated thread and
+    // joins it in its own `Drop`, which runs when the ECS world is dropped.
+    let chronicle_writes = {
+        use specs::WorldExt;
+        server
+            .state()
+            .ecs()
+            .read_resource::<oracle::ChronicleWrites>()
+            .clone()
+    };
+    if !chronicle_writes.wait_until_idle(oracle::ChronicleWrites::SHUTDOWN_DRAIN_TIMEOUT) {
+        warn!(
+            "Timed out waiting for queued chronicle writes to commit; the most recent rumors may \
+             not have been persisted"
+        );
+    }
+
     Ok(())
 }

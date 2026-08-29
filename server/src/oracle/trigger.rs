@@ -34,14 +34,20 @@
 //!   genuinely too low, that is a constant to change and redeploy, not a live
 //!   knob.
 
-use common::event::{CreateNpcEvent, EventBus, NpcBuilder};
+use crate::persistence::{self, DatabaseSettings};
+use chrono::Utc;
+use common::{
+    event::{CreateNpcEvent, EventBus, NpcBuilder},
+    slowjob::SlowJobPool,
+};
 use common_oracle::{CEILING_WARNING_FRACTION, DmEvent, MAX_LIVE_ORACLE_ENTITIES};
 use rand::rng;
 use specs::{World, WorldExt};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use tracing::error;
 use vek::Vec3;
 
-use super::{ChronicleLog, OracleWatcher, factory, spawned};
+use super::{ChronicleLog, ChronicleWrites, OracleWatcher, factory, spawned};
 
 /// What a caller wants `trigger_dm_event` to do when the requested spawn
 /// would push the live count over [`MAX_LIVE_ORACLE_ENTITIES`]. Never
@@ -217,6 +223,7 @@ pub fn trigger_dm_event(
 
         if let Some(rumor) = &dm_event.narrative.world_rumor {
             ecs.write_resource::<ChronicleLog>().push(rumor.clone());
+            persist_chronicle_entry(ecs, rumor);
         }
     }
 
@@ -230,6 +237,72 @@ pub fn trigger_dm_event(
         on_enter_message: dm_event.narrative.on_enter_message.clone(),
         bodies,
     })
+}
+
+/// Mirrors an in-memory [`ChronicleLog`] append into its database table.
+///
+/// `trigger_dm_event` is reachable from chat-command dispatch, which runs as
+/// part of an ECS system during the tick, so the write must never happen
+/// here: enqueueing onto the [`SlowJobPool`] is a cheap mutex-guarded push
+/// that touches no disk, and the actual connection/transaction happens on a
+/// pool thread.
+///
+/// **This is write-behind, and deliberately weaker than the write-through
+/// convention `CharacterSuspensions` uses.** There, the database write
+/// happens first and the in-memory cache is only updated once it succeeds, so
+/// the two can never disagree. Here the in-memory push has already happened,
+/// synchronously, by the time this is called; the database write is
+/// asynchronous and may fail or be dropped on its own. So a rumor can exist
+/// in the live [`ChronicleLog`] and never reach the table -- it would then
+/// vanish at the next restart. That is acceptable for a narrative log in a
+/// way it would not be for moderation state, but a caller must not read the
+/// two as equivalent guarantees.
+///
+/// A failed write is therefore logged and dropped rather than propagated: the
+/// caller's trigger genuinely happened, and the only consequence is one lost
+/// rumor -- not something worth failing an operator's trigger over, and
+/// certainly not worth unwinding a job-pool worker thread.
+///
+/// Ordering: the job name is configured with concurrency 1, so the writes
+/// themselves never overlap. That the *enqueue* order matches the in-memory
+/// push order additionally relies on every current caller reaching here from
+/// the same thread (the chat-command dispatch and `Message::OracleTrigger`
+/// both funnel through the server's single-threaded tick). Nothing enforces
+/// that; a future genuinely concurrent caller would need its own ordering
+/// story, since concurrency 1 alone only serializes the writes, it does not
+/// decide which of two racing callers queued first.
+fn persist_chronicle_entry(ecs: &World, rumor: &str) {
+    let settings = {
+        let settings = ecs.read_resource::<Arc<RwLock<DatabaseSettings>>>();
+        Arc::clone(&settings)
+    };
+    // Registered before the spawn, so a shutdown that begins between here and
+    // the job actually running still sees this write as outstanding.
+    let in_flight = ecs.read_resource::<ChronicleWrites>().begin();
+    let text = rumor.to_owned();
+    let created_at = Utc::now();
+
+    ecs.read_resource::<SlowJobPool>()
+        .spawn("CHRONICLE_LOG", move || {
+            // Dropped on every exit path below, so the shutdown drain can
+            // never be left waiting on a write that already gave up.
+            let _in_flight = in_flight;
+            let settings = match settings.read() {
+                // Unlike every other `DatabaseSettings` call site, this one
+                // does not `.expect()` on a poisoned lock: the release profile
+                // is `panic = "abort"`, so panicking here -- on a background
+                // job-pool thread, over a narrative log -- would take the
+                // whole server process down rather than just this one write.
+                Ok(settings) => settings,
+                Err(_) => {
+                    error!("DatabaseSettings RwLock was poisoned; chronicle entry not persisted");
+                    return;
+                },
+            };
+            if let Err(err) = persistence::append_chronicle_entry(&text, created_at, &settings) {
+                error!(?err, "Failed to persist a chronicle entry");
+            }
+        });
 }
 
 /// The outcome of resolving `requested` new entities against `live` already
@@ -380,7 +453,8 @@ mod resolve_ceiling_tests {
 #[cfg(test)]
 mod trigger_dm_event_tests {
     use super::*;
-    use common_oracle::{EntityTemplate, SpawningRules};
+    use crate::persistence::SqlLogMode;
+    use common_oracle::{EntityTemplate, Narrative, SpawningRules};
     use std::time::{Duration, Instant};
 
     fn wait_until(mut condition: impl FnMut() -> bool, timeout: Duration) -> bool {
@@ -416,6 +490,16 @@ mod trigger_dm_event_tests {
         event_id: &str,
         spawning_rules: SpawningRules,
     ) -> (World, tempfile::TempDir) {
+        world_with_dm_event(event_id, DmEvent {
+            spawning_rules,
+            ..Default::default()
+        })
+    }
+
+    /// The general form of `world_with_event`, for tests that need to set
+    /// more of the `DmEvent` than just its `spawning_rules` (its `narrative`,
+    /// say).
+    fn world_with_dm_event(event_id: &str, event: DmEvent) -> (World, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().canonicalize().expect("canonicalize tempdir");
         let mut watcher = OracleWatcher::new(&root);
@@ -432,10 +516,6 @@ mod trigger_dm_event_tests {
         )
         .expect("write template fixture");
 
-        let event = DmEvent {
-            spawning_rules,
-            ..Default::default()
-        };
         std::fs::write(
             root.join(format!("{event_id}.dmevent.ron")),
             ron::ser::to_string(&event).expect("DmEvent serializes"),
@@ -660,5 +740,134 @@ mod trigger_dm_event_tests {
         )
         .expect("exactly at the cap must not refuse");
         assert_eq!(outcome.spawned, 3);
+    }
+
+    /// A fixture `World` for the chronicle-persistence path: the standard
+    /// event fixture plus a `world_rumor` to chronicle, a real (small,
+    /// concurrency-1) `SlowJobPool`, and a tempdir-backed, fully migrated
+    /// database registered the way the server registers it.
+    fn world_with_rumor_and_database(
+        rumor: &str,
+    ) -> (
+        World,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        DatabaseSettings,
+    ) {
+        let (mut world, event_dir) = world_with_dm_event("rumor_event", DmEvent {
+            spawning_rules: SpawningRules {
+                entity_templates: vec!["test_template".to_owned()],
+                spawn_count: 1.0,
+                spawn_radius: 5.0,
+                ..Default::default()
+            },
+            narrative: Narrative {
+                world_rumor: Some(rumor.to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let db_dir = tempfile::tempdir().expect("db tempdir");
+        let settings = DatabaseSettings {
+            db_dir: db_dir.path().to_path_buf(),
+            sql_log_mode: SqlLogMode::Disabled,
+        };
+        persistence::run_migrations(&settings);
+
+        let threadpool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .expect("rayon pool"),
+        );
+        let pool = SlowJobPool::new(2, 100, threadpool);
+        pool.configure("CHRONICLE_LOG", |_| 1);
+
+        world.insert(pool);
+        world.insert(Arc::new(RwLock::new(settings.clone())));
+        world.insert(ChronicleWrites::default());
+
+        (world, event_dir, db_dir, settings)
+    }
+
+    #[test]
+    fn a_triggered_rumor_reaches_both_the_resource_and_the_database() {
+        let (world, _event_dir, _db_dir, settings) =
+            world_with_rumor_and_database("A cold mist swallows the village.");
+
+        trigger_dm_event(
+            &world,
+            "rumor_event",
+            Vec3::zero(),
+            false,
+            CeilingPolicy::Refuse,
+            usize::MAX,
+        )
+        .expect("fits comfortably under the ceiling");
+
+        assert_eq!(
+            world
+                .read_resource::<ChronicleLog>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec!["A cold mist swallows the village."],
+            "the in-memory push is synchronous and must have already happened"
+        );
+
+        // The database write is deliberately off the tick thread. Draining it
+        // the same way the server's shutdown path does, rather than polling
+        // the table, is what proves that path actually covers this write --
+        // if the job were never registered as in-flight, this would return
+        // instantly and the assert below would catch the empty table.
+        assert!(
+            world
+                .read_resource::<ChronicleWrites>()
+                .wait_until_idle(Duration::from_secs(5)),
+            "the queued chronicle write never drained"
+        );
+        assert_eq!(
+            persistence::load_chronicle_log_tail(&settings)
+                .expect("load")
+                .front()
+                .map(String::as_str),
+            Some("A cold mist swallows the village."),
+            "the rumor never reached the chronicle_log table"
+        );
+    }
+
+    #[test]
+    fn a_dry_run_persists_nothing_and_needs_no_job_pool() {
+        // The dry-run branch returns before the chronicle is touched at all,
+        // so it must not even fetch the `SlowJobPool` or the database
+        // settings -- this fixture deliberately registers neither, and a
+        // regression that moved the persistence call outside `if !dry_run`
+        // would panic here on the missing resource.
+        let (world, _dir) = world_with_dm_event("dry_rumor_event", DmEvent {
+            spawning_rules: SpawningRules {
+                entity_templates: vec!["test_template".to_owned()],
+                spawn_count: 1.0,
+                spawn_radius: 5.0,
+                ..Default::default()
+            },
+            narrative: Narrative {
+                world_rumor: Some("A rumor that must not be recorded.".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let outcome = trigger_dm_event(
+            &world,
+            "dry_rumor_event",
+            Vec3::zero(),
+            true,
+            CeilingPolicy::Refuse,
+            usize::MAX,
+        )
+        .expect("fits comfortably under the ceiling");
+
+        assert_eq!(outcome.spawned, 1, "dry_run still reports what would spawn");
+        assert!(world.read_resource::<ChronicleLog>().is_empty());
     }
 }

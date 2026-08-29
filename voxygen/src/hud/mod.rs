@@ -2,7 +2,6 @@
 mod animation;
 mod bag;
 mod buffs;
-mod buttons;
 mod change_notification;
 mod chat;
 mod crafting;
@@ -45,9 +44,8 @@ pub use settings_window::ScaleChange;
 pub use slot_grid::{SlotEvents, SlotGrid};
 pub use subtitles::Subtitle;
 
-use bag::Bag;
+use bag::BagManager;
 use buffs::BuffsBar;
-use buttons::Buttons;
 use change_notification::{ChangeNotification, NotificationReason};
 use chat::Chat;
 use chrono::NaiveTime;
@@ -71,7 +69,7 @@ use skillbar::Skillbar;
 use social::Social;
 use subtitles::Subtitles;
 use trade::Trade;
-use tutorial::Tutorial;
+use tutorial::{DynamicTutorial, Tutorial};
 
 use crate::{
     GlobalState,
@@ -955,7 +953,7 @@ pub struct Show {
     intro: bool,
     crafting: bool,
     bag: bool,
-    bag_inv: bool,
+    bag_menu_split: bool,
     bag_details: bool,
     trade: bool,
     trade_details: bool,
@@ -1007,7 +1005,7 @@ impl Show {
             intro: false,
             crafting: false,
             bag: false,
-            bag_inv: false,
+            bag_menu_split: false,
             bag_details: false,
             trade: false,
             trade_details: false,
@@ -1216,7 +1214,13 @@ impl Show {
 
     fn toggle_trade(&mut self) { self.trade(!self.trade); }
 
-    fn toggle_map(&mut self) { self.map(!self.map) }
+    fn toggle_map(&mut self) {
+        // Emitted here rather than at any one call site so every path that opens
+        // or closes the map (keybind, minimap button, …) shows up in the session
+        // telemetry stream under one event shape.
+        common::telemetry!("ui", widget = "Map", action = "toggle");
+        self.map(!self.map)
+    }
 
     fn toggle_social(&mut self) { self.social(!self.social); }
 
@@ -3387,25 +3391,9 @@ impl Hud {
         let msm = ecs.read_resource::<MaterialStatManifest>();
         let time = ecs.read_resource::<Time>();
 
-        match Buttons::new(
-            &self.imgs,
-            &self.fonts,
-            global_state,
-            &self.rot_imgs,
-            tooltip_manager,
-            i18n,
-        )
-        .set(self.ids.buttons, ui_widgets)
-        {
-            Some(buttons::Event::ToggleSettings) => self.show.toggle_settings(global_state),
-            Some(buttons::Event::ToggleSocial) => self.show.toggle_social(),
-            Some(buttons::Event::ToggleMap) => {
-                common::telemetry!("ui", widget = "Map", action = "toggle");
-                self.show.toggle_map();
-            },
-            Some(buttons::Event::ToggleCrafting) => self.show.toggle_crafting(),
-            None => {},
-        }
+        // Action text in bottom right corner
+        DynamicTutorial::new(global_state, client, &self.fonts, &self.imgs, i18n)
+            .set(self.ids.buttons, ui_widgets);
 
         // Group Window
         for event in Group::new(
@@ -3438,6 +3426,7 @@ impl Hud {
             &self.new_notifications,
             &self.fonts,
             &self.show,
+            global_state,
         )
         .set(self.ids.popup, ui_widgets);
 
@@ -3848,10 +3837,10 @@ impl Hud {
                 energies.get(entity),
             )
         {
-            for event in Bag::new(
+            for event in BagManager::new(
+                global_state,
                 client,
                 &info,
-                global_state,
                 &self.imgs,
                 &self.item_imgs,
                 &self.fonts,
@@ -3873,9 +3862,7 @@ impl Hud {
             .set(self.ids.bag, ui_widgets)
             {
                 match event {
-                    bag::Event::BagExpand => self.show.bag_inv = !self.show.bag_inv,
-                    bag::Event::SetDetailsMode(mode) => self.show.bag_details = mode,
-                    bag::Event::Close => {
+                    bag::BagEvent::Close => {
                         self.show.stats = false;
                         Self::show_bag(&mut self.slot_manager, &mut self.show, false);
                         if !self.show.social {
@@ -3889,21 +3876,24 @@ impl Hud {
                             self.events.push(Event::TradeAction(TradeAction::Decline));
                         }
                     },
-                    bag::Event::ChangeInventorySortOrder(sort_order) => {
+                    bag::BagEvent::MoveBag(pos) => {
+                        global_state.settings.hud_position.bag.own = pos;
+                    },
+                    bag::BagEvent::BagExpand => {
+                        self.show.bag_menu_split = !self.show.bag_menu_split
+                    },
+                    bag::BagEvent::SetDetailsMode(mode) => self.show.bag_details = mode,
+                    bag::BagEvent::ChangeInventorySortOrder(sort_order) => {
                         self.events
                             .push(Event::SettingsChange(SettingsChange::Inventory(
                                 Inventory::ChangeSortOrder(sort_order),
                             )));
                     },
-                    bag::Event::SortInventory(sort_order) => {
+                    bag::BagEvent::SortInventory(sort_order) => {
                         self.events.push(Event::SortInventory(sort_order))
                     },
-                    bag::Event::SwapEquippedWeapons => self.events.push(Event::SwapEquippedWeapons),
-                    bag::Event::MoveBag(pos) => {
-                        global_state.settings.hud_position.bag.own = pos;
-                    },
-                    bag::Event::ToggleStatsTab => {
-                        self.show.stats = !self.show.stats;
+                    bag::BagEvent::SwapEquippedWeapons => {
+                        self.events.push(Event::SwapEquippedWeapons)
                     },
                 }
             }

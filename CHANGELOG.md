@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The bag now shows contextual on-screen hints in the bottom-right corner that change with what you are doing (climbing, swimming, wielding a weapon, night-time), replacing the four fixed Settings/Social/Map/Crafting corner buttons.
+
+### Changed
+
+- Complete inventory/bag redesign: the bag is now a tabbed window (Inventory / Equipment) with a paperdoll, an always-visible stat block and an equipment-filtered item list, plus a split-screen mode that shows gear and inventory side by side. Tabs can be switched with the controller triggers.
+- The separate Items | Stats tabs are gone; character stats are now always visible on the Equipment tab.
+
+### Removed
+
+- The Settings, Social, Map and Crafting on-screen corner buttons (all four remain available via their keybinds, the Esc menu and the skillbar).
+
 ## [0.21.0] - 2026-08-23
 
 ### Added
@@ -76,6 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A 'flat' cloud rendering mode
 - A 'particle chance' slider to control the amount of particles
 - An area kind where players can change battlemode: `/area_add name battlemode_change ...`
+- Toggle for the biome change popup
 
 ### Changed
 

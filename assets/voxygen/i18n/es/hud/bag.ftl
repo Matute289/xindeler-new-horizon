@@ -1,5 +1,8 @@
 hud-bag-inventory = Inventario de { $playername }
 hud-bag-stats_title = Atributos de { $playername }
+hud-bag-gear-tab = Equipo
+hud-bag-ingredients-tab = Ingredientes
+hud-bag-quest-items-tab = Objetos de misión
 hud-bag-armor = Armadura
 hud-bag-stats = Atributos
 hud-bag-head = Cabeza
@@ -35,6 +38,7 @@ hud-bag-protection_desc = Reducción de daño por armadura.
 hud-bag-stun_res_desc =
     Resistencia a ser aturdido por golpes consecutivos.
     Se regenera del mismo modo que la energía.
+hud-bag-toggle-expanded-window = Alternar ventana expandida
 hud-bag-sort_by_name = Ordenar por nombre
 hud-bag-sort_by_quality = Ordenar por calidad
 hud-bag-sort_by_category = Ordenar por categoría
