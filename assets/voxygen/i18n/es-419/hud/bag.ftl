@@ -1,5 +1,8 @@
 hud-bag-inventory = Inventario de { $playername }
 hud-bag-stats_title = Atributos de { $playername }
+hud-bag-gear-tab = Equipo
+hud-bag-ingredients-tab = Ingredientes
+hud-bag-quest-items-tab = Objetos de misión
 hud-bag-armor = Armadura
 hud-bag-stats = Atributos
 hud-bag-head = Cabeza
@@ -35,6 +38,7 @@ hud-bag-protection_desc = Reducción de daño por armadura.
 hud-bag-stun_res_desc =
     Resistencia a ser aturdido por golpes consecutivos.
     Se regenera del mismo modo que la energía.
+hud-bag-toggle-expanded-window = Alternar ventana expandida
 hud-bag-sort_by_name = Ordenar por nombre
 hud-bag-sort_by_quality = Ordenar por calidad
 hud-bag-sort_by_category = Ordenar por categoría
@@ -66,8 +70,6 @@ hud-bag-split_swap_slots_drop_items =
         [1] Esto resultará en que 1 objeto caiga al suelo. ¿Estás seguro?
        *[other] Esto resultará en que { $slot_deficit } objetos caigan al suelo. ¿Estás seguro?
     }
-hud-bag-tab_items = Objetos
-hud-bag-tab_stats = Atributos
 hud-bag-title = Inventario
 hud-bag-unequip = Desequipar
 hud-bag-requirements_not_met = No cumples los requisitos para equipar este objeto.

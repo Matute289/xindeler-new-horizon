@@ -1,5 +1,3 @@
-hud-bag-tab_items = Items
-hud-bag-tab_stats = Stats
 hud-bag-inventory = { $playername }'s Inventory
 hud-bag-stats_title = { $playername }'s Stats
 hud-bag-gear-tab = Equipment
