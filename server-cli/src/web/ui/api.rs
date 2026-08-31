@@ -80,6 +80,7 @@ pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router
         .route("/players", get(players))
         .route("/logs", get(logs))
         .route("/send_global_msg", post(send_global_msg))
+        .route("/send_targeted_msg", post(send_targeted_msg))
         .route("/info", get(info))
         .route("/shutdown", post(shutdown))
         .route("/disconnect_all", post(disconnect_all))
@@ -146,6 +147,57 @@ async fn send_global_msg(
         .send((Message::SendGlobalMsg { msg: payload.msg }, dummy_s))
         .await;
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct SendTargetedMsgBody {
+    target_uuids: Vec<String>,
+    operator_uuid: String,
+    msg: String,
+}
+
+#[derive(Serialize)]
+struct SendTargetedMsgResponse {
+    delivered_to: Vec<String>,
+    not_found: Vec<String>,
+}
+
+/// Sends `msg` to exactly `target_uuids` (skipping any not currently
+/// connected -- see `MessageReturn::TargetedMsgSent`). Same auth tier as
+/// `send_global_msg` above (the shared secret only, no operator/role check);
+/// unlike the kick/ban/unban routes this isn't a moderation action.
+async fn send_targeted_msg(
+    State(web_ui_request_s): State<UiRequestSender>,
+    Json(payload): Json<SendTargetedMsgBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let _ = web_ui_request_s
+        .send((
+            Message::SendTargetedMsg {
+                target_uuids: payload.target_uuids,
+                operator_uuid: payload.operator_uuid,
+                msg: payload.msg,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        MessageReturn::TargetedMsgSent {
+            delivered_to,
+            not_found,
+        } => Ok(Json(SendTargetedMsgResponse {
+            delivered_to,
+            not_found,
+        })),
+        // A malformed uuid in `target_uuids` -- the request was understood
+        // but rejected for a stated reason, same "understood but refused"
+        // precedent `kick_player` below established, not 500.
+        MessageReturn::Error(err) => Err((StatusCode::BAD_REQUEST, err)),
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
 }
 
 async fn info(

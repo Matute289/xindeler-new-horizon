@@ -1872,6 +1872,18 @@ impl Server {
         cmd::admin_unban_player(self, target_uuid, operator_uuid, target_username)
     }
 
+    /// Sends `msg` to exactly the connected players named by `target_uuids`,
+    /// on behalf of `operator_uuid` (audit-log only, not role-checked).
+    /// Returns `(delivered_to, not_found)`. See `cmd::send_targeted_msg`.
+    pub fn send_targeted_msg(
+        &self,
+        target_uuids: &[Uuid],
+        operator_uuid: Uuid,
+        msg: String,
+    ) -> (Vec<Uuid>, Vec<Uuid>) {
+        cmd::send_targeted_msg(self, target_uuids, operator_uuid, msg)
+    }
+
     /// Suspends a single character on behalf of `operator_uuid`, a registered
     /// admin/moderator with no live in-game session of its own. `target_uuid`
     /// must be the account that actually owns `character_id`, or this refuses

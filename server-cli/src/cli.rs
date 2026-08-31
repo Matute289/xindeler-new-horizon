@@ -99,6 +99,18 @@ pub enum Message {
     SendGlobalMsg {
         msg: String,
     },
+    /// Sends `msg` to exactly the players named by `target_uuids`, skipping
+    /// (and reporting back) any uuid that isn't currently connected.
+    /// `operator_uuid` is recorded for our own audit log only -- not
+    /// role-checked, need not belong to a registered admin/moderator. See
+    /// `MessageReturn::TargetedMsgSent`.
+    SendTargetedMsg {
+        target_uuids: Vec<String>,
+        #[arg(long)]
+        operator_uuid: String,
+        #[arg(long)]
+        msg: String,
+    },
     /// Uptime-adjacent server status not already exported via `/metrics`:
     /// version, player count, pending-shutdown state.
     ServerInfo,
@@ -361,6 +373,14 @@ pub enum MessageReturn {
     /// `Error(String)` above, same as every other fallible arm.
     AdminActionOk {
         ban: Option<common_net::msg::server::BanInfo>,
+    },
+    /// Response to `Message::SendTargetedMsg`: which of the requested
+    /// `target_uuids` were currently connected and got the message, and
+    /// which weren't. Not a failure even if `not_found` is non-empty --
+    /// partial delivery isn't an error, callers that care can inspect it.
+    TargetedMsgSent {
+        delivered_to: Vec<String>,
+        not_found: Vec<String>,
     },
 }
 

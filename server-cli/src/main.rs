@@ -517,6 +517,38 @@ fn server_loop(
                     let msg = ChatType::Meta.into_plain_msg(msg);
                     server.state().send_chat(msg, false);
                 },
+                Message::SendTargetedMsg {
+                    target_uuids,
+                    operator_uuid,
+                    msg,
+                } => {
+                    let parsed = server::authc::Uuid::parse_str(&operator_uuid)
+                        .map_err(|_| "operator_uuid is not a valid uuid".to_string())
+                        .and_then(|operator_uuid| {
+                            target_uuids
+                                .iter()
+                                .map(|s| server::authc::Uuid::parse_str(s))
+                                .collect::<Result<Vec<_>, _>>()
+                                .map_err(|_| "target_uuids contains an invalid uuid".to_string())
+                                .map(|target_uuids| (operator_uuid, target_uuids))
+                        });
+                    match parsed {
+                        Ok((operator_uuid, target_uuids)) => {
+                            let (delivered_to, not_found) =
+                                server.send_targeted_msg(&target_uuids, operator_uuid, msg);
+                            let _ = response.send(MessageReturn::TargetedMsgSent {
+                                delivered_to: delivered_to
+                                    .iter()
+                                    .map(ToString::to_string)
+                                    .collect(),
+                                not_found: not_found.iter().map(ToString::to_string).collect(),
+                            });
+                        },
+                        Err(err) => {
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
+                    }
+                },
                 Message::ServerInfo => {
                     let player_count = server.state().ecs().read_storage::<Player>().join().count();
                     let entity_count = server
@@ -834,6 +866,10 @@ fn server_loop(
                         MessageReturn::AdminActionOk { ban } => {
                             info!(?ban, "Admin action completed")
                         },
+                        MessageReturn::TargetedMsgSent {
+                            delivered_to,
+                            not_found,
+                        } => info!(?delivered_to, ?not_found, "Targeted message sent"),
                     };
                 }
             }
