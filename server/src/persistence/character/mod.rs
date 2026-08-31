@@ -993,11 +993,14 @@ pub fn delete_character(
     stmt.execute([&char_id.0])?;
     drop(stmt);
 
-    // Delete the cached portrait, if one was ever rendered. Inside this same
-    // transaction and ahead of the character row on purpose: the portrait is a
-    // pure cache, so it must never be able to outlive the character it depicts
-    // (a later character reusing the id would otherwise inherit a stranger's
-    // face until its first re-render).
+    // Delete the cached portrait, if one was ever rendered. `character_id`s
+    // are never reused (`get_new_entity_ids` allocates from `sqlite_sequence`),
+    // so an orphaned row could not be served to anybody -- but nothing would
+    // ever collect it either, and a picture of a character its player deleted
+    // is not something to keep lying around. Inside this transaction so that a
+    // deletion that rolls back does not take the portrait with it, and ahead of
+    // the character row so the order stays correct if this table ever does
+    // acquire a foreign key.
     super::portrait::delete_portrait(char_id, transaction)?;
 
     // Delete character

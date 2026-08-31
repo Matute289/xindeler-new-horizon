@@ -537,23 +537,25 @@ impl PortraitService {
             .spawn()
             .map_err(|err| RenderError::Spawn(err.to_string()))?;
 
-        // The renderer reads stdin to EOF before it draws anything, so writing
-        // the request in full and then closing the pipe cannot deadlock. A
-        // write error here is not reported: it means the child already exited,
-        // and its exit code says why far more precisely than `EPIPE` does.
-        if let Some(mut stdin) = child.stdin.take()
-            && let Err(err) = stdin.write_all(&request).and_then(|()| stdin.flush())
-        {
-            debug!(%err, "the portrait renderer closed stdin early");
-        }
+        // All three pipes are handled off this thread, so that the timeout
+        // below is the *only* thing that decides how long a render may take.
+        // Each of them can block for as long as the child feels like: a
+        // request larger than a pipe buffer stalls the write until the child
+        // reads, an image larger than one stalls the child until something
+        // reads, and killing a child does not close a pipe that anything the
+        // child spawned still holds open. Doing any of it here would be a wait
+        // the timeout cannot interrupt.
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        std::thread::spawn(move || {
+            // A write error is not reported: it means the renderer exited
+            // early, and its exit code says why far more precisely than
+            // `EPIPE` does. Dropping the pipe afterwards is what gives the
+            // renderer its EOF.
+            if let Err(err) = stdin.write_all(&request).and_then(|()| stdin.flush()) {
+                debug!(%err, "the portrait renderer stopped reading its request");
+            }
+        });
 
-        // Both pipes are drained on their own threads, for two reasons: an
-        // image larger than a pipe buffer would otherwise wedge the child
-        // mid-write while this thread waits for it to exit, and -- more
-        // importantly -- neither read can then block *this* thread past the
-        // timeout. Killing a child does not close a pipe that something the
-        // child spawned still holds open, so a read on this thread would be
-        // exactly the unbounded wait the timeout exists to prevent.
         let stdout = child.stdout.take().expect("stdout was piped");
         let image = drain(move |buffer| {
             // One byte past the cap, so that hitting it is distinguishable
@@ -587,9 +589,9 @@ impl PortraitService {
 
         // Nothing the child wrote can matter once it has been killed, and
         // waiting for it might not terminate, so the timeout path collects
-        // neither pipe. Both drain threads are left to finish on their own;
-        // each is holding one bounded buffer and exits as soon as whatever
-        // still has the write end closes it.
+        // neither pipe. The helper threads are left to finish on their own:
+        // each holds one bounded buffer and ends as soon as whatever still has
+        // the other end of its pipe lets go.
         let Some(status) = status else {
             return Err(RenderError::TimedOut(self.render_timeout));
         };
@@ -1003,16 +1005,20 @@ mod service_tests {
         }
 
         /// Writes a stand-in `portrait_gen` whose body is `script`, and which
-        /// records one line per invocation in a counter file.
+        /// records one line per invocation in a counter file. Drains stdin
+        /// first, as the real renderer does.
         fn renderer(&self, name: &str, script: &str) -> PathBuf {
+            self.raw_renderer(name, &format!("cat >/dev/null\n{script}"))
+        }
+
+        /// [`renderer`](Self::renderer) without the stdin drain, for the cases
+        /// that are about a renderer misbehaving.
+        fn raw_renderer(&self, name: &str, script: &str) -> PathBuf {
             let path = self.dir.path().join(name);
             let counter = self.dir.path().join(format!("{name}.count"));
             std::fs::write(
                 &path,
-                format!(
-                    "#!/bin/sh\ncat >/dev/null\necho x >> '{}'\n{script}\n",
-                    counter.display()
-                ),
+                format!("#!/bin/sh\necho x >> '{}'\n{script}\n", counter.display()),
             )
             .expect("write the stand-in renderer");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
@@ -1296,6 +1302,40 @@ mod service_tests {
         assert_eq!(
             crate::persistence::get_portrait(id, &harness.db_settings()).expect("get"),
             None
+        );
+    }
+
+    #[test]
+    fn a_renderer_that_draws_too_much_is_refused_rather_than_buffered() {
+        let harness = Harness::new();
+        let id = harness.character(OWNER, "Testificate", None);
+        // Comfortably past MAX_IMAGE_BYTES, and never reading its request, so
+        // both the output cap and the pipe handling are under test at once.
+        let renderer = harness.raw_renderer("huge", "yes x | head -c 1200000");
+        let service = harness.service(renderer);
+
+        assert_eq!(service.answer(OWNER, id, None), PortraitOutcome::Failed);
+        assert_eq!(
+            crate::persistence::get_portrait(id, &harness.db_settings()).expect("get"),
+            None
+        );
+    }
+
+    /// The renderer is handed its request by a thread of its own, so a
+    /// renderer that never reads stdin cannot wedge the worker -- with the
+    /// write on the worker's own thread, a request bigger than a pipe buffer
+    /// would block there forever, where the timeout cannot reach it.
+    #[test]
+    fn a_renderer_that_ignores_its_request_is_still_answered() {
+        let harness = Harness::new();
+        let id = harness.character(OWNER, "Testificate", Some(CHEST));
+        let renderer = harness.raw_renderer("deaf", "printf 'FAKE-PORTRAIT-BYTES'");
+        let service = harness.service(renderer);
+
+        let outcome = service.answer(OWNER, id, None);
+        assert!(
+            matches!(&outcome, PortraitOutcome::Fresh { bytes, .. } if bytes == IMAGE),
+            "{outcome:?}"
         );
     }
 
