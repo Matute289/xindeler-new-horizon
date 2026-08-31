@@ -8,11 +8,24 @@
 //! stdout. It knows nothing about databases, HTTP, or the game server; callers
 //! run it as a short-lived subprocess.
 //!
-//! Build:
+//! Build — **for anything that spawns this repeatedly, build it without the
+//! crate's default features**:
 //!
 //! ```text
-//! cargo build -p xindeler-voxygen --bin portrait_gen
+//! cargo build -p xindeler-voxygen --bin portrait_gen --no-default-features
 //! ```
+//!
+//! `required-features = []` on the `[[bin]]` does not constrain the *library*'s
+//! features, and the default set includes `hot-reloading`, which makes the
+//! first asset load start a recursive filesystem watcher over the whole asset
+//! tree — one inotify watch per directory on Linux, ~1800 of them, for a
+//! process that lives about as long as it takes to draw one image. Those
+//! watches come out of a per-user kernel budget shared with everything else
+//! running as that user, so a process that exits in milliseconds should not be
+//! taking them out. Dropping the defaults also drops `singleplayer`,
+//! `shaderc-from-source` and the egui overlay, none of which this binary uses.
+//! Build it as its own `cargo` invocation: in a single workspace build, feature
+//! unification will re-enable hot-reloading no matter what is passed here.
 //!
 //! Run (assets must be reachable, as for every asset-loading binary):
 //!
@@ -29,7 +42,17 @@
 //! | 3    | the body kind is not supported (humanoids only)                |
 //! | 4    | any other failure (assets, meshing, encoding)                   |
 //!
+//! Anything else — another code, or termination by a signal — means the
+//! renderer crashed. Both workspace profiles set `panic = "abort"`, so a panic
+//! anywhere in the asset or meshing path cannot be caught and turned into a 4;
+//! a caller must treat "not one of the codes above" as a hard failure and must
+//! not retry-loop on it.
+//!
 //! Diagnostics go to stderr only; stdout carries image bytes and nothing else.
+
+// A `[[bin]]` is its own crate root, so the library's crate-level deny does not
+// reach it.
+#![deny(unsafe_code)]
 
 use std::{
     io::{Read, Write},
@@ -77,11 +100,25 @@ pub const PORTRAIT_PARAMS_VERSION: &str = "p1";
 pub const DEFAULT_PORTRAIT_SIZE: u16 = 256;
 
 /// Accepted range for [`PortraitParams::size`]. The upper bound keeps the
-/// supersampled intermediate buffers bounded (a 512² request rasterizes at
-/// 1024², ~4 MB per buffer) — anything larger is a malformed request, not a
-/// portrait.
+/// supersampled intermediate buffers bounded: a 512² request rasterizes at
+/// 1024², which is three live 4 MB allocations at once (the colour buffer, the
+/// depth buffer, and the flattened copy `draw_voxes` collects out of the colour
+/// buffer while it is still alive) plus the encoder's working set. Anything
+/// larger is a malformed request, not a portrait.
 pub const MIN_PORTRAIT_SIZE: u16 = 16;
 pub const MAX_PORTRAIT_SIZE: u16 = 512;
+
+/// Anti-aliasing: the scene is rasterized at `ceil(sqrt(SUPERSAMPLES))` times
+/// the requested edge length and filtered down, the same strategy the UI's
+/// voxel icons use.
+const SUPERSAMPLES: u8 = 4;
+
+/// Ceiling on the request read from stdin. A body plus a full inventory
+/// serializes to a few tens of KB; this sits far above that and exists so that
+/// a caller which never closes the pipe costs this process a few MB rather than
+/// growing it without bound — on a small box, an unbounded reader is a way to
+/// get something *else* killed.
+pub const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 
 /// How the posed model is framed inside the output square.
 ///
@@ -136,25 +173,30 @@ pub struct PortraitRequest {
 // Framing presets
 // ---------------------------------------------------------------------------
 
-/// Whether a framing preset draws the equipped mainhand/offhand weapons. The
-/// idle pose *can* hold them; a portrait that shows armour only does not.
-const fn framing_shows_weapons(framing: Framing) -> bool {
-    match framing {
-        Framing::FullBodyFront => false,
-    }
+/// Everything a [`Framing`] decides, in one place, so that adding a preset is
+/// one row of [`preset`] rather than an edit in three matches.
+struct FramingPreset {
+    /// How the model is turned before it is projected.
+    ori: Quaternion<f32>,
+    /// Fraction of the frame the figure fills along its longest visible axis.
+    /// The remainder is the margin that keeps boots and pointed hats off the
+    /// edge.
+    fill: f32,
+    /// Whether the equipped mainhand/offhand weapons are drawn. The idle pose
+    /// *can* hold them; a portrait that shows armour only does not.
+    shows_weapons: bool,
 }
 
-/// Fraction of the frame the figure fills along its longest visible axis. The
-/// remainder is the margin that keeps boots and pointed hats off the edge.
-const FRAME_FILL: f32 = 0.94;
-
-/// Camera orientation for a framing preset.
-fn framing_ori(framing: Framing) -> Quaternion<f32> {
+fn preset(framing: Framing) -> FramingPreset {
     match framing {
-        // Stand the model upright (turn the model's +Z up onto screen-up) and
-        // then turn it around to face the camera.
-        Framing::FullBodyFront => Quaternion::rotation_x(-90.0 * std::f32::consts::PI / 180.0)
-            .rotated_y(180.0 * std::f32::consts::PI / 180.0),
+        Framing::FullBodyFront => FramingPreset {
+            // Stand the model upright (turn the model's +Z up onto screen-up)
+            // and then turn it around to face the camera.
+            ori: Quaternion::rotation_x(-std::f32::consts::FRAC_PI_2)
+                .rotated_y(std::f32::consts::PI),
+            fill: 0.94,
+            shows_weapons: false,
+        },
     }
 }
 
@@ -228,22 +270,32 @@ fn drawn_bounds(bones: &[(Mat4<f32>, &Segment)], ori: Mat4<f32>) -> Option<(Vec3
 }
 
 /// Builds the [`Transform`] that centres the drawn figure in the frame and
-/// scales it to fill [`FRAME_FILL`] of the shorter dimension.
+/// scales it so its longest visible axis fills the preset's `fill` fraction.
 ///
-/// `draw_voxes`' own centring translation is disabled (the returned
-/// `offset_scaling` is zero) because it subtracts half the bounding box's
-/// *size* rather than its centre, which leaves an off-centre figure for any
-/// model whose bounds do not start at the origin — every posed character.
-fn fit(
-    framing: Framing,
-    bones: &[(Mat4<f32>, &Segment)],
-) -> Result<(Transform, Vec3<f32>), PortraitError> {
-    let ori = framing_ori(framing);
-    let ori_mat = Mat4::from(ori);
+/// Pair it with an `offset_scaling` of zero at the `draw_voxes` call, which
+/// disables that function's own centring translation: it subtracts half the
+/// bounding box's *size* rather than its centre, so any model whose bounds do
+/// not start at the origin — every posed character — ends up off-centre.
+fn fit(framing: Framing, bones: &[(Mat4<f32>, &Segment)]) -> Result<Transform, PortraitError> {
+    let preset = preset(framing);
+    let ori_mat = Mat4::from(preset.ori);
 
     let (min, max) = drawn_bounds(bones, ori_mat).ok_or_else(|| {
         PortraitError::Failed("the posed body contains no visible voxels".to_string())
     })?;
+    // Every derived value below has to be finite: a NaN reaching the model-view
+    // matrix trips a `debug_assert` inside the rasterizer, and both workspace
+    // profiles abort on panic, so it would leave the process with none of the
+    // documented exit codes. Guard the bounds themselves, then the quantities
+    // computed from them — a ratio of two individually finite, positive floats
+    // can still be infinite.
+    let finite = |v: Vec3<f32>| v.map(f32::is_finite).reduce_and();
+    if !finite(min) || !finite(max) {
+        return Err(PortraitError::Failed(
+            "the posed body has a non-finite bounding box".to_string(),
+        ));
+    }
+
     let size = max - min;
     let centre = (min + max) * 0.5;
 
@@ -255,23 +307,29 @@ fn fit(
         ));
     }
 
-    let zoom = FRAME_FILL * reference / visible;
-    // `draw_voxes` scales the rotated model by this factor before the
-    // orthographic projection, whose depth range is 0..1.
+    let zoom = preset.fill * reference / visible;
+    // The factor `draw_voxes` scales the rotated model by before projecting.
     let scale = 2.0 * zoom / reference;
+    if !(zoom.is_finite() && zoom > 0.0) || !(scale.is_finite() && scale > 0.0) {
+        return Err(PortraitError::Failed(
+            "the posed body yields a degenerate projection scale".to_string(),
+        ));
+    }
 
-    Ok((
-        Transform {
-            ori,
-            // x/y centre the figure; z parks the depth range around the middle
-            // of the near/far span so no part of the model is depth-clipped.
-            offset: Vec3::new(-centre.x, -centre.y, 0.5 / scale - centre.z),
-            zoom,
-            orth: true,
-            stretch: false,
-        },
-        Vec3::zero(),
-    ))
+    Ok(Transform {
+        ori: preset.ori,
+        // x/y centre the figure. z is not a framing choice: the rasterizer does
+        // no near/far clipping at all, so nothing is lost by sitting outside
+        // the projection's nominal range, and the only thing that decides
+        // whether a fragment survives is that its depth stays at or below the
+        // depth buffer's initial 1.0. This term places the figure with a wide
+        // margin below that; a preset whose depth extent rivalled its height
+        // would have to check the margin rather than assume it.
+        offset: Vec3::new(-centre.x, -centre.y, 0.5 / scale - centre.z),
+        zoom,
+        orth: true,
+        stretch: false,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +379,15 @@ fn validate(params: &PortraitParams) -> Result<(), PortraitError> {
             params.size
         )));
     }
+    // Without this, a caller built against one renderer version would happily
+    // cache images produced by another under a key that claims otherwise —
+    // exactly the drift `version` exists to catch.
+    if params.version != PORTRAIT_PARAMS_VERSION {
+        return Err(PortraitError::BadRequest(format!(
+            "request asks for params version {}, this renderer is {PORTRAIT_PARAMS_VERSION}",
+            params.version
+        )));
+    }
     Ok(())
 }
 
@@ -367,7 +434,10 @@ fn humanoid_bones(
     );
 
     // A backpack or cloak shifts the idle pose's shoulders, so a geared
-    // character is not posed as a bare one.
+    // character is not posed as a bare one. These offsets mirror the live
+    // figure system (`scene/figure/mod.rs`, the `back_carry_offset` it feeds
+    // into `CharacterSkeleton::new`) so a portrait and the in-game model agree;
+    // if that ever changes there, change it here too.
     let back_carry_offset = inventory
         .equipped(EquipSlot::Armor(ArmorSlot::Back))
         .and_then(|i| {
@@ -383,7 +453,7 @@ fn humanoid_bones(
         })
         .unwrap_or(0.0);
 
-    let mut buf = [FigureBoneData::default(); 16];
+    let mut buf = [FigureBoneData::default(); anim::MAX_BONE_COUNT];
     let skel = anim::character::StandAnimation::update_skeleton(
         &CharacterSkeleton::new(false, back_carry_offset, 1.0),
         (
@@ -431,7 +501,7 @@ fn render(request: &PortraitRequest) -> Result<RgbaImage, PortraitError> {
     };
 
     let mut inventory = request.inventory.clone();
-    if !framing_shows_weapons(request.params.framing) {
+    if !preset(request.params.framing).shows_weapons {
         strip_weapons(&mut inventory);
     }
 
@@ -446,14 +516,14 @@ fn render(request: &PortraitRequest) -> Result<RgbaImage, PortraitError> {
     }
     let bones: Vec<_> = bones.iter().map(|(t, s)| (*t, s)).collect();
 
-    let (transform, offset_scaling) = fit(request.params.framing, &bones)?;
-
     Ok(draw_voxes(
         &bones,
         Vec2::new(request.params.size, request.params.size),
-        transform,
-        SampleStrat::SuperSampling(4),
-        offset_scaling,
+        fit(request.params.framing, &bones)?,
+        SampleStrat::SuperSampling(SUPERSAMPLES),
+        // Zero disables `draw_voxes`' own centring translation; `fit` does the
+        // centring itself. See its doc comment for why.
+        Vec3::zero(),
     ))
 }
 
@@ -473,12 +543,21 @@ fn encode_webp(img: &RgbaImage) -> Result<Vec<u8>, PortraitError> {
 }
 
 fn run() -> Result<Vec<u8>, PortraitError> {
-    let mut input = String::new();
+    let mut input = Vec::new();
     std::io::stdin()
-        .read_to_string(&mut input)
+        .lock()
+        // One byte past the cap, so that hitting it is distinguishable from a
+        // request that merely happens to be exactly that long.
+        .take(MAX_REQUEST_BYTES + 1)
+        .read_to_end(&mut input)
         .map_err(|e| PortraitError::BadRequest(format!("could not read stdin: {e}")))?;
+    if input.len() as u64 > MAX_REQUEST_BYTES {
+        return Err(PortraitError::BadRequest(format!(
+            "request is larger than {MAX_REQUEST_BYTES} bytes"
+        )));
+    }
 
-    let request: PortraitRequest = serde_json::from_str(&input)
+    let request: PortraitRequest = serde_json::from_slice(&input)
         .map_err(|e| PortraitError::BadRequest(format!("could not parse request: {e}")))?;
 
     encode_webp(&render(&request)?)
@@ -544,6 +623,28 @@ mod tests {
         assert_eq!(request.params.size, DEFAULT_PORTRAIT_SIZE);
         assert_eq!(request.params.version, PORTRAIT_PARAMS_VERSION);
         assert_eq!(request.params.framing, Framing::FullBodyFront);
+    }
+
+    /// The params half of the wire format is what a caller has to reproduce
+    /// byte-for-byte to talk to this renderer, and it is reproduced by hand on
+    /// the caller's side rather than shared as a type. Pin it so that a change
+    /// here fails here, loudly, instead of silently at the far end.
+    #[test]
+    fn default_params_serialize_to_the_pinned_shape() {
+        assert_eq!(
+            serde_json::to_string(&PortraitParams::default()).unwrap(),
+            r#"{"size":256,"framing":"full_body_front","version":"p1"}"#
+        );
+    }
+
+    #[test]
+    fn a_mismatched_params_version_is_a_bad_request() {
+        let params = PortraitParams {
+            version: "p0".to_string(),
+            ..Default::default()
+        };
+        let err = validate(&params).expect_err("the renderer must refuse another version");
+        assert_eq!(err.exit_code(), 2);
     }
 
     #[test]
@@ -621,5 +722,64 @@ mod tests {
         assert!(!bytes.is_empty());
         assert_eq!(&bytes[0..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WEBP");
+    }
+
+    /// Framing is the whole job of this binary, and it is the one thing the
+    /// "something was drawn" test above would not notice going wrong — it
+    /// passes just as happily on a figure at 30% scale, clipped at 200%, shoved
+    /// into a corner, or facing away.
+    ///
+    /// The invariant is exact rather than eyeballed. `draw_voxes` scales the
+    /// rotated model by `2 * zoom / reference`, and `fit` picks `zoom` so that
+    /// the longest visible axis times that scale is `2 * fill` — against a
+    /// normalized frame two units wide, i.e. exactly `fill` of the output.
+    /// Tolerances only absorb the supersample-and-filter pass, which spreads a
+    /// silhouette by a pixel or so.
+    #[test]
+    fn the_figure_is_centred_and_fills_the_frame() {
+        const SIZE: u32 = 128;
+
+        let img = render(&PortraitRequest {
+            body: Body::Humanoid(test_body()),
+            inventory: Inventory::with_empty(),
+            params: PortraitParams {
+                size: SIZE as u16,
+                ..Default::default()
+            },
+        })
+        .expect("a bare humanoid renders");
+
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
+        for (x, y, px) in img.enumerate_pixels() {
+            // Ignore the faintest filtered fringe, which is not silhouette.
+            if px.0[3] > 8 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        assert!(min_x <= max_x, "nothing opaque was drawn");
+
+        let span_x = (max_x - min_x + 1) as f32;
+        let span_y = (max_y - min_y + 1) as f32;
+        let fill = preset(Framing::FullBodyFront).fill;
+
+        assert!(
+            (span_x.max(span_y) / SIZE as f32 - fill).abs() < 0.05,
+            "the figure spans {span_x}x{span_y} of {SIZE}px, which is not {fill} of the frame"
+        );
+        assert!(
+            ((min_x + max_x) as f32 / 2.0 - SIZE as f32 / 2.0).abs() < 3.0,
+            "the figure is not horizontally centred: x spans {min_x}..={max_x} of {SIZE}px"
+        );
+        assert!(
+            ((min_y + max_y) as f32 / 2.0 - SIZE as f32 / 2.0).abs() < 3.0,
+            "the figure is not vertically centred: y spans {min_y}..={max_y} of {SIZE}px"
+        );
+        assert!(
+            min_x > 0 && min_y > 0 && max_x < SIZE - 1 && max_y < SIZE - 1,
+            "the figure touches the frame edge — it is clipped, not framed"
+        );
     }
 }
