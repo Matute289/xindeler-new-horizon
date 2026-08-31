@@ -16,8 +16,8 @@ extern crate rusqlite;
 
 use super::{
     character::{
-        convert_body_from_database, convert_inventory_from_database_items, get_pseudo_containers,
-        load_items,
+        LOADOUT_PSEUDO_CONTAINER_POSITION, convert_body_from_database,
+        convert_loadout_from_database_items, get_pseudo_container_id, load_items,
     },
     error::PersistenceError,
 };
@@ -140,9 +140,19 @@ pub fn delete_portrait(
 /// somebody else are the same `CharacterNotFound`, which is what keeps the
 /// endpoint above this from being an enumeration oracle.
 ///
-/// This is `load_character_data`'s body/inventory half and nothing else -- no
-/// skills, pets, ability sets or waypoint, none of which affect what a
-/// character looks like.
+/// Only the **loadout** container is read, not the whole inventory
+/// `load_character_data` rebuilds. A portrait is decided entirely by equipped
+/// gear -- both the appearance key and the renderer consult nothing but
+/// `Inventory::equipped` -- so the carried inventory, overflow items, recipe
+/// book and spell book contribute nothing to it. Loading them would mean four
+/// more recursive-CTE queries and an `Item::new_from_asset` per carried item,
+/// on every request including the ones answered straight from the cache, and
+/// would bloat the renderer's request with an `ItemConfig` per item on top of
+/// that. The returned `Inventory` therefore has its loadout populated and its
+/// carried slots empty, which is all a portrait has ever looked at.
+///
+/// Everything else `load_character_data` reconstructs -- skills, pets, ability
+/// sets, waypoint -- is skipped for the same reason.
 pub fn load_portrait_inputs(
     character_id: CharacterId,
     player_uuid: &str,
@@ -168,25 +178,17 @@ pub fn load_portrait_inputs(
 
     let body = convert_body_from_database(&variant, &body_data)?;
 
-    let containers = get_pseudo_containers(connection, character_id)?;
-    let inventory_items = load_items(connection, containers.inventory_container_id)?;
-    let loadout_items = load_items(connection, containers.loadout_container_id)?;
-    let overflow_items = load_items(connection, containers.overflow_items_container_id)?;
-    let recipe_book_items = load_items(connection, containers.recipe_book_container_id)?;
-    let spell_book_items = load_items(connection, containers.spell_book_container_id)?;
+    // One container, not the five `get_pseudo_containers` resolves: loading a
+    // character needs all of them, a portrait needs only what is worn.
+    let loadout_container_id =
+        get_pseudo_container_id(connection, character_id, LOADOUT_PSEUDO_CONTAINER_POSITION)?;
+    // Recursive and topologically sorted, so a modular item's components
+    // arrive after it -- the ordering `convert_loadout_from_database_items`
+    // requires.
+    let loadout_items = load_items(connection, loadout_container_id)?;
+    let loadout = convert_loadout_from_database_items(loadout_container_id, &loadout_items)?;
 
-    let inventory = convert_inventory_from_database_items(
-        containers.inventory_container_id,
-        &inventory_items,
-        containers.loadout_container_id,
-        &loadout_items,
-        containers.overflow_items_container_id,
-        &overflow_items,
-        &recipe_book_items,
-        &spell_book_items,
-    )?;
-
-    Ok((body, inventory))
+    Ok((body, Inventory::with_loadout(loadout, body)))
 }
 
 #[cfg(test)]

@@ -43,6 +43,9 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
+    // `fmt::Write` is what `write!` into the appearance-key `String` needs;
+    // `io::Write` is what the renderer's stdin needs. Both, unnamed.
+    fmt::Write as _,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -185,16 +188,23 @@ const KEYED_SLOTS: &[(&str, EquipSlot)] = &[
 /// the HTTP layer needs is [`etag`] of this.
 pub fn appearance_key(body: &Body, inventory: &Inventory) -> String {
     let mut key = String::with_capacity(256);
-    key.push_str(PORTRAIT_PARAMS_VERSION);
+    // Everything about the *output* that is not the character, so that changing
+    // any of it self-invalidates every cached row. Only the version has to be
+    // bumped by hand, and only for a change none of these four capture -- a
+    // different pose at the same size, say.
+    let _ = write!(
+        key,
+        "{PORTRAIT_PARAMS_VERSION}/{DEFAULT_PORTRAIT_SIZE}/{PORTRAIT_FRAMING}/{PORTRAIT_FORMAT}"
+    );
     key.push_str("|body:");
-    key.push_str(&body_key(body));
+    write_body_key(&mut key, body);
 
     for (name, slot) in KEYED_SLOTS {
         key.push('|');
         key.push_str(name);
         key.push(':');
         if let Some(item) = inventory.equipped(*slot) {
-            key.push_str(&item_key(&item.item_definition_id()));
+            write_item_key(&mut key, &item.item_definition_id());
         }
     }
 
@@ -207,8 +217,12 @@ pub fn appearance_key(body: &Body, inventory: &Inventory) -> String {
 /// to `humanoid::Body` -- an upstream merge could -- then fails to compile here
 /// instead of silently producing a key that ignores it, which would leave every
 /// character wearing the new feature stuck on a stale portrait forever.
-fn body_key(body: &Body) -> String {
-    match body {
+///
+/// Writes straight into the key rather than returning a `String`: every one of
+/// these would otherwise be allocated only to be copied and dropped.
+fn write_body_key(key: &mut String, body: &Body) {
+    // Infallible -- `fmt::Write` for `String` cannot fail.
+    let _ = match body {
         Body::Humanoid(body) => {
             let common::comp::humanoid::Body {
                 species,
@@ -222,7 +236,8 @@ fn body_key(body: &Body) -> String {
                 eye_color,
                 height_scale,
             } = body;
-            format!(
+            write!(
+                key,
                 "humanoid/{species:?}/{body_type:?}/{hair_style}/{beard}/{eyes}/{accessory}/\
                  {hair_color}/{skin}/{eye_color}/{height_scale}"
             )
@@ -231,8 +246,10 @@ fn body_key(body: &Body) -> String {
         // draw one anyway. Kept total rather than panicking: this function's
         // whole job is to decide whether a cache row is stale, and there is no
         // appearance for which "crash the worker thread" is the right answer.
-        other => format!("other/{other:?}"),
-    }
+        // `Body`'s derived `Debug` prints every field, so the key stays
+        // injective here too.
+        other => write!(key, "other/{other:?}"),
+    };
 }
 
 /// One equipped item, as the key sees it.
@@ -243,9 +260,10 @@ fn body_key(body: &Body) -> String {
 /// the mesh forces one re-render -- and deliberately so: over-invalidating
 /// costs a render nobody sees, while under-invalidating shows a player the
 /// wrong armour and cannot be noticed from this side.
-fn item_key(id: &ItemDefinitionId<'_>) -> String {
+/// Writes into the key for the same reason [`write_body_key`] does.
+fn write_item_key(key: &mut String, id: &ItemDefinitionId<'_>) {
     match id {
-        ItemDefinitionId::Simple(id) => id.to_string(),
+        ItemDefinitionId::Simple(id) => key.push_str(id),
         ItemDefinitionId::Modular {
             pseudo_base,
             components,
@@ -254,12 +272,15 @@ fn item_key(id: &ItemDefinitionId<'_>) -> String {
             simple_base: pseudo_base,
             components,
         } => {
-            let components = components
-                .iter()
-                .map(item_key)
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{pseudo_base}({components})")
+            key.push_str(pseudo_base);
+            key.push('(');
+            for (i, component) in components.iter().enumerate() {
+                if i > 0 {
+                    key.push(',');
+                }
+                write_item_key(key, component);
+            }
+            key.push(')');
         },
     }
 }
@@ -556,14 +577,23 @@ impl PortraitService {
             }
         });
 
-        let stdout = child.stdout.take().expect("stdout was piped");
+        let mut stdout = child.stdout.take().expect("stdout was piped");
         let image = drain(move |buffer| {
             // One byte past the cap, so that hitting it is distinguishable
             // from an image that happens to be exactly that long.
-            stdout
+            (&mut stdout)
                 .take(MAX_IMAGE_BYTES as u64 + 1)
-                .read_to_end(buffer)
-                .map(|_| ())
+                .read_to_end(buffer)?;
+            if buffer.len() > MAX_IMAGE_BYTES {
+                // Keep reading, into nothing. Dropping the pipe here instead
+                // would kill the renderer with `EPIPE` mid-write, and the
+                // request would come back as "the renderer crashed" rather
+                // than the truth, which is that it drew more than it is
+                // allowed to. What it writes past the cap is discarded, so
+                // this costs no memory, and the render timeout still bounds it.
+                std::io::copy(&mut stdout, &mut std::io::sink())?;
+            }
+            Ok(())
         });
         let stderr = child.stderr.take().expect("stderr was piped");
         let diagnostics = drain(move |buffer| {
@@ -583,7 +613,15 @@ impl PortraitService {
                     break None;
                 },
                 Ok(None) => std::thread::sleep(RENDER_POLL_INTERVAL),
-                Err(err) => return Err(RenderError::Spawn(err.to_string())),
+                Err(err) => {
+                    // Returning here without killing would leave the renderer
+                    // running and both drain threads blocked on its pipes --
+                    // the one genuinely unbounded leak this function could
+                    // have.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(RenderError::Spawn(err.to_string()));
+                },
             }
         };
 
@@ -879,6 +917,99 @@ mod tests {
         }
     }
 
+    /// `KEYED_SLOTS` restates voxygen's figure-cache slot list, and nothing
+    /// links the two at compile time -- if upstream starts rendering a slot
+    /// this list doesn't have, every character using it would be stuck on a
+    /// stale portrait with nothing failing to build.
+    ///
+    /// This is the next best thing: an exhaustive match, so that *adding* a
+    /// slot to `EquipSlot`/`ArmorSlot` fails to compile here and forces
+    /// somebody to decide which side of the line it falls on. It cannot catch
+    /// an existing slot becoming visible, which stays a matter of reading the
+    /// figure cache on an upstream merge.
+    #[test]
+    fn every_equip_slot_is_deliberately_keyed_or_not() {
+        fn is_visible(slot: EquipSlot) -> bool {
+            match slot {
+                EquipSlot::ActiveMainhand
+                | EquipSlot::ActiveOffhand
+                | EquipSlot::Lantern
+                | EquipSlot::Glider => true,
+                // A sheathed second loadout is not drawn on the model.
+                EquipSlot::InactiveMainhand | EquipSlot::InactiveOffhand => false,
+                EquipSlot::Armor(armor) => match armor {
+                    ArmorSlot::Head
+                    | ArmorSlot::Shoulders
+                    | ArmorSlot::Chest
+                    | ArmorSlot::Hands
+                    | ArmorSlot::Back
+                    | ArmorSlot::Belt
+                    | ArmorSlot::Legs
+                    | ArmorSlot::Feet => true,
+                    // No mesh of their own: jewellery, tabards and bags are
+                    // absent from `CharacterCacheKey` too.
+                    ArmorSlot::Neck
+                    | ArmorSlot::Ring1
+                    | ArmorSlot::Ring2
+                    | ArmorSlot::Tabard
+                    | ArmorSlot::Bag1
+                    | ArmorSlot::Bag2
+                    | ArmorSlot::Bag3
+                    | ArmorSlot::Bag4 => false,
+                },
+            }
+        }
+
+        // `EquipSlot` derives no iterator, so the roll-call is written out.
+        // It is not what makes this test work -- `is_visible`'s exhaustive
+        // match is -- it is what checks the list against the classification.
+        const ALL_ARMOR: &[ArmorSlot] = &[
+            ArmorSlot::Head,
+            ArmorSlot::Neck,
+            ArmorSlot::Shoulders,
+            ArmorSlot::Chest,
+            ArmorSlot::Hands,
+            ArmorSlot::Ring1,
+            ArmorSlot::Ring2,
+            ArmorSlot::Back,
+            ArmorSlot::Belt,
+            ArmorSlot::Legs,
+            ArmorSlot::Feet,
+            ArmorSlot::Tabard,
+            ArmorSlot::Bag1,
+            ArmorSlot::Bag2,
+            ArmorSlot::Bag3,
+            ArmorSlot::Bag4,
+        ];
+
+        let keyed: std::collections::HashSet<_> =
+            KEYED_SLOTS.iter().map(|(_, slot)| *slot).collect();
+        assert_eq!(
+            keyed.len(),
+            KEYED_SLOTS.len(),
+            "a slot is listed twice in KEYED_SLOTS"
+        );
+
+        let all = [
+            EquipSlot::ActiveMainhand,
+            EquipSlot::ActiveOffhand,
+            EquipSlot::InactiveMainhand,
+            EquipSlot::InactiveOffhand,
+            EquipSlot::Lantern,
+            EquipSlot::Glider,
+        ]
+        .into_iter()
+        .chain(ALL_ARMOR.iter().copied().map(EquipSlot::Armor));
+
+        for slot in all {
+            assert_eq!(
+                keyed.contains(&slot),
+                is_visible(slot),
+                "{slot:?} is classified one way above and keyed the other"
+            );
+        }
+    }
+
     #[test]
     fn every_keyed_slot_has_its_own_position_in_the_key() {
         let body = body();
@@ -904,13 +1035,26 @@ mod tests {
         );
     }
 
+    /// Everything that decides what the output *is*, as opposed to who is in
+    /// it, has to sit in the key -- otherwise changing it leaves every client
+    /// holding a matching etag and being told `304` forever, against an image
+    /// the server would now render differently.
     #[test]
-    fn the_key_is_prefixed_with_the_params_version() {
+    fn the_key_is_prefixed_with_every_output_parameter() {
         let key = appearance_key(&body(), &Inventory::with_empty());
-        assert!(
-            key.starts_with(&format!("{PORTRAIT_PARAMS_VERSION}|")),
-            "a version bump must be able to invalidate every key: {key}"
-        );
+        let prefix = key.split('|').next().expect("the key has a prefix");
+
+        for parameter in [
+            PORTRAIT_PARAMS_VERSION,
+            &DEFAULT_PORTRAIT_SIZE.to_string(),
+            PORTRAIT_FRAMING,
+            PORTRAIT_FORMAT,
+        ] {
+            assert!(
+                prefix.split('/').any(|field| field == parameter),
+                "{parameter:?} must be part of the key prefix, which is {prefix:?}"
+            );
+        }
     }
 
     #[test]

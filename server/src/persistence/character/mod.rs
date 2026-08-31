@@ -17,12 +17,12 @@ use crate::{
             convert_body_to_database_json, convert_character_from_database,
             convert_class_from_database, convert_class_to_database, convert_ethos_from_database,
             convert_future_levels_to_secondary_to_database, convert_hardcore_from_database,
-            convert_hardcore_to_database, convert_items_to_database_items,
-            convert_loadout_from_database_items, convert_pact_from_database,
-            convert_pact_to_database, convert_recipe_book_from_database_items,
-            convert_secondary_class_level_to_database, convert_secondary_class_to_database,
-            convert_skill_groups_to_database, convert_skill_set_from_database,
-            convert_stats_from_database, convert_waypoint_to_database_json,
+            convert_hardcore_to_database, convert_inventory_from_database_items,
+            convert_items_to_database_items, convert_pact_from_database, convert_pact_to_database,
+            convert_recipe_book_from_database_items, convert_secondary_class_level_to_database,
+            convert_secondary_class_to_database, convert_skill_groups_to_database,
+            convert_skill_set_from_database, convert_stats_from_database,
+            convert_waypoint_to_database_json,
         },
         character_loader::{CharacterCreationResult, CharacterDataResult, CharacterListResult},
         character_updater::PetPersistenceData,
@@ -64,17 +64,17 @@ mod conversions;
 /// goes through `convert_waypoint_or_warn` instead.
 pub(crate) use conversions::convert_waypoint_from_database_json;
 
-/// `persistence::portrait::load_portrait_inputs` rebuilds exactly the body and
-/// inventory `load_character_data` does, for a character whose player may not
-/// be connected, and it lives in `persistence/portrait.rs` rather than here so
-/// that the portrait cache doesn't grow inside this (upstream-hot) file.
-/// Widened to `pub(in crate::persistence)` and no further -- the module warning
-/// above still stands for everyone outside `persistence`. The invariant these
-/// two carry is the topological ordering of the item rows they are handed,
-/// which is `load_items`' job (already `pub`), and `load_portrait_inputs`
-/// composes them in the same order `load_character_data` does.
+/// `persistence::portrait::load_portrait_inputs` rebuilds the body and the
+/// *equipped* half of what `load_character_data` rebuilds, for a character
+/// whose player may not be connected. It lives in `persistence/portrait.rs`
+/// rather than here so that the portrait cache doesn't grow inside this
+/// (upstream-hot) file. Widened to `pub(in crate::persistence)` and no further
+/// -- the module warning above still stands for everyone outside
+/// `persistence`. The invariant these carry is the topological ordering of the
+/// item rows they are handed, which is `load_items`' job (already `pub`), and
+/// `load_portrait_inputs` feeds them the same way `load_character_data` does.
 pub(in crate::persistence) use conversions::{
-    convert_body_from_database, convert_inventory_from_database_items,
+    convert_body_from_database, convert_loadout_from_database_items,
 };
 
 pub(crate) type EntityId = i64;
@@ -90,24 +90,21 @@ const RECIPE_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_container
 /// `spell_book` migration.
 const SPELL_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.spell_book";
 const INVENTORY_PSEUDO_CONTAINER_POSITION: &str = "inventory";
-const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
+/// `pub(in crate::persistence)` for `persistence::portrait`, which resolves
+/// this one container and none of the others.
+pub(in crate::persistence) const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
 const OVERFLOW_ITEMS_PSEUDO_CONTAINER_POSITION: &str = "overflow_items";
 const RECIPE_BOOK_PSEUDO_CONTAINER_POSITION: &str = "recipe_book";
 const SPELL_BOOK_PSEUDO_CONTAINER_POSITION: &str = "spell_book";
 const WORLD_PSEUDO_CONTAINER_ID: EntityId = 1;
 
-/// The five pseudo-container row ids every character's items hang off.
-///
-/// `pub(in crate::persistence)` rather than private so that
-/// `persistence::portrait` can resolve them for a character it is about to
-/// rebuild an `Inventory` for; they are meaningless outside `persistence`.
 #[derive(Clone, Copy)]
-pub(in crate::persistence) struct CharacterContainers {
-    pub(in crate::persistence) inventory_container_id: EntityId,
-    pub(in crate::persistence) loadout_container_id: EntityId,
-    pub(in crate::persistence) overflow_items_container_id: EntityId,
-    pub(in crate::persistence) recipe_book_container_id: EntityId,
-    pub(in crate::persistence) spell_book_container_id: EntityId,
+struct CharacterContainers {
+    inventory_container_id: EntityId,
+    loadout_container_id: EntityId,
+    overflow_items_container_id: EntityId,
+    recipe_book_container_id: EntityId,
+    spell_book_container_id: EntityId,
 }
 
 /// Load the inventory/loadout
@@ -1412,7 +1409,7 @@ fn get_new_entity_ids(
 }
 
 /// Fetches the pseudo_container IDs for a character
-pub(in crate::persistence) fn get_pseudo_containers(
+fn get_pseudo_containers(
     connection: &Connection,
     character_id: CharacterId,
 ) -> Result<CharacterContainers, PersistenceError> {
@@ -1447,7 +1444,10 @@ pub(in crate::persistence) fn get_pseudo_containers(
     Ok(character_containers)
 }
 
-fn get_pseudo_container_id(
+/// `pub(in crate::persistence)` so that `persistence::portrait` can resolve
+/// just the loadout container, rather than paying `get_pseudo_containers` for
+/// all five when it needs one.
+pub(in crate::persistence) fn get_pseudo_container_id(
     connection: &Connection,
     character_id: CharacterId,
     pseudo_container_position: &str,

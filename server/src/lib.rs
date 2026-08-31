@@ -262,6 +262,16 @@ pub enum ServerInitStage {
 }
 
 pub struct Server {
+    /// Answers the web account page's portrait requests on its own thread.
+    /// Held here rather than in the ECS because nothing on the tick ever
+    /// touches it -- the only caller is the frontend's message loop, which
+    /// reaches it through `portrait_service_handle`.
+    ///
+    /// Declared before `state` on purpose: fields drop in declaration order,
+    /// so dropping this sender first closes the queue and stops new portrait
+    /// work being admitted while `CharacterUpdater`'s own drop is flushing and
+    /// joining.
+    portrait_service: portrait::PortraitServiceHandle,
     state: State,
     world: Arc<World>,
     index: IndexOwned,
@@ -273,11 +283,6 @@ pub struct Server {
     metrics_registry: Arc<Registry>,
     chat_cache: ChatCache,
     database_settings: Arc<RwLock<DatabaseSettings>>,
-    /// Answers the web account page's portrait requests on its own thread.
-    /// Held here rather than in the ECS because nothing on the tick ever
-    /// touches it -- the only caller is the frontend's message loop, which
-    /// reaches it through `portrait_service_handle`.
-    portrait_service: portrait::PortraitServiceHandle,
     disconnect_all_clients_requested: bool,
 
     event_dispatcher: SendDispatcher<'static>,
@@ -288,9 +293,16 @@ pub struct Server {
     last_tick_time: Duration,
 }
 
-/// Where the portrait renderer is looked for when nothing says otherwise: a
-/// file named `portrait_gen` beside this executable, which is how the release
-/// build installs it.
+/// Where the portrait renderer is looked for: a file named `portrait_gen`
+/// beside this executable.
+///
+/// **Nothing installs it there yet.** Neither the release build nor the Docker
+/// image builds `portrait_gen` (and the image would additionally need the
+/// voxygen figure manifests, which it does not bundle), so on a deployed server
+/// this currently resolves to a path that does not exist. That is not a
+/// problem while nothing can reach the portrait service — no route is wired to
+/// it — but it must be resolved, along with a real settings override for this
+/// path, before the endpoint is turned on.
 ///
 /// Falls back to the bare name — resolved against `PATH` at spawn time — if the
 /// current executable's own path can't be determined, which is not something
@@ -805,6 +817,7 @@ impl Server {
         );
 
         let this = Self {
+            portrait_service,
             state,
             world,
             index,
@@ -814,7 +827,6 @@ impl Server {
             metrics_registry: registry,
             chat_cache,
             database_settings,
-            portrait_service,
             disconnect_all_clients_requested: false,
 
             event_dispatcher: Self::create_event_dispatcher(pools),

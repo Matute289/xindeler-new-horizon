@@ -51,7 +51,10 @@ tracing = { workspace = true }
 notify = { version = "8.0.0" }
 vek = { workspace = true }
 futures-util = { workspace = true }
-tokio = { workspace = true }
+# `sync` is for the portrait worker's oneshot response channels. It already
+# reaches this build through xindeler-query-server's own feature set, but that
+# is an accident of feature unification, not something to depend on.
+tokio = { workspace = true, features = ["sync"] }
 quinn = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { version = "2", default-features = false, features = ["std"] }

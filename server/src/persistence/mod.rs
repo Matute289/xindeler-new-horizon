@@ -13,7 +13,13 @@ mod diesel_to_rusqlite;
 pub mod error;
 mod json_models;
 mod models;
-pub mod portrait;
+/// `pub(in crate::persistence)`, matching `chronicle`: these take a raw
+/// `Connection`/`Transaction`, and the ownership check that makes them safe
+/// lives in `load_portrait_inputs`'s own SQL. Nothing outside this module
+/// should be able to reach them and skip the wrappers below. `PortraitRow` is
+/// re-exported because the public `get_portrait` wrapper returns one.
+pub(in crate::persistence) mod portrait;
+pub use portrait::PortraitRow;
 
 use crate::persistence::character_updater::PetPersistenceData;
 use chrono::{DateTime, Utc};
@@ -318,6 +324,16 @@ pub fn get_portrait(
 /// `rename_character`, this write is unreachable through `CharacterUpdater`'s
 /// background channel, since the character's owner may not be connected.
 ///
+/// This is the only frequent, externally-triggered writer outside
+/// `CharacterUpdater`, and it carries a blob, so it takes one precaution the
+/// other wrappers don't: `synchronous = NORMAL` for this connection only.
+/// SQLite serializes writers, and the far side of that lock is
+/// `execute_batch_update`, which does not retry -- a `SQLITE_BUSY` past the
+/// 250 ms `busy_timeout` there disconnects every player on the server. Under
+/// WAL, `NORMAL` drops the fsync from the commit, so the writer lock is held
+/// for an append rather than a disk flush. What it costs is the last few
+/// portrait writes on a power cut, which is a re-render.
+///
 /// There is deliberately no matching `delete_portrait` wrapper here: the only
 /// thing that ever needs to evict a row is `delete_character`, which calls
 /// `portrait::delete_portrait` inside its own transaction so the eviction is
@@ -331,6 +347,9 @@ pub fn upsert_portrait(
     settings: &DatabaseSettings,
 ) -> Result<(), error::PersistenceError> {
     let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    connection
+        .connection
+        .pragma_update(None, "synchronous", "NORMAL")?;
     let mut transaction = connection.connection.transaction()?;
     transaction.set_drop_behavior(DropBehavior::Rollback);
     portrait::upsert_portrait(
