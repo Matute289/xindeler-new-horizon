@@ -181,5 +181,9 @@ name = "img_export"
 required-features = []
 
 [[bin]]
+name = "portrait_gen"
+required-features = []
+
+[[bin]]
 name = "cmd_doc_gen"
 required-features = ["bin_cmd_doc_gen"]
