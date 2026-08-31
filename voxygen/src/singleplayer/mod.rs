@@ -145,6 +145,12 @@ impl SingleplayerState {
                         editable_settings,
                         database_settings,
                         &server_data_dir,
+                        // No override: a singleplayer server has no web
+                        // account page, so nothing ever asks it for a
+                        // portrait, and the default sibling path is both
+                        // correct here (the renderer ships beside this very
+                        // executable) and never reached.
+                        None,
                         &|init_stage| {
                             let _ = server_stage_tx.send(init_stage);
                         },

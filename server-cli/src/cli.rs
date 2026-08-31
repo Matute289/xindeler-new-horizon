@@ -165,6 +165,32 @@ pub enum Message {
         character_id: i64,
         new_alias: String,
     },
+    /// Serves the portrait image of one of `uuid`'s own characters, rendering
+    /// it first if what the cache holds no longer matches how the character
+    /// currently looks.
+    ///
+    /// `uuid` is the *authenticated* account, never a value the caller
+    /// supplied: ownership of `character_id` is checked against it, and a
+    /// character that is not this account's is answered exactly like one that
+    /// does not exist (`MessageReturn::CharacterPortraitNotFound`), so the
+    /// endpoint cannot be used to discover which character ids are real.
+    /// `if_none_match` is the caller's HTTP header verbatim; it is compared
+    /// against a server-computed digest and never parsed, stored, or put in a
+    /// query.
+    ///
+    /// **Forward-only.** The arm handling this must never render, decode or
+    /// otherwise inspect an image: it hands the request to the `server` crate's
+    /// portrait worker and returns immediately (design spec §6.1). A render is
+    /// a subprocess and up to a second of CPU, and the loop that would
+    /// otherwise be waiting for it is the same one that ticks the game and
+    /// answers every other message. Every outcome therefore arrives on the
+    /// response channel *after* this arm has already returned.
+    GetCharacterPortrait {
+        uuid: String,
+        character_id: i64,
+        #[arg(long)]
+        if_none_match: Option<String>,
+    },
     /// Kicks `target_uuid`'s live session on behalf of `operator_uuid`, a
     /// registered admin/moderator with no live in-game session of its own.
     /// Fails if the operator isn't a real admin/moderator, if the target
@@ -374,6 +400,38 @@ pub enum MessageReturn {
     AdminActionOk {
         ban: Option<common_net::msg::server::BanInfo>,
     },
+    /// Response to a `Message::GetCharacterPortrait` that has an image to
+    /// give, either straight out of the cache or freshly rendered. The bytes
+    /// are opaque here and are re-served as-is; nothing in this process
+    /// decodes them.
+    CharacterPortrait {
+        bytes: Vec<u8>,
+        /// Subtype of the image's `image/*` media type, e.g. `webp`. Comes
+        /// from the cache row rather than a constant, so a row written by an
+        /// older build still describes itself correctly.
+        format: String,
+        /// Bare, without the quotes an `ETag` header wants around it — adding
+        /// them is the HTTP layer's job.
+        etag: String,
+    },
+    /// Response to a `Message::GetCharacterPortrait` whose `if_none_match`
+    /// already names the character's current appearance. No image was read and
+    /// nothing was rendered; the `etag` is echoed so the HTTP layer can repeat
+    /// it on the `304`.
+    CharacterPortraitNotModified {
+        etag: String,
+    },
+    /// Response to a `Message::GetCharacterPortrait` that arrived while the
+    /// render queue was full. The request was not attempted at all, so a retry
+    /// shortly afterwards is the right thing for the caller to do — which is
+    /// why this is its own variant rather than an `Error(String)` the caller
+    /// would have to tell apart from a genuine failure by reading it.
+    CharacterPortraitBusy,
+    /// Response to a `Message::GetCharacterPortrait` for a character that does
+    /// not exist *or* does not belong to the requesting account. Deliberately
+    /// one variant for both: telling them apart is exactly the enumeration
+    /// this endpoint must not offer.
+    CharacterPortraitNotFound,
     /// Response to `Message::SendTargetedMsg`: which of the requested
     /// `target_uuids` were currently connected and got the message, and
     /// which weren't. Not a failure even if `not_found` is non-empty --

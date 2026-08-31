@@ -41,6 +41,7 @@ use server::{
     Event, Input, Server, oracle,
     oracle::policy::{self, PolicyError},
     persistence::DatabaseSettings,
+    portrait::{PortraitOutcome, PortraitRequestMsg},
     settings::Protocol,
 };
 use std::{
@@ -56,6 +57,14 @@ lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
 }
 const TPS: u64 = 30;
+
+/// What a caller is told when a portrait could not be produced.
+///
+/// Fixed, and deliberately uninformative: the real reason (a renderer that
+/// crashed, timed out, drew nothing, or a database that could not be read) is
+/// logged with the character id on this side, and none of it is a caller's
+/// business or any use to one.
+const PORTRAIT_FAILED: &str = "the portrait could not be produced";
 
 /// Recovers a loaded `DmEvent`'s own `<id>` from the path it was ingested
 /// from -- the inverse of the `{event_id}.dmevent.ron`/`.json` match
@@ -316,6 +325,7 @@ fn main() -> io::Result<()> {
         editable_settings,
         database_settings,
         &server_data_dir,
+        settings.portrait_gen_path.clone(),
         &|_| {},
         Arc::clone(&runtime),
     )
@@ -380,6 +390,7 @@ fn main() -> io::Result<()> {
         tui,
         web_ui_request_r,
         shutdown_signal,
+        Arc::clone(&runtime),
     )?;
 
     metrics_shutdown.notify_one();
@@ -397,6 +408,11 @@ fn server_loop(
         tokio::sync::oneshot::Sender<MessageReturn>,
     )>,
     shutdown_signal: Arc<AtomicBool>,
+    // Somewhere to put the handful of message arms whose answer is not ready
+    // by the time the arm returns. This loop is synchronous and must stay that
+    // way -- it ticks the game -- so an arm that would otherwise have to wait
+    // spawns the waiting here instead of doing it inline.
+    runtime: Arc<tokio::runtime::Runtime>,
 ) -> io::Result<()> {
     // Set up an fps clock
     let mut clock = Clock::new(Duration::from_secs_f64(1.0 / TPS as f64));
@@ -696,6 +712,67 @@ fn server_loop(
                         let _ = response.send(MessageReturn::Error(err.public_message()));
                     },
                 },
+                Message::GetCharacterPortrait {
+                    uuid,
+                    character_id,
+                    if_none_match,
+                } => {
+                    // Everything this arm does is hand the request over: no
+                    // database access, no validation beyond building the
+                    // message, and above all no render. `request` itself never
+                    // blocks -- a full queue and a dead worker are both
+                    // answered on `respond` immediately, from inside it.
+                    let (respond, outcome) = tokio::sync::oneshot::channel();
+                    server
+                        .portrait_service_handle()
+                        .request(PortraitRequestMsg {
+                            uuid,
+                            character_id: CharacterId(character_id),
+                            if_none_match,
+                            respond,
+                        });
+                    // The worker answers on its own thread, long after this
+                    // arm has returned, so the translation onto `response`
+                    // happens on the runtime rather than here. Spawning is
+                    // just a queue push; nothing below is awaited on this
+                    // thread.
+                    runtime.spawn(async move {
+                        let answer = match outcome.await {
+                            Ok(PortraitOutcome::Fresh {
+                                bytes,
+                                format,
+                                etag,
+                            }) => MessageReturn::CharacterPortrait {
+                                bytes,
+                                format,
+                                etag,
+                            },
+                            Ok(PortraitOutcome::NotModified { etag }) => {
+                                MessageReturn::CharacterPortraitNotModified { etag }
+                            },
+                            Ok(PortraitOutcome::Busy) => MessageReturn::CharacterPortraitBusy,
+                            Ok(PortraitOutcome::NotFound) => {
+                                MessageReturn::CharacterPortraitNotFound
+                            },
+                            // The failure is already logged, with the
+                            // character id, by whichever step produced it. The
+                            // caller gets a fixed string carrying no detail
+                            // about what went wrong on this side.
+                            Ok(PortraitOutcome::Failed) => {
+                                MessageReturn::Error(PORTRAIT_FAILED.to_owned())
+                            },
+                            // The worker dropped the request without
+                            // answering, which it has no path to do. Reported
+                            // rather than silently dropped, so the caller sees
+                            // a failure instead of a timeout.
+                            Err(err) => {
+                                error!(%err, "the portrait worker dropped a request unanswered");
+                                MessageReturn::Error(PORTRAIT_FAILED.to_owned())
+                            },
+                        };
+                        let _ = response.send(answer);
+                    });
+                },
                 Message::AdminKickPlayer {
                     target_uuid,
                     operator_uuid,
@@ -870,6 +947,23 @@ fn server_loop(
                             delivered_to,
                             not_found,
                         } => info!(?delivered_to, ?not_found, "Targeted message sent"),
+                        // The portrait arms answer asynchronously, so the
+                        // `try_recv` above has essentially never got one by
+                        // the time it looks. They are written out because this
+                        // match is exhaustive, and they log the image's length
+                        // rather than the image.
+                        MessageReturn::CharacterPortrait { bytes, format, .. } => {
+                            info!(len = bytes.len(), %format, "Character portrait")
+                        },
+                        MessageReturn::CharacterPortraitNotModified { .. } => {
+                            info!("Character portrait unchanged")
+                        },
+                        MessageReturn::CharacterPortraitBusy => {
+                            info!("Character portrait deferred: the render queue is full")
+                        },
+                        MessageReturn::CharacterPortraitNotFound => {
+                            info!("No such character portrait")
+                        },
                     };
                 }
             }

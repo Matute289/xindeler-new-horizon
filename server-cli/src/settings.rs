@@ -37,6 +37,19 @@ pub struct Settings {
     /// public SECRET API HEADER used to access the /ui_api, if disabled the API
     /// is reachable localhost only (by /ui)
     pub ui_api_secret: Option<String>,
+    /// Where the `portrait_gen` renderer that draws character portraits lives.
+    ///
+    /// `None` -- the default -- looks for a file named `portrait_gen` beside
+    /// this executable, which is where a normal install puts it. Set it when
+    /// the renderer is somewhere else: it is built from the client crate, so a
+    /// server built or deployed separately from one may well not have it as a
+    /// sibling.
+    ///
+    /// The path is not checked at startup and does not have to exist. A server
+    /// without a renderer simply fails every portrait request, with a log line
+    /// saying so, and is otherwise entirely normal -- which is exactly the
+    /// situation on a development machine that has never built the client.
+    pub portrait_gen_path: Option<PathBuf>,
     pub shutdown_signals: Vec<ShutdownSignal>,
 }
 
@@ -48,6 +61,7 @@ impl Default for Settings {
             web_address: SocketAddr::from((Ipv4Addr::LOCALHOST, 14005)),
             web_chat_secret: None,
             ui_api_secret: None,
+            portrait_gen_path: None,
             shutdown_signals: if cfg!(not(target_os = "windows")) {
                 vec![ShutdownSignal::SIGUSR1]
             } else {

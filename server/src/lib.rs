@@ -293,16 +293,16 @@ pub struct Server {
     last_tick_time: Duration,
 }
 
-/// Where the portrait renderer is looked for: a file named `portrait_gen`
-/// beside this executable.
+/// Where the portrait renderer is looked for when the frontend does not say:
+/// a file named `portrait_gen` beside this executable.
 ///
 /// **Nothing installs it there yet.** Neither the release build nor the Docker
 /// image builds `portrait_gen` (and the image would additionally need the
 /// voxygen figure manifests, which it does not bundle), so on a deployed server
-/// this currently resolves to a path that does not exist. That is not a
-/// problem while nothing can reach the portrait service — no route is wired to
-/// it — but it must be resolved, along with a real settings override for this
-/// path, before the endpoint is turned on.
+/// this currently resolves to a path that does not exist, and every portrait
+/// request comes back as a logged failure until the deploy catches up. A
+/// frontend that keeps the renderer somewhere else can say so instead — see
+/// `Server::new`'s `portrait_gen_path`.
 ///
 /// Falls back to the bare name — resolved against `PATH` at spawn time — if the
 /// current executable's own path can't be determined, which is not something
@@ -319,11 +319,20 @@ fn default_portrait_gen_path() -> std::path::PathBuf {
 
 impl Server {
     /// Create a new `Server`
+    ///
+    /// `portrait_gen_path` overrides where the portrait renderer is looked
+    /// for; `None` means [`default_portrait_gen_path`], which is where a
+    /// normal install puts it. It is a `Server::new` argument rather than a
+    /// field of [`Settings`] because it describes this *deployment's* layout
+    /// on disk -- which frontend is running and where its files were installed
+    /// -- not anything about the game, and the frontends that have such a
+    /// setting already have their own settings file to put it in.
     pub fn new(
         settings: Settings,
         editable_settings: EditableSettings,
         database_settings: DatabaseSettings,
         data_dir: &std::path::Path,
+        portrait_gen_path: Option<std::path::PathBuf>,
         report_stage: &(dyn Fn(ServerInitStage) + Send + Sync),
         runtime: Arc<Runtime>,
     ) -> Result<Self, Error> {
@@ -813,7 +822,7 @@ impl Server {
 
         let portrait_service = portrait::PortraitService::spawn(
             Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
-            default_portrait_gen_path(),
+            portrait_gen_path.unwrap_or_else(default_portrait_gen_path),
         );
 
         let this = Self {
