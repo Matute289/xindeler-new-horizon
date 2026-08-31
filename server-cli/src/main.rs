@@ -50,21 +50,13 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Notify;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use vek::Vec3;
 
 lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
 }
 const TPS: u64 = 30;
-
-/// What a caller is told when a portrait could not be produced.
-///
-/// Fixed, and deliberately uninformative: the real reason (a renderer that
-/// crashed, timed out, drew nothing, or a database that could not be read) is
-/// logged with the character id on this side, and none of it is a caller's
-/// business or any use to one.
-const PORTRAIT_FAILED: &str = "the portrait could not be produced";
 
 /// Recovers a loaded `DmEvent`'s own `<id>` from the path it was ingested
 /// from -- the inverse of the `{event_id}.dmevent.ron`/`.json` match
@@ -754,20 +746,19 @@ fn server_loop(
                             Ok(PortraitOutcome::NotFound) => {
                                 MessageReturn::CharacterPortraitNotFound
                             },
-                            // The failure is already logged, with the
-                            // character id, by whichever step produced it. The
-                            // caller gets a fixed string carrying no detail
-                            // about what went wrong on this side.
-                            Ok(PortraitOutcome::Failed) => {
-                                MessageReturn::Error(PORTRAIT_FAILED.to_owned())
-                            },
+                            // Already logged, with the character id, by
+                            // whichever step produced it.
+                            Ok(PortraitOutcome::Failed) => MessageReturn::CharacterPortraitFailed,
                             // The worker dropped the request without
-                            // answering, which it has no path to do. Reported
+                            // answering. Ordinary at shutdown -- the service
+                            // is torn down before the frontend stops taking
+                            // requests, so anything in flight lands here --
+                            // which is why this is not an error. Answered
                             // rather than silently dropped, so the caller sees
-                            // a failure instead of a timeout.
+                            // a failure instead of waiting out a timeout.
                             Err(err) => {
-                                error!(%err, "the portrait worker dropped a request unanswered");
-                                MessageReturn::Error(PORTRAIT_FAILED.to_owned())
+                                debug!(%err, "a portrait request went unanswered");
+                                MessageReturn::CharacterPortraitFailed
                             },
                         };
                         let _ = response.send(answer);
@@ -947,22 +938,22 @@ fn server_loop(
                             delivered_to,
                             not_found,
                         } => info!(?delivered_to, ?not_found, "Targeted message sent"),
-                        // The portrait arms answer asynchronously, so the
-                        // `try_recv` above has essentially never got one by
-                        // the time it looks. They are written out because this
-                        // match is exhaustive, and they log the image's length
-                        // rather than the image.
+                        // Unreachable, and written out only because this match
+                        // is exhaustive: the console cannot send the message
+                        // these answer (`Message::GetCharacterPortrait` is
+                        // `#[command(skip)]`), and even if it could, the
+                        // `try_recv` above runs microseconds after the arm
+                        // returns while the answer needs a thread hop and a
+                        // database read to exist. Debug rather than info, and
+                        // the image's length rather than the image.
                         MessageReturn::CharacterPortrait { bytes, format, .. } => {
-                            info!(len = bytes.len(), %format, "Character portrait")
+                            debug!(len = bytes.len(), %format, "Character portrait")
                         },
-                        MessageReturn::CharacterPortraitNotModified { .. } => {
-                            info!("Character portrait unchanged")
-                        },
-                        MessageReturn::CharacterPortraitBusy => {
-                            info!("Character portrait deferred: the render queue is full")
-                        },
-                        MessageReturn::CharacterPortraitNotFound => {
-                            info!("No such character portrait")
+                        MessageReturn::CharacterPortraitNotModified { .. }
+                        | MessageReturn::CharacterPortraitBusy
+                        | MessageReturn::CharacterPortraitNotFound
+                        | MessageReturn::CharacterPortraitFailed => {
+                            debug!("Portrait answer reached the console")
                         },
                     };
                 }

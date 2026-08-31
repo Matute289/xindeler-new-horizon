@@ -185,10 +185,16 @@ pub enum Message {
     /// otherwise be waiting for it is the same one that ticks the game and
     /// answers every other message. Every outcome therefore arrives on the
     /// response channel *after* this arm has already returned.
+    ///
+    /// Not offered as a console command, unlike its neighbours. Two reasons,
+    /// and both of them matter: an operator typing it would get nothing back
+    /// (the console reads its answer immediately, and this one cannot be ready
+    /// by then), and `uuid` would become a value somebody typed, which is the
+    /// one thing the paragraph above says it never is.
+    #[command(skip)]
     GetCharacterPortrait {
         uuid: String,
         character_id: i64,
-        #[arg(long)]
         if_none_match: Option<String>,
     },
     /// Kicks `target_uuid`'s live session on behalf of `operator_uuid`, a
@@ -432,6 +438,16 @@ pub enum MessageReturn {
     /// one variant for both: telling them apart is exactly the enumeration
     /// this endpoint must not offer.
     CharacterPortraitNotFound,
+    /// Response to a `Message::GetCharacterPortrait` that went wrong on this
+    /// side -- the renderer crashed, timed out, drew nothing, or the database
+    /// could not be read.
+    ///
+    /// Carries no reason, and is a variant rather than an `Error(String)` for
+    /// the same reason the two above are: a caller distinguishing "come back
+    /// later", "no such character" and "we are broken" by parsing a message
+    /// would be a contract made of prose. The real reason is logged with the
+    /// character id by whichever step produced it.
+    CharacterPortraitFailed,
     /// Response to `Message::SendTargetedMsg`: which of the requested
     /// `target_uuids` were currently connected and got the message, and
     /// which weren't. Not a failure even if `not_found` is non-empty --
@@ -510,5 +526,34 @@ pub fn parse_command(input: &str, msg_s: &mut Sender<Message>) {
                 .unwrap_or_else(|e| error!(?e, "Failed to send CLI message"));
         },
         Err(e) => error!("{}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TuiApp;
+    use clap::Parser;
+
+    /// `GetCharacterPortrait` is `#[command(skip)]`, so it must not be
+    /// reachable from the operator console: its answer arrives too late for
+    /// the console to ever print, and its `uuid` is meant to be an
+    /// authenticated identity rather than something anybody types.
+    #[test]
+    fn the_portrait_message_is_not_a_console_command() {
+        assert!(
+            TuiApp::try_parse_from(["get-character-portrait", "some-uuid", "1"]).is_err(),
+            "the portrait message must not be typeable at the console"
+        );
+    }
+
+    /// The control for the test above: without this, that one would also pass
+    /// if the console simply rejected every command, or if the name were
+    /// spelled differently than clap derives it.
+    #[test]
+    fn a_neighbouring_message_still_is() {
+        assert!(
+            TuiApp::try_parse_from(["list-player-characters", "some-uuid"]).is_ok(),
+            "the console must still accept the messages that are meant to be typed"
+        );
     }
 }

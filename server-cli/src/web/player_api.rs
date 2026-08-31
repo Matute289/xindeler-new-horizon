@@ -24,7 +24,9 @@ use axum::{
     extract::{Path, Request, State},
     http::{
         HeaderMap, HeaderValue,
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RETRY_AFTER},
+        header::{
+            AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RETRY_AFTER, VARY,
+        },
     },
     middleware::Next,
     response::{IntoResponse, Response},
@@ -173,12 +175,28 @@ async fn rename(
 /// the `ETag` is what actually decides whether anything is re-sent.
 const PORTRAIT_CACHE_CONTROL: HeaderValue = HeaderValue::from_static("private, max-age=300");
 
+/// What a cached portrait is allowed to be reused *for*.
+///
+/// Without this, `private, max-age=300` is a hole straight through the
+/// ownership check: caches key on the URL, and the only thing distinguishing
+/// two accounts asking for `/characters/42/portrait` is the `Authorization`
+/// header. One account's browser profile could hand the next account's session
+/// an image out of its own cache without the request ever reaching this server
+/// -- five minutes wide, and invisible from here. Naming the header makes the
+/// tokens part of the cache key.
+const PORTRAIT_VARY: HeaderValue = HeaderValue::from_static("authorization");
+
 /// Seconds a caller is asked to wait after being turned away because the render
 /// queue was full.
 ///
-/// Comfortably longer than the render that is occupying the queue (tens of
-/// milliseconds warm), short enough that a page which fell into the gap still
-/// fills in while the reader is looking at it.
+/// Tuned for the case that actually happens rather than the worst one. A warm
+/// render is on the order of ten milliseconds, so a full queue normally drains
+/// in far less than a second and five is already generous. The worst case is
+/// much worse -- four queued renders each allowed fifteen seconds before they
+/// are killed -- and a caller that walks into *that* gets a second `503` and
+/// asks again, which is the right outcome: waiting a guaranteed minute on
+/// every full queue, to be correct about a case that means the renderer is
+/// already broken, would make the common one feel broken too.
 const PORTRAIT_RETRY_AFTER: HeaderValue = HeaderValue::from_static("5");
 
 /// The caller's `If-None-Match`, if it sent one this layer can read.
@@ -228,6 +246,7 @@ fn portrait_response(answer: MessageReturn) -> Response {
                     (CONTENT_TYPE, content_type),
                     (ETAG, etag),
                     (CACHE_CONTROL, PORTRAIT_CACHE_CONTROL),
+                    (VARY, PORTRAIT_VARY),
                 ],
                 Body::from(bytes),
             )
@@ -238,8 +257,17 @@ fn portrait_response(answer: MessageReturn) -> Response {
                 error!("a portrait tag cannot be carried in a header");
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             };
-            // No body, by definition of the status.
-            (StatusCode::NOT_MODIFIED, [(ETAG, etag)]).into_response()
+            // No body, by definition of the status. The caching headers are
+            // repeated rather than left off: a `304` is allowed to update what
+            // the cache already holds, so sending them makes the refreshed
+            // entry's rules identical to the ones it was stored under instead
+            // of leaving that to each cache's own defaults.
+            (StatusCode::NOT_MODIFIED, [
+                (ETAG, etag),
+                (CACHE_CONTROL, PORTRAIT_CACHE_CONTROL),
+                (VARY, PORTRAIT_VARY),
+            ])
+                .into_response()
         },
         MessageReturn::CharacterPortraitBusy => {
             let headers = [(RETRY_AFTER, PORTRAIT_RETRY_AFTER)];
@@ -249,11 +277,13 @@ fn portrait_response(answer: MessageReturn) -> Response {
         // that distinguished them would let a caller walk the character-id
         // space and learn which ids exist.
         MessageReturn::CharacterPortraitNotFound => StatusCode::NOT_FOUND.into_response(),
-        // The reason is already logged with the character id on the game
-        // server's side, and none of it goes to the caller -- unlike `rename`,
-        // where the refusal reason is something the player asked for and can
-        // act on, a failed render is this server's problem alone.
-        MessageReturn::Error(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        // The reason is already logged, with the character id, by whichever
+        // step produced it, and none of it goes to the caller -- unlike
+        // `rename`, where the refusal reason is something the player asked for
+        // and can act on, a failed render is this server's problem alone.
+        MessageReturn::CharacterPortraitFailed => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        // An answer to somebody else's message: a bug on this side, and not
+        // one to describe to a caller either.
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
@@ -300,7 +330,7 @@ mod tests {
         extract::Request,
         http::{
             HeaderMap,
-            header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RETRY_AFTER},
+            header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RETRY_AFTER, VARY},
         },
         response::Response,
     };
@@ -397,6 +427,12 @@ mod tests {
             "the tag must be quoted, which the game server deliberately does not do"
         );
         assert_eq!(response.headers()[CACHE_CONTROL], "private, max-age=300");
+        assert_eq!(
+            response.headers()[VARY],
+            "authorization",
+            "without this, a private cache may hand one account's portrait to the next session in \
+             the same browser, never reaching the ownership check"
+        );
         assert_eq!(body_bytes(response), b"IMAGE");
     }
 
@@ -423,6 +459,12 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers()[ETAG], format!("\"{ETAG_VALUE}\""));
+        assert_eq!(
+            response.headers()[VARY],
+            "authorization",
+            "a 304 updates what the cache holds, so it must not silently widen who may reuse it"
+        );
+        assert_eq!(response.headers()[CACHE_CONTROL], "private, max-age=300");
         assert!(body_bytes(response).is_empty());
     }
 
@@ -446,21 +488,29 @@ mod tests {
         );
     }
 
-    /// The game server's own description of what went wrong is for its logs.
+    /// Why the render failed is for this server's logs.
     #[test]
     fn a_failure_reaches_the_caller_without_its_reason() {
-        let response = portrait_response(MessageReturn::Error("sqlite: disk I/O error".to_owned()));
+        let response = portrait_response(MessageReturn::CharacterPortraitFailed);
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(body_bytes(response).is_empty());
     }
 
-    /// An answer to somebody else's message can only be a bug on this side,
-    /// and must not be shown to the caller either.
+    /// An answer to somebody else's message can only be a bug on this side.
+    /// `Error` is in the list deliberately: it is how *other* handlers report a
+    /// refusal together with its reason, and that reason must not be relayed
+    /// by this route even if one ever reaches it by mistake.
     #[test]
-    fn an_unrelated_answer_is_a_failure() {
-        let response = portrait_response(MessageReturn::CharacterRenamed);
+    fn an_unrelated_answer_is_a_failure_that_says_nothing() {
+        for answer in [
+            MessageReturn::CharacterRenamed,
+            MessageReturn::Error("sqlite: disk I/O error".to_owned()),
+        ] {
+            let response = portrait_response(answer);
 
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(body_bytes(response).is_empty());
+        }
     }
 }
