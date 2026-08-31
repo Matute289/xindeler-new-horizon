@@ -34,6 +34,7 @@ pub mod oracle;
 pub mod pact;
 pub mod persistence;
 mod pet;
+pub mod portrait;
 pub mod presence;
 pub mod rtsim;
 pub mod settings;
@@ -272,6 +273,11 @@ pub struct Server {
     metrics_registry: Arc<Registry>,
     chat_cache: ChatCache,
     database_settings: Arc<RwLock<DatabaseSettings>>,
+    /// Answers the web account page's portrait requests on its own thread.
+    /// Held here rather than in the ECS because nothing on the tick ever
+    /// touches it -- the only caller is the frontend's message loop, which
+    /// reaches it through `portrait_service_handle`.
+    portrait_service: portrait::PortraitServiceHandle,
     disconnect_all_clients_requested: bool,
 
     event_dispatcher: SendDispatcher<'static>,
@@ -280,6 +286,23 @@ pub struct Server {
     /// Wall-clock duration of the most recently completed tick.
     /// `Duration::ZERO` until the first tick finishes.
     last_tick_time: Duration,
+}
+
+/// Where the portrait renderer is looked for when nothing says otherwise: a
+/// file named `portrait_gen` beside this executable, which is how the release
+/// build installs it.
+///
+/// Falls back to the bare name — resolved against `PATH` at spawn time — if the
+/// current executable's own path can't be determined, which is not something
+/// that happens on any platform this server runs on but is not worth panicking
+/// over either. Nothing checks that the file exists: a server built without the
+/// renderer beside it is an ordinary development setup, and the right place for
+/// that to surface is the first request that actually needs a render.
+fn default_portrait_gen_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("portrait_gen")))
+        .unwrap_or_else(|| std::path::PathBuf::from("portrait_gen"))
 }
 
 impl Server {
@@ -776,6 +799,11 @@ impl Server {
             weather::init(&mut state);
         }
 
+        let portrait_service = portrait::PortraitService::spawn(
+            Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
+            default_portrait_gen_path(),
+        );
+
         let this = Self {
             state,
             world,
@@ -786,6 +814,7 @@ impl Server {
             metrics_registry: registry,
             chat_cache,
             database_settings,
+            portrait_service,
             disconnect_all_clients_requested: false,
 
             event_dispatcher: Self::create_event_dispatcher(pools),
@@ -1764,6 +1793,16 @@ impl Server {
     /// connection from.
     pub fn database_settings(&self) -> Arc<RwLock<DatabaseSettings>> {
         Arc::clone(&self.database_settings)
+    }
+
+    /// Exposes the portrait worker's queue for the frontend's message loop.
+    ///
+    /// Handing out the handle rather than a `portrait(...)` method is the
+    /// point: the caller keeps its own response channel and returns
+    /// immediately, so a render can never happen on the thread that is also
+    /// running the game.
+    pub fn portrait_service_handle(&self) -> portrait::PortraitServiceHandle {
+        self.portrait_service.clone()
     }
 
     /// NH-79 Phase 2: exposes the same `authc::AuthClient`

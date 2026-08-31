@@ -94,6 +94,8 @@ slotmap = { workspace = true }
 
 rusqlite = { workspace = true }
 refinery = { version = "0.9", features = ["rusqlite"] }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 schnellru = "0.2.1"
 
