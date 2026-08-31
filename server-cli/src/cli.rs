@@ -326,6 +326,12 @@ pub struct CharacterSummaryDto {
     pub name: String,
     pub level: u32,
     pub class: String,
+    /// The character's humanoid species, as the raw enum-variant name (same
+    /// convention as `class`) -- callers must localize/rename this for
+    /// display, never show it verbatim, since some species have a
+    /// player-facing display name that differs from the internal variant
+    /// name.
+    pub race: String,
     /// `None` if this character never sat at a waypoint.
     pub location: Option<LocationDto>,
     /// `Some(_)` if this character is currently suspended.

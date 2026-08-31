@@ -232,6 +232,14 @@ pub struct CharacterSummary {
     pub character_id: CharacterId,
     pub alias: String,
     pub class: String,
+    /// The character's humanoid species, in its raw enum-variant form (e.g.
+    /// `"Danari"`, `"Draugr"`) -- the same "send the canonical Rust
+    /// identifier, let the caller localize" convention `class` already
+    /// follows. Callers must NOT display this verbatim: some species have
+    /// a player-facing display name that differs from the enum variant
+    /// name (i18n layer only, the variant itself is never renamed), so a
+    /// raw display would show the wrong name to players.
+    pub race: String,
     pub level: u16,
     pub waypoint: Option<String>,
     pub suspended: Option<SuspensionRecord>,

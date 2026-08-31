@@ -1093,13 +1093,16 @@ pub fn load_character_summaries(
 ) -> Result<Vec<super::CharacterSummary>, PersistenceError> {
     let mut stmt = connection.prepare_cached(
         "
-            SELECT  character_id,
-                    alias,
-                    class,
-                    waypoint
-            FROM    character
-            WHERE   player_uuid = ?1
-            ORDER BY character_id",
+            SELECT  c.character_id,
+                    c.alias,
+                    c.class,
+                    c.waypoint,
+                    b.variant,
+                    b.body_data
+            FROM    character c
+            JOIN    body b ON b.body_id = c.character_id
+            WHERE   c.player_uuid = ?1
+            ORDER BY c.character_id",
     )?;
 
     let rows = stmt
@@ -1108,25 +1111,41 @@ pub fn load_character_summaries(
             let alias: String = row.get(1)?;
             let class: String = row.get(2)?;
             let waypoint: Option<String> = row.get(3)?;
-            Ok((character_id, alias, class, waypoint))
+            let body_variant: String = row.get(4)?;
+            let body_data: String = row.get(5)?;
+            Ok((
+                character_id,
+                alias,
+                class,
+                waypoint,
+                body_variant,
+                body_data,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(stmt);
 
     rows.into_iter()
-        .map(|(character_id, alias, class, waypoint)| {
-            let character_id = CharacterId(character_id);
-            let level = character_level(character_id, connection)?;
-            let suspended = get_character_suspension(character_id, connection)?;
-            Ok(super::CharacterSummary {
-                character_id,
-                alias,
-                class,
-                level,
-                waypoint,
-                suspended,
-            })
-        })
+        .map(
+            |(character_id, alias, class, waypoint, body_variant, body_data)| {
+                let character_id = CharacterId(character_id);
+                let level = character_level(character_id, connection)?;
+                let suspended = get_character_suspension(character_id, connection)?;
+                let race = match convert_body_from_database(&body_variant, &body_data)? {
+                    comp::Body::Humanoid(body) => format!("{:?}", body.species),
+                    other => format!("{:?}", other),
+                };
+                Ok(super::CharacterSummary {
+                    character_id,
+                    alias,
+                    class,
+                    race,
+                    level,
+                    waypoint,
+                    suspended,
+                })
+            },
+        )
         .collect()
 }
 
@@ -2737,6 +2756,37 @@ mod nh79_character_summary_tests {
         let conn = db.connection();
         let summaries = load_character_summaries("uuid-does-not-exist", &conn).expect("load");
         assert!(summaries.is_empty());
+    }
+
+    #[test]
+    fn load_character_summaries_reports_the_stored_species_as_race() {
+        let db = TestDb::new();
+        let body = comp::Body::Humanoid(comp::humanoid::Body {
+            species: comp::humanoid::Species::Draugr,
+            ..comp::humanoid::Body::random()
+        });
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let (id, _) = create_character(
+            "uuid-race",
+            "Species Test",
+            PersistedComponents {
+                body,
+                stats: comp::Stats::new(Content::Plain("Species Test".to_owned()), body),
+                ..components()
+            },
+            &mut transaction,
+        )
+        .expect("creation");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let summaries = load_character_summaries("uuid-race", &conn).expect("load");
+        assert_eq!(
+            summaries.iter().find(|s| s.character_id == id).unwrap().race,
+            "Draugr",
+            "race must be the raw Species enum-variant name, never a display/localized string"
+        );
     }
 }
 
