@@ -14,13 +14,11 @@ use crate::{
         character::conversions::{
             convert_active_abilities_from_database, convert_active_abilities_to_database,
             convert_background_from_database, convert_background_to_database,
-            convert_body_from_database, convert_body_to_database_json,
-            convert_character_from_database, convert_class_from_database,
-            convert_class_to_database, convert_ethos_from_database,
+            convert_body_to_database_json, convert_character_from_database,
+            convert_class_from_database, convert_class_to_database, convert_ethos_from_database,
             convert_future_levels_to_secondary_to_database, convert_hardcore_from_database,
             convert_hardcore_to_database, convert_inventory_from_database_items,
-            convert_items_to_database_items, convert_loadout_from_database_items,
-            convert_pact_from_database, convert_pact_to_database,
+            convert_items_to_database_items, convert_pact_from_database, convert_pact_to_database,
             convert_recipe_book_from_database_items, convert_secondary_class_level_to_database,
             convert_secondary_class_to_database, convert_skill_groups_to_database,
             convert_skill_set_from_database, convert_stats_from_database,
@@ -66,6 +64,19 @@ mod conversions;
 /// goes through `convert_waypoint_or_warn` instead.
 pub(crate) use conversions::convert_waypoint_from_database_json;
 
+/// `persistence::portrait::load_portrait_inputs` rebuilds the body and the
+/// *equipped* half of what `load_character_data` rebuilds, for a character
+/// whose player may not be connected. It lives in `persistence/portrait.rs`
+/// rather than here so that the portrait cache doesn't grow inside this
+/// (upstream-hot) file. Widened to `pub(in crate::persistence)` and no further
+/// -- the module warning above still stands for everyone outside
+/// `persistence`. The invariant these carry is the topological ordering of the
+/// item rows they are handed, which is `load_items`' job (already `pub`), and
+/// `load_portrait_inputs` feeds them the same way `load_character_data` does.
+pub(in crate::persistence) use conversions::{
+    convert_body_from_database, convert_loadout_from_database_items,
+};
+
 pub(crate) type EntityId = i64;
 
 const CHARACTER_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.character";
@@ -79,7 +90,9 @@ const RECIPE_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_container
 /// `spell_book` migration.
 const SPELL_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.spell_book";
 const INVENTORY_PSEUDO_CONTAINER_POSITION: &str = "inventory";
-const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
+/// `pub(in crate::persistence)` for `persistence::portrait`, which resolves
+/// this one container and none of the others.
+pub(in crate::persistence) const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
 const OVERFLOW_ITEMS_PSEUDO_CONTAINER_POSITION: &str = "overflow_items";
 const RECIPE_BOOK_PSEUDO_CONTAINER_POSITION: &str = "recipe_book";
 const SPELL_BOOK_PSEUDO_CONTAINER_POSITION: &str = "spell_book";
@@ -977,6 +990,16 @@ pub fn delete_character(
     stmt.execute([&char_id.0])?;
     drop(stmt);
 
+    // Delete the cached portrait, if one was ever rendered. `character_id`s
+    // are never reused (`get_new_entity_ids` allocates from `sqlite_sequence`),
+    // so an orphaned row could not be served to anybody -- but nothing would
+    // ever collect it either, and a picture of a character its player deleted
+    // is not something to keep lying around. Inside this transaction so that a
+    // deletion that rolls back does not take the portrait with it, and ahead of
+    // the character row so the order stays correct if this table ever does
+    // acquire a foreign key.
+    super::portrait::delete_portrait(char_id, transaction)?;
+
     // Delete character
     let mut stmt = transaction.prepare_cached(
         "
@@ -1421,7 +1444,10 @@ fn get_pseudo_containers(
     Ok(character_containers)
 }
 
-fn get_pseudo_container_id(
+/// `pub(in crate::persistence)` so that `persistence::portrait` can resolve
+/// just the loadout container, rather than paying `get_pseudo_containers` for
+/// all five when it needs one.
+pub(in crate::persistence) fn get_pseudo_container_id(
     connection: &Connection,
     character_id: CharacterId,
     pseudo_container_position: &str,

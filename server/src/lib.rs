@@ -34,6 +34,7 @@ pub mod oracle;
 pub mod pact;
 pub mod persistence;
 mod pet;
+pub mod portrait;
 pub mod presence;
 pub mod rtsim;
 pub mod settings;
@@ -261,6 +262,16 @@ pub enum ServerInitStage {
 }
 
 pub struct Server {
+    /// Answers the web account page's portrait requests on its own thread.
+    /// Held here rather than in the ECS because nothing on the tick ever
+    /// touches it -- the only caller is the frontend's message loop, which
+    /// reaches it through `portrait_service_handle`.
+    ///
+    /// Declared before `state` on purpose: fields drop in declaration order,
+    /// so dropping this sender first closes the queue and stops new portrait
+    /// work being admitted while `CharacterUpdater`'s own drop is flushing and
+    /// joining.
+    portrait_service: portrait::PortraitServiceHandle,
     state: State,
     world: Arc<World>,
     index: IndexOwned,
@@ -280,6 +291,30 @@ pub struct Server {
     /// Wall-clock duration of the most recently completed tick.
     /// `Duration::ZERO` until the first tick finishes.
     last_tick_time: Duration,
+}
+
+/// Where the portrait renderer is looked for: a file named `portrait_gen`
+/// beside this executable.
+///
+/// **Nothing installs it there yet.** Neither the release build nor the Docker
+/// image builds `portrait_gen` (and the image would additionally need the
+/// voxygen figure manifests, which it does not bundle), so on a deployed server
+/// this currently resolves to a path that does not exist. That is not a
+/// problem while nothing can reach the portrait service — no route is wired to
+/// it — but it must be resolved, along with a real settings override for this
+/// path, before the endpoint is turned on.
+///
+/// Falls back to the bare name — resolved against `PATH` at spawn time — if the
+/// current executable's own path can't be determined, which is not something
+/// that happens on any platform this server runs on but is not worth panicking
+/// over either. Nothing checks that the file exists: a server built without the
+/// renderer beside it is an ordinary development setup, and the right place for
+/// that to surface is the first request that actually needs a render.
+fn default_portrait_gen_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("portrait_gen")))
+        .unwrap_or_else(|| std::path::PathBuf::from("portrait_gen"))
 }
 
 impl Server {
@@ -776,7 +811,13 @@ impl Server {
             weather::init(&mut state);
         }
 
+        let portrait_service = portrait::PortraitService::spawn(
+            Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
+            default_portrait_gen_path(),
+        );
+
         let this = Self {
+            portrait_service,
             state,
             world,
             index,
@@ -1764,6 +1805,16 @@ impl Server {
     /// connection from.
     pub fn database_settings(&self) -> Arc<RwLock<DatabaseSettings>> {
         Arc::clone(&self.database_settings)
+    }
+
+    /// Exposes the portrait worker's queue for the frontend's message loop.
+    ///
+    /// Handing out the handle rather than a `portrait(...)` method is the
+    /// point: the caller keeps its own response channel and returns
+    /// immediately, so a render can never happen on the thread that is also
+    /// running the game.
+    pub fn portrait_service_handle(&self) -> portrait::PortraitServiceHandle {
+        self.portrait_service.clone()
     }
 
     /// NH-79 Phase 2: exposes the same `authc::AuthClient`
