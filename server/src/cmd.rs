@@ -6231,6 +6231,56 @@ pub(crate) fn admin_unban_player(
     }
 }
 
+/// Sends `msg` to exactly the connected players named by `target_uuids`, on
+/// behalf of `operator_uuid` (recorded here purely for our own audit log --
+/// `xindeler-zuul` keeps its own step-up-gated audit trail for who asked for
+/// this, but a low-visibility DM to one or two players is a much easier
+/// spoofing/social-engineering target than a self-auditing global broadcast,
+/// so this side keeps a record too). Skips (and reports back) any uuid that
+/// isn't currently connected. No operator/role check, unlike the admin
+/// kick/ban/unban functions above -- this is the same security tier
+/// `Message::SendGlobalMsg` already uses (gated purely by holding the shared
+/// `/ui_api/v1` secret), just scoped to specific recipients instead of
+/// everyone; `operator_uuid` is not required to be a registered admin.
+/// Bypasses `StateExt::send_chat` entirely (same as the admin functions
+/// above), so this does not go through `ChatExporter`/`validate_chat_msg` --
+/// verified harmless: `ChatType::Meta` already skips both in that path today
+/// (`uid()` is `None`, `ChatExporter::generate` falls through to `None` for
+/// `Meta`), so nothing is lost by sending directly. See
+/// `Message::SendTargetedMsg`.
+pub(crate) fn send_targeted_msg(
+    server: &Server,
+    target_uuids: &[Uuid],
+    operator_uuid: Uuid,
+    msg: String,
+) -> (Vec<Uuid>, Vec<Uuid>) {
+    let ecs = server.state.ecs();
+    let clients = ecs.read_storage::<Client>();
+    let resolved_msg = ServerGeneral::server_msg(ChatType::Meta, Content::Plain(msg));
+
+    let mut delivered = Vec::new();
+    let mut not_found = Vec::new();
+    for &uuid in target_uuids {
+        let client = find_uuid(ecs, uuid)
+            .ok()
+            .and_then(|entity| clients.get(entity));
+        match client {
+            Some(client) => {
+                client.send_fallible(resolved_msg.clone());
+                delivered.push(uuid);
+            },
+            None => not_found.push(uuid),
+        }
+    }
+    info!(
+        %operator_uuid,
+        delivered = delivered.len(),
+        not_found = not_found.len(),
+        "targeted message sent"
+    );
+    (delivered, not_found)
+}
+
 /// Resolves `character_id`'s owning account uuid for the admin
 /// suspend/unsuspend commands below, and confirms it matches
 /// `expected_target_uuid` -- the uuid the caller believes owns this
