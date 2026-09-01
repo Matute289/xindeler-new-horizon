@@ -2783,7 +2783,11 @@ mod nh79_character_summary_tests {
         let conn = db.connection();
         let summaries = load_character_summaries("uuid-race", &conn).expect("load");
         assert_eq!(
-            summaries.iter().find(|s| s.character_id == id).unwrap().race,
+            summaries
+                .iter()
+                .find(|s| s.character_id == id)
+                .unwrap()
+                .race,
             "Draugr",
             "race must be the raw Species enum-variant name, never a display/localized string"
         );
