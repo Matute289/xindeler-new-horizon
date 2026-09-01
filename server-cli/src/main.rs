@@ -80,6 +80,7 @@ fn character_summary_dto(c: server::ResolvedCharacterSummary) -> CharacterSummar
         name: c.alias,
         level: u32::from(c.level),
         class: c.class,
+        race: c.race,
         location: c.location.map(|site| LocationDto {
             site,
             kingdom: None,

@@ -246,6 +246,7 @@ pub struct ResolvedCharacterSummary {
     pub character_id: CharacterId,
     pub alias: String,
     pub class: String,
+    pub race: String,
     pub level: u16,
     /// `None` if this character never sat at a waypoint, or the waypoint's
     /// site couldn't be resolved.
@@ -1859,6 +1860,7 @@ impl Server {
                 character_id: s.character_id,
                 alias: s.alias,
                 class: s.class,
+                race: s.race,
                 level: s.level,
                 location: self.resolve_waypoint_site_name(s.waypoint.as_deref()),
                 suspended: s.suspended,
