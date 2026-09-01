@@ -9,6 +9,7 @@
 ├── src/                              # git checkout, updated by deploy.sh
 ├── xindeler-server-cli                # the running binary
 ├── xindeler-server-cli.previous       # the previous one, kept for rollback
+├── portrait_gen                      # headless portrait renderer (NH-83), spawned per request
 ├── .env                              # secrets, not versioned
 └── userdata/
     ├── server/saves/
@@ -40,6 +41,13 @@ exits with an error.
 
 **The build takes ~10-30 minutes** on the VPS (2 vCPU) — run it from a session that won't
 drop, or under `nohup`/`tmux`.
+
+It also builds and installs `portrait_gen` (the headless character-portrait renderer, NH-83) —
+under the `dev` profile (no LTO), not `--release`: it lives in the `voxygen` crate, whose
+release profile uses full LTO, which does not fit this VPS's 3.8 GB of RAM. No previous-binary
+or dedicated rollback: it's spawned per request rather than run as a service, so a broken build
+simply fails closed (`PortraitService` already treats any unexpected exit as `Failed` and serves
+no portrait, without affecting the rest of the server).
 
 ## Tagged releases
 
