@@ -9,6 +9,7 @@
 ├── src/                              # checkout de git, lo actualiza deploy.sh
 ├── xindeler-server-cli                # el binario en ejecución
 ├── xindeler-server-cli.previous       # el anterior, guardado para rollback
+├── portrait_gen                      # renderer headless de retratos (NH-83), spawneado por pedido
 ├── .env                              # secretos, no versionado
 └── userdata/
     ├── server/saves/
@@ -41,6 +42,13 @@ error.
 
 **La build tarda ~10-30 minutos** en la VPS (2 vCPU) — correrlo en una sesión que no se vaya a
 cortar, o con `nohup`/`tmux`.
+
+También compila e instala `portrait_gen` (el binario headless que renderiza retratos de
+personaje, NH-83) — en perfil `dev` (sin LTO), no `--release`: vive en el crate `voxygen`, cuyo
+perfil de release usa LTO completo, que no entra en los 3.8 GB de RAM de esta VPS. Sin binario
+anterior ni rollback dedicado: se spawnea por pedido, no corre como servicio, así que una build
+rota simplemente falla cerrado (`PortraitService` ya trata cualquier salida inesperada como
+`Failed` y no sirve retrato, sin afectar al resto del servidor).
 
 ## Releases taggeados
 

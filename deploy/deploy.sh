@@ -29,6 +29,7 @@ ROOT="${SERVER_ROOT:-/opt/xindeler-server}"
 SRC="$ROOT/src"
 BIN="$ROOT/xindeler-server-cli"
 PREVIOUS="$ROOT/xindeler-server-cli.previous"
+PORTRAIT_GEN="$ROOT/portrait_gen"
 SAVES="$ROOT/userdata/server/saves"
 RTSIM="$ROOT/userdata/server/rtsim"
 HEALTH_URL="${SERVER_HEALTH_URL:-http://127.0.0.1:14005/health}"
@@ -156,6 +157,21 @@ log "building release binary (this takes ~30 min on 2 vCPU)"
 built="$SRC/target/release/xindeler-server-cli"
 [ -x "$built" ] || fail "build did not produce $built"
 
+# `portrait_gen` (NH-83) lives in the voxygen crate, whose `--release` profile
+# uses full LTO -- fine for a desktop client, not for this box's 3.8 GB of
+# RAM. The `dev` profile (opt-level=2, no LTO) is the exact configuration
+# Phase 1's own benchmark validated (~11ms/render on comparable hardware,
+# well under the 5s abort gate) -- do not switch this to `--release` without
+# re-benchmarking first. `--no-default-features` drops hot-reloading (which
+# would otherwise start a recursive asset-tree watcher for a process that
+# lives ~10ms) plus singleplayer/shaderc-from-source/egui, trimming both
+# build time and the dependency graph.
+log "building portrait_gen (dev profile, no default features)"
+"$CARGO" build --profile dev --locked --no-default-features -p xindeler-voxygen --bin portrait_gen
+
+built_portrait_gen="$SRC/target/debug/portrait_gen"
+[ -x "$built_portrait_gen" ] || fail "build did not produce $built_portrait_gen"
+
 # --- install -----------------------------------------------------------------
 
 if [ -f "$BIN" ]; then
@@ -166,6 +182,15 @@ fi
 log "installing the new binary"
 cp "$built" "$BIN.new"
 mv "$BIN.new" "$BIN"
+
+# No previous-binary/rollback dance for portrait_gen: it is spawned fresh per
+# request rather than run as a service, so there is nothing "running" to
+# roll back. A broken build fails closed -- `PortraitService` already treats
+# any non-{0,2,3,4} exit or a timeout as `Failed` and serves no portrait,
+# degrading a cosmetic feature rather than the server itself.
+log "installing portrait_gen"
+cp "$built_portrait_gen" "$PORTRAIT_GEN.new"
+mv "$PORTRAIT_GEN.new" "$PORTRAIT_GEN"
 
 restart_service
 
