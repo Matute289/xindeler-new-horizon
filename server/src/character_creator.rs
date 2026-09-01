@@ -1,6 +1,6 @@
 use crate::persistence::{PersistedComponents, character_updater::CharacterUpdater};
 use common::{
-    character::CharacterId,
+    character::{CharacterId, normalize_character_name, validate_character_name},
     comp::{
         BASE_ABILITY_LIMIT, Background, Body, CharacterClass, Content, Inventory, Item, SkillSet,
         Stats, Waypoint, class::ClassKind, inventory::loadout_builder::LoadoutBuilder,
@@ -128,6 +128,23 @@ pub enum CreationError {
     InvalidWeapon,
     InvalidBody,
     InvalidClass,
+    InvalidAlias,
+}
+
+/// Whether `alias` is a name the persistence layer would actually accept and
+/// store. Mirrors what `persistence::character::{create,edit,rename}_character`
+/// do — normalize first, then validate the exact string that would be written —
+/// so a name that could never be stored is rejected at the request boundary
+/// with a clear error instead of failing later inside the character-updater
+/// thread.
+///
+/// Deliberately reuses `validate_character_name` rather than a bare length
+/// check: that validator is the single definition of a storable character name
+/// (non-empty, at most `MAX_NAME_LENGTH` characters, and restricted to
+/// alphanumerics plus space/apostrophe/hyphen), and a second, weaker copy here
+/// would let names through that the write path still rejects.
+fn alias_is_storable(alias: &str) -> bool {
+    validate_character_name(&normalize_character_name(alias)).is_ok()
 }
 
 pub fn create_character(
@@ -144,6 +161,9 @@ pub fn create_character(
     character_updater: &mut WriteExpect<'_, CharacterUpdater>,
     waypoint: Option<Waypoint>,
 ) -> Result<(), CreationError> {
+    if !alias_is_storable(&character_alias) {
+        return Err(CreationError::InvalidAlias);
+    }
     // quick fix whitelist validation for now; eventually replace the
     // `Option<String>` with an index into a server-provided list of starter
     // items, and replace `comp::body::Body` with `comp::body::humanoid::Body`
@@ -235,6 +255,10 @@ pub fn edit_character(
     body: Body,
     character_updater: &mut WriteExpect<'_, CharacterUpdater>,
 ) -> Result<(), CreationError> {
+    if !alias_is_storable(&character_alias) {
+        return Err(CreationError::InvalidAlias);
+    }
+
     if !matches!(body, Body::Humanoid(_)) {
         return Err(CreationError::InvalidBody);
     }
@@ -265,6 +289,10 @@ impl core::fmt::Display for CreationError {
             CreationError::InvalidClass => write!(
                 f,
                 "Invalid class.\nServer and client might be partially incompatible."
+            ),
+            CreationError::InvalidAlias => write!(
+                f,
+                "Invalid character name.\nServer and client might be partially incompatible."
             ),
         }
     }
