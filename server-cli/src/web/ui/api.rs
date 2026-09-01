@@ -80,7 +80,15 @@ pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router
         .route("/players", get(players))
         .route("/logs", get(logs))
         .route("/send_global_msg", post(send_global_msg))
-        .route("/send_targeted_msg", post(send_targeted_msg))
+        // `Json` is an extractor, so serde has already allocated the whole
+        // `target_uuids` array by the time `MAX_TARGETED_MSG_UUIDS` can reject
+        // it. Sized to the cap with generous headroom (256 uuids is ~10 KiB of
+        // JSON) so the body limit refuses an oversized array before anything
+        // parses it, rather than after.
+        .route(
+            "/send_targeted_msg",
+            post(send_targeted_msg).layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
         .route("/info", get(info))
         .route("/shutdown", post(shutdown))
         .route("/disconnect_all", post(disconnect_all))
@@ -202,6 +210,13 @@ fn check_targeted_msg_batch(target_count: usize) -> Result<(), (StatusCode, Stri
 /// the first time that IP is ever seen on `/ui_api` at all, so a forged
 /// `operator_uuid` on this route would otherwise have nothing to cross-check
 /// against.
+///
+/// The IP is the *peer's*, so it only distinguishes callers when they connect
+/// directly. Unlike the HTML UI route (`super::ui`, which refuses `Forwarded`
+/// and `X-Forwarded-For` outright), these API routes are expected to sit behind
+/// a gateway in some deployments -- and there every record carries the same
+/// proxy address. That is a real limit on what this log proves; correlating an
+/// operator behind a proxy needs the gateway's own access log as well.
 async fn send_targeted_msg(
     State(web_ui_request_s): State<UiRequestSender>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

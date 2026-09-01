@@ -354,30 +354,47 @@ pub struct PortraitRequestMsg {
     pub respond: tokio::sync::oneshot::Sender<PortraitOutcome>,
 }
 
-/// The accounts that currently have a portrait request in flight.
+/// The `(account, character)` pairs that currently have a request in flight.
 ///
-/// [`QUEUE_DEPTH`] is four slots shared by everybody, so without this one
-/// account can hold all of them -- toggling equipment and re-requesting its own
-/// portrait in a loop is enough -- and every other player is answered
-/// [`PortraitOutcome::Busy`] until it stops. Admission is keyed on the
-/// *account* uuid rather than the character id on purpose: an account has up to
-/// eight characters, and cycling between them would fill the queue just as
-/// effectively as hammering one.
+/// [`QUEUE_DEPTH`] is four slots shared by everybody, so without this a single
+/// caller can hold all of them -- re-requesting one portrait in a loop, which
+/// each equipment change makes stale again, is enough -- and every other player
+/// is answered [`PortraitOutcome::Busy`] until it stops. One in-flight request
+/// per `(uuid, character_id)` removes that: a repeated request for the same
+/// character can occupy exactly one slot, however fast it arrives.
+///
+/// **Keyed on the pair, not on the account alone.** Gating per account would
+/// also throttle the feature's main use: the web account page loads every one
+/// of a player's characters at once, up to
+/// [`MAX_CHARACTERS_PER_PLAYER`](common::character::MAX_CHARACTERS_PER_PLAYER),
+/// and each is a separate request. A per-account gate would serve one and
+/// answer the rest `Busy` even on a fully warm cache, where every one of them
+/// is a cheap database read -- a worse outcome than the abuse it prevents. What
+/// remains is that an account with several characters can still occupy several
+/// slots; that is what [`QUEUE_DEPTH`] itself bounds, and it is the behaviour
+/// this route already had.
 ///
 /// Deliberately a set of in-flight requests rather than a rate limiter: the
 /// abuse pattern is *occupying slots*, not request frequency, so gating on "one
-/// at a time per account" targets it directly and needs no clock, no
-/// per-account timestamps, and no tuning.
-type InFlight = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+/// at a time per character" targets it directly and needs no clock, no
+/// timestamps, and no tuning.
+///
+/// `parking_lot` rather than `std`, matching the rest of this crate
+/// (`sys/msg/register.rs`, `sys/msg/in_game.rs`): both sides of this lock are
+/// reached from the server's main loop, and a `std::sync::Mutex` would let a
+/// poisoned lock panic the tick-owning thread -- exactly the blast radius the
+/// rest of this change exists to shrink. `parking_lot` has no poisoning at all,
+/// so the question does not arise.
+type InFlight = Arc<parking_lot::Mutex<hashbrown::HashSet<(String, CharacterId)>>>;
 
-/// Frees `uuid`'s slot. Split out because both the handle (when a send it had
-/// already admitted turns out to be unroutable) and the worker (when a request
-/// is answered) have to do it.
-fn release(in_flight: &InFlight, uuid: &str) {
-    in_flight
-        .lock()
-        .expect("the portrait in-flight set was poisoned")
-        .remove(uuid);
+/// Frees a `(uuid, character_id)` slot. Split out because both the handle (when
+/// a send it had already admitted turns out to be unroutable) and the worker
+/// (when a request is answered) have to do it.
+fn release(in_flight: &InFlight, uuid: &str, character_id: CharacterId) {
+    // `HashSet::remove` over a borrowed pair would need `Borrow`, which a tuple
+    // of an owned `String` cannot provide; one short-lived clone per completed
+    // request is cheaper than keeping a second index just to avoid it.
+    in_flight.lock().remove(&(uuid.to_owned(), character_id));
 }
 
 /// Hands requests to the portrait worker. Cloneable and cheap; every clone
@@ -389,8 +406,8 @@ pub struct PortraitServiceHandle {
 }
 
 impl PortraitServiceHandle {
-    /// Queues `msg`, or answers it immediately if this account already has one
-    /// in flight or the queue is full.
+    /// Queues `msg`, or answers it immediately if this character already has a
+    /// request in flight or the queue is full.
     ///
     /// Never blocks and never renders on the calling thread: this is called
     /// from the server's main loop, where a render would stall everything else
@@ -399,39 +416,38 @@ impl PortraitServiceHandle {
     /// into an unbounded backlog of work whose callers have long since given
     /// up.
     ///
-    /// The per-account gate answers the *same* `Busy`, not a variant of its
-    /// own. The caller's correct response is identical either way -- retry in a
+    /// The in-flight gate answers the *same* `Busy`, not a variant of its own.
+    /// The caller's correct response is identical either way -- retry in a
     /// moment -- and the HTTP layer maps both to the same 503, so a second
     /// variant would add a case to every match without changing any behaviour.
     /// It would also tell a caller whether the server is globally busy or just
     /// busy with *its* request, which is not something this route owes anyone.
     ///
-    /// The lock is held only across one hash-set insert, on a set whose size is
-    /// bounded by [`QUEUE_DEPTH`] plus one; it is never held across a render, a
-    /// database call, or a channel send that could block.
+    /// The lock is taken for exactly one hash-set insert and released before
+    /// anything is logged or sent: the key is built first, and the guard is a
+    /// temporary of the `let admitted` statement. It is never held across a
+    /// render, a database call, a `tracing` write, or a channel send.
     pub fn request(&self, msg: PortraitRequestMsg) {
-        {
-            let mut in_flight = self
-                .in_flight
-                .lock()
-                .expect("the portrait in-flight set was poisoned");
-            if !in_flight.insert(msg.uuid.clone()) {
-                debug!(
-                    character_id = ?msg.character_id,
-                    "this account already has a portrait render in flight, answering Busy"
-                );
-                let _ = msg.respond.send(PortraitOutcome::Busy);
-                return;
-            }
+        // Built *before* the lock, so the critical section is the insert and
+        // not an allocation as well.
+        let key = (msg.uuid.clone(), msg.character_id);
+        let admitted = self.in_flight.lock().insert(key);
+        if !admitted {
+            debug!(
+                character_id = ?msg.character_id,
+                "this character already has a portrait request in flight, answering Busy"
+            );
+            let _ = msg.respond.send(PortraitOutcome::Busy);
+            return;
         }
 
         match self.requests.try_send(msg) {
             Ok(()) => {},
             Err(TrySendError::Full(msg)) => {
                 // Admitted a moment ago, but there is nowhere to put it, so the
-                // reservation has to come back off -- otherwise this account
-                // would be locked out until it happened to send again.
-                release(&self.in_flight, &msg.uuid);
+                // reservation has to come back off -- otherwise this character
+                // would be locked out until it happened to be asked for again.
+                release(&self.in_flight, &msg.uuid, msg.character_id);
                 debug!(
                     character_id = ?msg.character_id,
                     "portrait queue is full, answering Busy"
@@ -442,7 +458,7 @@ impl PortraitServiceHandle {
                 // The worker thread is gone, which it only is if it panicked.
                 // Busy would invite a retry loop against something that is
                 // never coming back.
-                release(&self.in_flight, &msg.uuid);
+                release(&self.in_flight, &msg.uuid, msg.character_id);
                 error!("the portrait worker is gone; portraits are unavailable");
                 let _ = msg.respond.send(PortraitOutcome::Failed);
             },
@@ -494,8 +510,8 @@ impl PortraitService {
             render_timeout,
         };
 
-        let in_flight: InFlight = Arc::new(std::sync::Mutex::new(
-            std::collections::HashSet::with_capacity(queue_depth + 1),
+        let in_flight: InFlight = Arc::new(parking_lot::Mutex::new(
+            hashbrown::HashSet::with_capacity(queue_depth + 1),
         ));
         let worker_in_flight = Arc::clone(&in_flight);
 
@@ -518,7 +534,7 @@ impl PortraitService {
                     // this loop, which drops the receiver, after which every
                     // request is answered `Failed` by the disconnected arm
                     // above regardless of what the set still contains.
-                    release(&worker_in_flight, &uuid);
+                    release(&worker_in_flight, &uuid, character_id);
                     let _ = respond.send(outcome);
                 }
             })
@@ -1627,11 +1643,11 @@ mod service_tests {
         answer
     }
 
-    /// One account may not hold more than one of the four shared queue slots.
+    /// One character may not hold more than one of the four shared queue slots.
     /// The queue here is the full production depth, so a `Busy` can only have
-    /// come from the per-account gate, not from the queue filling up.
+    /// come from the in-flight gate, not from the queue filling up.
     #[test]
-    fn one_account_may_not_hold_two_slots_at_once() {
+    fn one_character_may_not_hold_two_slots_at_once() {
         let harness = Harness::new();
         let id = harness.character(OWNER, "Testificate", None);
         // Slow enough that the first request is still being rendered when the
@@ -1651,7 +1667,7 @@ mod service_tests {
         assert_eq!(
             second,
             PortraitOutcome::Busy,
-            "a second concurrent request from the same account must be refused"
+            "a second concurrent request for the same character must be refused"
         );
 
         let first = first.blocking_recv().expect("answered");
@@ -1696,9 +1712,9 @@ mod service_tests {
     }
 
     /// The reservation is a reservation, not a ban: once a request is answered
-    /// the account is free to ask again.
+    /// the same character may be asked for again.
     #[test]
-    fn an_account_may_request_again_once_its_request_is_answered() {
+    fn a_character_may_be_requested_again_once_its_request_is_answered() {
         let harness = Harness::new();
         let id = harness.character(OWNER, "Testificate", None);
         let renderer = harness.renderer("sequential", "printf 'FAKE-PORTRAIT-BYTES'");
@@ -1718,11 +1734,15 @@ mod service_tests {
         }
     }
 
-    /// The gate keys on the account, not the character: an account with several
-    /// characters must not be able to occupy several slots by cycling through
-    /// them.
+    /// The gate keys on `(account, character)`, so one player's *different*
+    /// characters do not contend with each other.
+    ///
+    /// This is the account page's load pattern, and getting it wrong is worse
+    /// than the abuse the gate exists to stop: a per-account gate would serve
+    /// one character and answer the rest `Busy`, even on a warm cache where
+    /// each is only a database read.
     #[test]
-    fn one_account_may_not_hold_two_slots_with_two_characters() {
+    fn two_characters_on_one_account_both_proceed() {
         let harness = Harness::new();
         let first_character = harness.character(OWNER, "First", None);
         let second_character = harness.character(OWNER, "Second", None);
@@ -1737,14 +1757,53 @@ mod service_tests {
         let first = send(&handle, OWNER, first_character);
         let second = send(&handle, OWNER, second_character);
 
-        assert_eq!(
-            second.blocking_recv().expect("answered"),
-            PortraitOutcome::Busy,
-            "a different character on the same account must not buy a second slot"
+        for (which, answer) in [("first", first), ("second", second)] {
+            let outcome = answer.blocking_recv().expect("answered");
+            assert!(
+                matches!(&outcome, PortraitOutcome::Fresh { bytes, .. } if bytes == IMAGE),
+                "the {which} character must be served, not refused: {outcome:?}"
+            );
+        }
+        assert_eq!(harness.renders("cycling"), 2);
+    }
+
+    /// The account page asks for every one of a player's characters at once.
+    /// The gate must not turn that into one image and a row of 503s -- the
+    /// shared queue is what bounds this, exactly as it did before the gate
+    /// existed.
+    #[test]
+    fn a_whole_character_roster_is_not_refused_by_the_gate() {
+        let harness = Harness::new();
+        // A full roster, which is what the account page requests in parallel.
+        let ids: Vec<_> = (0..common::character::MAX_CHARACTERS_PER_PLAYER)
+            .map(|i| harness.character(OWNER, &format!("Char{i}"), None))
+            .collect();
+        let renderer = harness.renderer("roster", "printf 'FAKE-PORTRAIT-BYTES'");
+        // Queue deep enough to hold the whole roster, so that anything refused
+        // here was refused by the *gate* rather than by the queue -- otherwise
+        // this test could not tell the two apart.
+        let handle = PortraitService::spawn_with(
+            Arc::clone(&harness.settings),
+            renderer,
+            TEST_RENDER_TIMEOUT,
+            common::character::MAX_CHARACTERS_PER_PLAYER,
         );
-        assert!(matches!(
-            first.blocking_recv().expect("answered"),
-            PortraitOutcome::Fresh { .. }
-        ));
+
+        // All in the air at once, the way the page requests them. Under a
+        // per-account gate this served one and refused the other seven.
+        let answers: Vec<_> = ids.iter().map(|id| send(&handle, OWNER, *id)).collect();
+
+        for (i, answer) in answers.into_iter().enumerate() {
+            let outcome = answer.blocking_recv().expect("answered");
+            assert!(
+                matches!(outcome, PortraitOutcome::Fresh { .. }),
+                "character {i} of a concurrently-loaded roster must be served: {outcome:?}"
+            );
+        }
+        assert_eq!(
+            harness.renders("roster"),
+            common::character::MAX_CHARACTERS_PER_PLAYER,
+            "every distinct character renders once"
+        );
     }
 }

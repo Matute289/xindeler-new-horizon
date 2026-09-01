@@ -1009,6 +1009,14 @@ pub fn delete_character(
     // the same transaction as every other online player's pending logout-save
     // for the tick, so a failure here rolls back their saves too and trips
     // `disconnect_all_clients_requested`, kicking the whole server.
+    //
+    // Note what this decides, since the crash was previously hiding it: a
+    // suspended character is *deletable*, and deleting it discards the
+    // suspension's reason, operator and timestamp along with it. Suspension is
+    // per-character (V87), so "suspend -> delete -> reroll" is a way around it.
+    // Refusing the deletion instead would be a moderation-policy change, not a
+    // crash fix, and belongs in `handle_character_delete` where it can be
+    // reported to the player rather than here in the persistence layer.
     unsuspend_character(char_id, transaction)?;
 
     // Delete character

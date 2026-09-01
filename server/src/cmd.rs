@@ -98,7 +98,7 @@ use wiring::{Circuit, Wire, WireNode, WiringAction, WiringActionEffect, WiringEl
 use world::util::{LOCALITY, Sampler};
 
 use common::comp::Alignment;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub trait ChatCommandExt {
     fn execute(&self, server: &mut Server, entity: EcsEntity, args: Vec<String>);
@@ -6254,6 +6254,13 @@ pub(crate) fn send_targeted_msg(
     operator_uuid: Uuid,
     msg: String,
 ) -> (Vec<Uuid>, Vec<Uuid>) {
+    // Nothing to resolve, so don't pay for the index below. Not a hypothetical
+    // shape: the HTTP layer accepts an empty `target_uuids`, and without this an
+    // empty body would still cost a full pass over every connected player.
+    if target_uuids.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
     let ecs = server.state.ecs();
     let clients = ecs.read_storage::<Client>();
     let resolved_msg = ServerGeneral::server_msg(ChatType::Meta, Content::Plain(msg));
@@ -6275,7 +6282,9 @@ pub(crate) fn send_targeted_msg(
         connected.entry(player.uuid()).or_insert(entity);
     }
 
-    let mut delivered = Vec::new();
+    // `delivered` is the one whose size is known for free and whose expected
+    // case is full; `not_found` stays lazy because the common case is empty.
+    let mut delivered = Vec::with_capacity(target_uuids.len());
     let mut not_found = Vec::new();
     for &uuid in target_uuids {
         let client = connected.get(&uuid).and_then(|&entity| clients.get(entity));
@@ -6287,7 +6296,12 @@ pub(crate) fn send_targeted_msg(
             None => not_found.push(uuid),
         }
     }
-    info!(
+    // Debug, not info: the HTTP handler now emits the audit record for this
+    // same event, and its copy is strictly the better one (it also carries the
+    // caller's source IP and the requested target count). Two INFO lines per
+    // call would just make a grep-based audit double-count. Kept at all so the
+    // engine side still leaves a trace when the log level is turned up.
+    debug!(
         %operator_uuid,
         delivered = delivered.len(),
         not_found = not_found.len(),
