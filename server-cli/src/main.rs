@@ -57,6 +57,17 @@ lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
 }
 const TPS: u64 = 30;
+/// Caps how many queued ops-console/API messages `server_loop` processes
+/// inline in a single tick iteration. `web_ui_request_r`'s channel is
+/// 1000-deep, and every message in it is handled synchronously on this same
+/// thread that also ticks the game -- so without a per-tick cap, a burst of
+/// many queued messages (e.g. several concurrent `SendTargetedMsg` calls,
+/// each already bounded per-request at
+/// `crate::web::ui::api::MAX_TARGETED_MSG_UUIDS`) could still stall every
+/// player's tick by draining an arbitrarily deep backlog in one go. A
+/// message left over past the cap simply stays queued and is picked up on a
+/// later tick -- nothing is dropped, the backlog is just spread out.
+const MAX_MESSAGES_PER_TICK: usize = 64;
 
 /// Recovers a loaded `DmEvent`'s own `<id>` from the path it was ingested
 /// from -- the inverse of the `{event_id}.dmevent.ron`/`.json` match
@@ -93,6 +104,29 @@ fn character_summary_dto(c: server::ResolvedCharacterSummary) -> CharacterSummar
             end_date: s.end_date,
         }),
     }
+}
+
+/// Drains at most `max` `(message, response-channel)` pairs from `receiver`,
+/// calling `handle` on each in order. Stops early -- before reaching `max`
+/// -- if the channel runs dry, or if `handle` returns `true` (a shutdown
+/// request). Returns `true` iff `handle` returned `true`. See
+/// `MAX_MESSAGES_PER_TICK`'s doc comment for why this cap exists: `handle`
+/// runs synchronously on the same thread that ticks the game, so this is
+/// what keeps an arbitrarily deep backlog from stalling every player's tick.
+fn drain_up_to<M, R>(
+    receiver: &mut tokio::sync::mpsc::Receiver<(M, tokio::sync::oneshot::Sender<R>)>,
+    max: usize,
+    mut handle: impl FnMut(M, tokio::sync::oneshot::Sender<R>) -> bool,
+) -> bool {
+    for _ in 0..max {
+        let Ok((msg, sender)) = receiver.try_recv() else {
+            return false;
+        };
+        if handle(msg, sender) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Parses the target/operator uuid strings carried by the admin HTTP `Message`
@@ -961,11 +995,9 @@ fn server_loop(
             }
         }
 
-        while let Ok((msg, sender)) = web_ui_request_r.try_recv() {
-            if handle_msg(msg, sender) {
-                info!("Closing the server");
-                break 'outer;
-            }
+        if drain_up_to(&mut web_ui_request_r, MAX_MESSAGES_PER_TICK, handle_msg) {
+            info!("Closing the server");
+            break 'outer;
         }
 
         drop(guard);
@@ -1005,4 +1037,74 @@ fn server_loop(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod drain_up_to_tests {
+    use super::drain_up_to;
+
+    fn channel_with(
+        n: usize,
+    ) -> tokio::sync::mpsc::Receiver<(u32, tokio::sync::oneshot::Sender<()>)> {
+        let (sender, receiver) = tokio::sync::mpsc::channel(n.max(1));
+        for i in 0..n {
+            let (response, _) = tokio::sync::oneshot::channel();
+            sender
+                .try_send((i as u32, response))
+                .expect("channel has room");
+        }
+        receiver
+    }
+
+    #[test]
+    fn stops_at_the_cap_even_with_more_queued() {
+        let mut receiver = channel_with(10);
+        let mut handled = Vec::new();
+        let shutdown = drain_up_to(&mut receiver, 3, |msg, _| {
+            handled.push(msg);
+            false
+        });
+        assert!(!shutdown);
+        assert_eq!(handled, vec![0, 1, 2]);
+        // The other 7 are still queued, untouched, for a later call.
+        assert_eq!(receiver.len(), 7);
+    }
+
+    #[test]
+    fn drains_fewer_than_the_cap_if_the_channel_runs_dry_first() {
+        let mut receiver = channel_with(2);
+        let mut handled = Vec::new();
+        let shutdown = drain_up_to(&mut receiver, 10, |msg, _| {
+            handled.push(msg);
+            false
+        });
+        assert!(!shutdown);
+        assert_eq!(handled, vec![0, 1]);
+    }
+
+    #[test]
+    fn stops_early_and_reports_shutdown_when_handle_asks_for_it() {
+        let mut receiver = channel_with(10);
+        let mut handled = Vec::new();
+        let shutdown = drain_up_to(&mut receiver, 10, |msg, _| {
+            handled.push(msg);
+            msg == 2 // signal shutdown on the third message
+        });
+        assert!(shutdown);
+        assert_eq!(handled, vec![0, 1, 2]);
+        // Messages after the shutdown-triggering one are left untouched.
+        assert_eq!(receiver.len(), 7);
+    }
+
+    #[test]
+    fn an_empty_channel_handles_nothing_and_reports_no_shutdown() {
+        let mut receiver = channel_with(0);
+        let mut calls = 0;
+        let shutdown = drain_up_to(&mut receiver, 10, |_, _| {
+            calls += 1;
+            false
+        });
+        assert!(!shutdown);
+        assert_eq!(calls, 0);
+    }
 }
