@@ -6258,12 +6258,27 @@ pub(crate) fn send_targeted_msg(
     let clients = ecs.read_storage::<Client>();
     let resolved_msg = ServerGeneral::server_msg(ChatType::Meta, Content::Plain(msg));
 
+    // One pass over the player storage to build a uuid -> entity index, then an
+    // O(1) lookup per requested uuid. This used to call `find_uuid` per target,
+    // and `find_uuid` linearly scans every connected player, making the whole
+    // loop O(targets * players) -- all of it synchronous on the tick-owning
+    // thread, so a caller holding only the shared `/ui_api/v1` secret could
+    // stall the game for everyone with one oversized `target_uuids` array. The
+    // HTTP layer caps that array too (`MAX_TARGETED_MSG_UUIDS`); this makes the
+    // work linear whatever gets through.
+    let mut connected: HashMap<Uuid, EcsEntity> = HashMap::new();
+    for (entity, player) in (&ecs.entities(), &ecs.read_storage::<comp::Player>()).join() {
+        // `find_uuid` returned the *first* match, so keep that tie-break rather
+        // than letting a later entry overwrite an earlier one: two entities can
+        // transiently carry the same account uuid while a reconnect overlaps
+        // its predecessor's cleanup.
+        connected.entry(player.uuid()).or_insert(entity);
+    }
+
     let mut delivered = Vec::new();
     let mut not_found = Vec::new();
     for &uuid in target_uuids {
-        let client = find_uuid(ecs, uuid)
-            .ok()
-            .and_then(|entity| clients.get(entity));
+        let client = connected.get(&uuid).and_then(|&entity| clients.get(entity));
         match client {
             Some(client) => {
                 client.send_fallible(resolved_msg.clone());

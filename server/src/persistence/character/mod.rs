@@ -1000,6 +1000,17 @@ pub fn delete_character(
     // acquire a foreign key.
     super::portrait::delete_portrait(char_id, transaction)?;
 
+    // Lift any suspension before the character row goes. Unlike the portrait
+    // table this one is not merely tidy-up: `character_suspensions.character_id`
+    // is `NOT NULL PRIMARY KEY REFERENCES "character"(character_id)` (V87) and
+    // every connection runs `PRAGMA foreign_keys = ON`, so leaving the row in
+    // place makes the `DELETE FROM character` below fail outright. That error
+    // does not stay local -- `queue_character_deletion` batches this delete into
+    // the same transaction as every other online player's pending logout-save
+    // for the tick, so a failure here rolls back their saves too and trips
+    // `disconnect_all_clients_requested`, kicking the whole server.
+    unsuspend_character(char_id, transaction)?;
+
     // Delete character
     let mut stmt = transaction.prepare_cached(
         "
@@ -1133,7 +1144,14 @@ pub fn load_character_summaries(
                 let suspended = get_character_suspension(character_id, connection)?;
                 let race = match convert_body_from_database(&body_variant, &body_data)? {
                     comp::Body::Humanoid(body) => format!("{:?}", body.species),
-                    other => format!("{:?}", other),
+                    // Not reachable: a player character is always Humanoid,
+                    // the same invariant `portrait.rs` states explicitly. Kept
+                    // total rather than panicking -- a character list is not
+                    // worth failing over -- but a fixed string rather than
+                    // `{other:?}`, which would dump an entire body variant's
+                    // unstable `Debug` shape into a field the web account page
+                    // renders as a race name.
+                    _ => "Unknown".to_owned(),
                 };
                 Ok(super::CharacterSummary {
                     character_id,
@@ -3000,6 +3018,116 @@ mod character_suspension_persistence_tests {
         let mut transaction = conn.connection.transaction().expect("transaction");
         unsuspend_character(id, &mut transaction).expect("unsuspend never-suspended character");
         transaction.commit().expect("commit");
+    }
+
+    /// Regression: `character_suspensions.character_id` is a `NOT NULL PRIMARY
+    /// KEY REFERENCES "character"(character_id)` (V87) and every connection
+    /// runs `PRAGMA foreign_keys = ON`, so deleting a suspended character used
+    /// to fail the FK constraint. That is not a locally-contained failure: the
+    /// player-facing delete path batches this into the same transaction as
+    /// every other online player's pending logout-save for the tick, and an
+    /// error there makes `character_updater` kick every connected client.
+    #[test]
+    fn deleting_a_suspended_character_succeeds() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-delete", "Doomed");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(
+            id,
+            "suspended, then deleted",
+            "operator-uuid",
+            now(),
+            None,
+            &mut transaction,
+        )
+        .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        delete_character("uuid-suspend-delete", id, &mut transaction)
+            .expect("deleting a suspended character must not fail the FK constraint");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let list = load_character_list("uuid-suspend-delete", &conn).expect("load list");
+        assert!(
+            !list.iter().any(|c| c.character.id == Some(id)),
+            "the character itself must be gone"
+        );
+    }
+
+    /// The suspension row must go with the character, not linger as an orphan
+    /// that a recycled id could inherit.
+    #[test]
+    fn deleting_a_character_clears_its_suspension() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-delete-clears", "Doomed");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(id, "reason", "operator-uuid", now(), None, &mut transaction)
+            .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_some(),
+            "precondition: the character is suspended"
+        );
+        drop(conn);
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        delete_character("uuid-suspend-delete-clears", id, &mut transaction).expect("delete");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_none(),
+            "a deleted character must not leave a suspension row behind"
+        );
+        assert!(
+            !load_all_character_suspensions(&conn)
+                .expect("load all")
+                .contains_key(&id),
+            "nor may the startup-load path still see it"
+        );
+    }
+
+    /// `delete_character` silently no-ops for a character the requester does
+    /// not own; the suspension deletion must sit behind that same ownership
+    /// check, mirroring the portrait case.
+    #[test]
+    fn a_refused_character_deletion_leaves_the_suspension_alone() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-delete-owner", "Guarded");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(id, "reason", "operator-uuid", now(), None, &mut transaction)
+            .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        delete_character("uuid-some-stranger", id, &mut transaction)
+            .expect("a stranger's delete is a silent no-op, not an error");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_some(),
+            "a stranger must not be able to lift another character's suspension"
+        );
     }
 
     #[test]
