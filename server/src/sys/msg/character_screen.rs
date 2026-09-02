@@ -42,6 +42,29 @@ event_emitters! {
     }
 }
 
+/// Why `alias` cannot be used as a character name, phrased for the player, or
+/// `None` if it is acceptable.
+///
+/// Normalizes before validating, exactly as the write path in
+/// `persistence::character` does, so this accepts and rejects precisely the set
+/// of names that will survive being stored. A looser length-only pre-check here
+/// would let a name pass this handler and then fail asynchronously inside the
+/// character-updater thread, where the player never learns why.
+fn character_name_rejection(alias: &str) -> Option<&'static str> {
+    use common::character::{
+        CharacterNameError, normalize_character_name, validate_character_name,
+    };
+
+    match validate_character_name(&normalize_character_name(alias)) {
+        Ok(()) => None,
+        Err(CharacterNameError::Empty) => Some("That name is empty"),
+        Err(CharacterNameError::TooLong) => Some("That name is too long"),
+        Err(CharacterNameError::ForbiddenCharacters) => {
+            Some("That name contains forbidden characters")
+        },
+    }
+}
+
 impl Sys {
     #[expect(clippy::too_many_arguments)] // Shhhh, go bother someone else clippy
     fn handle_client_character_screen_msg(
@@ -200,7 +223,10 @@ impl Sys {
                 ethos,
                 background,
             } => {
-                if censor.check(&alias) {
+                if let Some(reason) = character_name_rejection(&alias) {
+                    debug!(?alias, ?reason, "denied alias");
+                    client.send(ServerGeneral::CharacterActionError(reason.to_owned()))?;
+                } else if censor.check(&alias) {
                     debug!(?alias, "denied alias as it contained a banned word");
                     client.send(ServerGeneral::CharacterActionError(format!(
                         "Alias '{}' contains a banned word",
@@ -264,7 +290,10 @@ impl Sys {
                 }
             },
             ClientGeneral::EditCharacter { id, alias, body } => {
-                if censor.check(&alias) {
+                if let Some(reason) = character_name_rejection(&alias) {
+                    debug!(?alias, ?reason, "denied alias");
+                    client.send(ServerGeneral::CharacterActionError(reason.to_owned()))?;
+                } else if censor.check(&alias) {
                     debug!(?alias, "denied alias as it contained a banned word");
                     client.send(ServerGeneral::CharacterActionError(format!(
                         "Alias '{}' contains a banned word",

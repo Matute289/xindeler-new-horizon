@@ -18,8 +18,8 @@ use crate::{
         },
     },
     ui::{
-        ImageFrame, ItemTooltip, ItemTooltipManager, ItemTooltipable, Tooltip, TooltipManager,
-        Tooltipable,
+        ImageFrame, ItemTooltip, ItemTooltipManager, ItemTooltipable, RichText, Tooltip,
+        TooltipManager, Tooltipable,
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
@@ -330,6 +330,14 @@ impl<'a> InventoryScroller<'a> {
             .set(state.ids.spacing_above, ui);
 
         let mut space_max = 0;
+        let compact_mode = self
+            .global_state
+            .settings
+            .interface
+            .toggle_compact_item_slots;
+        let columns = if compact_mode { 9 } else { 6 };
+        let spacing = if compact_mode { 2.0 } else { 5.8 };
+        let slot_size = if compact_mode { 40.0 } else { 57.8 };
 
         let gray_out = equip_requirement_tint(self.client);
 
@@ -353,9 +361,9 @@ impl<'a> InventoryScroller<'a> {
             self.details_mode,
             self.show_salvage,
         )
-        .columns(6)
-        .spacing(if self.details_mode { 0.0 } else { 5.8 })
-        .slot_size(if self.details_mode { 20.0 } else { 57.8 })
+        .columns(columns)
+        .spacing(if self.details_mode { 0.0 } else { spacing })
+        .slot_size(if self.details_mode { 20.0 } else { slot_size })
         // This scroller only survives as the trade window's inventory pane, which
         // is never the target of menu navigation: trade hands it an empty
         // `menu_events` and drives its own focus cycling. Hard-coding the grid as
@@ -1234,14 +1242,14 @@ impl Widget for BagWindow<'_> {
                     .map_or_else(|| "".into(), |key| key.display_string()),
             };
 
-            Text::new(&left_key)
+            RichText::new(&left_key, self.imgs)
                 .left_from(state.ids.gear_tab, tab_space)
                 .font_id(self.fonts.cyri.conrod_id)
                 .font_size(self.fonts.cyri.scale(22))
                 .color(TEXT_COLOR)
                 .set(state.ids.left_button, ui);
 
-            Text::new(&right_key)
+            RichText::new(&right_key, self.imgs)
                 .right_from(state.ids.inventory_tab, tab_space)
                 .font_id(self.fonts.cyri.conrod_id)
                 .font_size(self.fonts.cyri.scale(22))
@@ -1554,6 +1562,16 @@ impl Widget for InventoryMenu<'_> {
             .set(state.ids.spacing_above, ui);
 
         let mut space_max = 0;
+        let compact_mode = self
+            .tab_package
+            .global_state
+            .settings
+            .interface
+            .toggle_compact_item_slots;
+        let columns = if compact_mode { 9 } else { 6 };
+        let spacing = if compact_mode { 2.0 } else { 5.8 };
+        let slot_size = if compact_mode { 40.0 } else { 57.8 };
+        let scroll_size = if compact_mode { 117 } else { 54 };
 
         let gray_out = equip_requirement_tint(self.tab_package.client);
 
@@ -1577,9 +1595,9 @@ impl Widget for InventoryMenu<'_> {
             self.details_mode,
             self.show_salvage,
         )
-        .columns(6)
-        .spacing(if self.details_mode { 0.0 } else { 5.8 })
-        .slot_size(if self.details_mode { 20.0 } else { 57.8 })
+        .columns(columns)
+        .spacing(if self.details_mode { 0.0 } else { spacing })
+        .slot_size(if self.details_mode { 20.0 } else { slot_size })
         .is_focused(self.nav_allowed)
         .filter(self.filter)
         .grid_width(grid_width)
@@ -1598,7 +1616,7 @@ impl Widget for InventoryMenu<'_> {
         }
 
         // Slots scrollbar
-        if space_max > 54 {
+        if space_max > scroll_size {
             // Scrollbar-BG
             Image::new(self.tab_package.imgs.scrollbar_bg_big)
                 .w_h(9.0, 577.0)
@@ -2161,6 +2179,16 @@ impl Widget for GearMenu<'_> {
                 .set(state.ids.spacing_above, ui);
 
             let mut space_max = 0;
+            let compact_mode = self
+                .tab_package
+                .global_state
+                .settings
+                .interface
+                .toggle_compact_item_slots;
+            let columns = if compact_mode { 9 } else { 6 };
+            let spacing = if compact_mode { 2.0 } else { 5.8 };
+            let slot_size = if compact_mode { 40.0 } else { 57.8 };
+            let scroll_size = if compact_mode { 36 } else { 24 };
 
             let gray_out = equip_requirement_tint(self.tab_package.client);
 
@@ -2184,11 +2212,11 @@ impl Widget for GearMenu<'_> {
             self.show.bag_details, // details_mode
             self.show.crafting_fields.salvage,
         )
-        .columns(6)
-        .spacing(if self.show.bag_details { 0.0 } else { 5.8 })
+        .columns(columns)
+        .spacing(if self.show.bag_details { 0.0 } else { spacing })
         // If the items are in focused, then gear is not (and vice-versa)
         .is_focused(self.nav_allowed && !state.is_focused)
-        .slot_size(if self.show.bag_details { 20.0 } else { 57.8 })
+        .slot_size(if self.show.bag_details { 20.0 } else { slot_size })
         .filter(TabFilters::Gear)
         .grid_width(grid_width)
         .slot_tint(&gray_out)
@@ -2213,7 +2241,7 @@ impl Widget for GearMenu<'_> {
             }
 
             // Scrollbar
-            if space_max > 24 {
+            if space_max > scroll_size {
                 // Scrollbar-BG
                 Image::new(self.tab_package.imgs.scrollbar_bg)
                     .w_h(9.0, 180.0)

@@ -160,6 +160,7 @@ hud-settings-walking_speed = Velocidad al caminar
 hud-settings-prefix_switch_point = Límite de dígitos para prefijos SI
 hud-settings-walking_speed_behavior = Comportamiento de la velocidad al caminar
 hud-settings-draggable_windows = Ventanas movibles
+hud-settings-compact_item_slots = Casillas de objetos compactas
 hud-settings-keybind-helper =
     M1 para establecer
     M2 para restablecer
