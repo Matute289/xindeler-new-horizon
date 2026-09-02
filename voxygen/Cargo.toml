@@ -113,7 +113,10 @@ directories-next = "2.0"
 dot_vox = "5.1"
 guillotiere = "0.7.0"
 hashbrown = { workspace = true }
-image = { workspace = true, features = ["ico"] }
+# `webp` is for the `portrait_gen` binary's encoder; it is scoped to this crate
+# rather than the workspace so the server and client do not link a codec they
+# never call.
+image = { workspace = true, features = ["ico", "webp"] }
 kira = { version = "0.12", default-features = false, features = [
     "cpal",
     "symphonia",
@@ -178,6 +181,10 @@ name = "light_benchmark"
 
 [[bin]]
 name = "img_export"
+required-features = []
+
+[[bin]]
+name = "portrait_gen"
 required-features = []
 
 [[bin]]

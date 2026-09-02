@@ -41,6 +41,7 @@ use server::{
     Event, Input, Server, oracle,
     oracle::policy::{self, PolicyError},
     persistence::DatabaseSettings,
+    portrait::{PortraitOutcome, PortraitRequestMsg},
     settings::Protocol,
 };
 use std::{
@@ -49,13 +50,24 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Notify;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use vek::Vec3;
 
 lazy_static::lazy_static! {
     pub static ref LOG: TuiLog<'static> = TuiLog::default();
 }
 const TPS: u64 = 30;
+/// Caps how many queued ops-console/API messages `server_loop` processes
+/// inline in a single tick iteration. `web_ui_request_r`'s channel is
+/// 1000-deep, and every message in it is handled synchronously on this same
+/// thread that also ticks the game -- so without a per-tick cap, a burst of
+/// many queued messages (e.g. several concurrent `SendTargetedMsg` calls,
+/// each already bounded per-request at
+/// `crate::web::ui::api::MAX_TARGETED_MSG_UUIDS`) could still stall every
+/// player's tick by draining an arbitrarily deep backlog in one go. A
+/// message left over past the cap simply stays queued and is picked up on a
+/// later tick -- nothing is dropped, the backlog is just spread out.
+const MAX_MESSAGES_PER_TICK: usize = 64;
 
 /// Recovers a loaded `DmEvent`'s own `<id>` from the path it was ingested
 /// from -- the inverse of the `{event_id}.dmevent.ron`/`.json` match
@@ -79,6 +91,7 @@ fn character_summary_dto(c: server::ResolvedCharacterSummary) -> CharacterSummar
         name: c.alias,
         level: u32::from(c.level),
         class: c.class,
+        race: c.race,
         location: c.location.map(|site| LocationDto {
             site,
             kingdom: None,
@@ -91,6 +104,29 @@ fn character_summary_dto(c: server::ResolvedCharacterSummary) -> CharacterSummar
             end_date: s.end_date,
         }),
     }
+}
+
+/// Drains at most `max` `(message, response-channel)` pairs from `receiver`,
+/// calling `handle` on each in order. Stops early -- before reaching `max`
+/// -- if the channel runs dry, or if `handle` returns `true` (a shutdown
+/// request). Returns `true` iff `handle` returned `true`. See
+/// `MAX_MESSAGES_PER_TICK`'s doc comment for why this cap exists: `handle`
+/// runs synchronously on the same thread that ticks the game, so this is
+/// what keeps an arbitrarily deep backlog from stalling every player's tick.
+fn drain_up_to<M, R>(
+    receiver: &mut tokio::sync::mpsc::Receiver<(M, tokio::sync::oneshot::Sender<R>)>,
+    max: usize,
+    mut handle: impl FnMut(M, tokio::sync::oneshot::Sender<R>) -> bool,
+) -> bool {
+    for _ in 0..max {
+        let Ok((msg, sender)) = receiver.try_recv() else {
+            return false;
+        };
+        if handle(msg, sender) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Parses the target/operator uuid strings carried by the admin HTTP `Message`
@@ -316,6 +352,7 @@ fn main() -> io::Result<()> {
         editable_settings,
         database_settings,
         &server_data_dir,
+        settings.portrait_gen_path.clone(),
         &|_| {},
         Arc::clone(&runtime),
     )
@@ -380,6 +417,7 @@ fn main() -> io::Result<()> {
         tui,
         web_ui_request_r,
         shutdown_signal,
+        Arc::clone(&runtime),
     )?;
 
     metrics_shutdown.notify_one();
@@ -397,6 +435,11 @@ fn server_loop(
         tokio::sync::oneshot::Sender<MessageReturn>,
     )>,
     shutdown_signal: Arc<AtomicBool>,
+    // Somewhere to put the handful of message arms whose answer is not ready
+    // by the time the arm returns. This loop is synchronous and must stay that
+    // way -- it ticks the game -- so an arm that would otherwise have to wait
+    // spawns the waiting here instead of doing it inline.
+    runtime: Arc<tokio::runtime::Runtime>,
 ) -> io::Result<()> {
     // Set up an fps clock
     let mut clock = Clock::new(Duration::from_secs_f64(1.0 / TPS as f64));
@@ -516,6 +559,38 @@ fn server_loop(
                     use server::state_ext::StateExt;
                     let msg = ChatType::Meta.into_plain_msg(msg);
                     server.state().send_chat(msg, false);
+                },
+                Message::SendTargetedMsg {
+                    target_uuids,
+                    operator_uuid,
+                    msg,
+                } => {
+                    let parsed = server::authc::Uuid::parse_str(&operator_uuid)
+                        .map_err(|_| "operator_uuid is not a valid uuid".to_string())
+                        .and_then(|operator_uuid| {
+                            target_uuids
+                                .iter()
+                                .map(|s| server::authc::Uuid::parse_str(s))
+                                .collect::<Result<Vec<_>, _>>()
+                                .map_err(|_| "target_uuids contains an invalid uuid".to_string())
+                                .map(|target_uuids| (operator_uuid, target_uuids))
+                        });
+                    match parsed {
+                        Ok((operator_uuid, target_uuids)) => {
+                            let (delivered_to, not_found) =
+                                server.send_targeted_msg(&target_uuids, operator_uuid, msg);
+                            let _ = response.send(MessageReturn::TargetedMsgSent {
+                                delivered_to: delivered_to
+                                    .iter()
+                                    .map(ToString::to_string)
+                                    .collect(),
+                                not_found: not_found.iter().map(ToString::to_string).collect(),
+                            });
+                        },
+                        Err(err) => {
+                            let _ = response.send(MessageReturn::Error(err));
+                        },
+                    }
                 },
                 Message::ServerInfo => {
                     let player_count = server.state().ecs().read_storage::<Player>().join().count();
@@ -663,6 +738,66 @@ fn server_loop(
                         error!(%err, "rename_character failed");
                         let _ = response.send(MessageReturn::Error(err.public_message()));
                     },
+                },
+                Message::GetCharacterPortrait {
+                    uuid,
+                    character_id,
+                    if_none_match,
+                } => {
+                    // Everything this arm does is hand the request over: no
+                    // database access, no validation beyond building the
+                    // message, and above all no render. `request` itself never
+                    // blocks -- a full queue and a dead worker are both
+                    // answered on `respond` immediately, from inside it.
+                    let (respond, outcome) = tokio::sync::oneshot::channel();
+                    server
+                        .portrait_service_handle()
+                        .request(PortraitRequestMsg {
+                            uuid,
+                            character_id: CharacterId(character_id),
+                            if_none_match,
+                            respond,
+                        });
+                    // The worker answers on its own thread, long after this
+                    // arm has returned, so the translation onto `response`
+                    // happens on the runtime rather than here. Spawning is
+                    // just a queue push; nothing below is awaited on this
+                    // thread.
+                    runtime.spawn(async move {
+                        let answer = match outcome.await {
+                            Ok(PortraitOutcome::Fresh {
+                                bytes,
+                                format,
+                                etag,
+                            }) => MessageReturn::CharacterPortrait {
+                                bytes,
+                                format,
+                                etag,
+                            },
+                            Ok(PortraitOutcome::NotModified { etag }) => {
+                                MessageReturn::CharacterPortraitNotModified { etag }
+                            },
+                            Ok(PortraitOutcome::Busy) => MessageReturn::CharacterPortraitBusy,
+                            Ok(PortraitOutcome::NotFound) => {
+                                MessageReturn::CharacterPortraitNotFound
+                            },
+                            // Already logged, with the character id, by
+                            // whichever step produced it.
+                            Ok(PortraitOutcome::Failed) => MessageReturn::CharacterPortraitFailed,
+                            // The worker dropped the request without
+                            // answering. Ordinary at shutdown -- the service
+                            // is torn down before the frontend stops taking
+                            // requests, so anything in flight lands here --
+                            // which is why this is not an error. Answered
+                            // rather than silently dropped, so the caller sees
+                            // a failure instead of waiting out a timeout.
+                            Err(err) => {
+                                debug!(%err, "a portrait request went unanswered");
+                                MessageReturn::CharacterPortraitFailed
+                            },
+                        };
+                        let _ = response.send(answer);
+                    });
                 },
                 Message::AdminKickPlayer {
                     target_uuid,
@@ -834,16 +969,35 @@ fn server_loop(
                         MessageReturn::AdminActionOk { ban } => {
                             info!(?ban, "Admin action completed")
                         },
+                        MessageReturn::TargetedMsgSent {
+                            delivered_to,
+                            not_found,
+                        } => info!(?delivered_to, ?not_found, "Targeted message sent"),
+                        // Unreachable, and written out only because this match
+                        // is exhaustive: the console cannot send the message
+                        // these answer (`Message::GetCharacterPortrait` is
+                        // `#[command(skip)]`), and even if it could, the
+                        // `try_recv` above runs microseconds after the arm
+                        // returns while the answer needs a thread hop and a
+                        // database read to exist. Debug rather than info, and
+                        // the image's length rather than the image.
+                        MessageReturn::CharacterPortrait { bytes, format, .. } => {
+                            debug!(len = bytes.len(), %format, "Character portrait")
+                        },
+                        MessageReturn::CharacterPortraitNotModified { .. }
+                        | MessageReturn::CharacterPortraitBusy
+                        | MessageReturn::CharacterPortraitNotFound
+                        | MessageReturn::CharacterPortraitFailed => {
+                            debug!("Portrait answer reached the console")
+                        },
                     };
                 }
             }
         }
 
-        while let Ok((msg, sender)) = web_ui_request_r.try_recv() {
-            if handle_msg(msg, sender) {
-                info!("Closing the server");
-                break 'outer;
-            }
+        if drain_up_to(&mut web_ui_request_r, MAX_MESSAGES_PER_TICK, handle_msg) {
+            info!("Closing the server");
+            break 'outer;
         }
 
         drop(guard);
@@ -883,4 +1037,74 @@ fn server_loop(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod drain_up_to_tests {
+    use super::drain_up_to;
+
+    fn channel_with(
+        n: usize,
+    ) -> tokio::sync::mpsc::Receiver<(u32, tokio::sync::oneshot::Sender<()>)> {
+        let (sender, receiver) = tokio::sync::mpsc::channel(n.max(1));
+        for i in 0..n {
+            let (response, _) = tokio::sync::oneshot::channel();
+            sender
+                .try_send((i as u32, response))
+                .expect("channel has room");
+        }
+        receiver
+    }
+
+    #[test]
+    fn stops_at_the_cap_even_with_more_queued() {
+        let mut receiver = channel_with(10);
+        let mut handled = Vec::new();
+        let shutdown = drain_up_to(&mut receiver, 3, |msg, _| {
+            handled.push(msg);
+            false
+        });
+        assert!(!shutdown);
+        assert_eq!(handled, vec![0, 1, 2]);
+        // The other 7 are still queued, untouched, for a later call.
+        assert_eq!(receiver.len(), 7);
+    }
+
+    #[test]
+    fn drains_fewer_than_the_cap_if_the_channel_runs_dry_first() {
+        let mut receiver = channel_with(2);
+        let mut handled = Vec::new();
+        let shutdown = drain_up_to(&mut receiver, 10, |msg, _| {
+            handled.push(msg);
+            false
+        });
+        assert!(!shutdown);
+        assert_eq!(handled, vec![0, 1]);
+    }
+
+    #[test]
+    fn stops_early_and_reports_shutdown_when_handle_asks_for_it() {
+        let mut receiver = channel_with(10);
+        let mut handled = Vec::new();
+        let shutdown = drain_up_to(&mut receiver, 10, |msg, _| {
+            handled.push(msg);
+            msg == 2 // signal shutdown on the third message
+        });
+        assert!(shutdown);
+        assert_eq!(handled, vec![0, 1, 2]);
+        // Messages after the shutdown-triggering one are left untouched.
+        assert_eq!(receiver.len(), 7);
+    }
+
+    #[test]
+    fn an_empty_channel_handles_nothing_and_reports_no_shutdown() {
+        let mut receiver = channel_with(0);
+        let mut calls = 0;
+        let shutdown = drain_up_to(&mut receiver, 10, |_, _| {
+            calls += 1;
+            false
+        });
+        assert!(!shutdown);
+        assert_eq!(calls, 0);
+    }
 }

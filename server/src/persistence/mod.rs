@@ -13,6 +13,13 @@ mod diesel_to_rusqlite;
 pub mod error;
 mod json_models;
 mod models;
+/// `pub(in crate::persistence)`, matching `chronicle`: these take a raw
+/// `Connection`/`Transaction`, and the ownership check that makes them safe
+/// lives in `load_portrait_inputs`'s own SQL. Nothing outside this module
+/// should be able to reach them and skip the wrappers below. `PortraitRow` is
+/// re-exported because the public `get_portrait` wrapper returns one.
+pub(in crate::persistence) mod portrait;
+pub use portrait::PortraitRow;
 
 use crate::persistence::character_updater::PetPersistenceData;
 use chrono::{DateTime, Utc};
@@ -225,6 +232,14 @@ pub struct CharacterSummary {
     pub character_id: CharacterId,
     pub alias: String,
     pub class: String,
+    /// The character's humanoid species, in its raw enum-variant form (e.g.
+    /// `"Danari"`, `"Draugr"`) -- the same "send the canonical Rust
+    /// identifier, let the caller localize" convention `class` already
+    /// follows. Callers must NOT display this verbatim: some species have
+    /// a player-facing display name that differs from the enum variant
+    /// name (i18n layer only, the variant itself is never renamed), so a
+    /// raw display would show the wrong name to players.
+    pub race: String,
     pub level: u16,
     pub waypoint: Option<String>,
     pub suspended: Option<SuspensionRecord>,
@@ -274,6 +289,110 @@ pub fn rename_character(
     character::rename_character(uuid, character_id, new_alias, &mut transaction)?;
     transaction.commit()?;
     Ok(())
+}
+
+/// The body and inventory a portrait for one of `uuid`'s own characters is
+/// rendered from. Opens its own short-lived, read-only connection, for the
+/// same reason `list_player_characters` does: the player whose portrait is
+/// being fetched from the web may not be connected to the game at all, so
+/// there is no live ECS state to read.
+///
+/// Ownership is enforced in the query itself; a character that isn't `uuid`'s
+/// comes back as `CharacterNotFound`, exactly as a character that doesn't
+/// exist does.
+pub fn load_portrait_inputs(
+    uuid: &str,
+    character_id: CharacterId,
+    settings: &DatabaseSettings,
+) -> Result<(comp::Body, comp::Inventory), error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    portrait::load_portrait_inputs(character_id, uuid, &connection)
+}
+
+/// The cached portrait for `character_id`, if one has ever been rendered.
+///
+/// Deliberately a separate connection from `load_portrait_inputs` rather than
+/// one combined read: the common steady-state request answers `304 Not
+/// Modified` off the appearance key alone, and that path must not pay to pull
+/// a blob it is never going to send.
+///
+/// Takes no `uuid`: the caller reaches a `character_id` only by having already
+/// loaded it through `load_portrait_inputs`, which is where ownership is
+/// decided.
+pub fn get_portrait(
+    character_id: CharacterId,
+    settings: &DatabaseSettings,
+) -> Result<Option<portrait::PortraitRow>, error::PersistenceError> {
+    let connection = establish_connection(settings, ConnectionMode::ReadOnly);
+    portrait::get_portrait(character_id, &connection)
+}
+
+/// Caches a freshly rendered portrait, replacing any previous one. Opens its
+/// own short-lived, read-write connection and transaction -- like
+/// `rename_character`, this write is unreachable through `CharacterUpdater`'s
+/// background channel, since the character's owner may not be connected.
+///
+/// This is the only frequent, externally-triggered writer outside
+/// `CharacterUpdater`, and it carries a blob, so it takes one precaution the
+/// other wrappers don't: `synchronous = NORMAL` for this connection only.
+/// SQLite serializes writers, and the far side of that lock is
+/// `execute_batch_update`, which does not retry -- a `SQLITE_BUSY` past the
+/// 250 ms `busy_timeout` there disconnects every player on the server. Under
+/// WAL, `NORMAL` drops the fsync from the commit, so the writer lock is held
+/// for an append rather than a disk flush. What it costs is the last few
+/// portrait writes on a power cut, which is a re-render.
+///
+/// There is deliberately no matching `delete_portrait` wrapper here: the only
+/// thing that ever needs to evict a row is `delete_character`, which calls
+/// `portrait::delete_portrait` inside its own transaction so the eviction is
+/// atomic with the deletion. A second connection could only make that weaker.
+pub fn upsert_portrait(
+    character_id: CharacterId,
+    appearance_key: &str,
+    format: &str,
+    image: &[u8],
+    rendered_at: DateTime<Utc>,
+    settings: &DatabaseSettings,
+) -> Result<(), error::PersistenceError> {
+    let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    connection
+        .connection
+        .pragma_update(None, "synchronous", "NORMAL")?;
+    let mut transaction = connection.connection.transaction()?;
+    transaction.set_drop_behavior(DropBehavior::Rollback);
+    portrait::upsert_portrait(
+        character_id,
+        appearance_key,
+        format,
+        image,
+        rendered_at,
+        &mut transaction,
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Test-only: creates a character owned by `uuid` through the real
+/// `create_character` path and returns its id.
+///
+/// Exists so that tests living outside `crate::persistence` -- the portrait
+/// service's, at the crate root -- can build a genuine fixture (character row,
+/// body row, five pseudo-containers, persisted loadout) instead of hand-writing
+/// rows that would drift from the real schema, without `persistence::character`
+/// having to become public for their sake.
+#[cfg(test)]
+pub(crate) fn create_character_for_test(
+    uuid: &str,
+    alias: &str,
+    components: PersistedComponents,
+    settings: &DatabaseSettings,
+) -> Result<CharacterId, error::PersistenceError> {
+    let mut connection = establish_connection(settings, ConnectionMode::ReadWrite);
+    let mut transaction = connection.connection.transaction()?;
+    transaction.set_drop_behavior(DropBehavior::Rollback);
+    let (character_id, _) = character::create_character(uuid, alias, components, &mut transaction)?;
+    transaction.commit()?;
+    Ok(character_id)
 }
 
 /// Suspends `character_id`, replacing any existing suspension on it (a

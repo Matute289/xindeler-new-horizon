@@ -1,0 +1,785 @@
+//! `portrait_gen` — headless renderer that turns a character's persisted body
+//! and inventory into a portrait image.
+//!
+//! A pure, stateless CLI filter: it reads one JSON [`PortraitRequest`] on
+//! stdin, renders the described character with the same CPU-only voxel
+//! rasterizer the UI icons use (`ui::graphic::renderer::draw_voxes`, backed by
+//! `euc` — no GPU, no window, no wgpu), and writes the encoded image bytes to
+//! stdout. It knows nothing about databases, HTTP, or the game server; callers
+//! run it as a short-lived subprocess.
+//!
+//! Build — **for anything that spawns this repeatedly, build it without the
+//! crate's default features**:
+//!
+//! ```text
+//! cargo build -p xindeler-voxygen --bin portrait_gen --no-default-features
+//! ```
+//!
+//! `required-features = []` on the `[[bin]]` does not constrain the *library*'s
+//! features, and the default set includes `hot-reloading`, which makes the
+//! first asset load start a recursive filesystem watcher over the whole asset
+//! tree — one inotify watch per directory on Linux, ~1800 of them, for a
+//! process that lives about as long as it takes to draw one image. Those
+//! watches come out of a per-user kernel budget shared with everything else
+//! running as that user, so a process that exits in milliseconds should not be
+//! taking them out. Dropping the defaults also drops `singleplayer`,
+//! `shaderc-from-source` and the egui overlay, none of which this binary uses.
+//! Build it as its own `cargo` invocation: in a single workspace build, feature
+//! unification will re-enable hot-reloading no matter what is passed here.
+//!
+//! Run (assets must be reachable, as for every asset-loading binary):
+//!
+//! ```text
+//! VELOREN_ASSETS="$(pwd)/assets" portrait_gen < request.json > portrait.webp
+//! ```
+//!
+//! Exit codes, so a caller can distinguish a caller bug from a renderer bug:
+//!
+//! | code | meaning                                                        |
+//! |------|----------------------------------------------------------------|
+//! | 0    | success — stdout holds the encoded image                       |
+//! | 2    | the request could not be parsed or its params are out of range |
+//! | 3    | the body kind is not supported (humanoids only)                |
+//! | 4    | any other failure (assets, meshing, encoding)                   |
+//!
+//! Anything else — another code, or termination by a signal — means the
+//! renderer crashed. Both workspace profiles set `panic = "abort"`, so a panic
+//! anywhere in the asset or meshing path cannot be caught and turned into a 4;
+//! a caller must treat "not one of the codes above" as a hard failure and must
+//! not retry-loop on it.
+//!
+//! Diagnostics go to stderr only; stdout carries image bytes and nothing else.
+
+// A `[[bin]]` is its own crate root, so the library's crate-level deny does not
+// reach it.
+#![deny(unsafe_code)]
+
+use std::{
+    io::{Read, Write},
+    process::ExitCode,
+    sync::Arc,
+};
+
+use common::{
+    comp::{
+        self, Body, CharacterState, Inventory,
+        item::{ItemKind, armor::ArmorKind},
+        slot::{ArmorSlot, EquipSlot},
+    },
+    figure::Segment,
+    resources::Time,
+    util::Dir,
+    vol::{IntoFullVolIterator, SizedVol},
+};
+use image::{ImageEncoder, RgbaImage, codecs::webp::WebPEncoder};
+use serde::{Deserialize, Serialize};
+use vek::{Mat4, Quaternion, Vec2, Vec3};
+
+use anim::{Animation, FigureBoneData, Skeleton, character::CharacterSkeleton};
+use xindeler_voxygen::{
+    scene::{
+        CameraMode,
+        figure::{
+            cache::{CharacterCacheKey, FigureKey},
+            load::BodySpec,
+        },
+    },
+    ui::{SampleStrat, Transform, graphic::renderer::draw_voxes},
+};
+
+// ---------------------------------------------------------------------------
+// Protocol
+// ---------------------------------------------------------------------------
+
+/// Renderer/params version, echoed through the request so a caller can prove
+/// the renderer it spawned agrees with the version its cache keys were built
+/// from. Bumping it is how a purely visual change invalidates cached output.
+pub const PORTRAIT_PARAMS_VERSION: &str = "p1";
+
+/// Output edge length, in pixels, when the request does not say.
+pub const DEFAULT_PORTRAIT_SIZE: u16 = 256;
+
+/// Accepted range for [`PortraitParams::size`]. The upper bound keeps the
+/// supersampled intermediate buffers bounded: a 512² request rasterizes at
+/// 1024², which is three live 4 MB allocations at once (the colour buffer, the
+/// depth buffer, and the flattened copy `draw_voxes` collects out of the colour
+/// buffer while it is still alive) plus the encoder's working set. Anything
+/// larger is a malformed request, not a portrait.
+pub const MIN_PORTRAIT_SIZE: u16 = 16;
+pub const MAX_PORTRAIT_SIZE: u16 = 512;
+
+/// Anti-aliasing: the scene is rasterized at `ceil(sqrt(SUPERSAMPLES))` times
+/// the requested edge length and filtered down, the same strategy the UI's
+/// voxel icons use.
+const SUPERSAMPLES: u8 = 4;
+
+/// Ceiling on the request read from stdin. A body plus a full inventory
+/// serializes to a few tens of KB; this sits far above that and exists so that
+/// a caller which never closes the pipe costs this process a few MB rather than
+/// growing it without bound — on a small box, an unbounded reader is a way to
+/// get something *else* killed.
+pub const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
+
+/// How the posed model is framed inside the output square.
+///
+/// One preset today; it is an enum rather than a flag so that adding a second
+/// framing is an additive change to the wire format.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Framing {
+    /// Whole figure seen straight-on, weapons omitted, background left
+    /// transparent so the consumer decides what sits behind it.
+    #[default]
+    FullBodyFront,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortraitParams {
+    /// Edge length of the (square) output image, in pixels.
+    #[serde(default = "default_size")]
+    pub size: u16,
+    #[serde(default)]
+    pub framing: Framing,
+    /// See [`PORTRAIT_PARAMS_VERSION`].
+    #[serde(default = "default_version")]
+    pub version: String,
+}
+
+fn default_size() -> u16 { DEFAULT_PORTRAIT_SIZE }
+
+fn default_version() -> String { PORTRAIT_PARAMS_VERSION.to_string() }
+
+impl Default for PortraitParams {
+    fn default() -> Self {
+        Self {
+            size: default_size(),
+            framing: Framing::default(),
+            version: default_version(),
+        }
+    }
+}
+
+/// The whole of stdin: everything the renderer needs, and nothing it could
+/// look up for itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortraitRequest {
+    pub body: Body,
+    pub inventory: Inventory,
+    #[serde(default)]
+    pub params: PortraitParams,
+}
+
+// ---------------------------------------------------------------------------
+// Framing presets
+// ---------------------------------------------------------------------------
+
+/// Everything a [`Framing`] decides, in one place, so that adding a preset is
+/// one row of [`preset`] rather than an edit in three matches.
+struct FramingPreset {
+    /// How the model is turned before it is projected.
+    ori: Quaternion<f32>,
+    /// Fraction of the frame the figure fills along its longest visible axis.
+    /// The remainder is the margin that keeps boots and pointed hats off the
+    /// edge.
+    fill: f32,
+    /// Whether the equipped mainhand/offhand weapons are drawn. The idle pose
+    /// *can* hold them; a portrait that shows armour only does not.
+    shows_weapons: bool,
+}
+
+fn preset(framing: Framing) -> FramingPreset {
+    match framing {
+        Framing::FullBodyFront => FramingPreset {
+            // Stand the model upright (turn the model's +Z up onto screen-up)
+            // and then turn it around to face the camera.
+            ori: Quaternion::rotation_x(-std::f32::consts::FRAC_PI_2)
+                .rotated_y(std::f32::consts::PI),
+            fill: 0.94,
+            shows_weapons: false,
+        },
+    }
+}
+
+/// The extent `draw_voxes` derives its projection scale from.
+///
+/// It only takes two corners of each bone's volume, so this is not a true
+/// bounding box — but it is the number the unstretched projection divides by,
+/// and [`fit`] has to compensate for exactly that number to place the figure.
+fn projection_reference_extent(bones: &[(Mat4<f32>, &Segment)]) -> f32 {
+    let mut min = Vec3::broadcast(f32::INFINITY);
+    let mut max = Vec3::broadcast(f32::NEG_INFINITY);
+    for (bone, segment) in bones {
+        let volume = segment.size().as_::<f32>();
+        for corner in [bone.mul_point(Vec3::zero()), bone.mul_point(volume)] {
+            min = min.map2(corner, f32::min);
+            max = max.map2(corner, f32::max);
+        }
+    }
+    let size = max - min;
+    size.x.max(size.y).max(size.z)
+}
+
+/// Axis-aligned bounds, in the rotated (screen-facing) space, of the voxels
+/// that will actually be drawn.
+///
+/// Empty padding inside a bone's volume — the slack around a quiver, say — is
+/// excluded, so the figure ends up framed on itself rather than on whatever
+/// its loosest bone volume happens to be. Returns `None` when nothing is
+/// visible at all.
+fn drawn_bounds(bones: &[(Mat4<f32>, &Segment)], ori: Mat4<f32>) -> Option<(Vec3<f32>, Vec3<f32>)> {
+    let mut min = Vec3::broadcast(f32::INFINITY);
+    let mut max = Vec3::broadcast(f32::NEG_INFINITY);
+    let mut any = false;
+
+    for (bone, segment) in bones {
+        let to_screen = ori * *bone;
+
+        let mut lo = Vec3::broadcast(i32::MAX);
+        let mut hi = Vec3::broadcast(i32::MIN);
+        let mut filled = false;
+        for (pos, vox) in segment.full_vol_iter() {
+            // `get_color` is exactly the test the mesher uses to decide whether
+            // a voxel contributes geometry.
+            if vox.get_color().is_some() {
+                filled = true;
+                lo = lo.map2(pos, i32::min);
+                hi = hi.map2(pos, i32::max);
+            }
+        }
+        if !filled {
+            continue;
+        }
+        any = true;
+
+        // The mesher emits a unit cube per filled voxel, so the drawn extent
+        // runs one voxel past the last voxel's origin.
+        let lo = lo.as_::<f32>();
+        let hi = hi.as_::<f32>() + Vec3::one();
+        for corner in 0..8u8 {
+            let p = to_screen.mul_point(Vec3::new(
+                if corner & 1 == 0 { lo.x } else { hi.x },
+                if corner & 2 == 0 { lo.y } else { hi.y },
+                if corner & 4 == 0 { lo.z } else { hi.z },
+            ));
+            min = min.map2(p, f32::min);
+            max = max.map2(p, f32::max);
+        }
+    }
+
+    any.then_some((min, max))
+}
+
+/// Builds the [`Transform`] that centres the drawn figure in the frame and
+/// scales it so its longest visible axis fills the preset's `fill` fraction.
+///
+/// Pair it with an `offset_scaling` of zero at the `draw_voxes` call, which
+/// disables that function's own centring translation: it subtracts half the
+/// bounding box's *size* rather than its centre, so any model whose bounds do
+/// not start at the origin — every posed character — ends up off-centre.
+fn fit(framing: Framing, bones: &[(Mat4<f32>, &Segment)]) -> Result<Transform, PortraitError> {
+    let preset = preset(framing);
+    let ori_mat = Mat4::from(preset.ori);
+
+    let (min, max) = drawn_bounds(bones, ori_mat).ok_or_else(|| {
+        PortraitError::Failed("the posed body contains no visible voxels".to_string())
+    })?;
+    // Every derived value below has to be finite: a NaN reaching the model-view
+    // matrix trips a `debug_assert` inside the rasterizer, and both workspace
+    // profiles abort on panic, so it would leave the process with none of the
+    // documented exit codes. Guard the bounds themselves, then the quantities
+    // computed from them — a ratio of two individually finite, positive floats
+    // can still be infinite.
+    let finite = |v: Vec3<f32>| v.map(f32::is_finite).reduce_and();
+    if !finite(min) || !finite(max) {
+        return Err(PortraitError::Failed(
+            "the posed body has a non-finite bounding box".to_string(),
+        ));
+    }
+
+    let size = max - min;
+    let centre = (min + max) * 0.5;
+
+    let reference = projection_reference_extent(bones);
+    let visible = size.x.max(size.y);
+    if !(reference.is_finite() && reference > 0.0) || !(visible.is_finite() && visible > 0.0) {
+        return Err(PortraitError::Failed(
+            "the posed body has a degenerate bounding box".to_string(),
+        ));
+    }
+
+    let zoom = preset.fill * reference / visible;
+    // The factor `draw_voxes` scales the rotated model by before projecting.
+    let scale = 2.0 * zoom / reference;
+    if !(zoom.is_finite() && zoom > 0.0) || !(scale.is_finite() && scale > 0.0) {
+        return Err(PortraitError::Failed(
+            "the posed body yields a degenerate projection scale".to_string(),
+        ));
+    }
+
+    Ok(Transform {
+        ori: preset.ori,
+        // x/y centre the figure. z is not a framing choice: the rasterizer does
+        // no near/far clipping at all, so nothing is lost by sitting outside
+        // the projection's nominal range, and the only thing that decides
+        // whether a fragment survives is that its depth stays at or below the
+        // depth buffer's initial 1.0. This term places the figure with a wide
+        // margin below that; a preset whose depth extent rivalled its height
+        // would have to check the margin rather than assume it.
+        offset: Vec3::new(-centre.x, -centre.y, 0.5 / scale - centre.z),
+        zoom,
+        orth: true,
+        stretch: false,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+enum PortraitError {
+    /// Malformed or out-of-range request.
+    BadRequest(String),
+    /// A body kind this renderer does not draw.
+    UnsupportedBody(String),
+    /// Assets, meshing or encoding failed.
+    Failed(String),
+}
+
+impl PortraitError {
+    /// The process exit code this error is reported as. See the module docs.
+    fn exit_code(&self) -> u8 {
+        match self {
+            PortraitError::BadRequest(_) => 2,
+            PortraitError::UnsupportedBody(_) => 3,
+            PortraitError::Failed(_) => 4,
+        }
+    }
+}
+
+impl std::fmt::Display for PortraitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PortraitError::BadRequest(msg) => write!(f, "bad request: {msg}"),
+            PortraitError::UnsupportedBody(msg) => write!(f, "unsupported body: {msg}"),
+            PortraitError::Failed(msg) => write!(f, "render failed: {msg}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/// Rejects requests whose params fall outside what the renderer will honour.
+fn validate(params: &PortraitParams) -> Result<(), PortraitError> {
+    if !(MIN_PORTRAIT_SIZE..=MAX_PORTRAIT_SIZE).contains(&params.size) {
+        return Err(PortraitError::BadRequest(format!(
+            "size {} outside {MIN_PORTRAIT_SIZE}..={MAX_PORTRAIT_SIZE}",
+            params.size
+        )));
+    }
+    // Without this, a caller built against one renderer version would happily
+    // cache images produced by another under a key that claims otherwise —
+    // exactly the drift `version` exists to catch.
+    if params.version != PORTRAIT_PARAMS_VERSION {
+        return Err(PortraitError::BadRequest(format!(
+            "request asks for params version {}, this renderer is {PORTRAIT_PARAMS_VERSION}",
+            params.version
+        )));
+    }
+    Ok(())
+}
+
+/// Drops the weapons from a copy of the inventory, so that neither the model
+/// cache key nor the idle animation sees them: the two weapon bones are
+/// derived purely from the cache key's tool entries, so an empty pair means no
+/// weapon geometry at all, and the stand animation then poses empty hands.
+fn strip_weapons(inventory: &mut Inventory) {
+    let time = Time(0.0);
+    for slot in [
+        EquipSlot::ActiveMainhand,
+        EquipSlot::ActiveOffhand,
+        EquipSlot::InactiveMainhand,
+        EquipSlot::InactiveOffhand,
+    ] {
+        // The removed item is deliberately dropped: this inventory is a
+        // throwaway render input that is never persisted.
+        let _ = inventory.replace_loadout_item(slot, None, time);
+    }
+}
+
+/// Poses a humanoid wearing `inventory` and returns the per-bone
+/// `(transform, segment)` pairs `draw_voxes` consumes.
+fn humanoid_bones(
+    body: comp::humanoid::Body,
+    inventory: &Inventory,
+    manifest: &<comp::humanoid::Body as BodySpec>::Manifests,
+) -> Vec<(Mat4<f32>, Segment)> {
+    let state = CharacterState::Idle(Default::default());
+    let extra = Some(Arc::new(CharacterCacheKey::from(
+        Some(&state),
+        CameraMode::ThirdPerson,
+        inventory,
+    )));
+
+    let bone_segments = comp::humanoid::Body::bone_meshes(
+        &FigureKey {
+            body,
+            item_key: None,
+            extra,
+        },
+        manifest,
+        (),
+    );
+
+    // A backpack or cloak shifts the idle pose's shoulders, so a geared
+    // character is not posed as a bare one. These offsets mirror the live
+    // figure system (`scene/figure/mod.rs`, the `back_carry_offset` it feeds
+    // into `CharacterSkeleton::new`) so a portrait and the in-game model agree;
+    // if that ever changes there, change it here too.
+    let back_carry_offset = inventory
+        .equipped(EquipSlot::Armor(ArmorSlot::Back))
+        .and_then(|i| {
+            if let ItemKind::Armor(armor) = i.kind().as_ref() {
+                match &armor.kind {
+                    ArmorKind::Backpack => Some(4.0),
+                    ArmorKind::Back => Some(1.5),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0.0);
+
+    let mut buf = [FigureBoneData::default(); anim::MAX_BONE_COUNT];
+    let skel = anim::character::StandAnimation::update_skeleton(
+        &CharacterSkeleton::new(false, back_carry_offset, 1.0),
+        (
+            // No tool kinds and no hands: the portrait shows armour only, so
+            // the pose must not reach for a weapon that will not be drawn.
+            None,
+            None,
+            (None, None),
+            anim::vek::Vec3::<f32>::unit_y(),
+            anim::vek::Vec3::<f32>::unit_y(),
+            Dir::new(Vec3::unit_y()),
+            0.0,
+            Vec3::zero(),
+        ),
+        0.0,
+        &mut 1.0,
+        &anim::character::SkeletonAttr::from(&body),
+    );
+    let _ = skel.compute_matrices(Mat4::identity(), &mut buf, body);
+
+    bone_segments
+        .into_iter()
+        .zip(buf)
+        .filter_map(|(segment, bone)| {
+            let (segment, offset) = segment?;
+            Some((
+                Mat4::from_col_arrays(bone.0) * Mat4::translation_3d(offset),
+                segment,
+            ))
+        })
+        .collect()
+}
+
+/// Renders `request` to an in-memory RGBA image on a transparent background.
+fn render(request: &PortraitRequest) -> Result<RgbaImage, PortraitError> {
+    validate(&request.params)?;
+
+    let body = match request.body {
+        Body::Humanoid(body) => body,
+        other => {
+            return Err(PortraitError::UnsupportedBody(format!(
+                "only humanoid characters can be rendered, got {other:?}"
+            )));
+        },
+    };
+
+    let mut inventory = request.inventory.clone();
+    if !preset(request.params.framing).shows_weapons {
+        strip_weapons(&mut inventory);
+    }
+
+    let manifest = <comp::humanoid::Body as BodySpec>::load_spec()
+        .map_err(|e| PortraitError::Failed(format!("could not load humanoid manifests: {e}")))?;
+
+    let bones = humanoid_bones(body, &inventory, &manifest);
+    if bones.is_empty() {
+        return Err(PortraitError::Failed(
+            "the posed body produced no drawable bones".to_string(),
+        ));
+    }
+    let bones: Vec<_> = bones.iter().map(|(t, s)| (*t, s)).collect();
+
+    Ok(draw_voxes(
+        &bones,
+        Vec2::new(request.params.size, request.params.size),
+        fit(request.params.framing, &bones)?,
+        SampleStrat::SuperSampling(SUPERSAMPLES),
+        // Zero disables `draw_voxes`' own centring translation; `fit` does the
+        // centring itself. See its doc comment for why.
+        Vec3::zero(),
+    ))
+}
+
+/// Encodes an RGBA image as lossless WebP — the only mode this encoder offers,
+/// and the right one for flat-shaded voxel art with a transparent background.
+fn encode_webp(img: &RgbaImage) -> Result<Vec<u8>, PortraitError> {
+    let mut out = Vec::new();
+    WebPEncoder::new_lossless(&mut out)
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| PortraitError::Failed(format!("webp encode failed: {e}")))?;
+    Ok(out)
+}
+
+fn run() -> Result<Vec<u8>, PortraitError> {
+    let mut input = Vec::new();
+    std::io::stdin()
+        .lock()
+        // One byte past the cap, so that hitting it is distinguishable from a
+        // request that merely happens to be exactly that long.
+        .take(MAX_REQUEST_BYTES + 1)
+        .read_to_end(&mut input)
+        .map_err(|e| PortraitError::BadRequest(format!("could not read stdin: {e}")))?;
+    if input.len() as u64 > MAX_REQUEST_BYTES {
+        return Err(PortraitError::BadRequest(format!(
+            "request is larger than {MAX_REQUEST_BYTES} bytes"
+        )));
+    }
+
+    let request: PortraitRequest = serde_json::from_slice(&input)
+        .map_err(|e| PortraitError::BadRequest(format!("could not parse request: {e}")))?;
+
+    encode_webp(&render(&request)?)
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(bytes) => {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(e) = stdout.write_all(&bytes).and_then(|()| stdout.flush()) {
+                eprintln!("portrait_gen: could not write image to stdout: {e}");
+                return ExitCode::from(4);
+            }
+            ExitCode::SUCCESS
+        },
+        Err(e) => {
+            eprintln!("portrait_gen: {e}");
+            ExitCode::from(e.exit_code())
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fixed humanoid, so failures are reproducible rather than seed-shaped.
+    fn test_body() -> comp::humanoid::Body {
+        comp::humanoid::Body::iter()
+            .next()
+            .expect("there is at least one humanoid body")
+    }
+
+    #[test]
+    fn request_json_round_trips() {
+        let request = PortraitRequest {
+            body: Body::Humanoid(test_body()),
+            inventory: Inventory::with_empty(),
+            params: PortraitParams::default(),
+        };
+
+        let json = serde_json::to_string(&request).expect("request serializes");
+        let back: PortraitRequest = serde_json::from_str(&json).expect("request deserializes");
+
+        assert_eq!(back.params, request.params);
+        assert_eq!(back.body, request.body);
+        assert_eq!(
+            serde_json::to_string(&back.inventory).unwrap(),
+            serde_json::to_string(&request.inventory).unwrap()
+        );
+    }
+
+    #[test]
+    fn params_default_when_absent() {
+        let body = serde_json::to_string(&Body::Humanoid(test_body())).unwrap();
+        let inventory = serde_json::to_string(&Inventory::with_empty()).unwrap();
+        let json = format!(r#"{{"body":{body},"inventory":{inventory}}}"#);
+
+        let request: PortraitRequest =
+            serde_json::from_str(&json).expect("params are optional in the wire format");
+
+        assert_eq!(request.params, PortraitParams::default());
+        assert_eq!(request.params.size, DEFAULT_PORTRAIT_SIZE);
+        assert_eq!(request.params.version, PORTRAIT_PARAMS_VERSION);
+        assert_eq!(request.params.framing, Framing::FullBodyFront);
+    }
+
+    /// The params half of the wire format is what a caller has to reproduce
+    /// byte-for-byte to talk to this renderer, and it is reproduced by hand on
+    /// the caller's side rather than shared as a type. Pin it so that a change
+    /// here fails here, loudly, instead of silently at the far end.
+    #[test]
+    fn default_params_serialize_to_the_pinned_shape() {
+        assert_eq!(
+            serde_json::to_string(&PortraitParams::default()).unwrap(),
+            r#"{"size":256,"framing":"full_body_front","version":"p1"}"#
+        );
+    }
+
+    #[test]
+    fn a_mismatched_params_version_is_a_bad_request() {
+        let params = PortraitParams {
+            version: "p0".to_string(),
+            ..Default::default()
+        };
+        let err = validate(&params).expect_err("the renderer must refuse another version");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn malformed_request_is_a_bad_request() {
+        let err = serde_json::from_str::<PortraitRequest>("{ not json }")
+            .map_err(|e| PortraitError::BadRequest(e.to_string()))
+            .expect_err("malformed JSON must not parse");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn out_of_range_size_is_a_bad_request() {
+        for size in [0, MIN_PORTRAIT_SIZE - 1, MAX_PORTRAIT_SIZE + 1] {
+            let params = PortraitParams {
+                size,
+                ..Default::default()
+            };
+            let err = validate(&params).expect_err("size must be range-checked");
+            assert_eq!(err.exit_code(), 2, "size {size} should be rejected");
+        }
+        for size in [MIN_PORTRAIT_SIZE, DEFAULT_PORTRAIT_SIZE, MAX_PORTRAIT_SIZE] {
+            let params = PortraitParams {
+                size,
+                ..Default::default()
+            };
+            validate(&params).expect("in-range sizes are accepted");
+        }
+    }
+
+    #[test]
+    fn non_humanoid_body_is_unsupported() {
+        let request = PortraitRequest {
+            body: Body::Object(comp::object::Body::Arrow),
+            inventory: Inventory::with_empty(),
+            params: PortraitParams::default(),
+        };
+        let err = render(&request).expect_err("only humanoids render");
+        assert_eq!(err.exit_code(), 3);
+    }
+
+    /// Needs `VELOREN_ASSETS`, like every asset-loading test in the workspace.
+    ///
+    /// Pixel-exact goldens are too brittle across float architectures, so this
+    /// asserts the properties that actually catch a broken pipeline: the right
+    /// dimensions, something was drawn, the background stayed transparent, and
+    /// the result is not one flat colour.
+    #[test]
+    fn renders_a_bare_humanoid() {
+        let request = PortraitRequest {
+            body: Body::Humanoid(test_body()),
+            inventory: Inventory::with_empty(),
+            params: PortraitParams {
+                size: 64,
+                ..Default::default()
+            },
+        };
+
+        let img = render(&request).expect("a bare humanoid renders");
+        assert_eq!((img.width(), img.height()), (64, 64));
+
+        let opaque = img.pixels().filter(|p| p.0[3] > 0).count();
+        assert!(opaque > 0, "the portrait is entirely transparent");
+        assert!(
+            opaque < (64 * 64),
+            "the background should stay transparent, not be filled"
+        );
+
+        let first = img.pixels().find(|p| p.0[3] > 0).expect("an opaque pixel");
+        assert!(
+            img.pixels().any(|p| p.0[3] > 0 && p.0 != first.0),
+            "the portrait is a single flat colour — nothing was shaded"
+        );
+
+        let bytes = encode_webp(&img).expect("the render encodes as lossless webp");
+        assert!(!bytes.is_empty());
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WEBP");
+    }
+
+    /// Framing is the whole job of this binary, and it is the one thing the
+    /// "something was drawn" test above would not notice going wrong — it
+    /// passes just as happily on a figure at 30% scale, clipped at 200%, shoved
+    /// into a corner, or facing away.
+    ///
+    /// The invariant is exact rather than eyeballed. `draw_voxes` scales the
+    /// rotated model by `2 * zoom / reference`, and `fit` picks `zoom` so that
+    /// the longest visible axis times that scale is `2 * fill` — against a
+    /// normalized frame two units wide, i.e. exactly `fill` of the output.
+    /// Tolerances only absorb the supersample-and-filter pass, which spreads a
+    /// silhouette by a pixel or so.
+    #[test]
+    fn the_figure_is_centred_and_fills_the_frame() {
+        const SIZE: u32 = 128;
+
+        let img = render(&PortraitRequest {
+            body: Body::Humanoid(test_body()),
+            inventory: Inventory::with_empty(),
+            params: PortraitParams {
+                size: SIZE as u16,
+                ..Default::default()
+            },
+        })
+        .expect("a bare humanoid renders");
+
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
+        for (x, y, px) in img.enumerate_pixels() {
+            // Ignore the faintest filtered fringe, which is not silhouette.
+            if px.0[3] > 8 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        assert!(min_x <= max_x, "nothing opaque was drawn");
+
+        let span_x = (max_x - min_x + 1) as f32;
+        let span_y = (max_y - min_y + 1) as f32;
+        let fill = preset(Framing::FullBodyFront).fill;
+
+        assert!(
+            (span_x.max(span_y) / SIZE as f32 - fill).abs() < 0.05,
+            "the figure spans {span_x}x{span_y} of {SIZE}px, which is not {fill} of the frame"
+        );
+        assert!(
+            ((min_x + max_x) as f32 / 2.0 - SIZE as f32 / 2.0).abs() < 3.0,
+            "the figure is not horizontally centred: x spans {min_x}..={max_x} of {SIZE}px"
+        );
+        assert!(
+            ((min_y + max_y) as f32 / 2.0 - SIZE as f32 / 2.0).abs() < 3.0,
+            "the figure is not vertically centred: y spans {min_y}..={max_y} of {SIZE}px"
+        );
+        assert!(
+            min_x > 0 && min_y > 0 && max_x < SIZE - 1 && max_y < SIZE - 1,
+            "the figure touches the frame edge — it is clipped, not framed"
+        );
+    }
+}

@@ -14,13 +14,11 @@ use crate::{
         character::conversions::{
             convert_active_abilities_from_database, convert_active_abilities_to_database,
             convert_background_from_database, convert_background_to_database,
-            convert_body_from_database, convert_body_to_database_json,
-            convert_character_from_database, convert_class_from_database,
-            convert_class_to_database, convert_ethos_from_database,
+            convert_body_to_database_json, convert_character_from_database,
+            convert_class_from_database, convert_class_to_database, convert_ethos_from_database,
             convert_future_levels_to_secondary_to_database, convert_hardcore_from_database,
             convert_hardcore_to_database, convert_inventory_from_database_items,
-            convert_items_to_database_items, convert_loadout_from_database_items,
-            convert_pact_from_database, convert_pact_to_database,
+            convert_items_to_database_items, convert_pact_from_database, convert_pact_to_database,
             convert_recipe_book_from_database_items, convert_secondary_class_level_to_database,
             convert_secondary_class_to_database, convert_skill_groups_to_database,
             convert_skill_set_from_database, convert_stats_from_database,
@@ -66,6 +64,19 @@ mod conversions;
 /// goes through `convert_waypoint_or_warn` instead.
 pub(crate) use conversions::convert_waypoint_from_database_json;
 
+/// `persistence::portrait::load_portrait_inputs` rebuilds the body and the
+/// *equipped* half of what `load_character_data` rebuilds, for a character
+/// whose player may not be connected. It lives in `persistence/portrait.rs`
+/// rather than here so that the portrait cache doesn't grow inside this
+/// (upstream-hot) file. Widened to `pub(in crate::persistence)` and no further
+/// -- the module warning above still stands for everyone outside
+/// `persistence`. The invariant these carry is the topological ordering of the
+/// item rows they are handed, which is `load_items`' job (already `pub`), and
+/// `load_portrait_inputs` feeds them the same way `load_character_data` does.
+pub(in crate::persistence) use conversions::{
+    convert_body_from_database, convert_loadout_from_database_items,
+};
+
 pub(crate) type EntityId = i64;
 
 const CHARACTER_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.character";
@@ -79,7 +90,9 @@ const RECIPE_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_container
 /// `spell_book` migration.
 const SPELL_BOOK_PSEUDO_CONTAINER_DEF_ID: &str = "veloren.core.pseudo_containers.spell_book";
 const INVENTORY_PSEUDO_CONTAINER_POSITION: &str = "inventory";
-const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
+/// `pub(in crate::persistence)` for `persistence::portrait`, which resolves
+/// this one container and none of the others.
+pub(in crate::persistence) const LOADOUT_PSEUDO_CONTAINER_POSITION: &str = "loadout";
 const OVERFLOW_ITEMS_PSEUDO_CONTAINER_POSITION: &str = "overflow_items";
 const RECIPE_BOOK_PSEUDO_CONTAINER_POSITION: &str = "recipe_book";
 const SPELL_BOOK_PSEUDO_CONTAINER_POSITION: &str = "spell_book";
@@ -977,6 +990,35 @@ pub fn delete_character(
     stmt.execute([&char_id.0])?;
     drop(stmt);
 
+    // Delete the cached portrait, if one was ever rendered. `character_id`s
+    // are never reused (`get_new_entity_ids` allocates from `sqlite_sequence`),
+    // so an orphaned row could not be served to anybody -- but nothing would
+    // ever collect it either, and a picture of a character its player deleted
+    // is not something to keep lying around. Inside this transaction so that a
+    // deletion that rolls back does not take the portrait with it, and ahead of
+    // the character row so the order stays correct if this table ever does
+    // acquire a foreign key.
+    super::portrait::delete_portrait(char_id, transaction)?;
+
+    // Lift any suspension before the character row goes. Unlike the portrait
+    // table this one is not merely tidy-up: `character_suspensions.character_id`
+    // is `NOT NULL PRIMARY KEY REFERENCES "character"(character_id)` (V87) and
+    // every connection runs `PRAGMA foreign_keys = ON`, so leaving the row in
+    // place makes the `DELETE FROM character` below fail outright. That error
+    // does not stay local -- `queue_character_deletion` batches this delete into
+    // the same transaction as every other online player's pending logout-save
+    // for the tick, so a failure here rolls back their saves too and trips
+    // `disconnect_all_clients_requested`, kicking the whole server.
+    //
+    // Note what this decides, since the crash was previously hiding it: a
+    // suspended character is *deletable*, and deleting it discards the
+    // suspension's reason, operator and timestamp along with it. Suspension is
+    // per-character (V87), so "suspend -> delete -> reroll" is a way around it.
+    // Refusing the deletion instead would be a moderation-policy change, not a
+    // crash fix, and belongs in `handle_character_delete` where it can be
+    // reported to the player rather than here in the persistence layer.
+    unsuspend_character(char_id, transaction)?;
+
     // Delete character
     let mut stmt = transaction.prepare_cached(
         "
@@ -1070,13 +1112,16 @@ pub fn load_character_summaries(
 ) -> Result<Vec<super::CharacterSummary>, PersistenceError> {
     let mut stmt = connection.prepare_cached(
         "
-            SELECT  character_id,
-                    alias,
-                    class,
-                    waypoint
-            FROM    character
-            WHERE   player_uuid = ?1
-            ORDER BY character_id",
+            SELECT  c.character_id,
+                    c.alias,
+                    c.class,
+                    c.waypoint,
+                    b.variant,
+                    b.body_data
+            FROM    character c
+            JOIN    body b ON b.body_id = c.character_id
+            WHERE   c.player_uuid = ?1
+            ORDER BY c.character_id",
     )?;
 
     let rows = stmt
@@ -1085,25 +1130,48 @@ pub fn load_character_summaries(
             let alias: String = row.get(1)?;
             let class: String = row.get(2)?;
             let waypoint: Option<String> = row.get(3)?;
-            Ok((character_id, alias, class, waypoint))
+            let body_variant: String = row.get(4)?;
+            let body_data: String = row.get(5)?;
+            Ok((
+                character_id,
+                alias,
+                class,
+                waypoint,
+                body_variant,
+                body_data,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(stmt);
 
     rows.into_iter()
-        .map(|(character_id, alias, class, waypoint)| {
-            let character_id = CharacterId(character_id);
-            let level = character_level(character_id, connection)?;
-            let suspended = get_character_suspension(character_id, connection)?;
-            Ok(super::CharacterSummary {
-                character_id,
-                alias,
-                class,
-                level,
-                waypoint,
-                suspended,
-            })
-        })
+        .map(
+            |(character_id, alias, class, waypoint, body_variant, body_data)| {
+                let character_id = CharacterId(character_id);
+                let level = character_level(character_id, connection)?;
+                let suspended = get_character_suspension(character_id, connection)?;
+                let race = match convert_body_from_database(&body_variant, &body_data)? {
+                    comp::Body::Humanoid(body) => format!("{:?}", body.species),
+                    // Not reachable: a player character is always Humanoid,
+                    // the same invariant `portrait.rs` states explicitly. Kept
+                    // total rather than panicking -- a character list is not
+                    // worth failing over -- but a fixed string rather than
+                    // `{other:?}`, which would dump an entire body variant's
+                    // unstable `Debug` shape into a field the web account page
+                    // renders as a race name.
+                    _ => "Unknown".to_owned(),
+                };
+                Ok(super::CharacterSummary {
+                    character_id,
+                    alias,
+                    class,
+                    race,
+                    level,
+                    waypoint,
+                    suspended,
+                })
+            },
+        )
         .collect()
 }
 
@@ -1421,7 +1489,10 @@ fn get_pseudo_containers(
     Ok(character_containers)
 }
 
-fn get_pseudo_container_id(
+/// `pub(in crate::persistence)` so that `persistence::portrait` can resolve
+/// just the loadout container, rather than paying `get_pseudo_containers` for
+/// all five when it needs one.
+pub(in crate::persistence) fn get_pseudo_container_id(
     connection: &Connection,
     character_id: CharacterId,
     pseudo_container_position: &str,
@@ -2712,6 +2783,41 @@ mod nh79_character_summary_tests {
         let summaries = load_character_summaries("uuid-does-not-exist", &conn).expect("load");
         assert!(summaries.is_empty());
     }
+
+    #[test]
+    fn load_character_summaries_reports_the_stored_species_as_race() {
+        let db = TestDb::new();
+        let body = comp::Body::Humanoid(comp::humanoid::Body {
+            species: comp::humanoid::Species::Draugr,
+            ..comp::humanoid::Body::random()
+        });
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        let (id, _) = create_character(
+            "uuid-race",
+            "Species Test",
+            PersistedComponents {
+                body,
+                stats: comp::Stats::new(Content::Plain("Species Test".to_owned()), body),
+                ..components()
+            },
+            &mut transaction,
+        )
+        .expect("creation");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let summaries = load_character_summaries("uuid-race", &conn).expect("load");
+        assert_eq!(
+            summaries
+                .iter()
+                .find(|s| s.character_id == id)
+                .unwrap()
+                .race,
+            "Draugr",
+            "race must be the raw Species enum-variant name, never a display/localized string"
+        );
+    }
 }
 
 /// End-to-end persistence tests for per-character suspension: suspend, check
@@ -2920,6 +3026,116 @@ mod character_suspension_persistence_tests {
         let mut transaction = conn.connection.transaction().expect("transaction");
         unsuspend_character(id, &mut transaction).expect("unsuspend never-suspended character");
         transaction.commit().expect("commit");
+    }
+
+    /// Regression: `character_suspensions.character_id` is a `NOT NULL PRIMARY
+    /// KEY REFERENCES "character"(character_id)` (V87) and every connection
+    /// runs `PRAGMA foreign_keys = ON`, so deleting a suspended character used
+    /// to fail the FK constraint. That is not a locally-contained failure: the
+    /// player-facing delete path batches this into the same transaction as
+    /// every other online player's pending logout-save for the tick, and an
+    /// error there makes `character_updater` kick every connected client.
+    #[test]
+    fn deleting_a_suspended_character_succeeds() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-delete", "Doomed");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(
+            id,
+            "suspended, then deleted",
+            "operator-uuid",
+            now(),
+            None,
+            &mut transaction,
+        )
+        .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        delete_character("uuid-suspend-delete", id, &mut transaction)
+            .expect("deleting a suspended character must not fail the FK constraint");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        let list = load_character_list("uuid-suspend-delete", &conn).expect("load list");
+        assert!(
+            !list.iter().any(|c| c.character.id == Some(id)),
+            "the character itself must be gone"
+        );
+    }
+
+    /// The suspension row must go with the character, not linger as an orphan
+    /// that a recycled id could inherit.
+    #[test]
+    fn deleting_a_character_clears_its_suspension() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-delete-clears", "Doomed");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(id, "reason", "operator-uuid", now(), None, &mut transaction)
+            .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_some(),
+            "precondition: the character is suspended"
+        );
+        drop(conn);
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        delete_character("uuid-suspend-delete-clears", id, &mut transaction).expect("delete");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_none(),
+            "a deleted character must not leave a suspension row behind"
+        );
+        assert!(
+            !load_all_character_suspensions(&conn)
+                .expect("load all")
+                .contains_key(&id),
+            "nor may the startup-load path still see it"
+        );
+    }
+
+    /// `delete_character` silently no-ops for a character the requester does
+    /// not own; the suspension deletion must sit behind that same ownership
+    /// check, mirroring the portrait case.
+    #[test]
+    fn a_refused_character_deletion_leaves_the_suspension_alone() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-suspend-delete-owner", "Guarded");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        suspend_character(id, "reason", "operator-uuid", now(), None, &mut transaction)
+            .expect("suspend");
+        transaction.commit().expect("commit");
+
+        let mut conn = db.connection();
+        let mut transaction = conn.connection.transaction().expect("transaction");
+        delete_character("uuid-some-stranger", id, &mut transaction)
+            .expect("a stranger's delete is a silent no-op, not an error");
+        transaction.commit().expect("commit");
+
+        let conn = db.connection();
+        assert!(
+            get_character_suspension(id, &conn)
+                .expect("query")
+                .is_some(),
+            "a stranger must not be able to lift another character's suspension"
+        );
     }
 
     #[test]

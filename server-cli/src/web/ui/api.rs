@@ -80,6 +80,15 @@ pub fn router(web_ui_request_s: UiRequestSender, secret_token: String) -> Router
         .route("/players", get(players))
         .route("/logs", get(logs))
         .route("/send_global_msg", post(send_global_msg))
+        // `Json` is an extractor, so serde has already allocated the whole
+        // `target_uuids` array by the time `MAX_TARGETED_MSG_UUIDS` can reject
+        // it. Sized to the cap with generous headroom (256 uuids is ~10 KiB of
+        // JSON) so the body limit refuses an oversized array before anything
+        // parses it, rather than after.
+        .route(
+            "/send_targeted_msg",
+            post(send_targeted_msg).layer(axum::extract::DefaultBodyLimit::max(64 * 1024)),
+        )
         .route("/info", get(info))
         .route("/shutdown", post(shutdown))
         .route("/disconnect_all", post(disconnect_all))
@@ -146,6 +155,135 @@ async fn send_global_msg(
         .send((Message::SendGlobalMsg { msg: payload.msg }, dummy_s))
         .await;
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct SendTargetedMsgBody {
+    target_uuids: Vec<String>,
+    operator_uuid: String,
+    msg: String,
+}
+
+#[derive(Serialize)]
+struct SendTargetedMsgResponse {
+    delivered_to: Vec<String>,
+    not_found: Vec<String>,
+}
+
+/// Upper bound on how many uuids one `send_targeted_msg` call may name.
+///
+/// The engine side resolves every entry against the connected-player set on
+/// the tick-owning thread, so an unbounded array is a direct stall of the game
+/// loop for every player -- reachable by anyone holding only the shared
+/// `/ui_api/v1` secret. A few hundred comfortably covers any real ops use
+/// (the alternative for a genuinely server-wide announcement is
+/// `send_global_msg`, which costs one broadcast rather than N lookups).
+const MAX_TARGETED_MSG_UUIDS: usize = 256;
+
+/// The cap itself, split out from the handler so it can be tested directly:
+/// `server-cli` has no HTTP test harness (no `tower` dev-dependency), and this
+/// returns the exact `(StatusCode, String)` pair the handler hands back.
+fn check_targeted_msg_batch(target_count: usize) -> Result<(), (StatusCode, String)> {
+    if target_count > MAX_TARGETED_MSG_UUIDS {
+        // Understood but refused, for a stated reason -- the same 400
+        // precedent the malformed-uuid case below uses, not 500.
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "target_uuids may name at most {MAX_TARGETED_MSG_UUIDS} uuids (got \
+                 {target_count}); use send_global_msg for a server-wide announcement"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Sends `msg` to exactly `target_uuids` (skipping any not currently
+/// connected -- see `MessageReturn::TargetedMsgSent`). Same auth tier as
+/// `send_global_msg` above (the shared secret only, no operator/role check);
+/// unlike the kick/ban/unban routes this isn't a moderation action.
+///
+/// `operator_uuid` is deliberately unverified -- it is an audit record, not an
+/// authorization check. For it to be worth anything it has to be correlatable,
+/// so every call logs it together with the caller's source IP and the delivery
+/// outcome. The `log_users` middleware is not a substitute: it logs an IP once,
+/// the first time that IP is ever seen on `/ui_api` at all, so a forged
+/// `operator_uuid` on this route would otherwise have nothing to cross-check
+/// against.
+///
+/// The IP is the *peer's*, so it only distinguishes callers when they connect
+/// directly. Unlike the HTML UI route (`super::ui`, which refuses `Forwarded`
+/// and `X-Forwarded-For` outright), these API routes are expected to sit behind
+/// a gateway in some deployments -- and there every record carries the same
+/// proxy address. That is a real limit on what this log proves; correlating an
+/// operator behind a proxy needs the gateway's own access log as well.
+async fn send_targeted_msg(
+    State(web_ui_request_s): State<UiRequestSender>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(payload): Json<SendTargetedMsgBody>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let ip_addr = addr.ip();
+    let target_count = payload.target_uuids.len();
+
+    if let Err(rejection) = check_targeted_msg_batch(target_count) {
+        tracing::info!(
+            ?ip_addr,
+            operator_uuid = %payload.operator_uuid,
+            target_count,
+            "targeted message rejected: too many target_uuids"
+        );
+        return Err(rejection);
+    }
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    // Kept for the audit log below; the request itself takes ownership.
+    let operator_uuid = payload.operator_uuid.clone();
+    let _ = web_ui_request_s
+        .send((
+            Message::SendTargetedMsg {
+                target_uuids: payload.target_uuids,
+                operator_uuid: payload.operator_uuid,
+                msg: payload.msg,
+            },
+            sender,
+        ))
+        .await;
+    match receiver
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, String::new()))?
+    {
+        MessageReturn::TargetedMsgSent {
+            delivered_to,
+            not_found,
+        } => {
+            tracing::info!(
+                ?ip_addr,
+                %operator_uuid,
+                target_count,
+                delivered = delivered_to.len(),
+                not_found = not_found.len(),
+                "targeted message sent"
+            );
+            Ok(Json(SendTargetedMsgResponse {
+                delivered_to,
+                not_found,
+            }))
+        },
+        // A malformed uuid in `target_uuids` -- the request was understood
+        // but rejected for a stated reason, same "understood but refused"
+        // precedent `kick_player` below established, not 500.
+        MessageReturn::Error(err) => {
+            tracing::info!(
+                ?ip_addr,
+                %operator_uuid,
+                target_count,
+                error = %err,
+                "targeted message rejected"
+            );
+            Err((StatusCode::BAD_REQUEST, err))
+        },
+        _ => Err((StatusCode::INTERNAL_SERVER_ERROR, String::new())),
+    }
 }
 
 async fn info(
@@ -605,5 +743,43 @@ async fn player_characters(
     {
         MessageReturn::PlayerCharacters(characters) => Ok(Json(characters)),
         _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+#[cfg(test)]
+mod targeted_msg_cap_tests {
+    use super::*;
+
+    /// `server-cli` carries no HTTP test harness (no `tower` dev-dependency),
+    /// so these exercise the admission check the handler delegates to -- it
+    /// returns the exact `(StatusCode, String)` pair the handler hands back to
+    /// the caller.
+    #[test]
+    fn an_oversized_batch_is_rejected_with_400() {
+        let (status, body) = check_targeted_msg_batch(MAX_TARGETED_MSG_UUIDS + 1)
+            .expect_err("a batch past the cap must be refused");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body.contains(&MAX_TARGETED_MSG_UUIDS.to_string()),
+            "the rejection must tell the caller what the cap is, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn a_batch_at_the_cap_is_accepted() {
+        assert!(
+            check_targeted_msg_batch(MAX_TARGETED_MSG_UUIDS).is_ok(),
+            "the cap itself is inclusive"
+        );
+    }
+
+    #[test]
+    fn ordinary_batches_are_accepted() {
+        for count in [0, 1, 2, 32] {
+            assert!(
+                check_targeted_msg_batch(count).is_ok(),
+                "{count} targets is a perfectly ordinary request"
+            );
+        }
     }
 }

@@ -98,7 +98,7 @@ use wiring::{Circuit, Wire, WireNode, WiringAction, WiringActionEffect, WiringEl
 use world::util::{LOCALITY, Sampler};
 
 use common::comp::Alignment;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub trait ChatCommandExt {
     fn execute(&self, server: &mut Server, entity: EcsEntity, args: Vec<String>);
@@ -6229,6 +6229,85 @@ pub(crate) fn admin_unban_player(
             Err(format!("failed to validate unban: {err:?}"))
         },
     }
+}
+
+/// Sends `msg` to exactly the connected players named by `target_uuids`, on
+/// behalf of `operator_uuid` (recorded here purely for our own audit log --
+/// `xindeler-zuul` keeps its own step-up-gated audit trail for who asked for
+/// this, but a low-visibility DM to one or two players is a much easier
+/// spoofing/social-engineering target than a self-auditing global broadcast,
+/// so this side keeps a record too). Skips (and reports back) any uuid that
+/// isn't currently connected. No operator/role check, unlike the admin
+/// kick/ban/unban functions above -- this is the same security tier
+/// `Message::SendGlobalMsg` already uses (gated purely by holding the shared
+/// `/ui_api/v1` secret), just scoped to specific recipients instead of
+/// everyone; `operator_uuid` is not required to be a registered admin.
+/// Bypasses `StateExt::send_chat` entirely (same as the admin functions
+/// above), so this does not go through `ChatExporter`/`validate_chat_msg` --
+/// verified harmless: `ChatType::Meta` already skips both in that path today
+/// (`uid()` is `None`, `ChatExporter::generate` falls through to `None` for
+/// `Meta`), so nothing is lost by sending directly. See
+/// `Message::SendTargetedMsg`.
+pub(crate) fn send_targeted_msg(
+    server: &Server,
+    target_uuids: &[Uuid],
+    operator_uuid: Uuid,
+    msg: String,
+) -> (Vec<Uuid>, Vec<Uuid>) {
+    // Nothing to resolve, so don't pay for the index below. Not a hypothetical
+    // shape: the HTTP layer accepts an empty `target_uuids`, and without this an
+    // empty body would still cost a full pass over every connected player.
+    if target_uuids.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let ecs = server.state.ecs();
+    let clients = ecs.read_storage::<Client>();
+    let resolved_msg = ServerGeneral::server_msg(ChatType::Meta, Content::Plain(msg));
+
+    // One pass over the player storage to build a uuid -> entity index, then an
+    // O(1) lookup per requested uuid. This used to call `find_uuid` per target,
+    // and `find_uuid` linearly scans every connected player, making the whole
+    // loop O(targets * players) -- all of it synchronous on the tick-owning
+    // thread, so a caller holding only the shared `/ui_api/v1` secret could
+    // stall the game for everyone with one oversized `target_uuids` array. The
+    // HTTP layer caps that array too (`MAX_TARGETED_MSG_UUIDS`); this makes the
+    // work linear whatever gets through.
+    let mut connected: HashMap<Uuid, EcsEntity> = HashMap::new();
+    for (entity, player) in (&ecs.entities(), &ecs.read_storage::<comp::Player>()).join() {
+        // `find_uuid` returned the *first* match, so keep that tie-break rather
+        // than letting a later entry overwrite an earlier one: two entities can
+        // transiently carry the same account uuid while a reconnect overlaps
+        // its predecessor's cleanup.
+        connected.entry(player.uuid()).or_insert(entity);
+    }
+
+    // `delivered` is the one whose size is known for free and whose expected
+    // case is full; `not_found` stays lazy because the common case is empty.
+    let mut delivered = Vec::with_capacity(target_uuids.len());
+    let mut not_found = Vec::new();
+    for &uuid in target_uuids {
+        let client = connected.get(&uuid).and_then(|&entity| clients.get(entity));
+        match client {
+            Some(client) => {
+                client.send_fallible(resolved_msg.clone());
+                delivered.push(uuid);
+            },
+            None => not_found.push(uuid),
+        }
+    }
+    // Debug, not info: the HTTP handler now emits the audit record for this
+    // same event, and its copy is strictly the better one (it also carries the
+    // caller's source IP and the requested target count). Two INFO lines per
+    // call would just make a grep-based audit double-count. Kept at all so the
+    // engine side still leaves a trace when the log level is turned up.
+    debug!(
+        %operator_uuid,
+        delivered = delivered.len(),
+        not_found = not_found.len(),
+        "targeted message sent"
+    );
+    (delivered, not_found)
 }
 
 /// Resolves `character_id`'s owning account uuid for the admin

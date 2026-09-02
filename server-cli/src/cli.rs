@@ -99,6 +99,18 @@ pub enum Message {
     SendGlobalMsg {
         msg: String,
     },
+    /// Sends `msg` to exactly the players named by `target_uuids`, skipping
+    /// (and reporting back) any uuid that isn't currently connected.
+    /// `operator_uuid` is recorded for our own audit log only -- not
+    /// role-checked, need not belong to a registered admin/moderator. See
+    /// `MessageReturn::TargetedMsgSent`.
+    SendTargetedMsg {
+        target_uuids: Vec<String>,
+        #[arg(long)]
+        operator_uuid: String,
+        #[arg(long)]
+        msg: String,
+    },
     /// Uptime-adjacent server status not already exported via `/metrics`:
     /// version, player count, pending-shutdown state.
     ServerInfo,
@@ -152,6 +164,38 @@ pub enum Message {
         uuid: String,
         character_id: i64,
         new_alias: String,
+    },
+    /// Serves the portrait image of one of `uuid`'s own characters, rendering
+    /// it first if what the cache holds no longer matches how the character
+    /// currently looks.
+    ///
+    /// `uuid` is the *authenticated* account, never a value the caller
+    /// supplied: ownership of `character_id` is checked against it, and a
+    /// character that is not this account's is answered exactly like one that
+    /// does not exist (`MessageReturn::CharacterPortraitNotFound`), so the
+    /// endpoint cannot be used to discover which character ids are real.
+    /// `if_none_match` is the caller's HTTP header verbatim; it is compared
+    /// against a server-computed digest and never parsed, stored, or put in a
+    /// query.
+    ///
+    /// **Forward-only.** The arm handling this must never render, decode or
+    /// otherwise inspect an image: it hands the request to the `server` crate's
+    /// portrait worker and returns immediately (design spec §6.1). A render is
+    /// a subprocess and up to a second of CPU, and the loop that would
+    /// otherwise be waiting for it is the same one that ticks the game and
+    /// answers every other message. Every outcome therefore arrives on the
+    /// response channel *after* this arm has already returned.
+    ///
+    /// Not offered as a console command, unlike its neighbours. Two reasons,
+    /// and both of them matter: an operator typing it would get nothing back
+    /// (the console reads its answer immediately, and this one cannot be ready
+    /// by then), and `uuid` would become a value somebody typed, which is the
+    /// one thing the paragraph above says it never is.
+    #[command(skip)]
+    GetCharacterPortrait {
+        uuid: String,
+        character_id: i64,
+        if_none_match: Option<String>,
     },
     /// Kicks `target_uuid`'s live session on behalf of `operator_uuid`, a
     /// registered admin/moderator with no live in-game session of its own.
@@ -314,6 +358,12 @@ pub struct CharacterSummaryDto {
     pub name: String,
     pub level: u32,
     pub class: String,
+    /// The character's humanoid species, as the raw enum-variant name (same
+    /// convention as `class`) -- callers must localize/rename this for
+    /// display, never show it verbatim, since some species have a
+    /// player-facing display name that differs from the internal variant
+    /// name.
+    pub race: String,
     /// `None` if this character never sat at a waypoint.
     pub location: Option<LocationDto>,
     /// `Some(_)` if this character is currently suspended.
@@ -361,6 +411,56 @@ pub enum MessageReturn {
     /// `Error(String)` above, same as every other fallible arm.
     AdminActionOk {
         ban: Option<common_net::msg::server::BanInfo>,
+    },
+    /// Response to a `Message::GetCharacterPortrait` that has an image to
+    /// give, either straight out of the cache or freshly rendered. The bytes
+    /// are opaque here and are re-served as-is; nothing in this process
+    /// decodes them.
+    CharacterPortrait {
+        bytes: Vec<u8>,
+        /// Subtype of the image's `image/*` media type, e.g. `webp`. Comes
+        /// from the cache row rather than a constant, so a row written by an
+        /// older build still describes itself correctly.
+        format: String,
+        /// Bare, without the quotes an `ETag` header wants around it — adding
+        /// them is the HTTP layer's job.
+        etag: String,
+    },
+    /// Response to a `Message::GetCharacterPortrait` whose `if_none_match`
+    /// already names the character's current appearance. No image was read and
+    /// nothing was rendered; the `etag` is echoed so the HTTP layer can repeat
+    /// it on the `304`.
+    CharacterPortraitNotModified {
+        etag: String,
+    },
+    /// Response to a `Message::GetCharacterPortrait` that arrived while the
+    /// render queue was full. The request was not attempted at all, so a retry
+    /// shortly afterwards is the right thing for the caller to do — which is
+    /// why this is its own variant rather than an `Error(String)` the caller
+    /// would have to tell apart from a genuine failure by reading it.
+    CharacterPortraitBusy,
+    /// Response to a `Message::GetCharacterPortrait` for a character that does
+    /// not exist *or* does not belong to the requesting account. Deliberately
+    /// one variant for both: telling them apart is exactly the enumeration
+    /// this endpoint must not offer.
+    CharacterPortraitNotFound,
+    /// Response to a `Message::GetCharacterPortrait` that went wrong on this
+    /// side -- the renderer crashed, timed out, drew nothing, or the database
+    /// could not be read.
+    ///
+    /// Carries no reason, and is a variant rather than an `Error(String)` for
+    /// the same reason the two above are: a caller distinguishing "come back
+    /// later", "no such character" and "we are broken" by parsing a message
+    /// would be a contract made of prose. The real reason is logged with the
+    /// character id by whichever step produced it.
+    CharacterPortraitFailed,
+    /// Response to `Message::SendTargetedMsg`: which of the requested
+    /// `target_uuids` were currently connected and got the message, and
+    /// which weren't. Not a failure even if `not_found` is non-empty --
+    /// partial delivery isn't an error, callers that care can inspect it.
+    TargetedMsgSent {
+        delivered_to: Vec<String>,
+        not_found: Vec<String>,
     },
 }
 
@@ -432,5 +532,34 @@ pub fn parse_command(input: &str, msg_s: &mut Sender<Message>) {
                 .unwrap_or_else(|e| error!(?e, "Failed to send CLI message"));
         },
         Err(e) => error!("{}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TuiApp;
+    use clap::Parser;
+
+    /// `GetCharacterPortrait` is `#[command(skip)]`, so it must not be
+    /// reachable from the operator console: its answer arrives too late for
+    /// the console to ever print, and its `uuid` is meant to be an
+    /// authenticated identity rather than something anybody types.
+    #[test]
+    fn the_portrait_message_is_not_a_console_command() {
+        assert!(
+            TuiApp::try_parse_from(["get-character-portrait", "some-uuid", "1"]).is_err(),
+            "the portrait message must not be typeable at the console"
+        );
+    }
+
+    /// The control for the test above: without this, that one would also pass
+    /// if the console simply rejected every command, or if the name were
+    /// spelled differently than clap derives it.
+    #[test]
+    fn a_neighbouring_message_still_is() {
+        assert!(
+            TuiApp::try_parse_from(["list-player-characters", "some-uuid"]).is_ok(),
+            "the console must still accept the messages that are meant to be typed"
+        );
     }
 }
