@@ -1109,7 +1109,7 @@ impl<'a> Skillbar<'a> {
             content_source: &content_source,
             image_source: &image_source,
             slot_manager: Some(self.slot_manager),
-            last_input: &self.global_state.window.last_input(),
+            global_state: self.global_state,
             pulse: self.pulse,
         };
 
