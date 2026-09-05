@@ -181,7 +181,7 @@ In dev builds, `voxygen-anim` and `server-agent` are compiled as `cdylib` crates
 **Where docs live — two repos, one working tree:**
 - Design docs (specs, plans, task boards) live in `docs/design/`, which is the **same separate, private git repo** used by the sibling Bevy-port project (`Matute289/xindeler-design`) — nested inside this repo too, and gitignored here. Commit and push design docs from inside `docs/design/` — never into this (public) repo. Reusing the same private repo (rather than forking a second one) keeps the engine-strategy decision history and the `docs/design/backlog/new-horizon.md` backlog in one place.
   - Specs → `docs/design/specs/`, implementation plans → `docs/design/plans/`, task boards → `docs/design/tasks/` (index: `00-task-board.md`).
-  - The **working backlog for this project** is `docs/design/backlog/new-horizon.md` (private) — NH-N rows, not a public `docs/backlog/backlog.md` (that file belongs to the sibling Bevy-port repo's own history).
+  - The **working backlog for this project** is `docs/design/backlog/new-horizon.md` (private) — NH-N rows. It is now the **only** active backlog across all Xindeler repos: the sibling Bevy-port repo's own `docs/backlog/backlog.md` (`BL-NN`) and `docs/backlog/engine-migration.md` (`EM-N`) were merged in and retired 2026-09-05 — every unique `BL-N` row was ported here as `NH-94..NH-141`, and every duplicate/heritage row has a `🔁 BL-N` cross-reference note under the `NH-` row that covers it (search `🔁` to find any specific old `BL-N`). There is still no public `docs/backlog/backlog.md` in *this* repo — the working backlog stays private in `docs/design/`.
 - Lore canon (markdown) lives at `docs/design/lore/` in the private design repo. `docs/lore/` is a legacy path kept gitignored as a guard — never create files there.
 - `.superpowers/` (brainstorm scratch) and `graphify-out/` are local-only and gitignored; never commit them anywhere. Brainstorm conclusions belong as a spec/plan in `docs/design/`.
 - The `gitlab` remote is the fetch-only upstream (push disabled); never push to it.
@@ -262,9 +262,13 @@ Custom profiles in the workspace `Cargo.toml`:
 
 **The working backlog for this project is [`docs/design/backlog/new-horizon.md`](docs/design/backlog/new-horizon.md)** —
 private (see Documentation & Git Policy above), `NH-N` rows, each referencing its specs/plans/tasks in
-the same private `docs/design/` repo. There is no public `docs/backlog/backlog.md` in this repo yet —
-if/when this project reaches a maturity where a public-facing summary backlog is useful, model it after
-the sibling Bevy-port repo's `docs/backlog/engine-migration.md`, but don't invent one prematurely.
+the same private `docs/design/` repo. This is now the **single backlog across every Xindeler repo**:
+the sibling Bevy-port repo's `docs/backlog/backlog.md` (`BL-NN`) and `docs/backlog/engine-migration.md`
+(`EM-N`) were merged in and deleted 2026-09-05 (see the `🎯 PRIORITY EXECUTION ORDER` section's
+"Tercera/Cuarta pasada" notes and the BL-→NH- reconciliation ledger inside `new-horizon.md` for the
+full mapping). There is still no public `docs/backlog/backlog.md` in *this* repo — if/when this
+project reaches a maturity where a public-facing summary backlog is useful, model it after the
+sibling repo's old `docs/backlog/engine-migration.md` shape, but don't invent one prematurely.
 
 **Always read `docs/design/backlog/new-horizon.md` on resume and before starting / after finishing any
 work.** The backlog is **multi-session**: `git pull`/re-sync `development` (in `docs/design`, a separate
