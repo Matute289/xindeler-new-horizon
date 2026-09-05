@@ -18,6 +18,7 @@ use std::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -112,6 +113,18 @@ pub struct CharacterUpdater {
 }
 
 impl CharacterUpdater {
+    /// How long shutdown is willing to wait for the persistence thread to
+    /// finish draining its pending batch backlog before giving up on the
+    /// join and letting the process exit anyway.
+    ///
+    /// Bounded on purpose, mirroring
+    /// [`crate::oracle::chronicle::ChronicleWrites::SHUTDOWN_DRAIN_TIMEOUT`]:
+    /// a server that never exits is a worse outcome than losing the tail of
+    /// an in-flight persistence batch. The batch-failure path already
+    /// disconnects all clients rather than risk data-integrity loss, so a
+    /// slow/stuck batch here is already an unusual, already-degraded case.
+    pub const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
     pub fn new(settings: Arc<RwLock<DatabaseSettings>>) -> rusqlite::Result<Self> {
         let (update_tx, update_rx) = crossbeam_channel::unbounded::<CharacterUpdaterAction>();
         let (response_tx, response_rx) = crossbeam_channel::unbounded::<CharacterUpdaterMessage>();
@@ -544,8 +557,32 @@ fn execute_character_edit(
 impl Drop for CharacterUpdater {
     fn drop(&mut self) {
         drop(self.update_tx.take());
-        if let Err(e) = self.handle.take().unwrap().join() {
-            error!(?e, "Error from joining character update thread");
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let (done_tx, done_rx) = crossbeam_channel::bounded(0);
+        let reaper = std::thread::Builder::new()
+            .name("persistence_updater_reaper".into())
+            .spawn(move || {
+                let result = handle.join();
+                // The receiver may already have timed out and stopped
+                // listening; that's fine, we tried.
+                let _ = done_tx.send(result);
+            });
+        match reaper {
+            Ok(_reaper_handle) => match done_rx.recv_timeout(Self::SHUTDOWN_JOIN_TIMEOUT) {
+                Ok(Ok(())) => {},
+                Ok(Err(e)) => error!(?e, "Error from joining character update thread"),
+                Err(_) => warn!(
+                    "Character persistence thread did not finish within {:?} of shutdown; leaving \
+                     it to finish draining its backlog in the background rather than blocking exit",
+                    Self::SHUTDOWN_JOIN_TIMEOUT
+                ),
+            },
+            Err(e) => error!(
+                ?e,
+                "Failed to spawn reaper thread to join character update thread"
+            ),
         }
     }
 }
