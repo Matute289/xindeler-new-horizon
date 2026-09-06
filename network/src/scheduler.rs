@@ -4,7 +4,7 @@ use crate::{
     metrics::{NetworkMetrics, ProtocolInfo},
     participant::{B2sPrioStatistic, BParticipant, S2bCreateChannel, S2bShutdownBparticipant},
 };
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future};
 use hashbrown::HashMap;
 use network_protocol::{Cid, Pid, ProtocolMetricCache, ProtocolMetrics};
 #[cfg(feature = "metrics")]
@@ -80,6 +80,20 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    /// How long a full server shutdown gives each still-connected participant
+    /// to flush pending messages and close cleanly, before that participant's
+    /// connection is force-closed.
+    ///
+    /// Deliberately much shorter than the 120s budget an ordinary
+    /// [`A2sDisconnect`] gets (that one is sized to tolerate a single lagging-
+    /// but-alive client during normal play) -- during a full shutdown we're
+    /// bounding the *whole process's* exit time, and a client whose connection
+    /// is already dead has no way to use the extra time anyway. Mirrors the
+    /// same "bounded give-up" shape as
+    /// `CharacterUpdater::SHUTDOWN_JOIN_TIMEOUT`
+    /// and `ChronicleWrites::SHUTDOWN_DRAIN_TIMEOUT` in the server crate.
+    const SHUTDOWN_PARTICIPANT_TIMEOUT: Duration = Duration::from_secs(10);
+
     pub fn new(
         local_pid: Pid,
         #[cfg(feature = "metrics")] registry: Option<&Registry>,
@@ -343,14 +357,19 @@ impl Scheduler {
                 pi.s2b_shutdown_bparticipant_s
                     .take()
                     .unwrap()
-                    .send((Duration::from_secs(120), finished_sender))
+                    .send((Self::SHUTDOWN_PARTICIPANT_TIMEOUT, finished_sender))
                     .unwrap();
                 (pid, finished_receiver)
             })
             .collect::<Vec<_>>();
         drop(participants);
         debug!("Wait for partiticipants to be shut down");
-        for (pid, recv) in waitings {
+        // Concurrent, not sequential: N participants each capped at
+        // SHUTDOWN_PARTICIPANT_TIMEOUT costs ~SHUTDOWN_PARTICIPANT_TIMEOUT
+        // total this way, not up to N times that -- a for-loop over `.await`
+        // here would let one dead-but-not-yet-detected connection add its
+        // full timeout to every participant behind it in the drain.
+        future::join_all(waitings.into_iter().map(|(pid, recv)| async move {
             if let Err(e) = recv.await {
                 error!(
                     ?pid,
@@ -358,8 +377,9 @@ impl Scheduler {
                     "Failed to finish sending all remaining messages to participant when shutting \
                      down"
                 );
-            };
-        }
+            }
+        }))
+        .await;
         debug!("shutting down protocol listeners");
         for (addr, end_channel_sender) in self.channel_listener.lock().await.drain() {
             trace!(?addr, "stopping listen on protocol");
