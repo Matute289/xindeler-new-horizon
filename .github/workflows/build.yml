@@ -1,0 +1,174 @@
+name: Build client
+
+# NH-58: cross-platform xindeler-voxygen client builds.
+#
+# Lives separately from ci-code-quality.yml on purpose: that workflow runs
+# `cargo clippy` on every PR and must stay fast; this one runs full `cargo
+# build` (which links real binaries, pulls the 467 MB asset tree from the VPS,
+# and takes far longer) only on demand or on a release tag.
+#
+# Phased rollout (docs/design/plans/2026-07-27-nh58-cross-platform-client-builds-plan.md):
+#   Phase 0 — Linux x64 (this file, first job)
+#   Phase 1+ — macOS ARM/Intel, Windows x64/ARM64, Linux ARM64 land as
+#              additional jobs in later PRs, per the plan's phase order.
+#
+# Invariants (docs/design/tasks/108-nh58-cross-platform-client-builds-tasks.md):
+#   - Never re-introduce GitHub LFS: assets come from the VPS via VPS_SSH_KEY,
+#     same pattern as publish-docker.yml.
+#   - `cargo clippy` is not a build: the bar is `cargo build` linking a real
+#     binary, plus `xindeler-voxygen --help` exiting 0 where the runner can
+#     execute it natively.
+#   - No CI runner has a GPU: a green job here proves the binary *links and
+#     starts*, not that it renders — real hardware smoke-testing is separate
+#     (fill-in-worksheets.md "Sibling convention").
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      DISABLE_GIT_LFS_CHECK: "true"
+      VELOREN_ASSETS: ${{ github.workspace }}/assets
+
+    steps:
+      - name: Checkout (no LFS — assets come from the VPS, not GitHub)
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull LFS assets (from VPS)
+        run: |
+          git lfs install --local
+          git lfs pull
+
+      - name: Install system dependencies
+        # mold — .cargo/config.toml forces -fuse-ld=mold on this target.
+        # alsa/udev — voxygen audio/gamepad backends need the dev headers to link.
+        # cmake/ninja — shaderc is built from source at compile time (plan §4.1).
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          echo "Pinned toolchain: $TOOLCHAIN"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-linux-x86_64
+
+      - name: Build xindeler-voxygen (release, default-publish)
+        run: cargo build --release --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        # Not a render test (no GPU on this runner) — proves the linked binary
+        # runs at all, which is the whole point of this workflow existing
+        # (clippy alone never catches a link failure). voxygen/src/cli.rs uses
+        # clap::Parser, so --help exits 0 without touching wgpu/audio/assets.
+        run: ./target/release/xindeler-voxygen --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xindeler-voxygen-linux-x86_64
+          path: target/release/xindeler-voxygen
+          retention-days: 14
+
+  macos-arm64:
+    name: macOS ARM (Apple Silicon)
+    runs-on: macos-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      DISABLE_GIT_LFS_CHECK: "true"
+      VELOREN_ASSETS: ${{ github.workspace }}/assets
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      RUSTFLAGS: "-D warnings"
+      CARGO_INCREMENTAL: "0"
+
+    steps:
+      - name: Checkout (no LFS — assets come from the VPS, not GitHub)
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull LFS assets (from VPS)
+        run: |
+          git lfs install --local
+          git lfs pull
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          echo "Pinned toolchain: $TOOLCHAIN"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-macos-arm64
+
+      # cmake + python (both preinstalled on macos-latest) build shaderc from
+      # source at compile time — verified locally on Matías's own Apple
+      # Silicon Mac (N58-B1): no extra provisioning needed, unlike Windows
+      # where shaderc's cmake step needs ninja explicitly (plan §4.1).
+      - name: Build xindeler-voxygen (release-thinlto, default-publish)
+        # release-thinlto, not plain release: upstream's fat-LTO default
+        # timed out on macOS CI runners for the same target (plan §4.5).
+        run: cargo build --profile release-thinlto --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        # This runner IS the target arch, so unlike a cross-compiled target
+        # we can actually execute the result, not just check that it linked.
+        run: ./target/release-thinlto/xindeler-voxygen --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xindeler-voxygen-macos-arm64-unsigned
+          path: target/release-thinlto/xindeler-voxygen
+          retention-days: 14

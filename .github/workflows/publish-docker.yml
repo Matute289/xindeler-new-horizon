@@ -43,10 +43,15 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2025-09-08
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        # Read the pin dynamically so this stays in sync with the monthly bump
+        # (this used to hardcode a stale nightly — NH-58 drive-by fix).
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          echo "Pinned toolchain: $TOOLCHAIN"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+          rustc --version
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
