@@ -235,10 +235,10 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 **Where each build runs:**
 - **Code CI** (build / check / test / lint on PRs) → **GitHub Actions** (public repo = free, unlimited minutes). It must **not** pull LFS — compilation and tests don't need the binary assets.
-- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`. **TODO before first use**: this script was written for the sibling repos and needs to be checked/adapted server-side to build from `xindeler-new-horizon` (checkout path, binary name, output path) before a real `v*` tag push is made here.
-- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
+- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`, which checks out the tag in the live `/opt/xindeler-server/src` checkout and delegates the actual build/install/health-check/rollback to `deploy/deploy.sh` in this repo. Already adapted and proven for `xindeler-new-horizon` specifically (binary `xindeler-server-cli`, toolchain pin, `.lfsconfig` all match this repo) — v0.1.0 through v0.23.0 have shipped this way as of 2026-09.
+- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR.
 - **Client release** (voxygen desktop installer + Airshipper) → **deferred**, same as the sibling repo.
-- **Repo secrets**: this is a brand-new repo — `secrets.VPS_SSH_KEY` has NOT been configured yet (`gh secret set VPS_SSH_KEY < path/to/key`, or via the GitHub UI). CI that needs VPS SSH will fail until this is added.
+- **Repo secrets**: `secrets.VPS_SSH_KEY` is configured (set 2026-09-05, using the same `~/.ssh/xindeler_ci` dedicated deploy key the sibling `xindeler` repo's identically-named secret already uses).
 
 **GitHub Actions minutes:** the 2,000-minute quota is for **private** repos only; the public `xindeler-new-horizon` repo runs Actions for free. Heavy Rust builds run on the VPS anyway, so they don't consume GitHub minutes.
 
@@ -246,7 +246,9 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 Xindeler is a fork of `gitlab veloren/veloren` (the `gitlab` remote — fetch-only, never push). To pull upstream `master` and update without breaking or overwriting Xindeler's work:
 
-- **Use the `gitlab-master-merger` skill** together with the `upstream-sync.yml` workflow. They bring upstream changes into a **review branch** (`upstream/review-…`) and integrate via **PR** — they do **not** force-push `main`/`development`.
+- Two independent mechanisms, usable separately or in sequence — neither force-pushes `main`/`development`:
+  - **`upstream-sync.yml`** (manual `workflow_dispatch`) checks GitLab for new commits and, if any exist, opens a **raw, non-mergeable draft PR** off an `upstream/review-YYYY-MM-DD-<sha>` branch — for eyeballing the upstream delta only, never merge it directly.
+  - **The `gitlab-master-merger` skill** does the real integration: creates its own `upstream/integrate-YYYY-MM-DD` branch off `development`, merges `gitlab/master`, resolves conflicts, validates (`cargo check --workspace`, tests, clippy, fmt), and opens the actual mergeable PR. This is the one to run directly when asked to "bring in upstream changes" — it doesn't require `upstream-sync.yml` to have run first.
 - ⚠️ **Never hard-mirror** upstream over our branches. (The old `mirror.yml` did `git push --force master→main` and was removed for exactly this reason; branch protection blocks it anyway.)
 - Upstream brings its own LFS binaries — these route to the **VPS** via `.lfsconfig`, never to GitHub.
 - After a sync, run the lint/test commands above and resolve conflicts so Xindeler customizations (classes, races, magic, lore-driven assets, CI/LFS config, etc.) are preserved — upstream must never clobber them.
