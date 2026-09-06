@@ -6,13 +6,14 @@ use super::{
     util,
 };
 use crate::{
+    GlobalState,
     hud::slots::SlotKind,
     ui::{
         ItemTooltip, ItemTooltipManager, ItemTooltipable,
         fonts::Fonts,
         slot::{ContentSize, SlotMaker},
     },
-    window::{LastInput, MenuInput},
+    window::MenuInput,
 };
 use client::Client;
 use common::{
@@ -64,6 +65,7 @@ pub struct SlotGrid<'a> {
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
     client: &'a Client,
+    global_state: &'a GlobalState,
     imgs: &'a Imgs,
     item_imgs: &'a ItemImgs,
     fonts: &'a Fonts,
@@ -74,7 +76,6 @@ pub struct SlotGrid<'a> {
     localized_strings: &'a Localization,
     item_i18n: &'a ItemI18n,
     entity: EcsEntity,
-    last_input: &'a LastInput,
     pulse: f32,
     menu_events: &'a Vec<MenuInput>,
     is_us: bool,
@@ -121,6 +122,7 @@ impl<'a> SlotGrid<'a> {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         client: &'a Client,
+        global_state: &'a GlobalState,
         imgs: &'a Imgs,
         item_imgs: &'a ItemImgs,
         fonts: &'a Fonts,
@@ -131,7 +133,6 @@ impl<'a> SlotGrid<'a> {
         localized_strings: &'a Localization,
         item_i18n: &'a ItemI18n,
         entity: EcsEntity,
-        last_input: &'a LastInput,
         pulse: f32,
         menu_events: &'a Vec<MenuInput>,
         is_us: bool,
@@ -141,6 +142,7 @@ impl<'a> SlotGrid<'a> {
         SlotGrid {
             common: widget::CommonBuilder::default(),
             client,
+            global_state,
             imgs,
             item_imgs,
             fonts,
@@ -151,7 +153,6 @@ impl<'a> SlotGrid<'a> {
             localized_strings,
             item_i18n,
             entity,
-            last_input,
             pulse,
             menu_events,
             is_us,
@@ -412,7 +413,7 @@ impl<'a> Widget for SlotGrid<'a> {
             content_source: self.inventory,
             image_source: self.item_imgs,
             slot_manager: Some(self.slot_manager),
-            last_input: self.last_input,
+            global_state: self.global_state,
             pulse: self.pulse,
         };
 
@@ -603,11 +604,11 @@ impl<'a> Widget for SlotGrid<'a> {
             let total_h = (actions.len() as f64 * 25.0) + ((actions.len() as f64 + 1.0) * 2.0);
 
             let event = ContextMenu::new(
+                self.global_state,
                 &actions,
                 self.fonts,
                 self.imgs,
                 self.menu_events,
-                self.last_input,
             )
             .top_left_with_margins_on(id, y, x)
             .w_h(130.0, total_h)
@@ -633,11 +634,11 @@ impl<'a> Widget for SlotGrid<'a> {
 struct ContextMenu<'a, T: 'a + AsRef<str>> {
     #[conrod(common_builder)]
     common: widget::CommonBuilder,
+    global_state: &'a GlobalState,
     actions: &'a [T],
     fonts: &'a Fonts,
     imgs: &'a Imgs,
     menu_events: &'a Vec<MenuInput>,
-    last_input: &'a LastInput,
 }
 
 widget_ids! {
@@ -655,19 +656,19 @@ struct ContextState {
 
 impl<'a, T: AsRef<str>> ContextMenu<'a, T> {
     fn new(
+        global_state: &'a GlobalState,
         actions: &'a [T],
         fonts: &'a Fonts,
         imgs: &'a Imgs,
         menu_events: &'a Vec<MenuInput>,
-        last_input: &'a LastInput,
     ) -> Self {
         ContextMenu {
             common: widget::CommonBuilder::default(),
+            global_state,
             actions,
             fonts,
             imgs,
             menu_events,
-            last_input,
         }
     }
 }
@@ -752,7 +753,7 @@ impl<'a, T: AsRef<str>> Widget for ContextMenu<'a, T> {
                 .color(color::BLACK)
                 .border(20.0)
                 .border_color(
-                    if active_btn && (*self.last_input == LastInput::Keyboard || *self.last_input == LastInput::Controller) {
+                    if active_btn && self.global_state.window.last_input_type_menu() {
                         color::YELLOW
                     } else {
                         color::WHITE
@@ -762,7 +763,7 @@ impl<'a, T: AsRef<str>> Widget for ContextMenu<'a, T> {
                 .label_font_size(self.fonts.cyri.scale(12))
                 .label_font_id(self.fonts.cyri.conrod_id)
                 .label_color(
-                    if active_btn && (*self.last_input == LastInput::Keyboard || *self.last_input == LastInput::Controller) {
+                    if active_btn && self.global_state.window.last_input_type_menu() {
                         color::YELLOW
                     } else {
                         color::WHITE

@@ -275,11 +275,12 @@ pub struct Window {
     pub focused: bool,
     gilrs: Option<Gilrs>,
     pub controller_modifiers: Vec<Button>,
-    pub menu_open: bool,
     cursor_position: winit::dpi::PhysicalPosition<f64>,
     mouse_emulation_vec: Vec2<f32>,
     controller_type: ControllerType,
     last_input: LastInput,
+    pub menu_open: bool,
+    last_input_type_menu: bool,
     // Currently used to send and receive screenshot result messages
     message_sender: channel::Sender<String>,
     message_receiver: channel::Receiver<String>,
@@ -408,11 +409,12 @@ impl Window {
             focused: true,
             gilrs,
             controller_modifiers: Vec::new(),
-            menu_open: false,
             cursor_position: winit::dpi::PhysicalPosition::new(0.0, 0.0),
             mouse_emulation_vec: Vec2::zero(),
             controller_type,
             last_input: LastInput::Mouse,
+            menu_open: false,
+            last_input_type_menu: false,
             // Currently used to send and receive screenshot result messages
             message_sender,
             message_receiver,
@@ -523,6 +525,7 @@ impl Window {
                     button: &Button,
                     is_pressed: bool,
                     last_input: &mut LastInput,
+                    last_input_menu: &mut bool,
                     mod1: bool,
                     mod2: bool,
                     menu_open: bool,
@@ -552,11 +555,13 @@ impl Window {
                             // Fetch actions to perform; if nothing was returned, then either no
                             // action was assigned to the input, or a remapping action was performed
                             MappedInput::Menu(menu_inputs) => {
+                                *last_input_menu = true;
                                 for menu_input in menu_inputs {
                                     events.push(Event::MenuInput(*menu_input, is_pressed));
                                 }
                             },
                             MappedInput::Game(game_inputs) => {
+                                *last_input_menu = false;
                                 // Prioritize game layers over buttons
                                 for game_input in game_inputs {
                                     events.push(Event::InputUpdate(*game_input, is_pressed));
@@ -577,6 +582,7 @@ impl Window {
                             &Button::from((button, code)),
                             true,
                             &mut self.last_input,
+                            &mut self.last_input_type_menu,
                             self.gamelayer_mod1,
                             self.gamelayer_mod2,
                             self.menu_open,
@@ -591,6 +597,7 @@ impl Window {
                             &Button::from((button, code)),
                             false,
                             &mut self.last_input,
+                            &mut self.last_input_type_menu,
                             self.gamelayer_mod1,
                             self.gamelayer_mod2,
                             self.menu_open,
@@ -911,6 +918,7 @@ impl Window {
                 ) {
                     match mapped_inputs {
                         MappedInput::Menu(menu_inputs) => {
+                            self.last_input_type_menu = true;
                             for menu_input in menu_inputs {
                                 self.events.push(Event::MenuInput(
                                     *menu_input,
@@ -919,6 +927,7 @@ impl Window {
                             }
                         },
                         MappedInput::Game(game_inputs) => {
+                            self.last_input_type_menu = false;
                             for game_input in game_inputs {
                                 match game_input {
                                     GameInput::Fullscreen => {
@@ -1365,7 +1374,10 @@ impl Window {
         let key_mouse = key_mouse.into_upper();
 
         // update last input to be Keyboard if button was pressed
-        *last_input = LastInput::Keyboard;
+        match key_mouse {
+            KeyMouse::Key(_) => *last_input = LastInput::Keyboard,
+            KeyMouse::Mouse(_) => *last_input = LastInput::Mouse,
+        }
 
         match *remapping {
             RemappingMode::RemapKeyboard(game_input) => {
@@ -1516,6 +1528,10 @@ impl Window {
     pub fn scale_factor(&self) -> f64 { self.scale_factor }
 
     pub fn last_input(&self) -> LastInput { self.last_input }
+
+    /// Returns true if the last input type was MenuInput, otherwise returns
+    /// false
+    pub fn last_input_type_menu(&self) -> bool { self.last_input_type_menu }
 
     pub fn controller_type(&self) -> ControllerType { self.controller_type }
 }

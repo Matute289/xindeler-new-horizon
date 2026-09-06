@@ -80,5 +80,3 @@ and the database needs to go back too, restore the most recent
 ## See also
 
 - `xindeler-auth/deploy/deploy.sh` — same pattern, same VPS, adapted here.
-- `docs/backlog/backlog.md`, row **BL-83**, has the full context for why this deploy fell ~44
-  PRs behind and which other repos (`xindeler-web-api`, `xindeler-auth`) are waiting on it.

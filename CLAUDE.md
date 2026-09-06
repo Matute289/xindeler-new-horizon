@@ -181,7 +181,7 @@ In dev builds, `voxygen-anim` and `server-agent` are compiled as `cdylib` crates
 **Where docs live — two repos, one working tree:**
 - Design docs (specs, plans, task boards) live in `docs/design/`, which is the **same separate, private git repo** used by the sibling Bevy-port project (`Matute289/xindeler-design`) — nested inside this repo too, and gitignored here. Commit and push design docs from inside `docs/design/` — never into this (public) repo. Reusing the same private repo (rather than forking a second one) keeps the engine-strategy decision history and the `docs/design/backlog/new-horizon.md` backlog in one place.
   - Specs → `docs/design/specs/`, implementation plans → `docs/design/plans/`, task boards → `docs/design/tasks/` (index: `00-task-board.md`).
-  - The **working backlog for this project** is `docs/design/backlog/new-horizon.md` (private) — NH-N rows, not a public `docs/backlog/backlog.md` (that file belongs to the sibling Bevy-port repo's own history).
+  - The **working backlog for this project** is `docs/design/backlog/new-horizon.md` (private) — NH-N rows. It is now the **only** active backlog across all Xindeler repos: the sibling Bevy-port repo's own `docs/backlog/backlog.md` (`BL-NN`) and `docs/backlog/engine-migration.md` (`EM-N`) were merged in and retired 2026-09-05 — every unique `BL-N` row was ported here as `NH-94..NH-141`, and every duplicate/heritage row has a `🔁 BL-N` cross-reference note under the `NH-` row that covers it (search `🔁` to find any specific old `BL-N`). There is still no public `docs/backlog/backlog.md` in *this* repo — the working backlog stays private in `docs/design/`.
 - Lore canon (markdown) lives at `docs/design/lore/` in the private design repo. `docs/lore/` is a legacy path kept gitignored as a guard — never create files there.
 - `.superpowers/` (brainstorm scratch) and `graphify-out/` are local-only and gitignored; never commit them anywhere. Brainstorm conclusions belong as a spec/plan in `docs/design/`.
 - The `gitlab` remote is the fetch-only upstream (push disabled); never push to it.
@@ -235,10 +235,10 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 **Where each build runs:**
 - **Code CI** (build / check / test / lint on PRs) → **GitHub Actions** (public repo = free, unlimited minutes). It must **not** pull LFS — compilation and tests don't need the binary assets.
-- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`. **TODO before first use**: this script was written for the sibling repos and needs to be checked/adapted server-side to build from `xindeler-new-horizon` (checkout path, binary name, output path) before a real `v*` tag push is made here.
-- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR. Same server-side adaptation caveat as above.
+- **Server release** → built **on the VPS** (where the assets are local), not on GitHub Actions. `release.yml` triggers on a `v*` tag push, SSHes to the VPS with `secrets.VPS_SSH_KEY`, and runs `/srv/git-lfs/scripts/build-release.sh <tag>`, which checks out the tag in the live `/opt/xindeler-server/src` checkout and delegates the actual build/install/health-check/rollback to `deploy/deploy.sh` in this repo. Already adapted and proven for `xindeler-new-horizon` specifically (binary `xindeler-server-cli`, toolchain pin, `.lfsconfig` all match this repo) — v0.1.0 through v0.23.0 have shipped this way as of 2026-09.
+- **Docker image** (`publish-docker.yml`, manual) → pulls only the asset dirs the image bundles (`assets/common,server,world`) from the VPS, builds `xindeler-server-cli`, pushes to GHCR.
 - **Client release** (voxygen desktop installer + Airshipper) → **deferred**, same as the sibling repo.
-- **Repo secrets**: this is a brand-new repo — `secrets.VPS_SSH_KEY` has NOT been configured yet (`gh secret set VPS_SSH_KEY < path/to/key`, or via the GitHub UI). CI that needs VPS SSH will fail until this is added.
+- **Repo secrets**: `secrets.VPS_SSH_KEY` is configured (set 2026-09-05, using the same `~/.ssh/xindeler_ci` dedicated deploy key the sibling `xindeler` repo's identically-named secret already uses).
 
 **GitHub Actions minutes:** the 2,000-minute quota is for **private** repos only; the public `xindeler-new-horizon` repo runs Actions for free. Heavy Rust builds run on the VPS anyway, so they don't consume GitHub minutes.
 
@@ -246,7 +246,9 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 Xindeler is a fork of `gitlab veloren/veloren` (the `gitlab` remote — fetch-only, never push). To pull upstream `master` and update without breaking or overwriting Xindeler's work:
 
-- **Use the `gitlab-master-merger` skill** together with the `upstream-sync.yml` workflow. They bring upstream changes into a **review branch** (`upstream/review-…`) and integrate via **PR** — they do **not** force-push `main`/`development`.
+- Two independent mechanisms, usable separately or in sequence — neither force-pushes `main`/`development`:
+  - **`upstream-sync.yml`** (manual `workflow_dispatch`) checks GitLab for new commits and, if any exist, opens a **raw, non-mergeable draft PR** off an `upstream/review-YYYY-MM-DD-<sha>` branch — for eyeballing the upstream delta only, never merge it directly.
+  - **The `gitlab-master-merger` skill** does the real integration: creates its own `upstream/integrate-YYYY-MM-DD` branch off `development`, merges `gitlab/master`, resolves conflicts, validates (`cargo check --workspace`, tests, clippy, fmt), and opens the actual mergeable PR. This is the one to run directly when asked to "bring in upstream changes" — it doesn't require `upstream-sync.yml` to have run first.
 - ⚠️ **Never hard-mirror** upstream over our branches. (The old `mirror.yml` did `git push --force master→main` and was removed for exactly this reason; branch protection blocks it anyway.)
 - Upstream brings its own LFS binaries — these route to the **VPS** via `.lfsconfig`, never to GitHub.
 - After a sync, run the lint/test commands above and resolve conflicts so Xindeler customizations (classes, races, magic, lore-driven assets, CI/LFS config, etc.) are preserved — upstream must never clobber them.
@@ -262,9 +264,13 @@ Custom profiles in the workspace `Cargo.toml`:
 
 **The working backlog for this project is [`docs/design/backlog/new-horizon.md`](docs/design/backlog/new-horizon.md)** —
 private (see Documentation & Git Policy above), `NH-N` rows, each referencing its specs/plans/tasks in
-the same private `docs/design/` repo. There is no public `docs/backlog/backlog.md` in this repo yet —
-if/when this project reaches a maturity where a public-facing summary backlog is useful, model it after
-the sibling Bevy-port repo's `docs/backlog/engine-migration.md`, but don't invent one prematurely.
+the same private `docs/design/` repo. This is now the **single backlog across every Xindeler repo**:
+the sibling Bevy-port repo's `docs/backlog/backlog.md` (`BL-NN`) and `docs/backlog/engine-migration.md`
+(`EM-N`) were merged in and deleted 2026-09-05 (see the `🎯 PRIORITY EXECUTION ORDER` section's
+"Tercera/Cuarta pasada" notes and the BL-→NH- reconciliation ledger inside `new-horizon.md` for the
+full mapping). There is still no public `docs/backlog/backlog.md` in *this* repo — if/when this
+project reaches a maturity where a public-facing summary backlog is useful, model it after the
+sibling repo's old `docs/backlog/engine-migration.md` shape, but don't invent one prematurely.
 
 **Always read `docs/design/backlog/new-horizon.md` on resume and before starting / after finishing any
 work.** The backlog is **multi-session**: `git pull`/re-sync `development` (in `docs/design`, a separate

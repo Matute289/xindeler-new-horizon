@@ -10,7 +10,7 @@
 <!-- SPDX-SnippetBegin -->
 <!-- SPDX-SnippetCopyrightText: 2025 Hrom -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
-# ![Xindeler banner](https://cdn.xindeler.greenmountain.dev/images/xindeler-banner.webp)
+# ![Xindeler banner](https://cdn.xindeler.com/images/xindeler-banner.webp)
 <!-- SPDX-SnippetEnd -->
 
 ## Welcome to Xindeler!
@@ -25,38 +25,38 @@ Xindeler is in active development.
 
 ### Account Management
 
-[Sign Up](https://auth.xindeler.greenmountain.dev)
+[Sign Up](https://auth.xindeler.com)
 
 Create an account to access Xindeler services and future multiplayer features.
 
 ### Community Wiki
 
-[Wiki](https://wiki.xindeler.greenmountain.dev)
+[Wiki](https://wiki.xindeler.com)
 
 Community-driven information repository about the world, mechanics, lore, crafting, creatures, and gameplay systems.
 
 ### Documentation
 
-[Documentation](https://docs.xindeler.greenmountain.dev)
+[Documentation](https://docs.xindeler.com)
 
 Technical and gameplay documentation for players, contributors, developers, and server administrators.
 
 ### Downloads
 
-[Downloads](https://downloads.xindeler.greenmountain.dev)
+[Downloads](https://downloads.xindeler.com)
 
 Official game downloads and launcher distribution.
 
 ## Official Services
 
-| Service        | URL                                          |
-| -------------- | -------------------------------------------- |
-| Website        | https://xindeler.greenmountain.dev           |
-| Authentication | https://auth.xindeler.greenmountain.dev      |
-| Wiki           | https://wiki.xindeler.greenmountain.dev      |
-| Documentation  | https://docs.xindeler.greenmountain.dev      |
-| Downloads      | https://downloads.xindeler.greenmountain.dev |
-| CDN            | https://cdn.xindeler.greenmountain.dev       |
+| Service        | URL                              |
+| -------------- | --------------------------------- |
+| Website        | https://xindeler.com              |
+| Authentication | https://auth.xindeler.com         |
+| Wiki           | https://wiki.xindeler.com         |
+| Documentation  | https://docs.xindeler.com         |
+| Downloads      | https://downloads.xindeler.com    |
+| CDN            | https://cdn.xindeler.com          |
 
 ## Getting Xindeler
 
