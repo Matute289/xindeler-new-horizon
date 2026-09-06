@@ -22,22 +22,46 @@ struct WriterState {
     bucket: String,
 }
 
+/// A file the compress thread should gzip, or a request to stop.
+///
+/// The thread's loop can't rely on the channel simply closing to know when to
+/// exit: its sending half lives inside `BoundedMakeWriter`, which is captured
+/// by the global `tracing` subscriber installed via `registry()....init()`
+/// (see `init_split_logs`) and is never dropped for the life of the process.
+/// Without an explicit `Shutdown` variant, `for path in rx` in the thread body
+/// blocks forever, and `CompressionGuard::drop`'s `h.join()` -- run from
+/// `main()`'s own local-variable teardown after everything else has already
+/// shut down cleanly -- hangs the process indefinitely with nothing left to
+/// log about it.
+enum CompressMsg {
+    Compress(PathBuf),
+    Shutdown,
+}
+
 pub struct BoundedMakeWriter {
     state: Arc<Mutex<WriterState>>,
     base_dir: PathBuf,
     prefix: String,
     rotation: Rotation,
     max_lines: u64,
-    compress_tx: mpsc::SyncSender<PathBuf>,
+    compress_tx: mpsc::SyncSender<CompressMsg>,
 }
 
 /// Held by the caller to keep the compression thread alive.
-pub struct CompressionGuard(Option<thread::JoinHandle<()>>);
+pub struct CompressionGuard {
+    handle: Option<thread::JoinHandle<()>>,
+    shutdown_tx: mpsc::SyncSender<CompressMsg>,
+}
 
 impl Drop for CompressionGuard {
     fn drop(&mut self) {
+        // Tell the thread to exit its loop -- see `CompressMsg`'s doc comment
+        // for why this can't be left to the channel closing on its own. If
+        // the receiver is already gone (thread panicked), the send fails and
+        // there's nothing to signal anyway.
+        let _ = self.shutdown_tx.send(CompressMsg::Shutdown);
         // join is best-effort; if the thread panicked, ignore
-        if let Some(h) = self.0.take() {
+        if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
     }
@@ -50,13 +74,18 @@ impl BoundedMakeWriter {
         rotation: Rotation,
         max_lines: u64,
     ) -> (Self, CompressionGuard) {
-        let (tx, rx) = mpsc::sync_channel::<PathBuf>(64);
+        let (tx, rx) = mpsc::sync_channel::<CompressMsg>(64);
         let compress_thread = thread::Builder::new()
             .name(format!("log-compress-{prefix}"))
             .spawn(move || {
-                for path in rx {
-                    if let Err(e) = compress_file(&path) {
-                        eprintln!("[log] compress failed for {}: {e}", path.display());
+                for msg in rx {
+                    match msg {
+                        CompressMsg::Compress(path) => {
+                            if let Err(e) = compress_file(&path) {
+                                eprintln!("[log] compress failed for {}: {e}", path.display());
+                            }
+                        },
+                        CompressMsg::Shutdown => break,
                     }
                 }
             })
@@ -89,9 +118,12 @@ impl BoundedMakeWriter {
                 prefix: prefix.to_owned(),
                 rotation,
                 max_lines,
-                compress_tx: tx,
+                compress_tx: tx.clone(),
             },
-            CompressionGuard(Some(compress_thread)),
+            CompressionGuard {
+                handle: Some(compress_thread),
+                shutdown_tx: tx,
+            },
         )
     }
 }
@@ -167,7 +199,7 @@ pub struct BoundedWriter<'a> {
     prefix: &'a str,
     rotation: &'a Rotation,
     max_lines: u64,
-    compress_tx: &'a mpsc::SyncSender<PathBuf>,
+    compress_tx: &'a mpsc::SyncSender<CompressMsg>,
 }
 
 impl Write for BoundedWriter<'_> {
@@ -190,7 +222,11 @@ impl Drop for BoundedWriter<'_> {
             let _ = self.state.writer.flush();
             let old_path = self.state.path.clone();
             // queue old file for gzip; non-blocking (sync_channel with capacity)
-            if self.compress_tx.try_send(old_path.clone()).is_err() {
+            if self
+                .compress_tx
+                .try_send(CompressMsg::Compress(old_path.clone()))
+                .is_err()
+            {
                 eprintln!(
                     "[log] compression queue full or disconnected, file will not be compressed: {}",
                     old_path.display()
@@ -231,5 +267,46 @@ impl<'a> MakeWriter<'a> for BoundedMakeWriter {
             max_lines: self.max_lines,
             compress_tx: &self.compress_tx,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the production shutdown hang (2026-09-06):
+    /// `CompressionGuard::drop` used to `.join()` a thread whose loop
+    /// (`for path in rx`) only ends when every `compress_tx` clone is
+    /// dropped -- but the one `BoundedMakeWriter` holds lives inside the
+    /// global `tracing` subscriber for the rest of the process, so that
+    /// never happened and the join hung forever with nothing left to log
+    /// about it.
+    ///
+    /// Runs the drop on its own thread and fails if it doesn't finish well
+    /// within a bound, rather than actually hanging the test suite if this
+    /// regresses.
+    #[test]
+    fn compression_guard_drop_does_not_hang_with_a_live_writer() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (writer, guard) =
+            BoundedMakeWriter::new(dir.path(), "test", Rotation::Daily, 1_000_000);
+        // Keep `writer` alive past the guard's drop, mirroring the real
+        // scenario: `BoundedMakeWriter` (and its `compress_tx` clone) lives
+        // inside the global subscriber for the whole process, well past
+        // where `CompressionGuard` gets dropped during shutdown.
+        let (done_tx, done_rx) = mpsc::channel();
+        let dropper = std::thread::spawn(move || {
+            drop(guard);
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "CompressionGuard::drop hung — did the shutdown signal regress?"
+        );
+        dropper.join().expect("dropper thread panicked");
+        drop(writer);
     }
 }
