@@ -10989,6 +10989,7 @@ dependencies = [
  "criterion",
  "crossbeam-channel",
  "flate2",
+ "tempfile",
  "termcolor",
  "tracing",
  "tracing-appender",
