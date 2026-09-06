@@ -23,8 +23,8 @@ os_arch_for() {
     xindeler-voxygen-linux-aarch64.tar.gz) echo "linux aarch64" ;;
     xindeler-voxygen-macos-arm64.dmg|xindeler-voxygen-macos-arm64-unsigned.dmg) echo "macos arm64" ;;
     xindeler-voxygen-macos-x86_64.dmg|xindeler-voxygen-macos-x86_64-unsigned.dmg) echo "macos x86_64" ;;
-    xindeler-voxygen-windows-x86_64.zip) echo "windows x86_64" ;;
-    xindeler-voxygen-windows-aarch64.zip) echo "windows aarch64" ;;
+    xindeler-voxygen-windows-x86_64.zip|xindeler-voxygen-windows-x86_64-unsigned.zip) echo "windows x86_64" ;;
+    xindeler-voxygen-windows-aarch64.zip|xindeler-voxygen-windows-aarch64-unsigned.zip) echo "windows aarch64" ;;
     *) echo "" ;;
   esac
 }
@@ -42,10 +42,10 @@ for file in "$PACKAGES_DIR"/xindeler-voxygen-*; do
   arch="${os_arch#* }"
   size="$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file")"
   sha256="$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$file" | cut -d' ' -f1)"
-  # Only meaningful for macOS today (Linux/Windows aren't signed at all in
-  # this phase) — null rather than a misleading "true" for those.
+  # Only meaningful for macOS/Windows (Linux isn't signed at all in this
+  # phase) — null rather than a misleading "true" for Linux.
   signed="null"
-  if [ "$os" = "macos" ]; then
+  if [ "$os" = "macos" ] || [ "$os" = "windows" ]; then
     signed="true"
     [[ "$name" == *-unsigned.* ]] && signed="false"
   fi
