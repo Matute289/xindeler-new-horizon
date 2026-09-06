@@ -94,6 +94,10 @@ Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024
 ```bash
 # Run the game client (hot-reloading enabled by default in dev builds)
 cargo run --bin xindeler-voxygen
+# On macOS, hot-reloading doesn't work (common/dynlib/src/lib.rs logs an error
+# and the dylib reload never succeeds) — run with everything else `default`
+# gives you, minus `hot-reloading`, instead:
+cargo run --bin xindeler-voxygen --no-default-features --features default-publish,shaderc-from-source,egui-ui
 
 # Run the server
 cargo run --bin xindeler-server-cli
