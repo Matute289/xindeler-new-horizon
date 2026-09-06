@@ -161,6 +161,26 @@ jobs:
         with:
           lfs: false
 
+      # Unlike Linux/macOS, Windows' build.rs (#[cfg(windows)]) embeds
+      # assets/voxygen/logo.ico as a resource via winres AT BUILD TIME, not
+      # runtime — so this is the one asset this workflow's "no LFS needed to
+      # compile" assumption doesn't hold for. Without this pull, the file in
+      # the checkout is just the LFS pointer text (`lfs: false` above), and
+      # rc.exe fails on it with a deeply misleading "is not in 3.00 format"
+      # (cost 4 rounds of chasing a phantom ICO-format bug before finding
+      # this — see build.yml's windows-x86_64 job for the full story).
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull the Windows exe icon from LFS (only this one file)
+        run: |
+          git lfs install --local
+          git lfs pull -I "assets/voxygen/logo.ico"
+
       # ninja is needed for shaderc's cmake step on MSVC specifically (plan
       # §4.1) — cmake itself ships with the windows-latest image already.
       - name: Install ninja (for shaderc-from-source's cmake build)

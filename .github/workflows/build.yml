@@ -420,6 +420,23 @@ jobs:
         with:
           lfs: false
 
+      # build.rs (#[cfg(windows)]) embeds assets/voxygen/logo.ico via winres
+      # AT BUILD TIME — without this, the checkout only has the LFS pointer
+      # text (lfs: false above) and rc.exe fails with a misleading "is not
+      # in 3.00 format" (see build-check.yml's windows-x86_64 job, or #265-268,
+      # for the saga this cost before finding the actual cause).
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull the Windows exe icon from LFS (only this one file)
+        run: |
+          git lfs install --local
+          git lfs pull -I "assets/voxygen/logo.ico"
+
       - name: Install ninja (for shaderc-from-source's cmake build)
         run: choco install ninja -y
 
