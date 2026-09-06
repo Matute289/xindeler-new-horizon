@@ -8,9 +8,12 @@ name: Build client
 # and takes far longer) only on demand or on a release tag.
 #
 # Phased rollout (docs/design/plans/2026-07-27-nh58-cross-platform-client-builds-plan.md):
-#   Phase 0 — Linux x64 (this file, first job)
-#   Phase 1+ — macOS ARM/Intel, Windows x64/ARM64, Linux ARM64 land as
-#              additional jobs in later PRs, per the plan's phase order.
+#   Phase 0 — Linux x64 (done, this file)
+#   Phase 1 — macOS ARM, unsigned (done, this file)
+#   Phase 2 — macOS Intel slice (done, unsigned — signing/notarization is a
+#             separate follow-up once Matías sets the Apple secrets)
+#   Phase 3-6 — Windows x64/ARM64, Linux ARM64, release plumbing land as
+#               additional jobs in later PRs, per the plan's phase order.
 #
 # Invariants (docs/design/tasks/108-nh58-cross-platform-client-builds-tasks.md):
 #   - Never re-introduce GitHub LFS: assets come from the VPS via VPS_SSH_KEY,
@@ -171,4 +174,74 @@ jobs:
         with:
           name: xindeler-voxygen-macos-arm64-unsigned
           path: target/release-thinlto/xindeler-voxygen
+          retention-days: 14
+
+  macos-x86_64:
+    name: macOS Intel (cross-compiled on the ARM runner)
+    runs-on: macos-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      DISABLE_GIT_LFS_CHECK: "true"
+      VELOREN_ASSETS: ${{ github.workspace }}/assets
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      RUSTFLAGS: "-D warnings"
+      CARGO_INCREMENTAL: "0"
+
+    steps:
+      - name: Checkout (no LFS — assets come from the VPS, not GitHub)
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull LFS assets (from VPS)
+        run: |
+          git lfs install --local
+          git lfs pull
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          echo "Pinned toolchain: $TOOLCHAIN"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+          rustup target add x86_64-apple-darwin
+          rustc --version
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-macos-x86_64
+
+      # Same ARM runner as the macos-arm64 job, cross-compiling the Intel
+      # slice — no separate Intel runner needed. Verified locally on real
+      # Apple Silicon hardware first (N58-C1): cross-build links clean and
+      # runs correctly under Rosetta.
+      - name: Build xindeler-voxygen (release-thinlto, default-publish)
+        run: cargo build --target=x86_64-apple-darwin --profile release-thinlto --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Install Rosetta 2 (to execute the cross-compiled x86_64 binary)
+        # GitHub's macos-latest runner is Apple Silicon; Rosetta isn't
+        # preinstalled on the image, unlike on a developer Mac.
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Smoke test — the binary actually links and starts (via Rosetta)
+        run: ./target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xindeler-voxygen-macos-x86_64-unsigned
+          path: target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen
           retention-days: 14
