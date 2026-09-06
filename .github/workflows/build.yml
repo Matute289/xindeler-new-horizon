@@ -13,7 +13,12 @@ name: Build & publish client
 #             conditional on Apple secrets existing (N58-C3-C6) — ships
 #             unsigned until Matías sets them, no workflow change needed
 #             when he does.
-#   Phase 3-5 — Windows x64/ARM64, Linux ARM64 land as additional jobs later.
+#   Phase 3 — Windows x64 (done); signing wired but conditional on
+#             WINDOWS_CERT_PFX_BASE64 existing, same pattern as macOS —
+#             ships unsigned until Matías sets it.
+#   Phase 4 — Linux ARM64 (done), native on ubuntu-24.04-arm.
+#   Phase 5 — Windows ARM64, highest risk (wasmtime is Tier 3 there),
+#             not started.
 #   Phase 6 — this file's `assets` + `publish` jobs.
 #
 # Downloads contract: docs/design/specs/2026-09-06-client-downloads-contract.md
@@ -135,6 +140,60 @@ jobs:
         with:
           name: package-linux-x86_64
           path: xindeler-voxygen-linux-x86_64.tar.gz
+          retention-days: 7
+
+  linux-aarch64:
+    name: Linux ARM64
+    needs: [validate]
+    runs-on: ubuntu-24.04-arm
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-linux-aarch64
+
+      - name: Build xindeler-voxygen (release, default-publish)
+        # Native on this ARM runner (NH-58 [Q3]=A) — see .cargo/config.toml
+        # for why no cross linker is configured for this target anymore.
+        run: cargo build --release --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/release/xindeler-voxygen --help
+
+      - name: Compress debug sections and package
+        run: |
+          objcopy --compress-debug-sections=zlib \
+            target/release/xindeler-voxygen target/release/xindeler-voxygen-compressed
+          mv target/release/xindeler-voxygen-compressed target/release/xindeler-voxygen
+          tar czf xindeler-voxygen-linux-aarch64.tar.gz -C target/release xindeler-voxygen
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux-aarch64
+          path: xindeler-voxygen-linux-aarch64.tar.gz
           retention-days: 7
 
   macos-arm64:
@@ -343,9 +402,80 @@ jobs:
           path: xindeler-voxygen-macos-x86_64*.dmg
           retention-days: 7
 
+  windows-x86_64:
+    name: Windows x64
+    needs: [validate]
+    runs-on: windows-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      # Same pattern as the macOS HAS_APPLE_* vars: `secrets` isn't a valid
+      # context inside a step `if:`, so route through `env` first.
+      HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install ninja (for shaderc-from-source's cmake build)
+        run: choco install ninja -y
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-windows-x86_64
+
+      - name: Build xindeler-voxygen (release, default-publish)
+        # x86_64-pc-windows-msvc (NH-58 [Q2]=A), native on this runner.
+        run: cargo build --release --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/release/xindeler-voxygen.exe --help
+
+      - name: Sign (stub — unsigned until Matías sets WINDOWS_CERT_PFX_BASE64)
+        if: ${{ env.HAS_WINDOWS_CERT == 'true' }}
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          echo "$WINDOWS_CERT_PFX_BASE64" | base64 --decode > cert.pfx
+          SIGNTOOL="$(find '/c/Program Files (x86)/Windows Kits/10/bin' -name signtool.exe -path '*x64*' | sort | tail -1)"
+          "$SIGNTOOL" sign /f cert.pfx /p "$WINDOWS_CERT_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target/release/xindeler-voxygen.exe
+          rm -f cert.pfx
+
+      - name: Package .zip
+        run: |
+          cd target/release
+          if [ "$HAS_WINDOWS_CERT" = "true" ]; then
+            powershell -Command "Compress-Archive -Path xindeler-voxygen.exe -DestinationPath xindeler-voxygen-windows-x86_64.zip"
+          else
+            powershell -Command "Compress-Archive -Path xindeler-voxygen.exe -DestinationPath xindeler-voxygen-windows-x86_64-unsigned.zip"
+          fi
+          mv xindeler-voxygen-windows-x86_64*.zip ../../
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows-x86_64
+          path: xindeler-voxygen-windows-x86_64*.zip
+          retention-days: 7
+
   publish:
     name: Publish to downloads server
-    needs: [assets, linux-x86_64, macos-arm64, macos-x86_64]
+    needs: [assets, linux-x86_64, linux-aarch64, macos-arm64, macos-x86_64, windows-x86_64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

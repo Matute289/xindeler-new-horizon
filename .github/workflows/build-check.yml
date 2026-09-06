@@ -142,3 +142,92 @@ jobs:
 
       - name: Smoke test — the binary actually links and starts (via Rosetta)
         run: ./target/x86_64-apple-darwin/debug/xindeler-voxygen --help
+
+  windows-x86_64:
+    name: Windows x64
+    runs-on: windows-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+    defaults:
+      run:
+        # windows-latest defaults `run:` to PowerShell; Git for Windows
+        # (preinstalled) ships bash, and reusing it keeps every step's
+        # syntax identical to the other 3 jobs instead of a parallel
+        # PowerShell dialect for just this one.
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # ninja is needed for shaderc's cmake step on MSVC specifically (plan
+      # §4.1) — cmake itself ships with the windows-latest image already.
+      - name: Install ninja (for shaderc-from-source's cmake build)
+        run: choco install ninja -y
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-windows-x86_64
+
+      - name: Build xindeler-voxygen (default-publish)
+        # x86_64-pc-windows-msvc, not the inherited -gnu (NH-58 [Q2]=A):
+        # native on this runner already, no --target needed.
+        run: cargo build --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/debug/xindeler-voxygen.exe --help
+
+  linux-aarch64:
+    name: Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-linux-aarch64
+
+      - name: Build xindeler-voxygen (default-publish)
+        # Native on this ARM runner (NH-58 [Q3]=A) — .cargo/config.toml no
+        # longer hardcodes a cross linker for this target, so plain `cargo
+        # build` uses the host's own cc, same as x86_64.
+        run: cargo build --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/debug/xindeler-voxygen --help
