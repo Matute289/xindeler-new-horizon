@@ -246,7 +246,9 @@ Large binary assets (`.vox`, `.png`/`.jpg`/`.jpeg`, `.ogg`/`.wav`, `.ttf`, `.ico
 
 Xindeler is a fork of `gitlab veloren/veloren` (the `gitlab` remote — fetch-only, never push). To pull upstream `master` and update without breaking or overwriting Xindeler's work:
 
-- **Use the `gitlab-master-merger` skill** together with the `upstream-sync.yml` workflow. They bring upstream changes into a **review branch** (`upstream/review-…`) and integrate via **PR** — they do **not** force-push `main`/`development`.
+- Two independent mechanisms, usable separately or in sequence — neither force-pushes `main`/`development`:
+  - **`upstream-sync.yml`** (manual `workflow_dispatch`) checks GitLab for new commits and, if any exist, opens a **raw, non-mergeable draft PR** off an `upstream/review-YYYY-MM-DD-<sha>` branch — for eyeballing the upstream delta only, never merge it directly.
+  - **The `gitlab-master-merger` skill** does the real integration: creates its own `upstream/integrate-YYYY-MM-DD` branch off `development`, merges `gitlab/master`, resolves conflicts, validates (`cargo check --workspace`, tests, clippy, fmt), and opens the actual mergeable PR. This is the one to run directly when asked to "bring in upstream changes" — it doesn't require `upstream-sync.yml` to have run first.
 - ⚠️ **Never hard-mirror** upstream over our branches. (The old `mirror.yml` did `git push --force master→main` and was removed for exactly this reason; branch protection blocks it anyway.)
 - Upstream brings its own LFS binaries — these route to the **VPS** via `.lfsconfig`, never to GitHub.
 - After a sync, run the lint/test commands above and resolve conflicts so Xindeler customizations (classes, races, magic, lore-driven assets, CI/LFS config, etc.) are preserved — upstream must never clobber them.

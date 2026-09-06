@@ -81,6 +81,3 @@ migración corrió y necesitás volver la base atrás, restaurá el backup
 ## Ver también
 
 - `xindeler-auth/deploy/deploy.sh` — mismo patrón, mismo VPS, adaptado acá.
-- El backlog `docs/backlog/backlog.md`, fila **BL-83**, tiene el contexto completo de por qué
-  este deploy quedó ~44 PRs atrasado y qué otros repos (`xindeler-web-api`, `xindeler-auth`)
-  están esperando que se despliegue.
