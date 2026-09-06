@@ -126,6 +126,12 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
       RUSTFLAGS: "-D warnings"
       CARGO_INCREMENTAL: "0"
+      # `secrets` isn't a permitted context in a step's `if:` — has to be
+      # routed through `env` first (actionlint caught this; without it the
+      # whole workflow file fails to parse on every push, not just a bad
+      # step). https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY_ID != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -154,7 +160,7 @@ jobs:
         run: ./target/release-thinlto/xindeler-voxygen --help
 
       - name: Import signing certificate
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
         env:
           APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -166,14 +172,17 @@ jobs:
           echo "$APPLE_CERT_P12_BASE64" | base64 --decode > cert.p12
           security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
+          EXISTING_KEYCHAINS=$(security list-keychains -d user | tr -d '"')
+          # Word-splitting here is the intent: each keychain path is one word.
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s build.keychain $EXISTING_KEYCHAINS
           rm -f cert.p12
 
       - name: Package .app + .dmg
         run: bash .github/scripts/macos-package.sh target/release-thinlto/xindeler-voxygen arm64 "$VERSION"
 
       - name: Sign
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
         run: |
           IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
           codesign --force --deep --options runtime --timestamp \
@@ -182,13 +191,13 @@ jobs:
           codesign --verify --strict --deep Xindeler.app
 
       - name: Re-package signed .app into .dmg
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
         run: |
           rm -f xindeler-voxygen-macos-arm64.dmg
           hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO xindeler-voxygen-macos-arm64.dmg
 
       - name: Notarize
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' && secrets.APPLE_API_KEY_ID != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
         env:
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         run: |
@@ -202,7 +211,7 @@ jobs:
           rm -f AuthKey.p8
 
       - name: Rename package if unsigned (no secrets configured yet)
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 == '' }}
+        if: ${{ env.HAS_APPLE_CERT != 'true' }}
         run: mv xindeler-voxygen-macos-arm64.dmg xindeler-voxygen-macos-arm64-unsigned.dmg
 
       - uses: actions/upload-artifact@v4
@@ -219,6 +228,8 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
       RUSTFLAGS: "-D warnings"
       CARGO_INCREMENTAL: "0"
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY_ID != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -251,7 +262,7 @@ jobs:
         run: ./target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen --help
 
       - name: Import signing certificate
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
         env:
           APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -263,14 +274,17 @@ jobs:
           echo "$APPLE_CERT_P12_BASE64" | base64 --decode > cert.p12
           security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          security list-keychains -d user -s build.keychain $(security list-keychains -d user | tr -d '"')
+          EXISTING_KEYCHAINS=$(security list-keychains -d user | tr -d '"')
+          # Word-splitting here is the intent: each keychain path is one word.
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s build.keychain $EXISTING_KEYCHAINS
           rm -f cert.p12
 
       - name: Package .app + .dmg
         run: bash .github/scripts/macos-package.sh target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen x86_64 "$VERSION"
 
       - name: Sign
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
         run: |
           IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
           codesign --force --deep --options runtime --timestamp \
@@ -279,13 +293,13 @@ jobs:
           codesign --verify --strict --deep Xindeler.app
 
       - name: Re-package signed .app into .dmg
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
         run: |
           rm -f xindeler-voxygen-macos-x86_64.dmg
           hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO xindeler-voxygen-macos-x86_64.dmg
 
       - name: Notarize
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 != '' && secrets.APPLE_API_KEY_ID != '' }}
+        if: ${{ env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
         env:
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
         run: |
@@ -299,7 +313,7 @@ jobs:
           rm -f AuthKey.p8
 
       - name: Rename package if unsigned (no secrets configured yet)
-        if: ${{ secrets.APPLE_CERT_P12_BASE64 == '' }}
+        if: ${{ env.HAS_APPLE_CERT != 'true' }}
         run: mv xindeler-voxygen-macos-x86_64.dmg xindeler-voxygen-macos-x86_64-unsigned.dmg
 
       - uses: actions/upload-artifact@v4
@@ -342,9 +356,13 @@ jobs:
         # vhost's `root` directive, not just the /srv/xindeler/downloads
         # parent dir the CDN migration spec mentions in passing).
         run: |
-          ssh mgrinberg@greenmountain.dev "mkdir -p /srv/xindeler/downloads/public/releases/$VERSION"
-          rsync -avz --progress dist/ mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/releases/$VERSION/
-          scp dist/manifest.json mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/latest.json
+          REMOTE_DIR="/srv/xindeler/downloads/public/releases/$VERSION"
+          # $VERSION expanding client-side (a GH Actions env var, not something
+          # the remote host has) is the intent.
+          # shellcheck disable=SC2029
+          ssh mgrinberg@greenmountain.dev "mkdir -p '$REMOTE_DIR'"
+          rsync -avz --progress dist/ "mgrinberg@greenmountain.dev:$REMOTE_DIR/"
+          scp dist/manifest.json "mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/latest.json"
 
       - name: Report
         run: |
