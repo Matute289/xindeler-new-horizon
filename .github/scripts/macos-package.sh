@@ -53,6 +53,14 @@ PLIST
 # No icon yet (NH-58 didn't scope one) — macOS falls back to a generic app
 # icon, which is fine for an alpha.
 
-hdiutil create -volname "$APP_NAME" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_NAME"
+# Without an explicit -size, hdiutil auto-sizes the intermediate disk image
+# from the srcfolder, but that estimate runs short in CI often enough to be
+# unusable: two v0.25.x release runs both failed with "No space left on
+# device" while the actual runner disk had 90+ GB free -- the failure was
+# the temp *volume's* internal capacity, not the host filesystem. Compute
+# the real size and pad it generously rather than trust the auto-estimate.
+APP_SIZE_MB="$(du -sm "$APP_DIR" | cut -f1)"
+DMG_SIZE_MB=$((APP_SIZE_MB + APP_SIZE_MB / 2 + 20))
+hdiutil create -volname "$APP_NAME" -srcfolder "$APP_DIR" -ov -format UDZO -size "${DMG_SIZE_MB}m" "$DMG_NAME"
 
 echo "Packaged: $DMG_NAME"
