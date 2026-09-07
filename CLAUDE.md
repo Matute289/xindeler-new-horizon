@@ -42,6 +42,11 @@ closing `## Reportá así` legend (`✅`/`❌`/`🤷`, screenshots for failures,
 For a single small feature/PR, the lighter variant embeds this directly in that feature's
 task-board doc instead of a standalone file.
 
+**External QA testers (not Matías, not the team)** use a different collaboration surface entirely —
+Notion + Drive, not text worksheets, since they're non-technical and outside this repo. Full detail
+(page/database structure, folder layout, the Guest-scoping mechanism that keeps them from seeing
+anything else in Matías's Notion/Drive, how Claude accesses both): `docs/design/conventions/qa-alpha-testing-workspace.md`.
+
 ## Delegation — worktrees + parallel subagents (Matias, 2026-07-24)
 
 Ported from how `xindeler` (the sibling Bevy-port repo) actually worked in practice (never
