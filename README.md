@@ -60,7 +60,7 @@ Official game downloads and launcher distribution.
 
 ## Getting Xindeler
 
-Official builds for Windows, macOS and Linux will be available through the Downloads portal.
+Official builds for Windows, macOS and Linux are available through the [Downloads](https://downloads.xindeler.com) portal, published automatically with every tagged release. macOS builds are signed and notarized; Windows builds are currently unsigned (you may see a security warning on first launch — this is expected and the binary is safe).
 
 Due to active development, builds may change frequently and compatibility between versions is not guaranteed.
 
