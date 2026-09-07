@@ -275,6 +275,15 @@ jobs:
 
       - name: Sign
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        # .github/entitlements.plist grants the JIT/unsigned-memory/
+        # library-validation allowances wasmtime's Cranelift backend needs —
+        # without them the hardened runtime (--options runtime below) kills
+        # the process the instant a WASM plugin loads (plan §6.3's silent-
+        # failure mode: signs fine, notarizes fine, dies on first plugin).
+        # Keep that plist itself comment-free: Apple's entitlements XML
+        # parser (AMFIUnserializeXML, not the generic plist parser) chokes
+        # on a `--` inside an XML comment, which cost a full debug cycle to
+        # find (v0.25.3's release run).
         run: |
           IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
           codesign --force --deep --options runtime --timestamp \
@@ -386,6 +395,15 @@ jobs:
 
       - name: Sign
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        # .github/entitlements.plist grants the JIT/unsigned-memory/
+        # library-validation allowances wasmtime's Cranelift backend needs —
+        # without them the hardened runtime (--options runtime below) kills
+        # the process the instant a WASM plugin loads (plan §6.3's silent-
+        # failure mode: signs fine, notarizes fine, dies on first plugin).
+        # Keep that plist itself comment-free: Apple's entitlements XML
+        # parser (AMFIUnserializeXML, not the generic plist parser) chokes
+        # on a `--` inside an XML comment, which cost a full debug cycle to
+        # find (v0.25.3's release run).
         run: |
           IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
           codesign --force --deep --options runtime --timestamp \
