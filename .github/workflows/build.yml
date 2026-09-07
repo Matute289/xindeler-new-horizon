@@ -1,0 +1,538 @@
+name: Build & publish client
+
+# NH-58: builds every xindeler-voxygen client target and publishes the
+# packages to the downloads server. Runs ONLY on a `v*` tag (a real release),
+# never on a plain merge to development — that cheaper "does it still link"
+# check lives in build-check.yml instead, so this workflow (which pulls the
+# 467 MB asset tree and does real packaging/signing) doesn't run on every PR.
+#
+# Phased rollout (docs/design/plans/2026-07-27-nh58-cross-platform-client-builds-plan.md):
+#   Phase 0 — Linux x64 (done)
+#   Phase 1 — macOS ARM (done)
+#   Phase 2 — macOS Intel slice (done); signing/notarization wired but
+#             conditional on Apple secrets existing (N58-C3-C6) — ships
+#             unsigned until Matías sets them, no workflow change needed
+#             when he does.
+#   Phase 3 — Windows x64 (done); signing wired but conditional on
+#             WINDOWS_CERT_PFX_BASE64 existing, same pattern as macOS —
+#             ships unsigned until Matías sets it.
+#   Phase 4 — Linux ARM64 (done), native on ubuntu-24.04-arm.
+#   Phase 5 — Windows ARM64, highest risk (wasmtime is Tier 3 there),
+#             not started.
+#   Phase 6 — this file's `assets` + `publish` jobs.
+#
+# Downloads contract: docs/design/specs/2026-09-06-client-downloads-contract.md
+# (xindeler-web-api reads manifest.json/latest.json to resolve download URLs
+# for xindeler-web-landing — coordinated with that repo's session directly).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate this is a real version tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to build/publish from anything but a v* tag
+        # workflow_dispatch can be run against any branch, not just a tag —
+        # without this check, doing that would set VERSION to the branch
+        # name (e.g. "development") and the publish job would happily
+        # rsync a bogus release under that name to the real downloads
+        # server. Fail fast here before spending any build minutes.
+        run: |
+          if [[ "${{ github.ref_type }}" != "tag" || ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "::error::build.yml must run against a v* tag (got ref_type=${{ github.ref_type }}, VERSION=$VERSION). Refusing to build/publish from a branch."
+            exit 1
+          fi
+          echo "OK: publishing $VERSION"
+
+  assets:
+    name: Package shared assets
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull LFS assets (from VPS)
+        run: |
+          git lfs install --local
+          git lfs pull
+
+      - name: Package assets.tar.gz
+        # Q7=A (worksheet): one shared assets archive, not bundled per
+        # platform — 467 MB once, not ×6.
+        run: tar czf assets.tar.gz -C assets .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets
+          path: assets.tar.gz
+          retention-days: 7
+
+  linux-x86_64:
+    name: Linux x64
+    needs: [validate]
+    runs-on: ubuntu-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-linux-x86_64
+
+      - name: Build xindeler-voxygen (release, default-publish)
+        run: cargo build --release --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/release/xindeler-voxygen --help
+
+      - name: Compress debug sections and package
+        run: |
+          objcopy --compress-debug-sections=zlib \
+            target/release/xindeler-voxygen target/release/xindeler-voxygen-compressed
+          mv target/release/xindeler-voxygen-compressed target/release/xindeler-voxygen
+          tar czf xindeler-voxygen-linux-x86_64.tar.gz -C target/release xindeler-voxygen
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux-x86_64
+          path: xindeler-voxygen-linux-x86_64.tar.gz
+          retention-days: 7
+
+  linux-aarch64:
+    name: Linux ARM64
+    needs: [validate]
+    runs-on: ubuntu-24.04-arm
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-linux-aarch64
+
+      - name: Build xindeler-voxygen (release, default-publish)
+        # Native on this ARM runner (NH-58 [Q3]=A) — see .cargo/config.toml
+        # for why no cross linker is configured for this target anymore.
+        run: cargo build --release --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/release/xindeler-voxygen --help
+
+      - name: Compress debug sections and package
+        run: |
+          objcopy --compress-debug-sections=zlib \
+            target/release/xindeler-voxygen target/release/xindeler-voxygen-compressed
+          mv target/release/xindeler-voxygen-compressed target/release/xindeler-voxygen
+          tar czf xindeler-voxygen-linux-aarch64.tar.gz -C target/release xindeler-voxygen
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux-aarch64
+          path: xindeler-voxygen-linux-aarch64.tar.gz
+          retention-days: 7
+
+  macos-arm64:
+    name: macOS ARM (Apple Silicon)
+    needs: [validate]
+    runs-on: macos-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      RUSTFLAGS: "-D warnings"
+      CARGO_INCREMENTAL: "0"
+      # `secrets` isn't a permitted context in a step's `if:` — has to be
+      # routed through `env` first (actionlint caught this; without it the
+      # whole workflow file fails to parse on every push, not just a bad
+      # step). https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-macos-arm64
+
+      - name: Build xindeler-voxygen (release-thinlto, default-publish)
+        run: cargo build --profile release-thinlto --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/release-thinlto/xindeler-voxygen --help
+
+      - name: Import signing certificate
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          EXISTING_KEYCHAINS=$(security list-keychains -d user | tr -d '"')
+          # Word-splitting here is the intent: each keychain path is one word.
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s build.keychain $EXISTING_KEYCHAINS
+          rm -f cert.p12
+
+      - name: Package .app + .dmg
+        run: bash .github/scripts/macos-package.sh target/release-thinlto/xindeler-voxygen arm64 "$VERSION"
+
+      - name: Sign
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        run: |
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements .github/entitlements.plist \
+            --sign "$IDENTITY" Xindeler.app
+          codesign --verify --strict --deep Xindeler.app
+
+      - name: Re-package signed .app into .dmg
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        run: |
+          rm -f xindeler-voxygen-macos-arm64.dmg
+          hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO xindeler-voxygen-macos-arm64.dmg
+
+      - name: Notarize
+        if: ${{ env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > AuthKey.p8
+          xcrun notarytool submit xindeler-voxygen-macos-arm64.dmg \
+            --key AuthKey.p8 \
+            --key-id "${{ secrets.APPLE_API_KEY_ID }}" \
+            --issuer "${{ secrets.APPLE_API_ISSUER_ID }}" \
+            --wait
+          xcrun stapler staple xindeler-voxygen-macos-arm64.dmg
+          rm -f AuthKey.p8
+
+      - name: Rename package if unsigned (no secrets configured yet)
+        if: ${{ env.HAS_APPLE_CERT != 'true' }}
+        run: mv xindeler-voxygen-macos-arm64.dmg xindeler-voxygen-macos-arm64-unsigned.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos-arm64
+          path: xindeler-voxygen-macos-arm64*.dmg
+          retention-days: 7
+
+  macos-x86_64:
+    name: macOS Intel (cross-compiled on the ARM runner)
+    needs: [validate]
+    runs-on: macos-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      RUSTFLAGS: "-D warnings"
+      CARGO_INCREMENTAL: "0"
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_API_KEY_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+          rustup target add x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-macos-x86_64
+
+      - name: Build xindeler-voxygen (release-thinlto, default-publish)
+        run: cargo build --target=x86_64-apple-darwin --profile release-thinlto --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Install Rosetta 2 (to execute the cross-compiled binary)
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Smoke test — the binary actually links and starts (via Rosetta)
+        run: ./target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen --help
+
+      - name: Import signing certificate
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          EXISTING_KEYCHAINS=$(security list-keychains -d user | tr -d '"')
+          # Word-splitting here is the intent: each keychain path is one word.
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s build.keychain $EXISTING_KEYCHAINS
+          rm -f cert.p12
+
+      - name: Package .app + .dmg
+        run: bash .github/scripts/macos-package.sh target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen x86_64 "$VERSION"
+
+      - name: Sign
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        run: |
+          IDENTITY="$(security find-identity -v -p codesigning build.keychain | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements .github/entitlements.plist \
+            --sign "$IDENTITY" Xindeler.app
+          codesign --verify --strict --deep Xindeler.app
+
+      - name: Re-package signed .app into .dmg
+        if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        run: |
+          rm -f xindeler-voxygen-macos-x86_64.dmg
+          hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO xindeler-voxygen-macos-x86_64.dmg
+
+      - name: Notarize
+        if: ${{ env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > AuthKey.p8
+          xcrun notarytool submit xindeler-voxygen-macos-x86_64.dmg \
+            --key AuthKey.p8 \
+            --key-id "${{ secrets.APPLE_API_KEY_ID }}" \
+            --issuer "${{ secrets.APPLE_API_ISSUER_ID }}" \
+            --wait
+          xcrun stapler staple xindeler-voxygen-macos-x86_64.dmg
+          rm -f AuthKey.p8
+
+      - name: Rename package if unsigned (no secrets configured yet)
+        if: ${{ env.HAS_APPLE_CERT != 'true' }}
+        run: mv xindeler-voxygen-macos-x86_64.dmg xindeler-voxygen-macos-x86_64-unsigned.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos-x86_64
+          path: xindeler-voxygen-macos-x86_64*.dmg
+          retention-days: 7
+
+  windows-x86_64:
+    name: Windows x64
+    needs: [validate]
+    runs-on: windows-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      # Same pattern as the macOS HAS_APPLE_* vars: `secrets` isn't a valid
+      # context inside a step `if:`, so route through `env` first.
+      HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # build.rs (#[cfg(windows)]) embeds assets/voxygen/logo.ico via winres
+      # AT BUILD TIME — without this, the checkout only has the LFS pointer
+      # text (lfs: false above) and rc.exe fails with a misleading "is not
+      # in 3.00 format" (see build-check.yml's windows-x86_64 job, or #265-268,
+      # for the saga this cost before finding the actual cause).
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull the Windows exe icon from LFS (only this one file)
+        run: |
+          git lfs install --local
+          git lfs pull -I "assets/voxygen/logo.ico"
+
+      - name: Install ninja (for shaderc-from-source's cmake build)
+        run: choco install ninja -y
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-release-windows-x86_64
+
+      - name: Build xindeler-voxygen (release, default-publish)
+        # x86_64-pc-windows-msvc (NH-58 [Q2]=A), native on this runner.
+        run: cargo build --release --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/release/xindeler-voxygen.exe --help
+
+      - name: Sign (stub — unsigned until Matías sets WINDOWS_CERT_PFX_BASE64)
+        if: ${{ env.HAS_WINDOWS_CERT == 'true' }}
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          echo "$WINDOWS_CERT_PFX_BASE64" | base64 --decode > cert.pfx
+          SIGNTOOL="$(find '/c/Program Files (x86)/Windows Kits/10/bin' -name signtool.exe -path '*x64*' | sort | tail -1)"
+          "$SIGNTOOL" sign /f cert.pfx /p "$WINDOWS_CERT_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 target/release/xindeler-voxygen.exe
+          rm -f cert.pfx
+
+      - name: Package .zip
+        run: |
+          cd target/release
+          if [ "$HAS_WINDOWS_CERT" = "true" ]; then
+            powershell -Command "Compress-Archive -Path xindeler-voxygen.exe -DestinationPath xindeler-voxygen-windows-x86_64.zip"
+          else
+            powershell -Command "Compress-Archive -Path xindeler-voxygen.exe -DestinationPath xindeler-voxygen-windows-x86_64-unsigned.zip"
+          fi
+          mv xindeler-voxygen-windows-x86_64*.zip ../../
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows-x86_64
+          path: xindeler-voxygen-windows-x86_64*.zip
+          retention-days: 7
+
+  publish:
+    name: Publish to downloads server
+    needs: [assets, linux-x86_64, linux-aarch64, macos-arm64, macos-x86_64, windows-x86_64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List what will be published
+        run: ls -la dist/
+
+      - name: Generate manifest.json
+        run: bash .github/scripts/generate-manifest.sh "$VERSION" dist dist/manifest.json
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Upload release to the VPS downloads root
+        # /srv/xindeler/downloads/public is nginx's actual document root for
+        # downloads.xindeler.com (verified against
+        # MyServerVPS/nginx/sites-available/downloads.xindeler.com — the
+        # vhost's `root` directive, not just the /srv/xindeler/downloads
+        # parent dir the CDN migration spec mentions in passing).
+        run: |
+          REMOTE_DIR="/srv/xindeler/downloads/public/releases/$VERSION"
+          # $VERSION expanding client-side (a GH Actions env var, not something
+          # the remote host has) is the intent.
+          # shellcheck disable=SC2029
+          ssh mgrinberg@greenmountain.dev "mkdir -p '$REMOTE_DIR'"
+          rsync -avz --progress dist/ "mgrinberg@greenmountain.dev:$REMOTE_DIR/"
+          scp dist/manifest.json "mgrinberg@greenmountain.dev:/srv/xindeler/downloads/public/latest.json"
+
+      - name: Report
+        run: |
+          echo "Published $VERSION to https://downloads.xindeler.com/releases/$VERSION/"
+          echo "Manifest: https://downloads.xindeler.com/latest.json"

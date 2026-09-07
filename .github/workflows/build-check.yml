@@ -1,0 +1,253 @@
+name: Build check (client)
+
+# NH-58: cheap "does the client still link" gate for every merge to
+# development. Deliberately NOT the same workflow as build.yml (the full
+# release pipeline): this one never pulls the 467 MB asset tree from the VPS
+# and never packages/publishes anything — it exists purely to catch a link
+# failure that `ci-code-quality.yml`'s `cargo clippy` (check-only, never
+# links a binary) cannot catch. See task board invariant 3:
+# "cargo clippy is not a build."
+#
+# The actual per-platform client packages only get built and published to
+# the downloads server on a `v*` tag — see build.yml.
+
+on:
+  push:
+    branches: [development]
+  workflow_dispatch:
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    name: Linux x64
+    runs-on: ubuntu-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-linux-x86_64
+
+      - name: Build xindeler-voxygen (default-publish)
+        run: cargo build --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        # No assets needed: clap::Parser's --help exits 0 before anything
+        # touches wgpu/audio/assets.
+        run: ./target/debug/xindeler-voxygen --help
+
+  macos-arm64:
+    name: macOS ARM (Apple Silicon)
+    runs-on: macos-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      RUSTFLAGS: "-D warnings"
+      CARGO_INCREMENTAL: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-macos-arm64
+
+      - name: Build xindeler-voxygen (default-publish)
+        # Plain `build` here, not release-thinlto — this job only needs to
+        # prove it links, so use the cheapest/fastest profile available.
+        run: cargo build --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/debug/xindeler-voxygen --help
+
+  macos-x86_64:
+    name: macOS Intel (cross-compiled)
+    runs-on: macos-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      RUSTFLAGS: "-D warnings"
+      CARGO_INCREMENTAL: "0"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+          rustup target add x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-macos-x86_64
+
+      - name: Build xindeler-voxygen (default-publish)
+        run: cargo build --target=x86_64-apple-darwin --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Install Rosetta 2 (to execute the cross-compiled binary)
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      - name: Smoke test — the binary actually links and starts (via Rosetta)
+        run: ./target/x86_64-apple-darwin/debug/xindeler-voxygen --help
+
+  windows-x86_64:
+    name: Windows x64
+    runs-on: windows-latest
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+    defaults:
+      run:
+        # windows-latest defaults `run:` to PowerShell; Git for Windows
+        # (preinstalled) ships bash, and reusing it keeps every step's
+        # syntax identical to the other 3 jobs instead of a parallel
+        # PowerShell dialect for just this one.
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # Unlike Linux/macOS, Windows' build.rs (#[cfg(windows)]) embeds
+      # assets/voxygen/logo.ico as a resource via winres AT BUILD TIME, not
+      # runtime — so this is the one asset this workflow's "no LFS needed to
+      # compile" assumption doesn't hold for. Without this pull, the file in
+      # the checkout is just the LFS pointer text (`lfs: false` above), and
+      # rc.exe fails on it with a deeply misleading "is not in 3.00 format"
+      # (cost 4 rounds of chasing a phantom ICO-format bug before finding
+      # this — see build.yml's windows-x86_64 job for the full story).
+      - name: Setup SSH (self-hosted VPS LFS store)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan greenmountain.dev >> ~/.ssh/known_hosts
+
+      - name: Pull the Windows exe icon from LFS (only this one file)
+        run: |
+          git lfs install --local
+          git lfs pull -I "assets/voxygen/logo.ico"
+
+      # ninja is needed for shaderc's cmake step on MSVC specifically (plan
+      # §4.1) — cmake itself ships with the windows-latest image already.
+      - name: Install ninja (for shaderc-from-source's cmake build)
+        run: choco install ninja -y
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-windows-x86_64
+
+      - name: Build xindeler-voxygen (default-publish)
+        # x86_64-pc-windows-msvc, not the inherited -gnu (NH-58 [Q2]=A):
+        # native on this runner already, no --target needed.
+        run: cargo build --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/debug/xindeler-voxygen.exe --help
+
+  linux-aarch64:
+    name: Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    env:
+      VELOREN_USERDATA_STRATEGY: executable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            mold binutils pkg-config libasound2-dev libudev-dev cmake ninja-build
+
+      - name: Authorize access to the private auth dependency
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      - name: Install Rust toolchain (pinned, read from rust-toolchain)
+        run: |
+          TOOLCHAIN="$(cat rust-toolchain)"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-check-linux-aarch64
+
+      - name: Build xindeler-voxygen (default-publish)
+        # Native on this ARM runner (NH-58 [Q3]=A) — .cargo/config.toml no
+        # longer hardcodes a cross linker for this target, so plain `cargo
+        # build` uses the host's own cc, same as x86_64.
+        run: cargo build --no-default-features --features default-publish -p xindeler-voxygen
+
+      - name: Smoke test — the binary actually links and starts
+        run: ./target/debug/xindeler-voxygen --help

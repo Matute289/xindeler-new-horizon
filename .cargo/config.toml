@@ -9,7 +9,15 @@ git-fetch-with-cli = true
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 [target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
+# NH-58 [Q3]=A: native build on an ARM runner (ubuntu-24.04-arm), not
+# cross-compiled from x86_64 — being able to actually execute the result
+# for a real smoke test outweighs cross-compiling blind. A hardcoded
+# `linker = "aarch64-linux-gnu-gcc"` here would break that: on a native ARM
+# host the toolchain's own `cc` is already the right compiler, and
+# `aarch64-linux-gnu-gcc` (the cross-prefixed name) doesn't exist there.
+# Cross-compiling this target from x86_64 is no longer supported by this
+# config — pass `-C linker=aarch64-linux-gnu-gcc` via RUSTFLAGS explicitly
+# if that's ever needed again.
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 [target.x86_64-pc-windows-gnu]

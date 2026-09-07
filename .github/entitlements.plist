@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- xindeler-voxygen embeds wasmtime (the `plugins` feature, part of
+	     default-publish) to run the WASM plugin ABI. wasmtime's Cranelift
+	     backend JIT-compiles at runtime, which the macOS hardened runtime
+	     blocks by default once a binary is signed with --options runtime.
+	     Without these two entitlements, the binary signs and notarizes fine
+	     and then dies the instant a plugin loads (NH-58 plan §6.3) — this is
+	     the silent-failure mode the plan calls out, so don't drop these
+	     entitlements to "harden" the build further without re-testing
+	     plugin loading on a signed, notarized artifact. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
