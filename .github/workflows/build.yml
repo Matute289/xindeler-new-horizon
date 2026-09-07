@@ -238,6 +238,19 @@ jobs:
       - name: Smoke test — the binary actually links and starts
         run: ./target/release-thinlto/xindeler-voxygen --help
 
+      - name: Free up disk space before packaging
+        # v0.25.0's first real run: hdiutil failed with "No space left on
+        # device" building the .dmg. GitHub's macOS runners don't have
+        # enough free space left after a release-thinlto build (LTO +
+        # shaderc + wgpu + every game dependency) to also hold the .app/.dmg
+        # output. The binary is all packaging needs — copy it out, then
+        # drop the ~15+ GB target/ directory before touching hdiutil.
+        run: |
+          mkdir -p /tmp/xindeler-out
+          cp target/release-thinlto/xindeler-voxygen /tmp/xindeler-out/xindeler-voxygen
+          rm -rf target
+          df -h /
+
       - name: Import signing certificate
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
         env:
@@ -258,7 +271,7 @@ jobs:
           rm -f cert.p12
 
       - name: Package .app + .dmg
-        run: bash .github/scripts/macos-package.sh target/release-thinlto/xindeler-voxygen arm64 "$VERSION"
+        run: bash .github/scripts/macos-package.sh /tmp/xindeler-out/xindeler-voxygen arm64 "$VERSION"
 
       - name: Sign
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
@@ -341,6 +354,14 @@ jobs:
       - name: Smoke test — the binary actually links and starts (via Rosetta)
         run: ./target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen --help
 
+      - name: Free up disk space before packaging
+        # Same fix as macos-arm64 — see that job's comment for why.
+        run: |
+          mkdir -p /tmp/xindeler-out
+          cp target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen /tmp/xindeler-out/xindeler-voxygen
+          rm -rf target
+          df -h /
+
       - name: Import signing certificate
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
         env:
@@ -361,7 +382,7 @@ jobs:
           rm -f cert.p12
 
       - name: Package .app + .dmg
-        run: bash .github/scripts/macos-package.sh target/x86_64-apple-darwin/release-thinlto/xindeler-voxygen x86_64 "$VERSION"
+        run: bash .github/scripts/macos-package.sh /tmp/xindeler-out/xindeler-voxygen x86_64 "$VERSION"
 
       - name: Sign
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
