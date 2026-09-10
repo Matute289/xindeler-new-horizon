@@ -205,8 +205,13 @@ impl Default for FileOpts {
 }
 
 impl FileOpts {
-    fn is_cromatolis_v0_asset(&self) -> bool {
-        matches!(self, Self::LoadAsset(specifier) if specifier == "world.map.cromatolis_v0")
+    /// The authored region this `FileOpts` activates, if any is registered
+    /// for the underlying map asset. See [`AUTHORED_REGIONS`].
+    fn authored_region(&self) -> Option<&'static AuthoredRegion> {
+        match self {
+            Self::LoadAsset(specifier) => authored_region_for_map_asset(specifier),
+            _ => None,
+        }
     }
 
     fn load_content(&self) -> (Option<ModernMap>, MapSizeLg, GenOpts) {
@@ -584,6 +589,78 @@ impl FileAsset for AuthoredF32Layer {
     }
 }
 
+/// One of the authored raster layers a region may ship alongside its base
+/// heightmap `.bin`. The asset specifier for a given region + kind is always
+/// `"{region.map_asset}_{kind.asset_suffix()}"` (e.g.
+/// `"world.map.cromatolis_v0_water"`), matching the convention
+/// `xindeler-open-world`'s `export-new-horizon` command already produces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthoredLayerKind {
+    Routes,
+    Vegetation,
+    Water,
+    ElevatedLakes,
+    RiverChannels,
+}
+
+impl AuthoredLayerKind {
+    /// All layer kinds a region can ship, in the order they're loaded.
+    const ALL: [Self; 5] = [
+        Self::Routes,
+        Self::Vegetation,
+        Self::Water,
+        Self::ElevatedLakes,
+        Self::RiverChannels,
+    ];
+
+    fn asset_suffix(self) -> &'static str {
+        match self {
+            Self::Routes => "routes",
+            Self::Vegetation => "vegetation",
+            Self::Water => "water",
+            Self::ElevatedLakes => "elevated_lakes",
+            Self::RiverChannels => "river_channels",
+        }
+    }
+}
+
+/// A hand-authored map region that ships extra raster layers alongside its
+/// base heightmap `.bin`, keyed by the `FileOpts::LoadAsset` specifier that
+/// activates it.
+///
+/// V1 has exactly one populated region (Cromatolis, see
+/// [`AUTHORED_REGIONS`]); this is the minimal abstraction needed so that
+/// opening a second region later is "add a registry entry," not "add
+/// another hardcoded branch" (per COW-2's region-within-one-world
+/// architecture). This does *not* yet support multiple regions being loaded
+/// simultaneously -- `WorldSim` still loads one `FileOpts` per server
+/// instance.
+struct AuthoredRegion {
+    /// The `FileOpts::LoadAsset` specifier that activates this region.
+    map_asset: &'static str,
+    /// Stable region id, independent of the map asset name. Not currently
+    /// consumed outside logging, but kept distinct from `map_asset` so a
+    /// region can be renamed/re-pointed without changing its identity.
+    id: &'static str,
+    /// Which authored layers this region ships.
+    layers: &'static [AuthoredLayerKind],
+}
+
+/// The region registry. Add an entry here to make a new hand-authored map
+/// region's extra layers loadable; nothing else in the loading path should
+/// need to change.
+const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
+    map_asset: "world.map.cromatolis_v0",
+    id: "cromatolis_v0",
+    layers: &AuthoredLayerKind::ALL,
+}];
+
+fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredRegion> {
+    AUTHORED_REGIONS
+        .iter()
+        .find(|region| region.map_asset == specifier)
+}
+
 /// Data for the most recent map type.  Update this when you add a new map
 /// version.
 pub type ModernMap = WorldMap_0_7_0;
@@ -796,33 +873,58 @@ impl WorldSim {
         let world_file = opts.world_file;
 
         // Parse out the contents of various map formats into the values we need.
-        let authored_cromatolis_v0 = world_file.is_cromatolis_v0_asset();
+        let authored_region = world_file.authored_region();
+        // NOTE: `authored_cromatolis_v0` stays the name of this flag (rather than a
+        // generic `has_authored_region`) because a good deal of Cromatolis-specific
+        // tuning downstream (temp/biome special-casing, `world/src/civ`,
+        // `world/src/layer`) already keys off this exact field name and isn't part
+        // of this generalization -- V1 has exactly one registered region anyway.
+        let authored_cromatolis_v0 = authored_region.is_some();
         let (parsed_world_file, map_size_lg, gen_opts) = world_file.load_content();
-        let load_authored_layer = |specifier, label| match AuthoredF32Layer::load_owned(specifier) {
-            Ok(layer) if layer.values.len() == map_size_lg.chunks_len() => Some(layer.values),
-            Ok(layer) => {
-                warn!(
-                    actual = layer.values.len(),
-                    expected = map_size_lg.chunks_len(),
-                    "Ignoring Cromatolis authored layer with invalid length: {}",
-                    label
-                );
-                None
-            },
-            Err(err) => {
-                warn!(?err, "Could not load Cromatolis authored layer: {}", label);
-                None
-            },
+        let load_authored_layer = |region: &AuthoredRegion, kind: AuthoredLayerKind| {
+            if !region.layers.contains(&kind) {
+                return None;
+            }
+            let specifier = format!("{}_{}", region.map_asset, kind.asset_suffix());
+            match AuthoredF32Layer::load_owned(&specifier) {
+                Ok(layer) if layer.values.len() == map_size_lg.chunks_len() => Some(layer.values),
+                Ok(layer) => {
+                    warn!(
+                        actual = layer.values.len(),
+                        expected = map_size_lg.chunks_len(),
+                        region = region.id,
+                        layer = kind.asset_suffix(),
+                        "Ignoring authored layer with invalid length"
+                    );
+                    None
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        region = region.id,
+                        layer = kind.asset_suffix(),
+                        "Could not load authored layer"
+                    );
+                    None
+                },
+            }
         };
-        let authored_route_layer = if authored_cromatolis_v0 {
-            load_authored_layer("world.map.cromatolis_v0_routes", "routes")
+        let (
+            authored_route_layer,
+            authored_vegetation_layer,
+            authored_water_layer,
+            authored_elevated_lakes_layer,
+            authored_river_channels_layer,
+        ) = if let Some(region) = authored_region {
+            (
+                load_authored_layer(region, AuthoredLayerKind::Routes),
+                load_authored_layer(region, AuthoredLayerKind::Vegetation),
+                load_authored_layer(region, AuthoredLayerKind::Water),
+                load_authored_layer(region, AuthoredLayerKind::ElevatedLakes),
+                load_authored_layer(region, AuthoredLayerKind::RiverChannels),
+            )
         } else {
-            None
-        };
-        let authored_vegetation_layer = if authored_cromatolis_v0 {
-            load_authored_layer("world.map.cromatolis_v0_vegetation", "vegetation")
-        } else {
-            None
+            (None, None, None, None, None)
         };
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
@@ -1619,17 +1721,63 @@ impl WorldSim {
             &flux_rivers,
         );
         if authored_cromatolis_v0 {
+            // Blend the authored water / elevated-lake / river-channel masks into real
+            // hydrology, instead of the altitude-only heuristic this block used before
+            // COW-3. Each mask keeps its own semantics rather than being collapsed into
+            // one generic "is wet" check: `elevated_lakes` marks standing water above
+            // sea level, `water` marks the broader surface-water footprint (sea/ocean/
+            // at-or-below-sea-level bodies), and `river_channels` marks flowing
+            // corridors. Priority follows specificity: an elevated lake wins over the
+            // broader water mask, which wins over a river channel, which wins over
+            // nothing.
+            const AUTHORED_WATER_THRESHOLD: f32 = 0.5;
+            // Only used when the erosion sim didn't already detect a river at a
+            // river-channel-masked tile. Matches `CONFIG.river_min_height` so
+            // `river.near_water()`/biome logic treats authored rivers consistently
+            // with procedurally-detected ones.
+            let authored_river_cross_section = Vec2::new(
+                TerrainChunkSize::RECT_SIZE.x as f32 * 0.1,
+                CONFIG.river_min_height,
+            );
+            let mask_value = |layer: &Option<Box<[f32]>>, idx: usize| {
+                layer
+                    .as_ref()
+                    .map(|values| authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values))
+            };
+            // If every mask failed to load (e.g. degraded/missing assets), fall back to
+            // the pre-COW-3 altitude-only heuristic so oceans/lakes still form instead
+            // of vanishing outright.
+            let masks_loaded = authored_water_layer.is_some()
+                || authored_elevated_lakes_layer.is_some()
+                || authored_river_channels_layer.is_some();
             for (idx, river) in rivers.iter_mut().enumerate() {
-                river.river_kind = if alt[idx] < 0.0 {
+                let is_elevated_lake = mask_value(&authored_elevated_lakes_layer, idx)
+                    .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
+                let is_water_body = mask_value(&authored_water_layer, idx)
+                    .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
+                let is_river_channel = mask_value(&authored_river_channels_layer, idx)
+                    .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
+
+                let neighbor_pass_pos = uniform_idx_as_vec2(map_size_lg, idx);
+                river.river_kind = if !masks_loaded && alt[idx] < 0.0 {
+                    // Every mask failed to load; fall back to the pre-COW-3
+                    // altitude-only heuristic so oceans/lakes still form.
                     if is_ocean[idx] {
                         Some(RiverKind::Ocean)
                     } else {
-                        Some(RiverKind::Lake {
-                            neighbor_pass_pos: uniform_idx_as_vec2(map_size_lg, idx),
-                        })
+                        Some(RiverKind::Lake { neighbor_pass_pos })
                     }
                 } else {
-                    None
+                    authored_river_kind_override(AuthoredRiverKindInputs {
+                        is_elevated_lake,
+                        is_water_body,
+                        is_river_channel,
+                        is_ocean: is_ocean[idx],
+                        alt_below_sea_level: alt[idx] < 0.0,
+                        existing_river_kind: river.river_kind,
+                        neighbor_pass_pos,
+                        authored_river_cross_section,
+                    })
                 };
             }
         }
@@ -2673,6 +2821,62 @@ fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Op
     way.is_way().then_some(way)
 }
 
+/// Inputs to [`authored_river_kind_override`], grouped into a struct rather
+/// than several positional `bool` parameters.
+struct AuthoredRiverKindInputs {
+    is_elevated_lake: bool,
+    is_water_body: bool,
+    is_river_channel: bool,
+    is_ocean: bool,
+    alt_below_sea_level: bool,
+    existing_river_kind: Option<RiverKind>,
+    neighbor_pass_pos: Vec2<i32>,
+    authored_river_cross_section: Vec2<f32>,
+}
+
+/// Decides the authored `RiverKind` for one chunk from its (already
+/// mask-value-thresholded) authored water flags. Each authored mask keeps
+/// its own semantics instead of being collapsed into one generic "is wet"
+/// check: an elevated lake wins over the broader water-body mask, which
+/// wins over a river channel, which wins over leaving the tile dry. A river
+/// channel tile keeps the erosion sim's own `RiverKind::River` (with its
+/// physically-derived cross-section) when the sim already computed one;
+/// only chunks the sim didn't already flag as a river fall back to
+/// `authored_river_cross_section`.
+fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<RiverKind> {
+    let AuthoredRiverKindInputs {
+        is_elevated_lake,
+        is_water_body,
+        is_river_channel,
+        is_ocean,
+        alt_below_sea_level,
+        existing_river_kind,
+        neighbor_pass_pos,
+        authored_river_cross_section,
+    } = inputs;
+
+    if is_elevated_lake {
+        Some(RiverKind::Lake { neighbor_pass_pos })
+    } else if is_water_body {
+        if is_ocean || alt_below_sea_level {
+            Some(RiverKind::Ocean)
+        } else {
+            // Flagged as water but neither below sea level nor tagged
+            // `elevated_lakes` -- still real standing water.
+            Some(RiverKind::Lake { neighbor_pass_pos })
+        }
+    } else if is_river_channel {
+        match existing_river_kind {
+            Some(RiverKind::River { .. }) => existing_river_kind,
+            _ => Some(RiverKind::River {
+                cross_section: authored_river_cross_section,
+            }),
+        }
+    } else {
+        None
+    }
+}
+
 impl SimChunk {
     fn generate(map_size_lg: MapSizeLg, posi: usize, gen_ctx: &GenCtx, gen_cdf: &GenCdf) -> Self {
         let pos = uniform_idx_as_vec2(map_size_lg, posi);
@@ -3038,5 +3242,378 @@ impl SimChunk {
             .min_by_key(|id| index_sites[**id].origin.distance_squared(wpos2d))
             .and_then(|id| Some(index_sites[*id].name()?.to_string()))
             .or_else(|| self.poi.map(|poi| civs_pois[poi].name.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- AuthoredF32Layer: raw f32le format ----
+
+    #[test]
+    fn authored_f32_layer_parses_little_endian_values() {
+        let bytes = [1.0f32, -2.5, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect::<Vec<u8>>();
+        let layer = AuthoredF32Layer::from_bytes(Cow::Owned(bytes)).unwrap();
+        assert_eq!(&*layer.values, [1.0, -2.5, 0.0]);
+    }
+
+    #[test]
+    fn authored_f32_layer_rejects_length_not_a_multiple_of_4() {
+        let bytes = vec![0u8; 6];
+        assert!(AuthoredF32Layer::from_bytes(Cow::Owned(bytes)).is_err());
+    }
+
+    #[test]
+    fn authored_f32_layer_accepts_empty_input() {
+        let layer = AuthoredF32Layer::from_bytes(Cow::Owned(Vec::new())).unwrap();
+        assert!(layer.values.is_empty());
+    }
+
+    // ---- Region registry ----
+
+    #[test]
+    fn registry_resolves_cromatolis_map_asset_with_all_five_layers() {
+        let region = authored_region_for_map_asset("world.map.cromatolis_v0")
+            .expect("cromatolis_v0 must be registered");
+        assert_eq!(region.id, "cromatolis_v0");
+        for kind in AuthoredLayerKind::ALL {
+            assert!(
+                region.layers.contains(&kind),
+                "cromatolis_v0 is missing layer kind {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_does_not_resolve_unregistered_specifiers() {
+        assert!(authored_region_for_map_asset("world.map.veloren_0_18_0_0").is_none());
+        assert!(authored_region_for_map_asset("world.map.cromatolis_v1").is_none());
+        assert!(authored_region_for_map_asset("").is_none());
+    }
+
+    #[test]
+    fn file_opts_authored_region_only_matches_registered_load_asset() {
+        assert!(
+            FileOpts::LoadAsset("world.map.cromatolis_v0".to_string())
+                .authored_region()
+                .is_some()
+        );
+        assert!(
+            FileOpts::LoadAsset("world.map.veloren_0_18_0_0".to_string())
+                .authored_region()
+                .is_none()
+        );
+        // Non-`LoadAsset` variants never resolve to an authored region, even
+        // though nothing about their content rules it out.
+        assert!(
+            FileOpts::Generate(GenOpts::default())
+                .authored_region()
+                .is_none()
+        );
+        assert!(
+            FileOpts::Load(PathBuf::from("/tmp/whatever.bin"))
+                .authored_region()
+                .is_none()
+        );
+    }
+
+    fn asset_specifier_for(region: &AuthoredRegion, kind: AuthoredLayerKind) -> String {
+        format!("{}_{}", region.map_asset, kind.asset_suffix())
+    }
+
+    #[test]
+    fn layer_asset_specifiers_match_the_open_world_export_convention() {
+        // Mirrors `xindeler-open-world`'s `export-new-horizon` output paths
+        // (`cromatolis_v0_new_horizon_export.ron`'s `active_runtime_assets` /
+        // `staged_runtime_layers`): "{map_asset}_{suffix}".
+        let region = authored_region_for_map_asset("world.map.cromatolis_v0").unwrap();
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::Routes),
+            "world.map.cromatolis_v0_routes"
+        );
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::Vegetation),
+            "world.map.cromatolis_v0_vegetation"
+        );
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::Water),
+            "world.map.cromatolis_v0_water"
+        );
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::ElevatedLakes),
+            "world.map.cromatolis_v0_elevated_lakes"
+        );
+        assert_eq!(
+            asset_specifier_for(region, AuthoredLayerKind::RiverChannels),
+            "world.map.cromatolis_v0_river_channels"
+        );
+    }
+
+    // ---- Orientation: the single Y-flip when sampling authored layers ----
+
+    #[test]
+    fn authored_layer_index_flips_y_exactly_once() {
+        // 4x4 grid (x_lg = y_lg = 2).
+        let map_size_lg = MapSizeLg::new(Vec2 { x: 2, y: 2 }).unwrap();
+
+        // Engine posi (0, 0) is top-left in *engine* space; after the single
+        // flip it must read the *last* source row (source-top-left order),
+        // not the first -- this is the inversion `routes`/`vegetation`
+        // already rely on, extended here to cover the 3 new layers too.
+        let posi_00 = vec2_as_uniform_idx(map_size_lg, Vec2::new(0, 0));
+        assert_eq!(
+            authored_layer_idx_for_cromatolis_v0(map_size_lg, posi_00),
+            3 * 4 // row 3 (last), col 0
+        );
+
+        // Engine (0, 3) (top-left of the *last* engine row) must read source
+        // row 0 (the *first* source row).
+        let posi_03 = vec2_as_uniform_idx(map_size_lg, Vec2::new(0, 3));
+        assert_eq!(
+            authored_layer_idx_for_cromatolis_v0(map_size_lg, posi_03),
+            0
+        );
+
+        // X is untouched by the flip.
+        let posi_30 = vec2_as_uniform_idx(map_size_lg, Vec2::new(3, 0));
+        assert_eq!(
+            authored_layer_idx_for_cromatolis_v0(map_size_lg, posi_30),
+            3 * 4 + 3
+        );
+
+        // Applying the flip twice must return to the original row (single
+        // inversion is an involution) -- guards against a future edit
+        // accidentally double-flipping.
+        for y in 0..4 {
+            for x in 0..4 {
+                let posi = vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y));
+                let once = authored_layer_idx_for_cromatolis_v0(map_size_lg, posi);
+                let twice = authored_layer_idx_for_cromatolis_v0(
+                    map_size_lg,
+                    // `authored_layer_idx_for_cromatolis_v0` is its own
+                    // inverse (row -> height-1-row), so feeding its output
+                    // back in recovers `posi`.
+                    once,
+                );
+                assert_eq!(twice, posi);
+            }
+        }
+    }
+
+    #[test]
+    fn authored_layer_value_clamps_to_unit_range_and_defaults_out_of_bounds() {
+        let map_size_lg = MapSizeLg::new(Vec2 { x: 1, y: 1 }).unwrap(); // 2x2
+        let layer = [2.0f32, -1.0, 0.4]; // shorter than the 2x2 = 4 grid on purpose
+
+        // In-bounds values are clamped to [0, 1].
+        let posi_over = vec2_as_uniform_idx(map_size_lg, Vec2::new(0, 1)); // source idx 0
+        assert_eq!(
+            authored_layer_value_for_cromatolis_v0(map_size_lg, posi_over, &layer),
+            1.0
+        );
+        let posi_under = vec2_as_uniform_idx(map_size_lg, Vec2::new(1, 1)); // source idx 1
+        assert_eq!(
+            authored_layer_value_for_cromatolis_v0(map_size_lg, posi_under, &layer),
+            0.0
+        );
+
+        // Out-of-bounds (layer shorter than the grid) defaults to 0.0 rather
+        // than panicking.
+        let posi_oob = vec2_as_uniform_idx(map_size_lg, Vec2::new(1, 0)); // source idx 3, len is 3
+        assert_eq!(
+            authored_layer_value_for_cromatolis_v0(map_size_lg, posi_oob, &layer),
+            0.0
+        );
+    }
+
+    // ---- Authored river-kind priority (elevated lake > water body > river
+    // channel > nothing) ----
+
+    fn river_kind_inputs() -> AuthoredRiverKindInputs {
+        AuthoredRiverKindInputs {
+            is_elevated_lake: false,
+            is_water_body: false,
+            is_river_channel: false,
+            is_ocean: false,
+            alt_below_sea_level: false,
+            existing_river_kind: None,
+            neighbor_pass_pos: Vec2::new(3, 4),
+            authored_river_cross_section: Vec2::new(1.0, 2.0),
+        }
+    }
+
+    #[test]
+    fn elevated_lake_mask_wins_over_water_and_river_masks() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_elevated_lake: true,
+            is_water_body: true,
+            is_river_channel: true,
+            is_ocean: true,
+            alt_below_sea_level: true,
+            ..river_kind_inputs()
+        });
+        assert_eq!(
+            kind,
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::new(3, 4)
+            })
+        );
+    }
+
+    #[test]
+    fn water_mask_below_sea_level_or_ocean_becomes_ocean() {
+        let below_sea_level = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_water_body: true,
+            alt_below_sea_level: true,
+            ..river_kind_inputs()
+        });
+        assert_eq!(below_sea_level, Some(RiverKind::Ocean));
+
+        let ocean_connected = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_water_body: true,
+            is_ocean: true,
+            ..river_kind_inputs()
+        });
+        assert_eq!(ocean_connected, Some(RiverKind::Ocean));
+    }
+
+    #[test]
+    fn water_mask_above_sea_level_and_not_ocean_connected_becomes_lake() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_water_body: true,
+            is_ocean: false,
+            alt_below_sea_level: false,
+            ..river_kind_inputs()
+        });
+        assert_eq!(
+            kind,
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::new(3, 4)
+            })
+        );
+    }
+
+    #[test]
+    fn river_channel_mask_preserves_an_already_computed_river() {
+        let existing = Some(RiverKind::River {
+            cross_section: Vec2::new(9.0, 9.0),
+        });
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_river_channel: true,
+            existing_river_kind: existing,
+            ..river_kind_inputs()
+        });
+        // Not replaced with the default cross-section -- the erosion sim's
+        // physically-derived one wins.
+        assert_eq!(kind, existing);
+    }
+
+    #[test]
+    fn river_channel_mask_falls_back_to_the_default_cross_section() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_river_channel: true,
+            existing_river_kind: None,
+            ..river_kind_inputs()
+        });
+        assert_eq!(
+            kind,
+            Some(RiverKind::River {
+                cross_section: Vec2::new(1.0, 2.0)
+            })
+        );
+    }
+
+    #[test]
+    fn no_mask_flagged_clears_any_previous_river_kind() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            // Nothing flagged, even though this chunk previously computed as
+            // ocean -- the authored masks are authoritative for the region.
+            existing_river_kind: Some(RiverKind::Ocean),
+            ..river_kind_inputs()
+        });
+        assert_eq!(kind, None);
+    }
+
+    // ---- Smoke test: instantiate the Cromatolis world from scratch ----
+
+    #[test]
+    fn cromatolis_world_generates_without_lfs_assets_and_orientation_is_sane() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let sim = WorldSim::generate(
+            0,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+
+        // Must not panic and must produce a full chunk grid, whether or not the
+        // real (LFS-hosted) Cromatolis assets are actually available: CI never
+        // pulls LFS, so `FileOpts::try_load_map` gracefully degrades to
+        // procedural generation instead of failing (see `FileOpts::load_content`
+        // / `try_load_map`), and every authored-layer load degrades the same
+        // way via `load_authored_layer`'s `Err` arm.
+        let map_size_lg = sim.map_size_lg();
+        assert_eq!(sim.chunks.len(), map_size_lg.chunks_len());
+
+        // If the real water mask happens to be available locally (a developer
+        // who has pulled Cromatolis's LFS assets, as opposed to CI), also
+        // regression-test the Y-orientation end to end: chunks the loaded
+        // `.bin` puts below sea level should overwhelmingly agree with the
+        // authored water mask sampled through the exact single-flip
+        // convention `routes`/`vegetation` already use (see
+        // `authored_layer_idx_for_cromatolis_v0`). A doubled or missing flip
+        // would show up as these two independently-sourced signals being
+        // essentially uncorrelated instead of in strong agreement.
+        let Ok(water) = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_water") else {
+            eprintln!(
+                "cromatolis_world_generates_without_lfs_assets_and_orientation_is_sane: skipping \
+                 the real-asset orientation regression, real Cromatolis LFS assets are not \
+                 available in this environment (expected in CI)."
+            );
+            return;
+        };
+        assert_eq!(water.values.len(), map_size_lg.chunks_len());
+
+        let mut agree = 0usize;
+        for (idx, chunk) in sim.chunks.iter().enumerate() {
+            let mask_idx = authored_layer_idx_for_cromatolis_v0(map_size_lg, idx);
+            let is_water_mask = water.values[mask_idx] >= 0.5;
+            let is_below_sea_level = chunk.alt < 0.0;
+            if is_water_mask == is_below_sea_level {
+                agree += 1;
+            }
+        }
+        let agreement = agree as f64 / sim.chunks.len() as f64;
+        assert!(
+            agreement > 0.9,
+            "authored water mask and loaded terrain altitude disagree on {:.1}% of chunks; \
+             suspect a Y-orientation bug (north=up, west=left) in the water loader (expected > \
+             90% agreement, got {:.1}%)",
+            (1.0 - agreement) * 100.0,
+            agreement * 100.0
+        );
+
+        // Coarse, independent sanity bound: Cromatolis should be neither "all
+        // ocean/lake" nor "no water at all" -- catches a Y-flip broken badly
+        // enough to invert the whole map (which the agreement check above
+        // would also catch), cheaply and orthogonally.
+        let water_fraction = sim
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.river.is_ocean() || chunk.river.is_lake())
+            .count() as f64
+            / sim.chunks.len() as f64;
+        assert!(
+            (0.02..0.75).contains(&water_fraction),
+            "unexpected authored water coverage fraction: {water_fraction:.3}"
+        );
     }
 }
