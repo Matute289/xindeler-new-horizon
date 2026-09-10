@@ -97,8 +97,16 @@ const DEFAULT_WORLD_CHUNKS_LG: MapSizeLg =
 /// InverseCdf for a description of how to interpret the types of its fields.
 struct GenCdf {
     pub(crate) authored_cromatolis_v0: bool,
+    /// Stable id of the specific authored region that's loaded (if any),
+    /// independent of `authored_cromatolis_v0`. Only threaded through for
+    /// call sites that need to distinguish "this specific region" from "any
+    /// authored region" -- see `SimChunk::get_biome`'s `Snowland` check.
+    pub(crate) authored_region_id: Option<&'static str>,
     authored_route_layer: Option<Box<[f32]>>,
     authored_vegetation_layer: Option<Box<[f32]>>,
+    /// Per-chunk "adjacent to authored water" signal, see
+    /// `SimChunk::authored_near_water`.
+    authored_near_water: Box<[bool]>,
     humid_base: InverseCdf,
     temp_base: InverseCdf,
     chaos: InverseCdf,
@@ -646,12 +654,27 @@ struct AuthoredRegion {
     layers: &'static [AuthoredLayerKind],
 }
 
+/// Threshold above which an authored water/elevated-lake/river-channel mask
+/// value (each in `[0, 1]`, see `AuthoredF32Layer`) counts as "hit". The real
+/// exported Cromatolis masks are strictly binary (checked directly against
+/// the LFS assets: every sampled value is either `0.0` or `1.0`, no
+/// blended/fringe values), so this only has to split that binary signal, not
+/// pick a point on a gradient.
+const AUTHORED_WATER_THRESHOLD: f32 = 0.5;
+
+/// Stable id of the Cromatolis authored region (see [`AUTHORED_REGIONS`]).
+/// Kept as a named const, rather than a literal repeated at every call site
+/// that needs to check "is this specifically Cromatolis" (as opposed to "is
+/// any authored region loaded" -- see `authored_cromatolis_v0`), so a rename
+/// can't silently desync the registry entry from its consumers.
+const CROMATOLIS_V0_REGION_ID: &str = "cromatolis_v0";
+
 /// The region registry. Add an entry here to make a new hand-authored map
 /// region's extra layers loadable; nothing else in the loading path should
 /// need to change.
 const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     map_asset: "world.map.cromatolis_v0",
-    id: "cromatolis_v0",
+    id: CROMATOLIS_V0_REGION_ID,
     layers: &AuthoredLayerKind::ALL,
 }];
 
@@ -833,6 +856,8 @@ impl WorldSim {
             max_height: 0.0,
             chunks: vec![SimChunk {
                 authored_cromatolis_v0: false,
+                authored_region_id: None,
+                authored_near_water: false,
                 chaos: 0.0,
                 alt: 0.0,
                 basement: 0.0,
@@ -880,6 +905,7 @@ impl WorldSim {
         // `world/src/layer`) already keys off this exact field name and isn't part
         // of this generalization -- V1 has exactly one registered region anyway.
         let authored_cromatolis_v0 = authored_region.is_some();
+        let authored_region_id = authored_region.map(|region| region.id);
         let (parsed_world_file, map_size_lg, gen_opts) = world_file.load_content();
         let load_authored_layer = |region: &AuthoredRegion, kind: AuthoredLayerKind| {
             if !region.layers.contains(&kind) {
@@ -1730,7 +1756,6 @@ impl WorldSim {
             // corridors. Priority follows specificity: an elevated lake wins over the
             // broader water mask, which wins over a river channel, which wins over
             // nothing.
-            const AUTHORED_WATER_THRESHOLD: f32 = 0.5;
             // Only used when the erosion sim didn't already detect a river at a
             // river-channel-masked tile. Matches `CONFIG.river_min_height` so
             // `river.near_water()`/biome logic treats authored rivers consistently
@@ -1781,6 +1806,54 @@ impl WorldSim {
                 };
             }
         }
+
+        // Per-chunk "is this land tile adjacent to authored standing/flowing
+        // water" signal, built from the same masks the block above already
+        // loaded -- consumed by `SimChunk::get_biome`'s `Swamp` branch
+        // (COW-4). A chunk that *is* water itself gets classified
+        // Ocean/Lake by an earlier `get_biome` branch before `Swamp` is ever
+        // considered, so this only needs to answer "is a neighbor water" for
+        // chunks that are themselves dry land. The masks are strictly binary
+        // (see `AUTHORED_WATER_THRESHOLD`'s doc comment), so there's no
+        // per-chunk gradient to threshold against directly -- proximity has
+        // to come from a neighbor check instead, same 3x3-neighborhood
+        // pattern `pure_water` below uses.
+        let authored_near_water: Box<[bool]> = if authored_cromatolis_v0 {
+            let mask_hit = |layer: &Option<Box<[f32]>>, idx: usize| {
+                layer.as_ref().is_some_and(|values| {
+                    authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values)
+                        >= AUTHORED_WATER_THRESHOLD
+                })
+            };
+            (0..map_size_lg.chunks_len())
+                .into_par_iter()
+                .map(|posi| {
+                    let pos = uniform_idx_as_vec2(map_size_lg, posi);
+                    for x in pos.x - 1..=pos.x + 1 {
+                        for y in pos.y - 1..=pos.y + 1 {
+                            if x < 0
+                                || y < 0
+                                || x >= map_size_lg.chunks().x as i32
+                                || y >= map_size_lg.chunks().y as i32
+                            {
+                                continue;
+                            }
+                            let nidx = vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y));
+                            if mask_hit(&authored_water_layer, nidx)
+                                || mask_hit(&authored_elevated_lakes_layer, nidx)
+                                || mask_hit(&authored_river_channels_layer, nidx)
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    false
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+        } else {
+            vec![false; map_size_lg.chunks_len()].into_boxed_slice()
+        };
 
         let water_alt = indirection
             .par_iter()
@@ -1898,8 +1971,10 @@ impl WorldSim {
 
         let gen_cdf = GenCdf {
             authored_cromatolis_v0,
+            authored_region_id,
             authored_route_layer,
             authored_vegetation_layer,
+            authored_near_water,
             humid_base,
             temp_base,
             chaos,
@@ -2724,6 +2799,14 @@ impl WorldSim {
 #[derive(Debug)]
 pub struct SimChunk {
     pub(crate) authored_cromatolis_v0: bool,
+    /// Stable id of the specific authored region this chunk belongs to, if
+    /// any. See `GenCdf::authored_region_id`.
+    pub(crate) authored_region_id: Option<&'static str>,
+    /// Whether this chunk is land adjacent to authored standing/flowing
+    /// water (real Cromatolis water/elevated-lakes/river-channels masks from
+    /// COW-3, not humidity/altitude heuristics). Always `false` outside an
+    /// authored region. Consumed by `get_biome`'s `Swamp` branch.
+    pub(crate) authored_near_water: bool,
     pub chaos: f32,
     pub alt: f32,
     pub basement: f32,
@@ -2876,6 +2959,27 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
         None
     }
 }
+
+/// Humidity floor for `SimChunk::get_biome`'s `Swamp` branch (also requires
+/// `authored_near_water`). Picked empirically against real Cromatolis
+/// hydrology, not guessed: sampling `generate_cromatolis_world()` (real LFS
+/// assets pulled from the VPS) over the 17,921 land chunks flagged
+/// `authored_near_water` gives min=0.250, p10=0.501, p25=0.637, median=0.736,
+/// p75=0.846, p90=0.930, max=0.970 -- i.e. land next to authored water skews
+/// heavily humid already, with only a short tail down near the general-map
+/// floor of 0.25. 0.6 sits below the p25 (keeps most of the near-water
+/// population, matching how common coastal/riverine wetlands are meant to be
+/// for a Caribbean-coast map) while still excluding the driest sliver (the
+/// bottom ~10-25%, likely narrow river mouths on otherwise arid stretches
+/// rather than real wetland). End result measured via
+/// `cromatolis_swamp_coverage_regression_against_real_lfs_assets`: Swamp
+/// covers 1.368% of the full Cromatolis chunk grid -- rare but genuinely
+/// present, not the ~0% the biome had before this row (COW-4). The
+/// pre-existing commented-out threshold (0.8, with no water-proximity gate
+/// at all) would have kept `Swamp` effectively unreachable: it sat behind
+/// `Forest`/`Jungle` in the old branch order, and both of those already
+/// claim most tiles humid enough to clear 0.8.
+const SWAMP_HUMIDITY_THRESHOLD: f32 = 0.6;
 
 impl SimChunk {
     fn generate(map_size_lg: MapSizeLg, posi: usize, gen_ctx: &GenCtx, gen_cdf: &GenCdf) -> Self {
@@ -3122,6 +3226,8 @@ impl SimChunk {
 
         Self {
             authored_cromatolis_v0: gen_cdf.authored_cromatolis_v0,
+            authored_region_id: gen_cdf.authored_region_id,
+            authored_near_water: gen_cdf.authored_near_water[posi],
             chaos,
             flux,
             alt,
@@ -3183,12 +3289,44 @@ impl SimChunk {
             BiomeKind::Ocean
         } else if self.river.is_lake() {
             BiomeKind::Lake
-        } else if !self.authored_cromatolis_v0 && self.temp < CONFIG.snow_temp {
+        } else if self.authored_region_id != Some(CROMATOLIS_V0_REGION_ID)
+            && self.temp < CONFIG.snow_temp
+        {
+            // Cromatolis is lore-authored as tropical/caribbean -- no real
+            // snow -- so this check is scoped to that specific region rather
+            // than "any authored region is loaded" (COW-2 debt: a future
+            // region shouldn't silently inherit Cromatolis's no-snow rule).
             BiomeKind::Snowland
         } else if self.alt > 500.0 && self.chaos > 0.3 && self.tree_density < 0.6 {
             BiomeKind::Mountain
         } else if self.temp > CONFIG.desert_temp && self.humidity < CONFIG.desert_hum {
             BiomeKind::Desert
+        } else if self.authored_near_water && self.humidity > SWAMP_HUMIDITY_THRESHOLD {
+            // Gated on real hydrology (`authored_near_water`, not humidity
+            // alone) -- a swamp is wet ground *near standing/flowing water*,
+            // not just any humid open area (that's Jungle/Savannah/
+            // Grassland's territory). Uses the authored water/elevated-lake/
+            // river-channel masks directly (`authored_near_water`) rather
+            // than `RiverData::near_water`: real Cromatolis LFS data shows
+            // every authored river-channel pixel also sits inside the
+            // broader `water` mask, so `authored_river_kind_override`'s
+            // elevated-lake > water-body > river-channel priority order
+            // means no chunk ever actually resolves to `RiverKind::River`
+            // there today (COW-3 behavior, out of this row's scope to
+            // change) -- `RiverData::near_water` would therefore never see a
+            // land tile as "near" anything, only chunks that are themselves
+            // Ocean/Lake (and those are already claimed by the branches
+            // above, before this one runs). Checked *before* Jungle/Forest
+            // rather than after (unlike the original pre-disable ordering):
+            // real swamps are frequently wooded (mangroves, cypress) and,
+            // for Cromatolis specifically, the authored vegetation layer
+            // drives `tree_density` and `humidity` together closely enough
+            // that "near water and humid but *not* forest" would have
+            // matched almost nothing -- checking this branch first lets a
+            // waterlogged, vegetated tile become Swamp instead of always
+            // losing to Jungle/Forest. See `SWAMP_HUMIDITY_THRESHOLD`'s doc
+            // comment for how the threshold was picked.
+            BiomeKind::Swamp
         } else if self.tree_density > 0.65 && self.humidity > 0.65 && self.temp > 0.45 {
             BiomeKind::Jungle
         } else if savannah_hum_temp[0].contains(&self.humidity)
@@ -3201,9 +3339,6 @@ impl SimChunk {
             BiomeKind::Taiga
         } else if self.tree_density > 0.4 {
             BiomeKind::Forest
-        // } else if self.humidity > 0.8 {
-        //    BiomeKind::Swamp
-        //      Swamps don't really exist yet.
         } else {
             BiomeKind::Grassland
         }
@@ -3625,6 +3760,31 @@ mod tests {
         assert!(
             (0.02..0.75).contains(&water_fraction),
             "unexpected authored water coverage fraction: {water_fraction:.3}"
+        );
+    }
+
+    /// Requires the real Cromatolis LFS assets, same precedent as
+    /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
+    /// above. Sanity-bounds `Swamp` coverage (re-enabled by this row, COW-4)
+    /// against the real hydrology/vegetation data `SWAMP_HUMIDITY_THRESHOLD`
+    /// was tuned against, so a future change to that threshold or to the
+    /// humidity formula that silently makes `Swamp` swallow the map (or
+    /// vanish again) gets caught here instead of only by eyeballing a
+    /// generated world.
+    #[test]
+    #[ignore]
+    fn cromatolis_swamp_coverage_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let swamp_fraction = sim
+            .chunks
+            .iter()
+            .filter(|c| c.get_biome() == BiomeKind::Swamp)
+            .count() as f64
+            / sim.chunks.len() as f64;
+        assert!(
+            (0.001..0.05).contains(&swamp_fraction),
+            "unexpected Swamp coverage fraction: {swamp_fraction:.4} (expected a rare but present \
+             biome, not ~0% or a large chunk of the map)"
         );
     }
 }
