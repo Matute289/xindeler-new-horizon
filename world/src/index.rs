@@ -1,6 +1,9 @@
 use crate::{
     Colors, Features,
-    layer::wildlife::{self, DensityFn, SpawnEntry},
+    layer::{
+        cromatolis_interior::InteriorLayout,
+        wildlife::{self, DensityFn, SpawnEntry},
+    },
     site::{Site, economy::TradeInformation},
 };
 use common::{
@@ -10,7 +13,7 @@ use common::{
 };
 use core::ops::Deref;
 use noise::{Fbm, MultiFractal, Perlin, SuperSimplex};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 const WORLD_COLORS_MANIFEST: &str = "world.style.colors";
 const WORLD_FEATURES_MANIFEST: &str = "world.features";
@@ -22,6 +25,12 @@ pub struct Index {
     pub sites: Store<Site>,
     pub trade: TradeInformation,
     pub wildlife_spawns: Vec<(AssetHandle<Ron<SpawnEntry>>, DensityFn)>,
+    /// Authored Cromatolis interior geometry (`the_undercompact`,
+    /// `kharvun_reach`), lazily built and cached the first time a chunk
+    /// needs it. Per-`Index` rather than a process-global `static` so a
+    /// fresh world (a new `Index::new` call) never reuses a previous
+    /// world's layout.
+    pub(crate) cromatolis_interiors: OnceLock<Vec<InteriorLayout>>,
     colors: AssetHandle<Arc<Colors>>,
     features: AssetHandle<Arc<Features>>,
 }
@@ -79,6 +88,7 @@ impl Index {
             sites: Store::default(),
             trade: Default::default(),
             wildlife_spawns,
+            cromatolis_interiors: OnceLock::new(),
             colors,
             features,
         }
@@ -155,5 +165,32 @@ impl Noise {
             scatter_nz: SuperSimplex::new(seed + 1),
             cave_fbm_nz: Fbm::new(seed + 2).set_octaves(5),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cromatolis_interiors` must be cached per-`Index` (per world), not
+    /// in a process-global `static`: a binary that calls `World::generate`
+    /// (and so `Index::new`) more than once in the same process -- a batch
+    /// export tool, a multi-world test harness -- must get an independently
+    /// initialized cache for each world, never the first world's leftover
+    /// value.
+    #[test]
+    fn cromatolis_interiors_cache_is_independent_per_index_instance() {
+        let a = Index::new(0);
+        let b = Index::new(0);
+
+        a.cromatolis_interiors.get_or_init(Vec::new);
+        assert!(
+            a.cromatolis_interiors.get().is_some(),
+            "index a should have its cache initialized"
+        );
+        assert!(
+            b.cromatolis_interiors.get().is_none(),
+            "index b's cache must still be empty -- it must not share state with index a"
+        );
     }
 }

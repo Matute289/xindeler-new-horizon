@@ -50,7 +50,7 @@
 
 use crate::{
     Canvas, CanvasInfo,
-    util::{FastNoise2d, sampler::Sampler},
+    util::{FastNoise2d, SQUARE_4, sampler::Sampler},
 };
 use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
@@ -62,7 +62,7 @@ use common::{
 };
 use hashbrown::HashMap;
 use serde::Deserialize;
-use std::{borrow::Cow, collections::VecDeque, f32::consts::TAU, sync::OnceLock};
+use std::{borrow::Cow, collections::VecDeque, f32::consts::TAU};
 use tracing::warn;
 use vek::*;
 
@@ -90,6 +90,12 @@ const SURFACE_MARGIN: f32 = 4.0;
 /// Distance (in blocks) over which a carved edge fades in, so rooms/tunnels
 /// don't have a razor-sharp boundary.
 const EDGE_SOFTNESS: f32 = 3.0;
+/// Upper bound on how far `carve_level_room`'s procedural-dressing edge
+/// jitter can ever push a room's radius outward. Used both to cheaply
+/// reject a column before paying for the noise sample, and to size the
+/// chunk-corner pruning check in [`level_touches_chunk`] so it never
+/// under-counts a jittered room's true reach.
+const MAX_ROOM_JITTER: f32 = 10.0;
 /// Vertical quantization step used for terraced traversal kinds, so they
 /// read as stepped terraces rather than a smooth ramp.
 const TERRACE_STEP: f64 = 4.0;
@@ -122,6 +128,11 @@ impl FileAsset for InteriorGraphsAsset {
 #[derive(Debug, Deserialize)]
 struct InteriorGraph {
     id: String,
+    /// The authored site id ([`SiteAnchor::id`]) this interior's entry is
+    /// physically built into or under (e.g. a city district's access) --
+    /// used by [`anchor_for`] as the fallback anchor when the entry's own
+    /// `surface_access` carries no authored pixel of its own.
+    parent_surface_site_id: String,
     entry_level_id: String,
     surface_accesses: Vec<SurfaceAccess>,
     /// The level id an adventure's narrative expects to start the player
@@ -479,8 +490,15 @@ struct WaterSeg {
     drop_m: Option<f32>,
 }
 
+/// A fully-resolved, ready-to-carve interior. Computed once per world (see
+/// `Index::cromatolis_interiors`, which lazily builds and caches this the
+/// first time a chunk needs it), not once per process -- a `static` here
+/// would silently keep reusing the first world's layout if a binary ever
+/// called `World::generate` more than once in the same process (a batch
+/// export/preview tool, a multi-world test harness), which is not an
+/// invariant this module wants to rely on.
 #[derive(Default)]
-struct InteriorLayout {
+pub(crate) struct InteriorLayout {
     levels: Vec<LevelGeom>,
     connections: Vec<ConnectionSeg>,
     water: Vec<WaterSeg>,
@@ -489,13 +507,7 @@ struct InteriorLayout {
     bounds: Option<(Vec2<i32>, f32)>,
 }
 
-static LAYOUT: OnceLock<Vec<InteriorLayout>> = OnceLock::new();
-
-fn layout(info: &CanvasInfo) -> &'static [InteriorLayout] {
-    LAYOUT.get_or_init(|| build_all_layouts(info))
-}
-
-fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
+pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
     let graphs = match InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET) {
         Ok(graphs) => graphs,
         Err(err) => {
@@ -569,21 +581,31 @@ fn anchor_for(
         return Ok(wpos_for_source_pixel(pixel, world_size));
     }
 
-    // No pixel authored for this interior's entry: fall back to its parent
-    // settlement's position (e.g. a district access built into an existing
-    // city rather than its own map pin).
+    // No pixel authored for this interior's entry: fall back to its
+    // `parent_surface_site_id` settlement's position (e.g. a district
+    // access built into an existing city rather than its own map pin).
     let sites = SitesAsset::load_owned(SITES_ASSET)
         .map_err(|err| format!("failed to load {SITES_ASSET}: {err}"))?;
     let anchor_site = sites
         .settlements
         .iter()
-        .find(|site| site.id == "site.cutstone_city")
-        .ok_or_else(|| "site.cutstone_city not found in the authored site list".to_string())?;
+        .find(|site| site.id == graph.parent_surface_site_id)
+        .ok_or_else(|| {
+            format!(
+                "parent_surface_site_id {} not found in the authored site list",
+                graph.parent_surface_site_id
+            )
+        })?;
     let chunk_pos = anchor_site.center.to_chunk_pos(map_size);
     let wpos = chunk_pos.cpos_to_wpos_center();
-    // Offset the district doorway away from the settlement's own footprint.
-    // A precise tie-in to that settlement's own site plot is separate,
-    // future integration work.
+    // Offset the district doorway away from the settlement's own nominal
+    // center. This is an approximate, un-verified offset -- it does not
+    // check against the parent site's actual generated footprint (city
+    // plots can be considerably larger than this offset), so it could in
+    // principle land inside another COW-6 building. Confirming that
+    // requires the real generated `Site`'s footprint, which isn't
+    // available at the point this interior's layout gets built; flagged
+    // as a follow-up rather than solved here.
     Ok(wpos + Vec2::new(96, -64))
 }
 
@@ -822,28 +844,76 @@ fn layout_levels(
 // Per-column carving.
 // ---------------------------------------------------------------------
 
+/// The subset of one [`InteriorLayout`]'s shapes that can plausibly touch
+/// the chunk currently being generated, computed once before
+/// `foreach_col` (not per-column) so the column closure only ever iterates
+/// shapes that were pre-filtered against this specific chunk.
+struct RelevantInterior<'a> {
+    levels: Vec<&'a LevelGeom>,
+    connections: Vec<&'a ConnectionSeg>,
+    water: Vec<&'a WaterSeg>,
+}
+
 pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
     if !canvas.info().chunk().authored_cromatolis_v0 {
         return;
     }
-    let interiors = layout(&canvas.info());
+    let info = canvas.info();
+    let index_ref = info.index();
+    let interiors = index_ref
+        .cromatolis_interiors
+        .get_or_init(|| build_all_layouts(&info));
     if interiors.is_empty() {
         return;
     }
 
-    // Cheap chunk-level rejection before touching any column: skip
-    // interiors whose bounding circle can't possibly reach this chunk.
-    let chunk_wpos = canvas.info().wpos();
-    let chunk_size = TerrainChunkSize::RECT_SIZE.map(|e| e as f32);
+    let chunk_wpos = info.wpos();
+    let chunk_size_i = TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+    let chunk_size = chunk_size_i.map(|e| e as f32);
     let chunk_center = chunk_wpos.map(|e| e as f32) + chunk_size / 2.0;
     let chunk_diag = (chunk_size.map(|e| e * e).sum()).sqrt() / 2.0;
-    let relevant: Vec<&InteriorLayout> = interiors
+    // The 4 corners of this chunk, same set `world/src/layer/cave.rs` uses
+    // to pre-filter tunnels before its own `foreach_col`.
+    let corners_i32 = SQUARE_4.map(|rpos| chunk_wpos + rpos * chunk_size_i);
+    let corners_f32 = corners_i32.map(|c| c.map(|e| e as f32));
+    let corners_f64 = corners_i32.map(|c| c.map(|e| e as f64 + 0.5));
+
+    // Two-stage pruning: first reject whole interiors whose overall
+    // bounding circle can't reach this chunk at all, then -- within each
+    // surviving interior -- reject individual rooms/connections/water
+    // features that don't touch any of the chunk's 4 corners. Without this
+    // second stage, a chunk anywhere inside a large interior's overall
+    // bounding circle (e.g. `kharvun_reach`'s, spanning many chained
+    // BFS-offset connections) would pay the cost of every shape in that
+    // interior, even ones nowhere near it.
+    let relevant: Vec<RelevantInterior> = interiors
         .iter()
-        .filter(|interior| match interior.bounds {
-            Some((center, radius)) => {
+        .filter(|interior| {
+            interior.bounds.is_some_and(|(center, radius)| {
                 chunk_center.distance(center.map(|e| e as f32)) <= radius + chunk_diag + 32.0
-            },
-            None => false,
+            })
+        })
+        .map(|interior| RelevantInterior {
+            levels: interior
+                .levels
+                .iter()
+                .filter(|level| level_touches_chunk(level, &corners_f32))
+                .collect(),
+            connections: interior
+                .connections
+                .iter()
+                .filter(|conn| connection_touches_chunk(conn, &corners_f64))
+                .collect(),
+            water: interior
+                .water
+                .iter()
+                .filter(|water| water_touches_chunk(water, &corners_f64))
+                .collect(),
+        })
+        .filter(|relevant| {
+            !relevant.levels.is_empty()
+                || !relevant.connections.is_empty()
+                || !relevant.water.is_empty()
         })
         .collect();
     if relevant.is_empty() {
@@ -871,21 +941,80 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
     });
 }
 
+/// Conservative (never under-counts) reach of a level room, for the
+/// chunk-corner pruning above: base radius, plus the max the
+/// procedural-dressing edge jitter could ever add, plus the edge-softness
+/// fade.
+fn level_touches_chunk(level: &LevelGeom, corners: &[Vec2<f32>; 4]) -> bool {
+    let max_radius = level.radius
+        + EDGE_SOFTNESS
+        + if level.generation.allows_dressing() {
+            MAX_ROOM_JITTER
+        } else {
+            0.0
+        };
+    let anchor = level.anchor2d.map(|e| e as f32);
+    corners
+        .iter()
+        .any(|corner| corner.distance(anchor) <= max_radius)
+}
+
+/// Conservative reach of a connection tunnel (covers its carved passage,
+/// bridge deck, and -- for a sealed connection -- the slightly wider gate
+/// plug) for the chunk-corner pruning above.
+fn connection_touches_chunk(conn: &ConnectionSeg, corners: &[Vec2<f64>; 4]) -> bool {
+    let a2 = conn.a.xy().map(|e| e as f64 + 0.5);
+    let b2 = conn.b.xy().map(|e| e as f64 + 0.5);
+    let max_dist = conn.style.radius as f64 + EDGE_SOFTNESS as f64 + 1.0;
+    corners.iter().any(|&corner| {
+        spline_sample(a2, b2, conn.curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
+    })
+}
+
+/// Conservative reach of a water feature (its carved fill plus its
+/// waterfall column) for the chunk-corner pruning above.
+fn water_touches_chunk(seg: &WaterSeg, corners: &[Vec2<f64>; 4]) -> bool {
+    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+    let max_dist = seg.radius as f64 + EDGE_SOFTNESS as f64;
+    let near_spline = corners.iter().any(|&corner| {
+        spline_sample(a2, b2, seg.curve, corner).is_some_and(|(_, dist)| dist <= max_dist)
+    });
+    if near_spline {
+        return true;
+    }
+    // A waterfall's vertical column sits at endpoint `b` and isn't
+    // necessarily close to the spline itself once `t` truncates at 1.0.
+    seg.drop_m.is_some_and(|_| {
+        let b = seg.b.xy().map(|e| e as f64 + 0.5);
+        corners.iter().any(|&corner| corner.distance(b) <= max_dist)
+    })
+}
+
 fn edge_weight(dist: f32, radius: f32) -> f32 { ((radius - dist) / EDGE_SOFTNESS).clamp(0.0, 1.0) }
 
 fn carve_level_room(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, level: &LevelGeom) {
     let dist = wpos2d
         .map(|e| e as f32)
         .distance(level.anchor2d.map(|e| e as f32));
+    let dressed = level.generation.allows_dressing();
+
+    // Cheap reject before paying for a noise sample: even with the maximum
+    // possible dressing jitter, this column couldn't be inside the room.
+    let max_possible_radius =
+        level.radius + EDGE_SOFTNESS + if dressed { MAX_ROOM_JITTER } else { 0.0 };
+    if dist > max_possible_radius {
+        return;
+    }
 
     let mut radius = level.radius;
-    if level.generation.allows_dressing() {
+    if dressed {
         // Additive-only jitter: never shrinks the guaranteed authored
         // skeleton, only adds an irregular fringe on top of it.
         let jitter = FastNoise2d::new(9001)
             .get(wpos2d.map(|e| e as f64 / 48.0))
             .max(0.0);
-        radius += jitter * 10.0;
+        radius += jitter * MAX_ROOM_JITTER;
     }
 
     if edge_weight(dist, radius) <= 0.0 {
@@ -1038,6 +1167,7 @@ mod tests {
     fn sample_graph() -> InteriorGraph {
         InteriorGraph {
             id: "interior.test".to_string(),
+            parent_surface_site_id: "site.cutstone_city".to_string(),
             entry_level_id: "level.a".to_string(),
             surface_accesses: vec![SurfaceAccess {
                 source_pixel: None,
@@ -1187,12 +1317,8 @@ mod tests {
 
         let a2 = sealed.a.xy().map(|e| e as f64 + 0.5);
         let b2 = sealed.b.xy().map(|e| e as f64 + 0.5);
-        let ctrl_offset = ((b2 - a2) * 0.5
-            + ((b2 - a2) * 0.5).rotated_z(std::f64::consts::FRAC_PI_2) * 6.0 * sealed.curve as f64)
-            .map(|e| e as f32);
-        let spline = river_spline_coeffs(a2, ctrl_offset, b2);
         // Evaluate the actual curve (not the straight a-b line) at t=0.5.
-        let midpoint = spline.x * 0.25 + spline.y * 0.5 + spline.z;
+        let midpoint = curve_midpoint(sealed.a, sealed.b, sealed.curve);
 
         let (t, dist) = spline_sample(a2, b2, sealed.curve, midpoint).unwrap();
         assert!(
@@ -1222,6 +1348,103 @@ mod tests {
     }
 
     #[test]
+    fn level_touches_chunk_accepts_a_near_chunk_and_rejects_a_far_one() {
+        let level = LevelGeom {
+            anchor2d: Vec2::new(1000, 1000),
+            floor_z: 0,
+            ceiling_z: 40,
+            radius: 20.0,
+            medium: Medium::Air,
+            generation: Generation::AuthoredGeometry,
+        };
+        // A chunk overlapping the room (well within radius + edge
+        // softness, even accounting for the diagonal distance of a
+        // corner): should touch.
+        let near_corners = [
+            Vec2::new(990.0, 1000.0),
+            Vec2::new(1010.0, 1000.0),
+            Vec2::new(990.0, 1010.0),
+            Vec2::new(1010.0, 1010.0),
+        ];
+        assert!(level_touches_chunk(&level, &near_corners));
+
+        // A chunk far outside the room's radius: should not touch.
+        let far_corners = [
+            Vec2::new(5000.0, 5000.0),
+            Vec2::new(5032.0, 5000.0),
+            Vec2::new(5000.0, 5032.0),
+            Vec2::new(5032.0, 5032.0),
+        ];
+        assert!(!level_touches_chunk(&level, &far_corners));
+    }
+
+    #[test]
+    fn level_touches_chunk_accounts_for_the_max_dressing_jitter() {
+        // Just past the base radius + edge softness, but still within the
+        // max jitter a procedurally-dressed room could add: a
+        // `authored_geometry` room (no jitter) should reject this, while
+        // an `authored_core_procedural_dressing` room should not.
+        let reach = 20.0 + EDGE_SOFTNESS + 1.0;
+        let corners = [
+            Vec2::new(1000.0 + reach, 1000.0),
+            Vec2::new(1000.0 + reach, 1000.0),
+            Vec2::new(1000.0 + reach, 1000.0),
+            Vec2::new(1000.0 + reach, 1000.0),
+        ];
+        let base = LevelGeom {
+            anchor2d: Vec2::new(1000, 1000),
+            floor_z: 0,
+            ceiling_z: 40,
+            radius: 20.0,
+            medium: Medium::Air,
+            generation: Generation::AuthoredGeometry,
+        };
+        assert!(!level_touches_chunk(&base, &corners));
+
+        let dressed = LevelGeom {
+            generation: Generation::AuthoredCoreProceduralDressing,
+            ..base
+        };
+        assert!(level_touches_chunk(&dressed, &corners));
+    }
+
+    #[test]
+    fn connection_and_water_touch_chunk_accept_near_and_reject_far() {
+        let graph = sample_graph();
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let world_size =
+            TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
+        let layout = build_layout(&graph, map_size, world_size).unwrap();
+        let conn = &layout.connections[0];
+        let water = &layout.water[0];
+
+        // The curve bends away from the straight `a`-`b` line (see
+        // `spline_sample`'s `ctrl_offset`), so a point actually on the
+        // curve -- not just the straight-line midpoint -- is needed here.
+        let near = [curve_midpoint(conn.a, conn.b, conn.curve); 4];
+        assert!(connection_touches_chunk(conn, &near));
+
+        let far = [Vec2::new(1.0e6, 1.0e6); 4];
+        assert!(!connection_touches_chunk(conn, &far));
+
+        let water_near = [curve_midpoint(water.a, water.b, water.curve); 4];
+        assert!(water_touches_chunk(water, &water_near));
+        assert!(!water_touches_chunk(water, &far));
+    }
+
+    /// A point actually on the quadratic curve `spline_sample` uses
+    /// (`a`-to-`b`, bent by `curve`), evaluated at `t = 0.5`.
+    fn curve_midpoint(a: Vec3<i32>, b: Vec3<i32>, curve: f32) -> Vec2<f64> {
+        let a2 = a.xy().map(|e| e as f64 + 0.5);
+        let b2 = b.xy().map(|e| e as f64 + 0.5);
+        let ctrl_offset = ((b2 - a2) * 0.5
+            + ((b2 - a2) * 0.5).rotated_z(std::f64::consts::FRAC_PI_2) * 6.0 * curve as f64)
+            .map(|e| e as f32);
+        let spline = river_spline_coeffs(a2, ctrl_offset, b2);
+        spline.x * 0.25 + spline.y * 0.5 + spline.z
+    }
+
+    #[test]
     fn build_layout_errors_on_unknown_medium() {
         let mut graph = sample_graph();
         graph.levels[0].medium = "nitrogen".to_string();
@@ -1229,6 +1452,29 @@ mod tests {
         let world_size =
             TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
         assert!(build_layout(&graph, map_size, world_size).is_err());
+    }
+
+    #[test]
+    fn anchor_for_uses_the_graph_s_own_parent_surface_site_id_not_a_hardcoded_one() {
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let world_size =
+            TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
+
+        // A real, known site: resolves.
+        let mut graph = sample_graph();
+        graph.parent_surface_site_id = "site.cutstone_city".to_string();
+        assert!(anchor_for(&graph, map_size, world_size).is_ok());
+
+        // A site id that doesn't exist in the authored site list: this
+        // must fail loudly, not silently fall back to some other site
+        // (which is what a hardcoded id would have done regardless of
+        // what this graph actually declares).
+        graph.parent_surface_site_id = "site.does_not_exist".to_string();
+        let err = anchor_for(&graph, map_size, world_size).unwrap_err();
+        assert!(
+            err.contains("site.does_not_exist"),
+            "error should name the actual missing site id, got: {err}"
+        );
     }
 
     #[test]
