@@ -784,8 +784,8 @@ common-items-npc_armor-biped_large-gigas_fire= Fire Gigas Armor
 common-items-npc_armor-biped_large-harvester = Harvester Shirt
     .desc = Made of sunflowers.
 
-common-items-npc_armor-biped_large-mindflayer = Mindflayer Armor
-    .desc = Worn by mindflayers.
+common-items-npc_armor-biped_large-mindflayer = Mind-Eater Armor
+    .desc = Worn by Mind-Eaters.
 
 common-items-npc_armor-biped_large-minotaur = Minotaur Armor
     .desc = The best defense is a good offense.
