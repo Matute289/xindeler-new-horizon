@@ -358,9 +358,17 @@ jobs:
 
       - name: Re-package signed .app into .dmg
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        # NH-60 grew the .app by ~467MB (bundled assets/), which made
+        # hdiutil's no-`-size` auto-estimate fail with "No space left on
+        # device" here too -- the exact same failure class already fixed
+        # once for the FIRST hdiutil call, in macos-package.sh (see that
+        # script's comment). This second call (re-packaging after signing)
+        # needs the identical explicit-size treatment.
         run: |
           rm -f xindeler-voxygen-macos-arm64.dmg
-          hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO xindeler-voxygen-macos-arm64.dmg
+          APP_SIZE_MB="$(du -sm Xindeler.app | cut -f1)"
+          DMG_SIZE_MB=$((APP_SIZE_MB + APP_SIZE_MB / 2 + 20))
+          hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO -size "${DMG_SIZE_MB}m" xindeler-voxygen-macos-arm64.dmg
 
       - name: Notarize
         if: ${{ env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
@@ -509,9 +517,13 @@ jobs:
 
       - name: Re-package signed .app into .dmg
         if: ${{ env.HAS_APPLE_CERT == 'true' }}
+        # See the identical comment on the macos-arm64 job's own copy of this
+        # step for why the explicit -size is needed now.
         run: |
           rm -f xindeler-voxygen-macos-x86_64.dmg
-          hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO xindeler-voxygen-macos-x86_64.dmg
+          APP_SIZE_MB="$(du -sm Xindeler.app | cut -f1)"
+          DMG_SIZE_MB=$((APP_SIZE_MB + APP_SIZE_MB / 2 + 20))
+          hdiutil create -volname Xindeler -srcfolder Xindeler.app -ov -format UDZO -size "${DMG_SIZE_MB}m" xindeler-voxygen-macos-x86_64.dmg
 
       - name: Notarize
         if: ${{ env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true' }}
