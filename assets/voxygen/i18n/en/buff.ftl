@@ -305,19 +305,19 @@ buff-magicaura = Magic Aura
 buff-sequester = Sequester
     .desc = A veil of stillness renders you unseen and shielded from every form of remote sensing.
 ## Smites (self-buff, next weapon hit gains a rider)
-buff-blindingsmite = Blinding Smite
+buff-blindingsmite = Blinding Strike
     .desc = Your next weapon strike sears with radiant light, dealing extra damage and blinding your foe.
 buff-brandingsmite = Branding Smite
     .desc = Your next weapon strike sears with radiant light, dealing extra damage.
 buff-divinesmite = Divine Smite
     .desc = Your next weapon strike is charged with holy power, dealing significant extra damage.
-buff-searingsmite = Searing Smite
+buff-searingsmite = Ember Strike
     .desc = Your next weapon strike sears with fire, dealing extra damage and setting your foe alight.
-buff-staggeringsmite = Staggering Smite
+buff-staggeringsmite = Sundering Strike
     .desc = Your next weapon strike rattles the senses, dealing extra damage and knocking your foe off balance.
-buff-thunderoussmite = Thunderous Smite
+buff-thunderoussmite = Storm Strike
     .desc = Your next weapon strike booms like thunder, dealing extra damage and hurling your foe backward.
-buff-wrathfulsmite = Wrathful Smite
+buff-wrathfulsmite = Dire Strike
     .desc = Your next weapon strike channels dread, dealing extra damage and filling your foe with terror.
 ## Bane / Bless / Faerie Fire / Enfeebled
 buff-blessed = Blessed
