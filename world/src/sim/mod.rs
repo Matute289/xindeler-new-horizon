@@ -3540,10 +3540,9 @@ mod tests {
 
     // ---- Smoke test: instantiate the Cromatolis world from scratch ----
 
-    #[test]
-    fn cromatolis_world_generates_without_lfs_assets_and_orientation_is_sane() {
+    fn generate_cromatolis_world() -> WorldSim {
         let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
-        let sim = WorldSim::generate(
+        WorldSim::generate(
             0,
             WorldOpts {
                 seed_elements: true,
@@ -3552,34 +3551,46 @@ mod tests {
             },
             &threadpool,
             &|_| {},
-        );
+        )
+    }
 
-        // Must not panic and must produce a full chunk grid, whether or not the
-        // real (LFS-hosted) Cromatolis assets are actually available: CI never
-        // pulls LFS, so `FileOpts::try_load_map` gracefully degrades to
-        // procedural generation instead of failing (see `FileOpts::load_content`
-        // / `try_load_map`), and every authored-layer load degrades the same
-        // way via `load_authored_layer`'s `Err` arm.
+    /// Always runs (no `#[ignore]`, unlike the real-data regression below):
+    /// must not panic and must produce a full chunk grid, whether or not the
+    /// real (LFS-hosted) Cromatolis assets are actually available. CI never
+    /// pulls LFS, so `FileOpts::try_load_map` gracefully degrades to
+    /// procedural generation instead of failing (see `FileOpts::load_content`
+    /// / `try_load_map`), and every authored-layer load degrades the same way
+    /// via `load_authored_layer`'s `Err` arm.
+    #[test]
+    fn cromatolis_world_generates_without_lfs_assets() {
+        let sim = generate_cromatolis_world();
         let map_size_lg = sim.map_size_lg();
         assert_eq!(sim.chunks.len(), map_size_lg.chunks_len());
+    }
 
-        // If the real water mask happens to be available locally (a developer
-        // who has pulled Cromatolis's LFS assets, as opposed to CI), also
-        // regression-test the Y-orientation end to end: chunks the loaded
+    /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
+    /// pull` against the VPS store); not run automated, matching
+    /// `site::economy::context::tests::test_economy0`/`test_economy1`'s
+    /// precedent in this crate for tests whose meaningful assertion depends
+    /// on real, environment-specific data rather than synthetic input.
+    /// Recommended command: `cargo test
+    /// cromatolis_world_orientation_regression_against_real_lfs_assets --
+    /// --ignored`
+    #[test]
+    #[ignore]
+    fn cromatolis_world_orientation_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+
+        // Regression-test the Y-orientation end to end: chunks the loaded
         // `.bin` puts below sea level should overwhelmingly agree with the
         // authored water mask sampled through the exact single-flip
         // convention `routes`/`vegetation` already use (see
         // `authored_layer_idx_for_cromatolis_v0`). A doubled or missing flip
         // would show up as these two independently-sourced signals being
         // essentially uncorrelated instead of in strong agreement.
-        let Ok(water) = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_water") else {
-            eprintln!(
-                "cromatolis_world_generates_without_lfs_assets_and_orientation_is_sane: skipping \
-                 the real-asset orientation regression, real Cromatolis LFS assets are not \
-                 available in this environment (expected in CI)."
-            );
-            return;
-        };
+        let water = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_water")
+            .expect("real Cromatolis LFS assets must be pulled locally to run this test");
         assert_eq!(water.values.len(), map_size_lg.chunks_len());
 
         let mut agree = 0usize;
