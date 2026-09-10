@@ -16,7 +16,7 @@
             depth_m: 8.0,
             height_m: 30.0,
             gates: [
-                (id: "gate.northwall_black_iron", material: "black_iron", center: (x: 1038, y: 8), clear_width_m: 8.0, height_m: 10.0),
+                (id: "gate.northwall_black_iron", material: "black_iron", center: (x: 1038, y: 8), clear_width_m: 8.0, height_m: 10.0, default_open: true),
             ],
         ),
         (
@@ -28,7 +28,7 @@
             depth_m: 3.0,
             height_m: 15.0,
             gates: [
-                (id: "gate.greenhwall_black_iron", material: "black_iron", center: (x: 1941, y: 109), clear_width_m: 3.0, height_m: 5.0),
+                (id: "gate.greenhwall_black_iron", material: "black_iron", center: (x: 1941, y: 109), clear_width_m: 3.0, height_m: 5.0, default_open: false),
             ],
         ),
         (
@@ -40,7 +40,7 @@
             depth_m: 8.0,
             height_m: 30.0,
             gates: [
-                (id: "gate.eastwall_black_iron", material: "black_iron", center: (x: 1958, y: 532), clear_width_m: 5.0, height_m: 8.0),
+                (id: "gate.eastwall_black_iron", material: "black_iron", center: (x: 1958, y: 532), clear_width_m: 5.0, height_m: 8.0, default_open: false),
             ],
         ),
     ],

@@ -595,7 +595,12 @@ impl FileAsset for AuthoredCromatolisFortifications {
 }
 
 impl AuthoredCromatolisFortifications {
-    fn validate(&self) -> Result<(), String> {
+    /// Takes `map_size` and fails hard on chunk-quantized start/end collapse
+    /// or duplicate spans, the same as `AuthoredCromatolisBridges::validate`
+    /// -- so the failure mode is consistent between the two loaders instead
+    /// of fortifications deferring that check to a per-item skip-and-warn at
+    /// establishment time.
+    fn validate(&self, map_size: MapSizeLg) -> Result<(), String> {
         const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_fortifications.v1";
         const EXPECTED_COORDINATE_SPACE: &str = "source_pixels_xy_top_left_origin";
 
@@ -620,6 +625,7 @@ impl AuthoredCromatolisFortifications {
 
         let mut wall_ids = std::collections::HashSet::new();
         let mut gate_ids = std::collections::HashSet::new();
+        let mut spans = std::collections::HashSet::new();
         for fortification in &self.fortifications {
             if fortification.id.is_empty() || !wall_ids.insert(fortification.id.as_str()) {
                 return Err(format!(
@@ -632,6 +638,29 @@ impl AuthoredCromatolisFortifications {
             {
                 return Err(format!(
                     "fortification {} collapses to a single point",
+                    fortification.id
+                ));
+            }
+            let start = self
+                .normalize_point(fortification.start)
+                .to_chunk_pos(map_size);
+            let end = self
+                .normalize_point(fortification.end)
+                .to_chunk_pos(map_size);
+            if start == end {
+                return Err(format!(
+                    "fortification {} collapses to a single chunk",
+                    fortification.id
+                ));
+            }
+            let span = if start.x < end.x || (start.x == end.x && start.y <= end.y) {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            if !spans.insert(span) {
+                return Err(format!(
+                    "duplicate fortification span for {}",
                     fortification.id
                 ));
             }
@@ -700,27 +729,12 @@ struct AuthoredCromatolisGate {
     center: AuthoredPixelPoint,
     clear_width_m: f32,
     height_m: f32,
-}
-
-/// The physical open/closed state of an authored Cromatolis gate. This is
-/// static, locked-in content confirmed against lore/settlement data (see
-/// `establish_authored_cromatolis_fortifications`'s callers) -- not derived
-/// from the asset itself, and deliberately not a day/night schedule (none of
-/// Cromatolis's Phase-1 gates need one). An unrecognized gate id defaults to
-/// closed (the fail-safe direction) and warns rather than panicking.
-fn cromatolis_gate_is_open(gate_id: &str) -> bool {
-    match gate_id {
-        "gate.northwall_black_iron" => true,
-        "gate.greenhwall_black_iron" => false,
-        "gate.eastwall_black_iron" => false,
-        _ => {
-            warn!(
-                gate_id,
-                "Unknown authored Cromatolis gate id; defaulting to closed"
-            );
-            false
-        },
-    }
+    /// The gate's physical open/closed state. This is static, locked-in
+    /// content confirmed against lore/settlement data -- deliberately not a
+    /// day/night schedule (none of these gates need one) -- but, unlike the
+    /// bridge style enum, it's plain authored data on the RON record itself
+    /// rather than a second, hand-synced source of truth in Rust.
+    default_open: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -761,7 +775,7 @@ impl AuthoredCromatolisFortification {
                             t,
                             clear_width: gate.clear_width_m.round() as i32,
                             height: gate.height_m.round() as i32,
-                            open: cromatolis_gate_is_open(&gate.id),
+                            open: gate.default_open,
                         }
                     })
                     .collect(),
@@ -1539,7 +1553,7 @@ impl Civs {
             match AuthoredCromatolisFortifications::load_owned(
                 "world.map.cromatolis_v0_fortifications",
             ) {
-                Ok(fortifications) => match fortifications.validate() {
+                Ok(fortifications) => match fortifications.validate(sim.map_size_lg()) {
                     Ok(()) => Some(fortifications),
                     Err(err) => {
                         warn!(
@@ -1969,7 +1983,9 @@ impl Civs {
                         bridge_site
                     },
                     SiteKind::Fortification(a, b) => {
+                        let land = Land::from_sim(ctx.sim);
                         let mut fortification_site = WorldSite::generate_fortification(
+                            &land,
                             &mut rng,
                             *a,
                             *b,
@@ -1982,7 +1998,7 @@ impl Civs {
                             fortification_site =
                                 fortification_site.with_name(authored.name.clone());
                         }
-                        fortification_site.demarcate_obstacles(&Land::from_sim(ctx.sim));
+                        fortification_site.demarcate_obstacles(&land);
                         fortification_site
                     },
                     SiteKind::Adlet => WorldSite::generate_adlet(
@@ -2871,6 +2887,10 @@ impl Civs {
     /// that block runs at all (see its early `chunk.authored_cromatolis_v0`
     /// return) -- `SiteKind::Fortification` isn't even in that block's match
     /// arms, so this holds by construction either way.
+    /// Assumes `authored.validate(ctx.sim.map_size_lg())` already succeeded
+    /// (checked by the caller before this runs, same as bridges) -- chunk
+    /// collapse and duplicate spans are validation failures for the whole
+    /// batch, not a per-item skip here.
     fn establish_authored_cromatolis_fortifications(
         &mut self,
         ctx: &mut GenCtx<impl Rng>,
@@ -2887,14 +2907,6 @@ impl Civs {
             let end = authored
                 .normalize_point(fortification.end)
                 .to_chunk_pos(ctx.sim.map_size_lg());
-            if start == end {
-                warn!(
-                    fortification_id = %fortification.id,
-                    ?start,
-                    "Skipping authored fortification collapsed to a single chunk"
-                );
-                continue;
-            }
             let center = (start + end) / 2;
             let metadata = fortification.meta();
             self.establish_site(ctx, center, |place| Site {
@@ -4179,7 +4191,7 @@ mod tests {
             "source_pixels_xy_top_left_origin"
         );
         fortifications
-            .validate()
+            .validate(synthetic_map_size())
             .expect("real Cromatolis fortifications must validate");
 
         assert_eq!(fortifications.fortifications.len(), 3);
@@ -4195,14 +4207,38 @@ mod tests {
     fn invalid_authored_fortification_schema_fails_validation_without_panicking() {
         let mut fortifications = real_fortifications();
         fortifications.schema = "invalid".to_string();
-        assert!(fortifications.validate().is_err());
+        assert!(fortifications.validate(synthetic_map_size()).is_err());
     }
 
     #[test]
     fn invalid_authored_fortification_coordinate_space_fails_validation_without_panicking() {
         let mut fortifications = real_fortifications();
         fortifications.coordinate_space = "normalized_map_xy_top_left_origin".to_string();
-        assert!(fortifications.validate().is_err());
+        assert!(fortifications.validate(synthetic_map_size()).is_err());
+    }
+
+    #[test]
+    fn fortification_chunk_collapse_fails_validation_without_panicking() {
+        let mut fortifications = real_fortifications();
+        // Force the first fortification's start/end to normalize to the same
+        // chunk at this map size, without them being literally the same
+        // pixel point (that's the separate raw-pixel collapse check above).
+        fortifications.fortifications[0].end = fortifications.fortifications[0].start;
+        fortifications.fortifications[0].end.x += 1.0;
+        assert!(fortifications.validate(synthetic_map_size()).is_err());
+    }
+
+    #[test]
+    fn duplicate_fortification_span_fails_validation_without_panicking() {
+        let mut fortifications = real_fortifications();
+        let duplicate = fortifications.fortifications[0].clone();
+        fortifications
+            .fortifications
+            .push(AuthoredCromatolisFortification {
+                id: "site.duplicate_span_stone".to_string(),
+                ..duplicate
+            });
+        assert!(fortifications.validate(synthetic_map_size()).is_err());
     }
 
     #[test]
@@ -4224,11 +4260,14 @@ mod tests {
 
     /// Locks in the per-gate physical open/closed state confirmed against
     /// lore/settlement data: the Freelands gate (anchored near
-    /// `site.evercross`) stays open, the other two stay closed. This is the
-    /// real, checkable end of the pipeline that
-    /// `establish_authored_cromatolis_fortifications` feeds into the
-    /// renderer -- see `plot::fortification`'s own tests for
-    /// the render-level half (turning `open` into an actual passable gap).
+    /// `site.evercross`) stays open, the other two stay closed. The state
+    /// itself lives on the RON record (`default_open`), same as a bridge's
+    /// `style` field -- this test just confirms the real export still
+    /// carries the expected values and that the metadata pipeline the
+    /// renderer actually consumes (`AuthoredCromatolisFortification::meta`)
+    /// passes it through unchanged. See `plot::fortification`'s own tests
+    /// for the render-level half (turning `open` into an actual passable
+    /// gap).
     #[test]
     fn cromatolis_gate_physical_state_matches_the_locked_in_policy_for_all_three_real_gates() {
         let fortifications = real_fortifications();
@@ -4256,8 +4295,7 @@ mod tests {
                 )
             });
             assert_eq!(
-                cromatolis_gate_is_open(&gate.id),
-                expected,
+                gate.default_open, expected,
                 "gate {} physical state does not match the locked-in policy",
                 gate.id
             );
@@ -4275,11 +4313,6 @@ mod tests {
             seen.insert(gate.id.clone());
         }
         assert_eq!(seen.len(), 3, "all three real gates must be exercised");
-    }
-
-    #[test]
-    fn unknown_gate_id_defaults_to_closed_without_panicking() {
-        assert!(!cromatolis_gate_is_open("gate.some_future_unauthored_gate"));
     }
 
     #[test]

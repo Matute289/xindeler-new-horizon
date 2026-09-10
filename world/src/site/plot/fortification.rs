@@ -3,14 +3,24 @@ use crate::Land;
 use common::terrain::{Block, BlockKind};
 use vek::*;
 
-/// A single gate opening along a fortification wall, in render-ready
-/// (world-position) form. Its physical open/closed state is locked in at
-/// authoring time (see `civ::cromatolis_gate_is_open`) -- this plot only
+/// One terrain-following sub-segment of a wall's run, fully baked at
+/// `Fortification::generate` time -- `a`/`b` already carry the sampled
+/// altitude, and `merlon_aabb` is the exact volume `render_inner` hands to
+/// `Painter::aabbs_around_aabb`. Nothing here needs a `Land` again.
+struct WallSegment {
+    a: Vec3<i32>,
+    b: Vec3<i32>,
+    merlon_aabb: Aabb<i32>,
+}
+
+/// A single gate opening, fully baked at generate time -- `aabb` already
+/// carries the sampled altitude, so `render_inner` only has to `.clear()` or
+/// `.fill()` it depending on `open`. The physical open/closed state itself
+/// is locked in on the authored data (see
+/// `AuthoredCromatolisGate::default_open` in `civ/mod.rs`) -- this plot only
 /// renders whatever state it's handed.
 struct FortificationGate {
-    wpos: Vec2<i32>,
-    clear_width: i32,
-    height: i32,
+    aabb: Aabb<i32>,
     open: bool,
 }
 
@@ -19,15 +29,20 @@ struct FortificationGate {
 /// per-gate state -- so it stays reusable by later continents' authored
 /// fortification data (mirrors `plot::Bridge`).
 pub struct Fortification {
-    start: Vec2<i32>,
-    end: Vec2<i32>,
-    dir: Dir2,
     /// Wall thickness, in blocks.
     depth: i32,
-    /// Total wall height, in blocks, from the terrain-following base to the
-    /// top of the merlon parapet.
-    height: i32,
+    radius: f32,
+    body_height: f32,
+    segments: Vec<WallSegment>,
     gates: Vec<FortificationGate>,
+}
+
+fn aabb(min: Vec3<i32>, max: Vec3<i32>) -> Aabb<i32> {
+    let aabb = Aabb { min, max }.made_valid();
+    Aabb {
+        min: aabb.min,
+        max: aabb.max + 1,
+    }
 }
 
 impl Fortification {
@@ -37,7 +52,13 @@ impl Fortification {
     /// (`civ::Civs::establish_authored_cromatolis_fortifications`) always
     /// supplies one, but this falls back to a small, plain wall rather than
     /// panicking.
+    ///
+    /// All terrain sampling (`land.get_alt_approx`) happens once, right
+    /// here, per sub-segment and per gate -- not in `render_inner`, which
+    /// would otherwise redo it on every chunk that touches this plot (see
+    /// `Bridge::generate`, which bakes world-space geometry the same way).
     pub fn generate(
+        land: &Land,
         start: Vec2<i32>,
         end: Vec2<i32>,
         design: Option<AuthoredFortificationDesign>,
@@ -47,26 +68,79 @@ impl Fortification {
             Some(design) => (design.depth.max(2), design.height.max(4), design.gates),
             None => (4, 10, Vec::new()),
         };
+
+        // Fixed, small merlon band on top of the wall body -- no aesthetic
+        // variety needed (see the module-level docs on the loader side).
+        const MERLON_HEIGHT: i32 = 3;
+        let body_height = (height - MERLON_HEIGHT).max(1);
+        let radius = (depth as f32 / 2.0).max(1.0);
+        let orth = dir.orthogonal().to_vec2();
+        let half_depth = (depth / 2 + 1).max(1);
+
+        // Split the wall into sub-segments so both the terrain-following
+        // base and its merlon band follow slopes along the wall's length,
+        // the same technique `GnarlingFortification` uses for its own
+        // perimeter wall.
+        const SECTIONS: i32 = 8;
+        let get_point = |a: i32| start + (end - start) * a / SECTIONS;
+        let segments = (0..SECTIONS)
+            .map(|i| {
+                let a = get_point(i);
+                let b = get_point(i + 1);
+                let a_alt = land.get_alt_approx(a) as i32;
+                let b_alt = land.get_alt_approx(b) as i32;
+
+                // Merlon parapet for this sub-segment: reuses the same
+                // alternating-gap primitive `render_tower`'s
+                // `RoofKind::Crenelated` branch uses for its own
+                // battlements, applied to this sub-segment's own local
+                // footprint so it still roughly follows terrain across a
+                // long wall.
+                let seg_top = ((a_alt + b_alt) / 2) + body_height;
+                let merlon_aabb = aabb(
+                    (a.map2(b, |x, y| x.min(y)) - orth * half_depth).with_z(seg_top),
+                    (a.map2(b, |x, y| x.max(y)) + orth * half_depth)
+                        .with_z(seg_top + MERLON_HEIGHT),
+                );
+                WallSegment {
+                    a: a.with_z(a_alt),
+                    b: b.with_z(b_alt),
+                    merlon_aabb,
+                }
+            })
+            .collect();
+
         let delta = end - start;
+        let forward = dir.to_vec2();
         let gates = gate_designs
             .into_iter()
             .map(|gate| {
                 let t = gate.t.clamp(0.0, 1.0);
                 let wpos = start + (delta.as_::<f32>() * t).as_::<i32>();
+                let clear_width = gate.clear_width.max(1);
+                let gate_height = gate.height.max(1);
+                let half_len = (clear_width / 2).max(1);
+                let alt = land.get_alt_approx(wpos) as i32;
+                // Gate openings: an open gate clears a passable gap straight
+                // through the wall's thickness; a closed gate fills the same
+                // volume solid. That solid fill is the only physical
+                // enforcement modeled here -- no guard/permit logic.
+                let gate_aabb = aabb(
+                    (wpos - forward * half_len - orth * half_depth).with_z(alt),
+                    (wpos + forward * half_len + orth * half_depth).with_z(alt + gate_height),
+                );
                 FortificationGate {
-                    wpos,
-                    clear_width: gate.clear_width.max(1),
-                    height: gate.height.max(1),
+                    aabb: gate_aabb,
                     open: gate.open,
                 }
             })
             .collect();
+
         Self {
-            start,
-            end,
-            dir,
             depth,
-            height,
+            radius,
+            body_height: body_height as f32,
+            segments,
             gates,
         }
     }
@@ -74,14 +148,6 @@ impl Fortification {
     /// Wall thickness, in blocks -- used by the site generator to size the
     /// tile-grid footprint this plot occupies.
     pub fn depth(&self) -> i32 { self.depth }
-}
-
-fn aabb(min: Vec3<i32>, max: Vec3<i32>) -> Aabb<i32> {
-    let aabb = Aabb { min, max }.made_valid();
-    Aabb {
-        min: aabb.min,
-        max: aabb.max + 1,
-    }
 }
 
 impl Structure for Fortification {
@@ -101,65 +167,27 @@ impl Structure for Fortification {
         spawn_rules.waypoints = false;
     }
 
-    fn render_inner(&self, _site: &Site, land: &Land, painter: &Painter) {
+    /// Pure geometry replay -- every position and altitude was already
+    /// sampled once in `generate`, so this never touches `land` (matches
+    /// `Bridge::render_inner`'s unused `_land` shape).
+    fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let stone = Fill::Block(Block::new(BlockKind::Rock, Rgb::gray(80)));
         let gate_fill = Fill::Block(Block::new(BlockKind::Rock, Rgb::gray(40)));
 
-        // Fixed, small merlon band on top of the wall body -- no aesthetic
-        // variety needed (see the module-level docs on the loader side).
-        const MERLON_HEIGHT: i32 = 3;
-        let body_height = (self.height - MERLON_HEIGHT).max(1);
-        let radius = (self.depth as f32 / 2.0).max(1.0);
-        let orth = self.dir.orthogonal().to_vec2();
-        let half_depth = (self.depth / 2 + 1).max(1);
-
-        // Split the wall into sub-segments so both the terrain-following
-        // base and its merlon band follow slopes along the wall's length,
-        // the same technique `GnarlingFortification` uses for its own
-        // perimeter wall.
-        const SECTIONS: i32 = 8;
-        let get_point = |a: i32| self.start + (self.end - self.start) * a / SECTIONS;
-        for i in 0..SECTIONS {
-            let a = get_point(i);
-            let b = get_point(i + 1);
-            let a_alt = land.get_alt_approx(a) as i32;
-            let b_alt = land.get_alt_approx(b) as i32;
-
+        for segment in &self.segments {
             painter
-                .segment_prism(a.with_z(a_alt), b.with_z(b_alt), radius, body_height as f32)
+                .segment_prism(segment.a, segment.b, self.radius, self.body_height)
                 .fill(stone.clone());
-
-            // Merlon parapet for this sub-segment: reuses the same
-            // alternating-gap primitive `render_tower`'s `RoofKind::Crenelated`
-            // branch uses for its own battlements, applied to this
-            // sub-segment's own local footprint so it still roughly follows
-            // terrain across a long wall.
-            let seg_top = ((a_alt + b_alt) / 2) + body_height;
-            let seg_aabb = aabb(
-                (a.map2(b, |x, y| x.min(y)) - orth * half_depth).with_z(seg_top),
-                (a.map2(b, |x, y| x.max(y)) + orth * half_depth).with_z(seg_top + MERLON_HEIGHT),
-            );
             painter
-                .aabbs_around_aabb(seg_aabb, 2, 2)
+                .aabbs_around_aabb(segment.merlon_aabb, 2, 2)
                 .fill(stone.clone());
         }
 
-        // Gate openings: an open gate clears a passable gap straight through
-        // the wall's thickness; a closed gate fills the same volume solid.
-        // That solid fill is the only physical enforcement modeled here --
-        // no guard/permit logic.
-        let forward = self.dir.to_vec2();
         for gate in &self.gates {
-            let alt = land.get_alt_approx(gate.wpos) as i32;
-            let half_len = (gate.clear_width / 2).max(1);
-            let gate_aabb = aabb(
-                (gate.wpos - forward * half_len - orth * half_depth).with_z(alt),
-                (gate.wpos + forward * half_len + orth * half_depth).with_z(alt + gate.height),
-            );
             if gate.open {
-                painter.aabb(gate_aabb).clear();
+                painter.aabb(gate.aabb).clear();
             } else {
-                painter.aabb(gate_aabb).fill(gate_fill.clone());
+                painter.aabb(gate.aabb).fill(gate_fill.clone());
             }
         }
     }
@@ -196,8 +224,8 @@ mod tests {
                 },
             ],
         };
-        let fortification = Fortification::generate(start, end, Some(design));
         let land = Land::empty();
+        let fortification = Fortification::generate(&land, start, end, Some(design));
         let site = Site::default();
         let painter = Painter::new_for_test(Aabr {
             min: Vec2::new(-20, -20),
@@ -223,9 +251,11 @@ mod tests {
 
     #[test]
     fn generate_falls_back_to_a_plain_wall_without_authored_metadata() {
-        let fortification = Fortification::generate(Vec2::new(0, 0), Vec2::new(50, 0), None);
+        let land = Land::empty();
+        let fortification = Fortification::generate(&land, Vec2::new(0, 0), Vec2::new(50, 0), None);
         assert_eq!(fortification.depth, 4);
-        assert_eq!(fortification.height, 10);
+        // height defaults to 10, minus the fixed 3-block merlon band.
+        assert_eq!(fortification.body_height, 7.0);
         assert!(fortification.gates.is_empty());
     }
 }

@@ -3148,10 +3148,12 @@ impl Site {
         site
     }
 
-    /// Terrain sampling happens later, per sub-segment, in
-    /// `plot::Fortification`'s `render_inner` (it needs a `Land` there, not
-    /// at generate time -- there's nothing terrain-dependent to decide here).
+    /// All terrain sampling happens once, here, per sub-segment (see
+    /// `plot::Fortification::generate`) -- `render_inner` is then pure
+    /// geometry replay, the same as `Bridge`, instead of resampling terrain
+    /// on every chunk that touches the plot.
     pub fn generate_fortification(
+        land: &Land,
         rng: &mut impl Rng,
         start_chunk: Vec2<i32>,
         end_chunk: Vec2<i32>,
@@ -3175,7 +3177,7 @@ impl Site {
         let start_tile = site.wpos_tile_pos(start);
         let end_tile = site.wpos_tile_pos(end);
 
-        let fortification = plot::Fortification::generate(start, end, authored_design);
+        let fortification = plot::Fortification::generate(land, start, end, authored_design);
 
         let orth = (start_tile - end_tile).yx().map(|dir| dir.signum().abs());
         let width = ((fortification.depth() + TILE_SIZE as i32 / 2) / TILE_SIZE as i32).max(1);
