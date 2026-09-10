@@ -49,7 +49,11 @@ impl ChatMode {
             ChatMode::World => ChatType::World(from),
         };
 
-        Ok(UnresolvedChatMsg { chat_type, content })
+        Ok(UnresolvedChatMsg {
+            chat_type,
+            content,
+            big_screen: false,
+        })
     }
 }
 
@@ -147,6 +151,7 @@ impl<G> ChatType<G> {
         GenericChatMsg {
             chat_type: self,
             content: Content::Plain(text.to_string()),
+            big_screen: false,
         }
     }
 
@@ -154,6 +159,7 @@ impl<G> ChatType<G> {
         GenericChatMsg {
             chat_type: self,
             content,
+            big_screen: false,
         }
     }
 
@@ -205,6 +211,13 @@ impl<G> ChatType<G> {
 pub struct GenericChatMsg<G> {
     pub chat_type: ChatType<G>,
     content: Content,
+    /// ZG-80 "Big Screen" rendering hint: when true, the client also shows
+    /// this message in a full-screen, self-timed overlay in addition to the
+    /// normal chat window (delivery/resolution is otherwise unchanged). Set
+    /// via [`GenericChatMsg::with_big_screen`]; defaults to `false` so every
+    /// existing construction site is unaffected.
+    #[serde(default)]
+    pub big_screen: bool,
 }
 
 pub type ChatMsg = GenericChatMsg<String>;
@@ -219,24 +232,45 @@ impl<G> GenericChatMsg<G> {
 
     pub fn npc(uid: Uid, content: Content) -> Self {
         let chat_type = ChatType::Npc(uid);
-        Self { chat_type, content }
+        Self {
+            chat_type,
+            content,
+            big_screen: false,
+        }
     }
 
     pub fn npc_say(uid: Uid, content: Content) -> Self {
         let chat_type = ChatType::NpcSay(uid);
-        Self { chat_type, content }
+        Self {
+            chat_type,
+            content,
+            big_screen: false,
+        }
     }
 
     pub fn npc_tell(from: Uid, to: Uid, content: Content) -> Self {
         let chat_type = ChatType::NpcTell(from, to);
-        Self { chat_type, content }
+        Self {
+            chat_type,
+            content,
+            big_screen: false,
+        }
     }
 
     pub fn death(kill_source: KillSource, victim: Uid) -> Self {
         Self {
             chat_type: ChatType::Kill(kill_source, victim),
             content: Content::Plain(String::new()),
+            big_screen: false,
         }
+    }
+
+    /// Sets the ZG-80 "Big Screen" rendering hint. See
+    /// [`GenericChatMsg::big_screen`]'s own doc comment for what this does
+    /// and doesn't change.
+    pub fn with_big_screen(mut self, big_screen: bool) -> Self {
+        self.big_screen = big_screen;
+        self
     }
 
     pub fn map_group<T>(self, mut f: impl FnMut(G) -> T) -> GenericChatMsg<T> {
@@ -263,6 +297,7 @@ impl<G> GenericChatMsg<G> {
         GenericChatMsg {
             chat_type,
             content: self.content,
+            big_screen: self.big_screen,
         }
     }
 
@@ -362,4 +397,31 @@ impl SpeechBubble {
     }
 
     pub fn content(&self) -> &Content { &self.content }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_big_screen_sets_the_flag() {
+        let msg: ChatMsg = ChatType::Meta.into_plain_msg("hello").with_big_screen(true);
+        assert!(msg.big_screen);
+    }
+
+    #[test]
+    fn plain_messages_default_to_not_big_screen() {
+        let msg: ChatMsg = ChatType::Meta.into_plain_msg("hello");
+        assert!(!msg.big_screen);
+    }
+
+    /// ZG-80's flag must survive `send_chat`'s group resolution -- it's the
+    /// one place a `GenericChatMsg` is reconstructed between an operator
+    /// sending it and the client receiving it.
+    #[test]
+    fn map_group_preserves_big_screen() {
+        let msg: UnresolvedChatMsg = ChatType::Meta.into_plain_msg("hello").with_big_screen(true);
+        let resolved: ChatMsg = msg.map_group(|_| "group name".to_string());
+        assert!(resolved.big_screen);
+    }
 }

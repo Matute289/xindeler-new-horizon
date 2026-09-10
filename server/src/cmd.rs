@@ -6247,12 +6247,15 @@ pub(crate) fn admin_unban_player(
 /// verified harmless: `ChatType::Meta` already skips both in that path today
 /// (`uid()` is `None`, `ChatExporter::generate` falls through to `None` for
 /// `Meta`), so nothing is lost by sending directly. See
-/// `Message::SendTargetedMsg`.
+/// `Message::SendTargetedMsg`. `big_screen` is the ZG-80 rendering hint,
+/// carried on the `comp::ChatMsg` itself -- see
+/// `GenericChatMsg::with_big_screen`.
 pub(crate) fn send_targeted_msg(
     server: &Server,
     target_uuids: &[Uuid],
     operator_uuid: Uuid,
     msg: String,
+    big_screen: bool,
 ) -> (Vec<Uuid>, Vec<Uuid>) {
     // Nothing to resolve, so don't pay for the index below. Not a hypothetical
     // shape: the HTTP layer accepts an empty `target_uuids`, and without this an
@@ -6263,7 +6266,11 @@ pub(crate) fn send_targeted_msg(
 
     let ecs = server.state.ecs();
     let clients = ecs.read_storage::<Client>();
-    let resolved_msg = ServerGeneral::server_msg(ChatType::Meta, Content::Plain(msg));
+    let resolved_msg = ServerGeneral::ChatMsg(
+        ChatType::Meta
+            .into_plain_msg(msg)
+            .with_big_screen(big_screen),
+    );
 
     // One pass over the player storage to build a uuid -> entity index, then an
     // O(1) lookup per requested uuid. This used to call `find_uuid` per target,

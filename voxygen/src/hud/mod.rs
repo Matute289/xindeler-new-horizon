@@ -1,6 +1,7 @@
 #![expect(non_local_definitions)] // because of WidgetCommon derive
 mod animation;
 mod bag;
+mod big_screen;
 mod buffs;
 mod change_notification;
 mod chat;
@@ -45,6 +46,7 @@ pub use slot_grid::{SlotEvents, SlotGrid};
 pub use subtitles::Subtitle;
 
 use bag::BagManager;
+use big_screen::BigScreen;
 use buffs::BuffsBar;
 use change_notification::{ChangeNotification, NotificationReason};
 use chat::Chat;
@@ -314,6 +316,7 @@ widget_ids! {
         map,
         world_map,
         popup,
+        big_screen,
         creature_card,
         identify_item_tooltip,
         minimap,
@@ -1445,6 +1448,10 @@ pub struct Hud {
     failed_entity_pickups: HashMap<EcsEntity, CollectFailedData>,
     new_loot_messages: VecDeque<LootMessage>,
     new_messages: VecDeque<comp::ChatMsg>,
+    /// Messages flagged `big_screen` (ZG-80), queued for the full-screen
+    /// overlay in addition to the normal chat window. Populated in
+    /// `new_message`, cleared each frame alongside `new_notifications`.
+    big_screen_queue: VecDeque<comp::ChatMsg>,
     new_notifications: VecDeque<UserNotification>,
     speech_bubbles: HashMap<Uid, comp::SpeechBubble>,
     content_bubbles: Vec<(Vec3<f32>, comp::SpeechBubble)>,
@@ -1560,6 +1567,7 @@ impl Hud {
             failed_entity_pickups: HashMap::default(),
             new_loot_messages: VecDeque::new(),
             new_messages: VecDeque::new(),
+            big_screen_queue: VecDeque::new(),
             new_notifications: VecDeque::new(),
             persisted_state,
             speech_bubbles: HashMap::new(),
@@ -5168,6 +5176,15 @@ impl Hud {
             }
         }
 
+        // Big Screen (ZG-80) — an operator-authored, mandatory-read overlay.
+        // Rendered last, on purpose: it must sit above every other HUD/menu
+        // z-layer regardless of what the player is doing (Q3), and unlike
+        // everything above it has no dismiss gesture to wire into
+        // `Show`'s focus stack, so it doesn't participate in that at all.
+        BigScreen::new(&self.big_screen_queue, i18n, &self.fonts)
+            .set(self.ids.big_screen, ui_widgets);
+        self.big_screen_queue.clear();
+
         // Bring the map/social/quest/diary/settings/esc-menu/prompt-dialog
         // focus entries up to date before computing `menu_open` (see
         // `Show::sync_window_focus` for why this can't just be pushed/
@@ -5242,7 +5259,12 @@ impl Hud {
         }
     }
 
-    pub fn new_message(&mut self, msg: comp::ChatMsg) { self.new_messages.push_back(msg); }
+    pub fn new_message(&mut self, msg: comp::ChatMsg) {
+        if msg.big_screen {
+            self.big_screen_queue.push_back(msg.clone());
+        }
+        self.new_messages.push_back(msg);
+    }
 
     pub fn new_notification(&mut self, msg: UserNotification) {
         self.new_notifications.push_back(msg);

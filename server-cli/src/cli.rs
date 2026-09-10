@@ -98,6 +98,10 @@ pub enum Message {
     /// sends a msg to everyone on the server
     SendGlobalMsg {
         msg: String,
+        /// ZG-80 "Big Screen": also show this as a full-screen, self-timed
+        /// overlay on every client, in addition to the normal chat window.
+        #[arg(long, default_value_t = false)]
+        big_screen: bool,
     },
     /// Sends `msg` to exactly the players named by `target_uuids`, skipping
     /// (and reporting back) any uuid that isn't currently connected.
@@ -110,6 +114,11 @@ pub enum Message {
         operator_uuid: String,
         #[arg(long)]
         msg: String,
+        /// ZG-80 "Big Screen": also show this as a full-screen, self-timed
+        /// overlay on every targeted client, in addition to the normal chat
+        /// window.
+        #[arg(long, default_value_t = false)]
+        big_screen: bool,
     },
     /// Uptime-adjacent server status not already exported via `/metrics`:
     /// version, player count, pending-shutdown state.
