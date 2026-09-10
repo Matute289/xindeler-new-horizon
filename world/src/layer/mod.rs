@@ -1,4 +1,5 @@
 pub mod cave;
+pub mod cromatolis_interior;
 pub mod rock;
 pub mod scatter;
 pub mod shrub;
@@ -7,8 +8,8 @@ pub mod tree;
 pub mod wildlife;
 
 pub use self::{
-    cave::apply_caves_to, rock::apply_rocks_to, scatter::apply_scatter_to, shrub::apply_shrubs_to,
-    spot::apply_spots_to, tree::apply_trees_to,
+    cave::apply_caves_to, cromatolis_interior::apply_cromatolis_interiors_to, rock::apply_rocks_to,
+    scatter::apply_scatter_to, shrub::apply_shrubs_to, spot::apply_spots_to, tree::apply_trees_to,
 };
 
 use crate::{

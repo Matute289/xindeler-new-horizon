@@ -491,6 +491,9 @@ impl World {
         if index.features.caves {
             layer::apply_caves_to(&mut canvas, &mut dynamic_rng);
         }
+        if sim_chunk.authored_cromatolis_v0 {
+            layer::apply_cromatolis_interiors_to(&mut canvas);
+        }
         if index.features.rocks {
             layer::apply_rocks_to(&mut canvas, &mut dynamic_rng);
         }
