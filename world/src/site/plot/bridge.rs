@@ -49,6 +49,26 @@ enum BridgeKind {
     Short,
     HeightenedViaduct(HeightenedViaduct),
     HangBridge,
+    GrandStoneIron {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+    StoneArch {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+    TimberFootbridge {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+    NaturalStoneEarth {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
 }
 
 impl BridgeKind {
@@ -93,6 +113,10 @@ impl BridgeKind {
     fn width(&self) -> i32 {
         match self {
             BridgeKind::HangBridge => 2,
+            BridgeKind::GrandStoneIron { deck_width, .. }
+            | BridgeKind::StoneArch { deck_width, .. }
+            | BridgeKind::TimberFootbridge { deck_width, .. }
+            | BridgeKind::NaturalStoneEarth { deck_width, .. } => *deck_width,
             _ => 8,
         }
     }
@@ -314,6 +338,360 @@ fn render_flat(bridge: &Bridge, painter: &Painter) {
             aabr.max.with_z(bridge.end.z),
         ))
         .fill(rock);
+}
+
+fn render_grand_stone_iron(
+    bridge: &Bridge,
+    painter: &Painter,
+    deck_width: i32,
+    clearance: i32,
+    deck_thickness: i32,
+) {
+    let start = bridge.start.xy();
+    let end = bridge.end.xy();
+    let spine = rasterized_bridge_spine(start, end);
+    let half_width = (deck_width / 2).max(4);
+    let delta = end - start;
+    let width_axis = if delta.x.abs() >= delta.y.abs() {
+        Vec2::new(0, half_width)
+    } else {
+        Vec2::new(half_width, 0)
+    };
+
+    // Authored crossings are freeform lines on the 2048 x 1536 source map.
+    // `Dir2` only has four cardinal directions, so using a single AABB here
+    // fills the entire diagonal bounding rectangle. Rasterise the deck along
+    // the actual source segment instead: a long diagonal crossing remains a
+    // narrow bridge rather than becoming a solid artificial island.
+    let deck_z = (bridge.water_alt + clearance).max(bridge.start.z.max(bridge.end.z));
+    let stone = Fill::Brick(BlockKind::Rock, Rgb::new(106, 103, 98), 14);
+    let trim_stone = Fill::Brick(BlockKind::Rock, Rgb::new(72, 70, 68), 10);
+    let road = Fill::Brick(BlockKind::Rock, Rgb::new(82, 75, 70), 8);
+    let iron = Fill::Brick(BlockKind::Rock, Rgb::new(20, 23, 28), 5);
+    let lamp = Fill::Block(Block::new(BlockKind::GlowingRock, Rgb::new(245, 189, 84)));
+
+    // The central carriageway uses a gentle 1:4 stepped grade.  Pedestrians
+    // get two clearly distinct stone stair lanes at the outside edges, so the
+    // civic crossing reads as a bridge approach rather than a flat slab that
+    // suddenly begins above the banks.
+    for (bank, outward) in [
+        (bridge.start, -bridge_step_direction(delta)),
+        (bridge.end, bridge_step_direction(delta)),
+    ] {
+        render_grand_bridge_approach(
+            painter,
+            bank,
+            outward,
+            width_axis,
+            deck_z,
+            deck_thickness,
+            road.clone(),
+            trim_stone.clone(),
+        );
+    }
+
+    for point in &spine {
+        painter
+            .aabb(aabb(
+                (*point - width_axis).with_z(deck_z - deck_thickness + 1),
+                (*point + width_axis).with_z(deck_z),
+            ))
+            .fill(road.clone());
+        for curb_side in [width_axis, -width_axis] {
+            painter
+                .aabb(aabb(
+                    (*point + curb_side).with_z(deck_z + 1),
+                    (*point + curb_side).with_z(deck_z + 2),
+                ))
+                .fill(trim_stone.clone());
+        }
+    }
+
+    // Pair each open span with a narrow masonry pier.  They are deliberately
+    // sparse and never meet across the channel, so boats can pass between them.
+    let pier_step = 36usize;
+    for point in spine.iter().step_by(pier_step).chain(spine.last()) {
+        painter
+            .aabb(aabb(
+                (*point - Vec2::broadcast(2)).with_z(bridge.water_alt),
+                (*point + Vec2::broadcast(2)).with_z(deck_z - deck_thickness),
+            ))
+            .fill(stone.clone());
+    }
+
+    // Black-iron rails remain open: posts plus thin diagonal rails, never a
+    // solid parapet.  Lamps mark the two civic approaches and the mid-spans.
+    let post_step = 12usize;
+    for (index, point) in spine.iter().enumerate() {
+        if index % post_step != 0 && index + 1 != spine.len() {
+            continue;
+        }
+        for rail_side in [width_axis, -width_axis] {
+            let post = *point + rail_side;
+            painter
+                .aabb(aabb(post.with_z(deck_z + 1), post.with_z(deck_z + 5)))
+                .fill(iron.clone());
+        }
+    }
+    for rail_side in [width_axis, -width_axis] {
+        let rail_start = start + rail_side;
+        let rail_end = end + rail_side;
+        painter
+            .line(
+                rail_start.with_z(deck_z + 3),
+                rail_end.with_z(deck_z + 3),
+                0.45,
+            )
+            .fill(iron.clone());
+        painter
+            .line(
+                rail_start.with_z(deck_z + 5),
+                rail_end.with_z(deck_z + 5),
+                0.35,
+            )
+            .fill(iron.clone());
+    }
+
+    for index in [0, spine.len() / 3, spine.len() * 2 / 3, spine.len() - 1] {
+        let point = spine[index];
+        for rail_side in [width_axis, -width_axis] {
+            painter
+                .aabb(aabb(
+                    (point + rail_side).with_z(deck_z + 6),
+                    (point + rail_side).with_z(deck_z + 7),
+                ))
+                .fill(lamp.clone());
+        }
+    }
+}
+
+fn bridge_step_direction(delta: Vec2<i32>) -> Vec2<i32> {
+    Vec2::new(delta.x.signum(), delta.y.signum())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_grand_bridge_approach(
+    painter: &Painter,
+    bank: Vec3<i32>,
+    outward: Vec2<i32>,
+    width_axis: Vec2<i32>,
+    deck_z: i32,
+    deck_thickness: i32,
+    road: Fill,
+    stair_stone: Fill,
+) {
+    let rise = (deck_z - bank.z).max(0);
+    if rise == 0 || outward == Vec2::zero() {
+        return;
+    }
+
+    // Four metres of run for each metre of rise keeps carts and NPCs on a
+    // predictable, walkable grade. Clamp it to avoid sprawling through a
+    // town if an authored bridge happens to sit far above its bank.
+    let run = (rise * 4).clamp(12, 48);
+    let approach_end = bank.xy() + outward * run;
+    let mut spine = rasterized_bridge_spine(approach_end, bank.xy());
+    if spine.len() < 2 {
+        return;
+    }
+
+    let span = (spine.len() - 1) as i32;
+    let stair_lane_width = 2;
+    let inner_edge = if width_axis.x == 0 {
+        Vec2::new(0, (width_axis.y.abs() - stair_lane_width).max(1))
+    } else {
+        Vec2::new((width_axis.x.abs() - stair_lane_width).max(1), 0)
+    };
+
+    for (index, point) in spine.drain(..).enumerate() {
+        // Quantisation produces real one-block steps at a maximum 1:4 grade;
+        // the wide middle strip remains the transport ramp.
+        let deck_step = bank.z + (rise * index as i32 / span);
+        painter
+            .aabb(aabb(
+                (point - width_axis).with_z(deck_step - deck_thickness + 1),
+                (point + width_axis).with_z(deck_step),
+            ))
+            .fill(road.clone());
+
+        for sign in [1, -1] {
+            let outer = width_axis * sign;
+            let inner = inner_edge * sign;
+            painter
+                .aabb(aabb(
+                    (point + inner).with_z(deck_step + 1),
+                    (point + outer).with_z(deck_step + 2),
+                ))
+                .fill(stair_stone.clone());
+        }
+    }
+}
+
+fn rasterized_bridge_spine(start: Vec2<i32>, end: Vec2<i32>) -> Vec<Vec2<i32>> {
+    let (mut x, mut y) = (start.x, start.y);
+    let (end_x, end_y) = (end.x, end.y);
+    let dx = (end_x - x).abs();
+    let dy = -(end_y - y).abs();
+    let step_x = if x < end_x { 1 } else { -1 };
+    let step_y = if y < end_y { 1 } else { -1 };
+    let mut error = dx + dy;
+    let mut spine = Vec::with_capacity((dx - dy) as usize + 1);
+
+    loop {
+        spine.push(Vec2::new(x, y));
+        if x == end_x && y == end_y {
+            return spine;
+        }
+        let twice_error = error * 2;
+        if twice_error >= dy {
+            error += dy;
+            x += step_x;
+        }
+        if twice_error <= dx {
+            error += dx;
+            y += step_y;
+        }
+    }
+}
+
+fn render_authored_low_span(
+    bridge: &Bridge,
+    painter: &Painter,
+    deck_width: i32,
+    clearance: i32,
+    deck_thickness: i32,
+    deck: Fill,
+    support: Fill,
+    rail: Fill,
+    rail_height: i32,
+) {
+    let forward = bridge.dir.to_vec2();
+    let orthogonal = bridge.dir.orthogonal().to_vec2();
+    let half_width = (deck_width / 2).max(2);
+    let side = orthogonal * half_width;
+    let deck_z = (bridge.water_alt + clearance).max(bridge.start.z.max(bridge.end.z));
+    let length = (bridge.start.xy() - bridge.end.xy())
+        .map(|component| component.abs())
+        .reduce_max()
+        .max(1);
+
+    // A narrow, shallow approach joins the terrain to the deck.  Unlike the old
+    // generic flat bridge this never fills the complete river corridor.
+    for (point, direction) in [(bridge.start, bridge.dir), (bridge.end, -bridge.dir)] {
+        let rise = (deck_z - point.z).max(0);
+        if rise > 0 {
+            let run = (rise * 3).clamp(4, 12);
+            let ramp_end = point.xy() + direction.to_vec2() * run;
+            painter
+                .ramp(
+                    aabb(
+                        (point.xy() - side).with_z(point.z),
+                        (ramp_end + side).with_z(deck_z),
+                    ),
+                    direction,
+                )
+                .fill(deck.clone());
+        }
+    }
+
+    painter
+        .aabb(aabb(
+            (bridge.start.xy() - side).with_z(deck_z - deck_thickness + 1),
+            (bridge.end.xy() + side).with_z(deck_z),
+        ))
+        .fill(deck.clone());
+
+    // Supports are deliberately narrow and sparse: a bridge must span the
+    // water, not become a solid dam or an underground wall.
+    let support_count = (length / 28).clamp(1, 3);
+    for index in 1..=support_count {
+        let offset = length * index / (support_count + 1);
+        let center = bridge.start.xy() + forward * offset;
+        let pier_side = orthogonal;
+        painter
+            .aabb(aabb(
+                (center - pier_side - forward).with_z(bridge.water_alt),
+                (center + pier_side + forward).with_z(deck_z - deck_thickness),
+            ))
+            .fill(support.clone());
+    }
+
+    if rail_height > 0 {
+        for rail_side in [side, -side] {
+            painter
+                .aabb(aabb(
+                    (bridge.start.xy() + rail_side).with_z(deck_z + 1),
+                    (bridge.end.xy() + rail_side).with_z(deck_z + rail_height),
+                ))
+                .fill(rail.clone());
+        }
+    }
+}
+
+fn render_stone_arch(
+    bridge: &Bridge,
+    painter: &Painter,
+    deck_width: i32,
+    clearance: i32,
+    deck_thickness: i32,
+) {
+    let stone = Fill::Brick(BlockKind::Rock, Rgb::new(112, 108, 101), 18);
+    let dark_stone = Fill::Brick(BlockKind::Rock, Rgb::new(70, 68, 66), 10);
+    render_authored_low_span(
+        bridge,
+        painter,
+        deck_width,
+        clearance,
+        deck_thickness,
+        stone.clone(),
+        dark_stone,
+        stone,
+        1,
+    );
+}
+
+fn render_timber_footbridge(
+    bridge: &Bridge,
+    painter: &Painter,
+    deck_width: i32,
+    clearance: i32,
+    deck_thickness: i32,
+) {
+    let timber = Fill::Brick(BlockKind::Wood, Rgb::new(92, 52, 25), 12);
+    let dark_timber = Fill::Brick(BlockKind::Wood, Rgb::new(58, 33, 18), 8);
+    render_authored_low_span(
+        bridge,
+        painter,
+        deck_width,
+        clearance,
+        deck_thickness,
+        timber.clone(),
+        dark_timber.clone(),
+        dark_timber,
+        1,
+    );
+}
+
+fn render_natural_stone_earth(
+    bridge: &Bridge,
+    painter: &Painter,
+    deck_width: i32,
+    clearance: i32,
+    deck_thickness: i32,
+) {
+    let earth = Fill::Brick(BlockKind::Rock, Rgb::new(115, 87, 62), 14);
+    let stone = Fill::Brick(BlockKind::Rock, Rgb::new(80, 78, 72), 12);
+    render_authored_low_span(
+        bridge,
+        painter,
+        deck_width,
+        clearance,
+        deck_thickness,
+        earth,
+        stone,
+        Fill::Block(Block::new(BlockKind::Grass, Rgb::new(64, 112, 48))),
+        0,
+    );
 }
 
 fn render_heightened_viaduct(bridge: &Bridge, painter: &Painter, data: &HeightenedViaduct) {
@@ -898,6 +1276,7 @@ pub struct Bridge {
     pub(crate) end: Vec3<i32>,
     pub(crate) dir: Dir2,
     center: Vec3<i32>,
+    water_alt: i32,
     kind: BridgeKind,
     biome: BiomeKind,
     surface_color: Rgb<f32>,
@@ -911,6 +1290,7 @@ impl Bridge {
         site: &Site,
         start: Vec2<i32>,
         end: Vec2<i32>,
+        authored_design: Option<AuthoredBridgeDesign>,
     ) -> Self {
         let original_start = site.tile_wpos(start);
         let original_end = site.tile_wpos(end);
@@ -968,13 +1348,52 @@ impl Bridge {
         let center = center.with_z(col.alt as i32);
         let surface_color = col.surface_color;
         let water_alt = col.water_level as i32;
-        let bridge = BridgeKind::random(rng, start, start_dist, end, end_dist, water_alt);
+        let bridge = match authored_design {
+            Some(AuthoredBridgeDesign::GrandStoneIron {
+                deck_width,
+                clearance,
+                deck_thickness,
+            }) => BridgeKind::GrandStoneIron {
+                deck_width,
+                clearance,
+                deck_thickness,
+            },
+            Some(AuthoredBridgeDesign::StoneArch {
+                deck_width,
+                clearance,
+                deck_thickness,
+            }) => BridgeKind::StoneArch {
+                deck_width,
+                clearance,
+                deck_thickness,
+            },
+            Some(AuthoredBridgeDesign::TimberFootbridge {
+                deck_width,
+                clearance,
+                deck_thickness,
+            }) => BridgeKind::TimberFootbridge {
+                deck_width,
+                clearance,
+                deck_thickness,
+            },
+            Some(AuthoredBridgeDesign::NaturalStoneEarth {
+                deck_width,
+                clearance,
+                deck_thickness,
+            }) => BridgeKind::NaturalStoneEarth {
+                deck_width,
+                clearance,
+                deck_thickness,
+            },
+            None => BridgeKind::random(rng, start, start_dist, end, end_dist, water_alt),
+        };
         Self {
             original_start,
             original_end,
             start,
             end,
             center,
+            water_alt,
             dir: Dir2::from_vec2(end.xy() - start.xy()),
             kind: bridge,
             biome: land
@@ -1003,6 +1422,51 @@ impl Structure for Bridge {
             BridgeKind::Short => render_short(self, painter),
             BridgeKind::HeightenedViaduct(data) => render_heightened_viaduct(self, painter, data),
             BridgeKind::HangBridge => render_hang(self, painter),
+            BridgeKind::GrandStoneIron {
+                deck_width,
+                clearance,
+                deck_thickness,
+            } => render_grand_stone_iron(self, painter, *deck_width, *clearance, *deck_thickness),
+            BridgeKind::StoneArch {
+                deck_width,
+                clearance,
+                deck_thickness,
+            } => render_stone_arch(self, painter, *deck_width, *clearance, *deck_thickness),
+            BridgeKind::TimberFootbridge {
+                deck_width,
+                clearance,
+                deck_thickness,
+            } => render_timber_footbridge(self, painter, *deck_width, *clearance, *deck_thickness),
+            BridgeKind::NaturalStoneEarth {
+                deck_width,
+                clearance,
+                deck_thickness,
+            } => {
+                render_natural_stone_earth(self, painter, *deck_width, *clearance, *deck_thickness)
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rasterized_diagonal_spine_is_continuous_without_filling_its_bounding_box() {
+        let spine = rasterized_bridge_spine(Vec2::new(0, 0), Vec2::new(15, 12));
+
+        assert_eq!(spine.first(), Some(&Vec2::new(0, 0)));
+        assert_eq!(spine.last(), Some(&Vec2::new(15, 12)));
+        assert_eq!(spine.len(), 16);
+        assert!(spine.windows(2).all(|pair| {
+            let delta = pair[1] - pair[0];
+            delta.x.abs() <= 1 && delta.y.abs() <= 1 && delta != Vec2::zero()
+        }));
+
+        // The old diagonal AABB would fill 16 * 13 positions. The rendered
+        // bridge may add deck width around this spine, but its route itself
+        // must remain a one-cell-wide ordered path.
+        assert!(spine.len() < 16 * 13);
     }
 }

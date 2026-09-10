@@ -331,6 +331,241 @@ impl AuthoredCromatolisLandmarkProfiles {
     }
 }
 
+/// Logical route edges connecting authored Cromatolis settlements. This
+/// reuses the existing civ `Track`/`Path` pathfinding system directly (see
+/// `Civs::establish_authored_cromatolis_routes`) rather than inventing a
+/// parallel travel graph -- the physical road/route raster remains a
+/// separate terrain layer, this is only the economy/RTSim travel edge list.
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisRouteGraph {
+    schema: String,
+    coordinate_space: String,
+    routes: Vec<AuthoredCromatolisRoute>,
+}
+
+impl FileAsset for AuthoredCromatolisRouteGraph {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisRouteGraph {
+    fn validate(&self, map_size: MapSizeLg) -> Result<(), String> {
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_route_graph.v1";
+        const EXPECTED_COORDINATE_SPACE: &str = "normalized_map_xy_top_left_origin";
+
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != EXPECTED_COORDINATE_SPACE {
+            return Err(format!(
+                "expected coordinate space {EXPECTED_COORDINATE_SPACE}, got {}",
+                self.coordinate_space
+            ));
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        for route in &self.routes {
+            if route.id.is_empty() || !ids.insert(route.id.as_str()) {
+                return Err(format!("duplicate or empty route id {}", route.id));
+            }
+            if route.start_site_id == route.end_site_id || route.points.len() < 2 {
+                return Err(format!("invalid route edge {}", route.id));
+            }
+            if route
+                .points
+                .iter()
+                .map(|point| point.to_chunk_pos(map_size))
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                < 2
+            {
+                return Err(format!("route {} collapses to one chunk", route.id));
+            }
+        }
+        if self.routes.is_empty() {
+            return Err("route graph contains no edges".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisRoute {
+    id: String,
+    start_site_id: String,
+    end_site_id: String,
+    points: Vec<AuthoredMapPoint>,
+}
+
+/// Physical bridges are independent of the route graph: a route describes
+/// travel, this asset owns the elevated crossing that preserves the water
+/// beneath it (bridges never fill water in to make room for themselves).
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisBridges {
+    schema: String,
+    coordinate_space: String,
+    bridges: Vec<AuthoredCromatolisBridge>,
+}
+
+impl FileAsset for AuthoredCromatolisBridges {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisBridges {
+    fn validate(&self, map_size: MapSizeLg) -> Result<(), String> {
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_bridges.v1";
+        const EXPECTED_COORDINATE_SPACE: &str = "normalized_map_xy_top_left_origin";
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != EXPECTED_COORDINATE_SPACE {
+            return Err(format!(
+                "expected coordinate space {EXPECTED_COORDINATE_SPACE}, got {}",
+                self.coordinate_space
+            ));
+        }
+        if self.bridges.len() != 12 {
+            return Err(format!(
+                "expected 12 authored bridge crossings, got {}",
+                self.bridges.len()
+            ));
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        let mut spans = std::collections::HashSet::new();
+        for bridge in &self.bridges {
+            if bridge.id.is_empty() || !ids.insert(bridge.id.as_str()) {
+                return Err(format!("duplicate or empty bridge id {}", bridge.id));
+            }
+            let start = bridge.start.to_chunk_pos(map_size);
+            let end = bridge.end.to_chunk_pos(map_size);
+            if start == end {
+                return Err(format!("bridge {} collapses to one chunk", bridge.id));
+            }
+            let span = if start.x < end.x || (start.x == end.x && start.y <= end.y) {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            if !spans.insert(span) {
+                return Err(format!("duplicate bridge span for {}", bridge.id));
+            }
+            if !bridge.dimensions_are_valid() {
+                return Err(format!("invalid authored dimensions for {}", bridge.id));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisBridge {
+    id: String,
+    name: String,
+    style: AuthoredBridgeStyle,
+    start: AuthoredMapPoint,
+    end: AuthoredMapPoint,
+    deck_width_m: f32,
+    deck_clearance_m: f32,
+    deck_thickness_m: f32,
+}
+
+impl AuthoredCromatolisBridge {
+    fn dimensions_are_valid(&self) -> bool {
+        self.deck_width_m.is_finite()
+            && self.deck_clearance_m.is_finite()
+            && self.deck_thickness_m.is_finite()
+            && self.deck_width_m >= 4.0
+            && self.deck_clearance_m >= 2.0
+            && (2.0..=3.0).contains(&self.deck_thickness_m)
+    }
+
+    fn design(&self) -> site::AuthoredBridgeDesign {
+        let dimensions = || {
+            (
+                self.deck_width_m.round() as i32,
+                self.deck_clearance_m.round() as i32,
+                self.deck_thickness_m.round() as i32,
+            )
+        };
+        match self.style {
+            AuthoredBridgeStyle::GrandStoneIron => {
+                let (deck_width, clearance, deck_thickness) = dimensions();
+                site::AuthoredBridgeDesign::GrandStoneIron {
+                    deck_width,
+                    clearance,
+                    deck_thickness,
+                }
+            },
+            AuthoredBridgeStyle::StoneArch => {
+                let (deck_width, clearance, deck_thickness) = dimensions();
+                site::AuthoredBridgeDesign::StoneArch {
+                    deck_width,
+                    clearance,
+                    deck_thickness,
+                }
+            },
+            AuthoredBridgeStyle::TimberFootbridge => {
+                let (deck_width, clearance, deck_thickness) = dimensions();
+                site::AuthoredBridgeDesign::TimberFootbridge {
+                    deck_width,
+                    clearance,
+                    deck_thickness,
+                }
+            },
+            AuthoredBridgeStyle::NaturalStoneEarth => {
+                let (deck_width, clearance, deck_thickness) = dimensions();
+                site::AuthoredBridgeDesign::NaturalStoneEarth {
+                    deck_width,
+                    clearance,
+                    deck_thickness,
+                }
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+enum AuthoredBridgeStyle {
+    GrandStoneIron,
+    StoneArch,
+    TimberFootbridge,
+    NaturalStoneEarth,
+}
+
+/// The bridge data remains authored and exportable, but physical bridge
+/// sites stay disabled until their isolated visual previews are approved
+/// (matches `xindeler-old`'s current live behavior, ported unchanged -- this
+/// is not this row's call to make). A developer can materialize exactly one
+/// bridge with `XINDELER_CROMATOLIS_BRIDGE_PREVIEW=bridge.<id>` (or `all`)
+/// for review.
+fn cromatolis_authored_bridge_preview() -> Option<String> {
+    std::env::var("XINDELER_CROMATOLIS_BRIDGE_PREVIEW")
+        .ok()
+        .filter(|preview| !preview.trim().is_empty())
+}
+
+fn bridge_is_selected_for_preview(preview: &str, bridge_id: &str) -> bool {
+    preview == "all" || preview == bridge_id
+}
+
+#[derive(Debug, Clone)]
+struct AuthoredBridgeMeta {
+    #[expect(dead_code)]
+    id: String,
+    name: String,
+    design: site::AuthoredBridgeDesign,
+}
+
 /// Geometry data for a manually placed Cromatolis landmark. Data-only port
 /// (see the module-level note above): describes what a future bespoke
 /// renderer would need, but nothing in this repo consumes it yet.
@@ -1032,6 +1267,66 @@ impl Civs {
         } else {
             None
         };
+        // Routes resolve their endpoints by authored settlement id, so they
+        // only make sense once the settlement loader itself is available
+        // (region-scoped the same way, not a literal asset-name check).
+        let authored_routes = if authored_cromatolis && authored_settlements.is_some() {
+            match AuthoredCromatolisRouteGraph::load_owned("world.map.cromatolis_v0_routes") {
+                Ok(routes) => match routes.validate(sim.map_size_lg()) {
+                    Ok(()) => Some(routes),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate Cromatolis authored route graph; continuing \
+                             without RTSim routes"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis authored route graph; continuing without RTSim \
+                         routes"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
+        // See `cromatolis_authored_bridge_preview`'s doc comment: bridges
+        // stay off in a normal run and only load when a developer opts in
+        // via the env var, matching `xindeler-old`'s current live behavior.
+        let authored_bridge_preview = if authored_cromatolis && authored_settlements.is_some() {
+            cromatolis_authored_bridge_preview()
+        } else {
+            None
+        };
+        let authored_bridges = if authored_bridge_preview.is_some() {
+            match AuthoredCromatolisBridges::load_owned("world.map.cromatolis_v0_bridges") {
+                Ok(bridges) => match bridges.validate(sim.map_size_lg()) {
+                    Ok(()) => Some(bridges),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate Cromatolis authored bridges; continuing without \
+                             them"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis authored bridges; continuing without them"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
         let mut ctx = GenCtx { sim, rng };
 
         // info!("starting cave generation");
@@ -1051,6 +1346,16 @@ impl Civs {
                     landmarks,
                     authored_landmark_profiles.as_ref(),
                 );
+            }
+            if let Some(bridges) = authored_bridges.as_ref() {
+                this.establish_authored_cromatolis_bridges(
+                    &mut ctx,
+                    bridges,
+                    authored_bridge_preview.as_deref(),
+                );
+            }
+            if let Some(routes) = authored_routes.as_ref() {
+                this.establish_authored_cromatolis_routes(&ctx, routes);
             }
             report_stage(WorldCivStage::CivCreation(1, 1));
         } else {
@@ -1268,6 +1573,7 @@ impl Civs {
                     site_tmp: None,
                     authored: None,
                     authored_landmark: None,
+                    authored_bridge: None,
                 }))
             });
         }
@@ -1390,7 +1696,14 @@ impl Civs {
                             &mut rng,
                             *a,
                             *b,
+                            sim_site
+                                .authored_bridge
+                                .as_ref()
+                                .map(|bridge| bridge.design),
                         );
+                        if let Some(authored) = sim_site.authored_bridge.as_ref() {
+                            bridge_site = bridge_site.with_name(authored.name.clone());
+                        }
 
                         // Update the path connecting to the bridge to line up better.
                         if let Some(bridge) =
@@ -1634,6 +1947,7 @@ impl Civs {
             place,
             authored: None,
             authored_landmark: None,
+            authored_bridge: None,
             /* most economic members have moved to site/Economy */
             /* last_exports: Stocks::from_default(0.0),
              * export_targets: Stocks::from_default(0.0),
@@ -2075,6 +2389,7 @@ impl Civs {
                 place,
                 authored: Some(metadata),
                 authored_landmark: None,
+                authored_bridge: None,
             });
 
             debug!(
@@ -2153,6 +2468,7 @@ impl Civs {
                 place,
                 authored: None,
                 authored_landmark: Some(metadata),
+                authored_bridge: None,
             });
             debug!(
                 landmark_id = %landmark.id,
@@ -2162,6 +2478,128 @@ impl Civs {
                 ?landmark.template,
                 "Established authored Cromatolis landmark"
             );
+        }
+    }
+
+    /// Establishes logical travel edges between authored Cromatolis
+    /// settlements as real `Track`s in `self.tracks`/`self.track_map` --
+    /// literally the same pathfinding/travel system procedural civs already
+    /// use (see the module-level note above), not a parallel structure. Must
+    /// run after `establish_authored_cromatolis_settlements`, since routes
+    /// resolve their endpoints by authored settlement id.
+    fn establish_authored_cromatolis_routes(
+        &mut self,
+        ctx: &GenCtx<impl Rng>,
+        routes: &AuthoredCromatolisRouteGraph,
+    ) {
+        let sites_by_authored_id = self
+            .sites
+            .iter()
+            .filter_map(|(site_id, site)| {
+                site.authored
+                    .as_ref()
+                    .map(|metadata| (metadata.id.as_str(), site_id))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut connected_pairs = std::collections::HashSet::new();
+        let mut established = 0;
+
+        for route in &routes.routes {
+            let Some(&start) = sites_by_authored_id.get(route.start_site_id.as_str()) else {
+                warn!(route_id = %route.id, start = %route.start_site_id, "Authored route has no start settlement");
+                continue;
+            };
+            let Some(&end) = sites_by_authored_id.get(route.end_site_id.as_str()) else {
+                warn!(route_id = %route.id, end = %route.end_site_id, "Authored route has no end settlement");
+                continue;
+            };
+            let pair = if route.start_site_id < route.end_site_id {
+                (route.start_site_id.as_str(), route.end_site_id.as_str())
+            } else {
+                (route.end_site_id.as_str(), route.start_site_id.as_str())
+            };
+            if !connected_pairs.insert(pair) {
+                debug!(route_id = %route.id, "Skipping duplicate authored route edge");
+                continue;
+            }
+
+            let mut path = route
+                .points
+                .iter()
+                .map(|point| point.to_chunk_pos(ctx.sim.map_size_lg()))
+                .collect::<Vec<_>>();
+            path[0] = self.sites.get(start).center;
+            let last = path.len() - 1;
+            path[last] = self.sites.get(end).center;
+            path.dedup();
+            if path.len() < 2 {
+                warn!(route_id = %route.id, "Skipping authored route collapsed to one chunk");
+                continue;
+            }
+            let cost = path
+                .windows(2)
+                .map(|points| points[0].as_::<f32>().distance(points[1].as_()))
+                .sum::<f32>()
+                .max(1.0);
+            let track = self.tracks.insert(Track {
+                cost,
+                path: Path { nodes: path },
+            });
+            self.track_map.entry(start).or_default().insert(end, track);
+            established += 1;
+        }
+        info!(
+            established,
+            "Established authored Cromatolis RTSim route edges"
+        );
+    }
+
+    /// Places authored Cromatolis bridge crossings as real `Bridge` sites,
+    /// additive to the generic procedural bridge generator via an
+    /// `Option<AuthoredBridgeDesign>` design parameter. `preview` mirrors
+    /// `xindeler-old`'s current live gating: bridges stay disabled unless a
+    /// developer opts a specific bridge (or `all`) in for review, via
+    /// `XINDELER_CROMATOLIS_BRIDGE_PREVIEW`.
+    fn establish_authored_cromatolis_bridges(
+        &mut self,
+        ctx: &mut GenCtx<impl Rng>,
+        authored: &AuthoredCromatolisBridges,
+        preview: Option<&str>,
+    ) {
+        info!(
+            bridge_count = authored.bridges.len(),
+            "Applying authored Cromatolis bridges"
+        );
+        for bridge in &authored.bridges {
+            if let Some(preview) = preview
+                && !bridge_is_selected_for_preview(preview, &bridge.id)
+            {
+                continue;
+            }
+            let start = bridge.start.to_chunk_pos(ctx.sim.map_size_lg());
+            let end = bridge.end.to_chunk_pos(ctx.sim.map_size_lg());
+            if self.bridges.contains_key(&start) || self.bridges.contains_key(&end) {
+                warn!(bridge_id = %bridge.id, ?start, ?end, "Skipping authored bridge with an occupied endpoint");
+                continue;
+            }
+            let center = (start + end) / 2;
+            let metadata = AuthoredBridgeMeta {
+                id: bridge.id.clone(),
+                name: bridge.name.clone(),
+                design: bridge.design(),
+            };
+            let site = self.establish_site(ctx, center, |place| Site {
+                kind: SiteKind::Bridge(start, end),
+                site_tmp: None,
+                center,
+                place,
+                authored: None,
+                authored_landmark: None,
+                authored_bridge: Some(metadata),
+            });
+            self.bridges.insert(start, (end, site));
+            self.bridges.insert(end, (start, site));
+            debug!(bridge_id = %bridge.id, bridge_name = %bridge.name, ?start, ?end, "Established authored Cromatolis bridge");
         }
     }
 
@@ -2280,6 +2718,7 @@ impl Civs {
                                         place,
                                         authored: None,
                                         authored_landmark: None,
+                                        authored_bridge: None,
                                     }
                                 });
                             self.bridges.insert(locs[1], (locs[2], id));
@@ -2774,6 +3213,10 @@ pub struct Site {
     /// Present iff this site was established from an authored Cromatolis
     /// landmark pin.
     authored_landmark: Option<AuthoredLandmarkMeta>,
+    /// Present iff this site was established from an authored Cromatolis
+    /// bridge crossing (as opposed to the generic procedural bridge
+    /// generator).
+    authored_bridge: Option<AuthoredBridgeMeta>,
 }
 
 impl Site {
@@ -3148,6 +3591,20 @@ mod tests {
         .expect("real Cromatolis landmark profiles export must parse")
     }
 
+    fn real_routes() -> AuthoredCromatolisRouteGraph {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_routes.ron"
+        ))
+        .expect("real Cromatolis route graph export must parse")
+    }
+
+    fn real_bridges() -> AuthoredCromatolisBridges {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_bridges.ron"
+        ))
+        .expect("real Cromatolis bridges export must parse")
+    }
+
     fn real_settlement_template_contract() -> SettlementTemplateContract {
         load_ron(include_bytes!(
             "../../../assets/world/map/cromatolis_v0_settlement_template_contract.ron"
@@ -3255,6 +3712,125 @@ mod tests {
             .validate(&landmarks)
             .expect("every real landmark must have exactly one valid physical profile");
         assert_eq!(profiles.entries.len(), landmarks.landmarks.len());
+    }
+
+    // ---- Authored Cromatolis routes/bridges: loaders ----
+
+    #[test]
+    fn cromatolis_authored_routes_parse_and_validate_real_export_without_panicking() {
+        let routes = real_routes();
+        assert_eq!(routes.schema, "xindeler_open_world.authored_route_graph.v1");
+        let map_size = synthetic_map_size();
+        routes
+            .validate(map_size)
+            .expect("real Cromatolis route graph must be valid at runtime scale");
+
+        // Real, measured count as of this export -- verified against the
+        // current `xindeler-open-world` export, not the design pass's
+        // earlier estimate (see the module-level note above and this row's
+        // spec §3/§6 for the "verify against the live export" rule).
+        assert_eq!(routes.routes.len(), 49);
+
+        let ids = routes
+            .routes
+            .iter()
+            .map(|route| route.id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), routes.routes.len());
+    }
+
+    #[test]
+    fn cromatolis_authored_route_endpoints_resolve_against_real_settlements() {
+        let routes = real_routes();
+        let settlements = real_settlements();
+        let settlement_ids = settlements
+            .settlements
+            .iter()
+            .map(|settlement| settlement.id.as_str())
+            .collect::<HashSet<_>>();
+
+        for route in &routes.routes {
+            assert!(
+                settlement_ids.contains(route.start_site_id.as_str()),
+                "route {} references unknown start settlement {}",
+                route.id,
+                route.start_site_id
+            );
+            assert!(
+                settlement_ids.contains(route.end_site_id.as_str()),
+                "route {} references unknown end settlement {}",
+                route.id,
+                route.end_site_id
+            );
+        }
+    }
+
+    #[test]
+    fn cromatolis_authored_bridges_parse_and_validate_real_export_without_panicking() {
+        let bridges = real_bridges();
+        assert_eq!(bridges.schema, "xindeler_open_world.authored_bridges.v1");
+        let map_size = synthetic_map_size();
+        bridges
+            .validate(map_size)
+            .expect("real Cromatolis bridges must be valid at runtime scale");
+
+        // The contract requires exactly 12 -- `validate` already enforces
+        // this, this assertion documents the number for readers.
+        assert_eq!(bridges.bridges.len(), 12);
+
+        let ids = bridges
+            .bridges
+            .iter()
+            .map(|bridge| bridge.id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), bridges.bridges.len());
+    }
+
+    #[test]
+    fn cromatolis_authored_bridge_design_maps_real_dimensions() {
+        let bridges = real_bridges();
+        let kalthis_duren = bridges
+            .bridges
+            .iter()
+            .find(|bridge| bridge.id == "bridge.kalthis_duren")
+            .expect("the named Kalthis-Duren crossing must be present in the real export");
+
+        // Trust the RON over any prior markdown draft (see this row's spec
+        // §3): the real export uses 17m width / 12m clearance.
+        assert_eq!(kalthis_duren.deck_width_m, 17.0);
+        assert_eq!(kalthis_duren.deck_clearance_m, 12.0);
+        assert!(matches!(
+            kalthis_duren.design(),
+            site::AuthoredBridgeDesign::GrandStoneIron {
+                deck_width: 17,
+                clearance: 12,
+                deck_thickness: 3,
+            }
+        ));
+
+        for bridge in &bridges.bridges {
+            assert!(
+                bridge.dimensions_are_valid(),
+                "bridge {} has invalid dimensions",
+                bridge.id
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_preview_selection_matches_by_id_or_all() {
+        assert!(bridge_is_selected_for_preview(
+            "bridge.kalthis_duren",
+            "bridge.kalthis_duren"
+        ));
+        assert!(!bridge_is_selected_for_preview(
+            "bridge.kalthis_duren",
+            "bridge.sapphire_loch"
+        ));
+        assert!(bridge_is_selected_for_preview(
+            "all",
+            "bridge.sapphire_loch"
+        ));
     }
 
     #[test]
@@ -3473,6 +4049,7 @@ mod tests {
                     start_eligible,
                 }),
                 authored_landmark: None,
+                authored_bridge: None,
             }
         }
 
@@ -3490,6 +4067,7 @@ mod tests {
             place: Id::new(0),
             authored: None,
             authored_landmark: None,
+            authored_bridge: None,
         };
         assert!(!procedural.is_authored_starting_settlement());
         assert_eq!(procedural.authored_name(), None);
@@ -3563,5 +4141,102 @@ mod tests {
             1,
             "exactly one civilisation must be created, rooted at the authored capital"
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn civs_generate_establishes_every_authored_cromatolis_route_as_a_real_track() {
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        // Routes have no preview gate (unlike bridges): they're established
+        // unconditionally whenever authored settlements exist, so a normal
+        // `Civs::generate` run already exercises
+        // `establish_authored_cromatolis_routes`.
+        let sites_by_authored_id = civs
+            .sites
+            .iter()
+            .filter_map(|(id, site)| site.authored.as_ref().map(|meta| (meta.id.as_str(), id)))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let routes = real_routes();
+        for route in &routes.routes {
+            let start = *sites_by_authored_id
+                .get(route.start_site_id.as_str())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "route {} start settlement {} missing from generated civs",
+                        route.id, route.start_site_id
+                    )
+                });
+            let end = *sites_by_authored_id
+                .get(route.end_site_id.as_str())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "route {} end settlement {} missing from generated civs",
+                        route.id, route.end_site_id
+                    )
+                });
+            assert!(
+                civs.track_between(start, end).is_some(),
+                "route {} did not resolve to a real Track between its authored settlements",
+                route.id
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn civs_bridge_preview_places_every_real_authored_bridge() {
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let mut civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        // Bridges stay gated behind `XINDELER_CROMATOLIS_BRIDGE_PREVIEW` in a
+        // normal run (see `cromatolis_authored_bridge_preview`'s doc
+        // comment). Exercise the establishment logic directly here, the
+        // same way a developer's `... =all` preview run would, instead of
+        // mutating process-global env state in a test.
+        let bridges = real_bridges();
+        let rng = ChaChaRng::from_seed(seed_expan::rng_state(0));
+        let mut ctx = GenCtx { sim: &mut sim, rng };
+        civs.establish_authored_cromatolis_bridges(&mut ctx, &bridges, Some("all"));
+
+        let placed_bridge_names = civs
+            .sites
+            .iter()
+            .filter_map(|(_, site)| site.authored_bridge.as_ref())
+            .map(|meta| meta.name.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            placed_bridge_names.len(),
+            12,
+            "all 12 real authored bridges must be placed as real sites"
+        );
+        for bridge in &bridges.bridges {
+            assert!(
+                placed_bridge_names.contains(bridge.name.as_str()),
+                "bridge {} ({}) was not placed",
+                bridge.id,
+                bridge.name
+            );
+        }
+
+        // The bridge endpoints stay at their authored source coordinates
+        // (`establish_authored_cromatolis_bridges` never reprojects them the
+        // way settlements are, and never fills the water beneath -- the
+        // renderer only ever adds sparse piers/ramps, see
+        // `render_grand_stone_iron`/`render_authored_low_span`).
+        for bridge in &bridges.bridges {
+            let expected_start = bridge.start.to_chunk_pos(sim.map_size_lg());
+            let expected_end = bridge.end.to_chunk_pos(sim.map_size_lg());
+            assert!(
+                civs.bridges.contains_key(&expected_start)
+                    && civs.bridges.contains_key(&expected_end),
+                "bridge {} is not registered at its real authored source coordinates",
+                bridge.id
+            );
+        }
     }
 }

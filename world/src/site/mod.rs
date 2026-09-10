@@ -65,6 +65,33 @@ pub struct SpawnRules {
     pub preferred_alt: (f32, f32, f32),
 }
 
+/// Data carried by an authored bridge site. The source map owns dimensions
+/// and style; the renderer remains generic and can be reused by later
+/// continents.
+#[derive(Debug, Clone, Copy)]
+pub enum AuthoredBridgeDesign {
+    GrandStoneIron {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+    StoneArch {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+    TimberFootbridge {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+    NaturalStoneEarth {
+        deck_width: i32,
+        clearance: i32,
+        deck_thickness: i32,
+    },
+}
+
 impl SpawnRules {
     /// Specify that the column these rules relates to should prefer to use the
     /// given `alt` as an altitude (causing the terrain to shift up or down).
@@ -2990,6 +3017,7 @@ impl Site {
         rng: &mut impl Rng,
         start_chunk: Vec2<i32>,
         end_chunk: Vec2<i32>,
+        authored_design: Option<AuthoredBridgeDesign>,
     ) -> Self {
         let mut rng = reseed(rng);
         let start = TerrainChunkSize::center_wpos(start_chunk);
@@ -3018,7 +3046,15 @@ impl Site {
             max: start_tile.map2(end_tile, |a, b| a.max(b)) + 1 + orth * width,
         };
 
-        let bridge = plot::Bridge::generate(land, index, &mut rng, &site, start_tile, end_tile);
+        let bridge = plot::Bridge::generate(
+            land,
+            index,
+            &mut rng,
+            &site,
+            start_tile,
+            end_tile,
+            authored_design,
+        );
 
         let start_tile = site.wpos_tile_pos(bridge.start.xy());
         let end_tile = site.wpos_tile_pos(bridge.end.xy());

@@ -1,0 +1,467 @@
+(
+    schema: "xindeler_open_world.authored_route_graph.v1",
+    coordinate_space: "normalized_map_xy_top_left_origin",
+    routes: [
+        (
+            id: "route_path.cobalt_coast_highway.segment_01",
+            start_site_id: "site.portland",
+            end_site_id: "site.kalthis",
+            points: [
+                (x: 0.21739, y: 0.16221),
+                (x: 0.20000, y: 0.23000),
+                (x: 0.23302, y: 0.16873),
+            ],
+        ),
+        (
+            id: "route_path.cobalt_coast_highway.segment_02",
+            start_site_id: "site.kalthis",
+            end_site_id: "site.garens_town",
+            points: [
+                (x: 0.23302, y: 0.16873),
+                (x: 0.18000, y: 0.34000),
+                (x: 0.16561, y: 0.21889),
+            ],
+        ),
+        (
+            id: "route_path.cobalt_coast_highway.segment_03",
+            start_site_id: "site.garens_town",
+            end_site_id: "site.andiran",
+            points: [
+                (x: 0.16561, y: 0.21889),
+                (x: 0.14216, y: 0.32052),
+                (x: 0.15388, y: 0.31922),
+            ],
+        ),
+        (
+            id: "route_path.cobalt_coast_highway.segment_04",
+            start_site_id: "site.andiran",
+            end_site_id: "site.timos",
+            points: [
+                (x: 0.15388, y: 0.31922),
+                (x: 0.13000, y: 0.52000),
+                (x: 0.12262, y: 0.41042),
+                (x: 0.14314, y: 0.42932),
+            ],
+        ),
+        (
+            id: "route_path.royal_road.segment_01",
+            start_site_id: "site.kalthis",
+            end_site_id: "site.neoland",
+            points: [
+                (x: 0.23302, y: 0.16873),
+                (x: 0.31515, y: 0.23469),
+            ],
+        ),
+        (
+            id: "route_path.royal_road.segment_02",
+            start_site_id: "site.neoland",
+            end_site_id: "site.levassi",
+            points: [
+                (x: 0.31515, y: 0.23469),
+                (x: 0.27000, y: 0.37000),
+                (x: 0.38105, y: 0.32182),
+            ],
+        ),
+        (
+            id: "route_path.royal_road.segment_03",
+            start_site_id: "site.levassi",
+            end_site_id: "site.giva",
+            points: [
+                (x: 0.38105, y: 0.32182),
+                (x: 0.30238, y: 0.35230),
+            ],
+        ),
+        (
+            id: "route_path.royal_road.segment_04",
+            start_site_id: "site.giva",
+            end_site_id: "site.rivermore_town",
+            points: [
+                (x: 0.30238, y: 0.35230),
+                (x: 0.42924, y: 0.38879),
+                (x: 0.41378, y: 0.40065),
+            ],
+        ),
+        (
+            id: "route_path.royal_road.segment_05",
+            start_site_id: "site.rivermore_town",
+            end_site_id: "site.cutstone_city",
+            points: [
+                (x: 0.41378, y: 0.40065),
+                (x: 0.45000, y: 0.43000),
+                (x: 0.47888, y: 0.45032),
+                (x: 0.56699, y: 0.30104),
+            ],
+        ),
+        (
+            id: "route_path.endless_path.segment_02",
+            start_site_id: "site.neoland",
+            end_site_id: "site.meyenahone",
+            points: [
+                (x: 0.31515, y: 0.23469),
+                (x: 0.32335, y: 0.23189),
+                (x: 0.40840, y: 0.16156),
+            ],
+        ),
+        (
+            id: "route_path.endless_path.segment_03",
+            start_site_id: "site.meyenahone",
+            end_site_id: "site.vaelindra_dorei",
+            points: [
+                (x: 0.40840, y: 0.16156),
+                (x: 0.43332, y: 0.13699),
+                (x: 0.45266, y: 0.13178),
+                (x: 0.42208, y: 0.11922),
+            ],
+        ),
+        (
+            id: "route_path.crystal_path.segment_01",
+            start_site_id: "site.garens_town",
+            end_site_id: "site.duren",
+            points: [
+                (x: 0.16561, y: 0.21889),
+                (x: 0.22228, y: 0.17720),
+            ],
+        ),
+        (
+            id: "route_path.crystal_path.segment_02",
+            start_site_id: "site.duren",
+            end_site_id: "site.giva",
+            points: [
+                (x: 0.22228, y: 0.17720),
+                (x: 0.30238, y: 0.35230),
+            ],
+        ),
+        (
+            id: "route_path.woodland_lane.segment_01",
+            start_site_id: "site.andiran",
+            end_site_id: "site.giva",
+            points: [
+                (x: 0.15388, y: 0.31922),
+                (x: 0.30238, y: 0.35230),
+            ],
+        ),
+        (
+            id: "route_path.silver_south_highway.segment_01",
+            start_site_id: "site.rivermore_town",
+            end_site_id: "site.rosemire",
+            points: [
+                (x: 0.41378, y: 0.40065),
+                (x: 0.36341, y: 0.50886),
+            ],
+        ),
+        (
+            id: "route_path.silver_south_highway.segment_02",
+            start_site_id: "site.rosemire",
+            end_site_id: "site.dromos_city",
+            points: [
+                (x: 0.36341, y: 0.50886),
+                (x: 0.36000, y: 0.57000),
+                (x: 0.38660, y: 0.55631),
+            ],
+        ),
+        (
+            id: "route_path.silver_south_highway.segment_03",
+            start_site_id: "site.dromos_city",
+            end_site_id: "site.mazon_town",
+            points: [
+                (x: 0.38660, y: 0.55631),
+                (x: 0.36133, y: 0.63541),
+            ],
+        ),
+        (
+            id: "route_path.silver_south_highway.segment_04",
+            start_site_id: "site.mazon_town",
+            end_site_id: "site.fallfair",
+            points: [
+                (x: 0.36133, y: 0.63541),
+                (x: 0.43000, y: 0.72000),
+                (x: 0.46080, y: 0.70110),
+            ],
+        ),
+        (
+            id: "route_path.silver_south_highway.segment_05",
+            start_site_id: "site.fallfair",
+            end_site_id: "site.tathune",
+            points: [
+                (x: 0.46080, y: 0.70110),
+                (x: 0.60210, y: 0.79780),
+            ],
+        ),
+        (
+            id: "route_path.silver_south_highway.segment_06",
+            start_site_id: "site.tathune",
+            end_site_id: "site.sutar_town",
+            points: [
+                (x: 0.60210, y: 0.79780),
+                (x: 0.75465, y: 0.79473),
+            ],
+        ),
+        (
+            id: "route_path.el_camino_del_pez.segment_01",
+            start_site_id: "site.le_pont_dargent",
+            end_site_id: "site.cutstone_city",
+            points: [
+                (x: 0.48490, y: 0.44482),
+                (x: 0.56699, y: 0.30104),
+            ],
+        ),
+        (
+            id: "route_path.golden_highway.segment_01",
+            start_site_id: "site.evercross",
+            end_site_id: "site.gloomshear",
+            points: [
+                (x: 0.56571, y: 0.03257),
+                (x: 0.57000, y: 0.17000),
+                (x: 0.60204, y: 0.13200),
+            ],
+        ),
+        (
+            id: "route_path.golden_highway.segment_02",
+            start_site_id: "site.gloomshear",
+            end_site_id: "site.cutwood_town",
+            points: [
+                (x: 0.60204, y: 0.13200),
+                (x: 0.54004, y: 0.25165),
+            ],
+        ),
+        (
+            id: "route_path.golden_highway.segment_03",
+            start_site_id: "site.cutwood_town",
+            end_site_id: "site.cutstone_city",
+            points: [
+                (x: 0.54004, y: 0.25165),
+                (x: 0.56699, y: 0.30104),
+            ],
+        ),
+        (
+            id: "route_path.sunlight_way.segment_01",
+            start_site_id: "site.evercross",
+            end_site_id: "site.lighthill",
+            points: [
+                (x: 0.56571, y: 0.03257),
+                (x: 0.73596, y: 0.03811),
+            ],
+        ),
+        (
+            id: "route_path.sunlight_way.segment_02",
+            start_site_id: "site.lighthill",
+            end_site_id: "site.windgrave",
+            points: [
+                (x: 0.73596, y: 0.03811),
+                (x: 0.75000, y: 0.08000),
+                (x: 0.94010, y: 0.03819),
+            ],
+        ),
+        (
+            id: "route_path.roseshaw_way.segment_01",
+            start_site_id: "site.gloomshear",
+            end_site_id: "site.farhaven",
+            points: [
+                (x: 0.60204, y: 0.13200),
+                (x: 0.77000, y: 0.20000),
+                (x: 0.83928, y: 0.11661),
+            ],
+        ),
+        (
+            id: "route_path.roseshaw_way.segment_02",
+            start_site_id: "site.farhaven",
+            end_site_id: "site.mordorin",
+            points: [
+                (x: 0.83928, y: 0.11661),
+                (x: 0.91025, y: 0.31587),
+            ],
+        ),
+        (
+            id: "route_path.ancient_highway.segment_01",
+            start_site_id: "site.cutstone_city",
+            end_site_id: "site.falsepost",
+            points: [
+                (x: 0.56699, y: 0.30104),
+                (x: 0.71275, y: 0.29316),
+            ],
+        ),
+        (
+            id: "route_path.ancient_highway.segment_02",
+            start_site_id: "site.falsepost",
+            end_site_id: "site.wazir_town",
+            points: [
+                (x: 0.71275, y: 0.29316),
+                (x: 0.80459, y: 0.42085),
+            ],
+        ),
+        (
+            id: "route_path.ancient_highway.segment_03",
+            start_site_id: "site.wazir_town",
+            end_site_id: "site.hita",
+            points: [
+                (x: 0.80459, y: 0.42085),
+                (x: 0.93747, y: 0.62541),
+            ],
+        ),
+        (
+            id: "route_path.eastern_highway.segment_02",
+            start_site_id: "site.wazir_town",
+            end_site_id: "site.mordorin",
+            points: [
+                (x: 0.80459, y: 0.42085),
+                (x: 0.91025, y: 0.31587),
+            ],
+        ),
+        (
+            id: "route_path.eastern_highway.segment_03",
+            start_site_id: "site.mordorin",
+            end_site_id: "site.fire_post_north",
+            points: [
+                (x: 0.91025, y: 0.31587),
+                (x: 0.92000, y: 0.48000),
+                (x: 0.95799, y: 0.34072),
+            ],
+        ),
+        (
+            id: "route_path.eastern_highway.segment_04",
+            start_site_id: "site.fire_post_north",
+            end_site_id: "site.fire_post_south",
+            points: [
+                (x: 0.95799, y: 0.34072),
+                (x: 0.95799, y: 0.36482),
+            ],
+        ),
+        (
+            id: "route_path.fallen_oak_trail.segment_01",
+            start_site_id: "site.farhaven",
+            end_site_id: "site.windgrave",
+            points: [
+                (x: 0.83928, y: 0.11661),
+                (x: 0.94010, y: 0.03819),
+            ],
+        ),
+        (
+            id: "route_path.fallen_oak_trail.segment_02",
+            start_site_id: "site.windgrave",
+            end_site_id: "site.green_post",
+            points: [
+                (x: 0.94010, y: 0.03819),
+                (x: 0.95213, y: 0.08339),
+            ],
+        ),
+        (
+            id: "route_path.moon_trail.segment_01",
+            start_site_id: "site.naville",
+            end_site_id: "site.inebel",
+            points: [
+                (x: 0.65578, y: 0.44133),
+                (x: 0.60000, y: 0.58000),
+                (x: 0.53906, y: 0.51678),
+            ],
+        ),
+        (
+            id: "route_path.moon_trail.segment_02",
+            start_site_id: "site.inebel",
+            end_site_id: "site.ourez",
+            points: [
+                (x: 0.53906, y: 0.51678),
+                (x: 0.67855, y: 0.54655),
+            ],
+        ),
+        (
+            id: "route_path.moon_trail.segment_03",
+            start_site_id: "site.ourez",
+            end_site_id: "site.wazir_town",
+            points: [
+                (x: 0.67855, y: 0.54655),
+                (x: 0.80459, y: 0.42085),
+            ],
+        ),
+        (
+            id: "route_path.trident_path.segment_01",
+            start_site_id: "site.naville",
+            end_site_id: "site.ourez",
+            points: [
+                (x: 0.65578, y: 0.44133),
+                (x: 0.67855, y: 0.54655),
+            ],
+        ),
+        (
+            id: "route_path.trident_path.segment_02",
+            start_site_id: "site.ourez",
+            end_site_id: "site.trident_dreams",
+            points: [
+                (x: 0.67855, y: 0.54655),
+                (x: 0.70000, y: 0.70000),
+                (x: 0.73758, y: 0.62026),
+            ],
+        ),
+        (
+            id: "route_path.trident_path.segment_03",
+            start_site_id: "site.trident_dreams",
+            end_site_id: "site.sutar_town",
+            points: [
+                (x: 0.73758, y: 0.62026),
+                (x: 0.75465, y: 0.79473),
+            ],
+        ),
+        (
+            id: "route_path.hilbel_route.segment_02",
+            start_site_id: "site.mazon_town",
+            end_site_id: "site.maistra",
+            points: [
+                (x: 0.36133, y: 0.63541),
+                (x: 0.49873, y: 0.64567),
+            ],
+        ),
+        (
+            id: "route_path.hilbel_route.segment_03",
+            start_site_id: "site.maistra",
+            end_site_id: "site.levannois_village",
+            points: [
+                (x: 0.49873, y: 0.64567),
+                (x: 0.63453, y: 0.66695),
+            ],
+        ),
+        (
+            id: "route_path.blueberry_trail.segment_03",
+            start_site_id: "site.tathune",
+            end_site_id: "site.levannois_village",
+            points: [
+                (x: 0.60210, y: 0.79780),
+                (x: 0.63453, y: 0.66695),
+            ],
+        ),
+        (
+            id: "route_path.fallen_soldier_walk.segment_01",
+            start_site_id: "site.levannois_village",
+            end_site_id: "site.trident_dreams",
+            points: [
+                (x: 0.63453, y: 0.66695),
+                (x: 0.73758, y: 0.62026),
+            ],
+        ),
+        (
+            id: "route_path.fallen_soldier_walk.segment_03",
+            start_site_id: "site.sutar_town",
+            end_site_id: "site.dove_city",
+            points: [
+                (x: 0.75465, y: 0.79473),
+                (x: 0.85038, y: 0.72481),
+            ],
+        ),
+        (
+            id: "route_path.cloudfield_alley.segment_01",
+            start_site_id: "site.le_pont_dargent",
+            end_site_id: "site.naville",
+            points: [
+                (x: 0.48490, y: 0.44482),
+                (x: 0.65578, y: 0.44133),
+            ],
+        ),
+        (
+            id: "route_path.crimson_passage.segment_01",
+            start_site_id: "site.dromos_city",
+            end_site_id: "site.maistra",
+            points: [
+                (x: 0.38660, y: 0.55631),
+                (x: 0.49873, y: 0.64567),
+            ],
+        ),
+    ],
+)
