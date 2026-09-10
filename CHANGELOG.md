@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.26.0] - 2026-09-10
+## [0.26.1] - 2026-09-10
 
 ### Added
 
@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Client downloads (Windows, macOS, Linux) now bundle the game's assets together with the client binary. A manual download previously crashed on launch with "Asset directory not found" because the assets shipped as a separate file that nothing combined with the executable.
 - The game window's Linux taskbar/dock identification no longer shows the old Veloren branding.
+- macOS packaging no longer runs out of disk space signing the `.dmg` (v0.26.0's build failed on this; nothing from that tag was published).
 
 ## [0.22.0] - 2026-08-28
 
