@@ -555,15 +555,18 @@ fn server_loop(
                         .collect();
                     let _ = response.send(MessageReturn::Logs(lines));
                 },
-                Message::SendGlobalMsg { msg } => {
+                Message::SendGlobalMsg { msg, big_screen } => {
                     use server::state_ext::StateExt;
-                    let msg = ChatType::Meta.into_plain_msg(msg);
+                    let msg = ChatType::Meta
+                        .into_plain_msg(msg)
+                        .with_big_screen(big_screen);
                     server.state().send_chat(msg, false);
                 },
                 Message::SendTargetedMsg {
                     target_uuids,
                     operator_uuid,
                     msg,
+                    big_screen,
                 } => {
                     let parsed = server::authc::Uuid::parse_str(&operator_uuid)
                         .map_err(|_| "operator_uuid is not a valid uuid".to_string())
@@ -577,8 +580,12 @@ fn server_loop(
                         });
                     match parsed {
                         Ok((operator_uuid, target_uuids)) => {
-                            let (delivered_to, not_found) =
-                                server.send_targeted_msg(&target_uuids, operator_uuid, msg);
+                            let (delivered_to, not_found) = server.send_targeted_msg(
+                                &target_uuids,
+                                operator_uuid,
+                                msg,
+                                big_screen,
+                            );
                             let _ = response.send(MessageReturn::TargetedMsgSent {
                                 delivered_to: delivered_to
                                     .iter()

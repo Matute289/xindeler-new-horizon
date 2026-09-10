@@ -144,6 +144,12 @@ async fn logs(
 #[derive(Deserialize)]
 struct SendWorldMsgBody {
     msg: String,
+    /// ZG-80 "Big Screen" rendering hint, forwarded verbatim to
+    /// `Message::SendGlobalMsg`. Defaults to `false` so callers (like
+    /// `xindeler-zuul`) can send this field ahead of it being read here --
+    /// there's no `deny_unknown_fields` anywhere in this integration.
+    #[serde(default)]
+    big_screen: bool,
 }
 
 async fn send_global_msg(
@@ -152,7 +158,13 @@ async fn send_global_msg(
 ) -> Result<impl IntoResponse, StatusCode> {
     let (dummy_s, _) = tokio::sync::oneshot::channel();
     let _ = web_ui_request_s
-        .send((Message::SendGlobalMsg { msg: payload.msg }, dummy_s))
+        .send((
+            Message::SendGlobalMsg {
+                msg: payload.msg,
+                big_screen: payload.big_screen,
+            },
+            dummy_s,
+        ))
         .await;
     Ok(())
 }
@@ -162,6 +174,11 @@ struct SendTargetedMsgBody {
     target_uuids: Vec<String>,
     operator_uuid: String,
     msg: String,
+    /// ZG-80 "Big Screen" rendering hint, forwarded verbatim to
+    /// `Message::SendTargetedMsg`. Same additive-field rationale as
+    /// `SendWorldMsgBody::big_screen`.
+    #[serde(default)]
+    big_screen: bool,
 }
 
 #[derive(Serialize)]
@@ -244,6 +261,7 @@ async fn send_targeted_msg(
                 target_uuids: payload.target_uuids,
                 operator_uuid: payload.operator_uuid,
                 msg: payload.msg,
+                big_screen: payload.big_screen,
             },
             sender,
         ))
