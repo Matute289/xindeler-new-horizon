@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-10
+
+### Added
+
+- Server operators can now send a "Big Screen" announcement: a full-screen message that interrupts every recipient's view for a few seconds (scaled to the message's length), shown in addition to the normal chat window, for messages that must not be missed.
+
+### Fixed
+
+- Client downloads (Windows, macOS, Linux) now bundle the game's assets together with the client binary. A manual download previously crashed on launch with "Asset directory not found" because the assets shipped as a separate file that nothing combined with the executable.
+- The game window's Linux taskbar/dock identification no longer shows the old Veloren branding.
+
+## [0.22.0] - 2026-08-28
+
 ### Added
 
 - The bag now shows contextual on-screen hints in the bottom-right corner that change with what you are doing (climbing, swimming, wielding a weapon, night-time), replacing the four fixed Settings/Social/Map/Crafting corner buttons.
