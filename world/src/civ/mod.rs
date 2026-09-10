@@ -2784,6 +2784,19 @@ impl Site {
             .is_some_and(|settlement| settlement.start_eligible)
     }
 
+    /// Whether player-start selection should consider this site at all.
+    /// Procedural sites (not authored) are always eligible -- the authored
+    /// map only ever *restricts* the pool, it never adds eligibility a
+    /// procedural site wouldn't already have. An authored settlement is
+    /// eligible unless its own `start_eligible: false` explicitly excludes
+    /// it (e.g. a settlement whose lore/terrain makes it unsuitable, such as
+    /// a permanently stormy or volcanic hamlet).
+    pub fn is_eligible_as_starting_site(&self) -> bool {
+        self.authored
+            .as_ref()
+            .is_none_or(|settlement| settlement.start_eligible)
+    }
+
     /// The authored name for this site, if it was established from an
     /// authored settlement or landmark pin rather than procedural
     /// generation.
@@ -2796,6 +2809,20 @@ impl Site {
                     .as_ref()
                     .map(|landmark| landmark.name.as_str())
             })
+    }
+
+    /// Test-only mutator. `authored` is private so other crate modules can't
+    /// build/edit it directly; this lets a cross-module integration test
+    /// (see `crate::tests` in `lib.rs`) exercise player-start exclusion
+    /// against a real, fully generated authored settlement -- picking one
+    /// out of a real generated world and flipping its eligibility -- instead
+    /// of a synthetic stand-in with no real plots/terrain behind it. Does
+    /// nothing on a site that isn't an authored settlement.
+    #[cfg(test)]
+    pub(crate) fn set_start_eligible_for_test(&mut self, start_eligible: bool) {
+        if let Some(authored) = self.authored.as_mut() {
+            authored.start_eligible = start_eligible;
+        }
     }
 }
 
