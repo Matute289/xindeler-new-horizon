@@ -99,6 +99,7 @@ impl<'a> CanvasInfo<'a> {
         let zcache_grid = Grid::populate_from(Vec2::broadcast(1), |_| None);
         let sim_chunk = SimChunk {
             authored_cromatolis_v0: false,
+            authored_region_id: None,
             chaos: 0.0,
             alt: 0.0,
             basement: 0.0,

@@ -97,6 +97,11 @@ const DEFAULT_WORLD_CHUNKS_LG: MapSizeLg =
 /// InverseCdf for a description of how to interpret the types of its fields.
 struct GenCdf {
     pub(crate) authored_cromatolis_v0: bool,
+    /// The specific [`AuthoredRegion::id`] that resolved for this generation
+    /// run, if any. Unlike `authored_cromatolis_v0` (kept generic-but-
+    /// misleadingly-named for the reasons noted below), this is meant to be
+    /// checked against a specific region id -- see [`CROMATOLIS_V0_REGION_ID`].
+    authored_region_id: Option<&'static str>,
     authored_route_layer: Option<Box<[f32]>>,
     authored_vegetation_layer: Option<Box<[f32]>>,
     humid_base: InverseCdf,
@@ -638,20 +643,30 @@ impl AuthoredLayerKind {
 struct AuthoredRegion {
     /// The `FileOpts::LoadAsset` specifier that activates this region.
     map_asset: &'static str,
-    /// Stable region id, independent of the map asset name. Not currently
-    /// consumed outside logging, but kept distinct from `map_asset` so a
-    /// region can be renamed/re-pointed without changing its identity.
+    /// Stable region id, independent of the map asset name. Kept distinct
+    /// from `map_asset` so a region can be renamed/re-pointed without
+    /// changing its identity. Consumed by [`SimChunk::authored_region_id`]
+    /// (via [`GenCdf`]) so call sites that must special-case *this specific*
+    /// region -- rather than "any authored region is loaded" -- have
+    /// something to check against (see the `Snowland` branch in
+    /// [`SimChunk::get_biome`] for the first such call site; COW-2's backlog
+    /// row lists the others still owing this same fix).
     id: &'static str,
     /// Which authored layers this region ships.
     layers: &'static [AuthoredLayerKind],
 }
+
+/// [`AuthoredRegion::id`] of the one region registered in V1. Named so call
+/// sites that need to check "is this specifically Cromatolis" (not just "is
+/// any authored region loaded") don't repeat the string literal.
+const CROMATOLIS_V0_REGION_ID: &str = "cromatolis_v0";
 
 /// The region registry. Add an entry here to make a new hand-authored map
 /// region's extra layers loadable; nothing else in the loading path should
 /// need to change.
 const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     map_asset: "world.map.cromatolis_v0",
-    id: "cromatolis_v0",
+    id: CROMATOLIS_V0_REGION_ID,
     layers: &AuthoredLayerKind::ALL,
 }];
 
@@ -833,6 +848,7 @@ impl WorldSim {
             max_height: 0.0,
             chunks: vec![SimChunk {
                 authored_cromatolis_v0: false,
+                authored_region_id: None,
                 chaos: 0.0,
                 alt: 0.0,
                 basement: 0.0,
@@ -880,6 +896,7 @@ impl WorldSim {
         // `world/src/layer`) already keys off this exact field name and isn't part
         // of this generalization -- V1 has exactly one registered region anyway.
         let authored_cromatolis_v0 = authored_region.is_some();
+        let authored_region_id = authored_region.map(|region| region.id);
         let (parsed_world_file, map_size_lg, gen_opts) = world_file.load_content();
         let load_authored_layer = |region: &AuthoredRegion, kind: AuthoredLayerKind| {
             if !region.layers.contains(&kind) {
@@ -1898,6 +1915,7 @@ impl WorldSim {
 
         let gen_cdf = GenCdf {
             authored_cromatolis_v0,
+            authored_region_id,
             authored_route_layer,
             authored_vegetation_layer,
             humid_base,
@@ -2724,6 +2742,8 @@ impl WorldSim {
 #[derive(Debug)]
 pub struct SimChunk {
     pub(crate) authored_cromatolis_v0: bool,
+    /// See [`GenCdf::authored_region_id`] / [`CROMATOLIS_V0_REGION_ID`].
+    pub(crate) authored_region_id: Option<&'static str>,
     pub chaos: f32,
     pub alt: f32,
     pub basement: f32,
@@ -3122,6 +3142,7 @@ impl SimChunk {
 
         Self {
             authored_cromatolis_v0: gen_cdf.authored_cromatolis_v0,
+            authored_region_id: gen_cdf.authored_region_id,
             chaos,
             flux,
             alt,
@@ -3179,11 +3200,26 @@ impl SimChunk {
     pub fn get_biome(&self) -> BiomeKind {
         let savannah_hum_temp = [0.05..0.55, 0.3..1.6];
         let taiga_hum_temp = [0.2..1.4, -0.7..-0.3];
+        // Data-grounded threshold (COW-4, 2026-09-10): a humidity-only check
+        // for "is this land wet enough to be Swamp." Verified against the
+        // real Cromatolis water/elevated_lakes/river_channels rasters (COW-3)
+        // rather than guessed -- for non-forest land (tree_density <= 0.4,
+        // the population this branch is reached for), tiles within 3 chunks
+        // of a real authored water pixel clear 0.8 humidity ~38% of the time
+        // vs ~2% for tiles far from any real water, a ~21x enrichment. Lower
+        // thresholds (e.g. 0.7) still separate the two populations but much
+        // more weakly (~3x), and would make Swamp the majority biome across
+        // large swathes of the humid jungle-adjacent south instead of a
+        // minority wetland biome. See the COW-4 PR description for the full
+        // sampling methodology.
+        const SWAMP_HUM_THRESHOLD: f32 = 0.8;
         if self.river.is_ocean() {
             BiomeKind::Ocean
         } else if self.river.is_lake() {
             BiomeKind::Lake
-        } else if !self.authored_cromatolis_v0 && self.temp < CONFIG.snow_temp {
+        } else if self.authored_region_id != Some(CROMATOLIS_V0_REGION_ID)
+            && self.temp < CONFIG.snow_temp
+        {
             BiomeKind::Snowland
         } else if self.alt > 500.0 && self.chaos > 0.3 && self.tree_density < 0.6 {
             BiomeKind::Mountain
@@ -3201,9 +3237,8 @@ impl SimChunk {
             BiomeKind::Taiga
         } else if self.tree_density > 0.4 {
             BiomeKind::Forest
-        // } else if self.humidity > 0.8 {
-        //    BiomeKind::Swamp
-        //      Swamps don't really exist yet.
+        } else if self.humidity > SWAMP_HUM_THRESHOLD {
+            BiomeKind::Swamp
         } else {
             BiomeKind::Grassland
         }
@@ -3626,5 +3661,99 @@ mod tests {
             (0.02..0.75).contains(&water_fraction),
             "unexpected authored water coverage fraction: {water_fraction:.3}"
         );
+    }
+
+    // ---- COW-4: get_biome() Swamp re-enable + Snowland region-scoping ----
+
+    /// A `SimChunk` with every biome-relevant field neutral (won't match any
+    /// branch of `get_biome` except the final `Grassland` fallback), so tests
+    /// only need to override the fields their scenario cares about.
+    fn neutral_biome_chunk() -> SimChunk {
+        SimChunk {
+            authored_cromatolis_v0: false,
+            authored_region_id: None,
+            chaos: 0.0,
+            alt: 0.0,
+            basement: 0.0,
+            water_alt: 0.0,
+            downhill: None,
+            flux: 0.0,
+            temp: 0.0,
+            humidity: 0.0,
+            rockiness: 0.0,
+            tree_density: 0.0,
+            forest_kind: ForestKind::Dead,
+            spawn_rate: 0.0,
+            river: RiverData::default(),
+            surface_veg: 0.0,
+            sites: vec![],
+            place: None,
+            poi: None,
+            path: Default::default(),
+            cliff_height: 0.0,
+            spot: None,
+            contains_waypoint: false,
+        }
+    }
+
+    #[test]
+    fn neutral_biome_chunk_is_grassland() {
+        // Sanity check on the test fixture itself, so failures in the tests
+        // below are attributable to the specific field they override.
+        assert_eq!(neutral_biome_chunk().get_biome(), BiomeKind::Grassland);
+    }
+
+    #[test]
+    fn get_biome_treats_high_humidity_sparse_land_as_swamp() {
+        let mut chunk = neutral_biome_chunk();
+        chunk.tree_density = 0.2; // below Forest's 0.4 cutoff
+        chunk.humidity = 0.85; // above the data-grounded 0.8 Swamp threshold
+        assert_eq!(chunk.get_biome(), BiomeKind::Swamp);
+    }
+
+    #[test]
+    fn get_biome_does_not_treat_moderately_humid_sparse_land_as_swamp() {
+        let mut chunk = neutral_biome_chunk();
+        chunk.tree_density = 0.2;
+        chunk.humidity = 0.79; // just below the threshold
+        assert_eq!(chunk.get_biome(), BiomeKind::Grassland);
+    }
+
+    #[test]
+    fn get_biome_forest_still_wins_over_swamp_at_high_humidity() {
+        // Swamp is only reached once Forest's tree_density > 0.4 branch has
+        // already failed to match -- dense, humid land should stay Forest.
+        let mut chunk = neutral_biome_chunk();
+        chunk.tree_density = 0.5;
+        chunk.humidity = 0.9;
+        assert_eq!(chunk.get_biome(), BiomeKind::Forest);
+    }
+
+    #[test]
+    fn get_biome_snowland_triggers_for_procedural_non_authored_chunks() {
+        let mut chunk = neutral_biome_chunk();
+        chunk.temp = CONFIG.snow_temp - 0.1;
+        chunk.authored_region_id = None;
+        assert_eq!(chunk.get_biome(), BiomeKind::Snowland);
+    }
+
+    #[test]
+    fn get_biome_snowland_suppressed_specifically_for_cromatolis_v0() {
+        let mut chunk = neutral_biome_chunk();
+        chunk.temp = CONFIG.snow_temp - 0.1;
+        chunk.authored_region_id = Some(CROMATOLIS_V0_REGION_ID);
+        assert_ne!(chunk.get_biome(), BiomeKind::Snowland);
+    }
+
+    #[test]
+    fn get_biome_snowland_not_suppressed_for_a_hypothetical_other_region() {
+        // The COW-2 backlog debt this fixes: the old check was "is *any*
+        // authored region loaded", which would have silently suppressed
+        // Snowland for every future region too. The fix checks the specific
+        // `cromatolis_v0` id, so a different region's chunks are unaffected.
+        let mut chunk = neutral_biome_chunk();
+        chunk.temp = CONFIG.snow_temp - 0.1;
+        chunk.authored_region_id = Some("some_future_region_v0");
+        assert_eq!(chunk.get_biome(), BiomeKind::Snowland);
     }
 }
