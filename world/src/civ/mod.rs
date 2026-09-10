@@ -566,6 +566,210 @@ struct AuthoredBridgeMeta {
     design: site::AuthoredBridgeDesign,
 }
 
+/// Authored linear defensive fortifications (walls + gates) for Cromatolis.
+/// Unlike every other `cromatolis_v0_*` authored asset, this source uses raw
+/// source-map **pixel** coordinates (`coordinate_space:
+/// "source_pixels_xy_top_left_origin"`), not the usual 0-1 normalized space
+/// -- normalization has to be computed against this asset's own `source_map`
+/// dimensions (see `normalize_point`), never a hardcoded literal.
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisFortifications {
+    schema: String,
+    coordinate_space: String,
+    source_map: AuthoredFortificationSourceMap,
+    #[expect(dead_code)]
+    notes: Vec<String>,
+    fortifications: Vec<AuthoredCromatolisFortification>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct AuthoredFortificationSourceMap {
+    width_px: u32,
+    height_px: u32,
+}
+
+impl FileAsset for AuthoredCromatolisFortifications {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisFortifications {
+    fn validate(&self) -> Result<(), String> {
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_fortifications.v1";
+        const EXPECTED_COORDINATE_SPACE: &str = "source_pixels_xy_top_left_origin";
+
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != EXPECTED_COORDINATE_SPACE {
+            return Err(format!(
+                "expected coordinate space {EXPECTED_COORDINATE_SPACE}, got {}",
+                self.coordinate_space
+            ));
+        }
+        if self.source_map.width_px < 2 || self.source_map.height_px < 2 {
+            return Err(format!(
+                "invalid fortification source_map dimensions {}x{}",
+                self.source_map.width_px, self.source_map.height_px
+            ));
+        }
+
+        let mut wall_ids = std::collections::HashSet::new();
+        let mut gate_ids = std::collections::HashSet::new();
+        for fortification in &self.fortifications {
+            if fortification.id.is_empty() || !wall_ids.insert(fortification.id.as_str()) {
+                return Err(format!(
+                    "duplicate or empty fortification id {}",
+                    fortification.id
+                ));
+            }
+            if fortification.start.x == fortification.end.x
+                && fortification.start.y == fortification.end.y
+            {
+                return Err(format!(
+                    "fortification {} collapses to a single point",
+                    fortification.id
+                ));
+            }
+            if !fortification.depth_m.is_finite()
+                || fortification.depth_m <= 0.0
+                || !fortification.height_m.is_finite()
+                || fortification.height_m <= 0.0
+            {
+                return Err(format!("invalid wall dimensions for {}", fortification.id));
+            }
+            if fortification.gates.is_empty() {
+                return Err(format!("fortification {} has no gates", fortification.id));
+            }
+            for gate in &fortification.gates {
+                if gate.id.is_empty() || !gate_ids.insert(gate.id.as_str()) {
+                    return Err(format!("duplicate or empty gate id {}", gate.id));
+                }
+                if !gate.clear_width_m.is_finite()
+                    || gate.clear_width_m <= 0.0
+                    || !gate.height_m.is_finite()
+                    || gate.height_m <= 0.0
+                {
+                    return Err(format!("invalid gate dimensions for {}", gate.id));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Normalizes a raw source-map pixel point against this asset's own
+    /// `source_map` dimensions, per the coordinate-space contract in the
+    /// module-level doc comment above. Never hardcode `2048`/`1536` --
+    /// always read them from here.
+    fn normalize_point(&self, point: AuthoredPixelPoint) -> AuthoredMapPoint {
+        AuthoredMapPoint {
+            x: point.x / (self.source_map.width_px as f32 - 1.0).max(1.0),
+            y: point.y / (self.source_map.height_px as f32 - 1.0).max(1.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct AuthoredPixelPoint {
+    x: f32,
+    y: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisFortification {
+    id: String,
+    name: String,
+    #[expect(dead_code)]
+    material: String,
+    start: AuthoredPixelPoint,
+    end: AuthoredPixelPoint,
+    depth_m: f32,
+    height_m: f32,
+    gates: Vec<AuthoredCromatolisGate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisGate {
+    id: String,
+    #[expect(dead_code)]
+    material: String,
+    center: AuthoredPixelPoint,
+    clear_width_m: f32,
+    height_m: f32,
+}
+
+/// The physical open/closed state of an authored Cromatolis gate. This is
+/// static, locked-in content confirmed against lore/settlement data (see
+/// `establish_authored_cromatolis_fortifications`'s callers) -- not derived
+/// from the asset itself, and deliberately not a day/night schedule (none of
+/// Cromatolis's Phase-1 gates need one). An unrecognized gate id defaults to
+/// closed (the fail-safe direction) and warns rather than panicking.
+fn cromatolis_gate_is_open(gate_id: &str) -> bool {
+    match gate_id {
+        "gate.northwall_black_iron" => true,
+        "gate.greenhwall_black_iron" => false,
+        "gate.eastwall_black_iron" => false,
+        _ => {
+            warn!(
+                gate_id,
+                "Unknown authored Cromatolis gate id; defaulting to closed"
+            );
+            false
+        },
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AuthoredFortificationMeta {
+    #[expect(dead_code)]
+    id: String,
+    name: String,
+    design: site::AuthoredFortificationDesign,
+}
+
+impl AuthoredCromatolisFortification {
+    /// Converts to the generic renderer's design type. Gate positions are
+    /// stored as a fraction `t` of the wall's own start->end span, computed
+    /// once here in the authored pixel space, so they land exactly on the
+    /// wall regardless of chunk-position rounding.
+    fn meta(&self) -> AuthoredFortificationMeta {
+        let delta = Vec2::new(self.end.x - self.start.x, self.end.y - self.start.y);
+        let len_sq = delta.x * delta.x + delta.y * delta.y;
+        AuthoredFortificationMeta {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            design: site::AuthoredFortificationDesign {
+                depth: self.depth_m.round() as i32,
+                height: self.height_m.round() as i32,
+                gates: self
+                    .gates
+                    .iter()
+                    .map(|gate| {
+                        let gate_delta =
+                            Vec2::new(gate.center.x - self.start.x, gate.center.y - self.start.y);
+                        let t = if len_sq > 0.0 {
+                            ((gate_delta.x * delta.x + gate_delta.y * delta.y) / len_sq)
+                                .clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        site::AuthoredFortificationGateDesign {
+                            t,
+                            clear_width: gate.clear_width_m.round() as i32,
+                            height: gate.height_m.round() as i32,
+                            open: cromatolis_gate_is_open(&gate.id),
+                        }
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
 /// Geometry data for a manually placed Cromatolis landmark. Data-only port
 /// (see the module-level note above): describes what a future bespoke
 /// renderer would need, but nothing in this repo consumes it yet.
@@ -1327,6 +1531,37 @@ impl Civs {
         } else {
             None
         };
+        // Fortifications resolve entirely from their own start/end pins, but
+        // stay gated the same region-scoped way as every other authored
+        // Cromatolis layer above (and, like bridges, only make sense once
+        // settlements exist).
+        let authored_fortifications = if authored_cromatolis && authored_settlements.is_some() {
+            match AuthoredCromatolisFortifications::load_owned(
+                "world.map.cromatolis_v0_fortifications",
+            ) {
+                Ok(fortifications) => match fortifications.validate() {
+                    Ok(()) => Some(fortifications),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate Cromatolis authored fortifications; continuing \
+                             without them"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis authored fortifications; continuing without \
+                         them"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
         let mut ctx = GenCtx { sim, rng };
 
         // info!("starting cave generation");
@@ -1353,6 +1588,9 @@ impl Civs {
                     bridges,
                     authored_bridge_preview.as_deref(),
                 );
+            }
+            if let Some(fortifications) = authored_fortifications.as_ref() {
+                this.establish_authored_cromatolis_fortifications(&mut ctx, fortifications);
             }
             if let Some(routes) = authored_routes.as_ref() {
                 this.establish_authored_cromatolis_routes(&ctx, routes);
@@ -1574,6 +1812,7 @@ impl Civs {
                     authored: None,
                     authored_landmark: None,
                     authored_bridge: None,
+                    authored_fortification: None,
                 }))
             });
         }
@@ -1728,6 +1967,23 @@ impl Civs {
                         }
                         bridge_site.demarcate_obstacles(&Land::from_sim(ctx.sim));
                         bridge_site
+                    },
+                    SiteKind::Fortification(a, b) => {
+                        let mut fortification_site = WorldSite::generate_fortification(
+                            &mut rng,
+                            *a,
+                            *b,
+                            sim_site
+                                .authored_fortification
+                                .as_ref()
+                                .map(|fortification| fortification.design.clone()),
+                        );
+                        if let Some(authored) = sim_site.authored_fortification.as_ref() {
+                            fortification_site =
+                                fortification_site.with_name(authored.name.clone());
+                        }
+                        fortification_site.demarcate_obstacles(&Land::from_sim(ctx.sim));
+                        fortification_site
                     },
                     SiteKind::Adlet => WorldSite::generate_adlet(
                         &Land::from_sim(ctx.sim),
@@ -1948,6 +2204,7 @@ impl Civs {
             authored: None,
             authored_landmark: None,
             authored_bridge: None,
+            authored_fortification: None,
             /* most economic members have moved to site/Economy */
             /* last_exports: Stocks::from_default(0.0),
              * export_targets: Stocks::from_default(0.0),
@@ -2390,6 +2647,7 @@ impl Civs {
                 authored: Some(metadata),
                 authored_landmark: None,
                 authored_bridge: None,
+                authored_fortification: None,
             });
 
             debug!(
@@ -2469,6 +2727,7 @@ impl Civs {
                 authored: None,
                 authored_landmark: Some(metadata),
                 authored_bridge: None,
+                authored_fortification: None,
             });
             debug!(
                 landmark_id = %landmark.id,
@@ -2596,10 +2855,59 @@ impl Civs {
                 authored: None,
                 authored_landmark: None,
                 authored_bridge: Some(metadata),
+                authored_fortification: None,
             });
             self.bridges.insert(start, (end, site));
             self.bridges.insert(end, (start, site));
             debug!(bridge_id = %bridge.id, bridge_name = %bridge.name, ?start, ?end, "Established authored Cromatolis bridge");
+        }
+    }
+
+    /// Places authored Cromatolis defensive fortifications (walls + gates) as
+    /// real `Fortification` sites. Unlike settlements/cities, these never run
+    /// `establish_site`'s neighbor-pathfinding-search block: like `Bridge`,
+    /// every authored Cromatolis fortification sits on an
+    /// `authored_cromatolis_v0` chunk, so `establish_site` returns before
+    /// that block runs at all (see its early `chunk.authored_cromatolis_v0`
+    /// return) -- `SiteKind::Fortification` isn't even in that block's match
+    /// arms, so this holds by construction either way.
+    fn establish_authored_cromatolis_fortifications(
+        &mut self,
+        ctx: &mut GenCtx<impl Rng>,
+        authored: &AuthoredCromatolisFortifications,
+    ) {
+        info!(
+            fortification_count = authored.fortifications.len(),
+            "Applying authored Cromatolis fortifications"
+        );
+        for fortification in &authored.fortifications {
+            let start = authored
+                .normalize_point(fortification.start)
+                .to_chunk_pos(ctx.sim.map_size_lg());
+            let end = authored
+                .normalize_point(fortification.end)
+                .to_chunk_pos(ctx.sim.map_size_lg());
+            if start == end {
+                warn!(
+                    fortification_id = %fortification.id,
+                    ?start,
+                    "Skipping authored fortification collapsed to a single chunk"
+                );
+                continue;
+            }
+            let center = (start + end) / 2;
+            let metadata = fortification.meta();
+            self.establish_site(ctx, center, |place| Site {
+                kind: SiteKind::Fortification(start, end),
+                site_tmp: None,
+                center,
+                place,
+                authored: None,
+                authored_landmark: None,
+                authored_bridge: None,
+                authored_fortification: Some(metadata),
+            });
+            debug!(fortification_id = %fortification.id, fortification_name = %fortification.name, ?start, ?end, "Established authored Cromatolis fortification");
         }
     }
 
@@ -2719,6 +3027,7 @@ impl Civs {
                                         authored: None,
                                         authored_landmark: None,
                                         authored_bridge: None,
+                                        authored_fortification: None,
                                     }
                                 });
                             self.bridges.insert(locs[1], (locs[2], id));
@@ -3217,6 +3526,9 @@ pub struct Site {
     /// bridge crossing (as opposed to the generic procedural bridge
     /// generator).
     authored_bridge: Option<AuthoredBridgeMeta>,
+    /// Present iff this site was established from an authored Cromatolis
+    /// defensive fortification (wall + gates) pin.
+    authored_fortification: Option<AuthoredFortificationMeta>,
 }
 
 impl Site {
@@ -3405,6 +3717,10 @@ impl SiteKind {
                 SiteKind::VampireCastle => on_land() && chunk.temp <= -0.8 && chunk.near_cliffs(),
                 SiteKind::Refactor => suitable_for_town(),
                 SiteKind::Bridge(_, _) => true,
+                // Placement is driven entirely by the authored start/end
+                // pins (see `establish_authored_cromatolis_fortifications`),
+                // same as `Bridge` above.
+                SiteKind::Fortification(_, _) => true,
             }
         })
     }
@@ -3460,6 +3776,8 @@ impl Site {
     }
 
     pub fn is_bridge(&self) -> bool { matches!(self.kind, SiteKind::Bridge(_, _)) }
+
+    pub fn is_fortification(&self) -> bool { matches!(self.kind, SiteKind::Fortification(_, _)) }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -3603,6 +3921,13 @@ mod tests {
             "../../../assets/world/map/cromatolis_v0_bridges.ron"
         ))
         .expect("real Cromatolis bridges export must parse")
+    }
+
+    fn real_fortifications() -> AuthoredCromatolisFortifications {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_fortifications.ron"
+        ))
+        .expect("real Cromatolis fortifications export must parse")
     }
 
     fn real_settlement_template_contract() -> SettlementTemplateContract {
@@ -3840,6 +4165,123 @@ mod tests {
         assert!(settlements.validate(synthetic_map_size()).is_err());
     }
 
+    // ---- Authored Cromatolis fortifications: loader + gate physical state ----
+
+    #[test]
+    fn cromatolis_authored_fortifications_parse_and_validate_real_export_without_panicking() {
+        let fortifications = real_fortifications();
+        assert_eq!(
+            fortifications.schema,
+            "xindeler_open_world.authored_fortifications.v1"
+        );
+        assert_eq!(
+            fortifications.coordinate_space,
+            "source_pixels_xy_top_left_origin"
+        );
+        fortifications
+            .validate()
+            .expect("real Cromatolis fortifications must validate");
+
+        assert_eq!(fortifications.fortifications.len(), 3);
+        let ids = fortifications
+            .fortifications
+            .iter()
+            .map(|fortification| fortification.id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), fortifications.fortifications.len());
+    }
+
+    #[test]
+    fn invalid_authored_fortification_schema_fails_validation_without_panicking() {
+        let mut fortifications = real_fortifications();
+        fortifications.schema = "invalid".to_string();
+        assert!(fortifications.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_authored_fortification_coordinate_space_fails_validation_without_panicking() {
+        let mut fortifications = real_fortifications();
+        fortifications.coordinate_space = "normalized_map_xy_top_left_origin".to_string();
+        assert!(fortifications.validate().is_err());
+    }
+
+    #[test]
+    fn fortification_pixel_point_normalizes_against_its_own_source_map() {
+        let fortifications = real_fortifications();
+        // Formula from the loader's contract: never a hardcoded 2048/1536 --
+        // always read from the asset's own `source_map`.
+        let normalized = fortifications.normalize_point(AuthoredPixelPoint { x: 0.0, y: 0.0 });
+        assert_eq!(normalized.x, 0.0);
+        assert_eq!(normalized.y, 0.0);
+
+        let normalized = fortifications.normalize_point(AuthoredPixelPoint {
+            x: fortifications.source_map.width_px as f32 - 1.0,
+            y: fortifications.source_map.height_px as f32 - 1.0,
+        });
+        assert_eq!(normalized.x, 1.0);
+        assert_eq!(normalized.y, 1.0);
+    }
+
+    /// Locks in the per-gate physical open/closed state confirmed against
+    /// lore/settlement data: the Freelands gate (anchored near
+    /// `site.evercross`) stays open, the other two stay closed. This is the
+    /// real, checkable end of the pipeline that
+    /// `establish_authored_cromatolis_fortifications` feeds into the
+    /// renderer -- see `plot::fortification`'s own tests for
+    /// the render-level half (turning `open` into an actual passable gap).
+    #[test]
+    fn cromatolis_gate_physical_state_matches_the_locked_in_policy_for_all_three_real_gates() {
+        let fortifications = real_fortifications();
+        let expected_open: std::collections::HashMap<&str, bool> = [
+            ("gate.northwall_black_iron", true),
+            ("gate.greenhwall_black_iron", false),
+            ("gate.eastwall_black_iron", false),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut seen = std::collections::HashSet::new();
+        for fortification in &fortifications.fortifications {
+            assert_eq!(
+                fortification.gates.len(),
+                1,
+                "fortification {} is expected to have exactly one gate in this export",
+                fortification.id
+            );
+            let gate = &fortification.gates[0];
+            let expected = *expected_open.get(gate.id.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "gate {} is not one of the three real, locked-in gates",
+                    gate.id
+                )
+            });
+            assert_eq!(
+                cromatolis_gate_is_open(&gate.id),
+                expected,
+                "gate {} physical state does not match the locked-in policy",
+                gate.id
+            );
+            // Also confirm the metadata pipeline the renderer actually
+            // consumes (`AuthoredCromatolisFortification::meta`) carries the
+            // same state through.
+            let design_gate = fortification
+                .meta()
+                .design
+                .gates
+                .into_iter()
+                .next()
+                .expect("fortification must produce exactly one gate design");
+            assert_eq!(design_gate.open, expected);
+            seen.insert(gate.id.clone());
+        }
+        assert_eq!(seen.len(), 3, "all three real gates must be exercised");
+    }
+
+    #[test]
+    fn unknown_gate_id_defaults_to_closed_without_panicking() {
+        assert!(!cromatolis_gate_is_open("gate.some_future_unauthored_gate"));
+    }
+
     #[test]
     fn invalid_authored_landmark_profiles_reject_a_mismatched_physical_template() {
         let landmarks = real_landmarks();
@@ -4050,6 +4492,7 @@ mod tests {
                 }),
                 authored_landmark: None,
                 authored_bridge: None,
+                authored_fortification: None,
             }
         }
 
@@ -4068,6 +4511,7 @@ mod tests {
             authored: None,
             authored_landmark: None,
             authored_bridge: None,
+            authored_fortification: None,
         };
         assert!(!procedural.is_authored_starting_settlement());
         assert_eq!(procedural.authored_name(), None);

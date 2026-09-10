@@ -49,9 +49,13 @@ impl Site {
                 | SiteKind::DwarvenMine,
             ) => Some(false),
             // Neutral
-            Some(SiteKind::GiantTree | SiteKind::GliderCourse | SiteKind::Bridge(..)) | None => {
-                None
-            },
+            Some(
+                SiteKind::GiantTree
+                | SiteKind::GliderCourse
+                | SiteKind::Bridge(..)
+                | SiteKind::Fortification(..),
+            )
+            | None => None,
         };
 
         Self {

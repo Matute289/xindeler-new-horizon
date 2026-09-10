@@ -92,6 +92,32 @@ pub enum AuthoredBridgeDesign {
     },
 }
 
+/// Data carried by an authored fortification (defensive wall + gates) site.
+/// Like `AuthoredBridgeDesign`, the source map owns the physical dimensions
+/// and per-gate state; the renderer stays generic so it can be reused by
+/// later continents' authored fortification data.
+#[derive(Debug, Clone)]
+pub struct AuthoredFortificationDesign {
+    /// Wall thickness, in blocks (source data calls this "depth").
+    pub depth: i32,
+    /// Wall height, in blocks, above the terrain-following base.
+    pub height: i32,
+    pub gates: Vec<AuthoredFortificationGateDesign>,
+}
+
+/// A single gate opening along a fortification wall.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthoredFortificationGateDesign {
+    /// Fraction (0.0..=1.0) of the wall's start->end span where this gate's
+    /// center sits.
+    pub t: f32,
+    pub clear_width: i32,
+    pub height: i32,
+    /// Whether the gate is physically open (a passable gap) or closed (a
+    /// solid fill). Static for now -- no day/night scheduling.
+    pub open: bool,
+}
+
 impl SpawnRules {
     /// Specify that the column these rules relates to should prefer to use the
     /// given `alt` as an altitude (causing the terrain to shift up or down).
@@ -144,6 +170,7 @@ pub enum SiteKind {
     GiantTree,
     Gnarling,
     Bridge(Vec2<i32>, Vec2<i32>),
+    Fortification(Vec2<i32>, Vec2<i32>),
     Adlet,
     Haniwa,
     PirateHideout,
@@ -222,7 +249,12 @@ impl SiteKind {
             | SiteKind::JungleRuin
             | SiteKind::RockCircle
             | SiteKind::TrollCave
-            | SiteKind::Camp => None,
+            | SiteKind::Camp
+            // No dedicated fortification marker icon exists yet (see
+            // `common::map::MarkerKind`) -- unmarked for now, same as the
+            // other minor site kinds above; a real icon is a separate,
+            // client-side concern outside this row's scope.
+            | SiteKind::Fortification(_, _) => None,
         }
     }
 }
@@ -3109,6 +3141,57 @@ impl Site {
 
         site.blit_aabr(aabr, Tile {
             kind: TileKind::Bridge,
+            plot: Some(plot),
+            hard_alt: None,
+        });
+
+        site
+    }
+
+    /// Terrain sampling happens later, per sub-segment, in
+    /// `plot::Fortification`'s `render_inner` (it needs a `Land` there, not
+    /// at generate time -- there's nothing terrain-dependent to decide here).
+    pub fn generate_fortification(
+        rng: &mut impl Rng,
+        start_chunk: Vec2<i32>,
+        end_chunk: Vec2<i32>,
+        authored_design: Option<AuthoredFortificationDesign>,
+    ) -> Self {
+        let mut rng = reseed(rng);
+        let start = TerrainChunkSize::center_wpos(start_chunk);
+        let end = TerrainChunkSize::center_wpos(end_chunk);
+        let origin = (start + end) / 2;
+
+        let mut site = Site {
+            origin,
+            name: Some(format!(
+                "Wall of {}",
+                NameGen::location(&mut rng).generate_town()
+            )),
+            kind: Some(SiteKind::Fortification(start_chunk, end_chunk)),
+            ..Site::default()
+        };
+
+        let start_tile = site.wpos_tile_pos(start);
+        let end_tile = site.wpos_tile_pos(end);
+
+        let fortification = plot::Fortification::generate(start, end, authored_design);
+
+        let orth = (start_tile - end_tile).yx().map(|dir| dir.signum().abs());
+        let width = ((fortification.depth() + TILE_SIZE as i32 / 2) / TILE_SIZE as i32).max(1);
+        let aabr = Aabr {
+            min: start_tile.map2(end_tile, |a, b| a.min(b)) - orth * width,
+            max: start_tile.map2(end_tile, |a, b| a.max(b)) + 1 + orth * width,
+        };
+
+        let plot = site.create_plot(Plot {
+            kind: PlotKind::Fortification(fortification),
+            root_tile: start_tile,
+            tiles: aabr_tiles(aabr).collect(),
+        });
+
+        site.blit_aabr(aabr, Tile {
+            kind: TileKind::Building,
             plot: Some(plot),
             hard_alt: None,
         });

@@ -18,6 +18,7 @@ mod desert_city_multiplot;
 mod desert_city_temple;
 mod dwarven_mine;
 mod farm_field;
+mod fortification;
 mod giant_tree;
 mod glider_finish;
 mod glider_platform;
@@ -67,6 +68,7 @@ pub use self::{
     desert_city_temple::DesertCityTemple,
     dwarven_mine::DwarvenMine,
     farm_field::FarmField,
+    fortification::Fortification,
     giant_tree::GiantTree,
     glider_finish::GliderFinish,
     glider_platform::GliderPlatform,
@@ -179,6 +181,7 @@ pub enum PlotKind {
     SavannahWorkshop(SavannahWorkshop),
     Barn(Barn),
     Bridge(Bridge),
+    Fortification(Fortification),
     PirateHideout(PirateHideout),
     RockCircle(RockCircle),
     TrollCave(TrollCave),
@@ -229,6 +232,7 @@ macro_rules! foreach_plot {
             PlotKind::SavannahWorkshop($x) => $y,
             PlotKind::Barn($x) => $y,
             PlotKind::Bridge($x) => $y,
+            PlotKind::Fortification($x) => $y,
             PlotKind::PirateHideout($x) => $y,
             PlotKind::Tavern($x) => $y,
             PlotKind::Cultist($x) => $y,
