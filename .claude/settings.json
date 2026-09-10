@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "worktree": {
+    "baseRef": "head"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(jq -r '.tool_input.command // empty'); if echo \"$cmd\" | grep -qE '(^|[;&|`]|[[:space:]])gh[[:space:]]+pr[[:space:]]+(create|edit)[[:space:]]+--' && echo \"$cmd\" | grep -qE -- '--repo[[:space:]]+Matute289/xindeler-new-horizon(\\.git)?([[:space:]]|$)'; then base=$(echo \"$cmd\" | grep -oE -- '--base[[:space:]]+[^ ]+' | awk '{print $2}'); if [ \"$base\" != \"new-horizon/open-world-cromatolis\" ]; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Bloqueado: los PRs a Matute289/xindeler-new-horizon en este worktree (proyecto Cromatolis) deben usar --base new-horizon/open-world-cromatolis. Nunca development/main salvo instruccion EXPLICITA de Matias en la conversacion actual -- en ese caso pedile que lo corra el, o editen/deshabiliten este hook a mano para esa vez puntual.\"}}'; exit 0; fi; fi; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
