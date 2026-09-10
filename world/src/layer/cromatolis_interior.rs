@@ -29,13 +29,21 @@
 //!
 //! ## Scope
 //!
-//! Only `interior.the_undercompact` is enabled (see
-//! [`ENABLED_INTERIOR_IDS`]). `interior.kharvun_reach` is fully parsed and
-//! validated (so data errors surface immediately) but not yet carved --
-//! adding it back is meant to be a one-line change to that list, not a
-//! rewrite. The `sealed_stone_gate` connection is built as a **physical
-//! structure only**: real approach corridors on both sides, then a solid
-//! stone plug at the seal plane. No puzzle/interaction logic exists here.
+//! Both authored interiors, `interior.the_undercompact` and
+//! `interior.kharvun_reach`, are enabled (see [`ENABLED_INTERIOR_IDS`]). The
+//! `sealed_stone_gate` connection (`the_undercompact` only -- no such
+//! connection exists in `kharvun_reach`) is built as a **physical structure
+//! only**: real approach corridors on both sides, then a solid stone plug at
+//! the seal plane. No puzzle/interaction logic exists here; enabling that is
+//! a separate, deliberately not-yet-made decision.
+//!
+//! `kharvun_reach`'s submerged "respiradero" surface access
+//! (`access.kharvun_polder_respiradero`) has no authored surface pixel in
+//! the source data (still pending upstream). This module never needed one:
+//! only the interior's designated *entry* access anchors the whole layout
+//! (see [`anchor_for`]), and the respiradero level still gets a real,
+//! carved position from the connection-graph walk regardless -- it just
+//! doesn't (yet) have a literal surface opening tied to an exact pixel.
 //!
 //! No NPCs, combat, loot, or boss content is placed by this module --
 //! physical space only.
@@ -59,11 +67,10 @@ use tracing::warn;
 use vek::*;
 
 /// Interiors this module actually carves. Extending this list is how a
-/// follow-up change enables another authored interior once its own
-/// build-order decisions (e.g. any puzzle-gate follow-up) are settled --
-/// the rest of the pipeline below is fully data-driven and doesn't need to
-/// change.
-const ENABLED_INTERIOR_IDS: &[&str] = &["interior.the_undercompact"];
+/// follow-up change would enable another authored interior once its own
+/// build-order decisions are settled -- the rest of the pipeline below is
+/// fully data-driven and doesn't need to change.
+const ENABLED_INTERIOR_IDS: &[&str] = &["interior.the_undercompact", "interior.kharvun_reach"];
 
 const INTERIOR_GRAPHS_ASSET: &str = "world.map.cromatolis_v0_interior_graphs";
 const INTERIOR_PLACES_ASSET: &str = "world.map.cromatolis_v0_interior_places";
@@ -117,6 +124,12 @@ struct InteriorGraph {
     id: String,
     entry_level_id: String,
     surface_accesses: Vec<SurfaceAccess>,
+    /// The level id an adventure's narrative expects to start the player
+    /// at (e.g. an escape-from-prison opening). Not consumed by any
+    /// gameplay/spawn logic here -- validated only, so that level's
+    /// reachability is confirmed as this module's geometry is built.
+    #[serde(default)]
+    adventure_start_level_id: Option<String>,
     levels: Vec<Level>,
     connections: Vec<Connection>,
     #[serde(default)]
@@ -267,11 +280,26 @@ impl Medium {
         }
     }
 
-    fn base_fill(self) -> Block {
+    /// Fill for one column of a *level room* at height `z` within its
+    /// `[floor_z, ceiling_z]` band. `Water` fills the whole band (levels
+    /// with this medium are authored as fully flooded, e.g. a submerged
+    /// throat). `Lava` only fills the lower fraction of the band, leaving
+    /// air above -- a lava level is authored as a hazard pool with an
+    /// air-side walkway over/around it, not a room full of lava a player
+    /// can't stand in.
+    fn room_fill(self, floor_z: i32, ceiling_z: i32, z: i32) -> Block {
         match self {
             Self::Air | Self::Mixed => Block::empty(),
             Self::Water => Block::new(BlockKind::Water, Rgb::zero()),
-            Self::Lava => Block::new(BlockKind::Lava, Rgb::new(255, 65, 0)),
+            Self::Lava => {
+                let band = (ceiling_z - floor_z).max(1) as f32;
+                let lava_top = floor_z + (band * 0.35).round() as i32;
+                if z <= lava_top {
+                    Block::new(BlockKind::Lava, Rgb::new(255, 65, 0))
+                } else {
+                    Block::empty()
+                }
+            },
         }
     }
 }
@@ -440,7 +468,6 @@ struct ConnectionSeg {
     b_ceiling: i32,
     curve: f32,
     style: TraversalStyle,
-    medium: Medium,
     sealed: bool,
 }
 
@@ -597,6 +624,14 @@ fn build_layout(
     let anchor = anchor_for(graph, map_size, world_size)?;
     let positions = layout_levels(graph, &levels_by_id, anchor)?;
 
+    if let Some(start_id) = &graph.adventure_start_level_id
+        && !positions.contains_key(start_id.as_str())
+    {
+        return Err(format!(
+            "adventure_start_level_id {start_id} is not reachable from entry_level_id"
+        ));
+    }
+
     let mut levels = Vec::with_capacity(graph.levels.len());
     for level in &graph.levels {
         let medium = Medium::parse(&level.medium)?;
@@ -644,7 +679,6 @@ fn build_layout(
             b_ceiling: to.ceiling_z_m,
             curve: (fnv1a_unit(&conn.id) - 0.5) * 0.6,
             style: traversal.style(),
-            medium: Medium::parse(&from.medium)?,
             sealed: traversal == Traversal::SealedStoneGate,
         });
     }
@@ -864,9 +898,11 @@ fn carve_level_room(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, level:
         return;
     }
 
-    let fill = level.medium.base_fill();
     for z in level.floor_z..=ceiling_z {
-        canvas.set(wpos2d.with_z(z), fill);
+        canvas.set(
+            wpos2d.with_z(z),
+            level.medium.room_fill(level.floor_z, level.ceiling_z, z),
+        );
     }
 }
 
@@ -912,9 +948,15 @@ fn carve_connection(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &
         return;
     }
 
-    let fill = seg.medium.base_fill();
+    // Connections always carve a dry/air passage: a traversal path is a
+    // route a player walks (or swims a short stretch of, per its
+    // `traversal` kind), never a room-sized hazard fill -- any actual
+    // liquid along the way comes from a `WaterSeg` layered independently
+    // over the same span, and a lava-medium level's hazard pool stays
+    // confined to that level's own room (see `Medium::room_fill`), never
+    // spilling into the dry connections in and out of it.
     for z in floor_z.floor() as i32..=ceiling_z.ceil() as i32 {
-        canvas.set(wpos2d.with_z(z), fill);
+        canvas.set(wpos2d.with_z(z), Block::empty());
     }
 
     if seg.style.bridge_deck && dist <= radius * 0.35 {
@@ -1001,6 +1043,7 @@ mod tests {
                 source_pixel: None,
                 entry_level_id: "level.a".to_string(),
             }],
+            adventure_start_level_id: Some("level.gated".to_string()),
             levels: vec![
                 Level {
                     id: "level.a".to_string(),
@@ -1189,8 +1232,11 @@ mod tests {
     }
 
     #[test]
-    fn enabled_interior_ids_only_contains_the_undercompact() {
-        assert_eq!(ENABLED_INTERIOR_IDS, &["interior.the_undercompact"]);
+    fn enabled_interior_ids_contains_both_authored_interiors() {
+        assert_eq!(ENABLED_INTERIOR_IDS, &[
+            "interior.the_undercompact",
+            "interior.kharvun_reach"
+        ]);
     }
 
     /// Loads the real authored asset (not a hand-written fixture) and
@@ -1265,6 +1311,65 @@ mod tests {
     }
 
     #[test]
+    fn real_kharvun_reach_layout_reaches_every_level_including_the_adventure_start() {
+        let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).unwrap();
+        let graph = graphs
+            .interiors
+            .iter()
+            .find(|g| g.id == "interior.kharvun_reach")
+            .expect("interior.kharvun_reach should be present in the authored data");
+
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let world_size =
+            TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
+        let layout = build_layout(graph, map_size, world_size).unwrap();
+
+        assert_eq!(
+            layout.levels.len(),
+            13,
+            "kharvun_reach has 13 authored levels"
+        );
+        assert_eq!(
+            graph.connections.len(),
+            12,
+            "kharvun_reach has 12 authored connections in the real data (the design docs say 11 \
+             -- data is source of truth)"
+        );
+        assert_eq!(
+            layout.connections.len(),
+            12,
+            "every connection should resolve (none reference an unreachable level)"
+        );
+        assert_eq!(
+            layout.connections.iter().filter(|c| c.sealed).count(),
+            0,
+            "kharvun_reach has no sealed_stone_gate connection"
+        );
+
+        // The submerged "respiradero" access has no authored surface pixel
+        // (still pending upstream) -- confirm that level still resolves to
+        // a real position via the connection-graph walk regardless.
+        let levels_by_id: HashMap<&str, &Level> =
+            graph.levels.iter().map(|l| (l.id.as_str(), l)).collect();
+        let positions = layout_levels(graph, &levels_by_id, Vec2::new(2000, 2000)).unwrap();
+        assert!(
+            positions.contains_key("level.kharvun_polder_respiradero"),
+            "the respiradero level should still resolve to a position despite its surface access \
+             having no authored pixel"
+        );
+
+        // "Out of the Abyss" will reference the adventure start by this id.
+        assert!(
+            positions.contains_key("level.kharvun_prison_depths"),
+            "the adventure-start level must be reachable from entry_level_id"
+        );
+        assert_eq!(
+            graph.adventure_start_level_id.as_deref(),
+            Some("level.kharvun_prison_depths")
+        );
+    }
+
+    #[test]
     fn real_interior_places_asset_parses_and_every_scale_is_known() {
         let places = InteriorPlacesAsset::load_owned(INTERIOR_PLACES_ASSET)
             .expect("assets/world/map/cromatolis_v0_interior_places.ron should load and parse");
@@ -1280,16 +1385,19 @@ mod tests {
         }
     }
 
-    /// Full-world smoke test: generates the real Cromatolis map and a real
-    /// chunk at the gate-market level's anchor, then confirms at least one
-    /// block inside that level's authored z-band came back non-solid.
-    /// Requires the real Cromatolis LFS assets pulled locally (`git lfs
-    /// pull` against the VPS store), matching this crate's existing
-    /// precedent for heavy real-terrain tests. Recommended command:
+    /// Full-world smoke test: generates the real Cromatolis map and real
+    /// chunks at the Undercompact's entry level and Kharvun Reach's
+    /// adventure-start level (the latter reached only after walking the
+    /// full 13-level connection chain, so this also confirms the layout
+    /// stays within real map bounds), then confirms at least one block
+    /// inside each level's authored z-band came back non-solid. Requires
+    /// the real Cromatolis LFS assets pulled locally (`git lfs pull`
+    /// against the VPS store), matching this crate's existing precedent
+    /// for heavy real-terrain tests. Recommended command:
     /// `cargo test -p xindeler-world real_world_chunk_generation -- --ignored`
     #[test]
     #[ignore]
-    fn real_world_chunk_generation_carves_the_gate_market_level_without_panicking() {
+    fn real_world_chunk_generation_carves_both_interiors_entry_levels_without_panicking() {
         let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
         let (world, index) = crate::World::generate(
             0,
@@ -1304,38 +1412,52 @@ mod tests {
         let index_ref = index.as_index_ref();
 
         let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).unwrap();
-        let graph = graphs
-            .interiors
-            .iter()
-            .find(|g| g.id == "interior.the_undercompact")
-            .unwrap();
-        let level = graph
-            .levels
-            .iter()
-            .find(|l| l.id == graph.entry_level_id)
-            .unwrap();
-
         let map_size = world.sim().map_size_lg();
         let world_size =
             TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
-        let anchor = anchor_for(graph, map_size, world_size).unwrap();
-        let chunk_pos = anchor.wpos_to_cpos();
-        let chunk_wpos2d = chunk_pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
-        let local = anchor - chunk_wpos2d;
 
-        let (chunk, _supplement) = world
-            .generate_chunk(index_ref, chunk_pos, None, || false, None)
-            .expect("chunk generation must not fail for a real, in-bounds Cromatolis chunk");
+        let assert_level_carved = |interior_id: &str, level_id: &str| {
+            let graph = graphs
+                .interiors
+                .iter()
+                .find(|g| g.id == interior_id)
+                .unwrap();
+            let level = graph.levels.iter().find(|l| l.id == level_id).unwrap();
+            let layout = build_layout(graph, map_size, world_size).unwrap();
+            let level_geom = layout
+                .levels
+                .iter()
+                .zip(&graph.levels)
+                .find(|(_, l)| l.id == level_id)
+                .map(|(geom, _)| geom)
+                .expect("level should have resolved a position");
+            let anchor = level_geom.anchor2d;
 
-        let carved_any = (level.floor_z_m..=level.ceiling_z_m).any(|z| {
-            chunk
-                .get(Vec3::new(local.x, local.y, z))
-                .is_ok_and(|block| !block.is_filled())
-        });
-        assert!(
-            carved_any,
-            "expected at least one carved (non-solid) block inside the gate-market level's \
-             authored z-band near its anchor"
-        );
+            let chunk_pos = anchor.wpos_to_cpos();
+            let chunk_wpos2d = chunk_pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
+            let local = anchor - chunk_wpos2d;
+
+            let (chunk, _supplement) = world
+                .generate_chunk(index_ref, chunk_pos, None, || false, None)
+                .expect("chunk generation must not fail for a real, in-bounds Cromatolis chunk");
+
+            let carved_any = (level.floor_z_m..=level.ceiling_z_m).any(|z| {
+                chunk
+                    .get(Vec3::new(local.x, local.y, z))
+                    .is_ok_and(|block| !block.is_filled())
+            });
+            assert!(
+                carved_any,
+                "expected at least one carved (non-solid) block inside {level_id}'s authored \
+                 z-band near its resolved anchor"
+            );
+        };
+
+        // The Undercompact's entry level (also its BFS anchor).
+        assert_level_carved("interior.the_undercompact", "level.thurnak_gate_market");
+        // Kharvun Reach's adventure-start level -- deep, far from the
+        // surface anchor via many chained connection offsets, so this also
+        // confirms the layout stays in-bounds for a real, large map.
+        assert_level_carved("interior.kharvun_reach", "level.kharvun_prison_depths");
     }
 }
