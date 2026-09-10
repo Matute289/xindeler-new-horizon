@@ -823,6 +823,15 @@ impl Site {
 
     pub fn name(&self) -> Option<&str> { self.name.as_deref() }
 
+    /// Overrides the procedurally generated name with an authored one (e.g.
+    /// a Cromatolis settlement/landmark's real name -- see
+    /// `civ::Site::authored_name`). Does not otherwise change how the site
+    /// was generated.
+    pub fn with_name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
+
     pub fn generate_mine(land: &Land, rng: &mut impl Rng, origin: Vec2<i32>) -> Self {
         let mut rng = reseed(rng);
         let mut site = Site {

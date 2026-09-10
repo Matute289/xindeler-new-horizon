@@ -15,6 +15,7 @@ use crate::{
     util::{DHashMap, NEIGHBORS, attempt, seed_expan},
 };
 use common::{
+    assets::{AssetExt, BoxedError, FileAsset, load_ron},
     astar::Astar,
     calendar::Calendar,
     path::Path,
@@ -28,6 +29,8 @@ use core::{fmt, hash::BuildHasherDefault, ops::Range};
 use fxhash::FxHasher64;
 use rand::{SeedableRng, prelude::*};
 use rand_chacha::ChaChaRng;
+use serde::Deserialize;
+use std::borrow::Cow;
 use tracing::{debug, info, warn};
 use vek::*;
 
@@ -57,6 +60,675 @@ pub struct Civs {
 
     pub sites: Store<Site>,
     pub airships: Airships,
+}
+
+// ---------------------------------------------------------------------------
+// Authored Cromatolis settlements, landmarks & the site-pin fallback table.
+//
+// - The source of truth is `xindeler-open-world`; this engine only consumes a
+//   compact runtime copy of it (`world.map.cromatolis_v0_sites`/`_landmarks`/
+//   `_landmark_profiles`), so the game never depends on that other working tree
+//   at runtime.
+// - Loading is gated on `SimChunk::authored_region_id ==
+//   Some(CROMATOLIS_V0_REGION_ID)` (the region registry `world/src/sim`
+//   maintains), not a literal asset-name check, and never panics on
+//   invalid/missing data -- it warns and falls back to procedural generation
+//   instead (same posture as the terrain/water/biome loaders this crate already
+//   uses).
+// - `AuthoredCromatolisLandmarkProfiles` is ported as data + validation only.
+//   Its physical-template/style/material fields describe a real bespoke
+//   landmark renderer that exists in the reference engine
+//   (`site::plot::CromatolisLandmark`, ~470 lines) but is explicitly NOT ported
+//   here -- that is real future per-family generator work, out of this change's
+//   scope. The profile is carried on `AuthoredLandmarkMeta` for a future
+//   consumer; today every landmark still generates through the existing generic
+//   `SiteKind` (`GiantTree`/`Citadel`/`ChapelSite`).
+// - The real "site-pin" abstraction this adds is
+//   `resolve_settlement_site_kind`: a small table read from
+//   `settlement_template_contract.ron`'s family list (category+size ->
+//   `xindeler_old_fallback`), replacing what used to be a 2-line hardcoded
+//   `match`. Every family's fallback still resolves to `SiteKind::Camp` or
+//   `SiteKind::Refactor` today -- that's the honest, measured baseline, not a
+//   placeholder bug: no real per-family physical generator exists yet.
+// ---------------------------------------------------------------------------
+
+/// Authored settlement data for Cromatolis. The source-of-truth asset is
+/// generated from `xindeler-open-world`, while the engine consumes this
+/// compact runtime copy so it never depends on another working tree.
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisSettlements {
+    schema: String,
+    coordinate_space: String,
+    settlements: Vec<AuthoredCromatolisSettlement>,
+}
+
+impl FileAsset for AuthoredCromatolisSettlements {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisSettlements {
+    fn validate(&self, map_size: MapSizeLg) -> Result<(), String> {
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_settlements.v1";
+        const EXPECTED_COORDINATE_SPACE: &str = "normalized_map_xy_top_left_origin";
+
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != EXPECTED_COORDINATE_SPACE {
+            return Err(format!(
+                "expected coordinate space {EXPECTED_COORDINATE_SPACE}, got {}",
+                self.coordinate_space
+            ));
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        let mut locations = std::collections::HashSet::new();
+        let mut capitals = 0;
+        let mut eligible_starts = 0;
+        for settlement in &self.settlements {
+            if settlement.id.is_empty() || !ids.insert(settlement.id.as_str()) {
+                return Err(format!(
+                    "duplicate or empty settlement id {}",
+                    settlement.id
+                ));
+            }
+            let location = settlement.center.to_chunk_pos(map_size);
+            if !locations.insert((location.x, location.y)) {
+                return Err(format!(
+                    "duplicate settlement location ({}, {})",
+                    location.x, location.y
+                ));
+            }
+            if !settlement.population.is_valid() {
+                return Err(format!("invalid population metadata for {}", settlement.id));
+            }
+            if settlement.category == AuthoredSettlementCategory::Capital {
+                capitals += 1;
+            }
+            eligible_starts += usize::from(settlement.start_eligible);
+        }
+
+        if capitals != 1 {
+            return Err(format!("expected exactly one capital, got {capitals}"));
+        }
+        if eligible_starts == 0 {
+            return Err("no settlement is eligible as a player start".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// First physical landmark batch for Cromatolis. This remains separate from
+/// settlements because landmark templates and future interactions evolve on
+/// a different cadence from civilian population data.
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisLandmarks {
+    schema: String,
+    coordinate_space: String,
+    landmarks: Vec<AuthoredCromatolisLandmark>,
+}
+
+impl FileAsset for AuthoredCromatolisLandmarks {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisLandmarks {
+    fn validate(&self, map_size: MapSizeLg) -> Result<(), String> {
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_landmarks.v1";
+        const EXPECTED_COORDINATE_SPACE: &str = "normalized_map_xy_top_left_origin";
+
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != EXPECTED_COORDINATE_SPACE {
+            return Err(format!(
+                "expected coordinate space {EXPECTED_COORDINATE_SPACE}, got {}",
+                self.coordinate_space
+            ));
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        let mut locations = std::collections::HashSet::new();
+        for landmark in &self.landmarks {
+            if landmark.id.is_empty() || !ids.insert(landmark.id.as_str()) {
+                return Err(format!("duplicate or empty landmark id {}", landmark.id));
+            }
+            let location = landmark.center.to_chunk_pos(map_size);
+            if !locations.insert((location.x, location.y)) {
+                return Err(format!(
+                    "duplicate landmark location ({}, {})",
+                    location.x, location.y
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Geometry profiles for authored Cromatolis landmarks, ported as data +
+/// validation only (see the module-level note above -- the renderer that
+/// would consume these is explicitly out of this change's scope).
+#[derive(Debug, Deserialize)]
+struct AuthoredCromatolisLandmarkProfiles {
+    schema: String,
+    coordinate_space: String,
+    entries: Vec<AuthoredLandmarkProfile>,
+}
+
+impl FileAsset for AuthoredCromatolisLandmarkProfiles {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCromatolisLandmarkProfiles {
+    fn validate(&self, landmarks: &AuthoredCromatolisLandmarks) -> Result<(), String> {
+        use AuthoredLandmarkPhysicalTemplate as Template;
+        use AuthoredLandmarkStyle as Style;
+
+        const EXPECTED_SCHEMA: &str = "xindeler_open_world.authored_landmark_profiles.v2";
+        if self.schema != EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {EXPECTED_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.coordinate_space != "inherits_landmark_center" {
+            return Err(format!(
+                "expected inherited landmark coordinate space, got {}",
+                self.coordinate_space
+            ));
+        }
+
+        let mut profiles = std::collections::HashSet::new();
+        for profile in &self.entries {
+            if profile.site_id.is_empty() || !profiles.insert(profile.site_id.as_str()) {
+                return Err(format!(
+                    "duplicate or empty landmark profile id {}",
+                    profile.site_id
+                ));
+            }
+            if !(4..=96).contains(&profile.footprint_radius)
+                || !(12..=320).contains(&profile.height)
+                || profile.light_range < 0
+            {
+                return Err(format!(
+                    "invalid geometry dimensions for {}",
+                    profile.site_id
+                ));
+            }
+
+            let Some(landmark) = landmarks
+                .landmarks
+                .iter()
+                .find(|landmark| landmark.id == profile.site_id)
+            else {
+                return Err(format!(
+                    "profile references unknown landmark {}",
+                    profile.site_id
+                ));
+            };
+            let valid_kind = matches!(
+                (landmark.kind, profile.physical_template, profile.style),
+                (
+                    AuthoredLandmarkKind::TreeOfLife | AuthoredLandmarkKind::TreeOfSouls,
+                    Template::GiantTree,
+                    Style::AncientCanopy
+                ) | (
+                    AuthoredLandmarkKind::BlackTower,
+                    Template::BlackTower,
+                    Style::CrownedSpire
+                ) | (
+                    AuthoredLandmarkKind::Lighthouse,
+                    Template::Lighthouse,
+                    Style::KeeperHouse | Style::StoneBeacon | Style::BandedHarbour
+                ) | (
+                    AuthoredLandmarkKind::ArchWrightTemple,
+                    Template::Chapel,
+                    Style::MonumentalChapel
+                ) | (
+                    AuthoredLandmarkKind::Harbour,
+                    Template::Harbour,
+                    Style::RiverPort
+                )
+            );
+            if !valid_kind {
+                return Err(format!(
+                    "profile type does not match landmark {}",
+                    profile.site_id
+                ));
+            }
+        }
+
+        if profiles.len() != landmarks.landmarks.len()
+            || landmarks
+                .landmarks
+                .iter()
+                .any(|landmark| !profiles.contains(landmark.id.as_str()))
+        {
+            return Err(
+                "every authored landmark must have exactly one physical profile".to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    fn profile_for(&self, site_id: &str) -> Option<AuthoredLandmarkProfile> {
+        self.entries
+            .iter()
+            .find(|profile| profile.site_id == site_id)
+            .cloned()
+    }
+}
+
+/// Geometry data for a manually placed Cromatolis landmark. Data-only port
+/// (see the module-level note above): describes what a future bespoke
+/// renderer would need, but nothing in this repo consumes it yet.
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredLandmarkProfile {
+    site_id: String,
+    physical_template: AuthoredLandmarkPhysicalTemplate,
+    style: AuthoredLandmarkStyle,
+    #[expect(dead_code)]
+    material: AuthoredLandmarkMaterial,
+    footprint_radius: i32,
+    height: i32,
+    #[expect(dead_code)]
+    keeper_house: bool,
+    light_range: i32,
+    #[expect(dead_code)]
+    #[serde(default)]
+    facing: AuthoredLandmarkFacing,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+enum AuthoredLandmarkPhysicalTemplate {
+    GiantTree,
+    BlackTower,
+    Lighthouse,
+    Chapel,
+    Harbour,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+enum AuthoredLandmarkStyle {
+    AncientCanopy,
+    CrownedSpire,
+    KeeperHouse,
+    StoneBeacon,
+    BandedHarbour,
+    MonumentalChapel,
+    RiverPort,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+enum AuthoredLandmarkMaterial {
+    LivingWood,
+    BlackStone,
+    PaleStone,
+    WeatheredStone,
+    PaintedMasonry,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+enum AuthoredLandmarkFacing {
+    #[default]
+    North,
+    South,
+    East,
+    West,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+enum AuthoredSettlementCategory {
+    Capital,
+    City,
+    Town,
+    Village,
+    Hamlet,
+    Inn,
+    Post,
+}
+
+impl AuthoredSettlementCategory {
+    /// The lowercase id `settlement_template_contract.ron`'s
+    /// `template_families[].category` field uses for this category.
+    const fn contract_key(self) -> &'static str {
+        match self {
+            Self::Capital => "capital",
+            Self::City => "city",
+            Self::Town => "town",
+            Self::Village => "village",
+            Self::Hamlet => "hamlet",
+            Self::Inn => "inn",
+            Self::Post => "post",
+        }
+    }
+
+    /// The `Camp`/`Refactor` split used before the data-driven table
+    /// existed -- kept as the safety-net default for when the contract
+    /// can't be loaded at all, or has no family covering a given
+    /// category+size (see `resolve_settlement_site_kind`).
+    const fn default_site_kind(self) -> SiteKind {
+        match self {
+            Self::Inn | Self::Post => SiteKind::Camp,
+            Self::Capital | Self::City | Self::Town | Self::Village | Self::Hamlet => {
+                SiteKind::Refactor
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+enum AuthoredLandmarkKind {
+    TreeOfLife,
+    TreeOfSouls,
+    BlackTower,
+    Lighthouse,
+    ArchWrightTemple,
+    Harbour,
+}
+
+/// The *generic* engine `SiteKind` a landmark procedurally generates as.
+/// Distinct from `AuthoredLandmarkPhysicalTemplate` above, which describes
+/// the (unported) bespoke renderer's physical shape -- this only ever
+/// resolves to pre-existing, non-Cromatolis-specific generators.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+enum AuthoredLandmarkTemplate {
+    GiantTree,
+    Citadel,
+    ChapelSite,
+}
+
+impl AuthoredLandmarkTemplate {
+    const fn site_kind(self) -> SiteKind {
+        match self {
+            Self::GiantTree => SiteKind::GiantTree,
+            Self::Citadel => SiteKind::Citadel,
+            Self::ChapelSite => SiteKind::ChapelSite,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+enum AuthoredSettlementSize {
+    VeryLarge,
+    Large,
+    Medium,
+    Small,
+    Minimal,
+}
+
+impl AuthoredSettlementSize {
+    const fn city_scale(self) -> f32 {
+        match self {
+            Self::VeryLarge => 0.95,
+            Self::Large => 0.55,
+            Self::Medium => 0.28,
+            Self::Small => 0.11,
+            Self::Minimal => 0.03,
+        }
+    }
+
+    /// The lowercase id `settlement_template_contract.ron`'s
+    /// `template_families[].supported_sizes` entries use for this size.
+    const fn contract_key(self) -> &'static str {
+        match self {
+            Self::VeryLarge => "very_large",
+            Self::Large => "large",
+            Self::Medium => "medium",
+            Self::Small => "small",
+            Self::Minimal => "minimal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct AuthoredSettlementPopulation {
+    tag: AuthoredSettlementPopulationTag,
+    peoples: Vec<AuthoredSettlementPeople>,
+    #[serde(default)]
+    future_peoples: Vec<String>,
+}
+
+impl AuthoredSettlementPopulation {
+    fn is_valid(&self) -> bool {
+        if self.peoples.is_empty() {
+            return false;
+        }
+        let unique = self
+            .peoples
+            .iter()
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != self.peoples.len() {
+            return false;
+        }
+        let future_unique = self
+            .future_peoples
+            .iter()
+            .collect::<std::collections::HashSet<_>>();
+        if future_unique.len() != self.future_peoples.len()
+            || self.future_peoples.iter().any(|people| people.is_empty())
+        {
+            return false;
+        }
+        self.tag
+            .expected_peoples()
+            .is_none_or(|expected| self.peoples == expected)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+enum AuthoredSettlementPopulationTag {
+    Human,
+    Elven,
+    Dwarf,
+    Orc,
+    Goblins,
+    Dhampirs,
+    HumanoidMix,
+    SuperMix,
+    DarkMix,
+    Custom,
+}
+
+impl AuthoredSettlementPopulationTag {
+    const fn expected_peoples(self) -> Option<&'static [AuthoredSettlementPeople]> {
+        use AuthoredSettlementPeople::{Dhampirs, Dwarf, Elven, Goblins, Human, Orc};
+        match self {
+            Self::Human => Some(&[Human]),
+            Self::Elven => Some(&[Elven]),
+            Self::Dwarf => Some(&[Dwarf]),
+            Self::Orc => Some(&[Orc]),
+            Self::Goblins => Some(&[Goblins]),
+            Self::Dhampirs => Some(&[Dhampirs]),
+            Self::HumanoidMix => Some(&[Human, Elven, Dwarf]),
+            Self::SuperMix => Some(&[Elven, Human, Dwarf, Orc, Goblins]),
+            Self::DarkMix => Some(&[Orc, Goblins, Dhampirs]),
+            Self::Custom => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+enum AuthoredSettlementPeople {
+    Human,
+    Elven,
+    Dwarf,
+    Orc,
+    Goblins,
+    Dhampirs,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct AuthoredMapPoint {
+    /// Normalized against the source map, whose origin is top-left.
+    x: f32,
+    y: f32,
+}
+
+impl AuthoredMapPoint {
+    fn to_chunk_pos(self, map_size: MapSizeLg) -> Vec2<i32> {
+        let size = map_size.chunks();
+        let x = (self.x.clamp(0.0, 1.0) * (size.x.saturating_sub(1)) as f32).round() as i32;
+        // Sim coordinates grow northward; authored map pixels grow southward.
+        let y = ((1.0 - self.y.clamp(0.0, 1.0)) * (size.y.saturating_sub(1)) as f32).round() as i32;
+        Vec2::new(x, y)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisSettlement {
+    id: String,
+    name: String,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+    population: AuthoredSettlementPopulation,
+    center: AuthoredMapPoint,
+    requires_capital_castle: bool,
+    #[serde(default = "default_start_eligible")]
+    start_eligible: bool,
+}
+
+const fn default_start_eligible() -> bool { true }
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuthoredCromatolisLandmark {
+    id: String,
+    name: String,
+    kind: AuthoredLandmarkKind,
+    template: AuthoredLandmarkTemplate,
+    center: AuthoredMapPoint,
+}
+
+#[derive(Debug, Clone)]
+struct AuthoredSettlementMeta {
+    id: String,
+    name: String,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+    #[expect(dead_code)]
+    population: AuthoredSettlementPopulation,
+    #[expect(dead_code)]
+    requires_capital_castle: bool,
+    start_eligible: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AuthoredLandmarkMeta {
+    #[expect(dead_code)]
+    id: String,
+    name: String,
+    #[expect(dead_code)]
+    kind: AuthoredLandmarkKind,
+    /// Carried through for a future bespoke-renderer consumer (see the
+    /// module-level note above); nothing reads this yet.
+    #[expect(dead_code)]
+    profile: Option<AuthoredLandmarkProfile>,
+}
+
+/// `settlement_template_contract.ron`'s own schema id.
+const SETTLEMENT_TEMPLATE_CONTRACT_SCHEMA: &str =
+    "xindeler_open_world.settlement_template_contract.v1";
+
+/// The design contract that defines Cromatolis's 15+ settlement families.
+/// This is the data half of the real `AuthoredSitePin` abstraction:
+/// `resolve_settlement_site_kind` reads `template_families` to turn a
+/// settlement's category+size into a `SiteKind`, instead of a hardcoded
+/// match. Only the fields that resolution needs are captured here --
+/// `culture_overlays`/`site_overrides` and the per-family
+/// `terrain_requirement`/`terrain_adaptation`/`districts` aren't consumed by
+/// any generator yet, and RON deserialization ignores the unrecognized
+/// fields rather than erroring on them.
+#[derive(Debug, Deserialize)]
+struct SettlementTemplateContract {
+    schema: String,
+    template_families: Vec<SettlementTemplateFamily>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SettlementTemplateFamily {
+    id: String,
+    category: String,
+    supported_sizes: Vec<String>,
+    /// The `SiteKind` family name currently falls back to for this family
+    /// (`"camp"`, `"refactor_city"`, or `"refactor_city_with_castle"`). See
+    /// `site_kind_for_fallback_name`.
+    xindeler_old_fallback: String,
+}
+
+impl FileAsset for SettlementTemplateContract {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl SettlementTemplateContract {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != SETTLEMENT_TEMPLATE_CONTRACT_SCHEMA {
+            return Err(format!(
+                "expected schema {SETTLEMENT_TEMPLATE_CONTRACT_SCHEMA}, got {}",
+                self.schema
+            ));
+        }
+        if self.template_families.is_empty() {
+            return Err("settlement template contract has no families".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Turns `settlement_template_contract.ron`'s
+/// `template_families[].xindeler_old_fallback` string into the `SiteKind`
+/// it names. Every family currently names one of these two -- there is no
+/// real per-family generator yet (see the module-level note above) -- but
+/// resolving by name (rather than assuming) means the day a family's
+/// fallback changes to something else, this returns `None` and the caller
+/// applies the same safe default it would for a missing family, instead of
+/// silently mis-resolving.
+fn site_kind_for_fallback_name(name: &str) -> Option<SiteKind> {
+    match name {
+        "camp" => Some(SiteKind::Camp),
+        "refactor_city" | "refactor_city_with_castle" => Some(SiteKind::Refactor),
+        _ => None,
+    }
+}
+
+/// The real `AuthoredSitePin` abstraction (see the module-level note above):
+/// resolves a settlement's `SiteKind` from `settlement_template_contract.ron`'s
+/// family table instead of a hardcoded match. Falls back to
+/// `AuthoredSettlementCategory::default_site_kind` (the same `Camp`/`Refactor`
+/// split used before this table existed) whenever the contract is
+/// unavailable, has no family for this category+size, or names a fallback
+/// this engine doesn't recognize -- never panics, never silently drops the
+/// settlement.
+fn resolve_settlement_site_kind(
+    contract: Option<&SettlementTemplateContract>,
+    category: AuthoredSettlementCategory,
+    size: AuthoredSettlementSize,
+) -> SiteKind {
+    contract
+        .and_then(|contract| {
+            contract.template_families.iter().find(|family| {
+                family.category == category.contract_key()
+                    && family
+                        .supported_sizes
+                        .iter()
+                        .any(|s| s == size.contract_key())
+            })
+        })
+        .and_then(|family| site_kind_for_fallback_name(&family.xindeler_old_fallback))
+        .unwrap_or_else(|| category.default_site_kind())
 }
 
 // Change this to get rid of particularly horrid seeds
@@ -249,6 +921,117 @@ impl Civs {
         }
 
         let initial_civ_count = initial_civ_count(sim.map_size_lg());
+
+        // Region-scoped (not a literal asset-name check): only Cromatolis
+        // ships these authored settlement/landmark pins today, gated the
+        // same way the terrain/water/biome authored layers already are.
+        let authored_cromatolis = sim.chunks.first().is_some_and(|chunk| {
+            chunk.authored_region_id == Some(crate::sim::CROMATOLIS_V0_REGION_ID)
+        });
+        let authored_settlements = if authored_cromatolis {
+            match AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites") {
+                Ok(settlements) => match settlements.validate(sim.map_size_lg()) {
+                    Ok(()) => Some(settlements),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate Cromatolis authored settlements; using procedural \
+                             sites"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis authored settlements; using procedural sites"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
+        let authored_landmarks = if authored_cromatolis {
+            match AuthoredCromatolisLandmarks::load_owned("world.map.cromatolis_v0_landmarks") {
+                Ok(landmarks) => match landmarks.validate(sim.map_size_lg()) {
+                    Ok(()) => Some(landmarks),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate Cromatolis authored landmarks; continuing without \
+                             them"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis authored landmarks; continuing without them"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
+        let authored_landmark_profiles = if authored_cromatolis {
+            match AuthoredCromatolisLandmarkProfiles::load_owned(
+                "world.map.cromatolis_v0_landmark_profiles",
+            ) {
+                Ok(profiles) => match authored_landmarks.as_ref() {
+                    Some(landmarks) => match profiles.validate(landmarks) {
+                        Ok(()) => Some(profiles),
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                "Could not validate Cromatolis landmark profiles; continuing \
+                                 without them"
+                            );
+                            None
+                        },
+                    },
+                    None => None,
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load Cromatolis landmark profiles; continuing without them"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
+        let authored_settlement_template_contract = if authored_settlements.is_some() {
+            match SettlementTemplateContract::load_owned(
+                "world.map.cromatolis_v0_settlement_template_contract",
+            ) {
+                Ok(contract) => match contract.validate() {
+                    Ok(()) => Some(contract),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "Could not validate the settlement template contract; falling back to \
+                             the default Camp/Refactor split"
+                        );
+                        None
+                    },
+                },
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        "Could not load the settlement template contract; falling back to the \
+                         default Camp/Refactor split"
+                    );
+                    None
+                },
+            }
+        } else {
+            None
+        };
         let mut ctx = GenCtx { sim, rng };
 
         // info!("starting cave generation");
@@ -256,21 +1039,44 @@ impl Civs {
 
         info!("starting civilisation creation");
         prof_span!(guard, "create civs");
-        for i in 0..initial_civ_count {
-            prof_span!("create civ");
-            debug!("Creating civilisation...");
-            if this.birth_civ(&mut ctx.reseed()).is_none() {
-                warn!("Failed to find starting site for civilisation.");
+        if let Some(settlements) = authored_settlements.as_ref() {
+            this.establish_authored_cromatolis_settlements(
+                &mut ctx,
+                settlements,
+                authored_settlement_template_contract.as_ref(),
+            );
+            if let Some(landmarks) = authored_landmarks.as_ref() {
+                this.establish_authored_cromatolis_landmarks(
+                    &mut ctx,
+                    landmarks,
+                    authored_landmark_profiles.as_ref(),
+                );
             }
-            report_stage(WorldCivStage::CivCreation(i, initial_civ_count));
+            report_stage(WorldCivStage::CivCreation(1, 1));
+        } else {
+            for i in 0..initial_civ_count {
+                prof_span!("create civ");
+                debug!("Creating civilisation...");
+                if this.birth_civ(&mut ctx.reseed()).is_none() {
+                    warn!("Failed to find starting site for civilisation.");
+                }
+                report_stage(WorldCivStage::CivCreation(i, initial_civ_count));
+            }
         }
         drop(guard);
-        info!(?initial_civ_count, "all civilisations created");
+        info!(
+            ?initial_civ_count,
+            authored_cromatolis, "all civilisations created"
+        );
 
         report_stage(WorldCivStage::SiteGeneration);
         prof_span!(guard, "find locations and establish sites");
         let world_dims = ctx.sim.get_aabr();
-        for _ in 0..initial_civ_count * 3 {
+        for _ in 0..if authored_settlements.is_some() {
+            0
+        } else {
+            initial_civ_count * 3
+        } {
             attempt(5, || {
                 let (loc, kind) = match ctx.rng.random_range(0..116) {
                     0..=4 => (
@@ -460,6 +1266,8 @@ impl Civs {
                     center: loc,
                     place,
                     site_tmp: None,
+                    authored: None,
+                    authored_landmark: None,
                 }))
             });
         }
@@ -487,9 +1295,12 @@ impl Civs {
                     features: &index.features(),
                     index,
                 };
-                match &sim_site.kind {
+                let generated_site = match &sim_site.kind {
                     SiteKind::Refactor => {
-                        let size = Lerp::lerp(0.03, 1.0, rng.random_range(0.0..1f32).powi(5));
+                        let size = sim_site.authored.as_ref().map_or_else(
+                            || Lerp::lerp(0.03, 1.0, rng.random_range(0.0..1f32).powi(5)),
+                            |authored| authored.size.city_scale(),
+                        );
                         WorldSite::generate_city(
                             &Land::from_sim(ctx.sim),
                             index_ref,
@@ -633,6 +1444,11 @@ impl Civs {
                     SiteKind::VampireCastle => {
                         WorldSite::generate_vampire_castle(&Land::from_sim(ctx.sim), &mut rng, wpos)
                     },
+                };
+                if let Some(name) = sim_site.authored_name() {
+                    generated_site.with_name(name.to_string())
+                } else {
+                    generated_site
                 }
             });
             sim_site.site_tmp = Some(site);
@@ -816,6 +1632,8 @@ impl Civs {
             site_tmp: None,
             center: loc,
             place,
+            authored: None,
+            authored_landmark: None,
             /* most economic members have moved to site/Economy */
             /* last_exports: Stocks::from_default(0.0),
              * export_targets: Stocks::from_default(0.0),
@@ -1198,6 +2016,155 @@ impl Civs {
         info!(?num_peaks, "all peaks named");
     }
 
+    /// Places every authored Cromatolis settlement as a `Site`, resolving
+    /// each one's `SiteKind` through `resolve_settlement_site_kind` (the
+    /// data-driven category+size -> generator table) and reprojecting its
+    /// requested location onto the nearest dry compatibility cell (see
+    /// `project_authored_settlement_location`). The capital settlement
+    /// becomes this world's sole `Civ`; if none is marked as capital
+    /// (already rejected by `AuthoredCromatolisSettlements::validate`, but
+    /// checked again here defensively), no civilisation is created.
+    fn establish_authored_cromatolis_settlements(
+        &mut self,
+        ctx: &mut GenCtx<impl Rng>,
+        authored: &AuthoredCromatolisSettlements,
+        contract: Option<&SettlementTemplateContract>,
+    ) {
+        info!(
+            settlement_count = authored.settlements.len(),
+            "Applying authored Cromatolis settlements"
+        );
+
+        let mut used_ids = std::collections::HashSet::new();
+        let mut used_locations = std::collections::HashSet::new();
+        let mut capital = None;
+
+        for settlement in &authored.settlements {
+            let requested_loc = settlement.center.to_chunk_pos(ctx.sim.map_size_lg());
+            let loc = project_authored_settlement_location(requested_loc, ctx.sim);
+            if loc != requested_loc {
+                info!(
+                    site_id = %settlement.id,
+                    ?requested_loc,
+                    ?loc,
+                    "Reprojected Cromatolis settlement onto a dry compatibility cell"
+                );
+            }
+            if !used_ids.insert(settlement.id.as_str()) {
+                warn!(site_id = %settlement.id, "Skipping duplicate authored Cromatolis settlement id");
+                continue;
+            }
+            if !used_locations.insert((loc.x, loc.y)) {
+                warn!(site_id = %settlement.id, ?loc, "Skipping authored settlement with a duplicate map location");
+                continue;
+            }
+            let kind = resolve_settlement_site_kind(contract, settlement.category, settlement.size);
+            let metadata = AuthoredSettlementMeta {
+                id: settlement.id.clone(),
+                name: settlement.name.clone(),
+                category: settlement.category,
+                size: settlement.size,
+                population: settlement.population.clone(),
+                requires_capital_castle: settlement.requires_capital_castle,
+                start_eligible: settlement.start_eligible,
+            };
+            let site = self.establish_site(ctx, loc, |place| Site {
+                kind,
+                site_tmp: None,
+                center: loc,
+                place,
+                authored: Some(metadata),
+                authored_landmark: None,
+            });
+
+            debug!(
+                site_id = %settlement.id,
+                site_name = %settlement.name,
+                ?loc,
+                ?kind,
+                ?settlement.category,
+                ?settlement.size,
+                population_tag = ?settlement.population.tag,
+                "Established authored Cromatolis settlement"
+            );
+
+            if settlement.category == AuthoredSettlementCategory::Capital {
+                capital = Some(site);
+            }
+        }
+
+        if let Some(capital) = capital {
+            self.civs.insert(Civ {
+                capital,
+                homeland: self.sites.get(capital).place,
+            });
+        } else {
+            warn!(
+                "Cromatolis authored settlements contain no capital; no civilisation was created"
+            );
+        }
+    }
+
+    /// Places every authored Cromatolis landmark as a `Site`, using the
+    /// landmark's own `template.site_kind()` (one of the pre-existing
+    /// generic `GiantTree`/`Citadel`/`ChapelSite` generators -- not a
+    /// bespoke per-landmark renderer). Landmark locations are used exactly
+    /// as authored, unlike settlements: they don't get reprojected onto a
+    /// dry compatibility cell.
+    fn establish_authored_cromatolis_landmarks(
+        &mut self,
+        ctx: &mut GenCtx<impl Rng>,
+        authored: &AuthoredCromatolisLandmarks,
+        profiles: Option<&AuthoredCromatolisLandmarkProfiles>,
+    ) {
+        info!(
+            landmark_count = authored.landmarks.len(),
+            "Applying authored Cromatolis landmarks"
+        );
+
+        let mut used_ids = std::collections::HashSet::new();
+        let mut used_locations = self
+            .sites
+            .values()
+            .map(|site| (site.center.x, site.center.y))
+            .collect::<std::collections::HashSet<_>>();
+
+        for landmark in &authored.landmarks {
+            let loc = landmark.center.to_chunk_pos(ctx.sim.map_size_lg());
+            if !used_ids.insert(landmark.id.as_str()) {
+                warn!(landmark_id = %landmark.id, "Skipping duplicate authored Cromatolis landmark id");
+                continue;
+            }
+            if !used_locations.insert((loc.x, loc.y)) {
+                warn!(landmark_id = %landmark.id, ?loc, "Skipping authored landmark with a duplicate map location");
+                continue;
+            }
+
+            let metadata = AuthoredLandmarkMeta {
+                id: landmark.id.clone(),
+                name: landmark.name.clone(),
+                kind: landmark.kind,
+                profile: profiles.and_then(|profiles| profiles.profile_for(&landmark.id)),
+            };
+            self.establish_site(ctx, loc, |place| Site {
+                kind: landmark.template.site_kind(),
+                site_tmp: None,
+                center: loc,
+                place,
+                authored: None,
+                authored_landmark: Some(metadata),
+            });
+            debug!(
+                landmark_id = %landmark.id,
+                landmark_name = %landmark.name,
+                ?loc,
+                ?landmark.kind,
+                ?landmark.template,
+                "Established authored Cromatolis landmark"
+            );
+        }
+    }
+
     fn establish_site(
         &mut self,
         ctx: &mut GenCtx<impl Rng>,
@@ -1311,6 +2278,8 @@ impl Civs {
                                         site_tmp: None,
                                         center,
                                         place,
+                                        authored: None,
+                                        authored_landmark: None,
                                     }
                                 });
                             self.bridges.insert(locs[1], (locs[2], id));
@@ -1726,6 +2695,46 @@ impl TownSiteAttributes {
     }
 }
 
+/// The authored map is edited at a much higher resolution than the engine's
+/// compatibility grid. Preserve the authored pin, but do not let that
+/// reduction place a settlement centre in a river or lake cell.
+fn project_authored_settlement_location(requested: Vec2<i32>, sim: &WorldSim) -> Vec2<i32> {
+    const SEARCH_RADIUS: i32 = 12;
+    nearest_authored_settlement_location(requested, SEARCH_RADIUS, |location| {
+        authored_settlement_has_dry_buffer(location, sim)
+    })
+    .unwrap_or(requested)
+}
+
+fn nearest_authored_settlement_location(
+    requested: Vec2<i32>,
+    search_radius: i32,
+    is_suitable: impl Fn(Vec2<i32>) -> bool,
+) -> Option<Vec2<i32>> {
+    let mut candidates = Vec::with_capacity(((search_radius * 2 + 1).pow(2)) as usize);
+    for dy in -search_radius..=search_radius {
+        for dx in -search_radius..=search_radius {
+            let location = requested + Vec2::new(dx, dy);
+            candidates.push((location, dx * dx + dy * dy, dy.abs(), dx.abs()));
+        }
+    }
+    candidates.sort_by_key(|(_, distance_sq, dy, dx)| (*distance_sq, *dy, *dx));
+
+    candidates
+        .into_iter()
+        .map(|(location, _, _, _)| location)
+        .find(|&location| is_suitable(location))
+}
+
+fn authored_settlement_has_dry_buffer(location: Vec2<i32>, sim: &WorldSim) -> bool {
+    (-1..=1).all(|dy| {
+        (-1..=1).all(|dx| {
+            sim.get(location + Vec2::new(dx, dy))
+                .is_some_and(|chunk| !chunk.is_underwater())
+        })
+    })
+}
+
 #[derive(Debug)]
 pub struct Civ {
     capital: Id<Site>,
@@ -1759,6 +2768,62 @@ pub struct Site {
     pub site_tmp: Option<Id<crate::site::Site>>,
     pub center: Vec2<i32>,
     pub place: Id<Place>,
+    /// Present iff this site was established from an authored Cromatolis
+    /// settlement pin (as opposed to procedural civ generation).
+    authored: Option<AuthoredSettlementMeta>,
+    /// Present iff this site was established from an authored Cromatolis
+    /// landmark pin.
+    authored_landmark: Option<AuthoredLandmarkMeta>,
+}
+
+impl Site {
+    /// The authored map owns the starting-site policy for its settlements.
+    pub fn is_authored_starting_settlement(&self) -> bool {
+        self.authored
+            .as_ref()
+            .is_some_and(|settlement| settlement.start_eligible)
+    }
+
+    /// Whether player-start selection should consider this site at all.
+    /// Procedural sites (not authored) are always eligible -- the authored
+    /// map only ever *restricts* the pool, it never adds eligibility a
+    /// procedural site wouldn't already have. An authored settlement is
+    /// eligible unless its own `start_eligible: false` explicitly excludes
+    /// it (e.g. a settlement whose lore/terrain makes it unsuitable, such as
+    /// a permanently stormy or volcanic hamlet).
+    pub fn is_eligible_as_starting_site(&self) -> bool {
+        self.authored
+            .as_ref()
+            .is_none_or(|settlement| settlement.start_eligible)
+    }
+
+    /// The authored name for this site, if it was established from an
+    /// authored settlement or landmark pin rather than procedural
+    /// generation.
+    fn authored_name(&self) -> Option<&str> {
+        self.authored
+            .as_ref()
+            .map(|settlement| settlement.name.as_str())
+            .or_else(|| {
+                self.authored_landmark
+                    .as_ref()
+                    .map(|landmark| landmark.name.as_str())
+            })
+    }
+
+    /// Test-only mutator. `authored` is private so other crate modules can't
+    /// build/edit it directly; this lets a cross-module integration test
+    /// (see `crate::tests` in `lib.rs`) exercise player-start exclusion
+    /// against a real, fully generated authored settlement -- picking one
+    /// out of a real generated world and flipping its eligibility -- instead
+    /// of a synthetic stand-in with no real plots/terrain behind it. Does
+    /// nothing on a site that isn't an authored settlement.
+    #[cfg(test)]
+    pub(crate) fn set_start_eligible_for_test(&mut self, start_eligible: bool) {
+        if let Some(authored) = self.authored.as_mut() {
+            authored.start_eligible = start_eligible;
+        }
+    }
 }
 
 impl fmt::Display for Site {
@@ -1972,6 +3037,7 @@ pub enum PoiKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn empty_proximity_requirements() {
@@ -2057,5 +3123,445 @@ mod tests {
             max: Vec2 { x: 200, y: 300 },
         };
         assert_eq!(expected, reqs.location_hint(&map_dims));
+    }
+
+    // ---- Authored Cromatolis settlements/landmarks: loaders ----
+
+    fn real_settlements() -> AuthoredCromatolisSettlements {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_sites.ron"
+        ))
+        .expect("real Cromatolis settlements export must parse")
+    }
+
+    fn real_landmarks() -> AuthoredCromatolisLandmarks {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_landmarks.ron"
+        ))
+        .expect("real Cromatolis landmarks export must parse")
+    }
+
+    fn real_landmark_profiles() -> AuthoredCromatolisLandmarkProfiles {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_landmark_profiles.ron"
+        ))
+        .expect("real Cromatolis landmark profiles export must parse")
+    }
+
+    fn real_settlement_template_contract() -> SettlementTemplateContract {
+        load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_settlement_template_contract.ron"
+        ))
+        .expect("real settlement template contract must parse")
+    }
+
+    fn synthetic_map_size() -> MapSizeLg { MapSizeLg::new(Vec2::new(10, 10)).unwrap() }
+
+    #[test]
+    fn cromatolis_authored_settlements_parse_and_validate_real_export_without_panicking() {
+        let settlements = real_settlements();
+        assert_eq!(
+            settlements.schema,
+            "xindeler_open_world.authored_settlements.v1"
+        );
+        let map_size = synthetic_map_size();
+        settlements
+            .validate(map_size)
+            .expect("real Cromatolis settlements must be valid at runtime scale");
+
+        // Real, measured numbers as of this export -- not the round figure
+        // an earlier design pass estimated before the source data's last
+        // update.
+        assert_eq!(settlements.settlements.len(), 62);
+
+        let ids = settlements
+            .settlements
+            .iter()
+            .map(|settlement| settlement.id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), settlements.settlements.len());
+
+        let capitals = settlements
+            .settlements
+            .iter()
+            .filter(|settlement| settlement.category == AuthoredSettlementCategory::Capital)
+            .count();
+        assert_eq!(capitals, 1);
+
+        let mut by_category: std::collections::HashMap<AuthoredSettlementCategory, usize> =
+            std::collections::HashMap::new();
+        for settlement in &settlements.settlements {
+            *by_category.entry(settlement.category).or_default() += 1;
+        }
+        assert_eq!(
+            by_category.get(&AuthoredSettlementCategory::Capital),
+            Some(&1)
+        );
+        assert_eq!(by_category.get(&AuthoredSettlementCategory::City), Some(&7));
+        assert_eq!(
+            by_category.get(&AuthoredSettlementCategory::Town),
+            Some(&17)
+        );
+        assert_eq!(
+            by_category.get(&AuthoredSettlementCategory::Village),
+            Some(&20)
+        );
+        assert_eq!(
+            by_category.get(&AuthoredSettlementCategory::Hamlet),
+            Some(&5)
+        );
+        assert_eq!(by_category.get(&AuthoredSettlementCategory::Inn), Some(&4));
+        assert_eq!(by_category.get(&AuthoredSettlementCategory::Post), Some(&8));
+    }
+
+    #[test]
+    fn cromatolis_authored_landmarks_parse_and_validate_real_export_without_panicking() {
+        let landmarks = real_landmarks();
+        assert_eq!(
+            landmarks.schema,
+            "xindeler_open_world.authored_landmarks.v1"
+        );
+        let map_size = synthetic_map_size();
+        landmarks
+            .validate(map_size)
+            .expect("real Cromatolis landmarks must be valid at runtime scale");
+
+        // Real, measured numbers as of this export -- not the round figure
+        // an earlier design pass estimated before the source data's last
+        // update (which added the two river-port Harbour landmarks).
+        assert_eq!(landmarks.landmarks.len(), 16);
+
+        let mut by_kind: std::collections::HashMap<AuthoredLandmarkKind, usize> =
+            std::collections::HashMap::new();
+        for landmark in &landmarks.landmarks {
+            *by_kind.entry(landmark.kind).or_default() += 1;
+        }
+        assert_eq!(by_kind.get(&AuthoredLandmarkKind::TreeOfLife), Some(&1));
+        assert_eq!(by_kind.get(&AuthoredLandmarkKind::TreeOfSouls), Some(&1));
+        assert_eq!(by_kind.get(&AuthoredLandmarkKind::BlackTower), Some(&2));
+        assert_eq!(by_kind.get(&AuthoredLandmarkKind::Lighthouse), Some(&9));
+        assert_eq!(
+            by_kind.get(&AuthoredLandmarkKind::ArchWrightTemple),
+            Some(&1)
+        );
+        assert_eq!(by_kind.get(&AuthoredLandmarkKind::Harbour), Some(&2));
+    }
+
+    #[test]
+    fn cromatolis_landmark_profiles_cover_every_real_landmark_without_panicking() {
+        let landmarks = real_landmarks();
+        let profiles = real_landmark_profiles();
+        profiles
+            .validate(&landmarks)
+            .expect("every real landmark must have exactly one valid physical profile");
+        assert_eq!(profiles.entries.len(), landmarks.landmarks.len());
+    }
+
+    #[test]
+    fn invalid_authored_settlement_schema_fails_validation_without_panicking() {
+        let mut settlements = real_settlements();
+        settlements.schema = "invalid".to_string();
+        assert!(settlements.validate(synthetic_map_size()).is_err());
+    }
+
+    #[test]
+    fn invalid_authored_landmark_profiles_reject_a_mismatched_physical_template() {
+        let landmarks = real_landmarks();
+        let mut profiles = real_landmark_profiles();
+        // Swap the first entry's template to one no landmark kind allows.
+        profiles.entries[0].physical_template = AuthoredLandmarkPhysicalTemplate::Chapel;
+        profiles.entries[0].style = AuthoredLandmarkStyle::MonumentalChapel;
+        assert!(profiles.validate(&landmarks).is_err());
+    }
+
+    #[test]
+    fn authored_map_point_flips_source_y_axis() {
+        let map_size = synthetic_map_size();
+        assert_eq!(
+            AuthoredMapPoint { x: 0.0, y: 0.0 }.to_chunk_pos(map_size),
+            Vec2::new(0, 1023)
+        );
+        assert_eq!(
+            AuthoredMapPoint { x: 1.0, y: 1.0 }.to_chunk_pos(map_size),
+            Vec2::new(1023, 0)
+        );
+    }
+
+    // ---- Positioning ----
+
+    #[test]
+    fn nearest_authored_settlement_location_keeps_a_valid_pin_or_finds_nearest_match() {
+        let requested = Vec2::new(100, 100);
+        assert_eq!(
+            nearest_authored_settlement_location(requested, 2, |location| location == requested),
+            Some(requested)
+        );
+        assert_eq!(
+            nearest_authored_settlement_location(requested, 2, |location| location
+                == Vec2::new(101, 100)),
+            Some(Vec2::new(101, 100))
+        );
+        assert_eq!(
+            nearest_authored_settlement_location(requested, 2, |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn project_authored_settlement_location_falls_back_to_requested_when_nothing_qualifies() {
+        let requested = Vec2::new(50, 50);
+        // No `WorldSim` chunks exist at all outside index 0, so every probed
+        // location around `requested` fails the dry-buffer check and the
+        // projection must fall back to the literal requested position
+        // instead of panicking or wandering off.
+        let sim = WorldSim::empty();
+        assert_eq!(
+            project_authored_settlement_location(requested, &sim),
+            requested
+        );
+    }
+
+    // ---- The data-driven category+size -> generator table ----
+
+    #[test]
+    fn settlement_template_contract_parses_and_validates_real_export_without_panicking() {
+        let contract = real_settlement_template_contract();
+        contract
+            .validate()
+            .expect("real settlement template contract must be valid");
+        assert!(!contract.template_families.is_empty());
+    }
+
+    #[test]
+    fn resolve_settlement_site_kind_covers_every_real_settlement_via_the_contract_table() {
+        let settlements = real_settlements();
+        let contract = real_settlement_template_contract();
+
+        for settlement in &settlements.settlements {
+            // Must resolve through a real family match in the contract (not
+            // silently fall through to the category default) for every
+            // settlement actually in the export -- this is the "fallback
+            // behaviour is explicitly tested, not incidental" requirement.
+            let matched_family = contract.template_families.iter().any(|family| {
+                family.category == settlement.category.contract_key()
+                    && family
+                        .supported_sizes
+                        .iter()
+                        .any(|s| s == settlement.size.contract_key())
+            });
+            assert!(
+                matched_family,
+                "settlement {} (category {:?}, size {:?}) has no matching family in the \
+                 settlement template contract",
+                settlement.id, settlement.category, settlement.size
+            );
+
+            let kind =
+                resolve_settlement_site_kind(Some(&contract), settlement.category, settlement.size);
+            // Honest baseline: every family's current fallback is one of
+            // these two generic generators -- no real per-family physical
+            // generator exists yet.
+            assert!(matches!(kind, SiteKind::Camp | SiteKind::Refactor));
+            if matches!(
+                settlement.category,
+                AuthoredSettlementCategory::Inn | AuthoredSettlementCategory::Post
+            ) {
+                assert_eq!(kind, SiteKind::Camp);
+            } else {
+                assert_eq!(kind, SiteKind::Refactor);
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_settlement_site_kind_falls_back_to_the_default_split_without_a_contract() {
+        // No contract at all (e.g. failed to load) -- every category must
+        // still resolve to the safe Camp/Refactor default, never panic.
+        for category in [
+            AuthoredSettlementCategory::Capital,
+            AuthoredSettlementCategory::City,
+            AuthoredSettlementCategory::Town,
+            AuthoredSettlementCategory::Village,
+            AuthoredSettlementCategory::Hamlet,
+            AuthoredSettlementCategory::Inn,
+            AuthoredSettlementCategory::Post,
+        ] {
+            let kind = resolve_settlement_site_kind(None, category, AuthoredSettlementSize::Medium);
+            assert_eq!(kind, category.default_site_kind());
+        }
+    }
+
+    #[test]
+    fn resolve_settlement_site_kind_falls_back_when_no_family_matches_category_and_size() {
+        let contract = real_settlement_template_contract();
+        // `city_very_large`/`city_large`/`city_medium`/`city_small` exist,
+        // but no family supports a `Minimal` city in the real contract --
+        // this exercises the "family list exists but doesn't cover this
+        // exact category+size" branch of the fallback, not just "no
+        // contract at all".
+        let no_family_covers_city_minimal = !contract.template_families.iter().any(|family| {
+            family.category == "city" && family.supported_sizes.iter().any(|s| s == "minimal")
+        });
+        assert!(
+            no_family_covers_city_minimal,
+            "test assumption stale: the contract now defines a city/minimal family"
+        );
+
+        let kind = resolve_settlement_site_kind(
+            Some(&contract),
+            AuthoredSettlementCategory::City,
+            AuthoredSettlementSize::Minimal,
+        );
+        assert_eq!(kind, SiteKind::Refactor);
+    }
+
+    #[test]
+    fn resolve_settlement_site_kind_falls_back_on_an_unrecognized_fallback_name() {
+        let contract = SettlementTemplateContract {
+            schema: SETTLEMENT_TEMPLATE_CONTRACT_SCHEMA.to_string(),
+            template_families: vec![SettlementTemplateFamily {
+                id: "test_family".to_string(),
+                category: "inn".to_string(),
+                supported_sizes: vec!["minimal".to_string()],
+                xindeler_old_fallback: "some_future_bespoke_inn_generator".to_string(),
+            }],
+        };
+        let kind = resolve_settlement_site_kind(
+            Some(&contract),
+            AuthoredSettlementCategory::Inn,
+            AuthoredSettlementSize::Minimal,
+        );
+        // Inn's safe default is Camp; an unrecognized fallback name must not
+        // panic or silently resolve to something else.
+        assert_eq!(kind, SiteKind::Camp);
+    }
+
+    #[test]
+    fn site_kind_for_fallback_name_recognizes_every_name_the_real_contract_uses() {
+        let contract = real_settlement_template_contract();
+        for family in &contract.template_families {
+            assert!(
+                site_kind_for_fallback_name(&family.xindeler_old_fallback).is_some(),
+                "family {} names an unrecognized fallback {}",
+                family.id,
+                family.xindeler_old_fallback
+            );
+        }
+    }
+
+    // ---- Site helper methods ----
+
+    #[test]
+    fn authored_starting_settlement_policy_reads_the_authored_flag() {
+        fn settlement_site(start_eligible: bool) -> Site {
+            Site {
+                kind: SiteKind::Refactor,
+                site_tmp: None,
+                center: Vec2::zero(),
+                place: Id::new(0),
+                authored: Some(AuthoredSettlementMeta {
+                    id: "test".to_string(),
+                    name: "Test".to_string(),
+                    category: AuthoredSettlementCategory::Village,
+                    size: AuthoredSettlementSize::Small,
+                    population: AuthoredSettlementPopulation {
+                        tag: AuthoredSettlementPopulationTag::Human,
+                        peoples: vec![AuthoredSettlementPeople::Human],
+                        future_peoples: Vec::new(),
+                    },
+                    requires_capital_castle: false,
+                    start_eligible,
+                }),
+                authored_landmark: None,
+            }
+        }
+
+        let eligible = settlement_site(true);
+        assert!(eligible.is_authored_starting_settlement());
+        assert_eq!(eligible.authored_name(), Some("Test"));
+
+        let not_eligible = settlement_site(false);
+        assert!(!not_eligible.is_authored_starting_settlement());
+
+        let procedural = Site {
+            kind: SiteKind::Refactor,
+            site_tmp: None,
+            center: Vec2::zero(),
+            place: Id::new(0),
+            authored: None,
+            authored_landmark: None,
+        };
+        assert!(!procedural.is_authored_starting_settlement());
+        assert_eq!(procedural.authored_name(), None);
+    }
+
+    // ---- Heavy, real-terrain-backed tests: require the real Cromatolis LFS
+    // assets pulled locally. Not run automated (same precedent as
+    // `site::economy::context::tests::test_economy0`/`sim::tests`'s
+    // `cromatolis_world_*_regression_against_real_lfs_assets`). Recommended:
+    // `cargo test -p xindeler-world -- --ignored cromatolis` ----
+
+    fn generate_cromatolis_world() -> WorldSim {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        WorldSim::generate(
+            0,
+            crate::sim::WorldOpts {
+                seed_elements: true,
+                world_file: crate::sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn known_settlement_projects_within_dry_buffer_radius_against_real_terrain() {
+        let sim = generate_cromatolis_world();
+        let settlements = real_settlements();
+        let map_size = sim.map_size_lg();
+
+        let kalthis = settlements
+            .settlements
+            .iter()
+            .find(|settlement| settlement.id == "site.kalthis")
+            .expect("the capital settlement must be present in the real export");
+        let requested = kalthis.center.to_chunk_pos(map_size);
+        let projected = project_authored_settlement_location(requested, &sim);
+
+        assert!(
+            authored_settlement_has_dry_buffer(projected, &sim),
+            "projected settlement location must have a dry 3x3 buffer against real terrain"
+        );
+        let dx = (projected.x - requested.x) as f64;
+        let dy = (projected.y - requested.y) as f64;
+        let distance = (dx * dx + dy * dy).sqrt();
+        assert!(
+            distance <= 12.0 * std::f64::consts::SQRT_2,
+            "projected location moved {distance} chunks from the requested pin, further than the \
+             12-chunk search radius allows"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn civs_generate_places_every_authored_cromatolis_settlement_and_landmark() {
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        let settlement_sites = civs.sites().filter(|site| site.authored.is_some()).count();
+        let landmark_sites = civs
+            .sites()
+            .filter(|site| site.authored_landmark.is_some())
+            .count();
+        assert_eq!(settlement_sites, 62);
+        assert_eq!(landmark_sites, 16);
+        assert_eq!(
+            civs.civs.iter().count(),
+            1,
+            "exactly one civilisation must be created, rooted at the authored capital"
+        );
     }
 }

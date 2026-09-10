@@ -667,7 +667,14 @@ const AUTHORED_WATER_THRESHOLD: f32 = 0.5;
 /// that needs to check "is this specifically Cromatolis" (as opposed to "is
 /// any authored region loaded" -- see `authored_cromatolis_v0`), so a rename
 /// can't silently desync the registry entry from its consumers.
-const CROMATOLIS_V0_REGION_ID: &str = "cromatolis_v0";
+///
+/// `pub(crate)` (rather than private to this module) so that `world/src/civ`
+/// can gate its own region-scoped loaders (settlements/landmarks, see COW-6)
+/// on `SimChunk::authored_region_id` the same way this module's own
+/// Snowland/Swamp checks do, instead of re-deriving a region check from the
+/// generic `authored_cromatolis_v0` flag (the COW-2 debt this repo is trying
+/// not to grow).
+pub(crate) const CROMATOLIS_V0_REGION_ID: &str = "cromatolis_v0";
 
 /// The region registry. Add an entry here to make a new hand-authored map
 /// region's extra layers loadable; nothing else in the loading path should
