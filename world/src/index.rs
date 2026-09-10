@@ -1,6 +1,7 @@
 use crate::{
     Colors, Features,
     layer::{
+        cromatolis_cave_features::GeneratedCave,
         cromatolis_interior::InteriorLayout,
         wildlife::{self, DensityFn, SpawnEntry},
     },
@@ -31,6 +32,10 @@ pub struct Index {
     /// fresh world (a new `Index::new` call) never reuses a previous
     /// world's layout.
     pub(crate) cromatolis_interiors: OnceLock<Vec<InteriorLayout>>,
+    /// Generic, size-class-scaled Cromatolis cave geometry, lazily built and
+    /// cached the first time a chunk needs it. Same per-`Index` rationale as
+    /// `cromatolis_interiors` above.
+    pub(crate) cromatolis_cave_features: OnceLock<Vec<GeneratedCave>>,
     colors: AssetHandle<Arc<Colors>>,
     features: AssetHandle<Arc<Features>>,
 }
@@ -89,6 +94,7 @@ impl Index {
             trade: Default::default(),
             wildlife_spawns,
             cromatolis_interiors: OnceLock::new(),
+            cromatolis_cave_features: OnceLock::new(),
             colors,
             features,
         }
@@ -190,6 +196,24 @@ mod tests {
         );
         assert!(
             b.cromatolis_interiors.get().is_none(),
+            "index b's cache must still be empty -- it must not share state with index a"
+        );
+    }
+
+    /// Same independence requirement as `cromatolis_interiors` above,
+    /// applied to `cromatolis_cave_features`.
+    #[test]
+    fn cromatolis_cave_features_cache_is_independent_per_index_instance() {
+        let a = Index::new(0);
+        let b = Index::new(0);
+
+        a.cromatolis_cave_features.get_or_init(Vec::new);
+        assert!(
+            a.cromatolis_cave_features.get().is_some(),
+            "index a should have its cache initialized"
+        );
+        assert!(
+            b.cromatolis_cave_features.get().is_none(),
             "index b's cache must still be empty -- it must not share state with index a"
         );
     }
