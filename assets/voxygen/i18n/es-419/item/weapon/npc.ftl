@@ -133,7 +133,7 @@ common-items-npc_weapons-axe-oni_blue_axe = Hacha Oni Azul
 common-items-npc_weapons-staff-bipedlarge-cultist = Bastón Gigante de Sectario
     .desc = El fuego no emite nada de calor.
 
-common-items-npc_weapons-staff-mindflayer_staff = Bastón de Devoramentes
+common-items-npc_weapons-staff-mindflayer_staff = Bastón de Mind-Eater
     .desc = Marcador de posición
 
 common-items-npc_weapons-staff-ogre_staff = Bastón de Ogro

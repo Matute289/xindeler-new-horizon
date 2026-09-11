@@ -62,10 +62,10 @@ armor-misc-bag-knitted_red_pouch = Faltriquera roja tricotada
     .desc = Bolsa de lana de un tamaño considerable y con dos bolsillos.
 armor-misc-bag-liana_kit = Kit de lianas
     .desc = Tejido con lianas secas.
-armor-misc-bag-mindflayer_spellbag = Bolsa mágica de devoramentes
+armor-misc-bag-mindflayer_spellbag = Bolsa mágica de Mind-Eater
     .desc =
         Casi se puede sentir la malvada presencia de
-        un devoramentes en su interior.
+        un Mind-Eater en su interior.
 armor-misc-bag-reliable_backpack = Mochila de confianza
     .desc = Jamás te dejará tirado.
 armor-misc-bag-reliable_leather_pack = Bolsa de cuero de confianza

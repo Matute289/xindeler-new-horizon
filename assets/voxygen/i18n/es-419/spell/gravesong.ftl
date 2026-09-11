@@ -1,17 +1,17 @@
 # Gravesong (Clérigo, fuente Divina) — nombres y descripciones de hechizos.
-spell-blinding_smite = Golpe Cegador
+spell-blinding_smite = Blinding Strike
 spell-blinding_smite-desc = Tu próximo golpe de arma destella con luz radiante, causando daño extra y cegando a la criatura golpeada.
 spell-branding_smite = Golpe Marcador
 spell-branding_smite-desc = Tu próximo golpe de arma arde con luz radiante, causando daño extra.
 spell-divine_smite = Golpe Divino
 spell-divine_smite-desc = Tu próximo golpe de arma se carga con poder sagrado, causando daño extra considerable.
-spell-searing_smite = Golpe de Brasas
+spell-searing_smite = Ember Strike
 spell-searing_smite-desc = Tu próximo golpe de arma arde en llamas, causando daño extra y prendiendo fuego a la criatura golpeada.
-spell-staggering_smite = Golpe Quebrantador
+spell-staggering_smite = Sundering Strike
 spell-staggering_smite-desc = Tu próximo golpe de arma sacude los sentidos, causando daño extra y haciendo perder el equilibrio a la criatura golpeada.
-spell-thunderous_smite = Golpe de Tormenta
+spell-thunderous_smite = Storm Strike
 spell-thunderous_smite-desc = Tu próximo golpe de arma retumba como un trueno, causando daño extra y lanzando hacia atrás a la criatura golpeada.
-spell-wrathful_smite = Golpe Aciago
+spell-wrathful_smite = Dire Strike
 spell-wrathful_smite-desc = Tu próximo golpe de arma canaliza el terror, causando daño extra y llenando de pavor a la criatura golpeada.
 spell-bane = Perdición
 spell-bane-desc = Impregnás el aire alrededor de un puñado de enemigos con una maldición desgastante, resquebrajando su concentración para que sus golpes y determinación flaqueen en los peores momentos.
