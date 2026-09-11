@@ -45,6 +45,10 @@ command-battlemode-desc = Set your battle mode to:
   If called without arguments will show current battle mode.
 command-battlemode_force-desc = Change your battle mode flag without any checks
 command-campfire-desc = Spawns a campfire
+command-citadel_practice_beam-desc = (Admin) Fires the Cromatolis Aerial Citadel's harmless practice beam from the beam-cannon pilot tower's current aim
+command-citadel_practice_sphere-desc = (Admin) Fires the Cromatolis Aerial Citadel's harmless practice sphere from the sphere-cannon pilot tower's current aim
+command-citadel_sphere_turret_pilot-desc = (Admin) Aims the Cromatolis Aerial Citadel's sphere-cannon pilot turret: <yaw degrees> <pitch degrees>. Visual only; does not fire or cause damage
+command-citadel_turret_pilot-desc = (Admin) Aims the Cromatolis Aerial Citadel's beam-cannon pilot turret: <yaw degrees> <pitch degrees>. Visual only; does not fire or cause damage
 command-clear_persisted_terrain-desc = Clears nearby persisted terrain
 command-create_location-desc = Create a location at the current position
 command-cromatolis_goto-desc = Teleport to the world position for a Cromatolis source map pixel coordinate (QA)

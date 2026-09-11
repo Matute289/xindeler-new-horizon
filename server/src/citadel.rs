@@ -89,11 +89,146 @@ pub(crate) fn upper_turret_rest_pose(tower_index: usize) -> CitadelTurretAngles 
         )
         .expect("citadel upper cannon must reference an authored outward axis");
     CitadelTurretAngles {
-        // The authored barrel points +Y at yaw zero. `atan2(x, y)` therefore
-        // maps each tower's cardinal outward vector into the model convention.
+        // Author space -> model space: the tower's outward vector
+        // (`outward.x`/`outward.y`) is authored directly in world X/Y by the
+        // world layer. The authored barrel model points +Y at yaw zero, so
+        // `atan2(x, y)` (not the more usual `atan2(y, x)`) is exactly the
+        // conversion that maps each tower's cardinal world-space outward
+        // vector into that model's local-yaw convention.
         yaw: (outward.x as f32).atan2(outward.y as f32),
         pitch: 0.0,
     }
+}
+
+/// Three distinct angle spaces are in play for a citadel cannon, and every
+/// function below that touches an angle documents which one it converts
+/// between and why -- a silent mix-up here is the single most likely way to
+/// introduce a cannon that visually aims a fixed angle off from what was
+/// intended, with no compiler error to catch it:
+///
+/// - **Author space**: how the tower/pivot geometry was authored in the world
+///   layer -- e.g. a tower's cardinal "outward" unit vector
+///   (`cromatolis_aerial_citadel_wall_tower_outward_axis`), expressed directly
+///   in world X/Y.
+/// - **Model space**: the `CitadelTurretAngles` stored on the entity and read
+///   by `anim::object::TurretAnimation` -- yaw around the model's local Z axis
+///   (authored barrel forward is +Y at yaw zero, see `upper_turret_rest_pose`
+///   above), pitch around the local X axis applied after yaw.
+/// - **Operator space**: what a pilot command's `<yaw degrees> <pitch degrees>`
+///   arguments mean to a human operator standing at a tower -- yaw 0° is
+///   defined as "straight out of *this* tower" (i.e. matching
+///   `upper_turret_rest_pose(tower_index)`), independent of what that tower's
+///   own author-space outward vector happens to be.
+///
+/// Converts operator space -> model space: reuses `upper_turret_rest_pose`
+/// as the per-tower "outward" zero-reference in model space, then adds the
+/// operator's requested yaw on top of it. This generalizes correctly across
+/// every tower without assuming any particular tower's outward direction
+/// (e.g. "world +X") the way a single hardcoded operator-to-model offset
+/// constant would -- it instead re-derives that offset, per tower, from the
+/// exact same authored geometry `upper_turret_rest_pose` already uses.
+pub(crate) fn pilot_pose_from_operator_degrees(
+    tower_index: usize,
+    yaw_degrees: f32,
+    pitch_degrees: f32,
+) -> Option<CitadelTurretAngles> {
+    (-7.0..=90.0)
+        .contains(&pitch_degrees)
+        .then(|| CitadelTurretAngles {
+            yaw: (upper_turret_rest_pose(tower_index).yaw + yaw_degrees.to_radians())
+                .rem_euclid(std::f32::consts::TAU),
+            pitch: pitch_degrees.to_radians(),
+        })
+}
+
+/// Whether `pos` is close enough to `tower_index`'s upper cannon to count as
+/// "at that tower" for a pilot/practice command -- the same proximity this
+/// module's own recovery/dedup logic already uses to identify a station, so
+/// a second, independently-tuned radius never has to be kept in sync with it.
+pub(crate) fn is_near_upper_turret(tower_index: usize, pos: Vec3<f32>) -> bool {
+    let pivot = upper_turret_pivot(tower_index);
+    (pos.xy() - pivot.xy()).magnitude_squared() <= UPPER_TURRET_RECOVERY_RADIUS.powi(2)
+        && (pos.z - pivot.z).abs() <= UPPER_TURRET_RECOVERY_VERTICAL_TOLERANCE
+}
+
+/// A pilot may freely rotate a cannon for inspection, but a practice effect
+/// must still never leave through the city-facing half of its tower. Near a
+/// vertical shot there is no horizontal city direction, so it is safe.
+///
+/// Converts model space -> world space (to compare against the tower's
+/// author-space outward vector): `pose.yaw` is model-space, and
+/// `(sin(yaw), cos(yaw))` is the same model-yaw-to-world-horizontal-direction
+/// mapping `turret_beam_muzzle`/`turret_sphere_muzzle` below use for the
+/// muzzle direction, kept consistent with `upper_turret_rest_pose`'s inverse
+/// `atan2(x, y)`.
+pub(crate) fn practice_pose_fires_outward(tower_index: usize, pose: CitadelTurretAngles) -> bool {
+    if pose.pitch.cos().abs() < 0.001 {
+        return true;
+    }
+    let outward =
+        world::layer::cromatolis_aerial_citadel::cromatolis_aerial_citadel_wall_tower_outward_axis(
+            tower_index,
+        )
+        .expect("practice cannon must reference an authored tower");
+    let horizontal_direction = Vec2::new(pose.yaw.sin(), pose.yaw.cos());
+    horizontal_direction.dot(Vec2::new(outward.x as f32, outward.y as f32)) > 0.0
+}
+
+// The articulated model uses 11 voxel units per base metre and has a visual
+// scale of 2.5 (`object::Body::visual_scale`'s `CitadelArcaneCannon` /
+// `CitadelArcaneSphereCannon` arm). `barrel.vox` extends to local +Y 57
+// after its manifest offset; its hinge is at the skeleton's local Z=17 (see
+// `anim::object::SkeletonAttr`'s `bone1` for `CitadelArcaneCannon` /
+// `CitadelArcaneSphereCannon`). These are physical geometry measurements of
+// the barrel itself, not an operator-relative practice offset, so they hold
+// for every tower.
+const CITADEL_TURRET_MODEL_METRES_PER_VOXEL: f32 = 2.5 / 11.0;
+const CITADEL_BEAM_BARREL_PIVOT_HEIGHT: f32 = 17.0 * CITADEL_TURRET_MODEL_METRES_PER_VOXEL;
+const CITADEL_BEAM_BARREL_MUZZLE_DISTANCE: f32 = 57.0 * CITADEL_TURRET_MODEL_METRES_PER_VOXEL;
+const CITADEL_SPHERE_BARREL_MUZZLE_DISTANCE: f32 = 50.0 * CITADEL_TURRET_MODEL_METRES_PER_VOXEL;
+
+/// Returns the visible tube mouth and its forward vector in world space.
+///
+/// Converts model space -> world space: this matches
+/// `anim::object::TurretAnimation`'s own model-space convention (authored
+/// tube is +Y forward at yaw zero, positive yaw turns +Y toward +X, positive
+/// pitch lifts the tube toward +Z), then applies that same rotation to
+/// derive a world-space direction. The cannon entity stays fixed at the
+/// tower centre; only the barrel vector turns.
+pub(crate) fn turret_beam_muzzle(
+    pivot: Vec3<f32>,
+    pose: CitadelTurretAngles,
+) -> (Vec3<f32>, Vec3<f32>) {
+    let horizontal = pose.pitch.cos();
+    let direction = Vec3::new(
+        pose.yaw.sin() * horizontal,
+        pose.yaw.cos() * horizontal,
+        pose.pitch.sin(),
+    );
+    let trunnion = pivot + Vec3::unit_z() * CITADEL_BEAM_BARREL_PIVOT_HEIGHT;
+    (
+        trunnion + direction * CITADEL_BEAM_BARREL_MUZZLE_DISTANCE,
+        direction,
+    )
+}
+
+/// Same model-space -> world-space conversion as `turret_beam_muzzle`, with
+/// the sphere cannon's own (shorter) authored muzzle distance.
+pub(crate) fn turret_sphere_muzzle(
+    pivot: Vec3<f32>,
+    pose: CitadelTurretAngles,
+) -> (Vec3<f32>, Vec3<f32>) {
+    let horizontal = pose.pitch.cos();
+    let direction = Vec3::new(
+        pose.yaw.sin() * horizontal,
+        pose.yaw.cos() * horizontal,
+        pose.pitch.sin(),
+    );
+    let trunnion = pivot + Vec3::unit_z() * CITADEL_BEAM_BARREL_PIVOT_HEIGHT;
+    (
+        trunnion + direction * CITADEL_SPHERE_BARREL_MUZZLE_DISTANCE,
+        direction,
+    )
 }
 
 /// `pivot`/`expected_body` are the caller's already-resolved values for this
@@ -612,15 +747,19 @@ pub(crate) fn ensure_lower_tower_defences(state: &mut State) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        component_needs_restore, lower_tower_force_field_collider, lower_tower_safety_floor_pivot,
-        lower_tower_turret_body, lower_tower_turret_is_recovery_candidate,
-        lower_tower_turret_pivot, lower_tower_turret_rest_pose, upper_turret_body,
+        component_needs_restore, is_near_upper_turret, lower_tower_force_field_collider,
+        lower_tower_safety_floor_pivot, lower_tower_turret_body,
+        lower_tower_turret_is_recovery_candidate, lower_tower_turret_pivot,
+        lower_tower_turret_rest_pose, pilot_pose_from_operator_degrees,
+        practice_pose_fires_outward, turret_beam_muzzle, turret_sphere_muzzle, upper_turret_body,
         upper_turret_center, upper_turret_is_recovery_candidate, upper_turret_pivot,
         upper_turret_rest_pose,
     };
     use common::{
         comp,
-        comp::{CitadelForceFieldShape, CitadelForceFieldVisual, object::Body},
+        comp::{
+            CitadelForceFieldShape, CitadelForceFieldVisual, CitadelTurretAngles, object::Body,
+        },
     };
     use vek::{Vec2, Vec3};
 
@@ -869,6 +1008,112 @@ mod tests {
             Some(&current),
             &super::aerial_features().lower_tower_dome(),
         ));
+    }
+
+    #[test]
+    fn is_near_upper_turret_uses_the_same_radius_as_upper_station_recovery() {
+        let tower_index = 0;
+        let pivot = upper_turret_pivot(tower_index);
+
+        assert!(is_near_upper_turret(tower_index, pivot));
+        assert!(is_near_upper_turret(
+            tower_index,
+            pivot + Vec3::new(12.0, 0.0, 0.0),
+        ));
+        assert!(!is_near_upper_turret(
+            tower_index,
+            pivot + Vec3::new(33.0, 0.0, 0.0),
+        ));
+        assert!(!is_near_upper_turret(
+            tower_index,
+            pivot + Vec3::new(0.0, 0.0, 17.0),
+        ));
+    }
+
+    #[test]
+    fn pilot_pose_from_operator_degrees_zero_matches_the_tower_rest_pose() {
+        for tower_index in [0, 1, 23] {
+            let pose = pilot_pose_from_operator_degrees(tower_index, 0.0, 0.0)
+                .expect("0 pitch degrees must be within the -7..=90 range");
+            assert_eq!(
+                pose.yaw,
+                upper_turret_rest_pose(tower_index).yaw,
+                "operator yaw 0 must equal this tower's own authored outward model yaw"
+            );
+            assert_eq!(pose.pitch, 0.0);
+        }
+    }
+
+    #[test]
+    fn pilot_pose_from_operator_degrees_wraps_and_rejects_out_of_range_pitch() {
+        let wrapped = pilot_pose_from_operator_degrees(0, 360.0, 90.0)
+            .expect("90 degrees pitch is within range");
+        let rest_yaw = upper_turret_rest_pose(0).yaw;
+        // `rem_euclid` normalizes into [0, TAU), so compare via sin/cos
+        // (angle equivalence mod TAU) rather than exact equality -- the
+        // canonical representative of the same angle can differ by exactly
+        // one full turn.
+        assert!((wrapped.yaw.sin() - rest_yaw.sin()).abs() < 1e-4);
+        assert!((wrapped.yaw.cos() - rest_yaw.cos()).abs() < 1e-4);
+        assert_eq!(wrapped.pitch, std::f32::consts::FRAC_PI_2);
+
+        assert!(pilot_pose_from_operator_degrees(0, 0.0, -8.0).is_none());
+        assert!(pilot_pose_from_operator_degrees(0, 0.0, 91.0).is_none());
+        // The boundary itself is admitted.
+        assert!(pilot_pose_from_operator_degrees(0, 0.0, -7.0).is_some());
+        assert!(pilot_pose_from_operator_degrees(0, 0.0, 90.0).is_some());
+    }
+
+    #[test]
+    fn practice_pose_fires_outward_accepts_the_tower_rest_pose_and_rejects_the_opposite() {
+        let tower_index = 0;
+        let outward = upper_turret_rest_pose(tower_index);
+        assert!(
+            practice_pose_fires_outward(tower_index, outward),
+            "the tower's own authored outward pose must always be allowed to fire"
+        );
+
+        let inward = CitadelTurretAngles {
+            yaw: outward.yaw + std::f32::consts::PI,
+            pitch: 0.0,
+        };
+        assert!(
+            !practice_pose_fires_outward(tower_index, inward),
+            "the exact opposite yaw must fire back into the citadel and be rejected"
+        );
+
+        // Near-vertical shots have no meaningful horizontal city direction,
+        // so they are always safe regardless of yaw.
+        assert!(practice_pose_fires_outward(
+            tower_index,
+            CitadelTurretAngles {
+                yaw: inward.yaw,
+                pitch: std::f32::consts::FRAC_PI_2,
+            }
+        ));
+    }
+
+    #[test]
+    fn turret_beam_and_sphere_muzzles_extend_outward_from_the_pivot_along_the_pose_direction() {
+        let pivot = Vec3::new(10.0, 20.0, 30.0);
+        let pose = CitadelTurretAngles {
+            yaw: 0.0,
+            pitch: 0.0,
+        };
+        let (beam_origin, beam_direction) = turret_beam_muzzle(pivot, pose);
+        let (sphere_origin, sphere_direction) = turret_sphere_muzzle(pivot, pose);
+
+        // At yaw 0 / pitch 0 the model-space forward vector (+Y) maps to
+        // world-space (0, 1, 0) -- see `turret_beam_muzzle`'s doc comment.
+        assert!((beam_direction - Vec3::new(0.0, 1.0, 0.0)).magnitude_squared() < 1e-6);
+        assert_eq!(beam_direction, sphere_direction);
+
+        // Both muzzles sit above the pivot (the trunnion height) and in
+        // front of it along +Y; the sphere cannon's authored muzzle
+        // distance is shorter than the beam cannon's.
+        assert!(beam_origin.z > pivot.z);
+        assert!(sphere_origin.z > pivot.z);
+        assert!(beam_origin.y > sphere_origin.y);
     }
 }
 

@@ -2745,6 +2745,9 @@ impl PlayState for SessionState {
                 self.scene
                     .trail_mgr()
                     .render(&mut trail_drawer, &scene_data);
+                self.scene
+                    .citadel_force_field_mgr()
+                    .render(&mut trail_drawer);
             }
         }
         // Bloom (call does nothing if bloom is off)

@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod citadel_force_field;
 pub mod debug;
 pub mod figure;
 pub mod lod;
@@ -14,6 +15,7 @@ use std::collections::HashSet;
 
 pub use self::{
     camera::{Camera, CameraMode},
+    citadel_force_field::CitadelForceFieldMgr,
     debug::{Debug, DebugShape, DebugShapeId},
     figure::FigureMgr,
     lod::Lod,
@@ -121,6 +123,7 @@ pub struct Scene {
 
     particle_mgr: ParticleMgr,
     trail_mgr: TrailMgr,
+    citadel_force_field_mgr: CitadelForceFieldMgr,
     figure_mgr: FigureMgr,
     tether_mgr: TetherMgr,
     pub sfx_mgr: SfxMgr,
@@ -369,6 +372,7 @@ impl Scene {
             light_data: Vec::new(),
             particle_mgr: ParticleMgr::new(renderer),
             trail_mgr: TrailMgr::default(),
+            citadel_force_field_mgr: CitadelForceFieldMgr::default(),
             figure_mgr: FigureMgr::new(renderer),
             tether_mgr: TetherMgr::new(renderer),
             sfx_mgr: SfxMgr::default(),
@@ -403,6 +407,8 @@ impl Scene {
 
     /// Get a reference to the scene's trail manager.
     pub fn trail_mgr(&self) -> &TrailMgr { &self.trail_mgr }
+
+    pub fn citadel_force_field_mgr(&self) -> &CitadelForceFieldMgr { &self.citadel_force_field_mgr }
 
     /// Get a reference to the scene's figure manager.
     pub fn figure_mgr(&self) -> &FigureMgr { &self.figure_mgr }
@@ -791,6 +797,7 @@ impl Scene {
 
         // Maintain the trails.
         self.trail_mgr.maintain(renderer, scene_data);
+        self.citadel_force_field_mgr.maintain(renderer, scene_data);
 
         // Update light constants
         let max_light_dist = loaded_distance.powi(2) + LIGHT_DIST_RADIUS;
