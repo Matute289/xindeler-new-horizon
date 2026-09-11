@@ -1,0 +1,73 @@
+(
+    schema: "xindeler_open_world.aerial_citadel.v1",
+    coordinate_space: "citadel_relative_meters",
+    notes: [
+        "Ported from xindeler-old's world/src/layer/mod.rs (COW-8 Phase 2). Every value here was",
+        "a hardcoded Rust constant there; this file is the single source of truth now.",
+        "`center` is an absolute world position (matches every other Cromatolis authored anchor).",
+        "Every other position field is relative to `center`, in the same local axes the geometry",
+        "functions compute (world x/y, not the mountain's rotated forward/side axes).",
+        "`wall_towers` are the 24 authored perimeter tower centres, clockwise from east, relative",
+        "to `center`. Mean spacing is ~93 m (range 78-116 m) around the ~2.25 km irregular rim.",
+    ],
+    center: (16384, 16384),
+    altitude_above_sea_m: 5000,
+    max_radius_m: 440,
+    mountain_center: (80, -40),
+    mountain_height_m: 200,
+    snowline_above_deck_m: 120,
+    castle_center: (-25, 15),
+    castle_floor_above_deck_m: 4,
+    castle_wall_height_m: 28,
+    wall_height_m: 25,
+    wall_tower_radius_m: 13,
+    // Wall tower height = wall_height_m + wall_tower_height_extra_m.
+    wall_tower_height_extra_m: 15,
+    // Both the upper spiral and the lower spiral use this same six-metre
+    // radial tread width -- deliberately generous so a player can correct a
+    // small movement error without falling through the inner side of the
+    // tower.
+    tower_stair_width_m: 6,
+    // The eastern pilot tower's force field remains nearly as wide as its
+    // 26-metre stone base, but rises higher than a literal hemisphere so the
+    // 2.5x articulated barrel stays enclosed at its maximum elevation.
+    pilot_dome_radius_m: 14,
+    pilot_dome_height_m: 20,
+    // First under-island prototype: deliberately 5 m shorter than the
+    // initial half-height sketch, so it reads as a compact lookout beneath
+    // its parent wall tower rather than a second full tower.
+    lower_pilot_tower_height_m: 15,
+    // The lower stair begins on the opposite side of the tower from the
+    // upper spiral. It is a separate route: entering it never changes a
+    // tread or hatch of the upper lookout.
+    lower_tower_stair_phase: 13,
+    // The centers sit slightly inside the rim. That keeps their full
+    // foundations supported while their 26 m diameter footprints overlap
+    // the contour wall.
+    wall_towers: [
+        (365, 0),
+        (312, 84),
+        (275, 159),
+        (243, 243),
+        (177, 307),
+        (91, 338),
+        (0, 342),
+        (-86, 322),
+        (-158, 275),
+        (-220, 220),
+        (-316, 182),
+        (-398, 107),
+        (-410, 0),
+        (-337, -90),
+        (-275, -159),
+        (-220, -220),
+        (-152, -263),
+        (-78, -290),
+        (0, -298),
+        (78, -290),
+        (161, -278),
+        (265, -265),
+        (350, -202),
+        (388, -104),
+    ],
+)

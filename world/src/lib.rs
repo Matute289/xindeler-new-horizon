@@ -513,6 +513,7 @@ impl World {
         if index.features.spots {
             layer::apply_spots_to(&mut canvas, &mut dynamic_rng);
         }
+        layer::apply_cromatolis_local_aerial_features_to(&mut canvas);
         // layer::apply_coral_to(&mut canvas);
 
         // Apply site generation
