@@ -9,6 +9,7 @@ pub use tool::{AbilityMap, AbilitySet, AbilitySpec, Hands, Tool, ToolKind, Weapo
 
 use crate::{
     assets::{self, Asset, AssetCache, AssetExt, BoxedError, Error, Ron, SharedString},
+    character::CharacterId,
     comp::{
         Body, body::humanoid, inventory::InvSlot, item_condition::ItemCondition, skillset::SkillSet,
     },
@@ -536,6 +537,17 @@ pub struct Item {
     /// NOTE: not persisted to the database — items reloaded from storage
     /// revert to their definition's baseline quality.
     quality_override: Option<Quality>,
+    /// Per-instance identity binding: the character this item instance is
+    /// bound to, if any (COW-11b). `None` (the common case) means unbound —
+    /// any character may hold/use it freely. Shaped like `quality_override`
+    /// above (a per-instance override independent of the shared, `Arc`'d
+    /// `ItemDef`), but — unlike `quality_override` — this DOES persist
+    /// across save/load (see [`Item::persistence_owner`]), since
+    /// identity-binding (e.g. a Green Post checkpoint permit) must survive a
+    /// reconnect. Uses the stable, per-character-row [`CharacterId`] —
+    /// deliberately never the ECS `Uid`, which is re-issued per server
+    /// session and would silently break the binding on reconnect.
+    owner: Option<CharacterId>,
 }
 
 /// Newtype around [`Item`] used for frontend events to prevent it accidentally
@@ -1236,6 +1248,7 @@ impl Item {
             hash: 0,
             durability_lost: None,
             quality_override: None,
+            owner: None,
         };
         item.durability_lost = item.has_durability().then_some(0);
         item.update_item_state(ability_map, msm);
@@ -1348,6 +1361,9 @@ impl Item {
         );
         if let Some(quality) = self.quality_override {
             new_item.set_quality_override(quality);
+        }
+        if let Some(owner) = self.owner {
+            new_item.set_owner(owner);
         }
         new_item.slots_mut().iter_mut().zip(self.slots()).for_each(
             |(new_item_slot, old_item_slot)| {
@@ -1872,6 +1888,23 @@ impl Item {
         // change from different durability
         self.update_item_state(ability_map, msm);
     }
+
+    /// The character this item instance is bound to, if any. See the
+    /// `owner` field doc on [`Item`].
+    pub fn owner(&self) -> Option<CharacterId> { self.owner }
+
+    /// Binds this item instance to `owner`. Safe to call repeatedly (e.g. a
+    /// stopgap grant command re-stamping the same target) — it simply
+    /// overwrites any previous binding.
+    pub fn set_owner(&mut self, owner: CharacterId) { self.owner = Some(owner); }
+
+    /// See [`Item::persistence_durability`] — the same persistence-layer
+    /// accessor shape, for the `owner` field.
+    pub fn persistence_owner(&self) -> Option<CharacterId> { self.owner }
+
+    /// See [`Item::persistence_set_durability`] — the same
+    /// persistence-layer accessor shape, for the `owner` field.
+    pub fn persistence_set_owner(&mut self, owner: Option<CharacterId>) { self.owner = owner; }
 
     /// If an item is stackable and has an amount greater than the requested
     /// amount, decreases the amount of the original item by the same

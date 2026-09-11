@@ -183,6 +183,7 @@ fn do_command(
         ServerChatCommand::Dummy => handle_spawn_training_dummy,
         ServerChatCommand::Explosion => handle_explosion,
         ServerChatCommand::Faction => handle_faction,
+        ServerChatCommand::GiveGatePermit => handle_give_gate_permit,
         ServerChatCommand::GiveItem => handle_give_item,
         ServerChatCommand::GiveItemQuality => handle_give_item_quality,
         ServerChatCommand::Gizmos => handle_gizmos,
@@ -896,6 +897,84 @@ fn handle_give_item_quality(
     } else {
         Err(action.help_content())
     }
+}
+
+/// `/give_gate_permit <player>` -- grants `target` the Green Post checkpoint
+/// permit item, stamped (`Item::set_owner`) to `target`'s own `CharacterId`
+/// in the same step, so the item is immediately valid at the checkpoint.
+///
+/// This is a stopgap grant path only: real content should grant the permit
+/// narratively, through NPC/quest dialogue, once that exists. Until then,
+/// this is the only way to obtain one. Admin-gated the same way
+/// `/give_item_quality` is: `needs_role: Admin` on the command definition,
+/// re-checked here against the authoritative admin source.
+#[cfg(feature = "worldgen")]
+fn handle_give_gate_permit(
+    server: &mut Server,
+    client: EcsEntity,
+    _target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let client_uuid = uuid(server, client, "client")?;
+    if !matches!(real_role(server, client_uuid, "client")?, AdminRole::Admin) {
+        return Err(Content::Plain(
+            "Only admins may use /give_gate_permit.".to_string(),
+        ));
+    }
+
+    let Some(alias) = parse_cmd_args!(args, String) else {
+        return Err(action.help_content());
+    };
+    let (player, _player_uuid) = find_alias(server.state.ecs(), &alias, true)?;
+
+    let character_id = server
+        .state
+        .ecs()
+        .read_storage::<comp::Presence>()
+        .get(player)
+        .and_then(|presence| presence.kind.character_id())
+        .ok_or_else(|| {
+            Content::Plain("Target has no loaded character to bind the permit to.".to_string())
+        })?;
+
+    let mut item = Item::new_from_asset(crate::gate_checkpoint::GREEN_POST_PERMIT_ITEM_ID)
+        .inspect_err(|error| error!(?error, "Failed to load the Green Post permit asset!"))
+        .map_err(|_| Content::Plain("Failed to load the Green Post permit item.".to_string()))?;
+    item.set_owner(character_id);
+
+    let pushed = server
+        .state
+        .ecs()
+        .write_storage::<Inventory>()
+        .get_mut(player)
+        .is_some_and(|mut inv| inv.push(item).is_ok());
+    if !pushed {
+        return Err(Content::Plain(
+            "Could not give the permit -- target inventory is full or missing.".to_string(),
+        ));
+    }
+
+    let mut inventory_update_buffers = server
+        .state
+        .ecs_mut()
+        .write_storage::<comp::InventoryUpdateBuffer>();
+    if let Some(buf) = inventory_update_buffers.get_mut(player) {
+        buf.push(comp::InventoryUpdateEvent::Given);
+    }
+    drop(inventory_update_buffers);
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Gave {alias} a Green Post permit bound to their character."
+            )),
+        ),
+    );
+
+    Ok(())
 }
 
 fn handle_gizmos(
@@ -2424,6 +2503,19 @@ fn handle_citadel_sphere_turret_pilot(
 
 #[cfg(not(feature = "worldgen"))]
 fn handle_citadel_turret_pilot(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_give_gate_permit(
     _server: &mut Server,
     _client: EcsEntity,
     _target: EcsEntity,

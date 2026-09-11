@@ -26,6 +26,7 @@ pub mod connection_handler;
 mod data_dir;
 pub mod error;
 pub mod events;
+#[cfg(feature = "worldgen")] mod gate_checkpoint;
 pub mod input;
 pub mod location;
 pub mod lod;
@@ -291,6 +292,17 @@ pub struct Server {
     // materializes an absent station; it never creates a second live copy.
     #[cfg(feature = "worldgen")]
     citadel_defence_refresh: Duration,
+
+    // Green Post checkpoint gate + Evercross guard reconciliation. Same 1Hz
+    // shape as `citadel_defence_refresh` above; `green_post_checkpoint_open`
+    // is the checkpoint's own cached last-applied physical state (`None`
+    // until the first pass), compared against instead of re-reading live
+    // terrain so the reconciliation stays idempotent without needing a full
+    // tick to apply the previous pass's `BlockChange` first.
+    #[cfg(feature = "worldgen")]
+    green_post_checkpoint_refresh: Duration,
+    #[cfg(feature = "worldgen")]
+    green_post_checkpoint_open: Option<bool>,
 
     event_dispatcher: SendDispatcher<'static>,
 
@@ -846,6 +858,10 @@ impl Server {
             disconnect_all_clients_requested: false,
             #[cfg(feature = "worldgen")]
             citadel_defence_refresh: Duration::from_secs(1),
+            #[cfg(feature = "worldgen")]
+            green_post_checkpoint_refresh: Duration::from_secs(1),
+            #[cfg(feature = "worldgen")]
+            green_post_checkpoint_open: None,
 
             event_dispatcher: Self::create_event_dispatcher(pools),
 
@@ -1103,6 +1119,19 @@ impl Server {
                 citadel::ensure_upper_defences(&mut self.state);
                 citadel::ensure_lower_tower_defences(&mut self.state);
                 self.citadel_defence_refresh = Duration::ZERO;
+            }
+
+            // Green Post checkpoint gate + Evercross guard reconciliation --
+            // see `green_post_checkpoint_refresh`'s field doc above.
+            self.green_post_checkpoint_refresh += dt;
+            if self.green_post_checkpoint_refresh >= Duration::from_secs(1) {
+                gate_checkpoint::ensure_green_post_checkpoint(
+                    &mut self.state,
+                    &self.world,
+                    &mut self.green_post_checkpoint_open,
+                );
+                gate_checkpoint::ensure_evercross_guard(&mut self.state, &self.world);
+                self.green_post_checkpoint_refresh = Duration::ZERO;
             }
         }
 
