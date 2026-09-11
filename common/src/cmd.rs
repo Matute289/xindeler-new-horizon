@@ -464,6 +464,7 @@ pub enum ServerChatCommand {
     Campfire,
     ClearPersistedTerrain,
     CreateLocation,
+    CromatolisGoto,
     DeathEffect,
     DebugColumn,
     DebugWays,
@@ -722,6 +723,14 @@ impl ServerChatCommand {
             ServerChatCommand::ClearPersistedTerrain => cmd(
                 vec![Integer("chunk_radius", 6, Required)],
                 Content::localized("command-clear_persisted_terrain-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CromatolisGoto => cmd(
+                vec![
+                    Integer("source pixel x", 1024, Required),
+                    Integer("source pixel y", 768, Required),
+                ],
+                Content::localized("command-cromatolis_goto-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::DeathEffect => cmd(
@@ -1500,6 +1509,7 @@ impl ServerChatCommand {
             ServerChatCommand::Build => "build",
             ServerChatCommand::Campfire => "campfire",
             ServerChatCommand::ClearPersistedTerrain => "clear_persisted_terrain",
+            ServerChatCommand::CromatolisGoto => "cromatolis_goto",
             ServerChatCommand::DeathEffect => "death_effect",
             ServerChatCommand::DebugColumn => "debug_column",
             ServerChatCommand::DebugWays => "debug_ways",

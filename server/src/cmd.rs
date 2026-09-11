@@ -185,6 +185,7 @@ fn do_command(
         ServerChatCommand::GizmosRange => handle_gizmos_range,
         ServerChatCommand::Goto => handle_goto,
         ServerChatCommand::GotoRand => handle_goto_rand,
+        ServerChatCommand::CromatolisGoto => handle_cromatolis_goto,
         ServerChatCommand::Group => handle_group,
         ServerChatCommand::GroupInvite => handle_group_invite,
         ServerChatCommand::GroupKick => handle_group_kick,
@@ -1921,6 +1922,78 @@ fn handle_goto_rand(
 
 #[cfg(not(feature = "worldgen"))]
 fn handle_goto_rand(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
+}
+
+/// Clearance above the sampled surface altitude a `/cromatolis_goto`
+/// teleport lands at, so the target doesn't spawn clipped into terrain.
+#[cfg(feature = "worldgen")]
+const CROMATOLIS_TELEPORT_CLEARANCE: f32 = 5.0;
+
+/// QA convenience: teleport to the real world position that corresponds to
+/// a raw pixel coordinate on the Cromatolis source map canvas (the same
+/// `2048x1536` pixel space every authored site/route/fortification is
+/// authored against). Reimplements the same behavior as `xindeler-old`'s
+/// `cromatolis_goto` command natively against this repo's own conversion
+/// helper (`world::civ::cromatolis_source_pixel_to_wpos`), rather than
+/// porting its code.
+#[cfg(feature = "worldgen")]
+fn handle_cromatolis_goto(
+    server: &mut Server,
+    _client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let (Some(source_x), Some(source_y)) = parse_cmd_args!(args, i32, i32) else {
+        return Err(action.help_content());
+    };
+
+    // Never hardcode the canvas dimensions here -- read them from the same
+    // authored asset every other Cromatolis pixel-space reader uses.
+    let Some(source_pixels) = world::civ::cromatolis_source_pixels() else {
+        return Err(Content::Plain(
+            "Could not load the Cromatolis source map canvas dimensions".into(),
+        ));
+    };
+
+    let map_size = server.world.sim().map_size_lg();
+    let Some(wpos) = world::civ::cromatolis_source_pixel_to_wpos(
+        Vec2::new(source_x as f32, source_y as f32),
+        source_pixels,
+        map_size,
+    ) else {
+        return Err(Content::Plain(format!(
+            "Cromatolis map pixels must be within 0..={} and 0..={}",
+            source_pixels.x.saturating_sub(1),
+            source_pixels.y.saturating_sub(1),
+        )));
+    };
+
+    let surface = server.world.sim().get_surface_alt_approx(wpos);
+    server.state.position_mut_reposition(
+        target,
+        true,
+        |current_pos| {
+            current_pos.0 = wpos
+                .map(|coord| coord as f32)
+                .with_z(surface + CROMATOLIS_TELEPORT_CLEARANCE)
+        },
+        true,
+        false,
+    )
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_cromatolis_goto(
     _server: &mut Server,
     _client: EcsEntity,
     _target: EcsEntity,
