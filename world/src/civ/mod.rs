@@ -4746,4 +4746,96 @@ mod tests {
              terrain -- the middle temperature band it needs may have collapsed"
         );
     }
+
+    /// Real-data regression for the other 9 real Cromatolis dungeon-site
+    /// types (`Haniwa` has its own dedicated test above), backing the exact
+    /// coverage numbers cited when this baseline-temperature-curve change
+    /// was reviewed -- same precedent as `SWAMP_HUMIDITY_THRESHOLD`'s doc
+    /// comment in `world/src/sim/mod.rs`, which cites an exact coverage
+    /// percentage backed by a committed regression
+    /// (`cromatolis_swamp_coverage_regression_against_real_lfs_assets`).
+    /// Bounds are generous around the measured fraction (not exact counts)
+    /// so small future world-gen tweaks don't make this brittle; a real
+    /// coverage shift big enough to leave the bound is exactly what this
+    /// should catch.
+    ///
+    /// - `Gnarling`: still exactly 0. Its temperature band (`-0.3..0.4`) is
+    ///   reachable (unlike before this change), but its `tree_density > 0.75`
+    ///   requirement almost never coincides with it in the real authored
+    ///   vegetation data (dense forest sits almost exclusively in the hot
+    ///   lowlands in Cromatolis's authored layer) -- a real content correlation
+    ///   unrelated to the curve's shape.
+    /// - `Myrmidon`/`Terracotta`: still exactly 0. Their temperature gate
+    ///   (`0.9..1.0`) is now reachable, but their separate `water_alt -
+    ///   CONFIG.sea_level > 50.0` requirement is unsatisfiable anywhere on the
+    ///   real map -- no chunk has a local water table that high above sea
+    ///   level. Unrelated to temperature.
+    /// - `ChapelSite`: still exactly 0. Has no temperature dependency at all
+    ///   (`Ocean` biome + an altitude-vs-sea-level check only); blocked by an
+    ///   unrelated bathymetry condition.
+    /// - `Adlet`/`Sahagin`/`VampireCastle`/`Cultist`/`DwarvenMine`: were
+    ///   already reachable (or unaffected, being non-temperature-gated) before
+    ///   this change; bounded here to catch a future regression.
+    #[test]
+    #[ignore]
+    fn cromatolis_dungeon_type_coverage_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let dims = sim.map_size_lg().chunks().map(i32::from);
+        let n = (dims.x * dims.y) as f64;
+
+        let mut gnarling = 0usize;
+        let mut adlet = 0usize;
+        let mut sahagin = 0usize;
+        let mut vampire_castle = 0usize;
+        let mut myrmidon = 0usize;
+        let mut chapel_site = 0usize;
+        let mut cultist = 0usize;
+        let mut terracotta = 0usize;
+        let mut dwarven_mine = 0usize;
+
+        for y in 0..dims.y {
+            for x in 0..dims.x {
+                let loc = Vec2::new(x, y);
+                gnarling += usize::from(SiteKind::Gnarling.is_suitable_loc(loc, &sim));
+                adlet += usize::from(SiteKind::Adlet.is_suitable_loc(loc, &sim));
+                sahagin += usize::from(SiteKind::Sahagin.is_suitable_loc(loc, &sim));
+                vampire_castle += usize::from(SiteKind::VampireCastle.is_suitable_loc(loc, &sim));
+                myrmidon += usize::from(SiteKind::Myrmidon.is_suitable_loc(loc, &sim));
+                chapel_site += usize::from(SiteKind::ChapelSite.is_suitable_loc(loc, &sim));
+                cultist += usize::from(SiteKind::Cultist.is_suitable_loc(loc, &sim));
+                terracotta += usize::from(SiteKind::Terracotta.is_suitable_loc(loc, &sim));
+                dwarven_mine += usize::from(SiteKind::DwarvenMine.is_suitable_loc(loc, &sim));
+            }
+        }
+
+        assert_eq!(
+            gnarling, 0,
+            "Gnarling: expected still exactly 0, got {gnarling}"
+        );
+        assert_eq!(
+            myrmidon, 0,
+            "Myrmidon: expected still exactly 0, got {myrmidon}"
+        );
+        assert_eq!(
+            chapel_site, 0,
+            "ChapelSite: expected still exactly 0, got {chapel_site}"
+        );
+        assert_eq!(
+            terracotta, 0,
+            "Terracotta: expected still exactly 0, got {terracotta}"
+        );
+
+        let assert_fraction_in = |name: &str, count: usize, range: std::ops::Range<f64>| {
+            let fraction = count as f64 / n;
+            assert!(
+                range.contains(&fraction),
+                "{name}: expected coverage fraction in {range:?}, got {fraction:.6} ({count}/{n})"
+            );
+        };
+        assert_fraction_in("Adlet", adlet, 0.005..0.03);
+        assert_fraction_in("Sahagin", sahagin, 0.0003..0.003);
+        assert_fraction_in("VampireCastle", vampire_castle, 0.00002..0.0005);
+        assert_fraction_in("Cultist", cultist, 0.05..0.2);
+        assert_fraction_in("DwarvenMine", dwarven_mine, 0.05..0.15);
+    }
 }
