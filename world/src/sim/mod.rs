@@ -31,6 +31,7 @@ use crate::{
     block::BlockGen,
     civ::{Place, PointOfInterest},
     column::ColumnGen,
+    config,
     site::Site,
     util::{
         CARDINALS, DHashSet, FastNoise, FastNoise2d, LOCALITY, NEIGHBORS, RandomField, Sampler,
@@ -42,7 +43,7 @@ use bincode::{
     serde::{decode_from_std_read, encode_into_std_write},
 };
 use common::{
-    assets::{AssetExt, BoxedError, FileAsset, load_bincode_legacy},
+    assets::{AssetExt, BoxedError, FileAsset, load_bincode_legacy, load_ron},
     calendar::Calendar,
     grid::Grid,
     lottery::Lottery,
@@ -104,6 +105,10 @@ struct GenCdf {
     pub(crate) authored_region_id: Option<&'static str>,
     authored_route_layer: Option<Box<[f32]>>,
     authored_vegetation_layer: Option<Box<[f32]>>,
+    /// Authored baseline-temperature-curve tuning for the loaded region (if
+    /// any), or `AuthoredCromatolisClimate::default()` if none is loaded /
+    /// the asset failed to parse. See `cromatolis_baseline_temp`.
+    pub(crate) cromatolis_climate: AuthoredCromatolisClimate,
     /// Per-chunk "adjacent to authored water" signal, see
     /// `SimChunk::authored_near_water`.
     authored_near_water: Box<[bool]>,
@@ -691,6 +696,43 @@ fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredReg
         .find(|region| region.map_asset == specifier)
 }
 
+/// Authored parameters for a region's baseline temperature curve (see
+/// `cromatolis_baseline_temp`). Cromatolis-specific tuned content, not a
+/// general engine constant, so it lives in a RON asset
+/// (`{region.map_asset}_climate`, e.g. `assets/world/map/
+/// cromatolis_v0_climate.ron`) rather than a Rust literal -- the same
+/// convention this crate already uses for every other authored Cromatolis
+/// parameter (settlements, landmarks, bridges, fortifications, ...).
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct AuthoredCromatolisClimate {
+    /// Baseline temperature at sea level, in real degrees Celsius.
+    sea_level_temp_c: f32,
+    /// How fast the curve cools with altitude, in degrees Celsius per meter
+    /// of relief above sea level.
+    lapse_rate_c_per_m: f32,
+}
+
+impl FileAsset for AuthoredCromatolisClimate {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl Default for AuthoredCromatolisClimate {
+    /// Used only if the authored climate asset is missing or fails to
+    /// parse (same graceful-degradation posture as this module's other
+    /// authored-layer loaders: warn, then fall back instead of panicking).
+    /// Mirrors the values `assets/world/map/cromatolis_v0_climate.ron`
+    /// ships today, so a missing/corrupt asset reproduces today's curve
+    /// rather than an arbitrary one.
+    fn default() -> Self {
+        Self {
+            sea_level_temp_c: 36.0,
+            lapse_rate_c_per_m: 0.023,
+        }
+    }
+}
+
 /// Data for the most recent map type.  Update this when you add a new map
 /// version.
 pub type ModernMap = WorldMap_0_7_0;
@@ -959,6 +1001,25 @@ impl WorldSim {
         } else {
             (None, None, None, None, None)
         };
+        // Not a raster layer (`AuthoredLayerKind`), so loaded separately: a
+        // couple of scalar tuning values, not a per-chunk array.
+        let cromatolis_climate = authored_region
+            .and_then(|region| {
+                let specifier = format!("{}_climate", region.map_asset);
+                match AuthoredCromatolisClimate::load_owned(&specifier) {
+                    Ok(climate) => Some(climate),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            region = region.id,
+                            "Could not load authored Cromatolis climate; falling back to the \
+                             default baseline curve"
+                        );
+                        None
+                    },
+                }
+            })
+            .unwrap_or_default();
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
         let fresh = parsed_world_file.is_none();
@@ -1981,6 +2042,7 @@ impl WorldSim {
             authored_region_id,
             authored_route_layer,
             authored_vegetation_layer,
+            cromatolis_climate,
             authored_near_water,
             humid_base,
             temp_base,
@@ -2988,6 +3050,43 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
 /// claim most tiles humid enough to clear 0.8.
 const SWAMP_HUMIDITY_THRESHOLD: f32 = 0.6;
 
+/// Cromatolis's authored baseline temperature curve: colder with altitude,
+/// computed in real degrees Celsius via a simple lapse-rate formula and
+/// converted onto the engine's existing abstract world-gen scale so every
+/// existing consumer of `SimChunk::temp` (biome assignment, scatter/
+/// wildlife/rock placement, dungeon-site eligibility) keeps working
+/// unmodified. Replaces a hard two-point clamp (`-1.0` above 970 m of
+/// relief, `0.55` at or below it) that structurally prevented any site
+/// predicate needing a *middle* temperature band from ever matching in
+/// Cromatolis.
+///
+/// `alt_pre` is meters of relief above `CONFIG.sea_level` (may be
+/// negative for underwater terrain, hence the `max(0.0)` -- underwater
+/// chunks get the sea-level baseline temperature, same as before this
+/// change).
+///
+/// `climate` is the authored, region-specific tuning
+/// (`AuthoredCromatolisClimate`, loaded from `cromatolis_v0_climate.ron`):
+/// `sea_level_temp_c` is a hot tropical coastal baseline (`close(...,
+/// CONFIG.desert_temp, ...)`/`(0.9..1.0).contains(&chunk.temp)`-style site
+/// predicates elsewhere in worldgen need *some* chunks to reach the hot end
+/// of the abstract scale, and the lowest-altitude chunks are the only ones
+/// this curve ever makes that hot); `lapse_rate_c_per_m` is deliberately
+/// steeper than Earth's ~6.5 °C/km average tropospheric lapse rate (still
+/// within the range real lapse rates span with humidity/region -- the dry
+/// adiabatic rate alone is ~9.8 °C/km): Cromatolis's actual relief tops out
+/// around 1.3 km above sea level, and a literal Earth-average rate over
+/// only that much relief would cool the highlands by less than 9 °C total,
+/// leaving the whole map clustered in the warm end of the scale and
+/// largely reproducing the "no usable cold/middle band" problem this curve
+/// exists to fix -- just gradually instead of via a hard clamp. The
+/// steeper rate lets Cromatolis's real, modest relief span the scale's
+/// full practical range end to end.
+fn cromatolis_baseline_temp(alt_pre: f32, climate: AuthoredCromatolisClimate) -> f32 {
+    let temp_c = climate.sea_level_temp_c - alt_pre.max(0.0) * climate.lapse_rate_c_per_m;
+    config::celsius_to_abstract_temp(temp_c).clamp(-1.0, 1.0)
+}
+
 impl SimChunk {
     fn generate(map_size_lg: MapSizeLg, posi: usize, gen_ctx: &GenCtx, gen_cdf: &GenCdf) -> Self {
         let pos = uniform_idx_as_vec2(map_size_lg, posi);
@@ -3033,7 +3132,7 @@ impl SimChunk {
         .sub(0.5)
         .mul(2.0);
         if gen_cdf.authored_cromatolis_v0 {
-            temp = if alt_pre > 970.0 { -1.0 } else { 0.55 };
+            temp = cromatolis_baseline_temp(alt_pre, gen_cdf.cromatolis_climate);
         }
 
         // Take the weighted average of our randomly generated base humidity, and the
@@ -3306,7 +3405,21 @@ impl SimChunk {
             BiomeKind::Snowland
         } else if self.alt > 500.0 && self.chaos > 0.3 && self.tree_density < 0.6 {
             BiomeKind::Mountain
-        } else if self.temp > CONFIG.desert_temp && self.humidity < CONFIG.desert_hum {
+        } else if self.authored_region_id != Some(CROMATOLIS_V0_REGION_ID)
+            && self.temp > CONFIG.desert_temp
+            && self.humidity < CONFIG.desert_hum
+        {
+            // Same rationale and scoping pattern as the `Snowland` check
+            // above: Cromatolis is lore-authored as tropical/caribbean, not
+            // arid, so this stays scoped to that specific region (not "any
+            // authored region is loaded" -- same COW-2 debt note). Without
+            // this, `cromatolis_baseline_temp`'s hot coastal end (needed so
+            // some chunks reach the `(0.9..1.0)` band several dungeon-site
+            // predicates require) drives real low-altitude coastal humidity
+            // down to ~0 via the evaporation dampener a few lines above
+            // (`humidity *= (1.0 - (temp - CONFIG.tropical_temp).max(0.0) /
+            // ...)`), which would otherwise satisfy this branch on ordinary
+            // tropical coastline and paint it as literal desert terrain.
             BiomeKind::Desert
         } else if self.authored_near_water && self.humidity > SWAMP_HUMIDITY_THRESHOLD {
             // Gated on real hydrology (`authored_near_water`, not humidity
@@ -3708,6 +3821,149 @@ mod tests {
         let sim = generate_cromatolis_world();
         let map_size_lg = sim.map_size_lg();
         assert_eq!(sim.chunks.len(), map_size_lg.chunks_len());
+    }
+
+    /// Regression for `cromatolis_baseline_temp` replacing the old hard
+    /// two-value clamp (`-1.0` above 970 m of relief, `0.55` at or below
+    /// it): sampling a spread of altitudes must produce a real, continuous
+    /// gradient of distinct values, not just those two fixed points.
+    #[test]
+    fn cromatolis_baseline_temp_is_continuous_not_two_fixed_points() {
+        let climate = AuthoredCromatolisClimate::default();
+        let samples: Vec<f32> = (0..=2000)
+            .step_by(20)
+            .map(|alt_pre| cromatolis_baseline_temp(alt_pre as f32, climate))
+            .collect();
+
+        let distinct_values = samples
+            .iter()
+            .map(|t| (t * 1_000_000.0).round() as i64)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            distinct_values.len() > 10,
+            "expected a continuous gradient of distinct temperatures across altitude, got only {} \
+             distinct value(s): {samples:?}",
+            distinct_values.len()
+        );
+
+        // Neither of the two old fixed points should be the *only* values
+        // produced -- some samples must land strictly between them.
+        let strictly_between_old_extremes = samples.iter().any(|&t| t > -1.0 && t < 0.55);
+        assert!(
+            strictly_between_old_extremes,
+            "expected some altitude to produce a temperature strictly between the old clamp's two \
+             fixed points (-1.0 and 0.55), got: {samples:?}"
+        );
+    }
+
+    /// The curve must cool monotonically with altitude (colder higher up),
+    /// matching the pre-existing intent the old hard clamp also expressed.
+    #[test]
+    fn cromatolis_baseline_temp_decreases_monotonically_with_altitude() {
+        let climate = AuthoredCromatolisClimate::default();
+        let mut prev = cromatolis_baseline_temp(-100.0, climate);
+        for alt_pre in (0..3000).step_by(10) {
+            let temp = cromatolis_baseline_temp(alt_pre as f32, climate);
+            assert!(
+                temp <= prev,
+                "temperature must never increase with altitude: alt_pre={alt_pre} gave {temp}, \
+                 previous (lower) altitude gave {prev}"
+            );
+            prev = temp;
+        }
+    }
+
+    /// Must never panic and must always stay within the abstract scale's
+    /// normal `[-1.0, 1.0]` range, even for extreme or non-finite input.
+    #[test]
+    fn cromatolis_baseline_temp_never_panics_and_stays_in_abstract_range() {
+        let climate = AuthoredCromatolisClimate::default();
+        for &alt_pre in &[
+            f32::MIN,
+            f32::MAX,
+            -1_000_000.0,
+            -1.0,
+            0.0,
+            1_000_000.0,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            let temp = cromatolis_baseline_temp(alt_pre, climate);
+            assert!(
+                temp.is_finite(),
+                "alt_pre={alt_pre} produced non-finite temp {temp}"
+            );
+            assert!(
+                (-1.0..=1.0).contains(&temp),
+                "alt_pre={alt_pre} produced out-of-range temp {temp}"
+            );
+        }
+    }
+
+    /// Regression for the `Desert` branch of `get_biome` staying scoped away
+    /// from Cromatolis (same pattern as the pre-existing `Snowland` scoping
+    /// immediately above it): `cromatolis_baseline_temp`'s hot coastal end
+    /// (needed so some chunks reach the `(0.9..1.0)` band several
+    /// dungeon-site predicates require) drives real low-altitude coastal
+    /// humidity toward 0 via the evaporation dampener, which would
+    /// otherwise satisfy `Desert`'s `temp > CONFIG.desert_temp && humidity <
+    /// CONFIG.desert_hum` check on real tropical/Caribbean coastline.
+    /// Without the scoping fix this found zero (not "rare but present" like
+    /// `Swamp`) `Desert` chunks in the real generated grid -- Cromatolis is
+    /// lore-authored to have none at all.
+    #[test]
+    #[ignore]
+    fn cromatolis_desert_biome_stays_scoped_out_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let desert_count = sim
+            .chunks
+            .iter()
+            .filter(|c| c.get_biome() == BiomeKind::Desert)
+            .count();
+        assert_eq!(
+            desert_count, 0,
+            "expected zero Desert-biome chunks in real Cromatolis terrain (lore-authored as \
+             tropical/caribbean, no real desert) -- got {desert_count}"
+        );
+    }
+
+    /// Regression for `crate::layer::wildlife::not_cromatolis` gating the
+    /// desert wildlife density formulas away from Cromatolis. Before that
+    /// gate existed, the ungated `world.wildlife.spawn.desert.hot` formula
+    /// (`close(chunk.temp, CONFIG.desert_temp + 0.2, 0.3)`, no humidity
+    /// check) was nonzero for ~86% of the real generated Cromatolis grid --
+    /// this reproduces that exact formula and asserts the gate zeroes it
+    /// out everywhere.
+    #[test]
+    #[ignore]
+    fn cromatolis_desert_wildlife_density_stays_gated_out_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let ungated_hits = sim
+            .chunks
+            .iter()
+            .filter(|c| (c.temp - (CONFIG.desert_temp + 0.2)).abs() < 0.3)
+            .count();
+        let gated_hits = sim
+            .chunks
+            .iter()
+            .filter(|c| {
+                crate::layer::wildlife::not_cromatolis(c) > 0.0
+                    && (c.temp - (CONFIG.desert_temp + 0.2)).abs() < 0.3
+            })
+            .count();
+        assert!(
+            ungated_hits as f64 / sim.chunks.len() as f64 > 0.5,
+            "sanity check failed: expected the ungated formula to still hit a large fraction of \
+             the map (regenerating this baseline confirms the gate is doing real work), got \
+             {ungated_hits}/{}",
+            sim.chunks.len()
+        );
+        assert_eq!(
+            gated_hits, 0,
+            "expected the Cromatolis-exclusion gate to zero out every hit of the desert wildlife \
+             density formula in real Cromatolis terrain, got {gated_hits}"
+        );
     }
 
     /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs

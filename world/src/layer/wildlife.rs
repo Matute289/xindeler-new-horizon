@@ -1,4 +1,9 @@
-use crate::{CONFIG, IndexRef, column::ColumnSample, sim::SimChunk, util::close};
+use crate::{
+    CONFIG, IndexRef,
+    column::ColumnSample,
+    sim::{CROMATOLIS_V0_REGION_ID, SimChunk},
+    util::close,
+};
 use common::{
     assets::{AssetExt, Ron},
     calendar::{Calendar, CalendarEvent},
@@ -510,24 +515,37 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         ("world.wildlife.spawn.tropical.rock", |c, col| {
             close(c.temp, CONFIG.tropical_temp + 0.1, 0.5) * col.rock_density * BASE_DENSITY * 5.0
         }),
-        // **Desert**
+        // **Desert** -- gated off in Cromatolis (see `not_cromatolis`'s doc
+        // comment): its authored baseline temperature curve
+        // (`cromatolis_baseline_temp`) needs some real coastal chunks to
+        // reach the hot end of the abstract scale (several dungeon-site
+        // predicates require it), which would otherwise satisfy these
+        // temp-only/loosely-humidity-gated density formulas across the
+        // large majority of the map -- verified directly against real
+        // generated Cromatolis terrain: `close(chunk.temp, CONFIG.desert_temp
+        // + 0.2, 0.3)` alone (the ungated `desert.hot` formula below) is
+        // nonzero for ~86% of all chunks. Same scoping pattern as
+        // `SimChunk::get_biome`'s `Snowland`/`Desert` checks.
         // Area animals
         ("world.wildlife.spawn.desert.area", |c, _col| {
-            close(c.temp, CONFIG.desert_temp + 0.1, 0.4)
+            not_cromatolis(c)
+                * close(c.temp, CONFIG.desert_temp + 0.1, 0.4)
                 * close(c.humidity, CONFIG.desert_hum, 0.4)
                 * BASE_DENSITY
                 * 0.8
         }),
         // Wasteland animals
         ("world.wildlife.spawn.desert.wasteland", |c, _col| {
-            close(c.temp, CONFIG.desert_temp + 0.2, 0.3)
+            not_cromatolis(c)
+                * close(c.temp, CONFIG.desert_temp + 0.2, 0.3)
                 * close(c.humidity, CONFIG.desert_hum, 0.5)
                 * BASE_DENSITY
                 * 1.3
         }),
         // River animals
         ("world.wildlife.spawn.desert.river", |c, col| {
-            close(col.temp, CONFIG.desert_temp + 0.2, 0.3)
+            not_cromatolis(c)
+                * close(col.temp, CONFIG.desert_temp + 0.2, 0.3)
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && !matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                     && c.alt > CONFIG.sea_level + 20.0
@@ -539,13 +557,30 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         }),
         // Hot area desert
         ("world.wildlife.spawn.desert.hot", |c, _col| {
-            close(c.temp, CONFIG.desert_temp + 0.2, 0.3) * BASE_DENSITY * 3.8
+            not_cromatolis(c) * close(c.temp, CONFIG.desert_temp + 0.2, 0.3) * BASE_DENSITY * 3.8
         }),
         // Rock animals
         ("world.wildlife.spawn.desert.rock", |c, col| {
-            close(c.temp, CONFIG.desert_temp + 0.2, 0.05) * col.rock_density * BASE_DENSITY * 4.0
+            not_cromatolis(c)
+                * close(c.temp, CONFIG.desert_temp + 0.2, 0.05)
+                * col.rock_density
+                * BASE_DENSITY
+                * 4.0
         }),
     ]
+}
+
+/// `1.0` outside the authored Cromatolis region, `0.0` inside it. Used to
+/// gate density/feature formulas that key off `chunk.temp`/`chunk.humidity`
+/// crossing `CONFIG`'s desert thresholds -- Cromatolis's authored baseline
+/// temperature curve intentionally lets real coastal chunks reach those
+/// thresholds (see `cromatolis_baseline_temp`'s doc comment), which would
+/// otherwise paint literal desert wildlife/terrain onto lore-authored
+/// tropical/Caribbean ground. Same scoping pattern as `SimChunk::get_biome`'s
+/// `Snowland`/`Desert` checks, extracted here since multiple density
+/// formulas need it.
+pub(crate) fn not_cromatolis(c: &SimChunk) -> f32 {
+    f32::from(c.authored_region_id != Some(CROMATOLIS_V0_REGION_ID))
 }
 
 pub fn apply_wildlife_supplement<'a, R: Rng>(

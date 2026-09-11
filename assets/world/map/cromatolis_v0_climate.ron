@@ -1,0 +1,14 @@
+(
+    // Baseline temperature curve for Cromatolis's world-gen (see
+    // `AuthoredCromatolisClimate`/`cromatolis_baseline_temp` in
+    // world/src/sim/mod.rs): real degrees Celsius at sea level, cooling
+    // linearly with altitude, then converted onto the engine's abstract
+    // world-gen temperature scale. sea_level_temp_c is a hot tropical
+    // coastal baseline; lapse_rate_c_per_m is deliberately steeper than
+    // Earth's ~6.5 C/km average tropospheric rate, chosen so Cromatolis's
+    // real, modest relief (tops out around 1.3km) still spans the
+    // temperature scale's full practical range instead of staying
+    // clustered in the warm end.
+    sea_level_temp_c: 36.0,
+    lapse_rate_c_per_m: 0.023,
+)

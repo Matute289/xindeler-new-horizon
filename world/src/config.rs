@@ -6,9 +6,15 @@ use vek::*;
 pub struct Config {
     pub sea_level: f32,
     pub mountain_scale: f32,
+    /// Abstract engine temperature scale (not a real unit -- see
+    /// `celsius_to_abstract_temp`'s doc comment for the affine mapping this
+    /// value's real-Celsius equivalent, `8.0`, is derived from).
     pub snow_temp: f32,
+    /// See `snow_temp`'s doc comment. Real-Celsius equivalent: `14.0`.
     pub temperate_temp: f32,
+    /// See `snow_temp`'s doc comment. Real-Celsius equivalent: `26.0`.
     pub tropical_temp: f32,
+    /// See `snow_temp`'s doc comment. Real-Celsius equivalent: `32.0`.
     pub desert_temp: f32,
     pub desert_hum: f32,
     pub forest_hum: f32,
@@ -78,6 +84,66 @@ pub const CONFIG: Config = Config {
     ice_color: Rgb::new(140, 175, 255),
 };
 
+/// Real-Celsius equivalent of one abstract-scale unit, i.e. `abstract_temp =
+/// (celsius - ABSTRACT_TEMP_CELSIUS_INTERCEPT) / ABSTRACT_TEMP_CELSIUS_SLOPE`
+/// (see `celsius_to_abstract_temp`). Calibrated so:
+///   - `5.0`  °C == `-1.0` abstract (a cool, non-freezing climate --
+///     deliberately kept above freezing, since none of the terrestrial biomes
+///     that use this scale today are meant to have real snow/ice)
+///   - `35.0` °C == `1.0`  abstract (a hot tropical extreme)
+///
+/// and extended linearly to cover the wider `[-60.0, 100.0]` real-Celsius
+/// range for values outside `[-1.0, 1.0]`, reserved for future biomes far
+/// more extreme than anything the engine currently generates.
+pub const ABSTRACT_TEMP_CELSIUS_SLOPE: f32 = 15.0;
+/// See `ABSTRACT_TEMP_CELSIUS_SLOPE`'s doc comment.
+pub const ABSTRACT_TEMP_CELSIUS_INTERCEPT: f32 = 20.0;
+
+/// Lower bound of the real-Celsius range `celsius_to_abstract_temp`
+/// supports. Chosen to be far colder than any terrestrial biome currently
+/// produces, reserved for a possible future arctic/frozen-wastes biome.
+pub const REAL_TEMP_MIN_CELSIUS: f32 = -60.0;
+/// Upper bound of the same range. Reserved for a possible future
+/// hell/infernal or lava-adjacent biome.
+pub const REAL_TEMP_MAX_CELSIUS: f32 = 100.0;
+
+/// Converts a real-Celsius value into the engine's abstract world-gen
+/// temperature scale (the unit `SimChunk::temp` and the four threshold
+/// fields on `CONFIG` above are still expressed in). Used by the authored
+/// Cromatolis baseline curve (`sim::cromatolis_baseline_temp`) to compute
+/// its curve in real degrees and convert the result back onto the scale
+/// every other worldgen consumer of `SimChunk::temp` already expects --
+/// `SimChunk::temp` itself keeps its existing abstract representation
+/// everywhere else, because dozens of hand-tuned call sites across
+/// `world/src/layer/{scatter,wildlife,rock}.rs`, `world/src/civ/mod.rs`,
+/// `world/src/site/**`, and `rtsim/src/rule/architect.rs` compare it
+/// against `CONFIG`'s thresholds with small, empirically-tuned epsilon
+/// widths (e.g. `close(chunk.temp, CONFIG.snow_temp, 0.15)`) calibrated
+/// against the current `[-1.0, 1.0]` range for the entire procedural
+/// world, not just Cromatolis. Rescaling the stored unit would require
+/// proportionally rescaling every one of those, which is out of scope
+/// here.
+///
+/// Does NOT clamp its output to `[-1.0, 1.0]` -- most existing world-gen
+/// code implicitly assumes abstract temperatures stay within that range
+/// (it's what `cdf_irwin_hall`-driven procedural generation always
+/// produces), so a caller that needs to preserve that assumption (as the
+/// authored Cromatolis curve does) must clamp the result itself. A caller
+/// building a deliberately extreme future biome may want the wider range
+/// this function can actually produce (its *input* is clamped to
+/// `[REAL_TEMP_MIN_CELSIUS, REAL_TEMP_MAX_CELSIUS]` regardless, so an
+/// out-of-range or non-finite `celsius` can never produce an unbounded or
+/// NaN-propagating result).
+pub fn celsius_to_abstract_temp(celsius: f32) -> f32 {
+    let celsius = if celsius.is_finite() {
+        celsius
+    } else {
+        ABSTRACT_TEMP_CELSIUS_INTERCEPT
+    };
+    (celsius.clamp(REAL_TEMP_MIN_CELSIUS, REAL_TEMP_MAX_CELSIUS) - ABSTRACT_TEMP_CELSIUS_INTERCEPT)
+        / ABSTRACT_TEMP_CELSIUS_SLOPE
+}
+
 #[derive(Deserialize)]
 pub struct Features {
     pub caverns: bool,
@@ -99,4 +165,59 @@ impl FileAsset for Features {
     const EXTENSION: &'static str = "ron";
 
     fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn celsius_to_abstract_temp_matches_documented_reference_points() {
+        assert!((celsius_to_abstract_temp(5.0) - (-1.0)).abs() < 1e-4);
+        assert!((celsius_to_abstract_temp(35.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn celsius_to_abstract_temp_never_panics_and_stays_finite() {
+        for &celsius in &[
+            f32::MIN,
+            f32::MAX,
+            -1000.0,
+            1000.0,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            let abstract_temp = celsius_to_abstract_temp(celsius);
+            assert!(abstract_temp.is_finite());
+        }
+    }
+
+    #[test]
+    fn celsius_to_abstract_temp_is_monotonically_increasing() {
+        let mut prev = celsius_to_abstract_temp(-70.0);
+        for i in -65..=105 {
+            let celsius = i as f32;
+            let abstract_temp = celsius_to_abstract_temp(celsius);
+            assert!(
+                abstract_temp >= prev,
+                "conversion must never decrease as celsius increases"
+            );
+            prev = abstract_temp;
+        }
+    }
+
+    #[test]
+    fn celsius_to_abstract_temp_clamps_input_to_the_documented_range() {
+        // Values outside `[REAL_TEMP_MIN_CELSIUS, REAL_TEMP_MAX_CELSIUS]`
+        // clamp to the same result as the boundary itself.
+        assert_eq!(
+            celsius_to_abstract_temp(REAL_TEMP_MIN_CELSIUS - 1000.0),
+            celsius_to_abstract_temp(REAL_TEMP_MIN_CELSIUS)
+        );
+        assert_eq!(
+            celsius_to_abstract_temp(REAL_TEMP_MAX_CELSIUS + 1000.0),
+            celsius_to_abstract_temp(REAL_TEMP_MAX_CELSIUS)
+        );
+    }
 }
