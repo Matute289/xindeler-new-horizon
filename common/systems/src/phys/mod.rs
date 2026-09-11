@@ -718,6 +718,7 @@ impl PhysicsData<'_> {
             &read.masses,
             &read.densities,
             read.scales.maybe(),
+            read.immovables.maybe(),
             !&read.is_riders,
             !&read.is_volume_riders,
         )
@@ -738,6 +739,7 @@ impl PhysicsData<'_> {
                     mass,
                     density,
                     scale,
+                    immovable,
                     _,
                     _,
                 )| {
@@ -747,6 +749,14 @@ impl PhysicsData<'_> {
 
                     // Apply physics only if in a loaded chunk
                     if in_loaded_chunk
+                    // An immovable entity is a static world fixture. Before
+                    // this guard it was still accelerated by gravity; hanging
+                    // fixtures then fell locally until an external position
+                    // refresh snapped them back. A live in-game check that
+                    // this doesn't regress any other `Immovable` fixture
+                    // (campfires, portals, Gnarling totems, `Object::Crux`)
+                    // is still owed -- COW-8 task board, T14.
+                    && immovable.is_none()
                     // And not already stuck on a block (e.g., for arrows)
                     && !(physics_state.on_surface().is_some() && sticky.is_some())
                     // HACK: Special-case boats. Experimentally, clients are *bad* at making guesses about movement,
