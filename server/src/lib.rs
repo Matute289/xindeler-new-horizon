@@ -1142,6 +1142,7 @@ impl Server {
             undercompact_gate::ensure_undercompact_gate_restart_recovery(
                 &mut self.state,
                 &self.world,
+                self.index.as_index_ref(),
             );
         }
 

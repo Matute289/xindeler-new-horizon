@@ -49,7 +49,7 @@
 //! physical space only.
 
 use crate::{
-    Canvas, CanvasInfo,
+    Canvas, CanvasInfo, IndexRef,
     sim::WorldSim,
     util::{FastNoise2d, SQUARE_4, sampler::Sampler},
 };
@@ -514,6 +514,7 @@ struct LevelGeom {
     generation: Generation,
 }
 
+#[derive(Clone)]
 struct ConnectionSeg {
     /// The authored connection id (e.g. `connection.deep_compact_gate`).
     /// Only consulted by the COW-7b public geometry accessor below, which
@@ -545,6 +546,11 @@ struct WaterSeg {
 /// invariant this module wants to rely on.
 #[derive(Default)]
 pub(crate) struct InteriorLayout {
+    /// The authored interior id (e.g. `interior.the_undercompact`). Lets a
+    /// consumer of the cached `Vec<InteriorLayout>` (see
+    /// `Index::cromatolis_interiors`) pick out one specific interior without
+    /// re-deriving it from the raw RON graph.
+    id: String,
     levels: Vec<LevelGeom>,
     connections: Vec<ConnectionSeg>,
     water: Vec<WaterSeg>,
@@ -554,6 +560,15 @@ pub(crate) struct InteriorLayout {
 }
 
 pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
+    build_all_layouts_for_map_size(info.chunks().map_size_lg())
+}
+
+/// The `map_size`-only core of [`build_all_layouts`], split out so it can
+/// also be called by [`undercompact_gate_antechamber_world_geometry`]'s
+/// `Index::cromatolis_interiors` cache-population closure below -- that
+/// runtime accessor has a `WorldSim` (hence a `MapSizeLg`) but no live
+/// `CanvasInfo`.
+fn build_all_layouts_for_map_size(map_size: MapSizeLg) -> Vec<InteriorLayout> {
     let graphs = match InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET) {
         Ok(graphs) => graphs,
         Err(err) => {
@@ -582,7 +597,6 @@ pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
         Err(err) => warn!(?err, "Failed to load Cromatolis interior places"),
     }
 
-    let map_size = info.chunks().map_size_lg();
     let world_size =
         TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
 
@@ -591,7 +605,10 @@ pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
         .iter()
         .filter(|graph| ENABLED_INTERIOR_IDS.contains(&graph.id.as_str()))
         .filter_map(|graph| match build_layout(graph, map_size, world_size) {
-            Ok(layout) => Some(layout),
+            Ok(mut layout) => {
+                layout.id = graph.id.clone();
+                Some(layout)
+            },
             Err(err) => {
                 warn!(interior_id = %graph.id, %err, "Failed to build authored interior layout");
                 None
@@ -780,6 +797,9 @@ fn build_layout(
     let bounds = compute_bounds(&levels, &connections, &water);
 
     Ok(InteriorLayout {
+        // Set by the caller (`build_all_layouts_for_map_size`), which knows
+        // the graph's own `id` -- this function only builds the geometry.
+        id: String::new(),
         levels,
         connections,
         water,
@@ -1279,46 +1299,67 @@ impl UndercompactGateAntechamberGeometry {
     }
 }
 
-/// Resolves [`UndercompactGateAntechamberGeometry`] fresh from the same
-/// authored `interior_graphs.ron` data [`build_all_layouts`] uses at
-/// world-gen time, using only `sim` -- unlike [`build_all_layouts`], this
-/// needs no live `CanvasInfo`/`Index`, so a server-side runtime consumer
-/// (COW-7b's lever activation event, its restart-recovery chunk-load check)
-/// can call it directly. Returns `None` if the authored asset is missing,
-/// malformed, or (should never happen for the real data) does not contain
-/// both the antechamber level and the sealed connection.
+/// Resolves [`UndercompactGateAntechamberGeometry`] from the same cached,
+/// per-`Index` `Vec<InteriorLayout>` [`apply_cromatolis_interiors_to`]
+/// already populates at world-gen time (`Index::cromatolis_interiors`) --
+/// **not** a fresh RON-parse-plus-BFS-rebuild on every call. By the time any
+/// server-side runtime consumer (COW-7b's lever-activation event, its
+/// restart-recovery chunk-load check) has a reason to call this, the
+/// relevant chunk has already been generated once through the ordinary
+/// world-gen pipeline, which means that cache is already warm and this call
+/// is just a cheap `OnceLock` read. The `get_or_init` closure below only
+/// ever actually runs in the (practically unreachable, but still handled
+/// correctly) case where this is called before any authored Cromatolis
+/// chunk has ever been generated for this `Index`.
+///
+/// Returns `None` if the authored asset is missing, malformed, or (should
+/// never happen for the real data) does not contain both the antechamber
+/// level and the sealed connection.
 pub fn undercompact_gate_antechamber_world_geometry(
+    index: IndexRef,
     sim: &WorldSim,
 ) -> Option<UndercompactGateAntechamberGeometry> {
-    undercompact_gate_antechamber_geometry_for_map_size(sim.map_size_lg())
+    let map_size = sim.map_size_lg();
+    let layouts = index
+        .cromatolis_interiors
+        .get_or_init(|| build_all_layouts_for_map_size(map_size));
+    let layout = layouts
+        .iter()
+        .find(|layout| layout.id == UNDERCOMPACT_INTERIOR_ID)?;
+    geometry_from_layout(layout)
 }
 
 /// The `map_size`-only core of
 /// [`undercompact_gate_antechamber_world_geometry`], split out so it is
-/// testable without a full, expensive `WorldSim::generate` -- every other
-/// test in this module already builds layouts from a bare `MapSizeLg` the
-/// same way.
+/// testable without a full, expensive `WorldSim::generate`/`Index` -- every
+/// other test in this module already builds layouts from a bare `MapSizeLg`
+/// the same way. Always builds fresh (no cache), which is fine: it exists
+/// only for tests, never called on any per-tick path -- `#[cfg(test)]` since
+/// it genuinely has no non-test caller (unlike the pub accessor above,
+/// which always goes through the `Index` cache instead).
+#[cfg(test)]
 fn undercompact_gate_antechamber_geometry_for_map_size(
     map_size: MapSizeLg,
 ) -> Option<UndercompactGateAntechamberGeometry> {
-    let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).ok()?;
-    let graph = graphs
-        .interiors
+    let layouts = build_all_layouts_for_map_size(map_size);
+    let layout = layouts
         .iter()
-        .find(|g| g.id == UNDERCOMPACT_INTERIOR_ID)?;
+        .find(|layout| layout.id == UNDERCOMPACT_INTERIOR_ID)?;
+    geometry_from_layout(layout)
+}
 
-    let world_size =
-        TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
-    let layout = build_layout(graph, map_size, world_size).ok()?;
-
+/// Shared by both accessors above: picks the antechamber room and the
+/// sealed connection's segment out of an already-resolved `layout`.
+fn geometry_from_layout(layout: &InteriorLayout) -> Option<UndercompactGateAntechamberGeometry> {
     let room = layout
         .levels
         .iter()
         .find(|level| level.id == GATE_ANTECHAMBER_LEVEL_ID)?;
     let plug_seg = layout
         .connections
-        .into_iter()
-        .find(|conn| conn.id == GATE_SEALED_CONNECTION_ID)?;
+        .iter()
+        .find(|conn| conn.id == GATE_SEALED_CONNECTION_ID)?
+        .clone();
 
     let lever_positions = antechamber_lever_positions(room.anchor2d, room.radius, room.floor_z);
     let plug_aabb = plug_bounding_aabb(&plug_seg);

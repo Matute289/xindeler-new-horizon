@@ -25,13 +25,21 @@ impl ServerEvent for ActivateVaultLeverEvent {
 mod worldgen_impl {
     use std::sync::Arc;
 
-    use common::{comp, consts::MAX_INTERACT_RANGE, terrain::TerrainGrid, vol::ReadVol};
+    use common::{
+        comp,
+        consts::MAX_INTERACT_RANGE,
+        terrain::{Block, SpriteKind, TerrainGrid},
+        vol::ReadVol,
+    };
     use common_state::BlockChange;
     use rtsim::data::UndercompactGateLever;
     use specs::{ReadExpect, ReadStorage, WriteExpect};
     use world::{World, layer::cromatolis_interior};
 
-    use crate::{rtsim::RtSim, undercompact_gate::clear_gate_plug};
+    use crate::{
+        rtsim::RtSim,
+        undercompact_gate::{clear_gate_plug, plug_already_clear},
+    };
 
     use super::{ActivateVaultLeverEvent, ServerEvent};
 
@@ -42,19 +50,22 @@ mod worldgen_impl {
             ReadStorage<'a, comp::Pos>,
             WriteExpect<'a, RtSim>,
             ReadExpect<'a, Arc<World>>,
+            ReadExpect<'a, world::IndexOwned>,
         );
 
         fn handle(
             events: impl ExactSizeIterator<Item = Self>,
-            (mut block_change, terrain, positions, rtsim, world): Self::SystemData<'_>,
+            (mut block_change, terrain, positions, rtsim, world, index): Self::SystemData<'_>,
         ) {
-            // Resolved once for the whole batch, not per event -- this is
-            // cheap (a small RON parse + BFS layout walk, see the module's
-            // own doc comment), but there is no reason to repeat it per
-            // interaction within the same tick.
-            let Some(geometry) =
-                cromatolis_interior::undercompact_gate_antechamber_world_geometry(world.sim())
-            else {
+            // Resolved once for the whole batch, not per event -- reads
+            // from the same per-`Index` cache world-gen itself populated
+            // when this chunk was first generated (see the accessor's own
+            // doc comment), so this is a cheap `OnceLock` read, not a fresh
+            // RON-parse-plus-BFS-rebuild.
+            let Some(geometry) = cromatolis_interior::undercompact_gate_antechamber_world_geometry(
+                index.as_index_ref(),
+                world.sim(),
+            ) else {
                 return;
             };
 
@@ -68,17 +79,36 @@ mod worldgen_impl {
                     continue;
                 }
 
-                // Visual flip of the lever's own block, exactly mirroring
-                // `ToggleSpriteLightEvent`'s handler -- harmless even for a
-                // position that turns out not to be either known lever
-                // below (e.g. stale client state).
-                if let Some(new_block) = terrain
-                    .get(ev.pos)
-                    .ok()
-                    .and_then(|block| block.with_ori(if ev.enable { 4 } else { 0 }))
-                {
-                    block_change.set(ev.pos, new_block);
-                }
+                // `ev.pos` has to actually be one of the two known levers --
+                // checked before writing anything, so a stale/malicious
+                // client position never places a floating lever sprite
+                // somewhere unrelated.
+                let lever = geometry
+                    .lever_positions
+                    .iter()
+                    .position(|&lever_pos| lever_pos == ev.pos)
+                    .map(|lever_index| {
+                        if lever_index == 0 {
+                            UndercompactGateLever::A
+                        } else {
+                            UndercompactGateLever::B
+                        }
+                    });
+                let Some(lever) = lever else { continue };
+
+                // Visual flip of the lever's own block: a `SpriteKind` swap
+                // (`VaultLever` <-> `VaultLeverPulled`, a lowered
+                // `sprite_manifest.ron` Z offset), not an `Ori` rotation --
+                // the reused `gear_wheel-0` model is point-symmetric, so a
+                // yaw rotation would have been visually identical.
+                block_change.set(
+                    ev.pos,
+                    Block::air(if ev.enable {
+                        SpriteKind::VaultLeverPulled
+                    } else {
+                        SpriteKind::VaultLever
+                    }),
+                );
 
                 // Only a forward pull (`enable == true`, the only value the
                 // generic sprite-interact path ever sends -- see
@@ -89,21 +119,10 @@ mod worldgen_impl {
                     continue;
                 }
 
-                let lever = geometry
-                    .lever_positions
-                    .iter()
-                    .position(|&lever_pos| lever_pos == ev.pos)
-                    .map(|index| {
-                        if index == 0 {
-                            UndercompactGateLever::A
-                        } else {
-                            UndercompactGateLever::B
-                        }
-                    });
-                let Some(lever) = lever else { continue };
-
                 let newly_solved = rtsim.with_undercompact_gate(|levers| levers.activate(lever));
-                if newly_solved {
+                if newly_solved
+                    && !plug_already_clear(&geometry, |pos| terrain.get(pos).ok().copied())
+                {
                     clear_gate_plug(&geometry, |pos, block| {
                         if block_change.can_set_block(pos) {
                             block_change.set(pos, block);
@@ -153,13 +172,16 @@ mod worldgen_impl {
             cromatolis_interior::UndercompactGateAntechamberGeometry,
             vek::Vec3<i32>,
         ) {
-            let geometry =
-                cromatolis_interior::undercompact_gate_antechamber_world_geometry(world.sim())
-                    .expect("the real export must carry the antechamber");
+            let geometry = cromatolis_interior::undercompact_gate_antechamber_world_geometry(
+                index.as_index_ref(),
+                world.sim(),
+            )
+            .expect("the real export must carry the antechamber");
 
             let mut state = setup();
             insert_rtsim(&mut state, world, index);
             state.ecs_mut().insert(Arc::clone(world));
+            state.ecs_mut().insert(index.clone());
 
             // Load the chunks under both levers and the plug's own sample
             // column, and carve both lever sprites plus a solid plug block

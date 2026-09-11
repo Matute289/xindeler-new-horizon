@@ -3352,6 +3352,22 @@ VaultLever: [(
     ],
     wind_sway: 0.0,
 )],
+// COW-7b: the "pulled" state of the same lever mechanism. Reuses the exact
+// same reskinned gear-wheel model as `VaultLever` above (`gear_wheel-0` is
+// point-symmetric, so a yaw rotation would have been visually identical --
+// confirmed by inspecting its voxel data), but sunk noticeably lower via the
+// Z offset: an unmistakable "before/after" cue that doesn't depend on the
+// model's own rotational symmetry.
+VaultLeverPulled: [(
+    variations: [
+        (
+            model: "voxygen.voxel.sprite.furniture.gear_wheel-0",
+            offset: (-8.5, -8.5, -3.0),
+            lod_axes: (1.0, 1.0, 1.0),
+        ),
+    ],
+    wind_sway: 0.0,
+)],
 Candle: [(
     variations: [
         (

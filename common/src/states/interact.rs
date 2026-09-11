@@ -279,9 +279,13 @@ pub enum SpriteInteractKind {
     Fallback,
     ToggleLight(bool),
     /// COW-7b: pulling a vault lever. Modeled on `ToggleLight`'s shape --
-    /// simple, non-consuming, visually-flippable (the sprite's own `Ori`
-    /// attribute, see `Block::with_ori`) -- but always `true`: a lever is
-    /// pulled, not toggled back and forth, by this generic interact path.
+    /// simple, non-consuming, visually-flippable -- but always `true`: a
+    /// lever is pulled, not toggled back and forth, by this generic
+    /// interact path. The visual flip itself is a `SpriteKind` swap
+    /// (`VaultLever` -> `VaultLeverPulled`, a lowered `sprite_manifest.ron`
+    /// Z offset), not an `Ori` rotation: the reused `gear_wheel-0` model is
+    /// point-symmetric, so a yaw rotation would have been visually
+    /// identical.
     LeverPull(bool),
 }
 
