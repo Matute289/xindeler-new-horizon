@@ -812,6 +812,15 @@ impl ParticleMgr {
         self.citadel_beam_started
             .retain(|_, started| time - *started < 6.0);
 
+        // Every citadel-beam particle is replaced every frame regardless of
+        // which beam entity it belonged to (each is re-pushed below if its
+        // timeline still has a visible segment), so a single O(n) pass over
+        // the shared particle pool here -- used by every other effect in the
+        // game, not just citadel beams -- drops them all at once instead of
+        // re-scanning that whole pool once per active beam entity.
+        self.particles
+            .retain(|particle| particle.citadel_beam_entity.is_none());
+
         for (entity, beam) in (
             &ecs.entities(),
             &ecs.read_storage::<comp::CitadelPracticeBeam>(),
@@ -820,9 +829,6 @@ impl ParticleMgr {
         {
             let started = *self.citadel_beam_started.entry(entity).or_insert(time);
             let elapsed = (time - started).max(0.0) as f32;
-
-            self.particles
-                .retain(|particle| particle.citadel_beam_entity != Some(entity));
 
             if let Some((tail, head)) = beam.segment_at(elapsed) {
                 self.particles.push(Particle::new_citadel_beam(
