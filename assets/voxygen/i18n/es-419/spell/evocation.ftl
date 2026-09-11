@@ -1,13 +1,13 @@
 # Evocación — nombres y descripciones de hechizos.
 spell-acid_splash = Salpicadura Ácida
 spell-acid_splash-desc = Arrojás un pequeño orbe de fluido cáustico que estalla en un punto elegido, salpicando a todos los que estén cerca. Quienes queden atrapados en la salpicadura sufren un daño ácido abrasador a menos que esquiven a tiempo.
-spell-booming_blade = Filo Resonante
+spell-booming_blade = Resonant Edge
 spell-booming_blade-desc = El lanzador envuelve un arma cuerpo a cuerpo en una resonancia zumbante y golpea a un enemigo a su alcance. El golpe resuena con un estruendo, sacudiendo al objetivo con una onda de choque.
 spell-eldritch_blast = Estallido Abisal
 spell-eldritch_blast-desc = Hilos crepitantes de energía cruda salen disparados de las yemas de los dedos del lanzador hacia los enemigos elegidos. Cada uno requiere un golpe a distancia certero y abrasa a su objetivo con fuerza pura.
 spell-frostbite = Mordida de Escarcha
 spell-frostbite-desc = Un mordisco de escarcha entumecedora se cristaliza sobre una sola criatura, minando sus fuerzas. Un objetivo que no logra resistir sufre daño de frío.
-spell-green_flame_blade = Filo Fuegobrujo
+spell-green_flame_blade = Witchfire Edge
 spell-green_flame_blade-desc = El portador blande un arma encantada y, al contacto, fuego esmeralda estalla de la herida. Las llamas saltan luego a un segundo enemigo cercano al primero, abrasándolo también.
 spell-lightning_lure = Señuelo Relampagueante
 spell-lightning_lure-desc = Un cable crepitante de electricidad se dispara hacia un enemigo cercano, arrastrándolo hacia vos cuando lo muerde. El latigazo lo abrasa con un relámpago al contacto.
