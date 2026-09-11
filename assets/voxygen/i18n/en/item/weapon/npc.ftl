@@ -205,7 +205,7 @@ common-items-npc_weapons-unique-coral_golem_fist = Coral Golem Fists
 common-items-npc_weapons-unique-crab_pincer = Crab Pincer
     .desc = testing123
     
-common-items-npc_weapons-unique-karkatha_pincer = Karkatha Pincer
+common-items-npc_weapons-unique-karkatha_pincer = Shellmaw Pincer
     .desc = testing123    
 
 common-items-npc_weapons-unique-dagon = Dagon Kit

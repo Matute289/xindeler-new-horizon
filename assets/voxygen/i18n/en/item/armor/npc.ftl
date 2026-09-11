@@ -730,7 +730,7 @@ common-items-npc_armor-biped_small-umber_legoom-hand-umber_legoom = Umber Legoom
 common-items-npc_armor-biped_small-umber_legoom-foot-umber_legoom = Umber Legoom
     .desc = Ceremonial attire used by members.                
 
-common-items-npc_armor-crustacean-karkatha = Karkatha's Armor
+common-items-npc_armor-crustacean-karkatha = Shellmaw's Armor
     .desc = Rigid enough to withstand the pressure of the deep ocean.    
 
 common-items-npc_armor-chest-plate_red = Iron Chestplate
