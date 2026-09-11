@@ -1057,10 +1057,15 @@ impl Body {
             // ── BirdMedium ────────────────────────────────────────────────
             // Species/HP-aware, matching the T-tags already on this body's
             // own `base_health` entries just below: non-combatant birds →
-            // T0; small aggressive birds (T1 tag) → T1; the vampire-castle
-            // bats (T3B tag — BloodmoonBat is the Bloodmoon Bat dungeon
-            // boss at 1200 HP, comparable to Golem::Gravewarden at 1000 HP
-            // and BipedLarge::Harvester at 1300 HP, both also T3) → T3.
+            // T0; small aggressive birds (T1 tag) → T1. The two bats share
+            // a `// T3B` tag there, but that lumps together two very
+            // different roles: VampireBat is ordinary trash-swarm fodder
+            // (Vampire Castle spawns two per `bat_pos`, alongside the one
+            // Bloodmoon Bat boss) at 100 HP — on par with
+            // FishMedium::Marlin/Icepike (50/90 HP, tagged T2) — so it's T2
+            // here, not T3. BloodmoonBat is the actual Bloodmoon Bat
+            // dungeon boss at 1200 HP, comparable to Golem::Gravewarden
+            // (1000 HP) and BipedLarge::Harvester (1300 HP), both T3 → T3.
             Body::BirdMedium(b) => match b.species {
                 bird_medium::Species::Crow
                 | bird_medium::Species::Eagle
@@ -1069,7 +1074,8 @@ impl Body {
                 | bird_medium::Species::Parrot
                 | bird_medium::Species::SnowyOwl
                 | bird_medium::Species::Toucan => 1,
-                bird_medium::Species::VampireBat | bird_medium::Species::BloodmoonBat => 3,
+                bird_medium::Species::VampireBat => 2,
+                bird_medium::Species::BloodmoonBat => 3,
                 _ => 0,
             },
 
@@ -1141,14 +1147,16 @@ impl Body {
 
             // ── Crustacean ────────────────────────────────────────────────
             // Species/HP-aware, matching the T-tags on this body's own
-            // `base_health` entries: ordinary crabs → T0; SoldierCrab and
-            // Karkatha (the Shellmaw dungeon boss, 2000 HP) are both tagged
-            // T2 there — Karkatha's HP sits below Golem::IronGolem (2500 HP,
-            // T3) and above BipedLarge::AdletElder (1500 HP, T3), so T2 is
-            // the correct (not raid-tier) band for it rather than the flat
-            // T0 every Crustacean got before.
+            // `base_health` entries: ordinary crabs → T0; SoldierCrab is
+            // tagged T2 there → T2. Karkatha (the Shellmaw dungeon boss,
+            // 2000 HP) is also tagged T2 there, but that tag is stale: its
+            // HP sits within the same band as Golem::IronGolem (2500 HP)
+            // and BipedLarge::AdletElder (1500 HP) — both T3 in this very
+            // function — so Karkatha is T3 here, not the flat T0 every
+            // Crustacean got before, and not the stale T2 tag either.
             Body::Crustacean(b) => match b.species {
-                crustacean::Species::SoldierCrab | crustacean::Species::Karkatha => 2,
+                crustacean::Species::SoldierCrab => 2,
+                crustacean::Species::Karkatha => 3,
                 _ => 0,
             },
 
@@ -2734,13 +2742,13 @@ mod threat_tier_boss_tests {
     }
 
     /// The Shellmaw (Sahagin Island's dungeon boss, `Karkatha`, 2000 HP)
-    /// must no longer be lumped in with a trivial T0 crab. It should land
-    /// in the same tier band as other bosses of comparable HP elsewhere in
-    /// the codebase (e.g. `Golem::IronGolem` at 2500 HP, also T3-and-below)
-    /// — strictly above the flat T0 every Crustacean got before this fix,
-    /// and not pinned to the raid-boss T4 band either.
+    /// must no longer be lumped in with a trivial T0 crab. Its 2000 HP sits
+    /// within the same band as `Golem::IronGolem` (2500 HP) and
+    /// `BipedLarge::AdletElder` (1500 HP) — both T3 in this function — so
+    /// it must land at exactly T3, matching those comparable-HP bosses, not
+    /// merely "some tier above T0".
     #[test]
-    fn shellmaw_boss_is_not_blanket_trivial_tier() {
+    fn shellmaw_boss_matches_comparable_hp_bosses_at_tier_three() {
         let shellmaw = crustacean_body(crustacean::Species::Karkatha);
         let trivial_crab = crustacean_body(crustacean::Species::Crab);
 
@@ -2750,13 +2758,11 @@ mod threat_tier_boss_tests {
         );
         assert_eq!(trivial_crab.threat_tier(), 0);
 
-        // Comparable-HP bosses elsewhere in the codebase (Golem::IronGolem,
-        // 2500 HP; BipedLarge::AdletElder, 1500 HP) sit at T3, so Karkatha's
-        // T2/T3-band tier should be in that same reasonable neighbourhood,
-        // never a mere T0/T1.
         let iron_golem = golem_body(golem::Species::IronGolem);
-        assert!(shellmaw.threat_tier() >= 2);
-        assert!(shellmaw.threat_tier() <= iron_golem.threat_tier());
+        let adlet_elder = biped_large_body(biped_large::Species::AdletElder);
+        assert_eq!(shellmaw.threat_tier(), 3);
+        assert_eq!(shellmaw.threat_tier(), iron_golem.threat_tier());
+        assert_eq!(shellmaw.threat_tier(), adlet_elder.threat_tier());
     }
 
     /// The Bloodmoon Bat (the vampire-dungeon boss, 1200 HP) must no
@@ -2776,5 +2782,23 @@ mod threat_tier_boss_tests {
 
         let harvester = biped_large_body(biped_large::Species::Harvester);
         assert_eq!(bloodmoon_bat.threat_tier(), harvester.threat_tier());
+    }
+
+    /// VampireBat (100 HP trash-swarm fodder, spawned two-per-position
+    /// alongside the one Bloodmoon Bat boss in Vampire Castle) must NOT
+    /// share the boss's tier just because `base_health` tags both `T3B` —
+    /// it belongs with other ~100 HP threats (on par with
+    /// `FishMedium::Marlin`/`Icepike`, tagged T2) instead, strictly below
+    /// the actual boss.
+    #[test]
+    fn vampire_bat_swarm_fodder_does_not_share_the_boss_tier() {
+        let vampire_bat = bird_medium_body(bird_medium::Species::VampireBat);
+        let bloodmoon_bat = bird_medium_body(bird_medium::Species::BloodmoonBat);
+
+        assert_eq!(vampire_bat.threat_tier(), 2);
+        assert!(
+            vampire_bat.threat_tier() < bloodmoon_bat.threat_tier(),
+            "trash-swarm VampireBat must not match the Bloodmoon Bat boss's tier"
+        );
     }
 }

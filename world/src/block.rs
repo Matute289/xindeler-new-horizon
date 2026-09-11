@@ -200,6 +200,24 @@ fn rotate_for_units(ori: u8, units: &Vec2<Vec2<i32>>) -> u8 {
     }
 }
 
+/// Builds the `SpriteCfg` for a prefab's keyhole `StructureBlock` variant
+/// (`Keyhole`, `KeyholeBars`, and their per-dungeon siblings): it requires
+/// `consumes` to unlock and, like every literal dungeon-generator keyhole
+/// built via `locked_dungeon_keyhole` in `site::plot`, opts out of
+/// ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock` — a
+/// progression-gated prefab keyhole (e.g. DwarvenMine's, which is entirely
+/// prefab-driven) must not be bypassable remotely either. Melee key-item
+/// unlocking is unaffected.
+fn keyhole_cfg(consumes: &str) -> SpriteCfg {
+    SpriteCfg {
+        unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
+            consumes.to_string(),
+        ))),
+        no_knock: true,
+        ..SpriteCfg::default()
+    }
+}
+
 /// Determines the kind of block to render based on the structure's definition.
 /// The third string return value is the name of an Entity to spawn, if the
 /// `StructureBlock` dictates one should be returned (such as an
@@ -360,12 +378,7 @@ pub fn block_from_structure<'a>(
         },
         StructureBlock::Keyhole(consumes) => Some((
             Block::air(SpriteKind::Keyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::Sign(content, ori) => Some((
@@ -380,93 +393,48 @@ pub fn block_from_structure<'a>(
         )),
         StructureBlock::BoneKeyhole(consumes) => Some((
             Block::air(SpriteKind::BoneKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::HaniwaKeyhole(consumes) => Some((
             Block::air(SpriteKind::HaniwaKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::KeyholeBars(consumes) => Some((
             Block::air(SpriteKind::KeyholeBars),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::GlassKeyhole(consumes) => Some((
             Block::air(SpriteKind::GlassKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::TerracottaKeyhole(consumes) => Some((
             Block::air(SpriteKind::TerracottaKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::SahaginKeyhole(consumes) => Some((
             Block::air(SpriteKind::SahaginKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::VampireKeyhole(consumes) => Some((
             Block::air(SpriteKind::VampireKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
 
         StructureBlock::MyrmidonKeyhole(consumes) => Some((
             Block::air(SpriteKind::MyrmidonKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::MinotaurKeyhole(consumes) => Some((
             Block::air(SpriteKind::MinotaurKeyhole),
-            Some(SpriteCfg {
-                unlock: Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(
-                    consumes.clone(),
-                ))),
-                ..SpriteCfg::default()
-            }),
+            Some(keyhole_cfg(consumes)),
             None,
         )),
         StructureBlock::RedwoodWood => {
@@ -501,5 +469,32 @@ pub fn block_from_structure<'a>(
                 )
             })
             .unwrap_or(None),
+    }
+}
+
+#[cfg(test)]
+mod keyhole_cfg_tests {
+    use super::*;
+
+    /// Every prefab keyhole `StructureBlock` (`Keyhole`/`KeyholeBars` are
+    /// actually placed today, e.g. DwarvenMine's entirely prefab-driven key
+    /// gates; the rest are unused scaffolding for the same family) must go
+    /// through `keyhole_cfg` so `no_knock` can never silently regress for a
+    /// prefab-based dungeon lock, the same way the literal
+    /// `locked_dungeon_keyhole` call sites in `site::plot` are guarded.
+    #[test]
+    fn keyhole_cfg_is_always_no_knock_and_carries_the_consumed_item() {
+        let cfg = keyhole_cfg("common.items.keys.quarry_keys.miner_key");
+
+        assert!(
+            cfg.no_knock,
+            "a prefab dungeon keyhole must set no_knock, so the knock spell can't bypass it"
+        );
+        match cfg.unlock {
+            Some(UnlockKind::Consumes(ItemDefinitionIdOwned::Simple(item))) => {
+                assert_eq!(item, "common.items.keys.quarry_keys.miner_key");
+            },
+            other => panic!("expected UnlockKind::Consumes(Simple(..)), got {other:?}"),
+        }
     }
 }

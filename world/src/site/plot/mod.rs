@@ -330,12 +330,23 @@ mod key_gate_tests {
     use super::*;
     use common::terrain::sprite::SpriteKind;
 
-    /// Every dungeon-type keyhole sprite in the game must be built through
-    /// `locked_dungeon_keyhole` so its `knock`-immunity can never silently
-    /// regress per-dungeon. One `SpriteKind` per Cromatolis dungeon type
-    /// that gates progression behind a physical key (Gnarling and
-    /// DwarvenMine have no locked-door content in this codebase, so they
-    /// contribute none here).
+    /// Every dungeon-type keyhole sprite placed directly by a generator's
+    /// own `render_inner` (as opposed to via a prefab, see below) must be
+    /// built through `locked_dungeon_keyhole` so its `knock`-immunity can
+    /// never silently regress per-dungeon. One `SpriteKind` per Cromatolis
+    /// dungeon type that gates progression behind a physical key this way.
+    ///
+    /// Gnarling has no lockable-door mechanism in this codebase at all.
+    /// DwarvenMine's key gates DO exist — its `forgemaster_boss`,
+    /// `forgemaster_room`, `entrance`, `hallway`, `hallway2`,
+    /// `mining_site`, `excavation_site` and `cleansing_room` prefabs all
+    /// place `Keyhole`/`KeyholeBars` — but the whole dungeon is
+    /// prefab-driven (`render_prefab`, not a literal `Fill::sprite_ori_cfg`
+    /// call here), so its `no_knock` guarantee instead comes from
+    /// `block::keyhole_cfg` (see `block::keyhole_cfg_tests`), which also
+    /// backs `SpriteKind::Keyhole` here — DwarvenMine's prefabs and
+    /// Cultist Sanctum's literal call both resolve to that same sprite
+    /// kind, just through two different code paths.
     const DUNGEON_KEY_GATE_SPRITES: &[SpriteKind] = &[
         SpriteKind::HaniwaKeyhole,     // Claybound Ossuary (SiteKind::Haniwa)
         SpriteKind::SahaginKeyhole,    // Sahagin Island (SiteKind::Sahagin)
@@ -343,7 +354,7 @@ mod key_gate_tests {
         SpriteKind::TerracottaKeyhole, // Terracotta Palace (SiteKind::Terracotta)
         SpriteKind::MyrmidonKeyhole,   // Myrmidon Arena (SiteKind::Myrmidon)
         SpriteKind::MinotaurKeyhole,   // Myrmidon Arena's Minotaur vault (SiteKind::Myrmidon)
-        SpriteKind::Keyhole,           // Cultist Sanctum (SiteKind::Cultist)
+        SpriteKind::Keyhole,           // Cultist Sanctum; also DwarvenMine (prefab)
         SpriteKind::BoneKeyhole,       // Adlet Stronghold (SiteKind::Adlet)
         SpriteKind::GlassKeyhole,      // Sea Chapel (SiteKind::ChapelSite)
     ];
