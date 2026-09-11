@@ -64,7 +64,13 @@ fn gate_center(gate_aabb: vek::Aabb<i32>) -> Vec3<f32> {
 }
 
 /// Whether any player within [`CHECKPOINT_RADIUS`] of `center` is carrying
-/// an item bound ([`comp::Item::owner`]) to their own `CharacterId`.
+/// the Green Post permit ([`GREEN_POST_PERMIT_ITEM_ID`]) bound
+/// ([`comp::Item::owner`]) to their own `CharacterId`.
+///
+/// [`comp::Item::owner`] is generic per-instance identity-binding infra, not
+/// Green-Post-specific -- checking it alone (without also checking the item
+/// definition id) would open this gate for *any* item some other feature
+/// happens to bind to the nearby player, not just the permit.
 fn has_valid_holder_nearby(state: &State, center: Vec3<f32>) -> bool {
     let ecs = state.ecs();
     let entities = ecs.entities();
@@ -81,24 +87,28 @@ fn has_valid_holder_nearby(state: &State, center: Vec3<f32>) -> bool {
             if (pos.0 - center).magnitude_squared() > CHECKPOINT_RADIUS.powi(2) {
                 return false;
             }
-            inventory
-                .slots()
-                .flatten()
-                .any(|item| item.owner() == Some(character_id))
+            inventory.slots().flatten().any(|item| {
+                item.owner() == Some(character_id)
+                    && item.item_definition_id().itemdef_id() == Some(GREEN_POST_PERMIT_ITEM_ID)
+            })
         })
+}
+
+/// The block a fully open/closed gate should show at every position within
+/// its AABB.
+fn gate_state_block(open: bool) -> common::terrain::Block {
+    if open {
+        common::terrain::Block::empty()
+    } else {
+        world::site::plot::Fortification::gate_closed_block()
+    }
 }
 
 /// Writes every block in `gate_aabb` to `open`'s desired state -- cleared if
 /// `open`, filled with the fortification's own closed-gate material
-/// otherwise. Only ever called when the desired state actually differs from
-/// [`ensure_green_post_checkpoint`]'s cached `last_known_open`, so this
-/// itself does not need its own per-block idempotency check.
+/// otherwise.
 fn write_gate_state(state: &State, gate_aabb: vek::Aabb<i32>, open: bool) {
-    let block = if open {
-        common::terrain::Block::empty()
-    } else {
-        world::site::plot::Fortification::gate_closed_block()
-    };
+    let block = gate_state_block(open);
     for x in gate_aabb.min.x..gate_aabb.max.x {
         for y in gate_aabb.min.y..gate_aabb.max.y {
             for z in gate_aabb.min.z..gate_aabb.max.z {
@@ -108,19 +118,51 @@ fn write_gate_state(state: &State, gate_aabb: vek::Aabb<i32>, open: bool) {
     }
 }
 
+/// Whether the gate's *live* terrain no longer matches `desired_open` --
+/// e.g. a player mined through a closed gate, or built a wall into an open
+/// one. Checked every pass (in addition to the `last_known_open` cache) so
+/// the reconciliation is genuinely self-healing against player-caused
+/// terrain drift, not only against a server restart -- unlike a plain cache
+/// comparison, this reads back the actual `TerrainGrid` state, the same
+/// live-state-diffing property `citadel::component_needs_restore` provides
+/// for entity components.
+///
+/// The gate's AABB is small (a handful of blocks in each dimension), so
+/// scanning it in full each pass is cheap -- much cheaper than the 1Hz
+/// player-proximity scan this module already runs alongside.
+fn gate_state_has_drifted(state: &State, gate_aabb: vek::Aabb<i32>, desired_open: bool) -> bool {
+    let expected = gate_state_block(desired_open);
+    for x in gate_aabb.min.x..gate_aabb.max.x {
+        for y in gate_aabb.min.y..gate_aabb.max.y {
+            for z in gate_aabb.min.z..gate_aabb.max.z {
+                // `None` means the position isn't loaded/known yet -- not a
+                // drift, just missing data; skip rather than forcing a
+                // write against terrain that isn't live.
+                if let Some(block) = state.get_block(Vec3::new(x, y, z))
+                    && block != expected
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Reconciles the Green Post checkpoint gate against nearby players' held
 /// permits.
 ///
 /// `last_known_open` is the caller's own cached last-applied state (a plain
 /// field on `Server`, mirroring `citadel_defence_refresh`'s own
-/// plain-`Duration`-field-on-`Server` shape rather than an ECS resource).
-/// Comparing against it, rather than re-reading live terrain, keeps this
-/// idempotent without needing a full tick to apply the previous pass's
-/// `BlockChange` first -- `State::set_block` only queues a diff; it does not
-/// mutate the terrain synchronously. `None` (server start, or after a
-/// hot-reload) always forces one write, self-healing the gate into a known
-/// state the same way `citadel::ensure_upper_defences` recovers its own
-/// stations after a restart.
+/// plain-`Duration`-field-on-`Server` shape rather than an ECS resource) --
+/// a fast-path skip for the common case where nothing changed. It is never
+/// trusted on its own: [`gate_state_has_drifted`] re-reads the actual live
+/// terrain every pass, so a player who mines/builds through the gate gets
+/// it corrected on the next pass even though `last_known_open` never
+/// toggled. `None` (server start, or after a hot-reload) always forces one
+/// write, self-healing the gate into a known state the same way
+/// `citadel::ensure_upper_defences` recovers its own stations after a
+/// restart.
 ///
 /// Returns whether the gate's physical state changed this call.
 pub fn ensure_green_post_checkpoint(
@@ -143,7 +185,9 @@ pub fn ensure_green_post_checkpoint(
     }
 
     let desired_open = has_valid_holder_nearby(state, center);
-    if *last_known_open == Some(desired_open) {
+    let up_to_date = *last_known_open == Some(desired_open)
+        && !gate_state_has_drifted(state, gate_aabb, desired_open);
+    if up_to_date {
         return false;
     }
 
@@ -355,6 +399,56 @@ mod tests {
     }
 
     #[test]
+    fn gate_state_has_drifted_detects_terrain_mined_through_a_closed_gate() {
+        let mut state = setup();
+        let aabb = Aabb {
+            min: Vec3::new(0, 0, 0),
+            max: Vec3::new(2, 2, 2),
+        };
+        load_chunk_containing(&mut state, Vec3::new(1.0, 1.0, 1.0));
+
+        write_gate_state(&state, aabb, false);
+        state.apply_terrain_changes(|_, _| {});
+        assert!(
+            !gate_state_has_drifted(&state, aabb, false),
+            "a freshly-written closed gate must not report drift against itself"
+        );
+
+        // Simulate a player mining a single block out of the closed gate,
+        // without going through `ensure_green_post_checkpoint` at all.
+        state.set_block(Vec3::new(1, 1, 1), common::terrain::Block::empty());
+        state.apply_terrain_changes(|_, _| {});
+        assert!(
+            gate_state_has_drifted(&state, aabb, false),
+            "a block mined out of a closed gate must be detected as drift"
+        );
+
+        write_gate_state(&state, aabb, false);
+        state.apply_terrain_changes(|_, _| {});
+        assert!(
+            !gate_state_has_drifted(&state, aabb, false),
+            "rewriting the gate state must clear the detected drift"
+        );
+    }
+
+    #[test]
+    fn only_the_permit_item_counts_not_any_item_bound_to_the_player() {
+        let character_id = CharacterId(4);
+        let center = Vec3::new(20.0, 20.0, 20.0);
+
+        let mut state = setup();
+        let mut unrelated_item = Item::new_from_asset_expect("common.items.weapons.empty.empty");
+        unrelated_item.set_owner(character_id);
+        spawn_player(&mut state, center, character_id, Some(unrelated_item));
+
+        assert!(
+            !has_valid_holder_nearby(&state, center),
+            "an item bound to the player's own character that isn't the permit must not open the \
+             gate"
+        );
+    }
+
+    #[test]
     fn holder_must_own_the_item_themselves() {
         let character_id = CharacterId(1);
         let other_character_id = CharacterId(2);
@@ -420,10 +514,13 @@ mod tests {
     /// second pass when nothing about the nearby holders changed -- the
     /// property the whole 1Hz refresh depends on, exercised here against a
     /// real generated Cromatolis `World`/`WorldSim`, mirroring
-    /// `citadel.rs`'s own `idempotency_tests` module.
+    /// `citadel.rs`'s own `idempotency_tests` module. It must also
+    /// self-heal a closed gate that a player mined through even though
+    /// `last_known_open` never toggled -- the property `gate_state_has_drifted`
+    /// exists to guarantee.
     #[test]
     #[ignore]
-    fn ensure_green_post_checkpoint_is_idempotent_against_the_real_world() {
+    fn ensure_green_post_checkpoint_is_idempotent_and_self_heals_against_the_real_world() {
         let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
         let (world, _index) = world::World::generate(
             0,
@@ -460,6 +557,42 @@ mod tests {
         assert!(
             !ensure_green_post_checkpoint(&mut state, &world, &mut last_known_open),
             "a second pass with unchanged conditions must not redundantly write blocks"
+        );
+
+        // Move the holder far away so the gate is due to close, then let it
+        // actually close.
+        {
+            let mut positions = state.ecs_mut().write_storage::<comp::Pos>();
+            for pos in (&mut positions).join() {
+                pos.0 = center + Vec3::new(CHECKPOINT_RADIUS * 10.0, 0.0, 0.0);
+            }
+        }
+        assert!(
+            ensure_green_post_checkpoint(&mut state, &world, &mut last_known_open),
+            "the gate must close once the holder leaves the checkpoint radius"
+        );
+        assert_eq!(last_known_open, Some(false));
+        // Actually apply the queued close write so the block read-back
+        // below reflects it, matching how the server applies every tick's
+        // `BlockChange` before the next 1Hz reconciliation pass runs.
+        state.apply_terrain_changes(|_, _| {});
+
+        // Simulate a player mining a single block out of the now-closed
+        // gate -- entirely outside `ensure_green_post_checkpoint`, the same
+        // way a real player's terrain edit would happen -- and apply it.
+        let sample = gate_center(gate_aabb).map(|c| c.floor() as i32);
+        state.set_block(sample, common::terrain::Block::empty());
+        state.apply_terrain_changes(|_, _| {});
+
+        assert!(
+            ensure_green_post_checkpoint(&mut state, &world, &mut last_known_open),
+            "a pass must detect and repair terrain drift even though last_known_open never toggled"
+        );
+        state.apply_terrain_changes(|_, _| {});
+        assert_eq!(
+            state.get_block(sample),
+            Some(world::site::plot::Fortification::gate_closed_block()),
+            "the mined-out block must be refilled"
         );
     }
 
