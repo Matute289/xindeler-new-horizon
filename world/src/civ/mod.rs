@@ -4716,4 +4716,34 @@ mod tests {
             );
         }
     }
+
+    /// Real-data regression for the Cromatolis baseline-temperature curve
+    /// (`sim::cromatolis_baseline_temp`) replacing a hard two-value clamp:
+    /// `Haniwa`'s eligibility predicate needs `chunk.temp` inside
+    /// `-0.3..0.4`, a middle band the old clamp (`-1.0` or `0.55`) could
+    /// never produce, so this location type was structurally impossible in
+    /// Cromatolis before. Asserts real generated terrain now has at least
+    /// one on-land, on-flat-terrain location the predicate accepts,
+    /// catching a future change to the curve (or to its calibration
+    /// constants) that collapses the middle band back down to nothing.
+    #[test]
+    #[ignore]
+    fn cromatolis_haniwa_site_no_longer_structurally_blocked_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let dims = sim.map_size_lg().chunks().map(i32::from);
+        let mut found = false;
+        'outer: for y in (0..dims.y).step_by(2) {
+            for x in (0..dims.x).step_by(2) {
+                if SiteKind::Haniwa.is_suitable_loc(Vec2::new(x, y), &sim) {
+                    found = true;
+                    break 'outer;
+                }
+            }
+        }
+        assert!(
+            found,
+            "no location satisfies SiteKind::Haniwa::is_suitable_loc anywhere in real Cromatolis \
+             terrain -- the middle temperature band it needs may have collapsed"
+        );
+    }
 }

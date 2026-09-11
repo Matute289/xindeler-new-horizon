@@ -31,6 +31,7 @@ use crate::{
     block::BlockGen,
     civ::{Place, PointOfInterest},
     column::ColumnGen,
+    config,
     site::Site,
     util::{
         CARDINALS, DHashSet, FastNoise, FastNoise2d, LOCALITY, NEIGHBORS, RandomField, Sampler,
@@ -2988,6 +2989,47 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
 /// claim most tiles humid enough to clear 0.8.
 const SWAMP_HUMIDITY_THRESHOLD: f32 = 0.6;
 
+/// Sea-level baseline temperature for Cromatolis's authored curve, in real
+/// degrees Celsius. A hot tropical coastal value on purpose: `close(...,
+/// CONFIG.desert_temp, ...)`/`(0.9..1.0).contains(&chunk.temp)`-style site
+/// predicates elsewhere in worldgen need *some* chunks to reach the hot end
+/// of the abstract scale, and the lowest-altitude chunks are the only ones
+/// this curve ever makes that hot.
+const CROMATOLIS_SEA_LEVEL_TEMP_C: f32 = 36.0;
+
+/// How fast Cromatolis's authored curve cools with altitude, in degrees
+/// Celsius per meter of relief above sea level. Deliberately steeper than
+/// Earth's ~6.5 °C/km average tropospheric lapse rate (still within the
+/// range real lapse rates span with humidity/region -- the dry adiabatic
+/// rate alone is ~9.8 °C/km): Cromatolis's actual relief tops out around
+/// 1.3 km above sea level, and a literal Earth-average rate over only that
+/// much relief would cool the highlands by less than 9 °C total, leaving
+/// the whole map clustered in the warm end of the scale and largely
+/// reproducing the "no usable cold/middle band" problem this curve exists
+/// to fix -- just gradually instead of via a hard clamp. The steeper rate
+/// lets Cromatolis's real, modest relief span the scale's full practical
+/// range end to end.
+const CROMATOLIS_LAPSE_RATE_C_PER_M: f32 = 0.023;
+
+/// Cromatolis's authored baseline temperature curve: colder with altitude,
+/// computed in real degrees Celsius via a simple lapse-rate formula and
+/// converted onto the engine's existing abstract world-gen scale so every
+/// existing consumer of `SimChunk::temp` (biome assignment, scatter/
+/// wildlife/rock placement, dungeon-site eligibility) keeps working
+/// unmodified. Replaces a hard two-point clamp (`-1.0` above 970 m of
+/// relief, `0.55` at or below it) that structurally prevented any site
+/// predicate needing a *middle* temperature band from ever matching in
+/// Cromatolis.
+///
+/// `alt_pre` is meters of relief above `CONFIG.sea_level` (may be
+/// negative for underwater terrain, hence the `max(0.0)` -- underwater
+/// chunks get the sea-level baseline temperature, same as before this
+/// change).
+fn cromatolis_baseline_temp(alt_pre: f32) -> f32 {
+    let temp_c = CROMATOLIS_SEA_LEVEL_TEMP_C - alt_pre.max(0.0) * CROMATOLIS_LAPSE_RATE_C_PER_M;
+    config::celsius_to_abstract_temp(temp_c).clamp(-1.0, 1.0)
+}
+
 impl SimChunk {
     fn generate(map_size_lg: MapSizeLg, posi: usize, gen_ctx: &GenCtx, gen_cdf: &GenCdf) -> Self {
         let pos = uniform_idx_as_vec2(map_size_lg, posi);
@@ -3033,7 +3075,7 @@ impl SimChunk {
         .sub(0.5)
         .mul(2.0);
         if gen_cdf.authored_cromatolis_v0 {
-            temp = if alt_pre > 970.0 { -1.0 } else { 0.55 };
+            temp = cromatolis_baseline_temp(alt_pre);
         }
 
         // Take the weighted average of our randomly generated base humidity, and the
@@ -3708,6 +3750,81 @@ mod tests {
         let sim = generate_cromatolis_world();
         let map_size_lg = sim.map_size_lg();
         assert_eq!(sim.chunks.len(), map_size_lg.chunks_len());
+    }
+
+    /// Regression for `cromatolis_baseline_temp` replacing the old hard
+    /// two-value clamp (`-1.0` above 970 m of relief, `0.55` at or below
+    /// it): sampling a spread of altitudes must produce a real, continuous
+    /// gradient of distinct values, not just those two fixed points.
+    #[test]
+    fn cromatolis_baseline_temp_is_continuous_not_two_fixed_points() {
+        let samples: Vec<f32> = (0..=2000)
+            .step_by(20)
+            .map(|alt_pre| cromatolis_baseline_temp(alt_pre as f32))
+            .collect();
+
+        let distinct_values = samples
+            .iter()
+            .map(|t| (t * 1_000_000.0).round() as i64)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            distinct_values.len() > 10,
+            "expected a continuous gradient of distinct temperatures across altitude, got only {} \
+             distinct value(s): {samples:?}",
+            distinct_values.len()
+        );
+
+        // Neither of the two old fixed points should be the *only* values
+        // produced -- some samples must land strictly between them.
+        let strictly_between_old_extremes = samples.iter().any(|&t| t > -1.0 && t < 0.55);
+        assert!(
+            strictly_between_old_extremes,
+            "expected some altitude to produce a temperature strictly between the old clamp's two \
+             fixed points (-1.0 and 0.55), got: {samples:?}"
+        );
+    }
+
+    /// The curve must cool monotonically with altitude (colder higher up),
+    /// matching the pre-existing intent the old hard clamp also expressed.
+    #[test]
+    fn cromatolis_baseline_temp_decreases_monotonically_with_altitude() {
+        let mut prev = cromatolis_baseline_temp(-100.0);
+        for alt_pre in (0..3000).step_by(10) {
+            let temp = cromatolis_baseline_temp(alt_pre as f32);
+            assert!(
+                temp <= prev,
+                "temperature must never increase with altitude: alt_pre={alt_pre} gave {temp}, \
+                 previous (lower) altitude gave {prev}"
+            );
+            prev = temp;
+        }
+    }
+
+    /// Must never panic and must always stay within the abstract scale's
+    /// normal `[-1.0, 1.0]` range, even for extreme or non-finite input.
+    #[test]
+    fn cromatolis_baseline_temp_never_panics_and_stays_in_abstract_range() {
+        for &alt_pre in &[
+            f32::MIN,
+            f32::MAX,
+            -1_000_000.0,
+            -1.0,
+            0.0,
+            1_000_000.0,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            let temp = cromatolis_baseline_temp(alt_pre);
+            assert!(
+                temp.is_finite(),
+                "alt_pre={alt_pre} produced non-finite temp {temp}"
+            );
+            assert!(
+                (-1.0..=1.0).contains(&temp),
+                "alt_pre={alt_pre} produced out-of-range temp {temp}"
+            );
+        }
     }
 
     /// Requires the real Cromatolis LFS assets to be pulled locally (`git lfs
