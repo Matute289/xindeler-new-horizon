@@ -63,6 +63,7 @@ command-dropall-desc = Drops all your items on the ground
 command-dummy-desc = Spawns a training dummy
 command-explosion-desc = Explodes the ground around you
 command-faction-desc = Send messages to your faction
+command-give_gate_permit-desc = (Admin) Grant the target player the Green Post checkpoint permit, bound to their own character: player
 command-give_item-desc = Give yourself some items. For an example or to auto complete use Tab.
 command-give_item_quality-desc = (Admin) Give yourself an item at a chosen quality tier, for comparing rarity-tier rendering: item quality [num]
 command-gizmos-desc = Manage gizmo subscriptions.

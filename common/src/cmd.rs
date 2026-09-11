@@ -480,6 +480,7 @@ pub enum ServerChatCommand {
     Dummy,
     Explosion,
     Faction,
+    GiveGatePermit,
     GiveItem,
     GiveItemQuality,
     Gizmos,
@@ -819,6 +820,11 @@ impl ServerChatCommand {
                 vec![Message(Optional)],
                 Content::localized("command-faction-desc"),
                 None,
+            ),
+            ServerChatCommand::GiveGatePermit => cmd(
+                vec![PlayerName(Required)],
+                Content::localized("command-give_gate_permit-desc"),
+                Some(Admin),
             ),
             ServerChatCommand::GiveItem => cmd(
                 vec![
@@ -1558,6 +1564,7 @@ impl ServerChatCommand {
             ServerChatCommand::Dummy => "dummy",
             ServerChatCommand::Explosion => "explosion",
             ServerChatCommand::Faction => "faction",
+            ServerChatCommand::GiveGatePermit => "give_gate_permit",
             ServerChatCommand::GiveItem => "give_item",
             ServerChatCommand::GiveItemQuality => "give_item_quality",
             ServerChatCommand::Gizmos => "gizmos",

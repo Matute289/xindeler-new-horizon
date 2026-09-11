@@ -148,6 +148,21 @@ impl Fortification {
     /// Wall thickness, in blocks -- used by the site generator to size the
     /// tile-grid footprint this plot occupies.
     pub fn depth(&self) -> i32 { self.depth }
+
+    /// World-space AABB of one gate opening, indexed the same way its
+    /// authored `design.gates` list was ordered when this `Fortification`
+    /// was generated. Used by server-side runtime reconciliation (e.g. a
+    /// checkpoint mechanic gating one gate on a held item) to locate a
+    /// gate's terrain volume without re-deriving this module's own gate
+    /// geometry a second time.
+    pub fn gate_aabb(&self, gate_index: usize) -> Option<Aabb<i32>> {
+        self.gates.get(gate_index).map(|gate| gate.aabb)
+    }
+
+    /// The exact fill block [`Structure::render_inner`] uses for a closed
+    /// gate, exposed so runtime reconciliation can replicate the closed
+    /// state without duplicating this material choice a second time.
+    pub fn gate_closed_block() -> Block { Block::new(BlockKind::Rock, Rgb::gray(40)) }
 }
 
 impl Structure for Fortification {
@@ -172,7 +187,7 @@ impl Structure for Fortification {
     /// `Bridge::render_inner`'s unused `_land` shape).
     fn render_inner(&self, _site: &Site, _land: &Land, painter: &Painter) {
         let stone = Fill::Block(Block::new(BlockKind::Rock, Rgb::gray(80)));
-        let gate_fill = Fill::Block(Block::new(BlockKind::Rock, Rgb::gray(40)));
+        let gate_fill = Fill::Block(Self::gate_closed_block());
 
         for segment in &self.segments {
             painter

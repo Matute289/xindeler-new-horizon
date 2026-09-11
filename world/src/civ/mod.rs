@@ -1091,6 +1091,67 @@ pub fn cromatolis_source_pixel_to_wpos(
     Some(point.to_chunk_pos(map_size).cpos_to_wpos_center())
 }
 
+/// World-space AABB of one Cromatolis fortification gate, resolved fresh
+/// from the same authored asset and geometry
+/// `establish_authored_cromatolis_fortifications` used at world-gen time --
+/// not cached, since fortification generation is cheap and this is only
+/// ever called by server-side runtime reconciliation (e.g. a checkpoint
+/// mechanic that gates one gate on a held item) at a low, fixed cadence,
+/// never a per-column hot path. Mirrors the "Public anchor accessors"
+/// convention `layer::cromatolis_aerial_citadel` already established for
+/// exposing authored-geometry positions to other code without duplicating
+/// the authoring math a second time.
+pub fn cromatolis_fortification_gate_world_aabb(
+    sim: &WorldSim,
+    gate_id: &str,
+) -> Option<Aabb<i32>> {
+    let authored =
+        AuthoredCromatolisFortifications::load_owned("world.map.cromatolis_v0_fortifications")
+            .ok()?;
+    authored.validate(sim.map_size_lg()).ok()?;
+    for fortification in &authored.fortifications {
+        let Some(gate_index) = fortification
+            .gates
+            .iter()
+            .position(|gate| gate.id == gate_id)
+        else {
+            continue;
+        };
+        let start_chunk = authored
+            .normalize_point(fortification.start)
+            .to_chunk_pos(sim.map_size_lg());
+        let end_chunk = authored
+            .normalize_point(fortification.end)
+            .to_chunk_pos(sim.map_size_lg());
+        let start = TerrainChunkSize::center_wpos(start_chunk);
+        let end = TerrainChunkSize::center_wpos(end_chunk);
+        let design = fortification.meta().design;
+        let land = Land::from_sim(sim);
+        let generated = site::plot::Fortification::generate(&land, start, end, Some(design));
+        return generated.gate_aabb(gate_index);
+    }
+    None
+}
+
+/// World-space centre of an authored Cromatolis settlement, resolved fresh
+/// from the same authored asset `establish_authored_cromatolis_settlements`
+/// uses at world-gen time. Lets other code (e.g. a stationed flavor NPC)
+/// anchor itself to a settlement without hardcoding its world position.
+pub fn cromatolis_settlement_world_center(sim: &WorldSim, site_id: &str) -> Option<Vec2<i32>> {
+    let settlements =
+        AuthoredCromatolisSettlements::load_owned("world.map.cromatolis_v0_sites").ok()?;
+    let settlement = settlements
+        .settlements
+        .iter()
+        .find(|settlement| settlement.id == site_id)?;
+    Some(
+        settlement
+            .center
+            .to_chunk_pos(sim.map_size_lg())
+            .cpos_to_wpos_center(),
+    )
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct AuthoredCromatolisSettlement {
     id: String,
@@ -4737,6 +4798,37 @@ mod tests {
             distance <= 12.0 * std::f64::consts::SQRT_2,
             "projected location moved {distance} chunks from the requested pin, further than the \
              12-chunk search radius allows"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn cromatolis_fortification_gate_world_aabb_resolves_the_real_green_post_gate() {
+        let sim = generate_cromatolis_world();
+
+        let aabb =
+            super::cromatolis_fortification_gate_world_aabb(&sim, "gate.greenhwall_black_iron")
+                .expect("the real export must carry the Green Post gate");
+
+        assert!(aabb.max.x > aabb.min.x);
+        assert!(aabb.max.y > aabb.min.y);
+        assert!(aabb.max.z > aabb.min.z);
+
+        assert!(
+            super::cromatolis_fortification_gate_world_aabb(&sim, "gate.does_not_exist").is_none(),
+            "an unknown gate id must resolve to nothing rather than panicking"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn cromatolis_settlement_world_center_resolves_the_real_evercross_anchor() {
+        let sim = generate_cromatolis_world();
+
+        assert!(super::cromatolis_settlement_world_center(&sim, "site.evercross").is_some());
+        assert!(
+            super::cromatolis_settlement_world_center(&sim, "site.does_not_exist").is_none(),
+            "an unknown settlement id must resolve to nothing rather than panicking"
         );
     }
 

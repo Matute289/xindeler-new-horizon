@@ -1,4 +1,4 @@
-use common::comp;
+use common::{character::CharacterId, comp};
 use common_base::dev_panic;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
@@ -779,17 +779,25 @@ pub fn active_abilities_from_db_model(
 pub struct DatabaseItemProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     durability: Option<NonZeroU32>,
+    /// Identity-binding owner for a permit-style item — see
+    /// `comp::Item::persistence_owner`. Stored as the raw `CharacterId` id
+    /// rather than the newtype so this struct's on-disk shape doesn't change
+    /// if `CharacterId`'s own `Serialize` impl ever does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<i64>,
 }
 
 pub fn item_properties_to_db_model(item: &comp::Item) -> DatabaseItemProperties {
     DatabaseItemProperties {
         durability: item.persistence_durability(),
+        owner: item.persistence_owner().map(|id| id.0),
     }
 }
 
 pub fn apply_db_item_properties(item: &mut comp::Item, properties: &DatabaseItemProperties) {
-    let DatabaseItemProperties { durability } = properties;
+    let DatabaseItemProperties { durability, owner } = properties;
     item.persistence_set_durability(*durability);
+    item.persistence_set_owner(owner.map(CharacterId));
 }
 
 #[cfg(test)]
@@ -827,6 +835,31 @@ pub mod tests {
         let _ = serde_json::de::from_str::<DatabaseItemProperties>(DEFAULT_ITEM_PROPERTIES).expect(
             "Default value should always load to ensure that changes to item properties is always \
              forward compatible with migration V50.",
+        );
+    }
+
+    /// An item's identity-binding `owner` must survive a full
+    /// `Item -> DatabaseItemProperties -> Item` round trip, the same
+    /// property `test_default_item_properties` above already guards for
+    /// forward-compatibility, but exercised end to end here.
+    #[test]
+    fn owner_survives_the_database_item_properties_round_trip() {
+        use super::{apply_db_item_properties, item_properties_to_db_model};
+        use common::{character::CharacterId, comp::Item};
+
+        let mut item = Item::empty();
+        assert_eq!(item.owner(), None, "a fresh item must start unbound");
+
+        item.set_owner(CharacterId(42));
+        let db_model = item_properties_to_db_model(&item);
+
+        let mut reloaded = Item::empty();
+        apply_db_item_properties(&mut reloaded, &db_model);
+
+        assert_eq!(
+            reloaded.owner(),
+            Some(CharacterId(42)),
+            "owner must round-trip through the persisted database model"
         );
     }
 
