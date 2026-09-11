@@ -128,7 +128,10 @@ impl Structure for Sahagin {
         }));
         let wood = Fill::Brick(BlockKind::Wood, Rgb::new(71, 33, 11), 12);
         let key_door = Fill::Block(Block::air(SpriteKind::SahaginKeyDoor));
-        let key_hole = Fill::Block(Block::air(SpriteKind::SahaginKeyhole));
+        // Progression-gated, like the Haniwa dungeon's key gate: opts out of
+        // ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`.
+        // Melee key-item unlocking is unaffected.
+        let key_hole = locked_dungeon_keyhole(SpriteKind::SahaginKeyhole);
         let rope = Fill::Block(Block::air(SpriteKind::Rope));
         let room_size = 30;
         let cell_size_raw = room_size / 6;
