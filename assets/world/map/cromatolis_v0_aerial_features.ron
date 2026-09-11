@@ -2,13 +2,17 @@
     schema: "xindeler_open_world.aerial_citadel.v1",
     coordinate_space: "citadel_relative_meters",
     notes: [
-        "Ported from xindeler-old's world/src/layer/mod.rs (COW-8 Phase 2). Every value here was",
-        "a hardcoded Rust constant there; this file is the single source of truth now.",
+        "Ported from xindeler-old's world/src/layer/mod.rs. Every value here was a hardcoded",
+        "Rust constant there; this file is the single source of truth now.",
         "`center` is an absolute world position (matches every other Cromatolis authored anchor).",
         "Every other position field is relative to `center`, in the same local axes the geometry",
         "functions compute (world x/y, not the mountain's rotated forward/side axes).",
         "`wall_towers` are the 24 authored perimeter tower centres, clockwise from east, relative",
         "to `center`. Mean spacing is ~93 m (range 78-116 m) around the ~2.25 km irregular rim.",
+        "`lower_platform_radius_m`/`lower_dome_radius_m`/`lower_dome_height_m` were ported",
+        "separately from `common::comp::citadel`'s force-field visual presets, which previously",
+        "baked them as Rust literals; they describe the lower tower's force field, distinct from",
+        "`lower_pilot_tower_height_m` above (the physical stair structure's height).",
     ],
     center: (16384, 16384),
     altitude_above_sea_m: 5000,
@@ -41,6 +45,15 @@
     // upper spiral. It is a separate route: entering it never changes a
     // tread or hatch of the upper lookout.
     lower_tower_stair_phase: 13,
+    // An invisible lower-tower safety floor. The server gives this shape a
+    // solid collision plate at its pivot; the visible floor is the authored
+    // stone mounting platform, not a second opaque cyan surface.
+    lower_platform_radius_m: 10,
+    // Hollow downward-facing bubble for the first lower-tower cannon. The
+    // platform below its pivot is collision-safe separately; the dome is
+    // still visual-only until force-field physics is introduced.
+    lower_dome_radius_m: 12,
+    lower_dome_height_m: 18,
     // The centers sit slightly inside the rim. That keeps their full
     // foundations supported while their 26 m diameter footprints overlap
     // the contour wall.

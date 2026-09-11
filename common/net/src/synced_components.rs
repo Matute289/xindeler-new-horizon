@@ -411,6 +411,26 @@ impl NetSync for PhantomIllusion {
     const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
 
+// Cromatolis Aerial Citadel state. All four are visible to every nearby
+// client (cannon aiming and its force field/practice fire are physically
+// observable, not a per-observer secret), same reasoning as `Body`/
+// `CharacterState` above.
+impl NetSync for CitadelForceFieldVisual {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for CitadelTurretAngles {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for CitadelPracticeBeam {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for CitadelPracticeSphere {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
 // These are synced only from the client's own entity.
 
 impl NetSync for Admin {
@@ -473,20 +493,4 @@ impl NetSync for IsInteractor {
 
 impl NetSync for Interactors {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientSpectatorEntity;
-}
-
-impl NetSync for CitadelForceFieldVisual {
-    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
-}
-
-impl NetSync for CitadelTurretAngles {
-    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
-}
-
-impl NetSync for CitadelPracticeBeam {
-    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
-}
-
-impl NetSync for CitadelPracticeSphere {
-    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }

@@ -1,6 +1,10 @@
+use crate::assets::{AssetExt, BoxedError, Error, FileAsset, load_ron};
 use serde::{Deserialize, Serialize};
-use specs::{Component, FlaggedStorage, VecStorage};
-use std::f32::consts::{PI, TAU};
+use specs::{Component, DenseVecStorage, DerefFlaggedStorage};
+use std::{
+    borrow::Cow,
+    f32::consts::{PI, TAU},
+};
 use vek::{Mat3, Vec3};
 
 const TURRET_AIM_EPSILON: f32 = 0.001;
@@ -14,7 +18,17 @@ pub struct CitadelTurretAngles {
 }
 
 impl Component for CitadelTurretAngles {
-    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
+    // `DenseVecStorage`, not `VecStorage`: rare (a handful of Aerial Citadel
+    // cannons world-wide, not thousands of entities), matching the choice
+    // `Disguise`/`RemoteSense`/`Detected`/`Summons` already made for this
+    // exact class of component -- a plain `VecStorage` reserves a slot per
+    // entity index up to the server's max, the wrong tradeoff for something
+    // this uncommon. `DerefFlaggedStorage`, not plain `FlaggedStorage`: this
+    // is net-synced `AnyEntity`-wide, and a later turret-tracking system will
+    // write this every tick -- plain `FlaggedStorage` would flag (and
+    // rebroadcast to every nearby client) on every write regardless of
+    // whether the angle actually changed.
+    type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
 }
 
 /// Geometric presentation used by a Cromatolis energy field.
@@ -28,7 +42,6 @@ pub enum CitadelForceFieldShape {
     /// stone platform remains visible instead of being covered by an opaque
     /// transparent-pass floor.
     SafetyFloor,
-    Floor,
 }
 
 /// A client-rendered, hollow force field projected by Cromatolis.
@@ -38,6 +51,14 @@ pub enum CitadelForceFieldShape {
 /// durability, projectile filtering, and automatic defences remain future
 /// systems. Keeping the dimensions on the entity lets that later work share
 /// the same authored field volume without rebuilding world terrain.
+///
+/// Per-preset dimensions (which shape, how wide, how tall) are authored
+/// data, not Rust literals -- see [`AuthoredCitadelAerialFeatures`], which
+/// reads them from `assets/world/map/cromatolis_v0_aerial_features.ron`,
+/// this structure's one authored source of truth for every other physical
+/// dimension (wall height, tower radius, tower positions, ...), the same
+/// authored-RON-not-hardcoded-Rust convention every other `cromatolis_v0_*`
+/// asset (fortifications, bridges, ...) already follows.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CitadelForceFieldVisual {
     pub shape: CitadelForceFieldShape,
@@ -48,44 +69,97 @@ pub struct CitadelForceFieldVisual {
     pub height: f32,
 }
 
-impl CitadelForceFieldVisual {
-    /// Every upper cannon tower uses a 28 m wide, 20 m tall semi-bubble.
-    pub const fn upper_tower() -> Self {
-        Self {
+impl Component for CitadelForceFieldVisual {
+    // See `CitadelTurretAngles::Storage` above for the reasoning: rare
+    // component, net-synced `AnyEntity`-wide.
+    type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
+}
+
+/// The subset of `assets/world/map/cromatolis_v0_aerial_features.ron` that
+/// force-field visual presets need.
+///
+/// This deliberately only declares the fields it reads (`schema` plus the
+/// dome/platform dimensions); serde ignores every other field the full
+/// asset carries (tower positions, wall/castle dimensions, ...), so this and
+/// any other partial reader of the same file can evolve independently
+/// without needing to agree on one shared Rust struct for the whole
+/// document.
+#[derive(Debug, Deserialize)]
+pub struct AuthoredCitadelAerialFeatures {
+    pub schema: String,
+    /// Radius of the upper pilot towers' hollow semi-bubble dome.
+    pub pilot_dome_radius_m: f32,
+    /// Height of the upper pilot towers' hollow semi-bubble dome.
+    pub pilot_dome_height_m: f32,
+    /// Radius of a lower tower's invisible safety-floor collision plate.
+    pub lower_platform_radius_m: f32,
+    /// Radius of a lower tower's hollow downward-facing dome.
+    pub lower_dome_radius_m: f32,
+    /// Height of a lower tower's hollow downward-facing dome.
+    pub lower_dome_height_m: f32,
+}
+
+impl FileAsset for AuthoredCitadelAerialFeatures {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl AuthoredCitadelAerialFeatures {
+    const EXPECTED_SCHEMA: &'static str = "xindeler_open_world.aerial_citadel.v1";
+
+    pub fn load_owned() -> Result<Self, Error> {
+        <Self as AssetExt>::load_owned("world.map.cromatolis_v0_aerial_features")
+    }
+
+    /// Fails hard on a schema mismatch, the same "fail hard rather than
+    /// skip-and-warn" policy `AuthoredCromatolisFortifications::validate`
+    /// uses.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != Self::EXPECTED_SCHEMA {
+            return Err(format!(
+                "expected schema {}, got {}",
+                Self::EXPECTED_SCHEMA,
+                self.schema
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn upper_tower(&self) -> CitadelForceFieldVisual {
+        CitadelForceFieldVisual {
             shape: CitadelForceFieldShape::Dome,
-            horizontal_radius: 14.0,
-            height: 20.0,
+            horizontal_radius: self.pilot_dome_radius_m,
+            height: self.pilot_dome_height_m,
         }
     }
 
-    /// Compatibility name for the first two manually operated pilot stations.
-    pub const fn pilot_tower() -> Self { Self::upper_tower() }
+    /// Compatibility name for the first two manually operated pilot
+    /// stations.
+    pub fn pilot_tower(&self) -> CitadelForceFieldVisual { self.upper_tower() }
 
     /// An invisible lower-tower safety floor. The server gives this shape a
-    /// solid collision plate at its pivot; the visible floor is the authored
-    /// stone mounting platform, not a second opaque cyan surface.
-    pub const fn lower_platform() -> Self {
-        Self {
+    /// solid collision plate at its pivot; the visible floor is the
+    /// authored stone mounting platform, not a second opaque cyan surface.
+    pub fn lower_platform(&self) -> CitadelForceFieldVisual {
+        CitadelForceFieldVisual {
             shape: CitadelForceFieldShape::SafetyFloor,
-            horizontal_radius: 10.0,
+            horizontal_radius: self.lower_platform_radius_m,
             height: 0.0,
         }
     }
 
-    /// Hollow downward-facing bubble for the first lower-tower cannon.
-    /// The platform below its pivot is collision-safe separately; the dome
-    /// is still visual-only until force-field physics is introduced.
-    pub const fn lower_tower_dome() -> Self {
-        Self {
+    /// Hollow downward-facing bubble for the first lower-tower cannon. The
+    /// platform below its pivot is collision-safe separately; the dome is
+    /// still visual-only until force-field physics is introduced.
+    pub fn lower_tower_dome(&self) -> CitadelForceFieldVisual {
+        CitadelForceFieldVisual {
             shape: CitadelForceFieldShape::InvertedDome,
-            horizontal_radius: 12.0,
-            height: 18.0,
+            horizontal_radius: self.lower_dome_radius_m,
+            height: self.lower_dome_height_m,
         }
     }
-}
-
-impl Component for CitadelForceFieldVisual {
-    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
 }
 
 /// Authored aiming limits for an articulated citadel cannon.
@@ -304,7 +378,9 @@ impl CitadelPracticeBeam {
 }
 
 impl Component for CitadelPracticeBeam {
-    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
+    // See `CitadelTurretAngles::Storage` above for the reasoning: rare
+    // component, net-synced `AnyEntity`-wide.
+    type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
 }
 
 /// Client-visible timeline for the harmless Cromatolis practice sphere.
@@ -331,23 +407,51 @@ impl CitadelPracticeSphere {
 }
 
 impl Component for CitadelPracticeSphere {
-    type Storage = FlaggedStorage<Self, VecStorage<Self>>;
+    // See `CitadelTurretAngles::Storage` above for the reasoning: rare
+    // component, net-synced `AnyEntity`-wide.
+    type Storage = DerefFlaggedStorage<Self, DenseVecStorage<Self>>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CitadelForceFieldShape, CitadelForceFieldVisual, CitadelPracticeBeam,
-        CitadelPracticeSphere, CitadelTurretAngles, CitadelTurretLimits,
-        desired_citadel_turret_angles, update_citadel_turret,
+        AuthoredCitadelAerialFeatures, CitadelForceFieldShape, CitadelForceFieldVisual,
+        CitadelPracticeBeam, CitadelPracticeSphere, CitadelTurretAngles, CitadelTurretLimits,
+        desired_citadel_turret_angles, load_ron, update_citadel_turret,
     };
     use std::f32::consts::PI;
     use vek::{Mat3, Vec3};
 
+    /// A fixture matching the real values authored in
+    /// `assets/world/map/cromatolis_v0_aerial_features.ron`, so these tests
+    /// don't depend on `VELOREN_ASSETS` being set.
+    fn aerial_features_fixture() -> AuthoredCitadelAerialFeatures {
+        AuthoredCitadelAerialFeatures {
+            schema: "xindeler_open_world.aerial_citadel.v1".to_string(),
+            pilot_dome_radius_m: 14.0,
+            pilot_dome_height_m: 20.0,
+            lower_platform_radius_m: 10.0,
+            lower_dome_radius_m: 12.0,
+            lower_dome_height_m: 18.0,
+        }
+    }
+
+    #[test]
+    fn real_aerial_features_export_parses_and_validates() {
+        let features: AuthoredCitadelAerialFeatures = load_ron::<AuthoredCitadelAerialFeatures>(
+            include_bytes!("../../../assets/world/map/cromatolis_v0_aerial_features.ron")
+                .as_slice(),
+        )
+        .expect("real Cromatolis aerial features export must parse");
+        features
+            .validate()
+            .expect("real Cromatolis aerial features export must validate");
+    }
+
     #[test]
     fn pilot_tower_force_field_visual_has_the_authored_hollow_bubble_dimensions() {
         assert_eq!(
-            CitadelForceFieldVisual::pilot_tower(),
+            aerial_features_fixture().pilot_tower(),
             CitadelForceFieldVisual {
                 shape: CitadelForceFieldShape::Dome,
                 horizontal_radius: 14.0,
@@ -359,7 +463,7 @@ mod tests {
     #[test]
     fn lower_tower_safety_floor_is_collision_only_not_a_second_visible_field() {
         assert_eq!(
-            CitadelForceFieldVisual::lower_platform().shape,
+            aerial_features_fixture().lower_platform().shape,
             CitadelForceFieldShape::SafetyFloor,
         );
     }
