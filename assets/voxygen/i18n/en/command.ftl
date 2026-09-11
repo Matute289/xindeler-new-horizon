@@ -47,6 +47,7 @@ command-battlemode_force-desc = Change your battle mode flag without any checks
 command-campfire-desc = Spawns a campfire
 command-clear_persisted_terrain-desc = Clears nearby persisted terrain
 command-create_location-desc = Create a location at the current position
+command-cromatolis_goto-desc = Teleport to the world position for a Cromatolis source map pixel coordinate (QA)
 command-death_effect-dest = Adds an on-death effect to the target entity
 command-debug_column-desc = Prints some debug information about a column
 command-debug_ways-desc = Prints some debug information about a column's ways

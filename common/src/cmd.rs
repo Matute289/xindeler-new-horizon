@@ -464,6 +464,7 @@ pub enum ServerChatCommand {
     Campfire,
     ClearPersistedTerrain,
     CreateLocation,
+    CromatolisGoto,
     DeathEffect,
     DebugColumn,
     DebugWays,
@@ -828,6 +829,14 @@ impl ServerChatCommand {
             ServerChatCommand::GotoRand => cmd(
                 vec![Boolean("Dismount from ship", "true".to_string(), Optional)],
                 Content::localized("command-goto-rand"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CromatolisGoto => cmd(
+                vec![
+                    Integer("source pixel x", 1024, Required),
+                    Integer("source pixel y", 768, Required),
+                ],
+                Content::localized("command-cromatolis_goto-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::Group => cmd(
@@ -1514,6 +1523,7 @@ impl ServerChatCommand {
             ServerChatCommand::GizmosRange => "gizmos_range",
             ServerChatCommand::Goto => "goto",
             ServerChatCommand::GotoRand => "goto_rand",
+            ServerChatCommand::CromatolisGoto => "cromatolis_goto",
             ServerChatCommand::Group => "group",
             ServerChatCommand::GroupInvite => "group_invite",
             ServerChatCommand::GroupKick => "group_kick",
