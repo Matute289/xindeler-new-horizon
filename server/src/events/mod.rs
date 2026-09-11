@@ -46,6 +46,7 @@ mod player;
 mod remote_sense;
 mod trade;
 mod transcription;
+mod undercompact_gate;
 
 pub(crate) use event_types::register_event_busses;
 /// Shared utilities used by other code **in this crate**

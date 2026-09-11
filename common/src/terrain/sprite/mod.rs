@@ -502,6 +502,12 @@ sprites! {
         SeaDecorPillar    = 0x1D,
         MagicalSeal       = 0x1E,
         JugAndCupsCoastal = 0x1F,
+
+        // COW-7b: the Undercompact gate antechamber's two-lever puzzle.
+        // Visually flipped via its existing `Ori` attribute (see
+        // `Block::with_ori`), the same way `Lamp`'s `LightEnabled` attribute
+        // flips a lantern -- no new attribute machinery needed.
+        VaultLever        = 0x20,
     },
     Lamp = 8 has Ori, LightEnabled {
         // Standalone lights

@@ -3338,6 +3338,20 @@ MagicalSeal: [(
     ],
     wind_sway: 0.0,
 )],
+// COW-7b: reskins the existing dwarven gear-wheel prop as a lever mechanism
+// rather than authoring new .vox art -- functional puzzle piece, not a new
+// asset. Its `Ori` attribute flips visually when pulled (see
+// `Block::with_ori`), the same way `Lamp` sprites flip `LightEnabled`.
+VaultLever: [(
+    variations: [
+        (
+            model: "voxygen.voxel.sprite.furniture.gear_wheel-0",
+            offset: (-8.5, -8.5, 0.0),
+            lod_axes: (1.0, 1.0, 1.0),
+        ),
+    ],
+    wind_sway: 0.0,
+)],
 Candle: [(
     variations: [
         (
