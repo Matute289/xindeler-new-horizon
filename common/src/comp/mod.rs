@@ -12,6 +12,7 @@ pub mod body;
 pub mod buff;
 pub mod character_state;
 pub mod chat;
+pub mod citadel;
 pub mod class;
 pub mod combo;
 pub mod compass;
@@ -90,6 +91,10 @@ pub use self::{
     character_state::{CharacterActivity, CharacterState, PetCommand, StateUpdate},
     chat::{
         ChatMode, ChatMsg, ChatType, Faction, SpeechBubble, SpeechBubbleType, UnresolvedChatMsg,
+    },
+    citadel::{
+        CitadelForceFieldShape, CitadelForceFieldVisual, CitadelPracticeBeam,
+        CitadelPracticeSphere, CitadelTurretAngles, CitadelTurretLimits,
     },
     class::{CharacterClass, ClassKind, EquipmentGroup},
     combo::Combo,

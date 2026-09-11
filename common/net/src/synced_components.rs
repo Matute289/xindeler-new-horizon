@@ -130,6 +130,14 @@ macro_rules! synced_components {
             // can show `spent() / pool`. Owner-private: nobody else needs to
             // see the running total, same reasoning as `ability_pool`.
             summons: Summons,
+            // Cromatolis Aerial Citadel state. All four are visible to every
+            // nearby client (cannon aiming and its force field/practice
+            // fire are physically observable, not a per-observer secret),
+            // same reasoning as `Body`/`CharacterState` above.
+            citadel_force_field_visual: CitadelForceFieldVisual,
+            citadel_turret_angles: CitadelTurretAngles,
+            citadel_practice_beam: CitadelPracticeBeam,
+            citadel_practice_sphere: CitadelPracticeSphere,
         }
     };
 }
@@ -465,4 +473,20 @@ impl NetSync for IsInteractor {
 
 impl NetSync for Interactors {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientSpectatorEntity;
+}
+
+impl NetSync for CitadelForceFieldVisual {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for CitadelTurretAngles {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for CitadelPracticeBeam {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
+}
+
+impl NetSync for CitadelPracticeSphere {
+    const SYNC_FROM: SyncFrom = SyncFrom::AnyEntity;
 }
