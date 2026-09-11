@@ -672,7 +672,10 @@ impl Structure for TerracottaPalace {
                 max: Vec2::new(center.x - (room_size / 2) + 1, center.y + 1)
                     .with_z(base - 10 - (room_size / 2) + 2),
             })
-            .fill(Fill::Block(Block::air(SpriteKind::TerracottaKeyhole)));
+            // Progression-gated, like the Haniwa dungeon's key gate: opts out
+            // of ranged/keyless unlocking (e.g. the `knock` spell) via
+            // `no_knock`. Melee key-item unlocking is unaffected.
+            .fill(locked_dungeon_keyhole(SpriteKind::TerracottaKeyhole));
         // chamber_2
         painter
             .aabb(Aabb {
@@ -689,7 +692,10 @@ impl Structure for TerracottaPalace {
                 max: Vec2::new(center.x + (room_size / 2), center.y + 1)
                     .with_z(base - 10 - (room_size / 2) + 2),
             })
-            .fill(Fill::Block(Block::air(SpriteKind::TerracottaKeyhole)));
+            // Progression-gated, like the Haniwa dungeon's key gate: opts out
+            // of ranged/keyless unlocking (e.g. the `knock` spell) via
+            // `no_knock`. Melee key-item unlocking is unaffected.
+            .fill(locked_dungeon_keyhole(SpriteKind::TerracottaKeyhole));
         // chamber_3
         painter
             .aabb(Aabb {
@@ -706,7 +712,10 @@ impl Structure for TerracottaPalace {
                 max: Vec2::new(center.x + 1, center.y - (room_size / 2) + 1)
                     .with_z(base - 10 - (room_size / 2) + 2),
             })
-            .fill(Fill::Block(Block::air(SpriteKind::TerracottaKeyhole)));
+            // Progression-gated, like the Haniwa dungeon's key gate: opts out
+            // of ranged/keyless unlocking (e.g. the `knock` spell) via
+            // `no_knock`. Melee key-item unlocking is unaffected.
+            .fill(locked_dungeon_keyhole(SpriteKind::TerracottaKeyhole));
         // chamber_4
         painter
             .aabb(Aabb {
@@ -723,7 +732,10 @@ impl Structure for TerracottaPalace {
                 max: Vec2::new(center.x + 1, center.y + (room_size / 2))
                     .with_z(base - 10 - (room_size / 2) + 2),
             })
-            .fill(Fill::Block(Block::air(SpriteKind::TerracottaKeyhole)));
+            // Progression-gated, like the Haniwa dungeon's key gate: opts out
+            // of ranged/keyless unlocking (e.g. the `knock` spell) via
+            // `no_knock`. Melee key-item unlocking is unaffected.
+            .fill(locked_dungeon_keyhole(SpriteKind::TerracottaKeyhole));
         // clear cellar
         painter
             .superquadric(
@@ -831,7 +843,10 @@ impl Structure for TerracottaPalace {
                 min: Vec2::new(exit_pos.x + 5, exit_pos.y).with_z(base - 9 - (room_size / 2)),
                 max: Vec2::new(exit_pos.x + 6, exit_pos.y + 1).with_z(base - 8 - (room_size / 2)),
             })
-            .fill(Fill::Block(Block::air(SpriteKind::TerracottaKeyhole)));
+            // Progression-gated, like the Haniwa dungeon's key gate: opts out
+            // of ranged/keyless unlocking (e.g. the `knock` spell) via
+            // `no_knock`. Melee key-item unlocking is unaffected.
+            .fill(locked_dungeon_keyhole(SpriteKind::TerracottaKeyhole));
         // chests
         let chests_position = exit_pos + 8;
         painter
@@ -949,7 +964,10 @@ impl Structure for TerracottaPalace {
                 min: (center).with_z(base + (3 * (room_size / 10)) + 1),
                 max: (center + 1).with_z(base + (3 * (room_size / 10)) + 2),
             })
-            .fill(Fill::Block(Block::air(SpriteKind::TerracottaKeyhole)));
+            // Progression-gated, like the Haniwa dungeon's key gate: opts out
+            // of ranged/keyless unlocking (e.g. the `knock` spell) via
+            // `no_knock`. Melee key-item unlocking is unaffected.
+            .fill(locked_dungeon_keyhole(SpriteKind::TerracottaKeyhole));
         // cellar floor
         painter
             .aabb(Aabb {

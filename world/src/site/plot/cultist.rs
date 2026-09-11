@@ -147,7 +147,10 @@ impl Structure for Cultist {
         let rock = Fill::Brick(BlockKind::Rock, Rgb::new(55, 50, 60), 24);
         let water = Fill::Block(Block::new(BlockKind::Water, Rgb::zero()));
         let key_door = Fill::Block(Block::air(SpriteKind::KeyDoor));
-        let key_hole = Fill::Block(Block::air(SpriteKind::Keyhole));
+        // Progression-gated, like the Haniwa dungeon's key gate: opts out of
+        // ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`.
+        // Melee key-item unlocking is unaffected.
+        let key_hole = locked_dungeon_keyhole(SpriteKind::Keyhole);
         let gold_chain = Fill::Block(Block::air(SpriteKind::SeaDecorChain));
 
         for room in room_data {

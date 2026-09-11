@@ -310,3 +310,105 @@ pub struct AirshipDockInfo<'plot> {
     pub center: Vec2<i32>,
     pub docking_positions: &'plot [Vec3<i32>],
 }
+
+/// Builds the sprite fill for a dungeon's key-gated keyhole: it opts out of
+/// ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`, so a
+/// dungeon whose whole point is requiring the matching key item can't be
+/// bypassed remotely — melee key-item unlocking is unaffected. See
+/// `common::event::RemoteUnlockEvent` / `SpriteCfg::no_knock` for the
+/// mechanism this backs, and `Haniwa::render_inner` for the original
+/// precedent every dungeon's key gate should share.
+pub fn locked_dungeon_keyhole(kind: common::terrain::sprite::SpriteKind) -> Fill {
+    Fill::sprite_ori_cfg(kind, 0, common::terrain::sprite::SpriteCfg {
+        no_knock: true,
+        ..Default::default()
+    })
+}
+
+#[cfg(test)]
+mod key_gate_tests {
+    use super::*;
+    use common::terrain::sprite::SpriteKind;
+
+    /// Every dungeon-type keyhole sprite placed directly by a generator's
+    /// own `render_inner` (as opposed to via a prefab, see below) must be
+    /// built through `locked_dungeon_keyhole` so its `knock`-immunity can
+    /// never silently regress per-dungeon. One `SpriteKind` per Cromatolis
+    /// dungeon type that gates progression behind a physical key this way.
+    ///
+    /// Gnarling has no lockable-door mechanism in this codebase at all.
+    /// DwarvenMine's key gates DO exist — its `forgemaster_boss`,
+    /// `forgemaster_room`, `entrance`, `hallway`, `hallway2`,
+    /// `mining_site`, `excavation_site` and `cleansing_room` prefabs all
+    /// place `Keyhole`/`KeyholeBars` — but the whole dungeon is
+    /// prefab-driven (`render_prefab`, not a literal `Fill::sprite_ori_cfg`
+    /// call here), so its `no_knock` guarantee instead comes from
+    /// `block::keyhole_cfg` (see `block::keyhole_cfg_tests`), which also
+    /// backs `SpriteKind::Keyhole` here — DwarvenMine's prefabs and
+    /// Cultist Sanctum's literal call both resolve to that same sprite
+    /// kind, just through two different code paths.
+    const DUNGEON_KEY_GATE_SPRITES: &[SpriteKind] = &[
+        SpriteKind::HaniwaKeyhole,     // Claybound Ossuary (SiteKind::Haniwa)
+        SpriteKind::SahaginKeyhole,    // Sahagin Island (SiteKind::Sahagin)
+        SpriteKind::VampireKeyhole,    // Vampire Castle (SiteKind::VampireCastle)
+        SpriteKind::TerracottaKeyhole, // Terracotta Palace (SiteKind::Terracotta)
+        SpriteKind::MyrmidonKeyhole,   // Myrmidon Arena (SiteKind::Myrmidon)
+        SpriteKind::MinotaurKeyhole,   // Myrmidon Arena's Minotaur vault (SiteKind::Myrmidon)
+        SpriteKind::Keyhole,           // Cultist Sanctum; also DwarvenMine (prefab)
+        SpriteKind::BoneKeyhole,       // Adlet Stronghold (SiteKind::Adlet)
+        SpriteKind::GlassKeyhole,      // Sea Chapel (SiteKind::ChapelSite)
+    ];
+
+    #[test]
+    fn all_dungeon_key_gates_are_no_knock() {
+        for &kind in DUNGEON_KEY_GATE_SPRITES {
+            match locked_dungeon_keyhole(kind) {
+                Fill::CfgSprite(block, cfg) => {
+                    assert!(
+                        cfg.no_knock,
+                        "{kind:?}'s dungeon key gate must set no_knock, so the knock spell can't \
+                         bypass it"
+                    );
+                    assert_eq!(
+                        block.get_sprite(),
+                        Some(kind),
+                        "locked_dungeon_keyhole must place the requested sprite kind"
+                    );
+                },
+                _ => panic!(
+                    "{kind:?}: expected locked_dungeon_keyhole to build a Fill::CfgSprite \
+                     carrying the keyhole's SpriteCfg"
+                ),
+            }
+        }
+    }
+
+    /// Guards against a dungeon's key gate quietly regressing back to a raw
+    /// `Fill::Block`/`Fill::sprite_ori_cfg` call that bypasses
+    /// `locked_dungeon_keyhole` (and so loses `no_knock`) — every dungeon
+    /// type's own generator source must actually call the shared helper for
+    /// its keyhole sprite kind.
+    #[test]
+    fn dungeon_generators_use_the_locked_keyhole_helper() {
+        let sources: &[(&str, &str)] = &[
+            (include_str!("haniwa.rs"), "HaniwaKeyhole"),
+            (include_str!("sahagin.rs"), "SahaginKeyhole"),
+            (include_str!("vampire_castle.rs"), "VampireKeyhole"),
+            (include_str!("terracotta_palace.rs"), "TerracottaKeyhole"),
+            (include_str!("myrmidon_arena.rs"), "MyrmidonKeyhole"),
+            (include_str!("myrmidon_arena.rs"), "MinotaurKeyhole"),
+            (include_str!("cultist.rs"), "Keyhole"),
+            (include_str!("adlet.rs"), "BoneKeyhole"),
+            (include_str!("sea_chapel.rs"), "GlassKeyhole"),
+        ];
+
+        for (src, variant) in sources {
+            let needle = format!("locked_dungeon_keyhole(SpriteKind::{variant})");
+            assert!(
+                src.contains(&needle),
+                "expected to find `{needle}` in the dungeon generator source — every dungeon's \
+                 key gate must be built via the shared no_knock-setting helper"
+            );
+        }
+    }
+}

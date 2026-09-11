@@ -112,7 +112,10 @@ impl Structure for SeaChapel {
         );
         let window_hor = Fill::Block(Block::air(SpriteKind::SeaDecorWindowHor));
         let glass_barrier = Fill::Block(Block::air(SpriteKind::GlassBarrier));
-        let glass_keyhole = Fill::Block(Block::air(SpriteKind::GlassKeyhole));
+        // Progression-gated, like the Haniwa dungeon's key gate: opts out of
+        // ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`.
+        // Melee key-item unlocking is unaffected.
+        let glass_keyhole = locked_dungeon_keyhole(SpriteKind::GlassKeyhole);
         // random exit from water basin to side building
         let mut connect_gate_types = vec![
             SpriteKind::GlassBarrier,

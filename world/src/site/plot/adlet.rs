@@ -1559,7 +1559,10 @@ impl Structure for AdletStronghold {
                             max: Vec2::new(yetipit_entrance_pos.x, yetipit_entrance_pos.y + 1)
                                 .with_z((alt as i32) - 7),
                         })
-                        .fill(Fill::Block(Block::air(SpriteKind::BoneKeyhole)));
+                        // Progression-gated, like the Haniwa dungeon's key gate: opts
+                        // out of ranged/keyless unlocking (e.g. the `knock` spell) via
+                        // `no_knock`. Melee key-item unlocking is unaffected.
+                        .fill(locked_dungeon_keyhole(SpriteKind::BoneKeyhole));
                 },
                 AdletStructure::Tannery => {
                     // shattered bone pieces

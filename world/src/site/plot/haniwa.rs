@@ -7,7 +7,7 @@ use crate::{
 };
 use common::{
     generation::EntityInfo,
-    terrain::{Structure as PrefabStructure, StructuresGroup, sprite::SpriteCfg},
+    terrain::{Structure as PrefabStructure, StructuresGroup},
 };
 use lazy_static::lazy_static;
 use rand::prelude::*;
@@ -122,10 +122,7 @@ impl Structure for Haniwa {
         // `haniwa_key` to pass this door, so its keyhole opts out of ranged/keyless
         // unlocking (e.g. the `knock` spell) via `no_knock`. Melee key-item
         // unlocking is unaffected.
-        let key_hole = Fill::sprite_ori_cfg(SpriteKind::HaniwaKeyhole, 0, SpriteCfg {
-            no_knock: true,
-            ..Default::default()
-        });
+        let key_hole = locked_dungeon_keyhole(SpriteKind::HaniwaKeyhole);
         let trap = Fill::Block(Block::air(SpriteKind::HaniwaTrap));
         let rock_broken = Fill::Sampling(Arc::new(|center| {
             Some(match (RandomField::new(0).get(center)) % 48 {

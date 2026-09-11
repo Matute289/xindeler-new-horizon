@@ -1055,9 +1055,27 @@ impl Body {
             },
 
             // ── BirdMedium ────────────────────────────────────────────────
-            // Non-combatant birds → T0; aggressive species → T1.
+            // Species/HP-aware, matching the T-tags already on this body's
+            // own `base_health` entries just below: non-combatant birds →
+            // T0; small aggressive birds (T1 tag) → T1. The two bats share
+            // a `// T3B` tag there, but that lumps together two very
+            // different roles: VampireBat is ordinary trash-swarm fodder
+            // (Vampire Castle spawns two per `bat_pos`, alongside the one
+            // Bloodmoon Bat boss) at 100 HP — on par with
+            // FishMedium::Marlin/Icepike (50/90 HP, tagged T2) — so it's T2
+            // here, not T3. BloodmoonBat is the actual Bloodmoon Bat
+            // dungeon boss at 1200 HP, comparable to Golem::Gravewarden
+            // (1000 HP) and BipedLarge::Harvester (1300 HP), both T3 → T3.
             Body::BirdMedium(b) => match b.species {
-                bird_medium::Species::VampireBat | bird_medium::Species::BloodmoonBat => 1,
+                bird_medium::Species::Crow
+                | bird_medium::Species::Eagle
+                | bird_medium::Species::Goose
+                | bird_medium::Species::HornedOwl
+                | bird_medium::Species::Parrot
+                | bird_medium::Species::SnowyOwl
+                | bird_medium::Species::Toucan => 1,
+                bird_medium::Species::VampireBat => 2,
+                bird_medium::Species::BloodmoonBat => 3,
                 _ => 0,
             },
 
@@ -1128,10 +1146,35 @@ impl Body {
             },
 
             // ── Crustacean ────────────────────────────────────────────────
-            Body::Crustacean(_) => 0,
+            // Species/HP-aware, matching the T-tags on this body's own
+            // `base_health` entries: ordinary crabs → T0; SoldierCrab is
+            // tagged T2 there → T2. Karkatha (the Shellmaw dungeon boss,
+            // 2000 HP) is also tagged T2 there, but that tag is stale: its
+            // HP sits within the same band as Golem::IronGolem (2500 HP)
+            // and BipedLarge::AdletElder (1500 HP) — both T3 in this very
+            // function — so Karkatha is T3 here, not the flat T0 every
+            // Crustacean got before, and not the stale T2 tag either.
+            Body::Crustacean(b) => match b.species {
+                crustacean::Species::SoldierCrab => 2,
+                crustacean::Species::Karkatha => 3,
+                _ => 0,
+            },
+
+            // ── Object ────────────────────────────────────────────────────
+            // Investigated for a high-HP boss body like Crustacean's
+            // Karkatha: none exists. Every combat-capable Object body
+            // (BarrelOrgan, HaniwaSentry, the dwarven-quarry/cultist
+            // turrets, TerracottaStatue) is a modest-HP (60-600) hazard/
+            // turret/decoy, not a boss with its own accuracy/evasion/crit
+            // baseline to correct, and TerracottaStatue specifically backs
+            // the Cursekeeper decoy mechanic, which is out of scope here.
+            // `base_health` also carries no T-tag convention for this body
+            // (unlike Crustacean/BirdMedium/QuadrupedLow/etc.), so there is
+            // no established per-species tier to extend. Stays flat T0.
+            Body::Object(_) => 0,
 
             // ── Non-combatant / structural bodies ─────────────────────────
-            Body::Object(_) | Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => 0,
+            Body::Ship(_) | Body::Item(_) | Body::Plugin(_) => 0,
         }
     }
 
@@ -2662,5 +2705,100 @@ mod undead_creature_kind_tests {
     fn ordinary_bodies_are_not_undead() {
         assert!(!is_undead(biped_large_body(biped_large::Species::Minotaur)));
         assert!(!is_undead(biped_small_body(biped_small::Species::Gnarling)));
+    }
+}
+
+#[cfg(test)]
+mod threat_tier_boss_tests {
+    use super::*;
+    use crate::comp::body::{biped_large, bird_medium, crustacean, golem};
+
+    fn crustacean_body(species: crustacean::Species) -> Body {
+        Body::Crustacean(crustacean::Body {
+            species,
+            body_type: crustacean::BodyType::Male,
+        })
+    }
+
+    fn bird_medium_body(species: bird_medium::Species) -> Body {
+        Body::BirdMedium(bird_medium::Body {
+            species,
+            body_type: bird_medium::BodyType::Male,
+        })
+    }
+
+    fn golem_body(species: golem::Species) -> Body {
+        Body::Golem(golem::Body {
+            species,
+            body_type: golem::BodyType::Male,
+        })
+    }
+
+    fn biped_large_body(species: biped_large::Species) -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    /// The Shellmaw (Sahagin Island's dungeon boss, `Karkatha`, 2000 HP)
+    /// must no longer be lumped in with a trivial T0 crab. Its 2000 HP sits
+    /// within the same band as `Golem::IronGolem` (2500 HP) and
+    /// `BipedLarge::AdletElder` (1500 HP) — both T3 in this function — so
+    /// it must land at exactly T3, matching those comparable-HP bosses, not
+    /// merely "some tier above T0".
+    #[test]
+    fn shellmaw_boss_matches_comparable_hp_bosses_at_tier_three() {
+        let shellmaw = crustacean_body(crustacean::Species::Karkatha);
+        let trivial_crab = crustacean_body(crustacean::Species::Crab);
+
+        assert!(
+            shellmaw.threat_tier() > trivial_crab.threat_tier(),
+            "Shellmaw (dungeon boss) must outrank a plain crab"
+        );
+        assert_eq!(trivial_crab.threat_tier(), 0);
+
+        let iron_golem = golem_body(golem::Species::IronGolem);
+        let adlet_elder = biped_large_body(biped_large::Species::AdletElder);
+        assert_eq!(shellmaw.threat_tier(), 3);
+        assert_eq!(shellmaw.threat_tier(), iron_golem.threat_tier());
+        assert_eq!(shellmaw.threat_tier(), adlet_elder.threat_tier());
+    }
+
+    /// The Bloodmoon Bat (the vampire-dungeon boss, 1200 HP) must no
+    /// longer be capped at the same T1 ceiling as every other BirdMedium,
+    /// and should land in a tier comparable to other ~1000-1500 HP bosses
+    /// elsewhere (e.g. `BipedLarge::Harvester`, 1300 HP, T3).
+    #[test]
+    fn bloodmoon_bat_boss_is_not_capped_at_tier_one() {
+        let bloodmoon_bat = bird_medium_body(bird_medium::Species::BloodmoonBat);
+        let trivial_bird = bird_medium_body(bird_medium::Species::Duck);
+
+        assert!(
+            bloodmoon_bat.threat_tier() > 1,
+            "must exceed the old flat T1 cap"
+        );
+        assert_eq!(trivial_bird.threat_tier(), 0);
+
+        let harvester = biped_large_body(biped_large::Species::Harvester);
+        assert_eq!(bloodmoon_bat.threat_tier(), harvester.threat_tier());
+    }
+
+    /// VampireBat (100 HP trash-swarm fodder, spawned two-per-position
+    /// alongside the one Bloodmoon Bat boss in Vampire Castle) must NOT
+    /// share the boss's tier just because `base_health` tags both `T3B` —
+    /// it belongs with other ~100 HP threats (on par with
+    /// `FishMedium::Marlin`/`Icepike`, tagged T2) instead, strictly below
+    /// the actual boss.
+    #[test]
+    fn vampire_bat_swarm_fodder_does_not_share_the_boss_tier() {
+        let vampire_bat = bird_medium_body(bird_medium::Species::VampireBat);
+        let bloodmoon_bat = bird_medium_body(bird_medium::Species::BloodmoonBat);
+
+        assert_eq!(vampire_bat.threat_tier(), 2);
+        assert!(
+            vampire_bat.threat_tier() < bloodmoon_bat.threat_tier(),
+            "trash-swarm VampireBat must not match the Bloodmoon Bat boss's tier"
+        );
     }
 }

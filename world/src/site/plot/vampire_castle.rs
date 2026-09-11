@@ -119,7 +119,10 @@ impl Structure for VampireCastle {
         let window_ver = Fill::Block(Block::air(SpriteKind::WitchWindow));
         let window_ver2 = Fill::Block(Block::air(SpriteKind::WitchWindow));
         let key_door = Fill::Block(Block::air(SpriteKind::VampireKeyDoor));
-        let key_hole = Fill::Block(Block::air(SpriteKind::VampireKeyhole));
+        // Progression-gated, like the Haniwa dungeon's key gate: opts out of
+        // ranged/keyless unlocking (e.g. the `knock` spell) via `no_knock`.
+        // Melee key-item unlocking is unaffected.
+        let key_hole = locked_dungeon_keyhole(SpriteKind::VampireKeyhole);
         let onewaydoor = Fill::Block(Block::air(SpriteKind::OneWayWall).with_ori(2).unwrap());
         let candles = Fill::Sampling(Arc::new(|wpos| {
             Some(match (RandomField::new(0).get(wpos)) % 4 {
