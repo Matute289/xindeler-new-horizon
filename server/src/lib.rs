@@ -19,6 +19,7 @@ pub mod character_suspension;
 pub mod chat;
 pub mod chunk_generator;
 mod chunk_serialize;
+#[cfg(feature = "worldgen")] mod citadel;
 pub mod client;
 pub mod cmd;
 pub mod connection_handler;
@@ -285,6 +286,11 @@ pub struct Server {
     chat_cache: ChatCache,
     database_settings: Arc<RwLock<DatabaseSettings>>,
     disconnect_all_clients_requested: bool,
+
+    // Citadel stations stream with their terrain chunks. The refresh only
+    // materializes an absent station; it never creates a second live copy.
+    #[cfg(feature = "worldgen")]
+    citadel_defence_refresh: Duration,
 
     event_dispatcher: SendDispatcher<'static>,
 
@@ -838,6 +844,8 @@ impl Server {
             chat_cache,
             database_settings,
             disconnect_all_clients_requested: false,
+            #[cfg(feature = "worldgen")]
+            citadel_defence_refresh: Duration::from_secs(1),
 
             event_dispatcher: Self::create_event_dispatcher(pools),
 
@@ -1084,6 +1092,19 @@ impl Server {
             &server_constants,
             on_block_update,
         );
+
+        #[cfg(feature = "worldgen")]
+        {
+            // Terrain streaming completed this tick. A station is materialized
+            // only if its own chunk is active and no matching live entity
+            // exists; chunk cleanup unloads it again outside player range.
+            self.citadel_defence_refresh += dt;
+            if self.citadel_defence_refresh >= Duration::from_secs(1) {
+                citadel::ensure_upper_defences(&mut self.state);
+                citadel::ensure_lower_tower_defences(&mut self.state);
+                self.citadel_defence_refresh = Duration::ZERO;
+            }
+        }
 
         let before_handle_events = Instant::now();
 
