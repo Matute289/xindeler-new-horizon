@@ -1957,15 +1957,24 @@ fn handle_cromatolis_goto(
         return Err(action.help_content());
     };
 
+    // Never hardcode the canvas dimensions here -- read them from the same
+    // authored asset every other Cromatolis pixel-space reader uses.
+    let Some(source_pixels) = world::civ::cromatolis_source_pixels() else {
+        return Err(Content::Plain(
+            "Could not load the Cromatolis source map canvas dimensions".into(),
+        ));
+    };
+
     let map_size = server.world.sim().map_size_lg();
     let Some(wpos) = world::civ::cromatolis_source_pixel_to_wpos(
         Vec2::new(source_x as f32, source_y as f32),
+        source_pixels,
         map_size,
     ) else {
         return Err(Content::Plain(format!(
-            "Cromatolis map pixels must be within 0..{} and 0..{}",
-            world::civ::CROMATOLIS_SOURCE_PIXELS.x - 1,
-            world::civ::CROMATOLIS_SOURCE_PIXELS.y - 1,
+            "Cromatolis map pixels must be within 0..={} and 0..={}",
+            source_pixels.x.saturating_sub(1),
+            source_pixels.y.saturating_sub(1),
         )));
     };
 

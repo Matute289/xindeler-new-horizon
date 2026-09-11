@@ -1040,28 +1040,46 @@ impl AuthoredMapPoint {
     }
 }
 
-/// Fixed pixel dimensions of the Cromatolis source map canvas (`2048x1536`)
-/// that every authored `cromatolis_v0_*.ron` asset is authored against --
-/// either directly (the `0..1`-normalized [`AuthoredMapPoint`] coordinates
-/// used by sites/landmarks/routes/bridges) or, for fortifications, via their
-/// own `source_map` pixel dimensions, which are these same numbers.
-pub const CROMATOLIS_SOURCE_PIXELS: Vec2<u32> = Vec2::new(2048, 1536);
+/// Loads the Cromatolis source map canvas's pixel dimensions from the same
+/// authored asset every other reader of this figure already uses --
+/// `AuthoredCromatolisFortifications::source_map` -- rather than a second,
+/// independently-hardcoded `2048x1536` constant. The asset cache (see
+/// `AssetExt::load_owned`) makes repeated calls cheap. Returns `None` if the
+/// asset fails to load.
+pub fn cromatolis_source_pixels() -> Option<Vec2<u32>> {
+    AuthoredCromatolisFortifications::load_owned("world.map.cromatolis_v0_fortifications")
+        .ok()
+        .map(|fortifications| {
+            Vec2::new(
+                fortifications.source_map.width_px,
+                fortifications.source_map.height_px,
+            )
+        })
+}
 
 /// Converts a raw pixel coordinate on the Cromatolis source map canvas
-/// (`0..CROMATOLIS_SOURCE_PIXELS`, top-left origin) into a world
-/// chunk-center position, using the exact same normalize-then-
+/// (`0..source_pixels`, top-left origin) into a world chunk-center
+/// position, using the exact same normalize-then-
 /// [`AuthoredMapPoint::to_chunk_pos`] pattern every authored Cromatolis
 /// asset loader above already uses -- so a raw QA pixel coordinate lands on
 /// the same world position an authored feature at that pixel would.
+/// `source_pixels` is the canvas's own pixel dimensions -- see
+/// [`cromatolis_source_pixels`] -- never a hardcoded literal, same rule
+/// `AuthoredCromatolisFortifications::normalize_point` already follows.
 ///
 /// Used by the `/cromatolis_goto` admin command (`server/src/cmd.rs`).
 /// Returns `None` if the pixel falls outside the canvas.
 pub fn cromatolis_source_pixel_to_wpos(
     source_pixel: Vec2<f32>,
+    source_pixels: Vec2<u32>,
     map_size: MapSizeLg,
 ) -> Option<Vec2<i32>> {
-    let max_x = (CROMATOLIS_SOURCE_PIXELS.x - 1) as f32;
-    let max_y = (CROMATOLIS_SOURCE_PIXELS.y - 1) as f32;
+    if source_pixels.x < 2 || source_pixels.y < 2 {
+        return None;
+    }
+
+    let max_x = (source_pixels.x - 1) as f32;
+    let max_y = (source_pixels.y - 1) as f32;
     if !(0.0..=max_x).contains(&source_pixel.x) || !(0.0..=max_y).contains(&source_pixel.y) {
         return None;
     }
@@ -4294,21 +4312,27 @@ mod tests {
     // ---- `/cromatolis_goto` pixel-to-world conversion (COW-9) ----
 
     #[test]
+    fn cromatolis_source_pixels_reads_real_fortifications_source_map() {
+        let fortifications = real_fortifications();
+        let source_pixels =
+            cromatolis_source_pixels().expect("real fortifications asset must load");
+        assert_eq!(source_pixels.x, fortifications.source_map.width_px);
+        assert_eq!(source_pixels.y, fortifications.source_map.height_px);
+    }
+
+    #[test]
     fn cromatolis_source_pixel_to_wpos_matches_fortification_loader_reference_point() {
         let fortifications = real_fortifications();
         // The fortifications asset is the one authored asset that already
         // uses raw pixel coordinates (like `/cromatolis_goto`'s input)
-        // rather than pre-normalized 0..1 points, and its `source_map` is
-        // exactly the fixed Cromatolis canvas -- so its own reference point
-        // doubles as a real, already-committed cross-check with no
-        // reconstruction rounding involved.
-        assert_eq!(
+        // rather than pre-normalized 0..1 points -- so its own reference
+        // point doubles as a real, already-committed cross-check with no
+        // reconstruction rounding involved. Its `source_map` is also the
+        // canonical source of the canvas dimensions, read here the same way
+        // `cromatolis_source_pixels` reads it, never a hardcoded literal.
+        let source_pixels = Vec2::new(
             fortifications.source_map.width_px,
-            CROMATOLIS_SOURCE_PIXELS.x
-        );
-        assert_eq!(
             fortifications.source_map.height_px,
-            CROMATOLIS_SOURCE_PIXELS.y
         );
 
         let reference = fortifications
@@ -4325,6 +4349,7 @@ mod tests {
 
         let got = cromatolis_source_pixel_to_wpos(
             Vec2::new(reference.start.x, reference.start.y),
+            source_pixels,
             map_size,
         )
         .expect("reference pixel must be within the source canvas");
@@ -4335,30 +4360,39 @@ mod tests {
     #[test]
     fn cromatolis_source_pixel_to_wpos_rejects_out_of_range_pixels_without_panicking() {
         let map_size = synthetic_map_size();
-        assert!(cromatolis_source_pixel_to_wpos(Vec2::new(-1.0, 0.0), map_size).is_none());
-        assert!(cromatolis_source_pixel_to_wpos(Vec2::new(0.0, -1.0), map_size).is_none());
+        let source_pixels = Vec2::new(2048_u32, 1536_u32);
+        assert!(
+            cromatolis_source_pixel_to_wpos(Vec2::new(-1.0, 0.0), source_pixels, map_size)
+                .is_none()
+        );
+        assert!(
+            cromatolis_source_pixel_to_wpos(Vec2::new(0.0, -1.0), source_pixels, map_size)
+                .is_none()
+        );
         assert!(
             cromatolis_source_pixel_to_wpos(
-                Vec2::new(CROMATOLIS_SOURCE_PIXELS.x as f32, 0.0),
+                Vec2::new(source_pixels.x as f32, 0.0),
+                source_pixels,
                 map_size
             )
             .is_none()
         );
         assert!(
             cromatolis_source_pixel_to_wpos(
-                Vec2::new(0.0, CROMATOLIS_SOURCE_PIXELS.y as f32),
+                Vec2::new(0.0, source_pixels.y as f32),
+                source_pixels,
                 map_size
             )
             .is_none()
         );
         // In-range corners must succeed.
-        assert!(cromatolis_source_pixel_to_wpos(Vec2::new(0.0, 0.0), map_size).is_some());
+        assert!(
+            cromatolis_source_pixel_to_wpos(Vec2::new(0.0, 0.0), source_pixels, map_size).is_some()
+        );
         assert!(
             cromatolis_source_pixel_to_wpos(
-                Vec2::new(
-                    (CROMATOLIS_SOURCE_PIXELS.x - 1) as f32,
-                    (CROMATOLIS_SOURCE_PIXELS.y - 1) as f32
-                ),
+                Vec2::new((source_pixels.x - 1) as f32, (source_pixels.y - 1) as f32),
+                source_pixels,
                 map_size
             )
             .is_some()

@@ -725,6 +725,14 @@ impl ServerChatCommand {
                 Content::localized("command-clear_persisted_terrain-desc"),
                 Some(Admin),
             ),
+            ServerChatCommand::CromatolisGoto => cmd(
+                vec![
+                    Integer("source pixel x", 1024, Required),
+                    Integer("source pixel y", 768, Required),
+                ],
+                Content::localized("command-cromatolis_goto-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::DeathEffect => cmd(
                 vec![
                     Enum("death_effect", vec!["transform".to_string()], Required),
@@ -829,14 +837,6 @@ impl ServerChatCommand {
             ServerChatCommand::GotoRand => cmd(
                 vec![Boolean("Dismount from ship", "true".to_string(), Optional)],
                 Content::localized("command-goto-rand"),
-                Some(Admin),
-            ),
-            ServerChatCommand::CromatolisGoto => cmd(
-                vec![
-                    Integer("source pixel x", 1024, Required),
-                    Integer("source pixel y", 768, Required),
-                ],
-                Content::localized("command-cromatolis_goto-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::Group => cmd(
@@ -1509,6 +1509,7 @@ impl ServerChatCommand {
             ServerChatCommand::Build => "build",
             ServerChatCommand::Campfire => "campfire",
             ServerChatCommand::ClearPersistedTerrain => "clear_persisted_terrain",
+            ServerChatCommand::CromatolisGoto => "cromatolis_goto",
             ServerChatCommand::DeathEffect => "death_effect",
             ServerChatCommand::DebugColumn => "debug_column",
             ServerChatCommand::DebugWays => "debug_ways",
@@ -1523,7 +1524,6 @@ impl ServerChatCommand {
             ServerChatCommand::GizmosRange => "gizmos_range",
             ServerChatCommand::Goto => "goto",
             ServerChatCommand::GotoRand => "goto_rand",
-            ServerChatCommand::CromatolisGoto => "cromatolis_goto",
             ServerChatCommand::Group => "group",
             ServerChatCommand::GroupInvite => "group_invite",
             ServerChatCommand::GroupKick => "group_kick",
