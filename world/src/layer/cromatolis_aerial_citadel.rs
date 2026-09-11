@@ -9,10 +9,9 @@
 //! ## Architecture
 //!
 //! Every tunable geometric constant (the anchor position, altitude, max
-//! radius, mountain center/height, snowline, castle center, every
-//! wall/tower height, the pilot-dome radii, and the 24 authored tower-
-//! anchor positions) is a field of [`AerialCitadelConfig`], loaded once per
-//! world from the schema-versioned
+//! radius, mountain/castle centers, wall/tower heights, dome radii, and the
+//! 24 authored tower-anchor positions) is a field of [`AerialCitadelConfig`],
+//! loaded once per world from the schema-versioned
 //! `assets/world/map/cromatolis_v0_aerial_features.ron` asset and cached on
 //! [`crate::index::Index`] -- the same shape `cromatolis_interior.rs` and
 //! `cromatolis_cave_features.rs` (sibling modules) already established for
@@ -20,6 +19,36 @@
 //!
 //! Like those siblings, this only ever activates for chunks with
 //! `SimChunk::authored_cromatolis_v0` set.
+//!
+//! ## Per-column geometry, not per-voxel
+//!
+//! The single-position `castle_voxel_at`/`wall_voxel_at`/`voxel_at` methods
+//! (kept for tests, and for any other one-off caller) are thin wrappers over
+//! a two-phase design: [`AerialCitadelConfig::build_column`] resolves every
+//! column-invariant quantity exactly once for a given `(x, y)` --
+//! `surface_z`'s trig/`powf` chain, each candidate tower's altitude/axis
+//! math, the castle's local-axis/corner-tower lookup -- into a
+//! [`ColumnContext`]; the actual per-`z` sampling
+//! (`ColumnContext::voxel_at`) then only ever does cheap integer range
+//! checks against that precomputed data. The real entry point,
+//! [`apply_cromatolis_local_aerial_features_to`], builds one `ColumnContext`
+//! per column and reuses it across the citadel's full ~380-block vertical
+//! extent, mirroring how `cromatolis_interior.rs`'s `carve_level_room` and
+//! `cromatolis_cave_features.rs`'s `carve_hub`/`carve_branch` compute their
+//! per-column invariants once before ever touching `z`.
+//!
+//! `build_column` also prunes the 24 authored towers down to the handful
+//! (typically 0-2, given a mean spacing of ~93 m against each tower's ~19 m
+//! reach) that could plausibly affect the column at all, via
+//! [`AerialCitadelConfig::tower_reach_radius_squared`] -- the same
+//! bounding-radius pre-filter `cromatolis_interior.rs`'s
+//! `level_touches_chunk`/`connection_touches_chunk` and
+//! `cromatolis_cave_features.rs`'s `hub_touches_chunk`/`branch_touches_chunk`
+//! already establish as this codebase's convention for exactly this shape
+//! of authored-geometry layer, applied here per column rather than per chunk
+//! since the citadel data itself (24 small fixed anchors) is cheap enough to
+//! scan for reachability -- only the *trig* per reachable tower needs
+//! hoisting out of the per-`z` loop.
 //!
 //! ## Scope
 //!
@@ -241,13 +270,30 @@ impl AerialCitadelConfig {
         20 + (self.footprint(relative).clamped(0.0, 1.0) * 140.0).round() as i32
     }
 
-    fn castle_voxel_at(
+    /// Conservative (never under-counts) squared bound on how far a tower's
+    /// effects -- its own footprint radius, the pilot dome, or the
+    /// extended-cannon muzzle emplacement (`forward` 1..=18, `lateral`
+    /// <=4) -- can reach horizontally from its centre. Used to prune the 24
+    /// authored towers down to the handful that could plausibly affect a
+    /// given column before doing any of the comparatively expensive
+    /// per-tower altitude/axis work.
+    fn tower_reach_radius_squared(&self) -> i32 {
+        let cannon_reach = ((18 * 18 + 4 * 4) as f32).sqrt();
+        let reach =
+            (self.wall_tower_radius_m.max(self.pilot_dome_radius_m) as f32).max(cannon_reach) + 1.0;
+        (reach.ceil() as i32).pow(2)
+    }
+
+    /// Resolves every column-invariant quantity the castle's voxel decision
+    /// depends on, once, regardless of `z`. Returns `None` if the column
+    /// has no castle structure at all (outside every core/gatehouse/corner
+    /// box) or lies outside the island footprint entirely.
+    fn build_castle_context(
         &self,
-        wpos: Vec3<i32>,
-        sea_level: i32,
-    ) -> Option<CromatolisSkyCitadelVoxel> {
-        let deck = self.deck_z(sea_level);
-        let relative = wpos.xy() - self.center();
+        relative: Vec2<i32>,
+        deck: i32,
+        terrain_surface: Option<i32>,
+    ) -> Option<CastleColumnContext> {
         let (forward, side) = self.local_axes(relative, self.castle_center());
         let forward = forward.round() as i32;
         let side = side.round() as i32;
@@ -256,76 +302,235 @@ impl AerialCitadelConfig {
         let gatehouse_top = floor + self.castle_wall_height_m;
         let in_core = (-22..=14).contains(&forward) && side.abs() <= 24;
         let in_gatehouse = (15..=29).contains(&forward) && side.abs() <= 13;
+        // Four hand-fit corner towers embedded in the keep. Kept as a
+        // code-level literal (unlike the 24 external perimeter towers,
+        // which live in the RON asset): these coordinates are tightly
+        // coupled to the core/gatehouse box math immediately around them,
+        // not standalone authored anchors consumed anywhere else.
         let towers: [(i32, i32, i32, i32); 4] = [
             (17, -25, 10, floor + 42),
             (17, 25, 10, floor + 42),
             (-17, -23, 10, floor + 50),
             (-17, 23, 10, floor + 50),
         ];
-        let tower = towers
-            .into_iter()
-            .find_map(|(tower_forward, tower_side, radius, top)| {
-                let delta_forward = forward - tower_forward;
-                let delta_side = side - tower_side;
-                (delta_forward.pow(2) + delta_side.pow(2) <= radius.pow(2)).then_some((
-                    delta_forward,
-                    delta_side,
-                    radius,
-                    top,
-                ))
-            });
-        let top = tower
+        let tower_match =
+            towers
+                .into_iter()
+                .find_map(|(tower_forward, tower_side, radius, top)| {
+                    let delta_forward = forward - tower_forward;
+                    let delta_side = side - tower_side;
+                    (delta_forward.pow(2) + delta_side.pow(2) <= radius.pow(2)).then_some((
+                        delta_forward,
+                        delta_side,
+                        radius,
+                        top,
+                    ))
+                });
+        let top = tower_match
             .map(|(_, _, _, top)| top)
             .or(in_core.then_some(core_top))
-            .or(in_gatehouse.then_some(gatehouse_top));
-        let top = top?;
+            .or(in_gatehouse.then_some(gatehouse_top))?;
 
-        let terrain_surface = self.surface_z(relative, deck)?;
+        let terrain_surface = terrain_surface?;
         let foundation_base = terrain_surface.min(floor);
-        if !(foundation_base..=top).contains(&wpos.z) {
-            return None;
-        }
-
-        // The entire footprint is carried down to the floating terrain.
-        // This prevents a castle floor from hanging in open air on an
-        // uneven shelf.
-        if wpos.z <= floor {
-            return Some(CromatolisSkyCitadelVoxel::Stone);
-        }
-
-        let gate = in_gatehouse && forward >= 27 && side.abs() <= 5 && wpos.z <= floor + 10;
-        if gate {
-            return Some(CromatolisSkyCitadelVoxel::Air);
-        }
-
-        let battlement = wpos.z == top && (forward + side).rem_euclid(6) < 3;
-        if wpos.z == top - 1 || battlement {
-            return Some(CromatolisSkyCitadelVoxel::Stone);
-        }
-
-        if let Some((delta_forward, delta_side, radius, _)) = tower {
+        let gate_open = in_gatehouse && forward >= 27 && side.abs() <= 5;
+        let battlement_pattern = (forward + side).rem_euclid(6) < 3;
+        let tower_result = tower_match.map(|(delta_forward, delta_side, radius, _)| {
             let tower_wall = delta_forward.pow(2) + delta_side.pow(2) >= (radius - 2).pow(2);
-            return Some(if tower_wall {
+            if tower_wall {
                 CromatolisSkyCitadelVoxel::Stone
             } else {
                 CromatolisSkyCitadelVoxel::Air
-            });
-        }
-
+            }
+        });
         let core_wall = in_core && (forward <= -19 || forward >= 11 || side.abs() >= 21);
         let gatehouse_wall = in_gatehouse && (forward >= 27 || side.abs() >= 10);
 
-        if core_wall || gatehouse_wall {
-            Some(CromatolisSkyCitadelVoxel::Stone)
-        } else {
-            Some(CromatolisSkyCitadelVoxel::Air)
+        Some(CastleColumnContext {
+            top,
+            floor,
+            foundation_base,
+            gate_open,
+            battlement_pattern,
+            tower_result,
+            core_or_gatehouse_wall: core_wall || gatehouse_wall,
+        })
+    }
+
+    /// Resolves every column-invariant quantity one tower's voxel decision
+    /// depends on, once, regardless of `z`. See [`TowerBuildResult`] for
+    /// the three possible outcomes.
+    fn build_tower_context(
+        &self,
+        tower_center: Vec2<i32>,
+        relative: Vec2<i32>,
+        deck: i32,
+        terrain_surface: Option<i32>,
+        reach_squared: i32,
+    ) -> TowerBuildResult {
+        let offset = relative - tower_center;
+        let distance_squared = offset.magnitude_squared();
+        if distance_squared > reach_squared {
+            return TowerBuildResult::NotReachable;
+        }
+
+        let radius_squared = self.wall_tower_radius_m.pow(2);
+        let tower_surface = self
+            .surface_z(tower_center, deck)
+            .expect("perimeter tower centers must remain inside the island footprint");
+        let top = tower_surface + self.wall_tower_height();
+        let roof_top = top + self.pilot_dome_height_m;
+        let inward = tower_inward_axis(tower_center);
+        let outward = -inward;
+        let side = Vec2::new(-outward.y, outward.x);
+        let forward = offset.x * outward.x + offset.y * outward.y;
+        let lateral = offset.x * side.x + offset.y * side.y;
+
+        if distance_squared > radius_squared {
+            return TowerBuildResult::Reachable(TowerColumnContext {
+                tower_surface,
+                top,
+                roof_top,
+                forward,
+                lateral,
+                offset,
+                inside: None,
+            });
+        }
+
+        let Some(terrain_surface) = terrain_surface else {
+            // Inside this tower's own footprint radius, but the general
+            // island surface is undefined here (footprint <= 0). Mirrors
+            // the source's `terrain_surface?` early return, which
+            // propagates out of the whole per-position wall lookup rather
+            // than falling back to another tower or the contour band.
+            return TowerBuildResult::ForceNone;
+        };
+        let foundation_base = terrain_surface.min(tower_surface);
+        let entrance_depth = offset.x * inward.x + offset.y * inward.y;
+        let entrance_width = offset.x * inward.y - offset.y * inward.x;
+        let outer_ring = distance_squared >= (self.wall_tower_radius_m - 3).pow(2);
+        let inner_roof = distance_squared <= (self.wall_tower_radius_m - 3).pow(2);
+        let on_outer_edge = distance_squared >= (self.wall_tower_radius_m - 1).pow(2);
+        let support = matches!((offset.x, offset.y), (-7, -7) | (-7, 7) | (7, -7) | (7, 7));
+        let roof_hatch_is_at_offset = self.tower_hatch_is_at(offset);
+        let is_hatch_transition_step = offset == self.tower_hatch_transition_step();
+
+        let underside = tower_surface - self.island_thickness(tower_center);
+        let lower_floor = underside - self.lower_pilot_tower_height_m;
+        let lower_hatch = self.lower_tower_hatch_center();
+        let lower_entry_floor = self
+            .surface_z(tower_center + lower_hatch, deck)
+            .expect("the lower hatch must remain inside the island footprint")
+            .max(tower_surface);
+        let hatch_is_at_offset = self.lower_tower_hatch_is_at(offset);
+        let landing_is_wall = distance_squared >= (self.wall_tower_radius_m - 5).pow(2);
+        let central_platform = offset.x.abs() <= 5 && offset.y.abs() <= 5;
+        let east_west_beam = offset.y.abs() <= 0 && (6..=10).contains(&offset.x.abs());
+        let north_south_beam = offset.x.abs() <= 0 && (6..=10).contains(&offset.y.abs());
+
+        TowerBuildResult::Reachable(TowerColumnContext {
+            tower_surface,
+            top,
+            roof_top,
+            forward,
+            lateral,
+            offset,
+            inside: Some(TowerInsideContext {
+                foundation_base,
+                entrance_depth,
+                entrance_width,
+                terrain_surface,
+                outer_ring,
+                inner_roof,
+                on_outer_edge,
+                support,
+                roof_hatch_is_at_offset,
+                is_hatch_transition_step,
+                lower: Some(TowerLowerColumnContext {
+                    lower_floor,
+                    lower_entry_floor,
+                    hatch_is_at_offset,
+                    landing_is_wall,
+                    platform_or_beam: central_platform || east_west_beam || north_south_beam,
+                }),
+            }),
+        })
+    }
+
+    /// Resolves every column-invariant quantity for the whole citadel at
+    /// `wpos2d`, once. This is the seam that lets
+    /// [`apply_cromatolis_local_aerial_features_to`] pay for `surface_z`'s
+    /// trig, each candidate tower's altitude/axis math, and the castle's
+    /// local-axis/corner-tower lookup exactly once per column, then reuse
+    /// the result across the citadel's full vertical extent instead of
+    /// recomputing all of it at every `z`.
+    fn build_column(&self, wpos2d: Vec2<i32>, sea_level: i32) -> ColumnContext {
+        let deck = self.deck_z(sea_level);
+        let relative = wpos2d - self.center();
+        let terrain_surface = self.surface_z(relative, deck);
+        let thickness = self.island_thickness(relative);
+        let is_snow =
+            terrain_surface.is_some_and(|surface| surface >= deck + self.snowline_above_deck_m);
+
+        let castle = self.build_castle_context(relative, deck, terrain_surface);
+
+        let reach_squared = self.tower_reach_radius_squared();
+        let mut towers = Vec::new();
+        let mut wall_force_none = false;
+        for tower_center in self.wall_towers() {
+            match self.build_tower_context(
+                tower_center,
+                relative,
+                deck,
+                terrain_surface,
+                reach_squared,
+            ) {
+                TowerBuildResult::NotReachable => {},
+                TowerBuildResult::ForceNone => wall_force_none = true,
+                TowerBuildResult::Reachable(context) => towers.push(context),
+            }
+        }
+
+        // A narrow contour band follows the authored asymmetric footprint
+        // instead of approximating it with a circular fence. Only reached
+        // (in `ColumnContext::wall_at`) when the column falls inside no
+        // tower's own radius at all.
+        let contour = terrain_surface.and_then(|surface| {
+            let footprint = self.footprint(relative);
+            if !(0.055..=0.105).contains(&footprint) {
+                return None;
+            }
+            Some(ContourColumnContext {
+                top: surface + self.wall_height_m,
+                terrain_surface: surface,
+                is_gap_pattern: (relative.x + relative.y).rem_euclid(5) >= 3,
+            })
+        });
+
+        ColumnContext {
+            terrain_surface,
+            thickness,
+            is_snow,
+            castle,
+            wall_force_none,
+            towers,
+            contour,
         }
     }
 
-    fn pilot_dome_contains(&self, tower_index: usize, offset: Vec2<i32>, z: i32, top: i32) -> bool {
-        tower_index < self.wall_towers.len()
-            && (top + 1..=top + self.pilot_dome_height_m).contains(&z)
-            && offset.magnitude_squared() <= self.pilot_dome_radius_m.pow(2)
+    /// Test-only single-position wrapper over [`Self::build_column`] +
+    /// [`ColumnContext::castle_at`]; production code (the real entry
+    /// point) builds one `ColumnContext` per column and calls
+    /// `ColumnContext::voxel_at` directly for every `z`, rather than
+    /// rebuilding the whole column per position.
+    #[cfg(test)]
+    fn castle_voxel_at(
+        &self,
+        wpos: Vec3<i32>,
+        sea_level: i32,
+    ) -> Option<CromatolisSkyCitadelVoxel> {
+        self.build_column(wpos.xy(), sea_level).castle_at(wpos.z)
     }
 
     fn tower_stair_is_at(&self, offset: Vec2<i32>, step: i32) -> bool {
@@ -416,271 +621,360 @@ impl AerialCitadelConfig {
         offset == stair + inward * self.tower_stair_width_m
     }
 
+    /// Test-only single-position wrapper; see [`Self::castle_voxel_at`].
+    #[cfg(test)]
     fn wall_voxel_at(&self, wpos: Vec3<i32>, sea_level: i32) -> Option<CromatolisSkyCitadelVoxel> {
-        let deck = self.deck_z(sea_level);
-        let relative = wpos.xy() - self.center();
-        let terrain_surface = self.surface_z(relative, deck);
-
-        for (tower_index, tower_center) in self.wall_towers().enumerate() {
-            let offset = relative - tower_center;
-            let distance_squared = offset.magnitude_squared();
-            let radius_squared = self.wall_tower_radius_m.pow(2);
-            let tower_surface = self
-                .surface_z(tower_center, deck)
-                .expect("perimeter tower centers must remain inside the island footprint");
-            let top = tower_surface + self.wall_tower_height();
-            let inward = tower_inward_axis(tower_center);
-            let outward = -inward;
-            let side = Vec2::new(-outward.y, outward.x);
-            let forward = offset.x * outward.x + offset.y * outward.y;
-            let lateral = offset.x * side.x + offset.y * side.y;
-            let in_pilot_dome = self.pilot_dome_contains(tower_index, offset, wpos.z, top);
-            let is_extended_cannon = (1..=18).contains(&forward)
-                && lateral.abs() <= 4
-                && (top + 1..=top + 5).contains(&wpos.z);
-            if distance_squared > radius_squared {
-                if in_pilot_dome {
-                    // The field itself is a client-transparent mesh
-                    // attached to the pilot cannon. Clear the old voxel
-                    // shell here: voxel sprites have no alpha channel and
-                    // would make it opaque.
-                    return Some(CromatolisSkyCitadelVoxel::Air);
-                }
-                if is_extended_cannon {
-                    // Every cannon is a physical entity; keep its terrain
-                    // emplacement volume clear.
-                    return Some(CromatolisSkyCitadelVoxel::Air);
-                }
-                continue;
-            }
-
-            let terrain_surface = terrain_surface?;
-            let foundation_base = terrain_surface.min(tower_surface);
-            let roof_top = top + self.pilot_dome_height_m;
-
-            if tower_index < self.wall_towers.len() {
-                let underside = tower_surface - self.island_thickness(tower_center);
-                let lower_floor = underside - self.lower_pilot_tower_height_m;
-                // The entrance floor follows the local terrain surface,
-                // which is one or two blocks higher than the tower-centre
-                // datum on this sloped wall segment. Use the hatch's
-                // terrain height as the canonical first tread level,
-                // rather than recomputing a varying stair height at every
-                // point of the sloped floor.
-                let lower_hatch = self.lower_tower_hatch_center();
-                let lower_entry_floor = self
-                    .surface_z(tower_center + lower_hatch, deck)
-                    .expect("the lower hatch must remain inside the island footprint")
-                    .max(tower_surface);
-                // Clear every local floor layer above the canonical hatch
-                // level. Otherwise an adjacent slope block can form an
-                // invisible stone lid over part of the elongated opening.
-                if self.lower_tower_hatch_is_at(offset)
-                    && (lower_entry_floor..=terrain_surface.max(tower_surface)).contains(&wpos.z)
-                {
-                    return Some(CromatolisSkyCitadelVoxel::Air);
-                }
-                // This is an independent descending interior, cut only
-                // below the accepted upper tower floor. It exits into a
-                // hanging tower; the upper spiral and hatch above are
-                // never changed.
-                // The stone ceiling remains intact at the entry level
-                // except for the explicit hatch cleared above. On steeper
-                // rim segments the hatch terrain can sit above the
-                // tower-centre datum; hollowing that extra layer would
-                // otherwise punch an unintended hole into the main tower
-                // floor.
-                if (lower_floor..tower_surface).contains(&wpos.z) {
-                    if wpos.z == lower_floor {
-                        // A solid annular landing receives the final tread.
-                        // The open centre remains reserved for the visual
-                        // energy floor and the view into the precipice.
-                        let landing_inner_radius = (self.wall_tower_radius_m - 5).pow(2);
-                        return Some(if distance_squared >= landing_inner_radius {
-                            CromatolisSkyCitadelVoxel::Stone
-                        } else {
-                            CromatolisSkyCitadelVoxel::Air
-                        });
-                    }
-                    if wpos.z == lower_floor + 1 {
-                        // The inverted cannon is mounted from a centred
-                        // stone deck rather than floating over the
-                        // lookout. Four one-block-wide cardinal beams
-                        // carry that deck back to the tower's inner wall,
-                        // leaving the corners open so the force-field
-                        // floor remains visible.
-                        let central_platform = offset.x.abs() <= 5 && offset.y.abs() <= 5;
-                        let east_west_beam =
-                            offset.y.abs() <= 0 && (6..=10).contains(&offset.x.abs());
-                        let north_south_beam =
-                            offset.x.abs() <= 0 && (6..=10).contains(&offset.y.abs());
-                        if central_platform || east_west_beam || north_south_beam {
-                            return Some(CromatolisSkyCitadelVoxel::Stone);
-                        }
-                    }
-                    let lower_wall = distance_squared >= (self.wall_tower_radius_m - 3).pow(2);
-                    if lower_wall {
-                        return Some(CromatolisSkyCitadelVoxel::Stone);
-                    }
-                    let descent = lower_entry_floor - 1 - wpos.z;
-                    if descent >= 0 && self.lower_tower_stair_is_at(offset, descent) {
-                        return Some(CromatolisSkyCitadelVoxel::Stone);
-                    }
-                    if descent.rem_euclid(4) == 0 && self.lower_tower_lantern_is_at(offset, descent)
-                    {
-                        return Some(CromatolisSkyCitadelVoxel::Lantern);
-                    }
-                    return Some(CromatolisSkyCitadelVoxel::Air);
-                }
-                // The hatch may lie on a locally higher slope than the
-                // tower centre. Preserve the upper tower's solid floor at
-                // its datum, but continue the first treads through that
-                // short slope gap.
-                if (tower_surface + 1..lower_entry_floor).contains(&wpos.z) {
-                    let descent = lower_entry_floor - 1 - wpos.z;
-                    if self.lower_tower_stair_is_at(offset, descent) {
-                        return Some(CromatolisSkyCitadelVoxel::Stone);
-                    }
-                    if descent.rem_euclid(4) == 0 && self.lower_tower_lantern_is_at(offset, descent)
-                    {
-                        return Some(CromatolisSkyCitadelVoxel::Lantern);
-                    }
-                }
-            }
-            if !(foundation_base..=roof_top).contains(&wpos.z) {
-                return None;
-            }
-
-            let inward_axis = tower_inward_axis(tower_center);
-            let entrance_depth = offset.x * inward_axis.x + offset.y * inward_axis.y;
-            let entrance_width = offset.x * inward_axis.y - offset.y * inward_axis.x;
-            let entrance = entrance_depth >= self.wall_tower_radius_m - 3
-                && entrance_width.abs() <= 3
-                && wpos.z > terrain_surface
-                && wpos.z <= tower_surface + 7;
-            if entrance {
-                return Some(CromatolisSkyCitadelVoxel::Air);
-            }
-
-            if wpos.z <= tower_surface {
-                return Some(CromatolisSkyCitadelVoxel::Stone);
-            }
-
-            let hatch_shaft = self.tower_hatch_is_at(offset) && (top..=top + 2).contains(&wpos.z);
-            if hatch_shaft {
-                // Test the hatch before the now-wide final stair tread.
-                // The stair continues into the shaft below, but must not
-                // refill the established roof opening itself.
-                return Some(CromatolisSkyCitadelVoxel::Air);
-            }
-
-            let stair_level = wpos.z - tower_surface - 1;
-            let highest_stair_level = self.wall_tower_final_stair_level();
-            if (0..=highest_stair_level).contains(&stair_level)
-                && (self.tower_stair_is_at(offset, stair_level)
-                    || (stair_level == highest_stair_level
-                        && offset == self.tower_hatch_transition_step()))
-            {
-                return Some(CromatolisSkyCitadelVoxel::Stone);
-            }
-
-            if (5..=highest_stair_level).contains(&stair_level)
-                && stair_level.rem_euclid(8) == 0
-                && self.tower_lantern_is_at(offset, stair_level)
-            {
-                return Some(CromatolisSkyCitadelVoxel::Lantern);
-            }
-
-            if wpos.z == top {
-                let on_outer_edge = distance_squared >= (self.wall_tower_radius_m - 1).pow(2);
-                return Some(if on_outer_edge {
-                    CromatolisSkyCitadelVoxel::Wood
-                } else {
-                    CromatolisSkyCitadelVoxel::Stone
-                });
-            }
-
-            // The pilot tower's old posts and solid wooden roof are
-            // replaced by a client-rendered, hollow transparent field. The
-            // deck and the stair/hatch below this height have already
-            // returned above and remain unchanged.
-            if in_pilot_dome {
-                return Some(CromatolisSkyCitadelVoxel::Air);
-            }
-
-            let support = matches!((offset.x, offset.y), (-7, -7) | (-7, 7) | (7, -7) | (7, 7));
-            if (top + 1..roof_top).contains(&wpos.z) {
-                // The watch level deliberately has broad, unobstructed
-                // openings: just four roof posts above a low perimeter
-                // rail.
-                return Some(if support {
-                    CromatolisSkyCitadelVoxel::Wood
-                } else {
-                    CromatolisSkyCitadelVoxel::Air
-                });
-            }
-            if wpos.z == roof_top && support {
-                return Some(CromatolisSkyCitadelVoxel::Wood);
-            }
-            if wpos.z == roof_top && distance_squared <= (self.wall_tower_radius_m - 3).pow(2) {
-                return Some(CromatolisSkyCitadelVoxel::Wood);
-            }
-            let tower_wall = distance_squared >= (self.wall_tower_radius_m - 3).pow(2);
-            return Some(if tower_wall || wpos.z == terrain_surface {
-                CromatolisSkyCitadelVoxel::Stone
-            } else {
-                CromatolisSkyCitadelVoxel::Air
-            });
-        }
-
-        // A narrow contour band follows the authored asymmetric footprint
-        // instead of approximating it with a circular fence.
-        let footprint = self.footprint(relative);
-        if !(0.055..=0.105).contains(&footprint) {
-            return None;
-        }
-
-        let terrain_surface = terrain_surface?;
-        let top = terrain_surface + self.wall_height_m;
-        if !(terrain_surface..=top).contains(&wpos.z) {
-            return None;
-        }
-        if wpos.z == top && (relative.x + relative.y).rem_euclid(5) >= 3 {
-            Some(CromatolisSkyCitadelVoxel::Air)
-        } else {
-            Some(CromatolisSkyCitadelVoxel::Stone)
-        }
+        self.build_column(wpos.xy(), sea_level)
+            .wall_at(self, wpos.z)
     }
 
+    /// Test-only single-position wrapper; see [`Self::castle_voxel_at`].
+    #[cfg(test)]
     fn voxel_at(&self, wpos: Vec3<i32>, sea_level: i32) -> Option<CromatolisSkyCitadelVoxel> {
-        if let Some(castle_voxel) = self.castle_voxel_at(wpos, sea_level) {
-            return Some(castle_voxel);
-        }
-        if let Some(wall_voxel) = self.wall_voxel_at(wpos, sea_level) {
-            return Some(wall_voxel);
-        }
+        self.build_column(wpos.xy(), sea_level)
+            .voxel_at(self, wpos.z)
+    }
+}
 
-        let deck = self.deck_z(sea_level);
-        let relative = wpos.xy() - self.center();
-        let surface = self.surface_z(relative, deck)?;
-        let thickness = self.island_thickness(relative);
-        let bottom = surface - thickness;
+// ---------------------------------------------------------------------
+// Per-column resolved geometry (see the module doc's "Per-column geometry,
+// not per-voxel" section). Every field here is column-invariant -- none of
+// it depends on `z` -- so it is computed once by `AerialCitadelConfig::
+// build_column` and reused for every `z` sampled at that column.
+// ---------------------------------------------------------------------
 
-        if !(bottom..=surface).contains(&wpos.z) {
+struct ColumnContext {
+    terrain_surface: Option<i32>,
+    thickness: i32,
+    is_snow: bool,
+    castle: Option<CastleColumnContext>,
+    /// Mirrors the source's `terrain_surface?` early return from inside
+    /// the wall-tower lookup: set when the column falls inside some
+    /// tower's own radius but the general island surface is undefined
+    /// there. When set, the wall lookup returns `None` for every `z`,
+    /// never falling back to another tower or the contour band.
+    wall_force_none: bool,
+    /// The (typically 0-2) towers whose reach could plausibly affect this
+    /// column, in ascending tower-index order -- see
+    /// [`AerialCitadelConfig::tower_reach_radius_squared`].
+    towers: Vec<TowerColumnContext>,
+    contour: Option<ContourColumnContext>,
+}
+
+struct CastleColumnContext {
+    top: i32,
+    floor: i32,
+    foundation_base: i32,
+    gate_open: bool,
+    battlement_pattern: bool,
+    tower_result: Option<CromatolisSkyCitadelVoxel>,
+    core_or_gatehouse_wall: bool,
+}
+
+struct ContourColumnContext {
+    top: i32,
+    terrain_surface: i32,
+    is_gap_pattern: bool,
+}
+
+/// Outcome of resolving one tower's column-invariant context.
+enum TowerBuildResult {
+    /// Outside even this tower's generous reach bound -- no effect on this
+    /// column at any `z`.
+    NotReachable,
+    /// See [`ColumnContext::wall_force_none`].
+    ForceNone,
+    Reachable(TowerColumnContext),
+}
+
+struct TowerColumnContext {
+    tower_surface: i32,
+    top: i32,
+    roof_top: i32,
+    forward: i32,
+    lateral: i32,
+    offset: Vec2<i32>,
+    /// `Some` only when the column falls inside this tower's own radius
+    /// (`distance_squared <= wall_tower_radius_m^2`) -- in that case this
+    /// tower is the sole authority for every `z` at this column.
+    inside: Option<TowerInsideContext>,
+}
+
+struct TowerInsideContext {
+    foundation_base: i32,
+    entrance_depth: i32,
+    entrance_width: i32,
+    terrain_surface: i32,
+    /// `distance_squared >= (wall_tower_radius_m - 3)^2`.
+    outer_ring: bool,
+    /// `distance_squared <= (wall_tower_radius_m - 3)^2`. Not simply
+    /// `!outer_ring`: the boundary value satisfies both, matching the
+    /// source's independent `>=`/`<=` checks there (the roof's `Wood` cap
+    /// takes priority over its `Stone` fallback exactly on that boundary).
+    inner_roof: bool,
+    on_outer_edge: bool,
+    support: bool,
+    roof_hatch_is_at_offset: bool,
+    is_hatch_transition_step: bool,
+    lower: Option<TowerLowerColumnContext>,
+}
+
+struct TowerLowerColumnContext {
+    lower_floor: i32,
+    lower_entry_floor: i32,
+    hatch_is_at_offset: bool,
+    landing_is_wall: bool,
+    platform_or_beam: bool,
+}
+
+impl ColumnContext {
+    fn castle_at(&self, z: i32) -> Option<CromatolisSkyCitadelVoxel> {
+        let c = self.castle.as_ref()?;
+        if !(c.foundation_base..=c.top).contains(&z) {
             return None;
         }
 
-        if wpos.z == surface {
-            if surface >= deck + self.snowline_above_deck_m {
-                Some(CromatolisSkyCitadelVoxel::Snow)
-            } else {
-                Some(CromatolisSkyCitadelVoxel::Grass)
+        // The entire footprint is carried down to the floating terrain.
+        // This prevents a castle floor from hanging in open air on an
+        // uneven shelf.
+        if z <= c.floor {
+            return Some(CromatolisSkyCitadelVoxel::Stone);
+        }
+
+        if c.gate_open && z <= c.floor + 10 {
+            return Some(CromatolisSkyCitadelVoxel::Air);
+        }
+
+        if z == c.top - 1 || (z == c.top && c.battlement_pattern) {
+            return Some(CromatolisSkyCitadelVoxel::Stone);
+        }
+
+        if let Some(result) = c.tower_result {
+            return Some(result);
+        }
+
+        Some(if c.core_or_gatehouse_wall {
+            CromatolisSkyCitadelVoxel::Stone
+        } else {
+            CromatolisSkyCitadelVoxel::Air
+        })
+    }
+
+    fn wall_at(&self, config: &AerialCitadelConfig, z: i32) -> Option<CromatolisSkyCitadelVoxel> {
+        if self.wall_force_none {
+            return None;
+        }
+
+        for tower in &self.towers {
+            if let Some(result) = tower.resolve(config, z) {
+                return Some(result);
             }
-        } else if wpos.z >= surface - 4 {
+            if tower.inside.is_some() {
+                // This tower unconditionally owns every `z` at this column
+                // once it falls inside its footprint radius: `resolve`
+                // already returned `Some` for the z-ranges it recognizes,
+                // so reaching here means `z` is outside this tower's
+                // vertical band, which must surface as "no wall data" for
+                // the whole column -- never falling through to another
+                // (unreachable, by construction) tower or the contour band.
+                return None;
+            }
+        }
+
+        let contour = self.contour.as_ref()?;
+        if !(contour.terrain_surface..=contour.top).contains(&z) {
+            return None;
+        }
+        Some(if z == contour.top && contour.is_gap_pattern {
+            CromatolisSkyCitadelVoxel::Air
+        } else {
+            CromatolisSkyCitadelVoxel::Stone
+        })
+    }
+
+    fn island_at(&self, z: i32) -> Option<CromatolisSkyCitadelVoxel> {
+        let surface = self.terrain_surface?;
+        let bottom = surface - self.thickness;
+        if !(bottom..=surface).contains(&z) {
+            return None;
+        }
+
+        if z == surface {
+            Some(if self.is_snow {
+                CromatolisSkyCitadelVoxel::Snow
+            } else {
+                CromatolisSkyCitadelVoxel::Grass
+            })
+        } else if z >= surface - 4 {
             Some(CromatolisSkyCitadelVoxel::Earth)
         } else {
             Some(CromatolisSkyCitadelVoxel::Rock)
         }
+    }
+
+    fn voxel_at(&self, config: &AerialCitadelConfig, z: i32) -> Option<CromatolisSkyCitadelVoxel> {
+        self.castle_at(z)
+            .or_else(|| self.wall_at(config, z))
+            .or_else(|| self.island_at(z))
+    }
+}
+
+impl TowerColumnContext {
+    fn resolve(&self, config: &AerialCitadelConfig, z: i32) -> Option<CromatolisSkyCitadelVoxel> {
+        let in_pilot_dome = (self.top + 1..=self.top + config.pilot_dome_height_m).contains(&z)
+            && self.offset.magnitude_squared() <= config.pilot_dome_radius_m.pow(2);
+
+        let Some(inside) = &self.inside else {
+            // The field itself is a client-transparent mesh attached to
+            // the pilot cannon; clear the old voxel shell here (voxel
+            // sprites have no alpha channel and would make it opaque).
+            // Every cannon is likewise a physical entity, so its terrain
+            // emplacement volume is simply left clear.
+            let is_extended_cannon = (1..=18).contains(&self.forward)
+                && self.lateral.abs() <= 4
+                && (self.top + 1..=self.top + 5).contains(&z);
+            return if in_pilot_dome || is_extended_cannon {
+                Some(CromatolisSkyCitadelVoxel::Air)
+            } else {
+                None
+            };
+        };
+
+        if let Some(lower) = &inside.lower {
+            // Clear every local floor layer above the canonical hatch
+            // level. Otherwise an adjacent slope block can form an
+            // invisible stone lid over part of the elongated opening.
+            if lower.hatch_is_at_offset
+                && (lower.lower_entry_floor..=inside.terrain_surface.max(self.tower_surface))
+                    .contains(&z)
+            {
+                return Some(CromatolisSkyCitadelVoxel::Air);
+            }
+            // This is an independent descending interior, cut only below
+            // the accepted upper tower floor. It exits into a hanging
+            // tower; the upper spiral and hatch above are never changed.
+            if (lower.lower_floor..self.tower_surface).contains(&z) {
+                if z == lower.lower_floor {
+                    // A solid annular landing receives the final tread.
+                    // The open centre remains reserved for the visual
+                    // energy floor and the view into the precipice.
+                    return Some(if lower.landing_is_wall {
+                        CromatolisSkyCitadelVoxel::Stone
+                    } else {
+                        CromatolisSkyCitadelVoxel::Air
+                    });
+                }
+                if z == lower.lower_floor + 1 && lower.platform_or_beam {
+                    // The inverted cannon is mounted from a centred stone
+                    // deck rather than floating over the lookout.
+                    return Some(CromatolisSkyCitadelVoxel::Stone);
+                }
+                if inside.outer_ring {
+                    return Some(CromatolisSkyCitadelVoxel::Stone);
+                }
+                let descent = lower.lower_entry_floor - 1 - z;
+                if descent >= 0 && config.lower_tower_stair_is_at(self.offset, descent) {
+                    return Some(CromatolisSkyCitadelVoxel::Stone);
+                }
+                if descent.rem_euclid(4) == 0
+                    && config.lower_tower_lantern_is_at(self.offset, descent)
+                {
+                    return Some(CromatolisSkyCitadelVoxel::Lantern);
+                }
+                return Some(CromatolisSkyCitadelVoxel::Air);
+            }
+            // The hatch may lie on a locally higher slope than the tower
+            // centre. Preserve the upper tower's solid floor at its datum,
+            // but continue the first treads through that short slope gap.
+            if (self.tower_surface + 1..lower.lower_entry_floor).contains(&z) {
+                let descent = lower.lower_entry_floor - 1 - z;
+                if config.lower_tower_stair_is_at(self.offset, descent) {
+                    return Some(CromatolisSkyCitadelVoxel::Stone);
+                }
+                if descent.rem_euclid(4) == 0
+                    && config.lower_tower_lantern_is_at(self.offset, descent)
+                {
+                    return Some(CromatolisSkyCitadelVoxel::Lantern);
+                }
+            }
+        }
+
+        if !(inside.foundation_base..=self.roof_top).contains(&z) {
+            return None;
+        }
+
+        let entrance = inside.entrance_depth >= config.wall_tower_radius_m - 3
+            && inside.entrance_width.abs() <= 3
+            && z > inside.terrain_surface
+            && z <= self.tower_surface + 7;
+        if entrance {
+            return Some(CromatolisSkyCitadelVoxel::Air);
+        }
+
+        if z <= self.tower_surface {
+            return Some(CromatolisSkyCitadelVoxel::Stone);
+        }
+
+        // Test the hatch before the now-wide final stair tread. The stair
+        // continues into the shaft below, but must not refill the
+        // established roof opening itself.
+        let hatch_shaft = inside.roof_hatch_is_at_offset && (self.top..=self.top + 2).contains(&z);
+        if hatch_shaft {
+            return Some(CromatolisSkyCitadelVoxel::Air);
+        }
+
+        let stair_level = z - self.tower_surface - 1;
+        let highest_stair_level = config.wall_tower_final_stair_level();
+        if (0..=highest_stair_level).contains(&stair_level)
+            && (config.tower_stair_is_at(self.offset, stair_level)
+                || (stair_level == highest_stair_level && inside.is_hatch_transition_step))
+        {
+            return Some(CromatolisSkyCitadelVoxel::Stone);
+        }
+
+        if (5..=highest_stair_level).contains(&stair_level)
+            && stair_level.rem_euclid(8) == 0
+            && config.tower_lantern_is_at(self.offset, stair_level)
+        {
+            return Some(CromatolisSkyCitadelVoxel::Lantern);
+        }
+
+        if z == self.top {
+            return Some(if inside.on_outer_edge {
+                CromatolisSkyCitadelVoxel::Wood
+            } else {
+                CromatolisSkyCitadelVoxel::Stone
+            });
+        }
+
+        // The pilot tower's old posts and solid wooden roof are replaced
+        // by a client-rendered, hollow transparent field. The deck and the
+        // stair/hatch below this height have already returned above and
+        // remain unchanged.
+        if in_pilot_dome {
+            return Some(CromatolisSkyCitadelVoxel::Air);
+        }
+
+        if (self.top + 1..self.roof_top).contains(&z) {
+            // The watch level deliberately has broad, unobstructed
+            // openings: just four roof posts above a low perimeter rail.
+            return Some(if inside.support {
+                CromatolisSkyCitadelVoxel::Wood
+            } else {
+                CromatolisSkyCitadelVoxel::Air
+            });
+        }
+        if z == self.roof_top && inside.support {
+            return Some(CromatolisSkyCitadelVoxel::Wood);
+        }
+        if z == self.roof_top && inside.inner_roof {
+            return Some(CromatolisSkyCitadelVoxel::Wood);
+        }
+        Some(if inside.outer_ring || z == inside.terrain_surface {
+            CromatolisSkyCitadelVoxel::Stone
+        } else {
+            CromatolisSkyCitadelVoxel::Air
+        })
     }
 }
 
@@ -867,9 +1161,13 @@ pub fn apply_cromatolis_local_aerial_features_to(canvas: &mut Canvas) {
         let deck = config.deck_z(sea_level);
         let bottom = deck - 180;
         let top = deck + config.mountain_height_m;
+        // Resolved once per column and reused across every `z` below --
+        // see the module doc's "Per-column geometry, not per-voxel"
+        // section.
+        let column = config.build_column(wpos2d, sea_level);
         for z in bottom..=top {
             let wpos = wpos2d.with_z(z);
-            let block = match config.voxel_at(wpos, sea_level) {
+            let block = match column.voxel_at(config, z) {
                 Some(CromatolisSkyCitadelVoxel::Air) => EMPTY_AIR,
                 Some(CromatolisSkyCitadelVoxel::Grass) => {
                     Block::new(BlockKind::Grass, Rgb::new(76, 124, 62))
@@ -1608,5 +1906,83 @@ mod tests {
             ),
             Some(CromatolisSkyCitadelVoxel::Stone),
         );
+    }
+
+    /// Guards against the pruning optimization in `build_column`
+    /// silently under-counting: for every authored tower, sampling well
+    /// beyond the tower's own radius but still within its dome/cannon
+    /// reach must produce the same result as the un-pruned per-position
+    /// API, and every tower must actually get included as "reachable" by
+    /// `tower_reach_radius_squared` at that distance.
+    #[test]
+    fn tower_reach_radius_never_excludes_the_extended_cannon_emplacement() {
+        let config = test_config();
+        let sea_level = CONFIG.sea_level as i32;
+        let deck = config.deck_z(sea_level);
+        let reach_squared = config.tower_reach_radius_squared();
+
+        for tower_center in config.wall_towers() {
+            let outward = -tower_inward_axis(tower_center);
+            // The extended-cannon muzzle emplacement's farthest authored
+            // point: forward = 18 along the outward axis.
+            let far_point = tower_center + outward * 18;
+            let offset = far_point - tower_center;
+            assert!(
+                offset.magnitude_squared() <= reach_squared,
+                "the cannon emplacement at {far_point:?} (offset {offset:?}) must remain inside \
+                 the reach radius used to prune towers per column",
+            );
+
+            let tower_surface = config
+                .surface_z(tower_center, deck)
+                .expect("tower center must sit inside the island footprint");
+            let top = tower_surface + config.wall_tower_height();
+            let wpos = (config.center() + far_point).with_z(top + 3);
+            assert_eq!(
+                config.wall_voxel_at(wpos, sea_level),
+                Some(CromatolisSkyCitadelVoxel::Air),
+                "the extended-cannon emplacement must stay clear at the reach boundary",
+            );
+        }
+    }
+
+    /// The column-context restructuring must not change any observable
+    /// result: for a scatter of positions covering island body, mountain,
+    /// castle, contour wall, and every tower's interior/exterior, the
+    /// per-position wrapper methods must agree with directly resolving a
+    /// column and walking every `z` in it (the same access pattern the
+    /// real entry point uses).
+    #[test]
+    fn column_context_resolution_matches_the_per_position_api_across_a_wide_sample() {
+        let config = test_config();
+        let sea_level = CONFIG.sea_level as i32;
+        let deck = config.deck_z(sea_level);
+
+        let mut sample_columns: Vec<Vec2<i32>> = vec![
+            Vec2::new(-340, 90),  // western lobe, island body
+            Vec2::new(-100, 100), // grassy shelf
+            config.mountain_center(),
+            config.castle_center(),
+        ];
+        for tower_center in config.wall_towers() {
+            sample_columns.push(tower_center);
+            sample_columns.push(tower_center + Vec2::new(20, 0));
+            sample_columns.push(tower_center + Vec2::new(0, -20));
+        }
+
+        for relative in sample_columns {
+            let wpos2d = config.center() + relative;
+            let column = config.build_column(wpos2d, sea_level);
+            let bottom = deck - 180;
+            let top = deck + config.mountain_height_m;
+            for z in bottom..=top {
+                let wpos = wpos2d.with_z(z);
+                assert_eq!(
+                    column.voxel_at(&config, z),
+                    config.voxel_at(wpos, sea_level),
+                    "column-context resolution diverged from the per-position API at {wpos:?}",
+                );
+            }
+        }
     }
 }
