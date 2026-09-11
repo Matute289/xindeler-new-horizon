@@ -745,6 +745,64 @@
             central: ("armor.empty"),
         )
     ),
+    CitadelArcaneCannon: (
+        bone0: (
+            offset: (-19.0, -19.0, 0.0),
+            central: ("object.citadel_arcane_cannon.base"),
+        ),
+        bone1: (
+            offset: (-15.0, -8.0, -15.0),
+            central: ("object.citadel_arcane_cannon.barrel"),
+        )
+    ),
+    CitadelArcaneSphereCannon: (
+        bone0: (
+            offset: (-19.0, -19.0, 0.0),
+            central: ("object.citadel_arcane_cannon.base"),
+        ),
+        bone1: (
+            offset: (-15.0, -8.0, -15.0),
+            central: ("object.citadel_arcane_cannon.sphere_barrel"),
+        )
+    ),
+    // The Cromatolis practice beam fired by CitadelArcaneCannon. Reuses the
+    // existing laser_beam voxel model (also used by the unrelated,
+    // untouched `LaserBeam` body) rather than authoring a new mesh.
+    LaserBeamLarge: (
+        bone0: (
+            offset: (-6.0, -60.0, -17.0),
+            central: ("weapon.projectile.laser_beam"),
+        ),
+        bone1: (
+            offset: (0.0, 0.0, 0.0),
+            central: ("armor.empty"),
+        )
+    ),
+    // The Cromatolis practice sphere fired by CitadelArcaneSphereCannon.
+    // Reuses the existing laser_beam_small voxel model (also used by the
+    // unrelated, untouched `LaserBeamSmall` body).
+    LaserSphereLarge: (
+        bone0: (
+            offset: (-1.0, -9.0, -3.0),
+            central: ("weapon.projectile.laser_beam_small"),
+        ),
+        bone1: (
+            offset: (0.0, 0.0, 0.0),
+            central: ("armor.empty"),
+        )
+    ),
+    // Smaller Cromatolis practice sphere variant. Same shared model as
+    // LaserSphereLarge above.
+    LaserSphereSmall: (
+        bone0: (
+            offset: (-1.0, -9.0, -3.0),
+            central: ("weapon.projectile.laser_beam_small"),
+        ),
+        bone1: (
+            offset: (0.0, 0.0, 0.0),
+            central: ("armor.empty"),
+        )
+    ),
         FireRing: (
         bone0: (
             offset: (0.0, 0.0, 0.0),

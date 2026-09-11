@@ -1,6 +1,7 @@
 use crate::{
     Colors, Features,
     layer::{
+        cromatolis_aerial_citadel::AerialCitadelConfig,
         cromatolis_cave_features::GeneratedCave,
         cromatolis_interior::InteriorLayout,
         wildlife::{self, DensityFn, SpawnEntry},
@@ -36,6 +37,11 @@ pub struct Index {
     /// cached the first time a chunk needs it. Same per-`Index` rationale as
     /// `cromatolis_interiors` above.
     pub(crate) cromatolis_cave_features: OnceLock<Vec<GeneratedCave>>,
+    /// The authored Aerial Citadel's geometry config, lazily loaded and
+    /// cached the first time a chunk needs it (`None` if the asset fails to
+    /// load or validate). Same per-`Index` rationale as `cromatolis_interiors`
+    /// above.
+    pub(crate) cromatolis_aerial_citadel: OnceLock<Option<AerialCitadelConfig>>,
     colors: AssetHandle<Arc<Colors>>,
     features: AssetHandle<Arc<Features>>,
 }
@@ -95,6 +101,7 @@ impl Index {
             wildlife_spawns,
             cromatolis_interiors: OnceLock::new(),
             cromatolis_cave_features: OnceLock::new(),
+            cromatolis_aerial_citadel: OnceLock::new(),
             colors,
             features,
         }
@@ -214,6 +221,24 @@ mod tests {
         );
         assert!(
             b.cromatolis_cave_features.get().is_none(),
+            "index b's cache must still be empty -- it must not share state with index a"
+        );
+    }
+
+    /// Same independence requirement as `cromatolis_interiors` above,
+    /// applied to `cromatolis_aerial_citadel`.
+    #[test]
+    fn cromatolis_aerial_citadel_cache_is_independent_per_index_instance() {
+        let a = Index::new(0);
+        let b = Index::new(0);
+
+        a.cromatolis_aerial_citadel.get_or_init(|| None);
+        assert!(
+            a.cromatolis_aerial_citadel.get().is_some(),
+            "index a should have its cache initialized"
+        );
+        assert!(
+            b.cromatolis_aerial_citadel.get().is_none(),
             "index b's cache must still be empty -- it must not share state with index a"
         );
     }
