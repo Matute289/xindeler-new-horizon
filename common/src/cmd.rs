@@ -462,6 +462,10 @@ pub enum ServerChatCommand {
     Buff,
     Build,
     Campfire,
+    CitadelPracticeBeam,
+    CitadelPracticeSphere,
+    CitadelSphereTurretPilot,
+    CitadelTurretPilot,
     ClearPersistedTerrain,
     CreateLocation,
     CromatolisGoto,
@@ -718,6 +722,38 @@ impl ServerChatCommand {
             ServerChatCommand::Campfire => cmd(
                 vec![],
                 Content::localized("command-campfire-desc"),
+                Some(Admin),
+            ),
+            // These 4 citadel pilot/practice commands are intentionally
+            // `Some(Admin)`, not the faction-string-match gate the reference
+            // implementation ported them with -- see the doc comment on
+            // `server::cmd::handle_citadel_turret_pilot` for the full
+            // rationale (a player-choosable `Faction` name is not a real
+            // credential boundary).
+            ServerChatCommand::CitadelPracticeBeam => cmd(
+                vec![],
+                Content::localized("command-citadel_practice_beam-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CitadelPracticeSphere => cmd(
+                vec![],
+                Content::localized("command-citadel_practice_sphere-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CitadelSphereTurretPilot => cmd(
+                vec![
+                    Float("yaw degrees", 0.0, Required),
+                    Float("pitch degrees", 0.0, Required),
+                ],
+                Content::localized("command-citadel_sphere_turret_pilot-desc"),
+                Some(Admin),
+            ),
+            ServerChatCommand::CitadelTurretPilot => cmd(
+                vec![
+                    Float("yaw degrees", 0.0, Required),
+                    Float("pitch degrees", 0.0, Required),
+                ],
+                Content::localized("command-citadel_turret_pilot-desc"),
                 Some(Admin),
             ),
             ServerChatCommand::ClearPersistedTerrain => cmd(
@@ -1510,6 +1546,10 @@ impl ServerChatCommand {
             ServerChatCommand::Campfire => "campfire",
             ServerChatCommand::ClearPersistedTerrain => "clear_persisted_terrain",
             ServerChatCommand::CromatolisGoto => "cromatolis_goto",
+            ServerChatCommand::CitadelPracticeBeam => "citadel_practice_beam",
+            ServerChatCommand::CitadelPracticeSphere => "citadel_practice_sphere",
+            ServerChatCommand::CitadelSphereTurretPilot => "citadel_sphere_turret_pilot",
+            ServerChatCommand::CitadelTurretPilot => "citadel_turret_pilot",
             ServerChatCommand::DeathEffect => "death_effect",
             ServerChatCommand::DebugColumn => "debug_column",
             ServerChatCommand::DebugWays => "debug_ways",
@@ -1960,6 +2000,43 @@ mod tests {
         let list2 = list.clone();
         list.sort_unstable();
         assert_eq!(list, list2);
+    }
+
+    #[test]
+    fn citadel_command_variants_have_stable_keywords_admin_gating_and_argument_shapes() {
+        let commands = [
+            (
+                ServerChatCommand::CitadelPracticeBeam,
+                "citadel_practice_beam",
+                0,
+            ),
+            (
+                ServerChatCommand::CitadelPracticeSphere,
+                "citadel_practice_sphere",
+                0,
+            ),
+            (
+                ServerChatCommand::CitadelSphereTurretPilot,
+                "citadel_sphere_turret_pilot",
+                2,
+            ),
+            (
+                ServerChatCommand::CitadelTurretPilot,
+                "citadel_turret_pilot",
+                2,
+            ),
+        ];
+
+        for (command, keyword, argument_count) in commands {
+            assert_eq!(command.keyword(), keyword);
+            assert_eq!(command.data().args.len(), argument_count);
+            assert_eq!(
+                command.data().needs_role,
+                Some(Role::Admin),
+                "{keyword} must stay gated by a real role, not the reference implementation's \
+                 player-choosable-faction-name check",
+            );
+        }
     }
 
     #[test]

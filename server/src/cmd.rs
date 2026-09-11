@@ -170,6 +170,10 @@ fn do_command(
         ServerChatCommand::Buff => handle_buff,
         ServerChatCommand::Build => handle_build,
         ServerChatCommand::Campfire => handle_spawn_campfire,
+        ServerChatCommand::CitadelPracticeBeam => handle_citadel_practice_beam,
+        ServerChatCommand::CitadelPracticeSphere => handle_citadel_practice_sphere,
+        ServerChatCommand::CitadelSphereTurretPilot => handle_citadel_sphere_turret_pilot,
+        ServerChatCommand::CitadelTurretPilot => handle_citadel_turret_pilot,
         ServerChatCommand::ClearPersistedTerrain => handle_clear_persisted_terrain,
         ServerChatCommand::DeathEffect => handle_death_effect,
         ServerChatCommand::DebugColumn => handle_debug_column,
@@ -1994,6 +1998,432 @@ fn handle_cromatolis_goto(
 
 #[cfg(not(feature = "worldgen"))]
 fn handle_cromatolis_goto(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
+}
+
+// The two Cromatolis Aerial Citadel towers the 4 pilot/practice commands
+// below operate: tower 0 (beam cannon, zero-based-even per
+// `citadel::upper_turret_body`'s alternation) and tower 1 (sphere cannon,
+// zero-based-odd). This is a separate, new concern from that alternation
+// itself -- which tower index a *pilot* interacts with -- so it is not
+// re-derived from `citadel::upper_turret_body`, only resolved *through* it
+// (via `citadel::upper_turret_pivot`/`upper_turret_rest_pose`/etc.).
+#[cfg(feature = "worldgen")]
+const CITADEL_BEAM_PILOT_TOWER_INDEX: usize = 0;
+#[cfg(feature = "worldgen")]
+const CITADEL_SPHERE_PILOT_TOWER_INDEX: usize = 1;
+#[cfg(feature = "worldgen")]
+const CITADEL_PRACTICE_BEAM_SPEED: f32 = 500.0;
+#[cfg(feature = "worldgen")]
+const CITADEL_PRACTICE_BEAM_LIFETIME: f32 = 4.0;
+#[cfg(feature = "worldgen")]
+const CITADEL_PRACTICE_SPHERE_LIFETIME: f32 = 2.0;
+
+#[cfg(feature = "worldgen")]
+fn citadel_practice_beam_visual(
+    pivot: Vec3<f32>,
+    pose: comp::CitadelTurretAngles,
+) -> comp::CitadelPracticeBeam {
+    let (origin, direction) = crate::citadel::turret_beam_muzzle(pivot, pose);
+    comp::CitadelPracticeBeam {
+        origin,
+        direction,
+        max_range: CITADEL_PRACTICE_BEAM_SPEED * CITADEL_PRACTICE_BEAM_LIFETIME / 2.0,
+        speed: CITADEL_PRACTICE_BEAM_SPEED,
+        diameter: comp::object::Body::LaserBeamLarge.dimensions().x,
+    }
+}
+
+#[cfg(feature = "worldgen")]
+fn citadel_practice_sphere_visual(
+    pivot: Vec3<f32>,
+    pose: comp::CitadelTurretAngles,
+) -> comp::CitadelPracticeSphere {
+    let (muzzle, direction) = crate::citadel::turret_sphere_muzzle(pivot, pose);
+    comp::CitadelPracticeSphere {
+        // The sphere's centre starts half its diameter beyond the open
+        // muzzle, so its rear surface begins exactly at the physical barrel
+        // tip.
+        origin: muzzle + direction * (comp::object::Body::LaserSphereLarge.dimensions().x * 0.5),
+        direction,
+        max_range: CITADEL_PRACTICE_BEAM_SPEED * CITADEL_PRACTICE_SPHERE_LIFETIME,
+        speed: CITADEL_PRACTICE_BEAM_SPEED,
+        diameter: comp::object::Body::LaserSphereLarge.dimensions().x,
+    }
+}
+
+/// Finds the already-placed, Phase-3-reconciled upper cannon for
+/// `tower_index` (server construction / the 1Hz
+/// `citadel::ensure_upper_defences` pass owns creating and recovering these 24
+/// stations -- this never spawns or duplicates one). Returns the entity, its
+/// pivot, and its current pose.
+#[cfg(feature = "worldgen")]
+fn find_citadel_upper_turret(
+    server: &Server,
+    tower_index: usize,
+) -> Option<(EcsEntity, Vec3<f32>, comp::CitadelTurretAngles)> {
+    let pivot = crate::citadel::upper_turret_pivot(tower_index);
+    let expected_body = comp::Body::Object(crate::citadel::upper_turret_body(tower_index));
+    let ecs = server.state.ecs();
+    let entities = ecs.entities();
+    let bodies = ecs.read_storage::<comp::Body>();
+    let positions = ecs.read_storage::<comp::Pos>();
+    let poses = ecs.read_storage::<comp::CitadelTurretAngles>();
+    (&entities, &bodies, &positions, &poses)
+        .join()
+        .find_map(|(entity, body, pos, pose)| {
+            (*body == expected_body && (pos.0 - pivot).magnitude_squared() < 0.01)
+                .then_some((entity, pos.0, *pose))
+        })
+}
+
+/// A pilot operating from a tower that has not yet had its station placed
+/// (e.g. immediately after server start, before the first 1Hz
+/// `citadel::ensure_upper_defences` pass) gets this instead of a spawned
+/// duplicate -- station creation and recovery belong exclusively to that
+/// reconciliation pass.
+#[cfg(feature = "worldgen")]
+fn citadel_turret_not_yet_placed_error() -> Content {
+    Content::Plain(
+        "This citadel cannon has not finished loading yet -- try again in a moment.".to_string(),
+    )
+}
+
+/// `/citadel_practice_beam` -- fires the harmless practice beam from the
+/// beam-cannon pilot tower's current aim. Purely a client-visible timeline
+/// entity (`comp::CitadelPracticeBeam`); it carries no combat or collision
+/// state.
+///
+/// Server-authoritative: gated by `needs_role: Admin` (see
+/// `ServerChatCommand::CitadelPracticeBeam`'s `cmd()` entry in
+/// `common::cmd`), enforced centrally before this handler ever runs (see
+/// `do_command`'s `cmd.needs_role() > server.entity_admin_role(client)`
+/// check). This is a deliberate, permanent divergence from the reference
+/// implementation this command was ported from, which instead gated these 4
+/// commands via `is_citadel_practice_operator`: an exact string match
+/// against a player-choosable `Faction` name (`"Cromatolis Citadel"`).
+/// That is not a real credential boundary -- any player can create a
+/// faction with that exact name and pass the check -- so it was never
+/// ported here, and no faction-based gate of any kind should be
+/// (re-)introduced for these commands.
+#[cfg(feature = "worldgen")]
+fn handle_citadel_practice_beam(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    no_sudo(client, target)?;
+
+    if !args.is_empty() {
+        return Err(action.help_content());
+    }
+
+    let (pivot, pose) = find_citadel_upper_turret(server, CITADEL_BEAM_PILOT_TOWER_INDEX)
+        .map(|(_, pivot, pose)| (pivot, pose))
+        .ok_or_else(citadel_turret_not_yet_placed_error)?;
+    if !crate::citadel::practice_pose_fires_outward(CITADEL_BEAM_PILOT_TOWER_INDEX, pose) {
+        return Err(Content::Plain(
+            "The practice beam cannot fire back into the Aerial Citadel.".to_string(),
+        ));
+    }
+
+    let beam = citadel_practice_beam_visual(pivot, pose);
+    let beam_origin = beam.origin;
+    let lifetime = Duration::from_secs_f32(beam.total_duration());
+    let spawned_at = Time(server.state.get_time());
+    server
+        .state_mut()
+        .ecs_mut()
+        .create_entity_synced()
+        .with(comp::Pos(beam_origin))
+        .with(comp::Ori::from_unnormalized_vec(beam.direction).unwrap_or_default())
+        .with(comp::Object::DeleteAfter {
+            spawned_at,
+            timeout: lifetime,
+        })
+        .with(beam)
+        .build();
+
+    server
+        .state
+        .ecs()
+        .read_resource::<EventBus<Outcome>>()
+        .emit_now(Outcome::LaserBeam { pos: beam_origin });
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain("Practice beam fired outward: no damage.".to_string()),
+        ),
+    );
+    Ok(())
+}
+
+/// `/citadel_practice_sphere` -- fires the harmless practice sphere from the
+/// sphere-cannon pilot tower's current aim. See
+/// `handle_citadel_practice_beam`'s doc comment for the admin-gating
+/// rationale, which applies identically here.
+#[cfg(feature = "worldgen")]
+fn handle_citadel_practice_sphere(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    no_sudo(client, target)?;
+
+    if !args.is_empty() {
+        return Err(action.help_content());
+    }
+
+    let (pivot, pose) = find_citadel_upper_turret(server, CITADEL_SPHERE_PILOT_TOWER_INDEX)
+        .map(|(_, pivot, pose)| (pivot, pose))
+        .ok_or_else(citadel_turret_not_yet_placed_error)?;
+    if !crate::citadel::practice_pose_fires_outward(CITADEL_SPHERE_PILOT_TOWER_INDEX, pose) {
+        return Err(Content::Plain(
+            "The practice sphere cannot fire back into the Aerial Citadel.".to_string(),
+        ));
+    }
+
+    let sphere = citadel_practice_sphere_visual(pivot, pose);
+    let lifetime = Duration::from_secs_f32(sphere.travel_duration());
+    let spawned_at = Time(server.state.get_time());
+    let body = comp::Body::Object(comp::object::Body::LaserSphereLarge);
+    let velocity = sphere.direction * sphere.speed;
+
+    server
+        .state
+        .ecs()
+        .read_resource::<EventBus<Outcome>>()
+        .emit_now(Outcome::ProjectileShot {
+            pos: sphere.origin,
+            body,
+            vel: velocity,
+        });
+
+    server
+        .state_mut()
+        .ecs_mut()
+        .create_entity_synced()
+        .with(comp::Pos(sphere.origin))
+        .with(comp::Ori::from_unnormalized_vec(sphere.direction).unwrap_or_default())
+        .with(comp::Object::DeleteAfter {
+            spawned_at,
+            timeout: lifetime,
+        })
+        .with(sphere)
+        .build();
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain("Practice sphere fired outward: no damage.".to_string()),
+        ),
+    );
+    Ok(())
+}
+
+/// `/citadel_sphere_turret_pilot <yaw degrees> <pitch degrees>` -- aims the
+/// sphere-cannon pilot tower's already-placed cannon (never spawns or moves
+/// a station; `citadel::ensure_upper_defences` owns placement). Purely
+/// visual: does not fire and causes no damage. See
+/// `handle_citadel_turret_pilot`'s doc comment for the angle-space and
+/// admin-gating rationale, which applies identically here.
+#[cfg(feature = "worldgen")]
+fn handle_citadel_sphere_turret_pilot(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    no_sudo(client, target)?;
+
+    let (Some(yaw_degrees), Some(pitch_degrees)) = parse_cmd_args!(args, f32, f32) else {
+        return Err(action.help_content());
+    };
+    // Operator space -> model space (see
+    // `citadel::pilot_pose_from_operator_degrees`'s doc comment for the full
+    // 3-space story).
+    let Some(pose) = crate::citadel::pilot_pose_from_operator_degrees(
+        CITADEL_SPHERE_PILOT_TOWER_INDEX,
+        yaw_degrees,
+        pitch_degrees,
+    ) else {
+        return Err(Content::Plain(
+            "Turret pitch must be between -7 and 90 degrees.".to_string(),
+        ));
+    };
+
+    let target_pos = server
+        .state
+        .ecs()
+        .read_storage::<comp::Pos>()
+        .get(target)
+        .copied()
+        .map(|pos| pos.0)
+        .ok_or_else(|| Content::Plain("Could not read the operator's position.".to_string()))?;
+    if !crate::citadel::is_near_upper_turret(CITADEL_SPHERE_PILOT_TOWER_INDEX, target_pos) {
+        return Err(Content::Plain(
+            "The sphere pilot turret can only be operated from its own tower.".to_string(),
+        ));
+    }
+
+    let (entity, ..) = find_citadel_upper_turret(server, CITADEL_SPHERE_PILOT_TOWER_INDEX)
+        .ok_or_else(citadel_turret_not_yet_placed_error)?;
+    server
+        .state_mut()
+        .ecs_mut()
+        .write_storage::<comp::CitadelTurretAngles>()
+        .insert(entity, pose)
+        .expect("the located sphere pilot cannon must remain a live entity");
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Sphere pilot turret updated: yaw {yaw_degrees:.1}, pitch {pitch_degrees:.1}. \
+                 Visual only; does not fire or cause damage."
+            )),
+        ),
+    );
+    Ok(())
+}
+
+/// `/citadel_turret_pilot <yaw degrees> <pitch degrees>` -- aims the
+/// beam-cannon pilot tower's already-placed cannon. Purely visual: does not
+/// fire and causes no damage.
+///
+/// **Angle-space note (see `citadel::upper_turret_rest_pose`'s doc comment
+/// for the full 3-space story):** `yaw_degrees`/`pitch_degrees` are in
+/// *operator space* (0 degrees yaw means "straight out of this tower" to a
+/// human pilot). `pilot_pose_from_operator_degrees` converts that into the
+/// *model space* `comp::CitadelTurretAngles` actually stored on the entity
+/// and read by `anim::object::TurretAnimation`. Never store operator-space
+/// degrees directly, and never assume model-space yaw 0 means "outward" for
+/// an arbitrary tower -- only `pilot_pose_from_operator_degrees`'s own
+/// per-tower `upper_turret_rest_pose` reference makes that translation
+/// correct for every tower, not just this pilot tower.
+///
+/// Server-authoritative: gated by `needs_role: Admin`, not the reference
+/// implementation's faction-string-match gate -- see
+/// `handle_citadel_practice_beam`'s doc comment for the full rationale of
+/// that deliberate divergence, which applies identically to all 4 of these
+/// commands.
+#[cfg(feature = "worldgen")]
+fn handle_citadel_turret_pilot(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    no_sudo(client, target)?;
+
+    let (Some(yaw_degrees), Some(pitch_degrees)) = parse_cmd_args!(args, f32, f32) else {
+        return Err(action.help_content());
+    };
+    let Some(pose) = crate::citadel::pilot_pose_from_operator_degrees(
+        CITADEL_BEAM_PILOT_TOWER_INDEX,
+        yaw_degrees,
+        pitch_degrees,
+    ) else {
+        return Err(Content::Plain(
+            "Turret pitch must be between -7 and 90 degrees.".to_string(),
+        ));
+    };
+
+    let target_pos = server
+        .state
+        .ecs()
+        .read_storage::<comp::Pos>()
+        .get(target)
+        .copied()
+        .map(|pos| pos.0)
+        .ok_or_else(|| Content::Plain("Could not read the operator's position.".to_string()))?;
+    if !crate::citadel::is_near_upper_turret(CITADEL_BEAM_PILOT_TOWER_INDEX, target_pos) {
+        return Err(Content::Plain(
+            "The pilot turret can only be operated from its own tower.".to_string(),
+        ));
+    }
+
+    let (entity, ..) = find_citadel_upper_turret(server, CITADEL_BEAM_PILOT_TOWER_INDEX)
+        .ok_or_else(citadel_turret_not_yet_placed_error)?;
+    server
+        .state_mut()
+        .ecs_mut()
+        .write_storage::<comp::CitadelTurretAngles>()
+        .insert(entity, pose)
+        .expect("the located pilot cannon must remain a live entity");
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain(format!(
+                "Pilot turret updated: yaw {yaw_degrees:.1}, pitch {pitch_degrees:.1}. Visual \
+                 only; does not fire or cause damage."
+            )),
+        ),
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_citadel_practice_beam(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_citadel_practice_sphere(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_citadel_sphere_turret_pilot(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_citadel_turret_pilot(
     _server: &mut Server,
     _client: EcsEntity,
     _target: EcsEntity,

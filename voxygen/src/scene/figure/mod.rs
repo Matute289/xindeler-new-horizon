@@ -52,9 +52,10 @@ use anim::{
 };
 use common::{
     comp::{
-        self, Body, CharacterActivity, CharacterState, Collider, Controller, Disguise, Health,
-        Inventory, ItemKey, Last, LightAnimation, LightEmitter, Object, Ori, PhantomIllusion,
-        PhysicsState, PickupItem, PoiseState, Pos, Scale, SenseKind, ThrownItem, Vel,
+        self, Body, CharacterActivity, CharacterState, CitadelTurretAngles, Collider, Controller,
+        Disguise, Health, Inventory, ItemKey, Last, LightAnimation, LightEmitter, Object, Ori,
+        PhantomIllusion, PhysicsState, PickupItem, PoiseState, Pos, Scale, SenseKind, ThrownItem,
+        Vel,
         body::{self, parts::HeadState},
         inventory::slot::EquipSlot,
         item::{Hands, ItemKind, ToolKind, armor::ArmorKind},
@@ -707,6 +708,7 @@ struct FigureReadData<'a> {
     velocities: ReadStorage<'a, Vel>,
     scales: ReadStorage<'a, Scale>,
     bodies: ReadStorage<'a, Body>,
+    citadel_turret_angles: ReadStorage<'a, CitadelTurretAngles>,
     character_states: ReadStorage<'a, CharacterState>,
     character_activitys: ReadStorage<'a, CharacterActivity>,
     last_character_states: ReadStorage<'a, Last<CharacterState>>,
@@ -766,6 +768,7 @@ impl FigureReadData<'_> {
             vel: self.velocities.get(entity)?,
             scale: self.scales.get(entity),
             body: self.bodies.get(entity)?,
+            citadel_turret_angles: self.citadel_turret_angles.get(entity),
             character_state: self.character_states.get(entity),
             character_activity: self.character_activitys.get(entity),
             last_character_state: self.last_character_states.get(entity),
@@ -795,6 +798,7 @@ impl FigureReadData<'_> {
             &self.velocities,
             self.scales.maybe(),
             &self.bodies,
+            self.citadel_turret_angles.maybe(),
             self.character_states.maybe(),
             self.character_activitys.maybe(),
             self.last_character_states.maybe(),
@@ -825,6 +829,7 @@ impl FigureReadData<'_> {
                     vel,
                     scale,
                     body,
+                    citadel_turret_angles,
                     character_state,
                     character_activity,
                     last_character_state,
@@ -852,6 +857,7 @@ impl FigureReadData<'_> {
                     vel,
                     scale,
                     body,
+                    citadel_turret_angles,
                     character_state,
                     character_activity,
                     last_character_state,
@@ -882,6 +888,7 @@ struct FigureUpdateParams<'a> {
     vel: &'a Vel,
     scale: Option<&'a Scale>,
     body: &'a Body,
+    citadel_turret_angles: Option<&'a CitadelTurretAngles>,
     character_state: Option<&'a CharacterState>,
     character_activity: Option<&'a CharacterActivity>,
     last_character_state: Option<&'a Last<CharacterState>>,
@@ -1380,6 +1387,7 @@ impl FigureMgr {
             vel,
             scale,
             body,
+            citadel_turret_angles,
             character_state: character,
             character_activity,
             last_character_state: last_character,
@@ -1537,7 +1545,17 @@ impl FigureMgr {
             // Tint entities revealed to us by an active magical sense
             * reveal_tint(revealing_sense, phantom_illusion.is_some());
 
-        let scale = scale.map(|s| s.0).unwrap_or(1.0);
+        let scale = scale.map(|s| s.0).unwrap_or(1.0)
+            * match body {
+                // A handful of object bodies (citadel practice
+                // beam/sphere/cannon tiers) share a source voxel model
+                // scaled to a different physical size, or use a fixed
+                // display multiplier -- see `object::Body::visual_scale`.
+                // Every other object body's `visual_scale()` is `None`, so
+                // this keeps their rendered size exactly as before.
+                Body::Object(object) => object.visual_scale().unwrap_or(1.0),
+                _ => 1.0,
+            };
 
         let mut state_animation_rate = 1.0;
 
@@ -6774,6 +6792,38 @@ impl FigureMgr {
                         skeleton_attr,
                     ),
                 };
+
+                // A Cromatolis Aerial Citadel cannon's `CitadelTurretAngles`
+                // fully replaces the per-character-state animation dispatch
+                // below with its own server-synchronised aim pose, and
+                // never fires a character-state ability of its own. This is
+                // an early return (not a wrapping `if let ... else { <match
+                // below> }`) specifically so the pre-existing
+                // `match &character` block underneath is left completely
+                // untouched at its current indentation -- wrapping it would
+                // re-indent every one of its lines, turning any future
+                // upstream edit to that same block into a whitespace-only
+                // merge conflict.
+                if let Some(angles) = citadel_turret_angles {
+                    let target_bones = anim::object::TurretAnimation::update_skeleton(
+                        &target_base,
+                        (*angles, body),
+                        state.state_time,
+                        &mut state_animation_rate,
+                        skeleton_attr,
+                    );
+                    state.skeleton = Lerp::lerp(&state.skeleton, &target_bones, dt_lerp);
+                    state.update(
+                        renderer,
+                        trail_mgr,
+                        update_buf,
+                        &common_params,
+                        state_animation_rate,
+                        model,
+                        body,
+                    );
+                    return;
+                }
 
                 let target_bones = match &character {
                     CharacterState::BasicRanged(s) => {

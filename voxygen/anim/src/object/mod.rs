@@ -1,9 +1,12 @@
 pub mod beam;
 pub mod idle;
 pub mod shoot;
+pub mod turret;
 
 // Reexports
-pub use self::{beam::BeamAnimation, idle::IdleAnimation, shoot::ShootAnimation};
+pub use self::{
+    beam::BeamAnimation, idle::IdleAnimation, shoot::ShootAnimation, turret::TurretAnimation,
+};
 
 use super::{FigureBoneData, Skeleton, vek::*};
 use common::comp::{self};
@@ -30,15 +33,29 @@ impl Skeleton for ObjectSkeleton {
         &self,
         base_mat: Mat4<f32>,
         buf: &mut [FigureBoneData; super::MAX_BONE_COUNT],
-        _body: Self::Body,
+        body: Self::Body,
     ) -> Self::ComputedSkeleton {
         let scale_mat = Mat4::scaling_3d(1.0 / 11.0);
 
         let bone0_mat = base_mat * scale_mat * Mat4::<f32>::from(self.bone0);
 
+        let bone1_mat = match body {
+            Body::CitadelArcaneCannon | Body::CitadelArcaneSphereCannon => {
+                base_mat * scale_mat * Mat4::<f32>::from(self.bone1)
+            },
+            _ => scale_mat * Mat4::<f32>::from(self.bone1), /* Decorellated from ori */
+        };
+
         let computed_skeleton = ComputedObjectSkeleton {
             bone0: bone0_mat,
-            bone1: scale_mat * Mat4::<f32>::from(self.bone1), /* Decorellated from ori */
+            // Conventional object attachments retain the legacy decoupled
+            // transform (their `bone1` never composes with the base
+            // rotation). Citadel cannon barrels are the one exception: the
+            // barrel must inherit the carriage's yaw (`bone0`'s orientation,
+            // driven by `TurretAnimation`) and then apply its own local
+            // pitch on top, so it needs the full `base_mat` composition like
+            // `bone0` does.
+            bone1: bone1_mat,
         };
 
         computed_skeleton.set_figure_bone_data(buf);
@@ -85,6 +102,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 Crossbow => (0.0, 0.0, 8.0),
                 Flamethrower => (0.0, 0.0, 8.0),
                 HaniwaSentry => (0.0, 0.0, 3.0),
+                CitadelArcaneCannon | CitadelArcaneSphereCannon => (0.0, 0.0, 17.0),
                 _ => (0.0, 0.0, 0.0),
             },
         }

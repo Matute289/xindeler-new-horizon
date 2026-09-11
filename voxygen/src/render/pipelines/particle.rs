@@ -136,6 +136,12 @@ pub enum ParticleMode {
     Dust = 81,
     CaveDust = 82,
     BubbleAmbient = 83,
+    /// The Cromatolis Aerial Citadel's harmless practice beam
+    /// (`common::comp::CitadelPracticeBeam`).
+    CitadelLaser = 84,
+    /// The Cromatolis Aerial Citadel's harmless practice sphere
+    /// (`common::comp::CitadelPracticeSphere`).
+    CitadelSphere = 85,
 }
 
 impl ParticleMode {
