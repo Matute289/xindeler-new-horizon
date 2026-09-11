@@ -76,10 +76,10 @@ impl Component for CitadelForceFieldVisual {
 }
 
 /// The subset of `assets/world/map/cromatolis_v0_aerial_features.ron` that
-/// force-field visual presets need.
+/// force-field visual presets and physical cannon-mount dimensions need.
 ///
 /// This deliberately only declares the fields it reads (`schema` plus the
-/// dome/platform dimensions); serde ignores every other field the full
+/// dome/platform/mount dimensions); serde ignores every other field the full
 /// asset carries (tower positions, wall/castle dimensions, ...), so this and
 /// any other partial reader of the same file can evolve independently
 /// without needing to agree on one shared Rust struct for the whole
@@ -97,6 +97,17 @@ pub struct AuthoredCitadelAerialFeatures {
     pub lower_dome_radius_m: f32,
     /// Height of a lower tower's hollow downward-facing dome.
     pub lower_dome_height_m: f32,
+    /// Height above the tower's watch-deck surface where a beam cannon's
+    /// (`CitadelArcaneCannon`) physical pivot mounts.
+    pub pilot_beam_pivot_clearance_m: f32,
+    /// Height above the tower's watch-deck surface where a sphere cannon's
+    /// (`CitadelArcaneSphereCannon`) physical pivot mounts -- taller than the
+    /// beam clearance so the larger sphere-cannon model stays clear of the
+    /// deck.
+    pub pilot_sphere_pivot_clearance_m: f32,
+    /// Vertical thickness of a lower tower's invisible, server-collidable
+    /// safety-floor plate.
+    pub lower_safety_floor_thickness_m: f32,
 }
 
 impl FileAsset for AuthoredCitadelAerialFeatures {
@@ -433,6 +444,9 @@ mod tests {
             lower_platform_radius_m: 10.0,
             lower_dome_radius_m: 12.0,
             lower_dome_height_m: 18.0,
+            pilot_beam_pivot_clearance_m: 1.45,
+            pilot_sphere_pivot_clearance_m: 2.0,
+            lower_safety_floor_thickness_m: 0.25,
         }
     }
 

@@ -752,7 +752,10 @@ impl PhysicsData<'_> {
                     // An immovable entity is a static world fixture. Before
                     // this guard it was still accelerated by gravity; hanging
                     // fixtures then fell locally until an external position
-                    // refresh snapped them back.
+                    // refresh snapped them back. A live in-game check that
+                    // this doesn't regress any other `Immovable` fixture
+                    // (campfires, portals, Gnarling totems, `Object::Crux`)
+                    // is still owed -- COW-8 task board, T14.
                     && immovable.is_none()
                     // And not already stuck on a block (e.g., for arrows)
                     && !(physics_state.on_surface().is_some() && sticky.is_some())

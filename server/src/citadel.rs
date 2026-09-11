@@ -13,19 +13,22 @@ use common_state::State;
 use specs::{Builder, Entity as EcsEntity, Join, WorldExt};
 use vek::{Vec2, Vec3};
 
-const BEAM_PIVOT_ABOVE_WATCH_DECK: f32 = 1.45;
-const SPHERE_PIVOT_ABOVE_WATCH_DECK: f32 = 2.0;
 // Older pilot commands placed stationary cannons slightly outward from their
 // tower centres. Capture only those local legacy entities during recovery;
 // neighbouring perimeter towers are much farther apart.
+//
+// This radius assumes no two authored tower anchors sit within
+// `2 * UPPER_TURRET_RECOVERY_RADIUS` of each other -- otherwise a legacy
+// cannon near the midpoint between two towers could be claimed as a
+// recovery candidate for the wrong one. The 24 authored towers are spaced
+// 78-116 m apart (see `cromatolis_v0_aerial_features.ron`'s notes), well
+// clear of this 64 m floor.
 const UPPER_TURRET_RECOVERY_RADIUS: f32 = 32.0;
 const UPPER_TURRET_RECOVERY_VERTICAL_TOLERANCE: f32 = 16.0;
 // A legacy lower cannon was created at the platform level with its complete
 // entity upside down. Its corrected physical mount is one cannon height below
 // that level, so recovery must span exactly that short migration distance.
 const LOWER_TURRET_RECOVERY_VERTICAL_TOLERANCE: f32 = 8.0;
-const LOWER_SAFETY_FLOOR_RADIUS: f32 = 10.0;
-const LOWER_SAFETY_FLOOR_THICKNESS: f32 = 0.25;
 
 fn component_needs_restore<T: PartialEq>(current: Option<&T>, desired: &T) -> bool {
     current != Some(desired)
@@ -70,9 +73,10 @@ pub(crate) fn upper_turret_pivot(tower_index: usize) -> Vec3<f32> {
             tower_index,
         )
         .expect("citadel upper cannon must reference an authored watch deck") as f32;
+    let features = aerial_features();
     let clearance = match upper_turret_body(tower_index) {
-        comp::object::Body::CitadelArcaneCannon => BEAM_PIVOT_ABOVE_WATCH_DECK,
-        comp::object::Body::CitadelArcaneSphereCannon => SPHERE_PIVOT_ABOVE_WATCH_DECK,
+        comp::object::Body::CitadelArcaneCannon => features.pilot_beam_pivot_clearance_m,
+        comp::object::Body::CitadelArcaneSphereCannon => features.pilot_sphere_pivot_clearance_m,
         _ => unreachable!("upper citadel stations have one of the two cannon bodies"),
     };
     upper_turret_center(tower_index).with_z(deck_z + clearance)
@@ -92,13 +96,19 @@ pub(crate) fn upper_turret_rest_pose(tower_index: usize) -> CitadelTurretAngles 
     }
 }
 
+/// `pivot`/`expected_body` are the caller's already-resolved values for this
+/// tower (each `upper_turret_pivot` call re-loads and clones the authored
+/// tower table, so this predicate must never resolve them itself: it runs
+/// once per `Immovable`+`Body`+`Pos` entity in the *entire world* -- every
+/// campfire, portal, and totem, not just the 24 towers -- inside the caller's
+/// `.join().filter_map(...)`).
 fn upper_turret_is_recovery_candidate(
-    tower_index: usize,
+    pivot: Vec3<f32>,
+    expected_body: comp::Body,
     body: comp::Body,
     position: Vec3<f32>,
 ) -> bool {
-    let pivot = upper_turret_pivot(tower_index);
-    body == comp::Body::Object(upper_turret_body(tower_index))
+    body == expected_body
         && (position.xy() - pivot.xy()).magnitude_squared() <= UPPER_TURRET_RECOVERY_RADIUS.powi(2)
         && (position.z - pivot.z).abs() <= UPPER_TURRET_RECOVERY_VERTICAL_TOLERANCE
 }
@@ -153,10 +163,11 @@ pub(crate) fn ensure_upper_defences(state: &mut State) -> usize {
             ))
             .map(|tower_index| {
                 let pivot = upper_turret_pivot(tower_index);
+                let expected_body = comp::Body::Object(upper_turret_body(tower_index));
                 let mut candidates = (&entities, &bodies, &positions, &immovables)
                     .join()
                     .filter_map(|(entity, body, pos, _)| {
-                        upper_turret_is_recovery_candidate(tower_index, *body, pos.0)
+                        upper_turret_is_recovery_candidate(pivot, expected_body, *body, pos.0)
                             .then_some((entity, pos.0))
                     })
                     .collect::<Vec<_>>();
@@ -280,13 +291,16 @@ pub(crate) fn lower_tower_turret_pivot(lower_tower_index: usize) -> Vec3<f32> {
     lower_tower_force_field_pivot(lower_tower_index) - Vec3::unit_z() * cannon.height()
 }
 
+/// `pivot`/`expected_body` are the caller's already-resolved values for this
+/// lower tower -- see `upper_turret_is_recovery_candidate`'s doc comment for
+/// why this predicate must never resolve them itself.
 fn lower_tower_turret_is_recovery_candidate(
-    lower_tower_index: usize,
+    pivot: Vec3<f32>,
+    expected_body: comp::Body,
     body: comp::Body,
     position: Vec3<f32>,
 ) -> bool {
-    let pivot = lower_tower_turret_pivot(lower_tower_index);
-    body == comp::Body::Object(lower_tower_turret_body(lower_tower_index))
+    body == expected_body
         && (position.xy() - pivot.xy()).magnitude_squared() < 0.01
         && (position.z - pivot.z).abs() <= LOWER_TURRET_RECOVERY_VERTICAL_TOLERANCE
 }
@@ -305,37 +319,54 @@ pub(crate) fn lower_tower_turret_rest_pose(_lower_tower_index: usize) -> Citadel
 /// prism expresses the intended flat collision directly, without allocating
 /// mutable voxel geometry. It also has no model of its own, keeping this
 /// collision-only entity separate from the dome and cannon visuals.
-fn lower_tower_force_field_collider() -> comp::Collider {
+///
+/// `radius`/`thickness` must come from the same authored source the visible
+/// `CitadelForceFieldVisual::SafetyFloor` uses (`aerial_features()`'s
+/// `lower_platform().horizontal_radius`/`lower_safety_floor_thickness_m`) --
+/// never a separate Rust constant, or the visual and physical footprints can
+/// silently drift apart the next time the RON asset is retuned.
+fn lower_tower_force_field_collider(radius: f32, thickness: f32) -> comp::Collider {
     comp::Collider::CapsulePrism(comp::CapsulePrism {
-        // A 21x20 m horizontal stadium: wide enough to cover the centre
-        // opening and deliberately lower than the authored stone platform.
+        // A stadium shape wide enough to cover the centre opening and
+        // deliberately lower than the authored stone platform.
         p0: Vec2::new(-0.5, 0.0),
         p1: Vec2::new(0.5, 0.0),
-        radius: LOWER_SAFETY_FLOOR_RADIUS,
+        radius,
         z_min: 0.0,
-        z_max: LOWER_SAFETY_FLOOR_THICKNESS,
+        z_max: thickness,
     })
 }
 
-fn lower_tower_force_field_has_correct_collider(collider: Option<&comp::Collider>) -> bool {
+fn lower_tower_force_field_has_correct_collider(
+    collider: Option<&comp::Collider>,
+    radius: f32,
+    thickness: f32,
+) -> bool {
     matches!(
         collider,
         Some(comp::Collider::CapsulePrism(comp::CapsulePrism {
             p0,
             p1,
-            radius,
+            radius: actual_radius,
             z_min,
             z_max,
         })) if *p0 == Vec2::new(-0.5, 0.0)
             && *p1 == Vec2::new(0.5, 0.0)
-            && *radius == LOWER_SAFETY_FLOOR_RADIUS
+            && *actual_radius == radius
             && *z_min == 0.0
-            && *z_max == LOWER_SAFETY_FLOOR_THICKNESS
+            && *z_max == thickness
     )
 }
 
 /// Ensures the collision-only safety floor for one lower tower exists once.
 /// The authored stone platform remains visible above this safety net.
+///
+/// Unlike the cannon-placement paths above, this does not hunt for and
+/// delete duplicate entities: the legacy off-center placement bug that
+/// motivated that dedup logic only ever affected the *cannons* (an old pilot
+/// command placed them slightly outward from their tower centres). No
+/// equivalent legacy-duplicate scenario exists for the safety floor or dome
+/// below, since neither was ever separately, manually placeable.
 fn ensure_lower_tower_force_field(state: &mut State, lower_tower_index: usize) -> bool {
     let pivot = lower_tower_safety_floor_pivot(lower_tower_index);
     let Some(home_chunk) = terrain_home_chunk(state, pivot) else {
@@ -359,8 +390,12 @@ fn ensure_lower_tower_force_field(state: &mut State, lower_tower_index: usize) -
             })
     };
 
+    let features = aerial_features();
+    let desired_field = features.lower_platform();
+    let collider_radius = desired_field.horizontal_radius;
+    let collider_thickness = features.lower_safety_floor_thickness_m;
+
     if let Some(entity) = existing {
-        let desired_field = aerial_features().lower_platform();
         let (needs_position, needs_field, needs_collider) = {
             let ecs = state.ecs();
             (
@@ -371,6 +406,8 @@ fn ensure_lower_tower_force_field(state: &mut State, lower_tower_index: usize) -
                 ),
                 !lower_tower_force_field_has_correct_collider(
                     ecs.read_storage::<comp::Collider>().get(entity),
+                    collider_radius,
+                    collider_thickness,
                 ),
             )
         };
@@ -392,7 +429,10 @@ fn ensure_lower_tower_force_field(state: &mut State, lower_tower_index: usize) -
             state
                 .ecs_mut()
                 .write_storage::<comp::Collider>()
-                .insert(entity, lower_tower_force_field_collider())
+                .insert(
+                    entity,
+                    lower_tower_force_field_collider(collider_radius, collider_thickness),
+                )
                 .expect("the existing lower safety-floor entity must accept its collider");
         }
         return false;
@@ -402,8 +442,11 @@ fn ensure_lower_tower_force_field(state: &mut State, lower_tower_index: usize) -
         .create_empty(comp::Pos(pivot))
         .with(comp::Immovable)
         .with(comp::Anchor::Chunk(home_chunk))
-        .with(lower_tower_force_field_collider())
-        .with(aerial_features().lower_platform())
+        .with(lower_tower_force_field_collider(
+            collider_radius,
+            collider_thickness,
+        ))
+        .with(desired_field)
         .build();
     true
 }
@@ -424,6 +467,9 @@ fn spawn_lower_tower_defence(state: &mut State, lower_tower_index: usize, home_c
 /// The dome is visual-only and remains at the structural platform centre.
 /// Decoupling it from the cannon means aiming cannot translate or rotate the
 /// protection shell, and it avoids mixing a mesh-only effect with physics.
+///
+/// Like `ensure_lower_tower_force_field` above, this does not dedupe: no
+/// legacy manually-placed dome ever existed to leave a duplicate behind.
 fn ensure_lower_tower_dome(state: &mut State, lower_tower_index: usize) -> bool {
     let pivot = lower_tower_force_field_pivot(lower_tower_index);
     let Some(home_chunk) = terrain_home_chunk(state, pivot) else {
@@ -467,10 +513,11 @@ fn ensure_lower_tower_defence(state: &mut State, lower_tower_index: usize) -> bo
         let bodies = ecs.read_storage::<comp::Body>();
         let positions = ecs.read_storage::<comp::Pos>();
         let immovables = ecs.read_storage::<comp::Immovable>();
+        let expected_body = comp::Body::Object(lower_tower_turret_body(lower_tower_index));
         let mut candidates = (&entities, &bodies, &positions, &immovables)
             .join()
             .filter_map(|(entity, body, pos, _)| {
-                lower_tower_turret_is_recovery_candidate(lower_tower_index, *body, pos.0)
+                lower_tower_turret_is_recovery_candidate(pivot, expected_body, *body, pos.0)
                     .then_some((entity, pos.0))
             })
             .collect::<Vec<_>>();
@@ -651,21 +698,24 @@ mod tests {
     fn upper_station_recovery_migrates_only_nearby_legacy_cannons() {
         let tower_index = 0;
         let pivot = upper_turret_pivot(tower_index);
-        let body = comp::Body::Object(upper_turret_body(tower_index));
+        let expected_body = comp::Body::Object(upper_turret_body(tower_index));
 
         assert!(upper_turret_is_recovery_candidate(
-            tower_index,
-            body,
+            pivot,
+            expected_body,
+            expected_body,
             pivot + Vec3::new(12.0, 0.0, 0.0),
         ));
         assert!(!upper_turret_is_recovery_candidate(
-            tower_index,
-            body,
+            pivot,
+            expected_body,
+            expected_body,
             pivot + Vec3::new(33.0, 0.0, 0.0),
         ));
         assert!(!upper_turret_is_recovery_candidate(
-            tower_index,
-            body,
+            pivot,
+            expected_body,
+            expected_body,
             pivot + Vec3::new(0.0, 0.0, 17.0),
         ));
     }
@@ -708,17 +758,24 @@ mod tests {
     }
 
     #[test]
-    fn lower_force_field_floor_has_a_solid_server_side_collision_plate() {
-        let comp::Collider::CapsulePrism(collider) = lower_tower_force_field_collider() else {
+    fn lower_force_field_floor_has_a_solid_server_side_collision_plate_matching_the_authored_radius()
+     {
+        let features = super::aerial_features();
+        let radius = features.lower_platform().horizontal_radius;
+        let thickness = features.lower_safety_floor_thickness_m;
+
+        let comp::Collider::CapsulePrism(collider) =
+            lower_tower_force_field_collider(radius, thickness)
+        else {
             panic!("the lower safety floor must use an invisible capsule-prism collider");
         };
         assert_eq!(collider.p0, Vec2::new(-0.5, 0.0));
         assert_eq!(collider.p1, Vec2::new(0.5, 0.0));
-        assert_eq!(collider.radius, 10.0);
+        assert_eq!(collider.radius, radius);
         assert_eq!(collider.z_min, 0.0);
-        assert_eq!(collider.z_max, 0.25);
+        assert_eq!(collider.z_max, thickness);
         assert!(
-            !lower_tower_force_field_collider().is_voxel(),
+            !lower_tower_force_field_collider(radius, thickness).is_voxel(),
             "the collision plate must never become a Voxygen-rendered voxel mesh",
         );
     }
@@ -774,20 +831,24 @@ mod tests {
     #[test]
     fn lower_station_recovery_migrates_the_legacy_flipped_mount_without_selecting_other_cannons() {
         let pivot = lower_tower_turret_pivot(0);
-        let cannon = comp::Body::Object(Body::CitadelArcaneSphereCannon);
+        let expected_body = comp::Body::Object(Body::CitadelArcaneSphereCannon);
+        let cannon = expected_body;
 
         assert!(lower_tower_turret_is_recovery_candidate(
-            0,
+            pivot,
+            expected_body,
             cannon,
             pivot + Vec3::unit_z() * cannon.height(),
         ));
         assert!(!lower_tower_turret_is_recovery_candidate(
-            0,
+            pivot,
+            expected_body,
             cannon,
             pivot + Vec3::unit_z() * 8.1,
         ));
         assert!(!lower_tower_turret_is_recovery_candidate(
-            0,
+            pivot,
+            expected_body,
             comp::Body::Object(Body::CitadelArcaneCannon),
             pivot,
         ));
@@ -808,5 +869,139 @@ mod tests {
             Some(&current),
             &super::aerial_features().lower_tower_dome(),
         ));
+    }
+}
+
+/// Exercises `ensure_upper_defences`/`ensure_lower_tower_defences` against a
+/// real `specs::World` (via `common_state::State`), the same pattern
+/// `events::entity_manipulation`'s and `events::remote_sense`'s test modules
+/// already use for server-crate integration tests. The property under test
+/// -- a second reconciliation pass must never double-spawn an already-live
+/// station -- was previously only verified by reading the code, not by a
+/// test, even though it is exactly the guarantee the whole 1Hz refresh
+/// depends on.
+#[cfg(test)]
+mod idempotency_tests {
+    use super::{
+        ensure_lower_tower_defences, ensure_upper_defences, lower_tower_force_field_pivot,
+        upper_turret_pivot,
+    };
+    use common::{
+        comp,
+        resources::GameMode,
+        terrain::{MapSizeLg, TerrainChunk, TerrainGrid},
+    };
+    use common_state::State;
+    use specs::{Join, WorldExt};
+    use std::sync::Arc;
+    use vek::{Vec2, Vec3};
+
+    const WORLD_CHUNKS_LG: MapSizeLg =
+        if let Ok(map_size_lg) = MapSizeLg::new(Vec2 { x: 10, y: 10 }) {
+            map_size_lg
+        } else {
+            panic!("Default world chunk size does not satisfy required invariants.");
+        };
+
+    fn setup() -> State {
+        let pools = State::pools(GameMode::Server);
+        let mut state = State::new(
+            GameMode::Server,
+            pools,
+            WORLD_CHUNKS_LG,
+            Arc::new(TerrainChunk::water(0)),
+            |dispatch_builder| {
+                common_systems::add_local_systems(dispatch_builder);
+            },
+            #[cfg(feature = "plugins")]
+            common_state::plugin::PluginMgr::default(),
+        );
+        // `Anchor` is a server-only component, normally registered by
+        // `Server::new` -- every station `spawn_upper_defence`/
+        // `spawn_lower_tower_defence`/`ensure_lower_tower_force_field`/
+        // `ensure_lower_tower_dome` creates carries one, so a bare `State`
+        // needs it registered by hand here.
+        state.ecs_mut().register::<comp::Anchor>();
+        state
+    }
+
+    /// Loads a real chunk at the key covering `pos`, so `terrain_home_chunk`
+    /// resolves it -- mirrors the "insert one real chunk into an otherwise
+    /// empty `TerrainGrid`" pattern `events::remote_sense`'s `empty_terrain`
+    /// helper already established. A tower's force-field/safety-floor/cannon
+    /// pivots only ever differ in z (never x/y), and the terrain grid keys
+    /// chunks purely by x/y, so one call here covers every co-located
+    /// placement at that tower.
+    fn load_chunk_containing(state: &mut State, pos: Vec3<f32>) {
+        let key = state.terrain().pos_key(pos.map(|axis| axis.floor() as i32));
+        state
+            .ecs_mut()
+            .write_resource::<TerrainGrid>()
+            .insert(key, Arc::new(TerrainChunk::water(0)));
+    }
+
+    fn entity_count(state: &State) -> usize { state.ecs().entities().join().count() }
+
+    #[test]
+    fn ensure_upper_defences_never_double_spawns_an_already_live_station() {
+        let mut state = setup();
+        // Only tower 0's chunk is loaded, so exactly one station can ever
+        // spawn here -- keeps the entity-count assertions unambiguous.
+        load_chunk_containing(&mut state, upper_turret_pivot(0));
+        let before = entity_count(&state);
+
+        let first_pass_spawned = ensure_upper_defences(&mut state);
+        assert_eq!(
+            first_pass_spawned, 1,
+            "exactly the one tower with a loaded chunk must spawn"
+        );
+        assert_eq!(
+            entity_count(&state),
+            before + 1,
+            "the first pass must create exactly one new entity"
+        );
+
+        let second_pass_spawned = ensure_upper_defences(&mut state);
+        assert_eq!(
+            second_pass_spawned, 0,
+            "a second reconciliation pass must not spawn a duplicate for an already-live station"
+        );
+        assert_eq!(
+            entity_count(&state),
+            before + 1,
+            "entity count must not grow across an idempotent reconciliation pass"
+        );
+    }
+
+    #[test]
+    fn ensure_lower_tower_defences_never_double_spawns_an_already_live_station() {
+        let mut state = setup();
+        load_chunk_containing(&mut state, lower_tower_force_field_pivot(0));
+        let before = entity_count(&state);
+
+        let first_pass_changes = ensure_lower_tower_defences(&mut state);
+        assert_eq!(
+            first_pass_changes, 2,
+            "one change from the safety floor and one from the cannon+dome pair on tower 0; every \
+             other tower's chunk is unloaded and reports no change"
+        );
+        assert_eq!(
+            entity_count(&state),
+            before + 3,
+            "the first pass must create exactly three new entities: the safety floor, the cannon, \
+             and the dome"
+        );
+
+        let second_pass_changes = ensure_lower_tower_defences(&mut state);
+        assert_eq!(
+            second_pass_changes, 0,
+            "a second reconciliation pass must not report any change once every lower-tower \
+             entity already matches its desired state"
+        );
+        assert_eq!(
+            entity_count(&state),
+            before + 3,
+            "entity count must not grow across an idempotent reconciliation pass"
+        );
     }
 }

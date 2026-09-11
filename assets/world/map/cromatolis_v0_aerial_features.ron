@@ -13,6 +13,10 @@
         "separately from `common::comp::citadel`'s force-field visual presets, which previously",
         "baked them as Rust literals; they describe the lower tower's force field, distinct from",
         "`lower_pilot_tower_height_m` above (the physical stair structure's height).",
+        "`pilot_beam_pivot_clearance_m`/`pilot_sphere_pivot_clearance_m`/",
+        "`lower_safety_floor_thickness_m` were ported separately from `server::citadel`'s",
+        "station-placement code, which previously baked them as Rust literals -- the physical",
+        "cannon-mount/collision-plate counterpart to the force-field dimensions above.",
     ],
     center: (16384, 16384),
     altitude_above_sea_m: 5000,
@@ -54,6 +58,15 @@
     // still visual-only until force-field physics is introduced.
     lower_dome_radius_m: 12,
     lower_dome_height_m: 18,
+    // Vertical thickness of the lower tower's invisible, server-collidable
+    // safety-floor plate. Kept thin -- it only needs to catch a fall, not
+    // read as a real floor slab.
+    lower_safety_floor_thickness_m: 0.25,
+    // Height above the watch-deck surface where each cannon type's physical
+    // pivot mounts. The sphere cannon sits higher than the beam cannon so
+    // its larger model stays clear of the deck at every elevation.
+    pilot_beam_pivot_clearance_m: 1.45,
+    pilot_sphere_pivot_clearance_m: 2.0,
     // The centers sit slightly inside the rim. That keeps their full
     // foundations supported while their 26 m diameter footprints overlap
     // the contour wall.
