@@ -308,14 +308,19 @@ pub enum InviteAnswer {
 /// not relevant to rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Notification {
-    WaypointSaved { location_name: Content },
+    WaypointSaved {
+        location_name: Content,
+    },
     /// A regional terrain override just activated or deactivated somewhere
     /// the recipient is standing in (`inside: true`) or can currently see
     /// (`inside: false`) - `text` is either the override's own authored
     /// line or a localized fallback keyed by payload kind and operation,
     /// resolved server-side so the client never needs the override's
     /// internal shape.
-    TerrainTransition { text: Content, inside: bool },
+    TerrainTransition {
+        text: Content,
+        inside: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
