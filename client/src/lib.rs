@@ -141,6 +141,7 @@ pub enum Event {
 #[derive(Debug)]
 pub enum UserNotification {
     WaypointUpdated,
+    TerrainTransition { text: Content, inside: bool },
 }
 
 #[derive(Debug)]
@@ -3244,10 +3245,17 @@ impl Client {
                 }
             },
             ServerGeneral::Notification(n) => {
-                let Notification::WaypointSaved { location_name } = n.clone();
-                self.waypoint = Some(location_name);
+                let user_notification = match n {
+                    Notification::WaypointSaved { location_name } => {
+                        self.waypoint = Some(location_name);
+                        UserNotification::WaypointUpdated
+                    },
+                    Notification::TerrainTransition { text, inside } => {
+                        UserNotification::TerrainTransition { text, inside }
+                    },
+                };
 
-                frontend_events.push(Event::Notification(UserNotification::WaypointUpdated));
+                frontend_events.push(Event::Notification(user_notification));
             },
             ServerGeneral::PluginData(d) => {
                 let plugin_len = d.len();

@@ -487,6 +487,7 @@ mod tests {
                 activated_at: 10.0,
                 wipe_player_edits: true,
                 ephemeral: false,
+                transition: Default::default(),
             }],
         };
 
@@ -650,6 +651,7 @@ mod tests {
                 activated_at: 20.0,
                 wipe_player_edits: false,
                 ephemeral: false,
+                transition: Default::default(),
             }],
         };
 
@@ -660,5 +662,65 @@ mod tests {
         let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..])
             .expect("a biome-profile-payload override must load through the real codec");
         assert_eq!(decoded, overrides);
+    }
+
+    /// `transition` is an additive `#[serde(default)]` field on
+    /// `RegionalTerrainOverride` -- a save written before it existed must
+    /// still load, falling back to an empty `TransitionNarrative` (both
+    /// fields `None`, the deterministic-fallback-text path).
+    #[test]
+    fn an_override_written_before_transition_existed_still_loads() {
+        use common::terrain::{
+            ClimateOverride, ClimateValue, OverrideRegion, TerrainOverrideId,
+            TerrainOverridePayload,
+        };
+
+        #[derive(Serialize)]
+        struct OldRegionalTerrainOverride {
+            id: TerrainOverrideId,
+            region: OverrideRegion,
+            payload: TerrainOverridePayload,
+            priority: i32,
+            activated_at: f64,
+            wipe_player_edits: bool,
+            ephemeral: bool,
+        }
+
+        #[derive(Serialize)]
+        struct OldTerrainOverrides {
+            version: u64,
+            active: Vec<OldRegionalTerrainOverride>,
+        }
+
+        let old = OldTerrainOverrides {
+            version: 12,
+            active: vec![OldRegionalTerrainOverride {
+                id: TerrainOverrideId(123),
+                region: OverrideRegion::Circle {
+                    center: Vec2::new(5, -5),
+                    radius: 16.0,
+                    edge: 4.0,
+                },
+                payload: TerrainOverridePayload::Climate(ClimateOverride {
+                    temp: Some(ClimateValue::Set(2.0)),
+                    humidity: None,
+                    tree_density_mul: None,
+                }),
+                priority: 10,
+                activated_at: 0.0,
+                wipe_player_edits: false,
+                ephemeral: false,
+            }],
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old)
+            .expect("serialise an override list using the OLD (pre-transition) shape");
+
+        let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..])
+            .expect("an override list written before `transition` existed must still load");
+        assert_eq!(decoded.version, old.version);
+        assert_eq!(decoded.active.len(), 1);
+        assert_eq!(decoded.active[0].transition, Default::default());
     }
 }

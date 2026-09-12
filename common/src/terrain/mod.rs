@@ -16,8 +16,9 @@ pub use self::{
     map::MapSizeLg,
     regional_override::{
         BiomeProfileGoverningAt, BiomeProfileOverride, ClimateOverride, ClimateValue,
-        DamageEffectsAt, DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride,
-        TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+        DamageEffectsAt, DamageOverride, DamageShape, MAX_TRANSITION_TEXT_BYTES, OverrideRegion,
+        RegionalTerrainOverride, TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+        TransitionNarrative,
     },
     site::SiteKindMeta,
     sprite::{SpriteCfg, SpriteKind, StructureSprite, UnlockKind},

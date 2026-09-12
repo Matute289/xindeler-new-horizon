@@ -314,6 +314,8 @@ widget_ids! {
         map,
         world_map,
         popup,
+        terrain_transition_bg,
+        terrain_transition_text,
         creature_card,
         identify_item_tooltip,
         minimap,
@@ -986,6 +988,10 @@ pub struct Show {
     /// target left `Detected` range).
     identify_card: Option<specs::Entity>,
     prompt_dialog: Option<PromptDialogSettings>,
+    /// Text for the full-screen takeover shown while a regional terrain
+    /// transition holds the screen fade to black (see `Scene::transition`).
+    /// `None` means no takeover is currently displayed.
+    terrain_transition: Option<String>,
     trade_amount_input_key: Option<TradeAmountInput>,
     /// Chat on-screen keyboard open state (controller-only text entry, no
     /// physical keyboard involved). See `Hud::osk_events`/`osk_prefill`.
@@ -1032,6 +1038,7 @@ impl Show {
             remote_sensing: false,
             identify_card: None,
             prompt_dialog: None,
+            terrain_transition: None,
             trade_amount_input_key: None,
             osk: false,
             focus: Vec::new(),
@@ -1599,6 +1606,20 @@ impl Hud {
     pub fn set_prompt_dialog(&mut self, prompt_dialog: PromptDialogSettings) {
         self.show.prompt_dialog = Some(prompt_dialog);
     }
+
+    /// Shows `text` as a full-screen takeover, replacing whatever takeover
+    /// text (if any) is already showing.
+    pub fn show_terrain_transition(&mut self, text: String) {
+        self.show.terrain_transition = Some(text);
+    }
+
+    /// Dismisses the full-screen takeover started by
+    /// [`Self::show_terrain_transition`], if one is showing.
+    pub fn clear_terrain_transition(&mut self) { self.show.terrain_transition = None; }
+
+    /// Whether the full-screen takeover started by
+    /// [`Self::show_terrain_transition`] is currently showing.
+    pub fn has_terrain_transition(&self) -> bool { self.show.terrain_transition.is_some() }
 
     pub fn update_fonts(&mut self, i18n: &Localization) {
         self.fonts = Fonts::load(i18n.fonts(), &mut self.ui).expect("Impossible to load fonts!");
@@ -3429,6 +3450,23 @@ impl Hud {
             global_state,
         )
         .set(self.ids.popup, ui_widgets);
+
+        // Full-screen takeover text for a regional terrain transition
+        // (the screen fade itself is driven by the scene, not here).
+        if let Some(text) = &self.show.terrain_transition {
+            Text::new(text)
+                .middle_of(ui_widgets.window)
+                .font_size(self.fonts.cyri.scale(40))
+                .font_id(self.fonts.cyri.conrod_id)
+                .color(Color::Rgba(0.0, 0.0, 0.0, 1.0))
+                .set(self.ids.terrain_transition_bg, ui_widgets);
+            Text::new(text)
+                .top_left_with_margins_on(self.ids.terrain_transition_bg, -1.0, -1.0)
+                .font_size(self.fonts.cyri.scale(40))
+                .font_id(self.fonts.cyri.conrod_id)
+                .color(TEXT_COLOR)
+                .set(self.ids.terrain_transition_text, ui_widgets);
+        }
 
         if let Some(prompt_dialog_settings) = &self.show.prompt_dialog {
             // Prompt Dialog

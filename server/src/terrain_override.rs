@@ -14,7 +14,7 @@ mod worldgen_impl {
 
     use common::{
         calendar::Calendar,
-        comp::{Pos, Presence},
+        comp::{Content, Pos, Presence},
         event::TerrainOverrideOp,
         resources::TimeOfDay,
         slowjob::SlowJobPool,
@@ -25,12 +25,16 @@ mod worldgen_impl {
         },
         vol::RectVolSize,
     };
+    use common_net::msg::{Notification, ServerGeneral};
     use common_state::TerrainChanges;
     use specs::{Entities, Entity as EcsEntity, Join, ReadStorage, WriteStorage};
     use vek::{Aabr, Vec2, Vec3};
     use world::{IndexOwned, World, util::Sampler};
 
-    use crate::{chunk_generator::ChunkGenerator, presence::RepositionToFreeSpace, rtsim::RtSim};
+    use crate::{
+        chunk_generator::ChunkGenerator, client::Client, presence::RepositionToFreeSpace,
+        rtsim::RtSim,
+    };
 
     #[cfg(feature = "persistent_world")]
     use crate::terrain_persistence::TerrainPersistence;
@@ -61,6 +65,7 @@ mod worldgen_impl {
         pub positions: ReadStorage<'a, Pos>,
         pub presences: ReadStorage<'a, Presence>,
         pub reposition: WriteStorage<'a, RepositionToFreeSpace>,
+        pub clients: ReadStorage<'a, Client>,
     }
 
     /// Activates or deactivates one regional terrain override: bumps
@@ -70,9 +75,15 @@ mod worldgen_impl {
     pub fn apply(op: TerrainOverrideOp, ctx: &mut ApplyContext) {
         match op {
             TerrainOverrideOp::Activate(new_override) => {
-                let new_override = bake_biome_profile_flood_to(new_override, ctx);
+                let mut new_override = bake_biome_profile_flood_to(new_override, ctx);
+                new_override.transition.sanitize();
                 let region = new_override.region.clone();
                 let wipe_player_edits = new_override.wipe_player_edits;
+                let text = transition_text(
+                    new_override.transition.on_activate.as_deref(),
+                    &new_override.payload,
+                    true,
+                );
 
                 let mut snapshot = (**ctx.terrain_overrides).clone();
                 snapshot.version = snapshot.version.wrapping_add(1);
@@ -80,6 +91,7 @@ mod worldgen_impl {
                 persist_and_install(snapshot, ctx);
 
                 regenerate_region(&region, wipe_player_edits, ctx);
+                notify_transition(&region, &text, ctx);
             },
             TerrainOverrideOp::Deactivate(id) => {
                 let mut snapshot = (**ctx.terrain_overrides).clone();
@@ -102,8 +114,15 @@ mod worldgen_impl {
                 // should not retroactively discard whatever players built
                 // *during* it.
                 regenerate_region(&removed.region, false, ctx);
+                let text = transition_text(
+                    removed.transition.on_deactivate.as_deref(),
+                    &removed.payload,
+                    false,
+                );
+                notify_transition(&removed.region, &text, ctx);
             },
-            TerrainOverrideOp::Replace(new_override) => {
+            TerrainOverrideOp::Replace(mut new_override) => {
+                new_override.transition.sanitize();
                 let mut snapshot = (**ctx.terrain_overrides).clone();
                 let Some(index) = snapshot.active.iter().position(|o| o.id == new_override.id)
                 else {
@@ -206,6 +225,128 @@ mod worldgen_impl {
         *ctx.terrain_overrides = Arc::new(snapshot);
     }
 
+    /// Resolves the `Content` to send for one activate/deactivate
+    /// transition: the override's own authored line if it has one,
+    /// otherwise a deterministic localized fallback keyed by payload kind
+    /// and operation -- every override gets *some* text, an authored line is
+    /// an enhancement on top of the fallback, not a requirement.
+    fn transition_text(
+        authored: Option<&str>,
+        payload: &TerrainOverridePayload,
+        activating: bool,
+    ) -> Content {
+        if let Some(text) = authored {
+            return Content::Plain(text.to_string());
+        }
+        let op = if activating { "activate" } else { "deactivate" };
+        Content::localized(format!(
+            "hud-terrain_transition-{}-{op}",
+            payload.transition_kind_key()
+        ))
+    }
+
+    /// Who should be told about an override activating or deactivating over
+    /// `region`, right now: [`TransitionRecipients::standing_in`] holds
+    /// everyone literally inside the region's own radius,
+    /// [`TransitionRecipients::in_view`] holds everyone else who merely has
+    /// some chunk the region touches within their current terrain view
+    /// distance (so they'd see the regen happen, without being caught inside
+    /// it themselves).
+    pub struct TransitionRecipients {
+        pub standing_in: Vec<EcsEntity>,
+        pub in_view: Vec<EcsEntity>,
+    }
+
+    /// Computes [`TransitionRecipients`] for `region`, using the same
+    /// bounds/spiral/touches-chunk computation [`regenerate_chunks`] uses to
+    /// decide which chunks to proactively regenerate -- applied here to
+    /// decide who to notify instead of what to regenerate.
+    pub fn partition_transition_recipients(
+        region: &OverrideRegion,
+        entities: &Entities<'_>,
+        positions: &ReadStorage<'_, Pos>,
+        presences: &ReadStorage<'_, Presence>,
+    ) -> TransitionRecipients {
+        let chunk_size = TerrainChunkSize::RECT_SIZE;
+        let touched_chunks: Vec<Vec2<i32>> = chunks_touched_by(region, chunk_size);
+
+        let mut standing_in = Vec::new();
+        let mut in_view = Vec::new();
+        for (entity, pos, chunk_key, vd) in joined_player_positions(entities, positions, presences)
+        {
+            if region.contains(pos.xy().as_::<i32>()) {
+                standing_in.push(entity);
+            } else if touched_chunks.iter().any(|touched| {
+                (*touched - chunk_key)
+                    .map(|e| e.unsigned_abs())
+                    .reduce_max()
+                    <= vd
+            }) {
+                in_view.push(entity);
+            }
+        }
+        TransitionRecipients {
+            standing_in,
+            in_view,
+        }
+    }
+
+    /// Sends `Notification::TerrainTransition` (`text`, and `inside`
+    /// matching which half of [`TransitionRecipients`] each recipient fell
+    /// into) to every connected player [`partition_transition_recipients`]
+    /// finds for `region`. A player with no live `Client` (there
+    /// shouldn't be one -- every entity with a `Pos`/`Presence` from a real
+    /// connection has one -- but `ApplyContext`'s test fixtures don't always
+    /// register every component) is silently skipped rather than panicking.
+    fn notify_transition(region: &OverrideRegion, text: &Content, ctx: &ApplyContext) {
+        let recipients =
+            partition_transition_recipients(region, &ctx.entities, &ctx.positions, &ctx.presences);
+        for (entity, inside) in recipients
+            .standing_in
+            .into_iter()
+            .map(|e| (e, true))
+            .chain(recipients.in_view.into_iter().map(|e| (e, false)))
+        {
+            if let Some(client) = ctx.clients.get(entity) {
+                client.send_fallible(ServerGeneral::Notification(
+                    Notification::TerrainTransition {
+                        text: text.clone(),
+                        inside,
+                    },
+                ));
+            }
+        }
+    }
+
+    /// Every chunk key `region` can have any effect on (see
+    /// [`OverrideRegion::touches_chunk`]), computed via the same
+    /// bounds-to-spiral-radius conversion [`regenerate_chunks`] uses.
+    fn chunks_touched_by(region: &OverrideRegion, chunk_size: Vec2<u32>) -> Vec<Vec2<i32>> {
+        touched_chunk_keys(region.bounds(), chunk_size, |key| {
+            region.touches_chunk(key, chunk_size)
+        })
+        .collect()
+    }
+
+    /// The chunk keys within `bounds` for which `touches(key)` is true --
+    /// the shared bounds-to-spiral-radius geometry both [`chunks_touched_by`]
+    /// and [`regenerate_chunks`] iterate over, kept in one place so they
+    /// can't silently drift apart from each other.
+    fn touched_chunk_keys(
+        bounds: Aabr<i32>,
+        chunk_size: Vec2<u32>,
+        touches: impl Fn(Vec2<i32>) -> bool,
+    ) -> impl Iterator<Item = Vec2<i32>> {
+        let center_chunk = bounds
+            .center()
+            .map2(chunk_size, |e, sz: u32| e.div_euclid(sz as i32));
+        let half_extent = (bounds.max - bounds.min) / 2;
+        let radius_chunks = (half_extent.x.max(half_extent.y) / chunk_size.x as i32).max(0) + 2;
+        Spiral2d::with_radius(radius_chunks)
+            .map(move |offset| center_chunk + offset)
+            .filter(move |&key| touches(key))
+    }
+
     /// Unloads every chunk `region` touches (even a sliver of falloff --
     /// same `OverrideRegion::touches_chunk` AABB-then-exact check the
     /// world-gen hooks use to decide whether to patch a chunk at all) so
@@ -299,11 +440,6 @@ mod worldgen_impl {
         ctx: &mut ApplyContext,
     ) {
         let chunk_size = TerrainChunkSize::RECT_SIZE;
-        let center_chunk = bounds
-            .center()
-            .map2(chunk_size, |e, sz: u32| e.div_euclid(sz as i32));
-        let half_extent = (bounds.max - bounds.min) / 2;
-        let radius_chunks = (half_extent.x.max(half_extent.y) / chunk_size.x as i32).max(0) + 2;
 
         // See `joined_player_positions`'s own doc comment -- computed once,
         // outside the per-chunk loop below, and reused inside it for BOTH
@@ -315,12 +451,7 @@ mod worldgen_impl {
                 .map(|(entity, _pos, chunk_key, vd)| (entity, chunk_key, vd))
                 .collect();
 
-        for offset in Spiral2d::with_radius(radius_chunks) {
-            let key = center_chunk + offset;
-            if !touches(key) {
-                continue;
-            }
-
+        for key in touched_chunk_keys(bounds, chunk_size, touches) {
             // Scoped invalidation: only chunks THIS region actually touches
             // get their generation-job epoch bumped -- see
             // `ChunkGenerator::chunk_versions`'s own doc comment for why
@@ -379,11 +510,17 @@ mod worldgen_impl {
 }
 
 #[cfg(feature = "worldgen")]
-pub use worldgen_impl::{ApplyContext, apply, joined_player_positions};
+pub use worldgen_impl::{
+    ApplyContext, TransitionRecipients, apply, joined_player_positions,
+    partition_transition_recipients,
+};
 
-// ---- Heavy, real-terrain-backed test: requires the real Cromatolis LFS
-// assets pulled locally, same precedent as `undercompact_gate.rs`'s own
-// `..._against_the_real_world` tests. Not run automatically.
+// ---- Most tests below are cheap synthetic-fixture unit tests and run
+// normally. The ones that need a real generated `World` (activate/deactivate
+// end-to-end, crater healing, biome-profile blending) require the real
+// Cromatolis LFS assets pulled locally, same precedent as
+// `undercompact_gate.rs`'s own `..._against_the_real_world` tests, so those
+// specific tests are `#[ignore]`d and not run automatically.
 // Recommended: `cargo test -p xindeler-server -- --ignored terrain_override`
 // ----
 #[cfg(all(test, feature = "worldgen"))]
@@ -400,14 +537,14 @@ mod tests {
         resources::TimeOfDay,
         slowjob::SlowJobPool,
         terrain::{
-            ClimateOverride, ClimateValue, DamageOverride, DamageShape, OverrideRegion,
-            RegionalTerrainOverride, TerrainChunkSize, TerrainOverrideId, TerrainOverridePayload,
-            TerrainOverrides,
+            ClimateOverride, ClimateValue, DamageOverride, DamageShape, MAX_TRANSITION_TEXT_BYTES,
+            OverrideRegion, RegionalTerrainOverride, TerrainChunkSize, TerrainOverrideId,
+            TerrainOverridePayload, TerrainOverrides, TransitionNarrative,
         },
         vol::RectVolSize,
     };
     use prometheus::Registry;
-    use specs::{Builder, WorldExt};
+    use specs::{Builder, Entities, ReadStorage, WorldExt};
     use world::{
         World,
         sim::{FileOpts, WorldOpts},
@@ -416,10 +553,12 @@ mod tests {
 
     use crate::{
         chunk_generator::ChunkGenerator,
+        client::Client,
         events::ServerEvent,
         metrics::ChunkGenMetrics,
         presence::RepositionToFreeSpace,
         sys::{SysScheduler, terrain_damage_heal},
+        terrain_override::partition_transition_recipients,
         undercompact_gate::test_support::{insert_rtsim, setup},
     };
 
@@ -462,6 +601,7 @@ mod tests {
             // exercised too.
             wipe_player_edits: false,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 
@@ -493,6 +633,7 @@ mod tests {
         state.ecs_mut().register::<Pos>();
         state.ecs_mut().register::<Presence>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
+        state.ecs_mut().register::<Client>();
 
         let slow_jobs = SlowJobPool::new(4, 8, Arc::new(threadpool));
         slow_jobs.configure("CHUNK_GENERATOR", |n| n.max(1));
@@ -676,6 +817,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: true,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 
@@ -715,6 +857,7 @@ mod tests {
         state.ecs_mut().register::<Pos>();
         state.ecs_mut().register::<Presence>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
+        state.ecs_mut().register::<Client>();
 
         let slow_jobs = SlowJobPool::new(4, 8, Arc::new(threadpool));
         slow_jobs.configure("CHUNK_GENERATOR", |n| n.max(1));
@@ -856,6 +999,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: false,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 
@@ -892,6 +1036,7 @@ mod tests {
         state.ecs_mut().register::<Pos>();
         state.ecs_mut().register::<Presence>();
         state.ecs_mut().register::<RepositionToFreeSpace>();
+        state.ecs_mut().register::<Client>();
 
         let slow_jobs = SlowJobPool::new(4, 8, Arc::new(threadpool));
         slow_jobs.configure("CHUNK_GENERATOR", |n| n.max(1));
@@ -1143,6 +1288,116 @@ mod tests {
             vec![world::ForestKind::Swamp, world::ForestKind::Mangrove],
             "apply_shrubs_to's fixed lottery pick must see the fixture's own forest list, not an \
              empty/default one"
+        );
+    }
+
+    /// `sanitize` must back off to the nearest char boundary rather than
+    /// slicing a multi-byte character in half, and must turn a
+    /// truncated-to-nothing (or already-empty) string into `None` so it
+    /// falls back to the localized default exactly like never authoring a
+    /// line at all. Cheap and synthetic -- no world/ECS needed.
+    #[test]
+    fn overlong_transition_text_is_truncated_to_a_char_boundary() {
+        // Each '✓' is 3 bytes, and 512 isn't a multiple of 3, so a naive
+        // byte-index truncation at the cap would split one down the middle.
+        let ch = '✓';
+        assert_eq!(ch.len_utf8(), 3);
+        let long_text = ch.to_string().repeat(200); // 600 bytes, over the cap.
+
+        let mut narrative = TransitionNarrative {
+            on_activate: Some(long_text.clone()),
+            on_deactivate: Some(String::new()),
+        };
+        narrative.sanitize();
+
+        let truncated = narrative
+            .on_activate
+            .as_ref()
+            .expect("a non-empty truncation result must remain Some");
+        assert!(
+            truncated.len() <= MAX_TRANSITION_TEXT_BYTES,
+            "truncated text must not exceed the byte cap (len={})",
+            truncated.len()
+        );
+        assert!(
+            long_text.starts_with(truncated.as_str()),
+            "truncation must only ever drop a trailing suffix, never rewrite the kept prefix"
+        );
+        // The nearest char boundary at or below 512 for 3-byte characters is
+        // 510 (170 whole characters) -- confirms the boundary walk-back
+        // actually ran, rather than just happening to land on one.
+        assert_eq!(truncated.len(), 510);
+
+        assert_eq!(
+            narrative.on_deactivate, None,
+            "an empty authored string must fall back to None, same as never authoring one"
+        );
+    }
+
+    /// The recipient split [`notify_transition`] relies on: a player
+    /// standing inside the region's own radius is `standing_in`; a player
+    /// outside it but with a chunk the region touches inside their current
+    /// terrain view distance is `in_view`; a player beyond both is neither.
+    /// Cheap and synthetic (bare `Pos`/`Presence` storages, no `World`/
+    /// `RtSim`/real terrain) -- this is pure geometry over ECS storages, not
+    /// anything worldgen-dependent.
+    #[test]
+    fn partition_transition_recipients_separates_standing_in_view_and_out_of_range_players() {
+        let mut ecs = specs::World::new();
+        ecs.register::<Pos>();
+        ecs.register::<Presence>();
+
+        let region = OverrideRegion::Circle {
+            center: vek::Vec2::new(0, 0),
+            radius: 32.0,
+            edge: 8.0,
+        };
+        let chunk = TerrainChunkSize::RECT_SIZE.x as f32;
+        let view_distance = 2;
+        let presence = || {
+            Presence::new(
+                ViewDistances {
+                    terrain: view_distance,
+                    entity: view_distance,
+                },
+                PresenceKind::Spectator,
+            )
+        };
+
+        // Squarely inside the region's own radius (32 blocks).
+        let standing = ecs
+            .create_entity()
+            .with(Pos(vek::Vec3::new(0.0, 0.0, 0.0)))
+            .with(presence())
+            .build();
+        // Outside the region entirely (chunk 3 is 96 blocks out, well past
+        // radius + edge = 40), but exactly `view_distance` chunks from the
+        // nearest chunk the region touches (chunk 1) -- still in view.
+        let in_view = ecs
+            .create_entity()
+            .with(Pos(vek::Vec3::new(chunk * 3.0, 0.0, 0.0)))
+            .with(presence())
+            .build();
+        // Far past both the region and its view-distance band.
+        let far = ecs
+            .create_entity()
+            .with(Pos(vek::Vec3::new(chunk * 100.0, 0.0, 0.0)))
+            .with(presence())
+            .build();
+
+        let (entities, positions, presences) = ecs.system_data::<(
+            Entities<'_>,
+            ReadStorage<'_, Pos>,
+            ReadStorage<'_, Presence>,
+        )>();
+        let recipients =
+            partition_transition_recipients(&region, &entities, &positions, &presences);
+
+        assert_eq!(recipients.standing_in, vec![standing]);
+        assert_eq!(recipients.in_view, vec![in_view]);
+        assert!(
+            !recipients.standing_in.contains(&far) && !recipients.in_view.contains(&far),
+            "a player beyond both the region and its view-distance band must be in neither list"
         );
     }
 }

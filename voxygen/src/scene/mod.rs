@@ -50,7 +50,7 @@ use common::{
     },
     outcome::Outcome,
     resources::{DeltaTime, TimeOfDay, TimeScale},
-    terrain::{BlockKind, TerrainChunk, TerrainGrid},
+    terrain::{BlockKind, CoordinateConversions, TerrainChunk, TerrainGrid},
     vol::ReadVol,
     weather::WeatherGrid,
 };
@@ -88,6 +88,37 @@ const RUNNING_THRESHOLD: f32 = 0.7;
 
 /// The threashold for starting calculations with rain.
 const RAIN_THRESHOLD: f32 = 0.0;
+
+/// Rate (in `screen_fade` units per second) the ambient fade — including the
+/// respawn fade-in — moves toward its target.
+const FADE_RATE: f32 = 0.5;
+/// Rate (in `screen_fade` units per second) a [`ScreenTransition`] fades the
+/// screen toward black. Slower than [`FADE_RATE`] so the cut to black reads
+/// as deliberate rather than an abrupt flash.
+const TRANSITION_FADE_OUT_RATE: f32 = 0.3;
+/// Minimum time (in the same units as [`Scene::local_time`]) a
+/// [`ScreenTransition`] holds the screen before it's allowed to end, even if
+/// the player's chunk has already changed.
+const TRANSITION_MIN_HOLD: f64 = 1.5;
+/// Hard cap on how long a [`ScreenTransition`] holds the screen if the
+/// player's chunk never changes (e.g. the regen never lands, or the player
+/// stays put outside the regenerated area).
+const TRANSITION_MAX_HOLD: f64 = 6.0;
+
+/// An in-progress full-screen transition (fade to black, held while a
+/// narrative overlay is shown) started by a regional terrain override
+/// activating or deactivating under the player. Owns `screen_fade_tgt` while
+/// active, taking priority over the default ambient fade and the
+/// death/respawn fade until it ends.
+struct ScreenTransition {
+    /// [`Scene::local_time`] when the transition began.
+    started_at: f64,
+    /// The chunk the player occupied when the transition began. The
+    /// transition can't end before the player is standing in a different
+    /// chunk than this — that's the earliest a terrain regen could plausibly
+    /// have landed under them.
+    start_chunk: Vec2<i32>,
+}
 
 /// is_daylight, array of active lights.
 pub type LightData<'a> = (bool, &'a [Light]);
@@ -138,6 +169,7 @@ pub struct Scene {
 
     pub screen_fade: f32,
     pub screen_fade_tgt: f32,
+    transition: Option<ScreenTransition>,
 
     pub debug_vectors_enabled: bool,
 }
@@ -386,9 +418,30 @@ impl Scene {
             // Keep the screen entirely black for a while, to give the scene time to sort itself out
             screen_fade: -0.5,
             screen_fade_tgt: 1.0,
+            transition: None,
             debug_vectors_enabled: false,
         }
     }
+
+    /// Starts a full-screen fade-to-black transition, restarting the hold
+    /// clock if one is already active rather than queuing or ignoring the
+    /// request — a second transition arriving mid-hold means the world
+    /// changed again, so it supersedes whatever was already showing.
+    /// `current_chunk` is the chunk the player currently occupies (see
+    /// [`common::terrain::CoordinateConversions::wpos_to_cpos`]); the
+    /// transition holds the screen until the player is standing in a
+    /// different chunk than this (and at least [`TRANSITION_MIN_HOLD`] has
+    /// elapsed), or [`TRANSITION_MAX_HOLD`] elapses regardless.
+    pub fn begin_transition(&mut self, current_chunk: Vec2<i32>) {
+        self.transition = Some(ScreenTransition {
+            started_at: self.local_time,
+            start_chunk: current_chunk,
+        });
+    }
+
+    /// Whether a full-screen transition (see [`Self::begin_transition`]) is
+    /// currently holding the screen fade.
+    pub fn transition_active(&self) -> bool { self.transition.is_some() }
 
     /// Get a reference to the scene's globals.
     pub fn globals(&self) -> &Consts<Globals> { &self.data.globals }
@@ -731,6 +784,41 @@ impl Scene {
             .get(scene_data.viewpoint_entity)
             .map_or(Vec3::zero(), |pos| pos.0);
 
+        // End an active transition once it's held long enough that a regen
+        // could plausibly have landed under the player (chunk changed) or,
+        // failing that, once the hard timeout is reached — otherwise a
+        // regen that never lands (or lands somewhere the player never
+        // enters) would hold the screen fade forever.
+        if let Some(transition) = &self.transition {
+            let elapsed = self.local_time - transition.started_at;
+            let current_chunk = entity_pos.xy().as_::<i32>().wpos_to_cpos();
+            let chunk_changed = current_chunk != transition.start_chunk;
+            if elapsed >= TRANSITION_MIN_HOLD && (chunk_changed || elapsed >= TRANSITION_MAX_HOLD) {
+                self.transition = None;
+            }
+        }
+        // Whether the viewpoint entity is currently dead, computed once here
+        // rather than per-camera-mode: the fade-target restore just below
+        // needs it regardless of camera mode, and the third-person arm below
+        // still needs it for its own focus-reset behavior.
+        let is_dead = ecs
+            .read_storage::<comp::Health>()
+            .get(scene_data.viewpoint_entity)
+            .is_some_and(|health| health.is_dead);
+        // A transition owns the fade target outright while active, ahead of
+        // the default ambient fade and the death fade; once it ends, restore
+        // the ambient target regardless of camera mode (previously this
+        // restore only happened in the third-person arm below, which was
+        // harmless before anything else ever moved the target away from
+        // `1.0` — now that a transition does, first-person/freefly players
+        // would otherwise stay faded to black forever after one ends).
+        // Skipped while dead so it doesn't fight the death fade.
+        if self.transition.is_some() {
+            self.screen_fade_tgt = 0.0;
+        } else if !is_dead {
+            self.screen_fade_tgt = 1.0;
+        }
+
         let viewpoint_pos = match self.camera.get_mode() {
             CameraMode::FirstPerson => {
                 // The camera is forced to focus on the interpolated x/y position but
@@ -747,15 +835,10 @@ impl Scene {
             },
             CameraMode::ThirdPerson => {
                 let viewpoint_pos = entity_pos;
-                if let Some(health) = ecs
-                    .read_storage::<comp::Health>()
-                    .get(scene_data.viewpoint_entity)
-                    && health.is_dead
-                {
+                if is_dead {
                     // When dead, fade the screen to black
                     self.camera.reset_focus();
                 } else {
-                    self.screen_fade_tgt = 1.0;
                     self.camera.set_focus_pos(viewpoint_pos + viewpoint_offset)
                 };
                 viewpoint_pos
@@ -959,7 +1042,12 @@ impl Scene {
         let focus_pos = self.camera.get_focus_pos();
         let focus_off = focus_pos.map(|e| e.trunc());
 
-        let step = 0.5 * dt;
+        let fade_rate = if self.transition.is_some() {
+            TRANSITION_FADE_OUT_RATE
+        } else {
+            FADE_RATE
+        };
+        let step = fade_rate * dt;
         self.screen_fade = if step > (self.screen_fade - self.screen_fade_tgt).abs() {
             self.screen_fade_tgt
         } else {
