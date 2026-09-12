@@ -3458,11 +3458,26 @@ mod tests {
                     _ => None,
                 })
                 .expect("generate_chapel_site always creates exactly one SeaChapel plot");
-            let real_alt = land.get_alt_approx(sea_chapel_center) as i32;
-            assert_eq!(
-                sea_chapel_alt, real_alt,
-                "SeaChapel::alt should track the real local terrain altitude at \
-                 {sea_chapel_center:?} (site origin {origin:?})"
+            // Cross-check against the raw chunk's own `alt` field directly
+            // (bypassing `Land::get_alt_approx`'s bicubic interpolation
+            // entirely) rather than re-deriving `real_alt` through the exact
+            // same function `SeaChapel::generate` itself calls - comparing
+            // against that would be tautological by construction (it would
+            // pass for any implementation that plugs *something* into
+            // `get_alt_approx`, regardless of whether it's the right thing).
+            // A generous tolerance accounts for the interpolation smoothing
+            // over a 4x4 chunk neighborhood in steep terrain; it's still far
+            // tighter than the ~hundreds-of-meters gap the old hardcoded
+            // sea_level constant produced at every sampled point below.
+            let raw_chunk_alt = sim
+                .get_wpos(sea_chapel_center)
+                .expect("sampled position is within the generated world")
+                .alt;
+            assert!(
+                (sea_chapel_alt as f32 - raw_chunk_alt).abs() < 50.0,
+                "SeaChapel::alt ({sea_chapel_alt}) should be close to the raw chunk altitude \
+                 ({raw_chunk_alt}) at {sea_chapel_center:?} (site origin {origin:?}), not an \
+                 unrelated constant"
             );
             if sea_chapel_alt != crate::config::CONFIG.sea_level as i32 {
                 saw_a_real_mismatch_from_sea_level = true;
