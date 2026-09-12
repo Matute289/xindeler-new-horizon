@@ -9407,12 +9407,105 @@ fn handle_repair_equipment(
     }
 }
 
+/// Builds a fresh terrain-damage crater override centered on `center`. A
+/// free function (rather than inlined directly in `handle_terrain_override`'s
+/// `"crater"` match arm below) so the `TimeOfDay`-vs-`Time` seeding for
+/// `next_heal_at` has a plain unit test that doesn't need a full
+/// `Server`/ECS to exercise it -- see
+/// `terrain_damage_override_tests::crater_next_heal_at_is_seeded_from_time_of_day_not_time`.
+///
+/// `activated_at` must be `Time`'s value at activation (matches
+/// `RegionalTerrainOverride::activated_at`'s own doc comment).
+/// `time_of_day` must be `TimeOfDay`'s value -- the large, persisted,
+/// monotonic game clock `terrain_damage_heal::Sys` actually checks
+/// `next_heal_at` against, NEVER `Time`, which resets to 0 on every server
+/// restart.
+#[cfg(feature = "worldgen")]
+fn crater_override(
+    center: vek::Vec2<i32>,
+    radius: f32,
+    activated_at: f64,
+    time_of_day: f64,
+) -> common::terrain::RegionalTerrainOverride {
+    use common::terrain::{
+        DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
+        TerrainOverridePayload,
+    };
+
+    RegionalTerrainOverride {
+        id: TerrainOverrideId::new_unique(),
+        region: OverrideRegion::Circle {
+            center,
+            radius,
+            edge: (radius * 0.25).max(8.0),
+        },
+        payload: TerrainOverridePayload::Damage(DamageOverride {
+            shapes: vec![DamageShape::Crater {
+                max_depth: (radius * 0.3).clamp(4.0, 24.0),
+                rim_height: (radius * 0.05).clamp(1.0, 4.0),
+            }],
+            scorch: 0.7,
+            vegetation_mul: 0.05,
+            heal_progress: 0.0,
+            heal_stages: 8,
+            heal_interval: 600.0,
+            next_heal_at: time_of_day + 600.0,
+        }),
+        priority: 100,
+        activated_at,
+        wipe_player_edits: true,
+        ephemeral: true,
+    }
+}
+
+/// Builds a fresh terrain-damage debris-field override centered on
+/// `center`. See [`crater_override`]'s doc comment -- the same
+/// `TimeOfDay`-vs-`Time` distinction for `next_heal_at` applies here too.
+#[cfg(feature = "worldgen")]
+fn debris_override(
+    center: vek::Vec2<i32>,
+    radius: f32,
+    activated_at: f64,
+    time_of_day: f64,
+) -> common::terrain::RegionalTerrainOverride {
+    use common::terrain::{
+        DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
+        TerrainOverridePayload,
+    };
+
+    RegionalTerrainOverride {
+        id: TerrainOverrideId::new_unique(),
+        region: OverrideRegion::Circle {
+            center,
+            radius,
+            edge: (radius * 0.25).max(8.0),
+        },
+        payload: TerrainOverridePayload::Damage(DamageOverride {
+            shapes: vec![DamageShape::Debris {
+                rubble_density: 0.05,
+                felled_tree_chance: 0.4,
+            }],
+            scorch: 0.5,
+            vegetation_mul: 0.2,
+            heal_progress: 0.0,
+            heal_stages: 8,
+            heal_interval: 600.0,
+            next_heal_at: time_of_day + 600.0,
+        }),
+        priority: 100,
+        activated_at,
+        wipe_player_edits: false,
+        ephemeral: true,
+    }
+}
+
 /// Manual test entry point for the Regional Terrain Event Engine: activates
-/// a simple climate override centered on `target`, or clears every currently
-/// active override. Not intended for real gameplay use -- future features
-/// (weather-linked events, craters, authored bespoke biome events) will
-/// activate overrides themselves, via `SetRegionalTerrainOverrideEvent`
-/// directly, not through this command.
+/// a simple climate override (`snow`), a terrain-damage crater (`crater`), a
+/// terrain-damage debris field (`debris`) centered on `target`, or clears
+/// every currently active override (`clear`). Not intended for real
+/// gameplay use -- future features (weather-linked events, authored bespoke
+/// biome events) will activate overrides themselves, via
+/// `SetRegionalTerrainOverrideEvent` directly, not through this command.
 #[cfg(feature = "worldgen")]
 fn handle_terrain_override(
     server: &mut Server,
@@ -9457,6 +9550,28 @@ fn handle_terrain_override(
                 wipe_player_edits: false,
                 ephemeral: true,
             };
+            events.emit_now(SetRegionalTerrainOverrideEvent {
+                op: TerrainOverrideOp::Activate(new_override),
+            });
+            Ok(())
+        },
+        "crater" => {
+            let radius = radius.unwrap_or(32).clamp(8, 256) as f32;
+            let activated_at = ecs.read_resource::<Time>().0;
+            let time_of_day = ecs.read_resource::<TimeOfDay>().0;
+            let new_override =
+                crater_override(pos.0.xy().as_::<i32>(), radius, activated_at, time_of_day);
+            events.emit_now(SetRegionalTerrainOverrideEvent {
+                op: TerrainOverrideOp::Activate(new_override),
+            });
+            Ok(())
+        },
+        "debris" => {
+            let radius = radius.unwrap_or(48).clamp(8, 256) as f32;
+            let activated_at = ecs.read_resource::<Time>().0;
+            let time_of_day = ecs.read_resource::<TimeOfDay>().0;
+            let new_override =
+                debris_override(pos.0.xy().as_::<i32>(), radius, activated_at, time_of_day);
             events.emit_now(SetRegionalTerrainOverrideEvent {
                 op: TerrainOverrideOp::Activate(new_override),
             });
@@ -9745,6 +9860,72 @@ mod suspension_end_date_tests {
         assert_eq!(
             end_date, None,
             "an out-of-range duration must become permanent, never an already-expired date"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "worldgen"))]
+mod terrain_damage_override_tests {
+    use super::*;
+
+    /// `next_heal_at` must track `TimeOfDay` (the large, persisted,
+    /// monotonic game clock `terrain_damage_heal::Sys` actually checks it
+    /// against), never `Time` (which resets to 0 on every server restart).
+    /// Deliberately uses a SMALL `activated_at` (as if fresh off a server
+    /// restart) and a LARGE `time_of_day` (as if the server has been
+    /// running a while) -- exactly the scenario where seeding
+    /// `next_heal_at` from the wrong clock would make the very next
+    /// scheduler tick see `now >= next_heal_at` and start healing almost
+    /// immediately instead of waiting `heal_interval` seconds.
+    #[test]
+    fn crater_next_heal_at_is_seeded_from_time_of_day_not_time() {
+        let activated_at = 5.0;
+        let time_of_day = 123_456.0;
+        let over = crater_override(vek::Vec2::zero(), 32.0, activated_at, time_of_day);
+
+        assert_eq!(
+            over.activated_at, activated_at,
+            "activated_at must still come from Time"
+        );
+        let damage = over
+            .damage()
+            .expect("a crater override must carry a Damage payload");
+        assert_eq!(
+            damage.next_heal_at,
+            time_of_day + 600.0,
+            "next_heal_at must be seeded from TimeOfDay, not Time"
+        );
+        assert_ne!(
+            damage.next_heal_at,
+            activated_at + 600.0,
+            "must not regress to seeding next_heal_at from Time"
+        );
+    }
+
+    /// See [`crater_next_heal_at_is_seeded_from_time_of_day_not_time`] --
+    /// same distinction, same bug shape, for the debris-field override.
+    #[test]
+    fn debris_next_heal_at_is_seeded_from_time_of_day_not_time() {
+        let activated_at = 5.0;
+        let time_of_day = 123_456.0;
+        let over = debris_override(vek::Vec2::zero(), 48.0, activated_at, time_of_day);
+
+        assert_eq!(
+            over.activated_at, activated_at,
+            "activated_at must still come from Time"
+        );
+        let damage = over
+            .damage()
+            .expect("a debris override must carry a Damage payload");
+        assert_eq!(
+            damage.next_heal_at,
+            time_of_day + 600.0,
+            "next_heal_at must be seeded from TimeOfDay, not Time"
+        );
+        assert_ne!(
+            damage.next_heal_at,
+            activated_at + 600.0,
+            "must not regress to seeding next_heal_at from Time"
         );
     }
 }

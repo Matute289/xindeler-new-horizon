@@ -8,8 +8,8 @@ use crate::{
 use common::{
     calendar::{Calendar, CalendarEvent},
     terrain::{
-        CoordinateConversions, TerrainChunkSize, TerrainOverrides, quadratic_nearest_point,
-        river_spline_coeffs, uniform_idx_as_vec2, vec2_as_uniform_idx,
+        CoordinateConversions, DamageEffectsAt, TerrainChunkSize, TerrainOverrides,
+        quadratic_nearest_point, river_spline_coeffs, uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
 };
@@ -56,6 +56,12 @@ pub struct Colors {
     pub grass_high: (f32, f32, f32),
     pub tropical_high: (f32, f32, f32),
     pub mesa_layers: Vec<(f32, f32, f32)>,
+
+    /// The scorched/burnt ground tint a `Damage` regional terrain
+    /// override's crater/debris field blends toward (see
+    /// `DamageOverride::scorch`), designer-tunable the same way as every
+    /// other ground color above.
+    pub scorch: (f32, f32, f32),
 }
 
 /// Generalised power function, pushes values in the range 0-1 to extremes.
@@ -114,7 +120,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let wposf_turb = wposf; // + turb.map(|e| e as f64);
 
         let chaos = sim.get_interpolated(wpos, |chunk| chunk.chaos)?;
-        let (temp, humidity, tree_density_mul) = {
+        let (temp, humidity, tree_density_mul, damage) = {
             let temp = sim.get_interpolated(wpos, |chunk| chunk.temp)?;
             let humidity = sim.get_interpolated(wpos, |chunk| chunk.humidity)?;
             // Applied AFTER the normal interpolated read, as a radial blend
@@ -126,17 +132,22 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             // chunk-filtered subset `World::generate_chunk` computed once
             // (not the whole server-wide active-overrides list -- see
             // `ColumnGen::with_overrides`'s doc comment), and a single
-            // `climate_and_tree_density_mul_at` call reuses one
-            // scan-and-distance-calc pass for both outputs instead of
-            // scanning twice.
+            // `climate_tree_density_and_damage_at` call reuses one
+            // scan-and-distance-calc pass for ALL of temp/humidity/
+            // tree-density-mul/damage-effects instead of scanning `active`
+            // once per output (see that method's own doc comment for why
+            // this must never become two independent scans).
             match self.overrides {
-                Some(overrides) => overrides.climate_and_tree_density_mul_at(wpos, temp, humidity),
-                None => (temp, humidity, 1.0),
+                Some(overrides) => {
+                    overrides.climate_tree_density_and_damage_at(wpos, temp, humidity)
+                },
+                None => (temp, humidity, 1.0, DamageEffectsAt::neutral()),
             }
         };
         let rockiness = sim.get_interpolated(wpos, |chunk| chunk.rockiness)?;
-        let tree_density =
-            sim.get_interpolated(wpos, |chunk| chunk.tree_density)? * tree_density_mul;
+        let tree_density = sim.get_interpolated(wpos, |chunk| chunk.tree_density)?
+            * tree_density_mul
+            * damage.vegetation_mul;
         let spawn_rate = sim.get_interpolated(wpos, |chunk| chunk.spawn_rate)?;
         let near_water =
             sim.get_interpolated(
@@ -926,6 +937,21 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let alt = alt + riverless_alt_delta;
         let alt = alt + warp * warp_factor;
 
+        // A `Damage` override's crater bowl/rim (see
+        // `common::terrain::regional_override::DamageOverride`), applied
+        // here -- right where `alt` is finalized for this column, before
+        // `basement` and every mesa/color/snow computation below reads it --
+        // so the depression (or rim) is real terrain, not a coat of paint:
+        // everything downstream (including a bowl dropping below
+        // `water_level`, which then fills with water via the existing
+        // water-fill logic below, same as any other low ground) sees the
+        // already-cratered altitude. `riverless_alt` (a separate,
+        // already-finalized local used for river-alt blending earlier) gets
+        // the same net delta applied only on the returned `ColumnSample`
+        // below, so it stays consistent without retroactively perturbing
+        // upstream river-carving math that already ran against it.
+        let alt = alt + damage.rim - damage.depth;
+
         let basement = alt + basement_sub_alt;
 
         let mesa = 1.0f32
@@ -983,6 +1009,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             grass_high,
             tropical_high,
             mesa_layers,
+            scorch,
         } = &index.colors.column;
 
         let cold_grass = (*cold_grass).into();
@@ -1003,6 +1030,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let warm_stone_high = (*warm_stone_high).into();
         let grass_high = (*grass_high).into();
         let tropical_high = (*tropical_high).into();
+        let scorched_ground: Rgb<f32> = (*scorch).into();
 
         let dirt = Lerp::lerp(dirt_low, dirt_high, marble_mixed);
         let tundra = Lerp::lerp(snow, snow_high, 0.4 + marble_mixed * 0.6);
@@ -1172,7 +1200,10 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             .add(((marble - 0.5) / 0.5) * 0.25)
             .add(((marble_mid - 0.5) / 0.5) * 0.125)
             .add(((marble_small - 0.5) / 0.5) * 0.0625);
-        let snow_cover = snow_factor <= 0.0;
+        // A scorched crater/debris field never has snow sitting on it,
+        // regardless of what the ambient snow formula above would otherwise
+        // say.
+        let snow_cover = snow_factor <= 0.0 && !damage.force_no_snow;
         let (alt, ground, sub_surface_color) = if snow_cover && alt > water_level {
             // Allow snow cover.
             (
@@ -1271,6 +1302,22 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         } else {
             0.0
         };
+
+        // A scorched/burnt look for a crater or debris field, blended in by
+        // `damage.scorch` (already faded by radial blend strength and
+        // healing progress -- see `DamageOverride::effects_at`) toward
+        // `scorched_ground` (the designer-tunable `Colors::scorch` read
+        // above). Applied to both `ground` and `sub_surface_color` so every
+        // downstream color (the beach/land blend and the sub-surface color
+        // field itself) reflects it consistently.
+        let ground = Rgb::lerp(ground, scorched_ground, damage.scorch);
+        let sub_surface_color = Rgb::lerp(sub_surface_color, scorched_ground, damage.scorch);
+        // Same net delta already baked into `alt`/`basement` above, applied
+        // to the separate `riverless_alt` local (finalized earlier, before
+        // river-alt-blending math that must not itself see the crater) only
+        // on the way out, so callers reading `riverless_alt` (paths,
+        // structure placement) see cratered terrain too.
+        let riverless_alt = riverless_alt + damage.rim - damage.depth;
 
         Some(ColumnSample {
             alt,

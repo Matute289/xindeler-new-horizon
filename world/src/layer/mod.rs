@@ -6,6 +6,7 @@ pub mod rock;
 pub mod scatter;
 pub mod shrub;
 pub mod spot;
+pub mod terrain_damage;
 pub mod tree;
 pub mod wildlife;
 
@@ -13,7 +14,8 @@ pub use self::{
     cave::apply_caves_to, cromatolis_aerial_citadel::apply_cromatolis_local_aerial_features_to,
     cromatolis_cave_features::apply_cromatolis_cave_features_to,
     cromatolis_interior::apply_cromatolis_interiors_to, rock::apply_rocks_to,
-    scatter::apply_scatter_to, shrub::apply_shrubs_to, spot::apply_spots_to, tree::apply_trees_to,
+    scatter::apply_scatter_to, shrub::apply_shrubs_to, spot::apply_spots_to,
+    terrain_damage::apply_terrain_damage_to, tree::apply_trees_to,
 };
 
 use crate::{
