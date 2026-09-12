@@ -489,7 +489,7 @@ impl SessionState {
                                 .is_none_or(|end| end.elapsed() >= TERRAIN_TRANSITION_COOLDOWN);
                             let takeover = inside
                                 && cooldown_elapsed
-                                && global_state.settings.interface.terrain_transitions;
+                                && global_state.settings.interface.toggle_terrain_transitions;
 
                             if takeover {
                                 let resolved = global_state.i18n.read().get_content(&text);

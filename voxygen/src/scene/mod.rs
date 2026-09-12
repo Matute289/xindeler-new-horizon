@@ -797,12 +797,26 @@ impl Scene {
                 self.transition = None;
             }
         }
-        // While a transition is active it owns the fade target outright,
-        // ahead of both the default ambient fade and the death fade below —
-        // otherwise the third-person branch's unconditional `= 1.0` would
-        // fight it every frame.
+        // Whether the viewpoint entity is currently dead, computed once here
+        // rather than per-camera-mode: the fade-target restore just below
+        // needs it regardless of camera mode, and the third-person arm below
+        // still needs it for its own focus-reset behavior.
+        let is_dead = ecs
+            .read_storage::<comp::Health>()
+            .get(scene_data.viewpoint_entity)
+            .is_some_and(|health| health.is_dead);
+        // A transition owns the fade target outright while active, ahead of
+        // the default ambient fade and the death fade; once it ends, restore
+        // the ambient target regardless of camera mode (previously this
+        // restore only happened in the third-person arm below, which was
+        // harmless before anything else ever moved the target away from
+        // `1.0` — now that a transition does, first-person/freefly players
+        // would otherwise stay faded to black forever after one ends).
+        // Skipped while dead so it doesn't fight the death fade.
         if self.transition.is_some() {
             self.screen_fade_tgt = 0.0;
+        } else if !is_dead {
+            self.screen_fade_tgt = 1.0;
         }
 
         let viewpoint_pos = match self.camera.get_mode() {
@@ -821,17 +835,10 @@ impl Scene {
             },
             CameraMode::ThirdPerson => {
                 let viewpoint_pos = entity_pos;
-                if let Some(health) = ecs
-                    .read_storage::<comp::Health>()
-                    .get(scene_data.viewpoint_entity)
-                    && health.is_dead
-                {
+                if is_dead {
                     // When dead, fade the screen to black
                     self.camera.reset_focus();
                 } else {
-                    if self.transition.is_none() {
-                        self.screen_fade_tgt = 1.0;
-                    }
                     self.camera.set_focus_pos(viewpoint_pos + viewpoint_offset)
                 };
                 viewpoint_pos

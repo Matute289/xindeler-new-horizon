@@ -784,8 +784,8 @@ impl SettingsChange {
                     Interface::ToggleBiomeChangePopups(toggle_biome_change_popups) => {
                         settings.interface.toggle_biome_change_popups = toggle_biome_change_popups;
                     },
-                    Interface::ToggleTerrainTransitions(terrain_transitions) => {
-                        settings.interface.terrain_transitions = terrain_transitions;
+                    Interface::ToggleTerrainTransitions(toggle_terrain_transitions) => {
+                        settings.interface.toggle_terrain_transitions = toggle_terrain_transitions;
                     },
                     Interface::CrosshairTransp(crosshair_opacity) => {
                         settings.interface.crosshair_opacity = crosshair_opacity;

@@ -1,3 +1,4 @@
+## Terrain transition fallback narrative (placeholder strings; authored per-override text lands separately)
 hud-terrain_transition-climate-activate = The air shifts as the land's climate changes around you.
 hud-terrain_transition-climate-deactivate = The air settles back to normal.
 hud-terrain_transition-damage-activate = The ground shudders and gives way.

@@ -65,7 +65,7 @@ pub struct InterfaceSettings {
     /// `false`, every transition notification uses the non-blocking toast
     /// instead, regardless of whether the player is inside the affected
     /// region.
-    pub terrain_transitions: bool,
+    pub toggle_terrain_transitions: bool,
 }
 
 impl Default for InterfaceSettings {
@@ -122,7 +122,7 @@ impl Default for InterfaceSettings {
             toggle_draggable_windows: true,
             toggle_biome_change_popups: true,
             toggle_compact_item_slots: false,
-            terrain_transitions: true,
+            toggle_terrain_transitions: true,
         }
     }
 }

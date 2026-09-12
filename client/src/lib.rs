@@ -3245,7 +3245,7 @@ impl Client {
                 }
             },
             ServerGeneral::Notification(n) => {
-                let user_notification = match n.clone() {
+                let user_notification = match n {
                     Notification::WaypointSaved { location_name } => {
                         self.waypoint = Some(location_name);
                         UserNotification::WaypointUpdated

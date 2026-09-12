@@ -417,7 +417,10 @@ impl Widget for Interface<'_> {
 
         // Terrain transition full-screen takeover
         let terrain_transitions = ToggleButton::new(
-            self.global_state.settings.interface.terrain_transitions,
+            self.global_state
+                .settings
+                .interface
+                .toggle_terrain_transitions,
             self.imgs.checkbox,
             self.imgs.checkbox_checked,
         )
@@ -427,7 +430,13 @@ impl Widget for Interface<'_> {
         .press_images(self.imgs.checkbox_press, self.imgs.checkbox_checked)
         .set(state.ids.terrain_transitions_button, ui);
 
-        if self.global_state.settings.interface.terrain_transitions != terrain_transitions {
+        if self
+            .global_state
+            .settings
+            .interface
+            .toggle_terrain_transitions
+            != terrain_transitions
+        {
             events.push(ToggleTerrainTransitions(terrain_transitions));
         }
 

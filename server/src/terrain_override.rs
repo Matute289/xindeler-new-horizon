@@ -322,16 +322,29 @@ mod worldgen_impl {
     /// [`OverrideRegion::touches_chunk`]), computed via the same
     /// bounds-to-spiral-radius conversion [`regenerate_chunks`] uses.
     fn chunks_touched_by(region: &OverrideRegion, chunk_size: Vec2<u32>) -> Vec<Vec2<i32>> {
-        let bounds = region.bounds();
+        touched_chunk_keys(region.bounds(), chunk_size, |key| {
+            region.touches_chunk(key, chunk_size)
+        })
+        .collect()
+    }
+
+    /// The chunk keys within `bounds` for which `touches(key)` is true --
+    /// the shared bounds-to-spiral-radius geometry both [`chunks_touched_by`]
+    /// and [`regenerate_chunks`] iterate over, kept in one place so they
+    /// can't silently drift apart from each other.
+    fn touched_chunk_keys(
+        bounds: Aabr<i32>,
+        chunk_size: Vec2<u32>,
+        touches: impl Fn(Vec2<i32>) -> bool,
+    ) -> impl Iterator<Item = Vec2<i32>> {
         let center_chunk = bounds
             .center()
             .map2(chunk_size, |e, sz: u32| e.div_euclid(sz as i32));
         let half_extent = (bounds.max - bounds.min) / 2;
         let radius_chunks = (half_extent.x.max(half_extent.y) / chunk_size.x as i32).max(0) + 2;
         Spiral2d::with_radius(radius_chunks)
-            .map(|offset| center_chunk + offset)
-            .filter(|&key| region.touches_chunk(key, chunk_size))
-            .collect()
+            .map(move |offset| center_chunk + offset)
+            .filter(move |&key| touches(key))
     }
 
     /// Unloads every chunk `region` touches (even a sliver of falloff --
@@ -427,11 +440,6 @@ mod worldgen_impl {
         ctx: &mut ApplyContext,
     ) {
         let chunk_size = TerrainChunkSize::RECT_SIZE;
-        let center_chunk = bounds
-            .center()
-            .map2(chunk_size, |e, sz: u32| e.div_euclid(sz as i32));
-        let half_extent = (bounds.max - bounds.min) / 2;
-        let radius_chunks = (half_extent.x.max(half_extent.y) / chunk_size.x as i32).max(0) + 2;
 
         // See `joined_player_positions`'s own doc comment -- computed once,
         // outside the per-chunk loop below, and reused inside it for BOTH
@@ -443,12 +451,7 @@ mod worldgen_impl {
                 .map(|(entity, _pos, chunk_key, vd)| (entity, chunk_key, vd))
                 .collect();
 
-        for offset in Spiral2d::with_radius(radius_chunks) {
-            let key = center_chunk + offset;
-            if !touches(key) {
-                continue;
-            }
-
+        for key in touched_chunk_keys(bounds, chunk_size, touches) {
             // Scoped invalidation: only chunks THIS region actually touches
             // get their generation-job epoch bumped -- see
             // `ChunkGenerator::chunk_versions`'s own doc comment for why
