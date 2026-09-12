@@ -10,7 +10,7 @@ use tracing::trace;
 
 use crate::proto::{
     MAX_RESPONSE_SIZE, QueryServerRequest, QueryServerResponse, RawQueryServerRequest,
-    RawQueryServerResponse, ServerInfo,
+    RawQueryServerResponse, ServerIdentity, ServerInfo,
 };
 
 // This must be at least 2 for the client to get a value for the `p` field.
@@ -45,9 +45,26 @@ impl QueryClient {
         self.send_query(QueryServerRequest::ServerInfo)
             .await
             .and_then(|(response, duration)| {
-                #[expect(irrefutable_let_patterns)]
                 if let QueryServerResponse::ServerInfo(info) = response {
                     Ok((info, duration))
+                } else {
+                    Err(QueryClientError::InvalidResponse)
+                }
+            })
+    }
+
+    /// Asks the server to identify its game/fork. A server that predates
+    /// this request variant (vanilla Veloren, or an older Xindeler build)
+    /// has no match arm for it and won't produce a valid response --
+    /// callers should treat any error from this call (not just a magic
+    /// mismatch) as "not confirmed to be a Xindeler server", never assume
+    /// a timeout/protocol error means something else.
+    pub async fn identity(&mut self) -> Result<(ServerIdentity, Duration), QueryClientError> {
+        self.send_query(QueryServerRequest::Identity)
+            .await
+            .and_then(|(response, duration)| {
+                if let QueryServerResponse::Identity(identity) = response {
+                    Ok((identity, duration))
                 } else {
                     Err(QueryClientError::InvalidResponse)
                 }
