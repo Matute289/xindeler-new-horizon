@@ -1176,6 +1176,18 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                 if !permit(block_kind) {
                     return None;
                 }
+                // A governing `BiomeProfile` override can deny this sprite
+                // kind outright (regardless of what density its own formula
+                // below would otherwise compute), or boost/dampen it by a
+                // per-kind multiplier (default `1.0`, i.e. no-op, for any
+                // kind not listed). This only ever gates/reweights the
+                // existing `ScatterConfig` entries above -- it never adds
+                // new ones.
+                if let Some(rp) = col.governing_biome_profile
+                    && rp.profile.scatter_deny.contains(kind)
+                {
+                    return None;
+                }
                 let snow_covered = matches!(block_kind, BlockKind::Snow | BlockKind::Ice);
                 let (density, patch) = f(canvas.chunk(), col);
                 let density = patch
@@ -1198,6 +1210,17 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                         }
                     })
                     .unwrap_or(density);
+                let density = match col.governing_biome_profile {
+                    Some(rp) => {
+                        density
+                            * rp.profile
+                                .scatter_boost
+                                .iter()
+                                .find(|(boosted_kind, _)| boosted_kind == kind)
+                                .map_or(1.0, |(_, weight)| *weight)
+                    },
+                    None => density,
+                };
                 if density > 0.0
                     // Now deterministic, chunk resources are tracked by rtsim
                     && /*rng.random::<f32>() < density*/ RandomField::new(i as u32).chance(Vec3::new(wpos2d.x, wpos2d.y, 0), density)

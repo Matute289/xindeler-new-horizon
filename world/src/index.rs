@@ -1,5 +1,5 @@
 use crate::{
-    Colors, Features,
+    BiomeProfiles, Colors, Features,
     layer::{
         cromatolis_aerial_citadel::AerialCitadelConfig,
         cromatolis_cave_features::GeneratedCave,
@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock};
 
 const WORLD_COLORS_MANIFEST: &str = "world.style.colors";
 const WORLD_FEATURES_MANIFEST: &str = "world.features";
+const WORLD_BIOME_PROFILES_MANIFEST: &str = "world.manifests.biome_profiles";
 
 pub struct Index {
     pub seed: u32,
@@ -44,6 +45,12 @@ pub struct Index {
     pub(crate) cromatolis_aerial_citadel: OnceLock<Option<AerialCitadelConfig>>,
     colors: AssetHandle<Arc<Colors>>,
     features: AssetHandle<Arc<Features>>,
+    /// The authored biome-profile catalog (see `crate::biome_profile`),
+    /// mirroring `colors`/`features`'s exact loading idiom -- a
+    /// `RegionalTerrainOverride`'s `BiomeProfile` payload only ever carries a
+    /// catalog id (`common::terrain::regional_override::BiomeProfileOverride
+    /// ::profile`); this is what resolves it.
+    biome_profiles: AssetHandle<Arc<BiomeProfiles>>,
 }
 
 /// An owned reference to indexed data.
@@ -55,8 +62,10 @@ pub struct Index {
 pub struct IndexOwned {
     colors: Arc<Colors>,
     features: Arc<Features>,
+    biome_profiles: Arc<BiomeProfiles>,
     colors_reload_watcher: ReloadWatcher,
     features_reload_watcher: ReloadWatcher,
+    biome_profiles_reload_watcher: ReloadWatcher,
     index: Arc<Index>,
 }
 
@@ -73,6 +82,7 @@ impl Deref for IndexOwned {
 pub struct IndexRef<'a> {
     pub colors: &'a Colors,
     pub features: &'a Features,
+    pub biome_profiles: &'a BiomeProfiles,
     pub index: &'a Index,
 }
 
@@ -87,6 +97,7 @@ impl Index {
     pub fn new(seed: u32) -> Self {
         let colors = Arc::<Colors>::load_expect(WORLD_COLORS_MANIFEST);
         let features = Arc::<Features>::load_expect(WORLD_FEATURES_MANIFEST);
+        let biome_profiles = Arc::<BiomeProfiles>::load_expect(WORLD_BIOME_PROFILES_MANIFEST);
         let wildlife_spawns = wildlife::spawn_manifest()
             .into_iter()
             .map(|(e, f)| (Ron::<SpawnEntry>::load_expect(e), f))
@@ -104,12 +115,17 @@ impl Index {
             cromatolis_aerial_citadel: OnceLock::new(),
             colors,
             features,
+            biome_profiles,
         }
     }
 
     pub fn colors(&self) -> impl Deref<Target = Arc<Colors>> + '_ { self.colors.read() }
 
     pub fn features(&self) -> impl Deref<Target = Arc<Features>> + '_ { self.features.read() }
+
+    pub fn biome_profiles(&self) -> impl Deref<Target = Arc<BiomeProfiles>> + '_ {
+        self.biome_profiles.read()
+    }
 
     pub fn get_site_prices(&self, site_id: SiteId) -> Option<SitePrices> {
         self.sites
@@ -124,15 +140,19 @@ impl IndexOwned {
     pub fn new(index: Index) -> Self {
         let colors = index.colors.cloned();
         let features = index.features.cloned();
+        let biome_profiles = index.biome_profiles.cloned();
         let colors_reload_watcher = index.colors.reload_watcher();
         let features_reload_watcher = index.features.reload_watcher();
+        let biome_profiles_reload_watcher = index.biome_profiles.reload_watcher();
 
         Self {
             index: Arc::new(index),
             colors,
             features,
+            biome_profiles,
             colors_reload_watcher,
             features_reload_watcher,
+            biome_profiles_reload_watcher,
         }
     }
 
@@ -146,11 +166,13 @@ impl IndexOwned {
     pub fn reload_if_changed<R>(&mut self, reload: impl FnOnce(&mut Self) -> R) -> Option<R> {
         let colors_reloaded = self.colors_reload_watcher.reloaded();
         let features_reloaded = self.features_reload_watcher.reloaded();
-        let reloaded = colors_reloaded || features_reloaded;
+        let biome_profiles_reloaded = self.biome_profiles_reload_watcher.reloaded();
+        let reloaded = colors_reloaded || features_reloaded || biome_profiles_reloaded;
         reloaded.then(move || {
             // Reload the fields from the asset handle, which is updated automatically
             self.colors = self.index.colors.cloned();
             self.features = self.index.features.cloned();
+            self.biome_profiles = self.index.biome_profiles.cloned();
             // Update wildlife spawns which is based on base_density in features
             reload(self)
         })
@@ -160,6 +182,7 @@ impl IndexOwned {
         IndexRef {
             colors: &self.colors,
             features: &self.features,
+            biome_profiles: &self.biome_profiles,
             index: &self.index,
         }
     }

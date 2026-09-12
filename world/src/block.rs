@@ -74,13 +74,24 @@ impl<'a> BlockGen<'a> {
             cliff_offset,
             cliff_height,
             ice_depth,
+            surface_block_override,
+            flood_block,
             ..
         } = sample;
 
         let wposf = wpos.map(|e| e as f64);
 
         // Sample blocks
-        let water = Block::new(BlockKind::Water, Rgb::zero());
+        //
+        // Usually `Water`, but a governing `BiomeProfile` regional terrain
+        // override can replace this with any other fluid-like block kind
+        // (e.g. `Lava` for a volcano) -- see `ColumnSample::flood_block`.
+        // The color is chosen to match how that block kind is colored
+        // elsewhere in world-gen (e.g. `world/src/layer/cave.rs`'s lava).
+        let water = Block::new(flood_block, match flood_block {
+            BlockKind::Lava => Rgb::new(255, 65, 0),
+            _ => Rgb::zero(),
+        });
         let grass_depth = (1.5 + 2.0 * chaos).min(alt - basement);
         if (wposf.z as f32) < alt - grass_depth {
             let stone_factor = (alt - grass_depth - wposf.z as f32) * 0.15;
@@ -122,7 +133,14 @@ impl<'a> BlockGen<'a> {
                 .div(grass_depth)
                 .sqrt();
             // Surface
-            Some(if water_level > alt.ceil() {
+            Some(if let Some(forced) = surface_block_override {
+                // A governing `BiomeProfile` override forces a specific
+                // surface block kind (e.g. bare `Rock` on a volcano's
+                // slopes) -- this takes full priority over the
+                // Sand/Earth/Snow/Grass decision below entirely.
+                let col = Lerp::lerp(sub_surface_color, surface_color, grass_factor);
+                Block::new(forced, col.map(|e| (e * 255.0) as u8))
+            } else if water_level > alt.ceil() {
                 Block::new(
                     BlockKind::Sand,
                     sub_surface_color.map(|e| (e * 255.0) as u8),
@@ -143,8 +161,12 @@ impl<'a> BlockGen<'a> {
         }
         .or_else(|| {
             let over_water = alt < water_level;
-            // Water
-            if over_water && (wposf.z as f32 - water_level).abs() < ice_depth {
+            // Water (or whatever `flood_block` governs here -- lava doesn't
+            // freeze, so ice only ever forms over an actual `Water` flood).
+            if over_water
+                && flood_block == BlockKind::Water
+                && (wposf.z as f32 - water_level).abs() < ice_depth
+            {
                 Some(Block::new(BlockKind::Ice, CONFIG.ice_color))
             } else if (wposf.z as f32) < water_level {
                 // Ocean

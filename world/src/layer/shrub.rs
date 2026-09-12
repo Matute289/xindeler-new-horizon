@@ -48,11 +48,36 @@ pub fn apply_shrubs_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
                 && !tunnel_bounds_at(wpos, &info, &info.land())
                     .any(|(_, z_range, _, _, _, _)| z_range.contains(&(col.alt as i32 - 1)))
             {
-                let kind = *info
-                    .chunks()
-                    .make_forest_lottery(wpos)
+                // Mirrors `world/src/layer/tree.rs`'s already-fixed call
+                // site: a governing `BiomeProfile` override with a nonempty
+                // `forest` list bypasses the normal lottery for its own
+                // weighted list (same `Lottery`/`choose_seeded` mechanism
+                // and seed). Otherwise, uses `info.chunk()` (the
+                // chunk-level, climate/damage-override-patched `SimChunk`)
+                // rather than `info.chunks().make_forest_lottery(wpos)`,
+                // which re-fetches the RAW, un-overridden `SimChunk` --
+                // this used to be a real bug: shrubs ignored every active
+                // regional terrain override entirely, unlike trees.
+                let kind = match col
+                    .governing_biome_profile
+                    .filter(|rp| !rp.profile.forest.is_empty())
+                {
+                    Some(rp) => *common::lottery::Lottery::from(
+                        rp.profile
+                            .forest
+                            .iter()
+                            .map(|(fk, w)| (*w, Some(*fk)))
+                            .collect::<Vec<_>>(),
+                    )
                     .choose_seeded(seed)
-                    .as_ref()?;
+                    .as_ref()?,
+                    None => *crate::sim::make_forest_lottery_for_env(
+                        wpos,
+                        info.chunk().get_environment(),
+                    )
+                    .choose_seeded(seed)
+                    .as_ref()?,
+                };
                 if rng.random_bool(kind.shrub_density_factor() as f64) {
                     Some(Shrub {
                         wpos: wpos.with_z(col.alt as i32),

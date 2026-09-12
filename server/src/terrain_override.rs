@@ -19,13 +19,16 @@ mod worldgen_impl {
         resources::TimeOfDay,
         slowjob::SlowJobPool,
         spiral::Spiral2d,
-        terrain::{OverrideRegion, TerrainChunkSize, TerrainGrid, TerrainOverrides},
+        terrain::{
+            OverrideRegion, RegionalTerrainOverride, TerrainChunkSize, TerrainGrid,
+            TerrainOverridePayload, TerrainOverrides,
+        },
         vol::RectVolSize,
     };
     use common_state::TerrainChanges;
     use specs::{Entities, Entity as EcsEntity, Join, ReadStorage, WriteStorage};
     use vek::{Aabr, Vec2, Vec3};
-    use world::{IndexOwned, World};
+    use world::{IndexOwned, World, util::Sampler};
 
     use crate::{chunk_generator::ChunkGenerator, presence::RepositionToFreeSpace, rtsim::RtSim};
 
@@ -67,6 +70,7 @@ mod worldgen_impl {
     pub fn apply(op: TerrainOverrideOp, ctx: &mut ApplyContext) {
         match op {
             TerrainOverrideOp::Activate(new_override) => {
+                let new_override = bake_biome_profile_flood_to(new_override, ctx);
                 let region = new_override.region.clone();
                 let wipe_player_edits = new_override.wipe_player_edits;
 
@@ -125,6 +129,63 @@ mod worldgen_impl {
                 regenerate_regions_union(&old_region, &new_region, ctx);
             },
         }
+    }
+
+    /// If `new_override`'s payload is a `BiomeProfile` override referencing
+    /// a catalog entry with an authored `flood_depth`, bakes that RELATIVE
+    /// depth into an ABSOLUTE `flood_to` altitude (ambient ground altitude
+    /// plus `flood_depth`) by sampling the region's own ambient ground
+    /// altitude at its center -- see
+    /// `common::terrain::regional_override::BiomeProfileOverride::flood_to`'s
+    /// own doc comment for why this must happen once, HERE, at activation
+    /// time, rather than in world-gen (which would have to keep re-sampling
+    /// ambient altitude on every chunk regeneration, letting the flood level
+    /// silently drift as terrain around it changes). Always overwrites
+    /// whatever `flood_to` the caller supplied -- callers should just leave
+    /// it `None` and let this compute the real value.
+    ///
+    /// Leaves `flood_to` as `None` (no flood) if: the payload isn't
+    /// `BiomeProfile`; the profile id doesn't resolve against the catalog;
+    /// the catalog entry has no `flood_depth`; the region isn't a `Circle`
+    /// (future region shapes this crate doesn't know how to find a center
+    /// for); or ambient world-gen has no column at that center at all.
+    fn bake_biome_profile_flood_to(
+        mut new_override: RegionalTerrainOverride,
+        ctx: &ApplyContext,
+    ) -> RegionalTerrainOverride {
+        let TerrainOverridePayload::BiomeProfile(profile_override) = &mut new_override.payload
+        else {
+            return new_override;
+        };
+
+        // `OverrideRegion` is `#[non_exhaustive]`, so this match needs a
+        // wildcard arm even though `Circle` is the only variant that exists
+        // today -- a future region shape simply can't be flood-baked yet.
+        let center = match &new_override.region {
+            OverrideRegion::Circle { center, .. } => *center,
+            _ => {
+                profile_override.flood_to = None;
+                return new_override;
+            },
+        };
+
+        let flood_depth = ctx
+            .index
+            .biome_profiles()
+            .entries
+            .iter()
+            .find(|profile| profile.id == profile_override.profile)
+            .and_then(|profile| profile.flood_depth);
+
+        profile_override.flood_to = flood_depth.and_then(|depth| {
+            ctx.world
+                .sample_blocks()
+                .column_gen
+                .get((center, ctx.index.as_index_ref(), None))
+                .map(|sample| sample.alt + depth)
+        });
+
+        new_override
     }
 
     /// Replaces the live ECS `Arc<TerrainOverrides>` with `snapshot`, and
@@ -767,6 +828,242 @@ mod tests {
             healed.alt, ambient.alt,
             "once fully healed and deactivated, the column must read EXACTLY the ambient altitude \
              again"
+        );
+    }
+
+    /// The shipped catalog's own throwaway test fixture (see
+    /// `assets/world/manifests/biome_profiles.ron`) -- `intensity: 1.0` so
+    /// every continuous effect below is at full blended strength within the
+    /// override's radius, `flood_to: None` because that's ALWAYS baked by
+    /// `apply` at activation time (see `bake_biome_profile_flood_to`), never
+    /// supplied by the caller.
+    fn biome_profile_override(center: vek::Vec2<i32>, radius: f32) -> RegionalTerrainOverride {
+        RegionalTerrainOverride {
+            id: TerrainOverrideId::new_unique(),
+            region: OverrideRegion::Circle {
+                center,
+                radius,
+                edge: 8.0,
+            },
+            payload: TerrainOverridePayload::BiomeProfile(common::terrain::BiomeProfileOverride {
+                profile: "test_fixture_do_not_use_in_content".to_string(),
+                intensity: 1.0,
+                flood_to: None,
+            }),
+            priority: 100,
+            activated_at: 0.0,
+            wipe_player_edits: false,
+            ephemeral: false,
+        }
+    }
+
+    /// End-to-end across the whole `BiomeProfile` payload: activating it
+    /// bakes `flood_to` from the fixture's authored `flood_depth` (see
+    /// `bake_biome_profile_flood_to`), then changes ground color, forces the
+    /// fixture's higher-weight forest species (`Swamp` at weight `3.0` over
+    /// `Mangrove` at `1.0` -- see `world/src/column.rs`'s
+    /// `ColumnGen::get`), forces the fixture's `surface_block`/
+    /// `force_no_snow`, and floods the water level up to the baked altitude
+    /// -- all read at the override's own center, where radial blend is
+    /// `1.0`. Deactivating reverts every one of those back to EXACTLY
+    /// ambient, the same full-circle guarantee the crater test above
+    /// already established for `Damage`.
+    #[test]
+    #[ignore]
+    fn activating_a_biome_profile_override_changes_ground_forest_and_flood_and_reverts_on_deactivation()
+     {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (world, index) = World::generate(
+            0,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+        let world = Arc::new(world);
+
+        let mut state = setup();
+        insert_rtsim(&mut state, &world, &index);
+        state.ecs_mut().register::<Pos>();
+        state.ecs_mut().register::<Presence>();
+        state.ecs_mut().register::<RepositionToFreeSpace>();
+
+        let slow_jobs = SlowJobPool::new(4, 8, Arc::new(threadpool));
+        slow_jobs.configure("CHUNK_GENERATOR", |n| n.max(1));
+        state.ecs_mut().insert(slow_jobs);
+        state.ecs_mut().insert(ChunkGenerator::new(
+            ChunkGenMetrics::new(&Registry::new()).unwrap(),
+        ));
+        state.ecs_mut().insert(Arc::clone(&world));
+        state.ecs_mut().insert(index.clone());
+        state.ecs_mut().insert(TimeOfDay(0.0));
+        state.ecs_mut().insert(Calendar::default());
+        state
+            .ecs_mut()
+            .insert(Arc::new(TerrainOverrides::default()));
+
+        let center_wpos = near_map_center(&world);
+        let ambient = world
+            .sample_blocks()
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("a real map export must have terrain at its own center");
+
+        const RADIUS: f32 = 48.0;
+        let new_override = biome_profile_override(center_wpos, RADIUS);
+        let id = new_override.id;
+        fire(&state, TerrainOverrideOp::Activate(new_override));
+
+        let after_activate = Arc::clone(&*state.ecs().read_resource::<Arc<TerrainOverrides>>());
+        assert_eq!(after_activate.version, 1);
+        assert_eq!(after_activate.active.len(), 1);
+
+        let baked_flood_to = after_activate.active[0]
+            .biome_profile()
+            .expect("the active override must still carry its BiomeProfile payload")
+            .flood_to
+            .expect("activation must bake flood_to from the fixture's authored flood_depth (2.0)");
+        assert!(
+            (baked_flood_to - (ambient.alt + 2.0)).abs() < 0.01,
+            "flood_to must equal the region center's own ambient ground altitude plus the \
+             fixture's flood_depth of 2.0 (ambient.alt={}, baked_flood_to={})",
+            ambient.alt,
+            baked_flood_to
+        );
+
+        let overridden = world
+            .sample_blocks_with_overrides(Some(&after_activate))
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("the override must not change whether this column generates at all");
+
+        assert_eq!(
+            overridden
+                .governing_biome_profile
+                .map(|rp| rp.profile.id.as_str()),
+            Some("test_fixture_do_not_use_in_content"),
+            "the column at the override's own center must be governed by the fixture profile"
+        );
+        assert_ne!(
+            overridden.sub_surface_color, ambient.sub_surface_color,
+            "ground color must blend toward the profile's authored color at full strength"
+        );
+        assert_eq!(
+            overridden.forest_kind,
+            world::ForestKind::Swamp,
+            "the fixture's higher-weight forest entry (Swamp, weight 3.0) must govern over the \
+             lower-weight one (Mangrove, weight 1.0)"
+        );
+        assert_eq!(
+            overridden.surface_block_override,
+            Some(common::terrain::BlockKind::Earth),
+            "the fixture's authored surface_block must force Earth at the surface"
+        );
+        assert!(
+            !overridden.snow_cover,
+            "the fixture's force_no_snow must suppress snow regardless of ambient temperature"
+        );
+        assert!(
+            overridden.water_level >= baked_flood_to - 0.01,
+            "water level must flood up to (at least) the baked altitude at full blend strength \
+             (water_level={}, baked_flood_to={})",
+            overridden.water_level,
+            baked_flood_to
+        );
+
+        fire(&state, TerrainOverrideOp::Deactivate(id));
+
+        let after_deactivate = Arc::clone(&*state.ecs().read_resource::<Arc<TerrainOverrides>>());
+        assert_eq!(after_deactivate.version, 2);
+        assert!(after_deactivate.active.is_empty());
+
+        let reverted = world
+            .sample_blocks_with_overrides(Some(&after_deactivate))
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("terrain must still generate once the override is gone");
+        assert_eq!(
+            reverted.sub_surface_color, ambient.sub_surface_color,
+            "deactivating must revert ground color to EXACTLY ambient"
+        );
+        assert_eq!(
+            reverted.forest_kind, ambient.forest_kind,
+            "deactivating must revert forest species to EXACTLY ambient"
+        );
+        assert_eq!(
+            reverted.surface_block_override, None,
+            "deactivating must clear the forced surface block"
+        );
+        assert_eq!(
+            reverted.water_level, ambient.water_level,
+            "deactivating must revert the water level to EXACTLY ambient"
+        );
+    }
+
+    /// `world/src/layer/shrub.rs`'s `apply_shrubs_to` used to call the raw,
+    /// un-overridden `WorldSim::make_forest_lottery` directly, completely
+    /// ignoring every active regional terrain override (climate, damage, AND
+    /// biome-profile alike) -- a real pre-existing bug, fixed alongside this
+    /// payload kind by making it consult overrides the same way
+    /// `world/src/layer/tree.rs` already does. This is the fix's
+    /// verification: under an active `BiomeProfile` override with a
+    /// nonempty `forest` list, the resolved `ColumnSample` a shrub-placement
+    /// call would consult (`CanvasInfo::col_or_gen`, which `apply_shrubs_to`
+    /// calls directly) must expose that list via
+    /// `ColumnSample::governing_biome_profile` -- confirming the exact field
+    /// `apply_shrubs_to`'s fixed lottery pick now reads actually carries the
+    /// override's forest list at the position shrubs are evaluated at,
+    /// where the OLD, buggy code path (a bare `make_forest_lottery` call)
+    /// would have silently ignored it entirely.
+    #[test]
+    #[ignore]
+    fn shrub_placement_sees_the_governing_biome_profiles_forest_list() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (world, index) = World::generate(
+            0,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+
+        let center_wpos = near_map_center(&world);
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![biome_profile_override(center_wpos, 48.0)],
+        };
+
+        // The exact same column lookup `CanvasInfo::col_or_gen` performs
+        // (see `world/src/canvas.rs`), which is what `apply_shrubs_to`
+        // (`world/src/layer/shrub.rs`) calls before picking a forest
+        // lottery -- confirming the override is visible at exactly the call
+        // site the fix touches, not a different one.
+        let col = world
+            .sample_blocks_with_overrides(Some(&overrides))
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("the override must not change whether this column generates at all");
+
+        let governing = col
+            .governing_biome_profile
+            .expect("a BiomeProfile override active over this exact position must govern it");
+        let forest_kinds: Vec<_> = governing
+            .profile
+            .forest
+            .iter()
+            .map(|(kind, _)| *kind)
+            .collect();
+        assert_eq!(
+            forest_kinds,
+            vec![world::ForestKind::Swamp, world::ForestKind::Mangrove],
+            "apply_shrubs_to's fixed lottery pick must see the fixture's own forest list, not an \
+             empty/default one"
         );
     }
 }

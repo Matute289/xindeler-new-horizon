@@ -1,6 +1,7 @@
 use crate::{
     CONFIG, IndexRef, Land,
     all::ForestKind,
+    biome_profile::BiomeProfile,
     sim::{Path, RiverKind, SimChunk, WorldSim, local_cells},
     site::SpawnRules,
     util::{RandomField, RandomPerm, Sampler},
@@ -8,7 +9,7 @@ use crate::{
 use common::{
     calendar::{Calendar, CalendarEvent},
     terrain::{
-        CoordinateConversions, DamageEffectsAt, TerrainChunkSize, TerrainOverrides,
+        BlockKind, CoordinateConversions, DamageEffectsAt, TerrainChunkSize, TerrainOverrides,
         quadratic_nearest_point, river_spline_coeffs, uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
@@ -62,6 +63,38 @@ pub struct Colors {
     /// `DamageOverride::scorch`), designer-tunable the same way as every
     /// other ground color above.
     pub scorch: (f32, f32, f32),
+}
+
+/// The governing `BiomeProfile` regional terrain override's catalog entry at
+/// one column, plus how strongly it applies here -- the `world`-side
+/// resolution of `common::terrain::regional_override::BiomeProfileGoverningAt`
+/// against `index.biome_profiles`'s catalog (see [`ColumnGen::get`]).
+/// Consumed directly by `world/src/layer/tree.rs`, `shrub.rs`, and
+/// `scatter.rs` (via [`ColumnSample::governing_biome_profile`]) so they can
+/// read the profile's own forest/scatter lists without re-resolving anything.
+#[derive(Copy, Clone)]
+pub struct ResolvedBiomeProfile<'a> {
+    pub profile: &'a BiomeProfile,
+    /// `OverrideRegion::blend_factor` at this position -- NOT yet multiplied
+    /// by `intensity`. See [`Self::strength`].
+    pub blend: f32,
+    /// The override's own `intensity`, already clamped to `0.0..=1.0`.
+    pub intensity: f32,
+    /// The override's baked absolute flood altitude, if the profile floods
+    /// at all (see `common::terrain::regional_override::BiomeProfileOverride
+    /// ::flood_to`).
+    pub flood_to: Option<f32>,
+}
+
+impl ResolvedBiomeProfile<'_> {
+    /// `blend * intensity` -- the single lerp factor every continuous
+    /// (as opposed to binary/forced) effect this profile has should blend
+    /// in by. Binary effects (`surface_block`, `force_no_snow`, the forest
+    /// override) apply outright whenever this profile governs at all (i.e.
+    /// whenever a [`ResolvedBiomeProfile`] exists), the same way
+    /// `DamageEffectsAt::force_no_snow` is a boolean triggered by a
+    /// continuous `scorch` value being merely positive.
+    pub fn strength(&self) -> f32 { self.blend * self.intensity }
 }
 
 /// Generalised power function, pushes values in the range 0-1 to extremes.
@@ -120,7 +153,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let wposf_turb = wposf; // + turb.map(|e| e as f64);
 
         let chaos = sim.get_interpolated(wpos, |chunk| chunk.chaos)?;
-        let (temp, humidity, tree_density_mul, damage) = {
+        let (temp, humidity, tree_density_mul, damage, biome_profile) = {
             let temp = sim.get_interpolated(wpos, |chunk| chunk.temp)?;
             let humidity = sim.get_interpolated(wpos, |chunk| chunk.humidity)?;
             // Applied AFTER the normal interpolated read, as a radial blend
@@ -132,16 +165,52 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             // chunk-filtered subset `World::generate_chunk` computed once
             // (not the whole server-wide active-overrides list -- see
             // `ColumnGen::with_overrides`'s doc comment), and a single
-            // `climate_tree_density_and_damage_at` call reuses one
+            // `climate_tree_density_damage_and_profile_at` call reuses one
             // scan-and-distance-calc pass for ALL of temp/humidity/
-            // tree-density-mul/damage-effects instead of scanning `active`
-            // once per output (see that method's own doc comment for why
-            // this must never become two independent scans).
+            // tree-density-mul/damage-effects/biome-profile-governance
+            // instead of scanning `active` once per output (see that
+            // method's own doc comment for why this must never become
+            // multiple independent scans).
             match self.overrides {
                 Some(overrides) => {
-                    overrides.climate_tree_density_and_damage_at(wpos, temp, humidity)
+                    let (temp, humidity, tree_density_mul, damage, governing) =
+                        overrides.climate_tree_density_damage_and_profile_at(wpos, temp, humidity);
+                    // `common` can't resolve a `BiomeProfile` catalog id
+                    // itself (see `BiomeProfileGoverningAt`'s doc comment) --
+                    // this is the one place that lookup happens, against the
+                    // small in-memory catalog on `index.biome_profiles`
+                    // (typically a handful of entries; a linear scan here is
+                    // fine, and only ever runs for columns an active
+                    // `BiomeProfile` override actually touches).
+                    let resolved_profile = governing.and_then(|governing| {
+                        index
+                            .biome_profiles
+                            .entries
+                            .iter()
+                            .find(|profile| profile.id == governing.profile.profile)
+                            .map(|profile| ResolvedBiomeProfile {
+                                profile,
+                                blend: governing.blend,
+                                intensity: governing.profile.intensity.clamp(0.0, 1.0),
+                                flood_to: governing.profile.flood_to,
+                            })
+                    });
+                    // The profile's own vegetation multiplier reuses the
+                    // exact same mechanism `ClimateOverride::tree_density_mul`
+                    // / `DamageOverride::vegetation_mul` already thread
+                    // through, rather than a parallel path.
+                    let profile_tree_density_mul = resolved_profile
+                        .map(|rp| Lerp::lerp(1.0, rp.profile.tree_density_mul, rp.strength()))
+                        .unwrap_or(1.0);
+                    (
+                        temp,
+                        humidity,
+                        tree_density_mul * profile_tree_density_mul,
+                        damage,
+                        resolved_profile,
+                    )
                 },
-                None => (temp, humidity, 1.0, DamageEffectsAt::neutral()),
+                None => (temp, humidity, 1.0, DamageEffectsAt::neutral(), None),
             }
         };
         let rockiness = sim.get_interpolated(wpos, |chunk| chunk.rockiness)?;
@@ -698,6 +767,25 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         }
         .max(base_sea_level);
 
+        // A `BiomeProfile` override with a baked `flood_to` (see
+        // `common::terrain::regional_override::BiomeProfileOverride::flood_to`
+        // -- an absolute world-z the server bakes once at activation time
+        // from the profile's authored *relative* `flood_depth`) floods this
+        // column's water level UP TO that altitude, radially blended in by
+        // distance from the override's region -- never below whatever
+        // ambient water level already applies here. This is a genuinely new
+        // mechanism (`Climate`/`Damage` overrides never needed to raise the
+        // water table itself), so it has no existing blend point to reuse.
+        let flood_block = biome_profile
+            .filter(|rp| rp.flood_to.is_some())
+            .map_or(BlockKind::Water, |rp| rp.profile.flood_block);
+        let water_level = match biome_profile
+            .and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to)))
+        {
+            Some((rp, flood_to)) => water_level.max(Lerp::lerp(water_level, flood_to, rp.blend)),
+            None => water_level,
+        };
+
         let mut spawn_rules = SpawnRules::default();
         for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {
             site.spawn_rules(&mut spawn_rules, &Land::from_sim(sim), wpos);
@@ -1200,10 +1288,12 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             .add(((marble - 0.5) / 0.5) * 0.25)
             .add(((marble_mid - 0.5) / 0.5) * 0.125)
             .add(((marble_small - 0.5) / 0.5) * 0.0625);
-        // A scorched crater/debris field never has snow sitting on it,
+        // A scorched crater/debris field, or a `BiomeProfile` authored with
+        // `force_no_snow` (e.g. a volcano), never has snow sitting on it,
         // regardless of what the ambient snow formula above would otherwise
         // say.
-        let snow_cover = snow_factor <= 0.0 && !damage.force_no_snow;
+        let profile_force_no_snow = biome_profile.is_some_and(|rp| rp.profile.force_no_snow);
+        let snow_cover = snow_factor <= 0.0 && !damage.force_no_snow && !profile_force_no_snow;
         let (alt, ground, sub_surface_color) = if snow_cover && alt > water_level {
             // Allow snow cover.
             (
@@ -1312,6 +1402,30 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // field itself) reflects it consistently.
         let ground = Rgb::lerp(ground, scorched_ground, damage.scorch);
         let sub_surface_color = Rgb::lerp(sub_surface_color, scorched_ground, damage.scorch);
+        // A governing `BiomeProfile` override's own authored ground/
+        // sub-surface color, blended in by `blend * intensity` -- mirrors
+        // the scorch blend just above exactly (same `Rgb::lerp` toward a
+        // target color, applied to both fields), just toward a
+        // designer-authored color pair instead of a fixed scorch tint.
+        let (ground, sub_surface_color) = match biome_profile {
+            Some(rp) => {
+                let strength = rp.strength();
+                (
+                    Rgb::lerp(ground, Rgb::from(rp.profile.ground), strength),
+                    Rgb::lerp(
+                        sub_surface_color,
+                        Rgb::from(rp.profile.sub_surface),
+                        strength,
+                    ),
+                )
+            },
+            None => (ground, sub_surface_color),
+        };
+        // If the governing profile forces a specific surface block kind
+        // (e.g. bare `Rock` on a volcano's slopes), that's a binary effect
+        // applied outright whenever the profile governs at all -- same
+        // posture as `force_no_snow` above, not blended by `strength`.
+        let surface_block_override = biome_profile.and_then(|rp| rp.profile.surface_block);
         // Same net delta already baked into `alt`/`basement` above, applied
         // to the separate `riverless_alt` local (finalized earlier, before
         // river-alt-blending math that must not itself see the crater) only
@@ -1346,7 +1460,25 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             } else {
                 0.0
             },
-            forest_kind: sim_chunk.forest_kind,
+            // A governing `BiomeProfile` override with a nonempty `forest`
+            // list overrides the ambient `SimChunk::forest_kind` label at
+            // COLUMN granularity too (a deterministic highest-weight pick,
+            // not the seeded per-tree draw `world/src/layer/tree.rs` makes
+            // for actual placement -- this is just the representative
+            // species label callers of `ColumnSample` read, e.g. for
+            // minimap/UI purposes).
+            forest_kind: biome_profile
+                .filter(|rp| !rp.profile.forest.is_empty())
+                .and_then(|rp| {
+                    rp.profile
+                        .forest
+                        .iter()
+                        .max_by(|(_, a), (_, b)| {
+                            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|(fk, _)| *fk)
+                })
+                .unwrap_or(sim_chunk.forest_kind),
             marble,
             marble_mid,
             marble_small,
@@ -1363,6 +1495,9 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             cliff_height,
             water_vel,
             ice_depth,
+            surface_block_override,
+            flood_block,
+            governing_biome_profile: biome_profile,
 
             chunk: sim_chunk,
         })
@@ -1397,6 +1532,19 @@ pub struct ColumnSample<'a> {
     pub cliff_height: f32,
     pub water_vel: Vec3<f32>,
     pub ice_depth: f32,
+    /// A governing `BiomeProfile` override's forced surface block kind (e.g.
+    /// `Rock` for a volcano), if any -- see `world/src/block.rs`'s
+    /// `BlockGen::get_with_z_cache`.
+    pub surface_block_override: Option<BlockKind>,
+    /// The block kind that should fill this column's flooded area, if any
+    /// (`Water` when no `BiomeProfile` override with a flood governs here).
+    /// See `world/src/block.rs`'s `BlockGen::get_with_z_cache`.
+    pub flood_block: BlockKind,
+    /// The governing `BiomeProfile` regional terrain override's resolved
+    /// catalog entry at this column, if any -- read directly by
+    /// `world/src/layer/tree.rs`, `shrub.rs`, and `scatter.rs` for the
+    /// profile's own forest/scatter-deny/scatter-boost lists.
+    pub governing_biome_profile: Option<ResolvedBiomeProfile<'a>>,
 
     pub chunk: &'a SimChunk,
 }

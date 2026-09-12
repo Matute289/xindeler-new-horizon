@@ -1307,11 +1307,21 @@ impl ServerChatCommand {
                             "snow".to_string(),
                             "crater".to_string(),
                             "debris".to_string(),
+                            "biome".to_string(),
                             "clear".to_string(),
                         ],
                         Required,
                     ),
+                    // For every kind except `biome`, this is the radius
+                    // (defaults vary per kind -- see `handle_terrain_override`).
+                    // For `biome`, this position is instead the catalog
+                    // profile id (radius, if given, becomes the THIRD
+                    // argument for that kind only) -- see
+                    // `handle_terrain_override`'s own `raw_args` handling for
+                    // why `biome`'s argument order can't be made to match
+                    // every other kind's here.
                     Integer("radius", 64, Optional),
+                    Any("profile", Optional),
                 ],
                 Content::localized("command-terrain_override-desc"),
                 Some(Admin),
