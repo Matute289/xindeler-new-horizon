@@ -15,7 +15,8 @@ use tracing::{debug, error, trace};
 use crate::{
     proto::{
         Init, MAX_REQUEST_SIZE, MAX_RESPONSE_SIZE, QueryServerRequest, QueryServerResponse,
-        RawQueryServerRequest, RawQueryServerResponse, ServerInfo, VELOREN_HEADER, VERSION,
+        RawQueryServerRequest, RawQueryServerResponse, ServerIdentity, ServerInfo, VELOREN_HEADER,
+        VERSION,
     },
     ratelimit::{RateLimiter, ReducedIpAddr},
 };
@@ -38,6 +39,7 @@ pub struct Metrics {
     pub proccessing_errors: u32,
     pub info_requests: u32,
     pub init_requests: u32,
+    pub identity_requests: u32,
     pub sent_responses: u32,
     pub failed_responses: u32,
     pub timed_out_responses: u32,
@@ -231,6 +233,18 @@ impl QueryServer {
                 )
                 .await;
             },
+            QueryServerRequest::Identity => {
+                metrics.identity_requests += 1;
+                Self::send_response(
+                    RawQueryServerResponse::Response(QueryServerResponse::Identity(
+                        ServerIdentity::XINDELER,
+                    )),
+                    remote,
+                    socket,
+                    metrics,
+                )
+                .await;
+            },
         }
     }
 
@@ -289,6 +303,7 @@ impl std::ops::AddAssign for Metrics {
             proccessing_errors,
             info_requests,
             init_requests,
+            identity_requests,
             sent_responses,
             failed_responses,
             timed_out_responses,
@@ -301,6 +316,7 @@ impl std::ops::AddAssign for Metrics {
         self.proccessing_errors += proccessing_errors;
         self.info_requests += info_requests;
         self.init_requests += init_requests;
+        self.identity_requests += identity_requests;
         self.sent_responses += sent_responses;
         self.failed_responses += failed_responses;
         self.timed_out_responses += timed_out_responses;
