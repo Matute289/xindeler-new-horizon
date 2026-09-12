@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    CONFIG, Land,
+    Land,
     site::generation::{PrimitiveTransform, spiral_staircase},
     util::{DIAGONALS, NEIGHBORS, RandomField, sampler::Sampler, within_distance},
 };
@@ -22,16 +22,23 @@ pub struct SeaChapel {
     pub(crate) alt: i32,
 }
 impl SeaChapel {
-    pub fn generate(_land: &Land, _rng: &mut impl Rng, site: &Site, tile_aabr: Aabr<i32>) -> Self {
+    pub fn generate(land: &Land, _rng: &mut impl Rng, site: &Site, tile_aabr: Aabr<i32>) -> Self {
         let bounds = Aabr {
             min: site.tile_wpos(tile_aabr.min),
             max: site.tile_wpos(tile_aabr.max),
         };
         let center = bounds.center();
-        Self {
-            center,
-            alt: CONFIG.sea_level as i32,
-        }
+        // The whole structure is anchored to `alt` as its waterline
+        // reference (every wall/floor/spire height below is relative to
+        // it) - it needs to be the real ground level at this exact spot,
+        // not the abstract sea_level constant. Placement (both the
+        // procedural site predicate and an authored Cromatolis landmark
+        // pin) only guarantees the terrain is *near* sea level, not exactly
+        // at it, so using the constant directly left a real gap/overlap
+        // between the structure and the actual ground whenever a site
+        // landed even a couple meters off from sea_level.
+        let alt = land.get_alt_approx(center) as i32;
+        Self { center, alt }
     }
 }
 
@@ -3396,5 +3403,90 @@ impl Structure for SeaChapel {
                 _ => {},
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        Land,
+        sim::{FileOpts, WorldOpts, WorldSim},
+        site::{PlotKind, Site},
+    };
+
+    fn generate_cromatolis_world() -> WorldSim {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        WorldSim::generate(
+            0,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn sea_chapel_uses_the_real_local_altitude_not_a_hardcoded_sea_level_constant() {
+        let sim = generate_cromatolis_world();
+        let land = Land::from_sim(&sim);
+        let mut rng = rand::rng();
+
+        // Sample a handful of real world positions spread across the map.
+        // The generated structure's alt must always match the real sampled
+        // ground there - this is exactly the property an authored Cromatolis
+        // landmark relies on, since it places unconditionally wherever
+        // authored, with no altitude check of its own (unlike vanilla
+        // procedural placement, which is gated by a separate predicate).
+        let mut saw_a_real_mismatch_from_sea_level = false;
+        for (x, y) in [
+            (1000, 1000),
+            (5000, 3000),
+            (10000, 8000),
+            (2000, 15000),
+            (12000, 12000),
+        ] {
+            let origin = vek::Vec2::new(x, y);
+            let site = Site::generate_chapel_site(&land, &mut rng, origin);
+            let (sea_chapel_center, sea_chapel_alt) = site
+                .plots()
+                .find_map(|p| match p.kind() {
+                    PlotKind::SeaChapel(sea_chapel) => Some((sea_chapel.center, sea_chapel.alt)),
+                    _ => None,
+                })
+                .expect("generate_chapel_site always creates exactly one SeaChapel plot");
+            // Cross-check against the raw chunk's own `alt` field directly
+            // (bypassing `Land::get_alt_approx`'s bicubic interpolation
+            // entirely) rather than re-deriving `real_alt` through the exact
+            // same function `SeaChapel::generate` itself calls - comparing
+            // against that would be tautological by construction (it would
+            // pass for any implementation that plugs *something* into
+            // `get_alt_approx`, regardless of whether it's the right thing).
+            // A generous tolerance accounts for the interpolation smoothing
+            // over a 4x4 chunk neighborhood in steep terrain; it's still far
+            // tighter than the ~hundreds-of-meters gap the old hardcoded
+            // sea_level constant produced at every sampled point below.
+            let raw_chunk_alt = sim
+                .get_wpos(sea_chapel_center)
+                .expect("sampled position is within the generated world")
+                .alt;
+            assert!(
+                (sea_chapel_alt as f32 - raw_chunk_alt).abs() < 50.0,
+                "SeaChapel::alt ({sea_chapel_alt}) should be close to the raw chunk altitude \
+                 ({raw_chunk_alt}) at {sea_chapel_center:?} (site origin {origin:?}), not an \
+                 unrelated constant"
+            );
+            if sea_chapel_alt != crate::config::CONFIG.sea_level as i32 {
+                saw_a_real_mismatch_from_sea_level = true;
+            }
+        }
+        assert!(
+            saw_a_real_mismatch_from_sea_level,
+            "expected at least one sampled position to differ from sea_level, proving this isn't \
+             coincidentally always equal to the old hardcoded constant"
+        );
     }
 }
