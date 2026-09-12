@@ -304,9 +304,11 @@ fn basic_world_pixmap(image_size: &MapSizeLg, index: &Index, sampler: &WorldSim)
 
     let colors = index.colors();
     let features = index.features();
+    let biome_profiles = index.biome_profiles();
     let index_ref = IndexRef {
         colors: &colors,
         features: &features,
+        biome_profiles: &biome_profiles,
         index,
     };
 

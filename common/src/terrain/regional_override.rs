@@ -11,11 +11,13 @@
 //! `world/` and `server/`'s job — see those crates' `terrain_override`-shaped
 //! modules.
 //!
-//! This is deliberately a foundational, general mechanism: a family of future
-//! features (weather-linked events, craters, authored bespoke biome events)
-//! will build on it by adding new [`TerrainOverridePayload`] variants. Only
-//! [`TerrainOverridePayload::Climate`] exists yet; the enum is
-//! `#[non_exhaustive]` so those additions don't need a breaking change here.
+//! This is deliberately a foundational, general mechanism: a family of
+//! features builds on it by adding new [`TerrainOverridePayload`] variants --
+//! [`TerrainOverridePayload::Climate`] (temperature/humidity/tree-density),
+//! [`TerrainOverridePayload::Damage`] (craters/debris), and
+//! [`TerrainOverridePayload::BiomeProfile`] (an authored, named biome, e.g. a
+//! bespoke swamp or volcano) exist so far; the enum is `#[non_exhaustive]` so
+//! further additions don't need a breaking change here.
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -170,10 +172,9 @@ impl ClimateValue {
     }
 }
 
-/// A temperature/humidity (and, optionally, tree-density) override — the
-/// only [`TerrainOverridePayload`] variant implemented so far. Future
-/// payload kinds (a biome-profile override, a damage/crater layer) are
-/// siblings of this, not changes to it.
+/// A temperature/humidity (and, optionally, tree-density) override. Sibling
+/// of [`DamageOverride`] and [`BiomeProfileOverride`], not a superset of
+/// either.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClimateOverride {
     pub temp: Option<ClimateValue>,
@@ -238,15 +239,47 @@ pub struct DamageOverride {
     pub next_heal_at: f64,
 }
 
-/// `#[non_exhaustive]`: only climate and damage overrides exist so far.
-/// Later, unrelated work is expected to add variants (a biome-profile
-/// override, an authored bespoke event) — deliberately not stubbed out
-/// speculatively here.
+/// An authored, named biome profile override (a bespoke swamp, a volcano) --
+/// a *reference* to a catalog entry (`profile`, an id resolved by `world/`
+/// against its own catalog), not the profile's data inlined here. This
+/// module (and the whole `common` crate) cannot see `world`-only types
+/// (`ForestKind`, `Colors`, structure groups) that a real profile's content
+/// needs, so unlike [`ClimateOverride`]/[`DamageOverride`] the actual effect
+/// this has at a position is resolved entirely by `world/` (see
+/// `world::biome_profile` and `world/src/column.rs`'s `ColumnGen::get`) --
+/// this struct only carries enough to find the right catalog entry and blend
+/// it in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BiomeProfileOverride {
+    /// Catalog id, e.g. `"swamp_dark_01"` -- looked up by `world/` against
+    /// its own biome-profile catalog (`Index::biome_profiles`). Unknown ids
+    /// are simply never resolved to any effect (graceful, not a panic).
+    pub profile: String,
+    /// 0..1 global strength, multiplied into every blended (as opposed to
+    /// binary) effect the resolved profile has -- separate from, and
+    /// multiplied together with, the region's own radial edge falloff (see
+    /// [`OverrideRegion::blend_factor`]).
+    pub intensity: f32,
+    /// Absolute world-z the profile's water/lava should flood up to, if the
+    /// profile is authored with a `flood_depth`. `None` for a profile with
+    /// no flood at all. This is a BAKED value: `world/`'s catalog only knows
+    /// a profile's *relative* `flood_depth`; the server bakes it to this
+    /// absolute altitude once, at override activation time, by sampling the
+    /// region's ambient ground altitude (see `server/src/terrain_override.rs`)
+    /// -- world-gen itself never re-samples ambient altitude to recompute
+    /// this, so the flood level a player sees can't drift as chunks
+    /// regenerate.
+    pub flood_to: Option<f32>,
+}
+
+/// `#[non_exhaustive]`: only climate, damage, and biome-profile overrides
+/// exist so far. Later, unrelated work may add further variants.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TerrainOverridePayload {
     Climate(ClimateOverride),
     Damage(DamageOverride),
+    BiomeProfile(BiomeProfileOverride),
 }
 
 /// One active (or, once deactivated, about-to-be-removed) regional terrain
@@ -293,6 +326,13 @@ impl RegionalTerrainOverride {
             _ => None,
         }
     }
+
+    pub fn biome_profile(&self) -> Option<&BiomeProfileOverride> {
+        match &self.payload {
+            TerrainOverridePayload::BiomeProfile(profile) => Some(profile),
+            _ => None,
+        }
+    }
 }
 
 /// A versioned snapshot of every currently-active regional terrain override.
@@ -335,38 +375,53 @@ impl TerrainOverrides {
 
     /// Blends `base_temp`/`base_humidity` (whatever ambient world-gen already
     /// computed at `wpos`) toward the governing active `Climate` override's
-    /// value, computes its tree-density multiplier, AND computes the
-    /// governing active `Damage` override's crater/rim/scorch/vegetation
-    /// effect at `wpos` -- all from a SINGLE pass over `active` (one `for o
-    /// in &self.active` loop tracking the best `Climate` candidate and the
-    /// best `Damage` candidate side by side, each independently
+    /// value, computes its tree-density multiplier, computes the governing
+    /// active `Damage` override's crater/rim/scorch/vegetation effect at
+    /// `wpos`, AND finds the governing active `BiomeProfile` override (if
+    /// any) -- all from a SINGLE pass over `active` (one `for o in
+    /// &self.active` loop tracking the best `Climate`, best `Damage`, and
+    /// best `BiomeProfile` candidates side by side, each independently
     /// priority-maxed with first-registered-wins tie-breaking, exactly like
     /// the old climate-only scan). This is the method `world/src/column.rs`'s
     /// `ColumnGen::get` actually calls (once per block-column, the hottest
     /// per-chunk-generation path in the engine), specifically so it never
-    /// pays for a second independent scan over `active` for the damage
-    /// payload -- see this module's and `ColumnGen::get`'s own doc comments
-    /// for why that matters.
+    /// pays for a second independent scan over `active` for the damage or
+    /// biome-profile payloads -- see this module's and `ColumnGen::get`'s own
+    /// doc comments for why that matters.
+    ///
+    /// The `BiomeProfile` output is deliberately unresolved: this module
+    /// cannot see `world`-only types, so it hands back the raw
+    /// [`BiomeProfileOverride`] payload plus the blend factor
+    /// ([`BiomeProfileGoverningAt`]) and leaves catalog lookup (and every
+    /// actual effect a real profile has) to `world/`.
+    ///
     /// [`Self::climate_and_tree_density_mul_at`]/[`Self::climate_at`]/
-    /// [`Self::tree_density_mul_at`]/[`Self::damage_effects_at`] are thin
-    /// single-purpose wrappers around this for callers (tests, future
-    /// one-off consumers, `world/src/lib.rs`'s chunk-level patch) that only
-    /// want a subset of the outputs and don't care about paying for the scan
-    /// twice.
+    /// [`Self::tree_density_mul_at`]/[`Self::damage_effects_at`]/
+    /// [`Self::biome_profile_at`] are thin single-purpose wrappers around this
+    /// for callers (tests, future one-off consumers, `world/src/lib.rs`'s
+    /// chunk-level patch) that only want a subset of the outputs and don't
+    /// care about paying for the scan twice.
     ///
     /// Called at COLUMN granularity (once per block-column), which is what
     /// gives every override's edge its soft radial falloff rather than a
     /// hard per-chunk cutoff. Returns the ambient climate inputs unchanged
-    /// (and a `1.0` tree-density multiplier / [`DamageEffectsAt::neutral`])
-    /// wherever no matching override applies.
-    pub fn climate_tree_density_and_damage_at(
+    /// (a `1.0` tree-density multiplier, [`DamageEffectsAt::neutral`], and
+    /// `None`) wherever no matching override applies.
+    pub fn climate_tree_density_damage_and_profile_at(
         &self,
         wpos: Vec2<i32>,
         base_temp: f32,
         base_humidity: f32,
-    ) -> (f32, f32, f32, DamageEffectsAt) {
+    ) -> (
+        f32,
+        f32,
+        f32,
+        DamageEffectsAt,
+        Option<BiomeProfileGoverningAt<'_>>,
+    ) {
         let mut best_climate: Option<(&RegionalTerrainOverride, &ClimateOverride, f32)> = None;
         let mut best_damage: Option<(&RegionalTerrainOverride, &DamageOverride, f32)> = None;
+        let mut best_profile: Option<(&RegionalTerrainOverride, &BiomeProfileOverride, f32)> = None;
 
         for o in &self.active {
             let blend = o.region.blend_factor(wpos);
@@ -384,6 +439,12 @@ impl TerrainOverrides {
                     let replace = best_damage.is_none_or(|(best, ..)| o.priority > best.priority);
                     if replace {
                         best_damage = Some((o, damage, blend));
+                    }
+                },
+                TerrainOverridePayload::BiomeProfile(profile) => {
+                    let replace = best_profile.is_none_or(|(best, ..)| o.priority > best.priority);
+                    if replace {
+                        best_profile = Some((o, profile, blend));
                     }
                 },
             }
@@ -413,51 +474,84 @@ impl TerrainOverrides {
             None => DamageEffectsAt::neutral(),
         };
 
-        (temp, humidity, tree_density_mul, damage)
+        let profile =
+            best_profile.map(|(_, profile, blend)| BiomeProfileGoverningAt { profile, blend });
+
+        (temp, humidity, tree_density_mul, damage, profile)
     }
 
-    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
-    /// damage-effect output. Prefer the combined method in a hot loop that
-    /// needs both.
+    /// See [`Self::climate_tree_density_damage_and_profile_at`] -- this
+    /// discards its damage/biome-profile output. Prefer the combined method
+    /// in a hot loop that needs more than one piece.
     pub fn climate_and_tree_density_mul_at(
         &self,
         wpos: Vec2<i32>,
         base_temp: f32,
         base_humidity: f32,
     ) -> (f32, f32, f32) {
-        let (temp, humidity, tree_density_mul, _) =
-            self.climate_tree_density_and_damage_at(wpos, base_temp, base_humidity);
+        let (temp, humidity, tree_density_mul, ..) =
+            self.climate_tree_density_damage_and_profile_at(wpos, base_temp, base_humidity);
         (temp, humidity, tree_density_mul)
     }
 
-    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
-    /// `tree_density_mul`/damage output. Prefer the combined method in a hot
-    /// loop that needs more than one piece.
+    /// See [`Self::climate_tree_density_damage_and_profile_at`] -- this
+    /// discards its `tree_density_mul`/damage/biome-profile output. Prefer
+    /// the combined method in a hot loop that needs more than one piece.
     pub fn climate_at(&self, wpos: Vec2<i32>, base_temp: f32, base_humidity: f32) -> (f32, f32) {
         let (temp, humidity, _) =
             self.climate_and_tree_density_mul_at(wpos, base_temp, base_humidity);
         (temp, humidity)
     }
 
-    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
-    /// temp/humidity/damage output. Prefer the combined method in a hot loop
-    /// that needs more than one piece.
+    /// See [`Self::climate_tree_density_damage_and_profile_at`] -- this
+    /// discards its temp/humidity/damage/biome-profile output. Prefer the
+    /// combined method in a hot loop that needs more than one piece.
     pub fn tree_density_mul_at(&self, wpos: Vec2<i32>) -> f32 {
         let (_, _, tree_density_mul) = self.climate_and_tree_density_mul_at(wpos, 0.0, 0.0);
         tree_density_mul
     }
 
-    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
-    /// climate output. Prefer the combined method in a hot loop that needs
-    /// more than one piece.
+    /// See [`Self::climate_tree_density_damage_and_profile_at`] -- this
+    /// discards its climate/biome-profile output. Prefer the combined method
+    /// in a hot loop that needs more than one piece.
     pub fn damage_effects_at(&self, wpos: Vec2<i32>) -> DamageEffectsAt {
-        let (_, _, _, damage) = self.climate_tree_density_and_damage_at(wpos, 0.0, 0.0);
+        let (_, _, _, damage, _) = self.climate_tree_density_damage_and_profile_at(wpos, 0.0, 0.0);
         damage
+    }
+
+    /// See [`Self::climate_tree_density_damage_and_profile_at`] -- this
+    /// discards its climate/damage output. Prefer the combined method in a
+    /// hot loop that needs more than one piece.
+    pub fn biome_profile_at(&self, wpos: Vec2<i32>) -> Option<BiomeProfileGoverningAt<'_>> {
+        let (_, _, _, _, profile) = self.climate_tree_density_damage_and_profile_at(wpos, 0.0, 0.0);
+        profile
     }
 }
 
+/// The governing `BiomeProfile` override's raw payload at one column, plus
+/// how strongly it applies here, computed by
+/// [`TerrainOverrides::climate_tree_density_damage_and_profile_at`].
+///
+/// Deliberately NOT a resolved effect (unlike [`DamageEffectsAt`]): this
+/// module cannot see the `world`-only catalog a real profile id resolves
+/// against, so it only hands back the override's own payload fields --
+/// `world/` (see `world/src/column.rs`) does the catalog lookup and computes
+/// every actual ground/tree/scatter/flood effect from it.
+#[derive(Copy, Clone, Debug)]
+pub struct BiomeProfileGoverningAt<'a> {
+    pub profile: &'a BiomeProfileOverride,
+    /// `OverrideRegion::blend_factor` at this position for the governing
+    /// override's region -- `1.0` at/within `radius`, fading to `0.0` over
+    /// the falloff band. NOT yet multiplied by `profile.intensity`; callers
+    /// that want a single blended strength should multiply the two
+    /// themselves (mirrors how `DamageOverride::effects_at` keeps its own
+    /// `blend` and `remaining` factors separate until the last moment).
+    pub blend: f32,
+}
+
 /// The governing `Damage` override's terrain-level effect at one column,
-/// computed by [`TerrainOverrides::climate_tree_density_and_damage_at`].
+/// computed by
+/// [`TerrainOverrides::climate_tree_density_damage_and_profile_at`].
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct DamageEffectsAt {
     /// World-unit depression to subtract from `alt`/`basement`/
@@ -499,8 +593,8 @@ impl DamageOverride {
     /// `region`/`blend` must be the SAME [`OverrideRegion`] and
     /// [`OverrideRegion::blend_factor`] result the caller already picked
     /// this override for (see
-    /// [`TerrainOverrides::climate_tree_density_and_damage_at`]) -- this
-    /// never re-scans `active` itself.
+    /// [`TerrainOverrides::climate_tree_density_damage_and_profile_at`]) --
+    /// this never re-scans `active` itself.
     fn effects_at(&self, region: &OverrideRegion, wpos: Vec2<i32>, blend: f32) -> DamageEffectsAt {
         let heal = self.heal_progress.clamp(0.0, 1.0);
         let remaining = 1.0 - heal;
@@ -972,5 +1066,131 @@ mod tests {
             "a Damage override must still govern damage even with a Climate override also active \
              over the same region"
         );
+    }
+
+    fn biome_profile_override(
+        id: u64,
+        center: Vec2<i32>,
+        radius: f32,
+        edge: f32,
+        profile: &str,
+        intensity: f32,
+        flood_to: Option<f32>,
+        priority: i32,
+    ) -> RegionalTerrainOverride {
+        RegionalTerrainOverride {
+            id: TerrainOverrideId(id),
+            region: OverrideRegion::Circle {
+                center,
+                radius,
+                edge,
+            },
+            payload: TerrainOverridePayload::BiomeProfile(BiomeProfileOverride {
+                profile: profile.to_string(),
+                intensity,
+                flood_to,
+            }),
+            priority,
+            activated_at: 0.0,
+            wipe_player_edits: false,
+            ephemeral: true,
+        }
+    }
+
+    #[test]
+    fn no_active_overrides_leaves_biome_profile_governance_absent() {
+        let overrides = TerrainOverrides::default();
+        assert!(overrides.biome_profile_at(Vec2::new(10, 10)).is_none());
+    }
+
+    #[test]
+    fn a_biome_profile_override_governs_within_its_region_and_not_beyond_it() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![biome_profile_override(
+                1,
+                Vec2::zero(),
+                50.0,
+                10.0,
+                "swamp_dark_01",
+                0.8,
+                Some(12.0),
+                0,
+            )],
+        };
+
+        let governing = overrides
+            .biome_profile_at(Vec2::zero())
+            .expect("a biome-profile override active over this position must govern it");
+        assert_eq!(governing.profile.profile, "swamp_dark_01");
+        assert_eq!(governing.profile.intensity, 0.8);
+        assert_eq!(governing.profile.flood_to, Some(12.0));
+        assert_eq!(governing.blend, 1.0);
+
+        assert!(overrides.biome_profile_at(Vec2::new(1000, 0)).is_none());
+    }
+
+    #[test]
+    fn higher_priority_biome_profile_override_wins_when_regions_overlap() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![
+                biome_profile_override(1, Vec2::zero(), 100.0, 0.0, "swamp_dark_01", 1.0, None, 0),
+                biome_profile_override(
+                    2,
+                    Vec2::zero(),
+                    100.0,
+                    0.0,
+                    "volcano_ash_01",
+                    1.0,
+                    None,
+                    10,
+                ),
+            ],
+        };
+
+        let governing = overrides.biome_profile_at(Vec2::zero()).unwrap();
+        assert_eq!(governing.profile.profile, "volcano_ash_01");
+    }
+
+    #[test]
+    fn climate_damage_and_biome_profile_overrides_are_governed_independently() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![
+                climate_override(
+                    1,
+                    Vec2::zero(),
+                    50.0,
+                    0.0,
+                    Some(ClimateValue::Set(-10.0)),
+                    0,
+                ),
+                damage_override(
+                    2,
+                    Vec2::zero(),
+                    50.0,
+                    10.0,
+                    vec![DamageShape::Crater {
+                        max_depth: 20.0,
+                        rim_height: 0.0,
+                    }],
+                    0.0,
+                    1.0,
+                    0.0,
+                ),
+                biome_profile_override(3, Vec2::zero(), 50.0, 10.0, "swamp_dark_01", 1.0, None, 0),
+            ],
+        };
+
+        let (temp, _) = overrides.climate_at(Vec2::zero(), 20.0, 0.5);
+        assert_eq!(temp, -10.0);
+        let damage = overrides.damage_effects_at(Vec2::zero());
+        assert!((damage.depth - 20.0).abs() < 0.001);
+        let profile = overrides.biome_profile_at(Vec2::zero()).expect(
+            "a BiomeProfile override must still govern even with Climate and Damage overrides \
+             also active over the same region",
+        );
+        assert_eq!(profile.profile.profile, "swamp_dark_01");
     }
 }

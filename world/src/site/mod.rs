@@ -3475,6 +3475,7 @@ pub fn test_site() -> Site {
     let index_ref = IndexRef {
         colors: &index.colors(),
         features: &index.features(),
+        biome_profiles: &index.biome_profiles(),
         index: &index,
     };
     let mut gen_meta = SitesGenMeta::new(0);

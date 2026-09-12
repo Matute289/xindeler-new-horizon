@@ -10,6 +10,7 @@
 #![cfg_attr(feature = "simd", feature(portable_simd))]
 
 mod all;
+mod biome_profile;
 mod block;
 pub mod canvas;
 pub mod civ;
@@ -26,6 +27,8 @@ pub mod util;
 
 // Reexports
 pub use crate::{
+    all::ForestKind,
+    biome_profile::{BiomeProfile, BiomeProfiles},
     canvas::{Canvas, CanvasInfo},
     config::{CONFIG, Features},
     land::Land,
@@ -33,7 +36,7 @@ pub use crate::{
 };
 pub use block::BlockGen;
 use civ::WorldCivStage;
-pub use column::ColumnSample;
+pub use column::{ColumnSample, ResolvedBiomeProfile};
 pub use common::terrain::site::{DungeonKindMeta, SettlementKindMeta};
 pub use index::{IndexOwned, IndexRef};
 use sim::{SimChunk, WorldSimStage};
@@ -435,8 +438,8 @@ impl World {
         // this chunk.
         let sim_chunk: Cow<SimChunk> = match touching_overrides.as_ref() {
             Some(overrides) => {
-                let (temp, humidity, tree_density_mul, damage) = overrides
-                    .climate_tree_density_and_damage_at(
+                let (temp, humidity, tree_density_mul, damage, biome_governing) = overrides
+                    .climate_tree_density_damage_and_profile_at(
                         chunk_center_wpos2d,
                         sim_chunk.temp,
                         sim_chunk.humidity,
@@ -458,6 +461,37 @@ impl World {
                 // below) at the chunk CENTER -- the real per-column terrain
                 // height change happens in `ColumnGen::get`, not here.
                 patched.alt += damage.rim - damage.depth;
+                // Resolve a governing `BiomeProfile` override's catalog
+                // entry (same lookup `ColumnGen::get` does, at chunk
+                // granularity here) and patch `forest_kind` so
+                // `ColumnSample::forest_kind`/this chunk's biome metadata
+                // agree with what `layer::tree`'s per-position override
+                // (see `world/src/layer/tree.rs`) actually places. This is
+                // a DETERMINISTIC representative pick (highest-weight entry
+                // in the profile's own list), not a seeded random draw --
+                // unlike the real per-tree placement, nothing here needs to
+                // vary tree-to-tree, it just needs a single label for the
+                // whole chunk.
+                if let Some(governing) = biome_governing
+                    && let Some(profile) = index
+                        .biome_profiles
+                        .entries
+                        .iter()
+                        .find(|profile| profile.id == governing.profile.profile)
+                {
+                    patched.tree_density *= Lerp::lerp(
+                        1.0,
+                        profile.tree_density_mul,
+                        governing.blend * governing.profile.intensity.clamp(0.0, 1.0),
+                    );
+                    if let Some((forest_kind, _)) =
+                        profile.forest.iter().max_by(|(_, a), (_, b)| {
+                            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    {
+                        patched.forest_kind = *forest_kind;
+                    }
+                }
                 Cow::Owned(patched)
             },
             None => Cow::Borrowed(sim_chunk),

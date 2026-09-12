@@ -498,4 +498,167 @@ mod tests {
             .expect("a damage-payload override must load through the real codec");
         assert_eq!(decoded, overrides);
     }
+
+    /// `TerrainOverridePayload::BiomeProfile` is a brand new enum variant
+    /// (a third payload kind, alongside `Climate` and `Damage`) -- same
+    /// risk class the test above already pinned for `Damage`, applied to
+    /// this variant too.
+    ///
+    /// This encodes with a LOCAL, deliberately old-shaped payload enum that
+    /// has ONLY the `Climate`/`Damage` variants `TerrainOverridePayload` had
+    /// before `BiomeProfile` was added, AT THE SAME VARIANT POSITIONS (index
+    /// 0/1) they hold in the real, current enum -- not the current
+    /// (already-`BiomeProfile`-aware) enum -- then decodes those bytes with
+    /// the REAL, current `TerrainOverrides`/`TerrainOverridePayload` type.
+    /// Encoding and decoding with the same (current) enum would only prove
+    /// "this round-trips today", which would pass identically even if
+    /// `BiomeProfile` had been inserted BEFORE `Climate`/`Damage` (which,
+    /// given `rmp_serde`'s index-based externally-tagged enum encoding,
+    /// would have silently broken every pre-existing save's `Climate`/
+    /// `Damage` overrides) -- mirrors
+    /// `a_climate_only_override_list_written_before_the_damage_payload_existed_still_loads`'s
+    /// own old-wire-shape approach above.
+    #[test]
+    fn a_climate_and_damage_only_override_list_written_before_the_biome_profile_payload_existed_still_loads()
+     {
+        use common::terrain::{
+            ClimateOverride, ClimateValue, DamageOverride, DamageShape, OverrideRegion,
+            TerrainOverrideId,
+        };
+
+        /// The exact wire shape of `TerrainOverridePayload` before
+        /// `BiomeProfile` was added -- `Climate`/`Damage` only, at the same
+        /// variant positions (index 0/1) they hold in the real, current
+        /// enum.
+        #[derive(Serialize)]
+        enum OldTerrainOverridePayload {
+            Climate(ClimateOverride),
+            Damage(DamageOverride),
+        }
+
+        #[derive(Serialize)]
+        struct OldRegionalTerrainOverride {
+            id: TerrainOverrideId,
+            region: OverrideRegion,
+            payload: OldTerrainOverridePayload,
+            priority: i32,
+            activated_at: f64,
+            wipe_player_edits: bool,
+            ephemeral: bool,
+        }
+
+        #[derive(Serialize)]
+        struct OldTerrainOverrides {
+            version: u64,
+            active: Vec<OldRegionalTerrainOverride>,
+        }
+
+        let old = OldTerrainOverrides {
+            version: 4,
+            active: vec![
+                OldRegionalTerrainOverride {
+                    id: TerrainOverrideId(7),
+                    region: OverrideRegion::Circle {
+                        center: Vec2::new(10, 20),
+                        radius: 50.0,
+                        edge: 8.0,
+                    },
+                    payload: OldTerrainOverridePayload::Climate(ClimateOverride {
+                        temp: Some(ClimateValue::Set(-5.0)),
+                        humidity: None,
+                        tree_density_mul: None,
+                    }),
+                    priority: 5,
+                    activated_at: 0.0,
+                    wipe_player_edits: false,
+                    ephemeral: false,
+                },
+                OldRegionalTerrainOverride {
+                    id: TerrainOverrideId(8),
+                    region: OverrideRegion::Circle {
+                        center: Vec2::new(-30, 40),
+                        radius: 24.0,
+                        edge: 6.0,
+                    },
+                    payload: OldTerrainOverridePayload::Damage(DamageOverride {
+                        shapes: vec![DamageShape::Crater {
+                            max_depth: 12.0,
+                            rim_height: 2.0,
+                        }],
+                        scorch: 0.8,
+                        vegetation_mul: 0.1,
+                        heal_progress: 0.25,
+                        heal_stages: 4,
+                        heal_interval: 600.0,
+                        next_heal_at: 1234.5,
+                    }),
+                    priority: 50,
+                    activated_at: 10.0,
+                    wipe_player_edits: true,
+                    ephemeral: false,
+                },
+            ],
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect(
+            "serialise a climate+damage override list using the OLD (pre-BiomeProfile) enum",
+        );
+
+        let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..]).expect(
+            "a climate+damage override list written before BiomeProfile existed must still load",
+        );
+        assert_eq!(decoded.version, old.version);
+        assert_eq!(decoded.active.len(), 2);
+        let climate = decoded.active[0]
+            .climate()
+            .expect("must decode back to a Climate payload, not silently become something else");
+        assert_eq!(climate.temp, Some(ClimateValue::Set(-5.0)));
+        assert!(climate.humidity.is_none());
+        let damage = decoded.active[1]
+            .damage()
+            .expect("must decode back to a Damage payload, not silently become something else");
+        assert_eq!(damage.scorch, 0.8);
+    }
+
+    /// A save containing a `BiomeProfile`-payload override (the new payload
+    /// kind this test module's own sibling above pins the save-compat story
+    /// for) must round-trip through the same MessagePack codec real rtsim
+    /// saves use.
+    #[test]
+    fn a_biome_profile_payload_override_round_trips_through_the_real_codec() {
+        use common::terrain::{
+            BiomeProfileOverride, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
+            TerrainOverridePayload,
+        };
+
+        let overrides = TerrainOverrides {
+            version: 11,
+            active: vec![RegionalTerrainOverride {
+                id: TerrainOverrideId(99),
+                region: OverrideRegion::Circle {
+                    center: Vec2::new(15, -25),
+                    radius: 40.0,
+                    edge: 10.0,
+                },
+                payload: TerrainOverridePayload::BiomeProfile(BiomeProfileOverride {
+                    profile: "swamp_dark_01".to_string(),
+                    intensity: 0.75,
+                    flood_to: Some(123.5),
+                }),
+                priority: 60,
+                activated_at: 20.0,
+                wipe_player_edits: false,
+                ephemeral: false,
+            }],
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &overrides)
+            .expect("serialise a biome-profile override");
+
+        let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..])
+            .expect("a biome-profile-payload override must load through the real codec");
+        assert_eq!(decoded, overrides);
+    }
 }

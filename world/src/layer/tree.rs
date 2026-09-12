@@ -88,17 +88,6 @@ pub fn apply_trees_to(
         let trees = tree_cache.get(wpos2d, |wpos, seed| {
             let scale = 1.0;
             let inhabited = false;
-            // Uses `info.chunk()` (the chunk-level, once-per-`generate_chunk`
-            // climate-override-patched `SimChunk` -- see
-            // `world/src/lib.rs::generate_chunk`) rather than
-            // `info.chunks().make_forest_lottery(wpos)`, which would re-fetch
-            // the RAW, un-overridden `SimChunk` at `wpos` and silently bypass
-            // any active regional terrain override's effect on which trees
-            // spawn here.
-            let forest_kind =
-                *crate::sim::make_forest_lottery_for_env(wpos, info.chunk().get_environment())
-                    .choose_seeded(seed)
-                    .as_ref()?;
 
             // Reads active regional terrain overrides (see
             // `world/src/canvas.rs`'s `CanvasInfo::overrides` doc comment)
@@ -110,6 +99,37 @@ pub fn apply_trees_to(
                 None => ColumnGen::new(info.chunks()),
             };
             let col = column_gen.get((wpos, info.index(), calendar))?;
+
+            // A governing `BiomeProfile` override with a nonempty `forest`
+            // list bypasses the normal proclivity-based lottery entirely and
+            // picks from its own weighted list instead -- same
+            // `Lottery`/`choose_seeded` mechanism and seed, just a different
+            // candidate set. Otherwise, uses `info.chunk()` (the chunk-level,
+            // once-per-`generate_chunk` climate-override-patched `SimChunk`
+            // -- see `world/src/lib.rs::generate_chunk`) rather than
+            // `info.chunks().make_forest_lottery(wpos)`, which would re-fetch
+            // the RAW, un-overridden `SimChunk` at `wpos` and silently bypass
+            // any active regional terrain override's effect on which trees
+            // spawn here.
+            let forest_kind = match col
+                .governing_biome_profile
+                .filter(|rp| !rp.profile.forest.is_empty())
+            {
+                Some(rp) => *common::lottery::Lottery::from(
+                    rp.profile
+                        .forest
+                        .iter()
+                        .map(|(fk, w)| (*w, Some(*fk)))
+                        .collect::<Vec<_>>(),
+                )
+                .choose_seeded(seed)
+                .as_ref()?,
+                None => {
+                    *crate::sim::make_forest_lottery_for_env(wpos, info.chunk().get_environment())
+                        .choose_seeded(seed)
+                        .as_ref()?
+                },
+            };
 
             let crowding = col.tree_density;
 

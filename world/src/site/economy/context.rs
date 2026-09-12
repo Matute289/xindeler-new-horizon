@@ -401,6 +401,7 @@ mod tests {
                             crate::IndexRef {
                                 colors: &index.colors(),
                                 features: &index.features(),
+                                biome_profiles: &index.biome_profiles(),
                                 index: &index,
                             },
                             &mut rng,
@@ -468,6 +469,7 @@ mod tests {
                 crate::IndexRef {
                     colors: &env.index.colors(),
                     features: &env.index.features(),
+                    biome_profiles: &env.index.biome_profiles(),
                     index: &env.index,
                 },
                 &mut env.rng,
