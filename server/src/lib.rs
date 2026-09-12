@@ -42,6 +42,7 @@ pub mod rtsim;
 pub mod settings;
 pub mod state_ext;
 pub mod sys;
+pub mod terrain_override;
 #[cfg(feature = "persistent_world")]
 pub mod terrain_persistence;
 #[cfg(not(feature = "worldgen"))] mod test_world;
@@ -831,7 +832,14 @@ impl Server {
             ) {
                 Ok(rtsim) => {
                     state.ecs_mut().insert(rtsim.state().data().time_of_day);
+                    // Rebuild the ECS-side `Arc<TerrainOverrides>` resource
+                    // (the live, fast-access snapshot every chunk generation
+                    // reads) from whatever was persisted in this save. Read
+                    // before the move below hands `rtsim` to the ECS.
+                    let terrain_overrides =
+                        rtsim.with_terrain_overrides(|overrides| overrides.clone());
                     state.ecs_mut().insert(rtsim);
+                    state.ecs_mut().insert(Arc::new(terrain_overrides));
                 },
                 Err(err) => {
                     error!("Failed to load rtsim: {}", err);
@@ -840,6 +848,14 @@ impl Server {
             }
             weather::init(&mut state);
         }
+        // Without worldgen there is no rtsim save to rehydrate from, but
+        // `sys::terrain::Sys` and every regional-terrain-override consumer
+        // still unconditionally fetch this resource -- always insert it, an
+        // empty (no active overrides) snapshot when there's nothing to load.
+        #[cfg(not(feature = "worldgen"))]
+        state
+            .ecs_mut()
+            .insert(Arc::new(common::terrain::TerrainOverrides::default()));
 
         let portrait_service = portrait::PortraitService::spawn(
             Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
@@ -1476,6 +1492,8 @@ impl Server {
                 let rtsim = ecs.read_resource::<rtsim::RtSim>();
                 #[cfg(not(feature = "worldgen"))]
                 let rtsim = ();
+                let terrain_overrides =
+                    ecs.read_resource::<Arc<common::terrain::TerrainOverrides>>();
 
                 // Cancel all pending chunks.
                 chunk_generator.cancel_all();
@@ -1497,6 +1515,7 @@ impl Server {
                                 *ecs.read_resource::<TimeOfDay>(),
                                 (*ecs.read_resource::<Calendar>()).clone(),
                             ),
+                            Some(Arc::clone(&terrain_overrides)),
                         );
                     });
                 }

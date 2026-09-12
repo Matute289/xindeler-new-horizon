@@ -2024,7 +2024,7 @@ mod tests {
             let local = anchor - chunk_wpos2d;
 
             let (chunk, _supplement) = world
-                .generate_chunk(index_ref, chunk_pos, None, || false, None)
+                .generate_chunk(index_ref, chunk_pos, None, || false, None, None)
                 .expect("chunk generation must not fail for a real, in-bounds Cromatolis chunk");
 
             let carved_any = (level.floor_z_m..=level.ceiling_z_m).any(|z| {

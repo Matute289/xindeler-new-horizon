@@ -249,6 +249,7 @@ fn do_command(
         ServerChatCommand::Spot => handle_spot,
         ServerChatCommand::Sudo => handle_sudo,
         ServerChatCommand::Tell => handle_tell,
+        ServerChatCommand::TerrainOverride => handle_terrain_override,
         ServerChatCommand::Time => handle_time,
         ServerChatCommand::TimeScale => handle_time_scale,
         ServerChatCommand::Tp => handle_tp,
@@ -9404,6 +9405,92 @@ fn handle_repair_equipment(
     } else {
         Err(action.help_content())
     }
+}
+
+/// Manual test entry point for the Regional Terrain Event Engine: activates
+/// a simple climate override centered on `target`, or clears every currently
+/// active override. Not intended for real gameplay use -- future features
+/// (weather-linked events, craters, authored bespoke biome events) will
+/// activate overrides themselves, via `SetRegionalTerrainOverrideEvent`
+/// directly, not through this command.
+#[cfg(feature = "worldgen")]
+fn handle_terrain_override(
+    server: &mut Server,
+    _client: EcsEntity,
+    target: EcsEntity,
+    args: Vec<String>,
+    action: &ServerChatCommand,
+) -> CmdResult<()> {
+    use common::{
+        event::{SetRegionalTerrainOverrideEvent, TerrainOverrideOp},
+        terrain::{
+            ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride,
+            TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+        },
+    };
+
+    let (Some(kind), radius) = parse_cmd_args!(args, String, i32) else {
+        return Err(action.help_content());
+    };
+    let pos = position(server, target, "target")?;
+    let ecs = server.state.ecs();
+    let events = ecs.read_resource::<EventBus<SetRegionalTerrainOverrideEvent>>();
+
+    match kind.as_str() {
+        "snow" => {
+            let radius = radius.unwrap_or(64).clamp(8, 512) as f32;
+            let activated_at = ecs.read_resource::<Time>().0;
+            let new_override = RegionalTerrainOverride {
+                id: TerrainOverrideId::new_unique(),
+                region: OverrideRegion::Circle {
+                    center: pos.0.xy().as_::<i32>(),
+                    radius,
+                    edge: (radius * 0.25).max(8.0),
+                },
+                payload: TerrainOverridePayload::Climate(ClimateOverride {
+                    temp: Some(ClimateValue::Set(-10.0)),
+                    humidity: Some(ClimateValue::Set(0.9)),
+                    tree_density_mul: Some(0.1),
+                }),
+                priority: 100,
+                activated_at,
+                wipe_player_edits: false,
+                ephemeral: true,
+            };
+            events.emit_now(SetRegionalTerrainOverrideEvent {
+                op: TerrainOverrideOp::Activate(new_override),
+            });
+            Ok(())
+        },
+        "clear" => {
+            let active_ids: Vec<TerrainOverrideId> = ecs
+                .read_resource::<Arc<TerrainOverrides>>()
+                .active
+                .iter()
+                .map(|o| o.id)
+                .collect();
+            for id in active_ids {
+                events.emit_now(SetRegionalTerrainOverrideEvent {
+                    op: TerrainOverrideOp::Deactivate(id),
+                });
+            }
+            Ok(())
+        },
+        _ => Err(action.help_content()),
+    }
+}
+
+#[cfg(not(feature = "worldgen"))]
+fn handle_terrain_override(
+    _server: &mut Server,
+    _client: EcsEntity,
+    _target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    Err(Content::Plain(
+        "Unsupported without worldgen enabled".into(),
+    ))
 }
 
 fn handle_tether(

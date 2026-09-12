@@ -8,8 +8,8 @@ use crate::{
 use common::{
     calendar::{Calendar, CalendarEvent},
     terrain::{
-        CoordinateConversions, TerrainChunkSize, quadratic_nearest_point, river_spline_coeffs,
-        uniform_idx_as_vec2, vec2_as_uniform_idx,
+        CoordinateConversions, TerrainChunkSize, TerrainOverrides, quadratic_nearest_point,
+        river_spline_coeffs, uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
 };
@@ -22,6 +22,13 @@ use vek::*;
 
 pub struct ColumnGen<'a> {
     pub sim: &'a WorldSim,
+    /// Currently-active regional terrain overrides, if any apply to this
+    /// generation call. `None` for the vast majority of `ColumnGen`
+    /// construction sites (LOD zone building, site-render helpers, etc.),
+    /// which have never needed to know about overrides -- only the real
+    /// `World::generate_chunk` path (via `World::sample_blocks_with_overrides`)
+    /// ever passes `Some`.
+    overrides: Option<&'a TerrainOverrides>,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +68,33 @@ fn power(x: f64, t: f64) -> f64 {
 }
 
 impl<'a> ColumnGen<'a> {
-    pub fn new(sim: &'a WorldSim) -> Self { Self { sim } }
+    pub fn new(sim: &'a WorldSim) -> Self {
+        Self {
+            sim,
+            overrides: None,
+        }
+    }
+
+    /// Same as [`Self::new`], but reads active regional terrain overrides
+    /// (see `common::terrain::regional_override`) and applies their
+    /// column-level (temperature/humidity/tree-density) effects at
+    /// [`Self::get`] time, radially blended by distance from each
+    /// override's region.
+    ///
+    /// `overrides` should be the small subset already filtered to just
+    /// those actually touching the current chunk (via
+    /// `TerrainOverrides::overrides_touching_chunk`), NOT the whole
+    /// server-wide active-overrides list -- `World::generate_chunk`
+    /// computes that filtered subset once per chunk and passes it here, so
+    /// every column's [`Self::get`] call only ever scans the handful of
+    /// overrides that could possibly apply to this chunk (typically 0-2),
+    /// not every override active anywhere on the server.
+    pub fn with_overrides(sim: &'a WorldSim, overrides: &'a TerrainOverrides) -> Self {
+        Self {
+            sim,
+            overrides: Some(overrides),
+        }
+    }
 }
 
 impl<'a> Sampler<'a> for ColumnGen<'a> {
@@ -81,10 +114,29 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let wposf_turb = wposf; // + turb.map(|e| e as f64);
 
         let chaos = sim.get_interpolated(wpos, |chunk| chunk.chaos)?;
-        let temp = sim.get_interpolated(wpos, |chunk| chunk.temp)?;
-        let humidity = sim.get_interpolated(wpos, |chunk| chunk.humidity)?;
+        let (temp, humidity, tree_density_mul) = {
+            let temp = sim.get_interpolated(wpos, |chunk| chunk.temp)?;
+            let humidity = sim.get_interpolated(wpos, |chunk| chunk.humidity)?;
+            // Applied AFTER the normal interpolated read, as a radial blend
+            // toward the override's value based on distance from the
+            // override region's center -- never a hard cutoff. This is the
+            // one place regional terrain overrides affect
+            // temperature/humidity at full per-column (not per-chunk)
+            // resolution. `self.overrides` is already the small,
+            // chunk-filtered subset `World::generate_chunk` computed once
+            // (not the whole server-wide active-overrides list -- see
+            // `ColumnGen::with_overrides`'s doc comment), and a single
+            // `climate_and_tree_density_mul_at` call reuses one
+            // scan-and-distance-calc pass for both outputs instead of
+            // scanning twice.
+            match self.overrides {
+                Some(overrides) => overrides.climate_and_tree_density_mul_at(wpos, temp, humidity),
+                None => (temp, humidity, 1.0),
+            }
+        };
         let rockiness = sim.get_interpolated(wpos, |chunk| chunk.rockiness)?;
-        let tree_density = sim.get_interpolated(wpos, |chunk| chunk.tree_density)?;
+        let tree_density =
+            sim.get_interpolated(wpos, |chunk| chunk.tree_density)? * tree_density_mul;
         let spawn_rate = sim.get_interpolated(wpos, |chunk| chunk.spawn_rate)?;
         let near_water =
             sim.get_interpolated(

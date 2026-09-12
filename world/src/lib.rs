@@ -36,7 +36,7 @@ use civ::WorldCivStage;
 pub use column::ColumnSample;
 pub use common::terrain::site::{DungeonKindMeta, SettlementKindMeta};
 pub use index::{IndexOwned, IndexRef};
-use sim::WorldSimStage;
+use sim::{SimChunk, WorldSimStage};
 
 use crate::{
     column::ColumnGen,
@@ -58,7 +58,7 @@ use common::{
     spot::Spot,
     terrain::{
         Block, BlockKind, CoordinateConversions, SpriteKind, TerrainChunk, TerrainChunkMeta,
-        TerrainChunkSize, TerrainGrid,
+        TerrainChunkSize, TerrainGrid, TerrainOverrides,
     },
     vol::{ReadVol, RectVolSize, WriteVol},
 };
@@ -319,6 +319,19 @@ impl World {
 
     pub fn sample_blocks(&self) -> BlockGen<'_> { BlockGen::new(ColumnGen::new(&self.sim)) }
 
+    /// Same as [`Self::sample_blocks`], but -- when `overrides` is `Some` --
+    /// applies active regional terrain overrides' column-level effects (see
+    /// `common::terrain::regional_override` and `column::ColumnGen`).
+    pub fn sample_blocks_with_overrides<'a>(
+        &'a self,
+        overrides: Option<&'a TerrainOverrides>,
+    ) -> BlockGen<'a> {
+        BlockGen::new(match overrides {
+            Some(overrides) => ColumnGen::with_overrides(&self.sim, overrides),
+            None => ColumnGen::new(&self.sim),
+        })
+    }
+
     /// Find a position that's accessible to a player at the given world
     /// position by searching blocks vertically.
     ///
@@ -335,7 +348,7 @@ impl World {
         // Unwrapping because generate_chunk only returns err when should_continue evals
         // to true
         let (tc, _cs) = self
-            .generate_chunk(index, chunk_pos, None, || false, None)
+            .generate_chunk(index, chunk_pos, None, || false, None, None)
             .unwrap();
 
         tc.find_accessible_pos(spawn_wpos, ascending)
@@ -350,10 +363,31 @@ impl World {
         // TODO: misleading name
         mut should_continue: impl FnMut() -> bool,
         time: Option<(TimeOfDay, Calendar)>,
+        overrides: Option<&TerrainOverrides>,
     ) -> Result<(TerrainChunk, ChunkSupplement), ()> {
         let calendar = time.as_ref().map(|(_, cal)| cal);
 
-        let mut sampler = self.sample_blocks();
+        // Filtered ONCE per `generate_chunk` call to just the overrides that
+        // actually touch this chunk (an AABB-then-exact `touches_chunk`
+        // check per override, done here rather than per column). Both the
+        // column-level sampler below and the chunk-level `Cow<SimChunk>`
+        // patch further down reuse this same small subset, so a chunk
+        // nowhere near any active override never has `ColumnGen::get`
+        // scanning the full, potentially server-wide, active-overrides list
+        // once per block-column -- and a chunk that IS touched only ever
+        // gets filtered once, not once per column either.
+        let touching_overrides: Option<TerrainOverrides> = overrides.and_then(|overrides| {
+            let active: Vec<_> = overrides
+                .overrides_touching_chunk(chunk_pos, TerrainChunkSize::RECT_SIZE)
+                .cloned()
+                .collect();
+            (!active.is_empty()).then_some(TerrainOverrides {
+                version: overrides.version,
+                active,
+            })
+        });
+
+        let mut sampler = self.sample_blocks_with_overrides(touching_overrides.as_ref());
 
         let chunk_wpos2d = chunk_pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
         let chunk_center_wpos2d = chunk_wpos2d + TerrainChunkSize::RECT_SIZE.map(|e| e as i32 / 2);
@@ -390,6 +424,37 @@ impl World {
                 return Ok((self.sim().generate_oob_chunk(), ChunkSupplement::default()));
             },
         };
+
+        // Chunk-level (as opposed to `ColumnGen::get`'s per-column) regional
+        // terrain override patch: applied ONCE per `generate_chunk` call, at
+        // this chunk's center, and consumed everywhere below that would
+        // otherwise read the raw `sim_chunk` for its biome label,
+        // wildlife-density closures, or forest-species lottery (`get_biome`,
+        // `apply_wildlife_supplement`, `layer::tree`'s real call site).
+        // `Cow::Borrowed` (zero-cost) unless an override actually touches
+        // this chunk.
+        let sim_chunk: Cow<SimChunk> = match touching_overrides.as_ref() {
+            Some(overrides) => {
+                let (temp, humidity, tree_density_mul) = overrides.climate_and_tree_density_mul_at(
+                    chunk_center_wpos2d,
+                    sim_chunk.temp,
+                    sim_chunk.humidity,
+                );
+                // NOTE: `(*sim_chunk).clone()`, not `sim_chunk.clone()` --
+                // `sim_chunk` is already `&SimChunk` here, and `&T` is
+                // itself always `Clone` (a cheap pointer copy) regardless of
+                // whether `T` is; without the explicit deref this would
+                // silently clone the reference instead of the chunk.
+                let mut patched: SimChunk = (*sim_chunk).clone();
+                patched.temp = temp;
+                patched.humidity = humidity;
+                patched.tree_density *= tree_density_mul;
+                Cow::Owned(patched)
+            },
+            None => Cow::Borrowed(sim_chunk),
+        };
+        let sim_chunk: &SimChunk = &sim_chunk;
+
         let meta = TerrainChunkMeta::new(
             sim_chunk.get_location_name(&index.sites, &self.civs.pois, chunk_center_wpos2d),
             sim_chunk.get_biome(),

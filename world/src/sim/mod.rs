@@ -870,6 +870,34 @@ pub struct WorldSim {
     pub(crate) calendar: Option<Calendar>,
 }
 
+/// The forest-species lottery for a position, given the [`Environment`]
+/// (temperature/humidity/nearness-to-water) that governs it at that
+/// position. Extracted out of [`WorldSim::make_forest_lottery`] (which
+/// fetches `env` from the raw, un-overridden `SimChunk` at `wpos`) so a
+/// caller holding an already climate-override-patched `Environment` — see
+/// `world/src/layer/tree.rs`'s real tree-placement call site — can drive the
+/// same lottery without that patch being silently bypassed by a second,
+/// separate raw sim lookup.
+pub fn make_forest_lottery_for_env(
+    wpos: Vec2<i32>,
+    env: Environment,
+) -> Lottery<Option<ForestKind>> {
+    Lottery::from(
+        ForestKind::iter()
+            .enumerate()
+            .map(|(i, fk)| {
+                const CLUSTER_SIZE: f64 = 48.0;
+                let nz = (FastNoise2d::new(i as u32 * 37)
+                    .get(wpos.map(|e| e as f64) / CLUSTER_SIZE)
+                    + 1.0)
+                    / 2.0;
+                (fk.proclivity(&env) * nz, Some(fk))
+            })
+            .chain(std::iter::once((0.001, None)))
+            .collect::<Vec<_>>(),
+    )
+}
+
 impl WorldSim {
     pub fn empty() -> Self {
         let gen_ctx = GenCtx {
@@ -2805,21 +2833,7 @@ impl WorldSim {
         } else {
             return Lottery::from(vec![(1.0, None)]);
         };
-        let env = chunk.get_environment();
-        Lottery::from(
-            ForestKind::iter()
-                .enumerate()
-                .map(|(i, fk)| {
-                    const CLUSTER_SIZE: f64 = 48.0;
-                    let nz = (FastNoise2d::new(i as u32 * 37)
-                        .get(wpos.map(|e| e as f64) / CLUSTER_SIZE)
-                        + 1.0)
-                        / 2.0;
-                    (fk.proclivity(&env) * nz, Some(fk))
-                })
-                .chain(std::iter::once((0.001, None)))
-                .collect::<Vec<_>>(),
-        )
+        make_forest_lottery_for_env(wpos, chunk.get_environment())
     }
 
     /// WARNING: Not currently used by the tree layer. Needs to be reworked.
@@ -2865,7 +2879,7 @@ impl WorldSim {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SimChunk {
     pub(crate) authored_cromatolis_v0: bool,
     /// Stable id of the specific authored region this chunk belongs to, if

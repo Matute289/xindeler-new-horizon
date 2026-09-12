@@ -19,7 +19,7 @@ use crate::{
     resources::{BattleMode, Secs},
     rtsim,
     states::basic_summon::BeamPillarIndicatorSpecifier,
-    terrain::SpriteKind,
+    terrain::{RegionalTerrainOverride, SpriteKind, TerrainOverrideId},
     trade::{TradeAction, TradeId},
     uid::Uid,
     util::Dir,
@@ -798,6 +798,22 @@ pub struct ActivateVaultLeverEvent {
     pub entity: EcsEntity,
     pub pos: Vec3<i32>,
     pub enable: bool,
+}
+
+/// Activates or deactivates one region's terrain-generation-input override
+/// (see `common::terrain::regional_override`). Mirrors
+/// `ActivateVaultLeverEvent`'s shape (a plain data struct here, handled by a
+/// `worldgen`-feature-gated `ServerEvent` impl); see
+/// `server/src/events/terrain_override.rs` for the handler, and
+/// `server/src/terrain_override.rs::apply` for the actual activate/deactivate
+/// logic it's a thin wrapper around.
+pub enum TerrainOverrideOp {
+    Activate(RegionalTerrainOverride),
+    Deactivate(TerrainOverrideId),
+}
+
+pub struct SetRegionalTerrainOverrideEvent {
+    pub op: TerrainOverrideOp,
 }
 
 pub struct RegrowHeadEvent {

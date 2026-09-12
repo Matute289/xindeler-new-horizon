@@ -28,7 +28,7 @@ use common::{
     lottery::LootSpec,
     resources::{Time, TimeOfDay},
     slowjob::SlowJobPool,
-    terrain::TerrainGrid,
+    terrain::{TerrainGrid, TerrainOverrides},
     util::Dir,
 };
 
@@ -122,6 +122,7 @@ pub struct Data<'a> {
     world: ReadExpect<'a, Arc<World>>,
     chunk_send_bus: ReadExpect<'a, EventBus<ChunkSendEntry>>,
     chunk_generator: WriteExpect<'a, ChunkGenerator>,
+    terrain_overrides: ReadExpect<'a, Arc<TerrainOverrides>>,
     terrain: WriteExpect<'a, TerrainGrid>,
     terrain_changes: Write<'a, TerrainChanges>,
     chunk_requests: Write<'a, Vec<ChunkRequest>>,
@@ -170,6 +171,7 @@ impl<'a> System<'a> for Sys {
                 &data.rtsim,
                 data.index.clone(),
                 (*data.time_of_day, data.calendar.clone()),
+                Some(Arc::clone(&data.terrain_overrides)),
             )
         });
 
@@ -177,7 +179,31 @@ impl<'a> System<'a> for Sys {
         // Fetch any generated `TerrainChunk`s and insert them into the terrain.
         // Also, send the chunk data to anybody that is close by.
         let mut new_chunks = Vec::new();
-        'insert_terrain_chunks: while let Some((key, res)) = data.chunk_generator.recv_new_chunk() {
+        'insert_terrain_chunks: while let Some((key, chunk_version, res)) =
+            data.chunk_generator.recv_new_chunk()
+        {
+            if chunk_version != data.chunk_generator.chunk_version(key) {
+                // This chunk's own invalidation epoch moved on after this
+                // job was requested (a regional terrain override
+                // activated/deactivated and its region touched THIS chunk
+                // specifically -- see `ChunkGenerator::chunk_versions`'s own
+                // doc comment for why this is scoped per chunk, not global),
+                // so this result may not honor the override state that
+                // actually applies now. Drop it and re-request under the
+                // current epoch rather than risk inserting stale terrain.
+                data.chunk_generator.generate_chunk(
+                    None,
+                    key,
+                    &data.slow_jobs,
+                    Arc::clone(&data.world),
+                    &data.rtsim,
+                    data.index.clone(),
+                    (*data.time_of_day, data.calendar.clone()),
+                    Some(Arc::clone(&data.terrain_overrides)),
+                );
+                continue 'insert_terrain_chunks;
+            }
+
             #[cfg_attr(not(feature = "persistent_world"), expect(unused_mut))]
             let (mut chunk, supplement) = match res {
                 Ok((chunk, supplement)) => (chunk, supplement),

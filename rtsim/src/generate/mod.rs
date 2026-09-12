@@ -101,6 +101,7 @@ impl Data {
             quests: Default::default(),
             banished: Default::default(),
             undercompact_gate: Default::default(),
+            terrain_overrides: Default::default(),
 
             tick: 0,
             time_of_day: TimeOfDay(settings.start_time),

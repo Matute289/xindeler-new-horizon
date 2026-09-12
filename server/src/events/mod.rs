@@ -44,6 +44,7 @@ mod invite;
 mod mounting;
 mod player;
 mod remote_sense;
+mod terrain_override;
 mod trade;
 mod transcription;
 mod undercompact_gate;
@@ -122,6 +123,7 @@ pub fn register_event_systems(builder: &mut DispatcherBuilder) {
     invite::register_event_systems(builder);
     group_manip::register_event_systems(builder);
     information::register_event_systems(builder);
+    terrain_override::register_event_systems(builder);
 }
 
 /// Server frontend events.

@@ -23,7 +23,7 @@ pub use self::{
 };
 use airship::AirshipSim;
 use architect::Architect;
-use common::{resources::TimeOfDay, rtsim::ActorId};
+use common::{resources::TimeOfDay, rtsim::ActorId, terrain::TerrainOverrides};
 use enum_map::{EnumArray, EnumMap, enum_map};
 use serde::{Deserialize, Serialize, de, ser};
 use std::{
@@ -73,6 +73,17 @@ pub struct Data {
     /// above -- an older save simply loads with an unsolved, empty state.
     #[serde(default)]
     pub undercompact_gate: UndercompactGateLevers,
+
+    /// Active regional terrain overrides (temperature/humidity events,
+    /// craters, authored bespoke biome events, etc. -- see
+    /// `common::terrain::regional_override`) that should survive a server
+    /// restart. Additive `#[serde(default)]` field, same convention as
+    /// `banished`/`undercompact_gate` above -- an older save simply loads
+    /// with no active overrides. Ephemeral overrides (`ephemeral: true`,
+    /// e.g. the `/terrain_override` admin command) are never written here --
+    /// see `server/src/terrain_override.rs::apply`.
+    #[serde(default)]
+    pub terrain_overrides: TerrainOverrides,
 
     #[serde(default)]
     pub tick: u64,
@@ -296,5 +307,60 @@ mod tests {
         let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
         assert_eq!(data.tick, 11);
         assert!(!data.undercompact_gate.is_solved());
+    }
+
+    /// The exact wire shape of an rtsim save written *before*
+    /// `terrain_overrides` existed: every field `Data` has today except that
+    /// one.
+    #[derive(Serialize)]
+    struct PreTerrainOverridesData {
+        version: u32,
+        nature: Nature,
+        actors: Actors,
+        sites: Sites,
+        factions: Factions,
+        reports: Reports,
+        architect: Architect,
+        quests: Quests,
+        banished: Banishments,
+        undercompact_gate: UndercompactGateLevers,
+        tick: u64,
+        time_of_day: TimeOfDay,
+        should_purge: bool,
+    }
+
+    /// `terrain_overrides` is an additive `#[serde(default)]` field, same
+    /// convention as `banished`/`undercompact_gate` above, so
+    /// `CURRENT_VERSION` does not move for it either. This pins that a save
+    /// missing the key entirely still loads through the real MessagePack
+    /// codec, at the unchanged version, with no active overrides.
+    #[test]
+    fn a_save_written_before_terrain_overrides_existed_still_loads_at_the_same_version() {
+        let old = PreTerrainOverridesData {
+            version: CURRENT_VERSION,
+            nature: Nature {
+                chunks: Grid::populate_from(Vec2::new(1, 1), |_| nature::Chunk {
+                    res: Default::default(),
+                }),
+            },
+            actors: Default::default(),
+            sites: Default::default(),
+            factions: Default::default(),
+            reports: Default::default(),
+            architect: Default::default(),
+            quests: Default::default(),
+            banished: Default::default(),
+            undercompact_gate: Default::default(),
+            tick: 13,
+            time_of_day: TimeOfDay(2222.0),
+            should_purge: false,
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect("serialise the old save");
+
+        let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
+        assert_eq!(data.tick, 13);
+        assert!(data.terrain_overrides.active.is_empty());
     }
 }

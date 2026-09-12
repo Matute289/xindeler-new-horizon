@@ -813,7 +813,8 @@ fn main() {
             .map(|v| v + sitepos.as_())
             .enumerate()
         {
-            let chunk = world.generate_chunk(index.as_index_ref(), spiralpos, None, || false, None);
+            let chunk =
+                world.generate_chunk(index.as_index_ref(), spiralpos, None, || false, None, None);
             if let Ok((chunk, _)) = chunk {
                 let uncompressed = encode_to_vec(&chunk, legacy()).unwrap();
                 let n = uncompressed.len();
