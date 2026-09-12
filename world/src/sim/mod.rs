@@ -1961,7 +1961,28 @@ impl WorldSim {
                 } else {
                     indirection_idx as usize
                 };
-                if authored_cromatolis_v0 || dh[lake_idx] < 0 {
+                // Cromatolis defaults every chunk's water to sea level rather
+                // than trusting the erosion sim's own fill_sinks height,
+                // since the hand-authored heightmap has many small unmarked
+                // dips that would otherwise all become spurious procedural
+                // lakes. The one deliberate exception: a basin the
+                // `elevated_lakes` mask (COW-3) actually marks as an
+                // authored elevated lake should get its real fill_sinks
+                // lake-bottom-fill height instead - that's the entire point
+                // of authoring one - as long as the erosion sim found it to
+                // be a genuinely closed basin (`dh[lake_idx] >= 0`; a
+                // `dh[lake_idx] < 0` marked "lake" is actually open
+                // drainage to a boundary/the ocean, so there's no real
+                // elevated pass height to use and it must still fall back
+                // to sea level like everything else).
+                let lake_is_authored_elevated = authored_cromatolis_v0
+                    && authored_elevated_lakes_layer
+                        .as_ref()
+                        .is_some_and(|values| {
+                            authored_layer_value_for_cromatolis_v0(map_size_lg, lake_idx, values)
+                                >= AUTHORED_WATER_THRESHOLD
+                        });
+                if dh[lake_idx] < 0 || (authored_cromatolis_v0 && !lake_is_authored_elevated) {
                     // This is either a boundary node (dh[chunk_idx] == -2, i.e. water is at sea
                     // level) or part of a lake that flows directly into the
                     // ocean.  In the former case, water is at sea level so we
@@ -1969,7 +1990,10 @@ impl WorldSim {
                     // have been a boundary node in the first place--meaning this node flows
                     // directly into the ocean.  In that case, its lake bottom
                     // is ocean, meaning its water is also at sea level.  Thus,
-                    // we return 0.0 in both cases.
+                    // we return 0.0 in both cases. On an authored Cromatolis
+                    // map, we also fall back to sea level for every basin
+                    // that isn't marked as an authored elevated lake, for
+                    // the reason explained above.
                     0.0
                 } else {
                     // This is not flowing into the ocean, so we can use the existing water_alt.
