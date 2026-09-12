@@ -282,6 +282,58 @@ pub enum TerrainOverridePayload {
     BiomeProfile(BiomeProfileOverride),
 }
 
+/// Per-byte-length cap on each field of [`TransitionNarrative`], enforced by
+/// [`TransitionNarrative::sanitize`] the same way ORACLE's `DmEvent` caps its
+/// own free-text fields — a region-wide override is player-triggerable
+/// content in some paths (e.g. an admin command), so it goes through the
+/// same anti-chaos discipline before ever reaching a client.
+pub const MAX_TRANSITION_TEXT_BYTES: usize = 512;
+
+/// Optional in-character text shown to affected players when a
+/// [`RegionalTerrainOverride`] activates or deactivates (the "screen goes
+/// black, an ominous line appears" moment). Left `None` on either side to
+/// fall back to a deterministic, localized line keyed by the override's
+/// payload kind and the operation - every override still gets *some* text,
+/// authoring one here is an enhancement, not a requirement.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TransitionNarrative {
+    pub on_activate: Option<String>,
+    pub on_deactivate: Option<String>,
+}
+
+impl TransitionNarrative {
+    /// Truncates both fields to [`MAX_TRANSITION_TEXT_BYTES`], walking back
+    /// to the nearest char boundary (never panics on a hostile string that
+    /// splits a multi-byte char exactly at the limit). Empty strings become
+    /// `None` so a blank authored value falls back to the localized default
+    /// the same as never authoring one at all.
+    pub fn sanitize(&mut self) {
+        for field in [&mut self.on_activate, &mut self.on_deactivate] {
+            if let Some(text) = field {
+                truncate_to(text, MAX_TRANSITION_TEXT_BYTES);
+                if text.is_empty() {
+                    *field = None;
+                }
+            }
+        }
+    }
+}
+
+/// Truncates `s` to at most `max_bytes` bytes, walking back to the nearest
+/// char boundary. Deliberately duplicated from
+/// `common/oracle/src/dm_event.rs` rather than depending on that crate -
+/// `common` must not gain a dependency on `common-oracle`.
+fn truncate_to(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
 /// One active (or, once deactivated, about-to-be-removed) regional terrain
 /// override.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -310,6 +362,10 @@ pub struct RegionalTerrainOverride {
     /// so does not survive a server restart — intended for admin/test
     /// overrides (e.g. the `/terrain_override` command).
     pub ephemeral: bool,
+    /// Optional authored transition-screen text. `#[serde(default)]` so an
+    /// override serialized before this field existed still deserializes.
+    #[serde(default)]
+    pub transition: TransitionNarrative,
 }
 
 impl RegionalTerrainOverride {

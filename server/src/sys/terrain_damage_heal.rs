@@ -153,6 +153,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: false,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 

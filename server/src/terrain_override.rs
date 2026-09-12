@@ -70,7 +70,8 @@ mod worldgen_impl {
     pub fn apply(op: TerrainOverrideOp, ctx: &mut ApplyContext) {
         match op {
             TerrainOverrideOp::Activate(new_override) => {
-                let new_override = bake_biome_profile_flood_to(new_override, ctx);
+                let mut new_override = bake_biome_profile_flood_to(new_override, ctx);
+                new_override.transition.sanitize();
                 let region = new_override.region.clone();
                 let wipe_player_edits = new_override.wipe_player_edits;
 
@@ -103,7 +104,8 @@ mod worldgen_impl {
                 // *during* it.
                 regenerate_region(&removed.region, false, ctx);
             },
-            TerrainOverrideOp::Replace(new_override) => {
+            TerrainOverrideOp::Replace(mut new_override) => {
+                new_override.transition.sanitize();
                 let mut snapshot = (**ctx.terrain_overrides).clone();
                 let Some(index) = snapshot.active.iter().position(|o| o.id == new_override.id)
                 else {
@@ -462,6 +464,7 @@ mod tests {
             // exercised too.
             wipe_player_edits: false,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 
@@ -676,6 +679,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: true,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 
@@ -856,6 +860,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: false,
             ephemeral: false,
+            transition: Default::default(),
         }
     }
 

@@ -9455,6 +9455,7 @@ fn crater_override(
         activated_at,
         wipe_player_edits: true,
         ephemeral: true,
+        transition: Default::default(),
     }
 }
 
@@ -9496,6 +9497,7 @@ fn debris_override(
         activated_at,
         wipe_player_edits: false,
         ephemeral: true,
+        transition: Default::default(),
     }
 }
 
@@ -9519,6 +9521,7 @@ fn handle_terrain_override(
         terrain::{
             BiomeProfileOverride, ClimateOverride, ClimateValue, OverrideRegion,
             RegionalTerrainOverride, TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+            TransitionNarrative,
         },
     };
 
@@ -9559,6 +9562,14 @@ fn handle_terrain_override(
                 activated_at,
                 wipe_player_edits: false,
                 ephemeral: true,
+                transition: TransitionNarrative {
+                    on_activate: Some(
+                        "The air turns bitterly cold as an unnatural frost creeps over the \
+                         land."
+                            .to_string(),
+                    ),
+                    on_deactivate: Some("The frost recedes, and warmth returns.".to_string()),
+                },
             };
             events.emit_now(SetRegionalTerrainOverrideEvent {
                 op: TerrainOverrideOp::Activate(new_override),
@@ -9619,6 +9630,7 @@ fn handle_terrain_override(
                 activated_at,
                 wipe_player_edits: false,
                 ephemeral: true,
+                transition: Default::default(),
             };
             events.emit_now(SetRegionalTerrainOverrideEvent {
                 op: TerrainOverrideOp::Activate(new_override),
