@@ -2,6 +2,7 @@ pub mod biome;
 pub mod block;
 pub mod chonk;
 pub mod map;
+pub mod regional_override;
 pub mod site;
 pub mod sprite;
 pub mod structure;
@@ -13,6 +14,10 @@ pub use self::{
     biome::BiomeKind,
     block::{Block, BlockKind},
     map::MapSizeLg,
+    regional_override::{
+        ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
+        TerrainOverridePayload, TerrainOverrides,
+    },
     site::SiteKindMeta,
     sprite::{SpriteCfg, SpriteKind, StructureSprite, UnlockKind},
     structure::{Structure, StructuresGroup},

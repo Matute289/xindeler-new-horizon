@@ -7,7 +7,7 @@ use common::{
     grid::Grid,
     mounting::VolumePos,
     rtsim::{ActorId, TerrainResource, WorldSettings},
-    terrain::{CoordinateConversions, SpriteKind},
+    terrain::{CoordinateConversions, SpriteKind, TerrainOverrides},
 };
 use common_ecs::{System, dispatch};
 use common_state::BlockDiff;
@@ -369,6 +369,16 @@ impl RtSim {
         f: impl FnOnce(&mut rtsim::data::UndercompactGateLevers) -> R,
     ) -> R {
         f(&mut self.state.data_mut().undercompact_gate)
+    }
+
+    /// Runs `f` against the persisted regional-terrain-override registry.
+    /// Same interior-mutability shape as [`Self::with_banishments`] above --
+    /// see that method's own doc comment. This is the persistence mirror
+    /// only -- the live, fast-access copy consumed every chunk generation is
+    /// the ECS `Arc<TerrainOverrides>` resource (see
+    /// `server/src/terrain_override.rs::apply`, which keeps both in sync).
+    pub fn with_terrain_overrides<R>(&self, f: impl FnOnce(&mut TerrainOverrides) -> R) -> R {
+        f(&mut self.state.data_mut().terrain_overrides)
     }
 
     /// Sets or clears an actor's `presence` — rtsim's own "is this actor in

@@ -127,6 +127,7 @@ command-spawn-desc = Spawn a test entity
 command-spot-desc = Find and teleport to the closest spot of a certain kind.
 command-sudo-desc = Run command as if you were another entity
 command-tell-desc = Send a message to another player
+command-terrain_override-desc = Activate (or clear) a regional terrain-generation override centered on yourself, for testing
 command-tether-desc = Tether another entity to yourself
 command-time-desc = Set the time of day
 command-time_scale-desc = Set scaling of delta time

@@ -4,8 +4,11 @@ use crate::rtsim::RtSim;
 #[cfg(not(feature = "worldgen"))]
 use crate::test_world::{IndexOwned, World};
 use common::{
-    calendar::Calendar, generation::ChunkSupplement, resources::TimeOfDay, slowjob::SlowJobPool,
-    terrain::TerrainChunk,
+    calendar::Calendar,
+    generation::ChunkSupplement,
+    resources::TimeOfDay,
+    slowjob::SlowJobPool,
+    terrain::{TerrainChunk, TerrainOverrides},
 };
 use hashbrown::{HashMap, hash_map::Entry};
 use rayon::iter::ParallelIterator;
@@ -18,8 +21,14 @@ use vek::*;
 #[cfg(feature = "worldgen")]
 use world::{IndexOwned, World};
 
+/// The chunk's key, the [`TerrainOverrides::version`] snapshot that was
+/// active when this job was requested (used to detect and discard a job
+/// that predates a since-changed override -- see
+/// `server/src/sys/terrain.rs`'s consumer), and the actual generation
+/// result.
 type ChunkGenResult = (
     Vec2<i32>,
+    u64,
     Result<(TerrainChunk, ChunkSupplement), Option<EcsEntity>>,
 );
 
@@ -50,6 +59,7 @@ impl ChunkGenerator {
         #[cfg(not(feature = "worldgen"))] _rtsim: &(),
         index: IndexOwned,
         time: (TimeOfDay, Calendar),
+        overrides: Option<Arc<TerrainOverrides>>,
     ) {
         let v = if let Entry::Vacant(v) = self.pending_chunks.entry(key) {
             v
@@ -67,10 +77,23 @@ impl ChunkGenerator {
         #[cfg(not(feature = "worldgen"))]
         let rtsim_resources = None;
 
+        // Snapshotted on the calling thread (never the version at the time
+        // the result eventually arrives) so a stale-in-flight job can be
+        // detected and discarded by `recv_new_chunk`'s consumer -- see this
+        // module's own `ChunkGenResult` doc comment.
+        let overrides_version = overrides.as_ref().map_or(0, |overrides| overrides.version);
+
         slowjob_pool.spawn("CHUNK_GENERATOR", move || {
             let index = index.as_index_ref();
             let payload = world
-                .generate_chunk(index, key, rtsim_resources, || cancel.load(Ordering::Relaxed), Some(time))
+                .generate_chunk(
+                    index,
+                    key,
+                    rtsim_resources,
+                    || cancel.load(Ordering::Relaxed),
+                    Some(time),
+                    overrides.as_deref(),
+                )
                 // FIXME: Since only the first entity who cancels a chunk is notified, we end up
                 // delaying chunk re-requests for up to 3 seconds for other clients, which isn't
                 // great.  We *could* store all the other requesting clients here, but it could
@@ -80,18 +103,18 @@ impl ChunkGenerator {
                 // some solution that always pushes chunk updates to players (rather than waiting
                 // for explicit requests) should adequately solve this kind of issue.
                 .map_err(|_| entity);
-            let _ = chunk_tx.send((key, payload));
+            let _ = chunk_tx.send((key, overrides_version, payload));
         });
     }
 
     pub fn recv_new_chunk(&mut self) -> Option<ChunkGenResult> {
         // Make sure chunk wasn't cancelled and if it was check to see if there are more
         // chunks to receive
-        while let Ok((key, res)) = self.chunk_rx.try_recv() {
+        while let Ok((key, overrides_version, res)) = self.chunk_rx.try_recv() {
             if self.pending_chunks.remove(&key).is_some() {
                 self.metrics.chunks_served.inc();
                 // TODO: do anything else if res is an Err?
-                return Some((key, res));
+                return Some((key, overrides_version, res));
             }
         }
 

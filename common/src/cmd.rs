@@ -556,6 +556,7 @@ pub enum ServerChatCommand {
     Spot,
     Sudo,
     Tell,
+    TerrainOverride,
     Tether,
     Time,
     TimeScale,
@@ -1298,6 +1299,18 @@ impl ServerChatCommand {
                 Content::localized("command-tell-desc"),
                 None,
             ),
+            ServerChatCommand::TerrainOverride => cmd(
+                vec![
+                    Enum(
+                        "kind",
+                        vec!["snow".to_string(), "clear".to_string()],
+                        Required,
+                    ),
+                    Integer("radius", 64, Optional),
+                ],
+                Content::localized("command-terrain_override-desc"),
+                Some(Admin),
+            ),
             ServerChatCommand::Time => cmd(
                 vec![Enum("time", TIMES.clone(), Optional)],
                 Content::localized("command-time-desc"),
@@ -1626,6 +1639,7 @@ impl ServerChatCommand {
             ServerChatCommand::Spot => "spot",
             ServerChatCommand::Sudo => "sudo",
             ServerChatCommand::Tell => "tell",
+            ServerChatCommand::TerrainOverride => "terrain_override",
             ServerChatCommand::Time => "time",
             ServerChatCommand::TimeScale => "time_scale",
             ServerChatCommand::Tp => "tp",

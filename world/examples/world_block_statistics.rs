@@ -176,9 +176,14 @@ fn generate(db_path: &str, ymin: Option<i32>, ymax: Option<i32>) -> Result<(), B
                 return;
             }
             let start_time = SystemTime::now();
-            if let Ok((chunk, _supplement)) =
-                world.generate_chunk(index.as_index_ref(), Vec2::new(x, y), None, || false, None)
-            {
+            if let Ok((chunk, _supplement)) = world.generate_chunk(
+                index.as_index_ref(),
+                Vec2::new(x, y),
+                None,
+                || false,
+                None,
+                None,
+            ) {
                 let end_time = SystemTime::now();
                 // TODO: The KiddoRgb wrapper type is necessary to satisfy trait bounds.
                 // We store the colors twice currently, once as coordinates and another time

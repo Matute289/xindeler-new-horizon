@@ -814,7 +814,7 @@ mod tests {
                 });
             let chunk_pos = feature.position.to_chunk_pos(map_size);
             world
-                .generate_chunk(index_ref, chunk_pos, None, || false, None)
+                .generate_chunk(index_ref, chunk_pos, None, || false, None, None)
                 .expect("chunk generation must not fail for a real, in-bounds Cromatolis chunk");
         }
     }

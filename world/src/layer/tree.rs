@@ -88,11 +88,17 @@ pub fn apply_trees_to(
         let trees = tree_cache.get(wpos2d, |wpos, seed| {
             let scale = 1.0;
             let inhabited = false;
-            let forest_kind = *info
-                .chunks()
-                .make_forest_lottery(wpos)
-                .choose_seeded(seed)
-                .as_ref()?;
+            // Uses `info.chunk()` (the chunk-level, once-per-`generate_chunk`
+            // climate-override-patched `SimChunk` -- see
+            // `world/src/lib.rs::generate_chunk`) rather than
+            // `info.chunks().make_forest_lottery(wpos)`, which would re-fetch
+            // the RAW, un-overridden `SimChunk` at `wpos` and silently bypass
+            // any active regional terrain override's effect on which trees
+            // spawn here.
+            let forest_kind =
+                *crate::sim::make_forest_lottery_for_env(wpos, info.chunk().get_environment())
+                    .choose_seeded(seed)
+                    .as_ref()?;
 
             let col = ColumnGen::new(info.chunks()).get((wpos, info.index(), calendar))?;
 

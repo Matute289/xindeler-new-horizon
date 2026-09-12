@@ -583,7 +583,16 @@ impl StateExt for State {
             .for_each(|chunk_key| {
                 {
                     let time = (*ecs.read_resource::<TimeOfDay>(), (*ecs.read_resource::<Calendar>()).clone());
-                    chunk_generator.generate_chunk(None, chunk_key, &slow_jobs, Arc::clone(world), &rtsim, index.clone(), time);
+                    chunk_generator.generate_chunk(
+                        None,
+                        chunk_key,
+                        &slow_jobs,
+                        Arc::clone(world),
+                        &rtsim,
+                        index.clone(),
+                        time,
+                        None,
+                    );
                 }
             });
         }

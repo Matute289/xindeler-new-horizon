@@ -28,7 +28,7 @@ use common::{
     lottery::LootSpec,
     resources::{Time, TimeOfDay},
     slowjob::SlowJobPool,
-    terrain::TerrainGrid,
+    terrain::{TerrainGrid, TerrainOverrides},
     util::Dir,
 };
 
@@ -110,6 +110,17 @@ event_emitters! {
     }
 }
 
+/// A generation result whose [`TerrainOverrides::version`] tag doesn't match
+/// the current one is stale: some regional terrain override activated or
+/// deactivated after this job was requested but before it completed, so the
+/// chunk it generated may not honor the override state that actually applies
+/// now. Discarding and re-requesting (rather than inserting it) is what
+/// stops that stale result from landing after a correct regeneration and
+/// silently overwriting it.
+fn is_stale(overrides_version: u64, current: &TerrainOverrides) -> bool {
+    overrides_version != current.version
+}
+
 #[derive(SystemData)]
 pub struct Data<'a> {
     events: Events<'a>,
@@ -122,6 +133,7 @@ pub struct Data<'a> {
     world: ReadExpect<'a, Arc<World>>,
     chunk_send_bus: ReadExpect<'a, EventBus<ChunkSendEntry>>,
     chunk_generator: WriteExpect<'a, ChunkGenerator>,
+    terrain_overrides: ReadExpect<'a, Arc<TerrainOverrides>>,
     terrain: WriteExpect<'a, TerrainGrid>,
     terrain_changes: Write<'a, TerrainChanges>,
     chunk_requests: Write<'a, Vec<ChunkRequest>>,
@@ -170,6 +182,7 @@ impl<'a> System<'a> for Sys {
                 &data.rtsim,
                 data.index.clone(),
                 (*data.time_of_day, data.calendar.clone()),
+                Some(Arc::clone(&data.terrain_overrides)),
             )
         });
 
@@ -177,7 +190,28 @@ impl<'a> System<'a> for Sys {
         // Fetch any generated `TerrainChunk`s and insert them into the terrain.
         // Also, send the chunk data to anybody that is close by.
         let mut new_chunks = Vec::new();
-        'insert_terrain_chunks: while let Some((key, res)) = data.chunk_generator.recv_new_chunk() {
+        'insert_terrain_chunks: while let Some((key, overrides_version, res)) =
+            data.chunk_generator.recv_new_chunk()
+        {
+            if is_stale(overrides_version, &data.terrain_overrides) {
+                // Some regional terrain override activated/deactivated after
+                // this job was requested -- its result may not honor the
+                // override state that actually applies now. Drop it and
+                // re-request under the current version rather than risk
+                // inserting stale terrain.
+                data.chunk_generator.generate_chunk(
+                    None,
+                    key,
+                    &data.slow_jobs,
+                    Arc::clone(&data.world),
+                    &data.rtsim,
+                    data.index.clone(),
+                    (*data.time_of_day, data.calendar.clone()),
+                    Some(Arc::clone(&data.terrain_overrides)),
+                );
+                continue 'insert_terrain_chunks;
+            }
+
             #[cfg_attr(not(feature = "persistent_world"), expect(unused_mut))]
             let (mut chunk, supplement) = match res {
                 Ok((chunk, supplement)) => (chunk, supplement),
