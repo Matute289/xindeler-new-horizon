@@ -101,8 +101,9 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // reveal set out of every crate the client dispatches is what makes it
     // structurally impossible for a client to grant itself one.
     dispatch::<detection::Sys>(dispatch_builder, &["Common_buff_sys"]);
-    // Gated by its own internal `SysScheduler` (once/minute), same pattern
-    // as `persistence::Sys` above -- no dependency, it only ever reads
+    // Gated by its own internal `SysScheduler`, run every 30s (the default
+    // interval -- no production call site overrides it, same as
+    // `persistence::Sys` above), no dependency: it only ever reads
     // `Arc<TerrainOverrides>` and emits events for
     // `events::terrain_override`'s handler to act on later this tick.
     #[cfg(feature = "worldgen")]

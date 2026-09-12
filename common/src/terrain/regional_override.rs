@@ -386,10 +386,6 @@ impl TerrainOverrides {
                         best_damage = Some((o, damage, blend));
                     }
                 },
-                // #[non_exhaustive]: future payload kinds have no
-                // column-level climate/damage effect of their own (yet).
-                #[allow(unreachable_patterns)]
-                _ => {},
             }
         }
 

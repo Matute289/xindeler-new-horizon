@@ -56,6 +56,12 @@ pub struct Colors {
     pub grass_high: (f32, f32, f32),
     pub tropical_high: (f32, f32, f32),
     pub mesa_layers: Vec<(f32, f32, f32)>,
+
+    /// The scorched/burnt ground tint a `Damage` regional terrain
+    /// override's crater/debris field blends toward (see
+    /// `DamageOverride::scorch`), designer-tunable the same way as every
+    /// other ground color above.
+    pub scorch: (f32, f32, f32),
 }
 
 /// Generalised power function, pushes values in the range 0-1 to extremes.
@@ -1003,6 +1009,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             grass_high,
             tropical_high,
             mesa_layers,
+            scorch,
         } = &index.colors.column;
 
         let cold_grass = (*cold_grass).into();
@@ -1023,6 +1030,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         let warm_stone_high = (*warm_stone_high).into();
         let grass_high = (*grass_high).into();
         let tropical_high = (*tropical_high).into();
+        let scorched_ground: Rgb<f32> = (*scorch).into();
 
         let dirt = Lerp::lerp(dirt_low, dirt_high, marble_mixed);
         let tundra = Lerp::lerp(snow, snow_high, 0.4 + marble_mixed * 0.6);
@@ -1297,11 +1305,11 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 
         // A scorched/burnt look for a crater or debris field, blended in by
         // `damage.scorch` (already faded by radial blend strength and
-        // healing progress -- see `DamageOverride::effects_at`). Applied to
-        // both `ground` and `sub_surface_color` so every downstream color
-        // (the beach/land blend and the sub-surface color field itself)
-        // reflects it consistently.
-        let scorched_ground: Rgb<f32> = Rgb::new(0.08, 0.07, 0.06);
+        // healing progress -- see `DamageOverride::effects_at`) toward
+        // `scorched_ground` (the designer-tunable `Colors::scorch` read
+        // above). Applied to both `ground` and `sub_surface_color` so every
+        // downstream color (the beach/land blend and the sub-surface color
+        // field itself) reflects it consistently.
         let ground = Rgb::lerp(ground, scorched_ground, damage.scorch);
         let sub_surface_color = Rgb::lerp(sub_surface_color, scorched_ground, damage.scorch);
         // Same net delta already baked into `alt`/`basement` above, applied

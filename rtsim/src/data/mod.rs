@@ -368,26 +368,58 @@ mod tests {
     /// alongside terrain-damage healing -- `TerrainOverrides` itself already
     /// loads fine on an old save (see the test above), but adding a variant
     /// to something already serialized deserves its own dedicated check.
-    /// This pins that a `terrain_overrides.active` list written before
-    /// `Damage` existed (containing only `Climate`-payload entries) still
-    /// loads through the real MessagePack codec.
+    ///
+    /// This encodes with a LOCAL, deliberately old-shaped payload enum that
+    /// has ONLY the `Climate` variant `TerrainOverridePayload` had before
+    /// `Damage` was added -- not the current (already-`Damage`-aware) enum
+    /// -- then decodes those bytes with the REAL, current
+    /// `TerrainOverrides`/`TerrainOverridePayload` type. Encoding and
+    /// decoding with the same (current) enum would only prove "this
+    /// round-trips today", which would pass identically even if `Damage`
+    /// had been inserted BEFORE `Climate` (which, given `rmp_serde`'s
+    /// index-based externally-tagged enum encoding, would have silently
+    /// broken every pre-existing save's `Climate` overrides) -- so this
+    /// mirrors `PreTerrainOverridesData`'s own old-wire-shape approach
+    /// above, applied to an enum variant rather than a struct field.
     #[test]
     fn a_climate_only_override_list_written_before_the_damage_payload_existed_still_loads() {
-        use common::terrain::{
-            ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride,
-            TerrainOverrideId, TerrainOverridePayload,
-        };
+        use common::terrain::{ClimateOverride, ClimateValue, OverrideRegion, TerrainOverrideId};
 
-        let old = TerrainOverrides {
+        /// The exact wire shape of `TerrainOverridePayload` before `Damage`
+        /// was added -- `Climate` only, at the same variant position (index
+        /// 0) it holds in the real, current enum.
+        #[derive(Serialize)]
+        enum OldTerrainOverridePayload {
+            Climate(ClimateOverride),
+        }
+
+        #[derive(Serialize)]
+        struct OldRegionalTerrainOverride {
+            id: TerrainOverrideId,
+            region: OverrideRegion,
+            payload: OldTerrainOverridePayload,
+            priority: i32,
+            activated_at: f64,
+            wipe_player_edits: bool,
+            ephemeral: bool,
+        }
+
+        #[derive(Serialize)]
+        struct OldTerrainOverrides {
+            version: u64,
+            active: Vec<OldRegionalTerrainOverride>,
+        }
+
+        let old = OldTerrainOverrides {
             version: 3,
-            active: vec![RegionalTerrainOverride {
+            active: vec![OldRegionalTerrainOverride {
                 id: TerrainOverrideId(7),
                 region: OverrideRegion::Circle {
                     center: Vec2::new(10, 20),
                     radius: 50.0,
                     edge: 8.0,
                 },
-                payload: TerrainOverridePayload::Climate(ClimateOverride {
+                payload: OldTerrainOverridePayload::Climate(ClimateOverride {
                     temp: Some(ClimateValue::Set(-5.0)),
                     humidity: None,
                     tree_density_mul: None,
@@ -401,11 +433,17 @@ mod tests {
 
         let mut encoded = Vec::new();
         rmp_serde::encode::write_named(&mut encoded, &old)
-            .expect("serialise a climate-only override list");
+            .expect("serialise a climate-only override list using the OLD (pre-Damage) enum");
 
         let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..])
             .expect("a climate-only override list written before Damage existed must still load");
-        assert_eq!(decoded, old);
+        assert_eq!(decoded.version, old.version);
+        assert_eq!(decoded.active.len(), 1);
+        let climate = decoded.active[0]
+            .climate()
+            .expect("must decode back to a Climate payload, not silently become something else");
+        assert_eq!(climate.temp, Some(ClimateValue::Set(-5.0)));
+        assert!(climate.humidity.is_none());
     }
 
     /// A save containing a `Damage`-payload override (the new payload kind
