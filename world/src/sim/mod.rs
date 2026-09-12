@@ -1961,20 +1961,6 @@ impl WorldSim {
                 } else {
                     indirection_idx as usize
                 };
-                // Cromatolis defaults every chunk's water to sea level rather
-                // than trusting the erosion sim's own fill_sinks height,
-                // since the hand-authored heightmap has many small unmarked
-                // dips that would otherwise all become spurious procedural
-                // lakes. The one deliberate exception: a basin the
-                // `elevated_lakes` mask (COW-3) actually marks as an
-                // authored elevated lake should get its real fill_sinks
-                // lake-bottom-fill height instead - that's the entire point
-                // of authoring one - as long as the erosion sim found it to
-                // be a genuinely closed basin (`dh[lake_idx] >= 0`; a
-                // `dh[lake_idx] < 0` marked "lake" is actually open
-                // drainage to a boundary/the ocean, so there's no real
-                // elevated pass height to use and it must still fall back
-                // to sea level like everything else).
                 let lake_is_authored_elevated = authored_cromatolis_v0
                     && authored_elevated_lakes_layer
                         .as_ref()
@@ -1982,18 +1968,11 @@ impl WorldSim {
                             authored_layer_value_for_cromatolis_v0(map_size_lg, lake_idx, values)
                                 >= AUTHORED_WATER_THRESHOLD
                         });
-                if dh[lake_idx] < 0 || (authored_cromatolis_v0 && !lake_is_authored_elevated) {
-                    // This is either a boundary node (dh[chunk_idx] == -2, i.e. water is at sea
-                    // level) or part of a lake that flows directly into the
-                    // ocean.  In the former case, water is at sea level so we
-                    // just return 0.0.  In the latter case, the lake bottom must
-                    // have been a boundary node in the first place--meaning this node flows
-                    // directly into the ocean.  In that case, its lake bottom
-                    // is ocean, meaning its water is also at sea level.  Thus,
-                    // we return 0.0 in both cases. On an authored Cromatolis
-                    // map, we also fall back to sea level for every basin
-                    // that isn't marked as an authored elevated lake, for
-                    // the reason explained above.
+                if cromatolis_forces_sea_level(
+                    authored_cromatolis_v0,
+                    dh[lake_idx],
+                    lake_is_authored_elevated,
+                ) {
                     0.0
                 } else {
                     // This is not flowing into the ocean, so we can use the existing water_alt.
@@ -2976,6 +2955,78 @@ fn authored_layer_value_for_cromatolis_v0(
         .copied()
         .unwrap_or_default()
         .clamp(0.0, 1.0)
+}
+
+/// Decides whether a chunk's `water_alt` should be forced to sea level
+/// (`true`) rather than the erosion sim's own `fill_sinks` height (`false`),
+/// for the basin identified by `dh_lake_idx`/`lake_is_authored_elevated`.
+///
+/// For a non-Cromatolis (procedural) world this must reduce to exactly
+/// `dh_lake_idx < 0` (the original, upstream Veloren behavior: sea level
+/// only for a boundary node or a lake draining straight to the ocean). The
+/// `authored_cromatolis_v0` check on the right-hand side of the `||` is
+/// load-bearing, not redundant with the one already gating
+/// `lake_is_authored_elevated`'s own definition: on a non-Cromatolis world
+/// `lake_is_authored_elevated` is trivially `false`, so without this second
+/// check `!lake_is_authored_elevated` alone would force every procedural
+/// lake to sea level too. Do not simplify this away.
+///
+/// On an authored Cromatolis map, every basin still defaults to sea level
+/// (the hand-authored heightmap has many small unmarked dips that would
+/// otherwise all become spurious procedural lakes) - the one exception is a
+/// basin the `elevated_lakes` mask (COW-3) marks as an authored elevated
+/// lake AND the erosion sim also found genuinely closed
+/// (`dh_lake_idx >= 0`); a marked-but-open-draining basin has no real
+/// elevated pass height to use either, so it still falls back to sea level.
+fn cromatolis_forces_sea_level(
+    authored_cromatolis_v0: bool,
+    dh_lake_idx: isize,
+    lake_is_authored_elevated: bool,
+) -> bool {
+    dh_lake_idx < 0 || (authored_cromatolis_v0 && !lake_is_authored_elevated)
+}
+
+#[cfg(test)]
+mod cromatolis_forces_sea_level_tests {
+    use super::cromatolis_forces_sea_level;
+
+    #[test]
+    fn procedural_world_matches_upstream_veloren_behavior() {
+        // authored_cromatolis_v0=false must reduce to exactly `dh_lake_idx < 0`,
+        // regardless of `lake_is_authored_elevated` (which can't be true here
+        // in practice, but the function must still be safe if it were).
+        assert!(cromatolis_forces_sea_level(false, -1, false));
+        assert!(cromatolis_forces_sea_level(false, -1, true));
+        assert!(!cromatolis_forces_sea_level(false, 0, false));
+        assert!(!cromatolis_forces_sea_level(false, 0, true));
+    }
+
+    #[test]
+    fn cromatolis_unmarked_basin_still_falls_back_to_sea_level() {
+        // A closed basin (dh >= 0) that the elevated_lakes mask never
+        // flagged - the "many small unmarked dips" case the sea-level
+        // default exists to suppress.
+        assert!(cromatolis_forces_sea_level(true, 5, false));
+    }
+
+    #[test]
+    fn cromatolis_marked_but_open_draining_basin_still_falls_back_to_sea_level() {
+        // A basin the mask marks as an elevated lake, but the erosion sim
+        // still found open-draining to a boundary/the ocean - no real
+        // elevated pass height exists, matches the documented real-world
+        // canyon case (pixel (30816,640) / chunk (1926,40)) before it's
+        // re-terraformed into a genuinely closed basin.
+        assert!(cromatolis_forces_sea_level(true, -1, true));
+    }
+
+    #[test]
+    fn cromatolis_marked_and_closed_basin_uses_the_real_fill_sinks_height() {
+        // The actual fix: a basin that's both mask-marked AND genuinely
+        // closed per the erosion sim is the one case that should NOT force
+        // sea level, letting the real fill_sinks lake-bottom-fill value
+        // through instead.
+        assert!(!cromatolis_forces_sea_level(true, 5, true));
+    }
 }
 
 fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Option<Way> {
