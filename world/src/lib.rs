@@ -367,7 +367,27 @@ impl World {
     ) -> Result<(TerrainChunk, ChunkSupplement), ()> {
         let calendar = time.as_ref().map(|(_, cal)| cal);
 
-        let mut sampler = self.sample_blocks_with_overrides(overrides);
+        // Filtered ONCE per `generate_chunk` call to just the overrides that
+        // actually touch this chunk (an AABB-then-exact `touches_chunk`
+        // check per override, done here rather than per column). Both the
+        // column-level sampler below and the chunk-level `Cow<SimChunk>`
+        // patch further down reuse this same small subset, so a chunk
+        // nowhere near any active override never has `ColumnGen::get`
+        // scanning the full, potentially server-wide, active-overrides list
+        // once per block-column -- and a chunk that IS touched only ever
+        // gets filtered once, not once per column either.
+        let touching_overrides: Option<TerrainOverrides> = overrides.and_then(|overrides| {
+            let active: Vec<_> = overrides
+                .overrides_touching_chunk(chunk_pos, TerrainChunkSize::RECT_SIZE)
+                .cloned()
+                .collect();
+            (!active.is_empty()).then_some(TerrainOverrides {
+                version: overrides.version,
+                active,
+            })
+        });
+
+        let mut sampler = self.sample_blocks_with_overrides(touching_overrides.as_ref());
 
         let chunk_wpos2d = chunk_pos * TerrainChunkSize::RECT_SIZE.map(|e| e as i32);
         let chunk_center_wpos2d = chunk_wpos2d + TerrainChunkSize::RECT_SIZE.map(|e| e as i32 / 2);
@@ -413,13 +433,13 @@ impl World {
         // `apply_wildlife_supplement`, `layer::tree`'s real call site).
         // `Cow::Borrowed` (zero-cost) unless an override actually touches
         // this chunk.
-        let sim_chunk: Cow<SimChunk> = match overrides
-            .filter(|overrides| overrides.touches_chunk(chunk_pos, TerrainChunkSize::RECT_SIZE))
-        {
+        let sim_chunk: Cow<SimChunk> = match touching_overrides.as_ref() {
             Some(overrides) => {
-                let (temp, humidity) =
-                    overrides.climate_at(chunk_center_wpos2d, sim_chunk.temp, sim_chunk.humidity);
-                let tree_density_mul = overrides.tree_density_mul_at(chunk_center_wpos2d);
+                let (temp, humidity, tree_density_mul) = overrides.climate_and_tree_density_mul_at(
+                    chunk_center_wpos2d,
+                    sim_chunk.temp,
+                    sim_chunk.humidity,
+                );
                 // NOTE: `(*sim_chunk).clone()`, not `sim_chunk.clone()` --
                 // `sim_chunk` is already `&SimChunk` here, and `&T` is
                 // itself always `Clone` (a cheap pointer copy) regardless of

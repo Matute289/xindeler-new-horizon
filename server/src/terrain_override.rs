@@ -153,23 +153,37 @@ mod worldgen_impl {
         let half_extent = (bounds.max - bounds.min) / 2;
         let radius_chunks = (half_extent.x.max(half_extent.y) / chunk_size.x as i32).max(0) + 2;
 
-        // Every connected player's chunk position and current view
-        // distance -- computed once, outside the per-chunk loop below.
-        let player_chunks: Vec<(Vec2<i32>, u32)> = (&ctx.entities, &ctx.positions, &ctx.presences)
-            .join()
-            .map(|(_, pos, presence)| {
-                (
-                    TerrainGrid::chunk_key(pos.0.xy().as_::<i32>()),
-                    presence.terrain_view_distance.current(),
-                )
-            })
-            .collect();
+        // Every connected player's entity, chunk position, and current view
+        // distance -- computed once, outside the per-chunk loop below, via
+        // a single ECS join. Reused inside the loop for BOTH the
+        // reposition check (is a player standing in this chunk?) and the
+        // view-distance check (is this chunk in anyone's view?) in one
+        // pass over this small `Vec`, rather than re-joining
+        // `(&ctx.entities, &ctx.positions)` from scratch for every touched
+        // chunk.
+        let player_chunks: Vec<(specs::Entity, Vec2<i32>, u32)> =
+            (&ctx.entities, &ctx.positions, &ctx.presences)
+                .join()
+                .map(|(entity, pos, presence)| {
+                    (
+                        entity,
+                        TerrainGrid::chunk_key(pos.0.xy().as_::<i32>()),
+                        presence.terrain_view_distance.current(),
+                    )
+                })
+                .collect();
 
         for offset in Spiral2d::with_radius(radius_chunks) {
             let key = center_chunk + offset;
             if !region.touches_chunk(key, chunk_size) {
                 continue;
             }
+
+            // Scoped invalidation: only chunks THIS region actually touches
+            // get their generation-job epoch bumped -- see
+            // `ChunkGenerator::chunk_versions`'s own doc comment for why
+            // this must never be a global counter.
+            ctx.chunk_generator.invalidate_chunk(key);
 
             #[cfg(feature = "persistent_world")]
             if wipe_player_edits && let Some(persistence) = ctx.terrain_persistence.as_mut() {
@@ -180,18 +194,18 @@ mod worldgen_impl {
 
             remove_chunk(ctx.terrain, ctx.terrain_changes, key);
 
-            for (entity, pos) in (&ctx.entities, &ctx.positions).join() {
-                if TerrainGrid::chunk_key(pos.0.xy().as_::<i32>()) == key {
-                    let _ = ctx.reposition.insert(entity, RepositionToFreeSpace {
+            let mut within_any_players_vd = false;
+            for (entity, player_chunk, vd) in &player_chunks {
+                if *player_chunk == key {
+                    let _ = ctx.reposition.insert(*entity, RepositionToFreeSpace {
                         needs_ground: true,
                         modify_waypoints: false,
                     });
                 }
+                if (key - player_chunk).map(|e| e.unsigned_abs()).reduce_max() <= *vd {
+                    within_any_players_vd = true;
+                }
             }
-
-            let within_any_players_vd = player_chunks.iter().any(|(player_chunk, vd)| {
-                (key - player_chunk).map(|e| e.unsigned_abs()).reduce_max() <= *vd
-            });
             if within_any_players_vd {
                 ctx.chunk_generator.generate_chunk(
                     None,

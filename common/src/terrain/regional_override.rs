@@ -268,16 +268,29 @@ impl TerrainOverrides {
 
     /// Blends `base_temp`/`base_humidity` (whatever ambient world-gen already
     /// computed at `wpos`) toward the governing active `Climate` override's
-    /// value, by that override's radial falloff at `wpos`. Returns the
-    /// inputs unchanged if no `Climate` override applies here.
+    /// value, and computes its tree-density multiplier, all from a SINGLE
+    /// [`Self::governing_climate_override`] scan-and-distance-calc pass over
+    /// `active` -- this is the method `world/src/column.rs`'s
+    /// `ColumnGen::get` actually calls (once per block-column, the hottest
+    /// per-chunk-generation path in the engine), specifically so it never
+    /// pays for that scan twice over for the same `wpos`.
+    /// [`Self::climate_at`]/[`Self::tree_density_mul_at`] are thin
+    /// single-purpose wrappers around this for callers (tests, future
+    /// one-off consumers) that only want one piece and don't care about
+    /// paying for the scan twice.
     ///
-    /// Called at COLUMN granularity (once per block-column, in
-    /// `world/src/column.rs`'s `ColumnGen::get`), which is what gives the
-    /// override's edge its soft radial falloff rather than a hard
-    /// per-chunk cutoff.
-    pub fn climate_at(&self, wpos: Vec2<i32>, base_temp: f32, base_humidity: f32) -> (f32, f32) {
+    /// Called at COLUMN granularity (once per block-column), which is what
+    /// gives the override's edge its soft radial falloff rather than a hard
+    /// per-chunk cutoff. Returns the ambient inputs unchanged (and a `1.0`
+    /// tree-density multiplier) if no `Climate` override applies here.
+    pub fn climate_and_tree_density_mul_at(
+        &self,
+        wpos: Vec2<i32>,
+        base_temp: f32,
+        base_humidity: f32,
+    ) -> (f32, f32, f32) {
         let Some((climate, blend)) = self.governing_climate_override(wpos) else {
-            return (base_temp, base_humidity);
+            return (base_temp, base_humidity, 1.0);
         };
         let temp = climate
             .temp
@@ -287,20 +300,28 @@ impl TerrainOverrides {
             .humidity
             .map(|v| lerp(base_humidity, v.target(base_humidity), blend))
             .unwrap_or(base_humidity);
+        let tree_density_mul = climate
+            .tree_density_mul
+            .map(|mul| lerp(1.0, mul, blend))
+            .unwrap_or(1.0);
+        (temp, humidity, tree_density_mul)
+    }
+
+    /// See [`Self::climate_and_tree_density_mul_at`] -- this discards its
+    /// `tree_density_mul` output. Prefer the combined method in a hot loop
+    /// that needs both.
+    pub fn climate_at(&self, wpos: Vec2<i32>, base_temp: f32, base_humidity: f32) -> (f32, f32) {
+        let (temp, humidity, _) =
+            self.climate_and_tree_density_mul_at(wpos, base_temp, base_humidity);
         (temp, humidity)
     }
 
-    /// The tree-density multiplier the governing active `Climate` override
-    /// applies at `wpos`, blended by that override's radial falloff (`1.0`,
-    /// i.e. no-op, when none applies or the override doesn't set one).
+    /// See [`Self::climate_and_tree_density_mul_at`] -- this discards its
+    /// temp/humidity output. Prefer the combined method in a hot loop that
+    /// needs both.
     pub fn tree_density_mul_at(&self, wpos: Vec2<i32>) -> f32 {
-        let Some((climate, blend)) = self.governing_climate_override(wpos) else {
-            return 1.0;
-        };
-        climate
-            .tree_density_mul
-            .map(|mul| lerp(1.0, mul, blend))
-            .unwrap_or(1.0)
+        let (_, _, tree_density_mul) = self.climate_and_tree_density_mul_at(wpos, 0.0, 0.0);
+        tree_density_mul
     }
 }
 
@@ -423,6 +444,36 @@ mod tests {
         };
         let (temp, _) = overrides.climate_at(Vec2::zero(), 20.0, 0.5);
         assert_eq!(temp, 99.0);
+    }
+
+    /// `governing_climate_override`'s tie-break rule (`Ordering::Equal`
+    /// remapped to `Ordering::Greater` in its `max_by` comparator) isn't
+    /// obvious from reading the priority field alone -- pin down that an
+    /// exact priority tie deterministically favors the first-registered
+    /// override (earlier position in `active`), not the last one, and not
+    /// something arbitrary/unstable.
+    #[test]
+    fn equal_priority_override_ties_are_broken_by_insertion_order() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![
+                climate_override(1, Vec2::zero(), 100.0, 0.0, Some(ClimateValue::Set(5.0)), 0),
+                climate_override(
+                    2,
+                    Vec2::zero(),
+                    100.0,
+                    0.0,
+                    Some(ClimateValue::Set(99.0)),
+                    0,
+                ),
+            ],
+        };
+        let (temp, _) = overrides.climate_at(Vec2::zero(), 20.0, 0.5);
+        assert_eq!(
+            temp, 5.0,
+            "on an exact priority tie the first-registered override (index 0 in `active`) must \
+             win deterministically"
+        );
     }
 
     #[test]

@@ -110,17 +110,6 @@ event_emitters! {
     }
 }
 
-/// A generation result whose [`TerrainOverrides::version`] tag doesn't match
-/// the current one is stale: some regional terrain override activated or
-/// deactivated after this job was requested but before it completed, so the
-/// chunk it generated may not honor the override state that actually applies
-/// now. Discarding and re-requesting (rather than inserting it) is what
-/// stops that stale result from landing after a correct regeneration and
-/// silently overwriting it.
-fn is_stale(overrides_version: u64, current: &TerrainOverrides) -> bool {
-    overrides_version != current.version
-}
-
 #[derive(SystemData)]
 pub struct Data<'a> {
     events: Events<'a>,
@@ -190,15 +179,18 @@ impl<'a> System<'a> for Sys {
         // Fetch any generated `TerrainChunk`s and insert them into the terrain.
         // Also, send the chunk data to anybody that is close by.
         let mut new_chunks = Vec::new();
-        'insert_terrain_chunks: while let Some((key, overrides_version, res)) =
+        'insert_terrain_chunks: while let Some((key, chunk_version, res)) =
             data.chunk_generator.recv_new_chunk()
         {
-            if is_stale(overrides_version, &data.terrain_overrides) {
-                // Some regional terrain override activated/deactivated after
-                // this job was requested -- its result may not honor the
-                // override state that actually applies now. Drop it and
-                // re-request under the current version rather than risk
-                // inserting stale terrain.
+            if chunk_version != data.chunk_generator.chunk_version(key) {
+                // This chunk's own invalidation epoch moved on after this
+                // job was requested (a regional terrain override
+                // activated/deactivated and its region touched THIS chunk
+                // specifically -- see `ChunkGenerator::chunk_versions`'s own
+                // doc comment for why this is scoped per chunk, not global),
+                // so this result may not honor the override state that
+                // actually applies now. Drop it and re-request under the
+                // current epoch rather than risk inserting stale terrain.
                 data.chunk_generator.generate_chunk(
                     None,
                     key,
