@@ -65,6 +65,7 @@ event_emitters! {
         energy_change: event::EnergyChangeEvent,
         knockback: event::KnockbackEvent,
         sprite_light: event::ToggleSpriteLightEvent,
+        vault_lever: event::ActivateVaultLeverEvent,
         transform: event::TransformEvent,
         regrow_head: event::RegrowHeadEvent,
         create_aura_entity: event::CreateAuraEntityEvent,

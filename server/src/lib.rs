@@ -45,6 +45,8 @@ pub mod sys;
 #[cfg(feature = "persistent_world")]
 pub mod terrain_persistence;
 #[cfg(not(feature = "worldgen"))] mod test_world;
+#[cfg(feature = "worldgen")]
+mod undercompact_gate;
 
 #[cfg(feature = "worldgen")] mod weather;
 
@@ -1133,6 +1135,15 @@ impl Server {
                 gate_checkpoint::ensure_evercross_guard(&mut self.state, &self.world);
                 self.green_post_checkpoint_refresh = Duration::ZERO;
             }
+
+            // COW-7b: Undercompact gate lever puzzle restart recovery -- a
+            // one-shot check per newly-loaded chunk, not a 1Hz poll like the
+            // two reconciliations above. See the function's own doc comment.
+            undercompact_gate::ensure_undercompact_gate_restart_recovery(
+                &mut self.state,
+                &self.world,
+                self.index.as_index_ref(),
+            );
         }
 
         let before_handle_events = Instant::now();

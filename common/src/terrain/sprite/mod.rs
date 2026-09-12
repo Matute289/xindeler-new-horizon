@@ -502,6 +502,18 @@ sprites! {
         SeaDecorPillar    = 0x1D,
         MagicalSeal       = 0x1E,
         JugAndCupsCoastal = 0x1F,
+
+        // COW-7b: the Undercompact gate antechamber's two-lever puzzle.
+        // Two distinct sprite kinds (not one sprite flipped via its `Ori`
+        // attribute) on purpose: `gear_wheel-0`'s reused model is
+        // point-symmetric (a 4-toothed rosette), so a yaw rotation of any
+        // multiple of 90 degrees is visually identical -- confirmed by
+        // inspecting its voxel data, not assumed. `VaultLeverPulled` gets
+        // its own `sprite_manifest.ron` entry with a lowered Z offset
+        // instead, which is unmistakable regardless of the model's own
+        // rotational symmetry.
+        VaultLever        = 0x20,
+        VaultLeverPulled  = 0x21,
     },
     Lamp = 8 has Ori, LightEnabled {
         // Standalone lights

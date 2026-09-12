@@ -791,6 +791,15 @@ pub struct ToggleSpriteLightEvent {
     pub enable: bool,
 }
 
+/// COW-7b: a player pulled one of the Undercompact gate antechamber's two
+/// vault levers. Mirrors [`ToggleSpriteLightEvent`]'s shape exactly; see
+/// `server/src/events/undercompact_gate.rs` for the handler.
+pub struct ActivateVaultLeverEvent {
+    pub entity: EcsEntity,
+    pub pos: Vec3<i32>,
+    pub enable: bool,
+}
+
 pub struct RegrowHeadEvent {
     pub entity: EcsEntity,
 }

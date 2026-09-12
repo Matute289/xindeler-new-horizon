@@ -361,6 +361,16 @@ impl RtSim {
         f(&mut self.state.data_mut().banished)
     }
 
+    /// Runs `f` against the persisted Undercompact gate lever registry
+    /// (COW-7b). Same interior-mutability shape as [`Self::with_banishments`]
+    /// above -- see that method's own doc comment.
+    pub fn with_undercompact_gate<R>(
+        &self,
+        f: impl FnOnce(&mut rtsim::data::UndercompactGateLevers) -> R,
+    ) -> R {
+        f(&mut self.state.data_mut().undercompact_gate)
+    }
+
     /// Sets or clears an actor's `presence` — rtsim's own "is this actor in
     /// the world at all" flag (`rtsim::data::actor::Actor::presence`).
     /// Clearing it is how a banished rtsim actor is put into limbo: it stops

@@ -5,7 +5,10 @@ use crate::{
         controller::InputKind, item::ItemDefinitionIdOwned, slot::InvSlotId,
     },
     consts::MAX_INTERACT_RANGE,
-    event::{HelpDownedEvent, InventoryManipEvent, LocalEvent, ToggleSpriteLightEvent},
+    event::{
+        ActivateVaultLeverEvent, HelpDownedEvent, InventoryManipEvent, LocalEvent,
+        ToggleSpriteLightEvent,
+    },
     outcome::Outcome,
     states::behavior::{CharacterBehavior, JoinData},
     terrain::SpriteKind,
@@ -172,6 +175,12 @@ impl CharacterBehavior for Data {
                                                 pos,
                                                 enable,
                                             }),
+                                        SpriteInteractKind::LeverPull(enable) => output_events
+                                            .emit_server(ActivateVaultLeverEvent {
+                                                entity: data.entity,
+                                                pos,
+                                                enable,
+                                            }),
                                         _ => output_events.emit_server(InventoryManipEvent(
                                             data.entity,
                                             inv_manip,
@@ -269,6 +278,15 @@ pub enum SpriteInteractKind {
     Unlock,
     Fallback,
     ToggleLight(bool),
+    /// COW-7b: pulling a vault lever. Modeled on `ToggleLight`'s shape --
+    /// simple, non-consuming, visually-flippable -- but always `true`: a
+    /// lever is pulled, not toggled back and forth, by this generic
+    /// interact path. The visual flip itself is a `SpriteKind` swap
+    /// (`VaultLever` -> `VaultLeverPulled`, a lowered `sprite_manifest.ron`
+    /// Z offset), not an `Ori` rotation: the reused `gear_wheel-0` model is
+    /// point-symmetric, so a yaw rotation would have been visually
+    /// identical.
+    LeverPull(bool),
 }
 
 impl From<SpriteKind> for Option<SpriteInteractKind> {
@@ -311,6 +329,7 @@ impl From<SpriteKind> for Option<SpriteInteractKind> {
             | SpriteKind::TerracottaKeyhole
             | SpriteKind::MyrmidonKeyhole
             | SpriteKind::MinotaurKeyhole => Some(SpriteInteractKind::Unlock),
+            SpriteKind::VaultLever => Some(SpriteInteractKind::LeverPull(true)),
             // Collectible checked in addition to container for case that sprite requires a tool to
             // collect and cannot be collected by hand, yet still meets the container check
             _ if sprite_kind.is_defined_as_container()
@@ -357,6 +376,11 @@ impl SpriteInteractKind {
                 Duration::from_secs_f32(0.1),
                 Duration::from_secs_f32(0.2),
                 Duration::from_secs_f32(0.1),
+            ),
+            Self::LeverPull(_) => (
+                Duration::from_secs_f32(0.3),
+                Duration::from_secs_f32(0.3),
+                Duration::from_secs_f32(0.2),
             ),
         }
     }

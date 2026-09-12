@@ -1,11 +1,11 @@
 pub use common::event::{
-    ArcingEvent, AuraEvent, BanishEvent, BonkEvent, BuffEvent, ChangeAbilityEvent, ChangeBodyEvent,
-    ChangeStanceEvent, ChatEvent, ClientDisconnectEvent, ClientDisconnectWithoutPersistenceEvent,
-    ComboChangeEvent, CommandEvent, CommandPetEvent, CreateAuraEntityEvent,
-    CreateFloatingDiskEvent, CreateItemDropEvent, CreateNpcEvent, CreateNpcGroupEvent,
-    CreateObjectEvent, CreatePoolEvent, CreateShipEvent, CreateSpecialEntityEvent,
-    CreateSpriteEvent, DeleteCharacterEvent, DeleteEvent, DestroyEvent, DialogueEvent,
-    DismissSummonEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
+    ActivateVaultLeverEvent, ArcingEvent, AuraEvent, BanishEvent, BonkEvent, BuffEvent,
+    ChangeAbilityEvent, ChangeBodyEvent, ChangeStanceEvent, ChatEvent, ClientDisconnectEvent,
+    ClientDisconnectWithoutPersistenceEvent, ComboChangeEvent, CommandEvent, CommandPetEvent,
+    CreateAuraEntityEvent, CreateFloatingDiskEvent, CreateItemDropEvent, CreateNpcEvent,
+    CreateNpcGroupEvent, CreateObjectEvent, CreatePoolEvent, CreateShipEvent,
+    CreateSpecialEntityEvent, CreateSpriteEvent, DeleteCharacterEvent, DeleteEvent, DestroyEvent,
+    DialogueEvent, DismissSummonEvent, DispelIllusionEvent, DownedEvent, EnergyChangeEvent,
     EntityAttackedHookEvent, EventBus, ExitIngameEvent, ExplosionEvent, GroupManipEvent,
     HealthChangeEvent, HelpDownedEvent, InitializeCharacterEvent, InitializeSpectatorEvent,
     InitiateInviteEvent, InventoryManipEvent, InviteResponseEvent, KillEvent, KnockbackEvent,
@@ -107,6 +107,7 @@ macro_rules! server_events {
             ResolveRemoteSenseEvent
             ResolveIdentifyEvent
             DispelIllusionEvent
+            ActivateVaultLeverEvent
         }
 
         #[cfg(feature = "plugins")]

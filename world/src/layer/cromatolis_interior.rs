@@ -49,13 +49,14 @@
 //! physical space only.
 
 use crate::{
-    Canvas, CanvasInfo,
+    Canvas, CanvasInfo, IndexRef,
+    sim::WorldSim,
     util::{FastNoise2d, SQUARE_4, sampler::Sampler},
 };
 use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
     terrain::{
-        Block, BlockKind, CoordinateConversions, MapSizeLg, TerrainChunkSize,
+        Block, BlockKind, CoordinateConversions, MapSizeLg, SpriteKind, TerrainChunkSize,
         quadratic_nearest_point, river_spline_coeffs,
     },
     vol::RectVolSize,
@@ -102,6 +103,42 @@ const TERRACE_STEP: f64 = 4.0;
 /// Half-width (in `t`, 0..1 along the connection) of the solid plug built
 /// for sealed connections.
 const GATE_PLUG_HALF_T: f64 = 0.05;
+
+// ---------------------------------------------------------------------
+// COW-7b: the Undercompact gate's two-lever puzzle. Only the antechamber's
+// physical geometry (its room, and the sealed connection's plug) is this
+// module's concern -- world-gen places the two lever sprites (this module),
+// and [`undercompact_gate_antechamber_world_geometry`] lets server-side
+// runtime code (lever activation, restart recovery) resolve the same
+// positions fresh, without hardcoding coordinates. No puzzle *state* lives
+// here; that is `rtsim::data::undercompact_gate`.
+// ---------------------------------------------------------------------
+
+/// The authored id of the antechamber level added between
+/// `level.thurnak_lower_mines` and `level.undercompact_threshold`.
+const GATE_ANTECHAMBER_LEVEL_ID: &str = "level.undercompact_gate_antechamber";
+/// The authored id of the sealed connection carrying the gate's plug --
+/// unchanged by COW-7b, only its `from_level_id` moved to the antechamber.
+const GATE_SEALED_CONNECTION_ID: &str = "connection.deep_compact_gate";
+const UNDERCOMPACT_INTERIOR_ID: &str = "interior.the_undercompact";
+
+/// Fraction of the antechamber room's own radius the two levers are offset
+/// from its center, flanking opposite walls.
+const GATE_LEVER_OFFSET_FRAC: f32 = 0.6;
+
+/// The two lever world positions inside the antechamber room, derived
+/// purely from the room's own resolved geometry -- never a hardcoded
+/// coordinate. Called identically by world-gen (to place the sprites, see
+/// `carve_gate_levers`) and by the public runtime accessor below (to
+/// recognize which lever an interaction hit), so the two can never
+/// disagree.
+fn antechamber_lever_positions(center2d: Vec2<i32>, radius: f32, floor_z: i32) -> [Vec3<i32>; 2] {
+    let offset = (radius * GATE_LEVER_OFFSET_FRAC).round() as i32;
+    [
+        Vec3::new(center2d.x - offset, center2d.y, floor_z),
+        Vec3::new(center2d.x + offset, center2d.y, floor_z),
+    ]
+}
 
 // ---------------------------------------------------------------------
 // RON data model. Every "categorical" field in the source data
@@ -464,6 +501,11 @@ struct TraversalStyle {
 // ---------------------------------------------------------------------
 
 struct LevelGeom {
+    /// The authored level id (e.g. `level.undercompact_gate_antechamber`).
+    /// Only consulted by carve-time code that needs to recognize one
+    /// specific, named authored room (see [`GATE_ANTECHAMBER_LEVEL_ID`]) --
+    /// every other level is carved generically and never inspects this.
+    id: String,
     anchor2d: Vec2<i32>,
     floor_z: i32,
     ceiling_z: i32,
@@ -472,7 +514,12 @@ struct LevelGeom {
     generation: Generation,
 }
 
+#[derive(Clone)]
 struct ConnectionSeg {
+    /// The authored connection id (e.g. `connection.deep_compact_gate`).
+    /// Only consulted by the COW-7b public geometry accessor below, which
+    /// needs to find this one specific sealed connection by name.
+    id: String,
     a: Vec3<i32>,
     b: Vec3<i32>,
     a_ceiling: i32,
@@ -499,6 +546,11 @@ struct WaterSeg {
 /// invariant this module wants to rely on.
 #[derive(Default)]
 pub(crate) struct InteriorLayout {
+    /// The authored interior id (e.g. `interior.the_undercompact`). Lets a
+    /// consumer of the cached `Vec<InteriorLayout>` (see
+    /// `Index::cromatolis_interiors`) pick out one specific interior without
+    /// re-deriving it from the raw RON graph.
+    id: String,
     levels: Vec<LevelGeom>,
     connections: Vec<ConnectionSeg>,
     water: Vec<WaterSeg>,
@@ -508,6 +560,15 @@ pub(crate) struct InteriorLayout {
 }
 
 pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
+    build_all_layouts_for_map_size(info.chunks().map_size_lg())
+}
+
+/// The `map_size`-only core of [`build_all_layouts`], split out so it can
+/// also be called by [`undercompact_gate_antechamber_world_geometry`]'s
+/// `Index::cromatolis_interiors` cache-population closure below -- that
+/// runtime accessor has a `WorldSim` (hence a `MapSizeLg`) but no live
+/// `CanvasInfo`.
+fn build_all_layouts_for_map_size(map_size: MapSizeLg) -> Vec<InteriorLayout> {
     let graphs = match InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET) {
         Ok(graphs) => graphs,
         Err(err) => {
@@ -536,7 +597,6 @@ pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
         Err(err) => warn!(?err, "Failed to load Cromatolis interior places"),
     }
 
-    let map_size = info.chunks().map_size_lg();
     let world_size =
         TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
 
@@ -545,7 +605,10 @@ pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
         .iter()
         .filter(|graph| ENABLED_INTERIOR_IDS.contains(&graph.id.as_str()))
         .filter_map(|graph| match build_layout(graph, map_size, world_size) {
-            Ok(layout) => Some(layout),
+            Ok(mut layout) => {
+                layout.id = graph.id.clone();
+                Some(layout)
+            },
             Err(err) => {
                 warn!(interior_id = %graph.id, %err, "Failed to build authored interior layout");
                 None
@@ -673,6 +736,7 @@ fn build_layout(
                 0.0
             };
         levels.push(LevelGeom {
+            id: level.id.clone(),
             anchor2d,
             floor_z: level.floor_z_m,
             ceiling_z: level.ceiling_z_m,
@@ -695,6 +759,7 @@ fn build_layout(
         let to = levels_by_id[conn.to_level_id.as_str()];
         let traversal = Traversal::parse(&conn.traversal)?;
         connections.push(ConnectionSeg {
+            id: conn.id.clone(),
             a: from2d.with_z(from.floor_z_m),
             b: to2d.with_z(to.floor_z_m),
             a_ceiling: from.ceiling_z_m,
@@ -732,6 +797,9 @@ fn build_layout(
     let bounds = compute_bounds(&levels, &connections, &water);
 
     Ok(InteriorLayout {
+        // Set by the caller (`build_all_layouts_for_map_size`), which knows
+        // the graph's own `id` -- this function only builds the geometry.
+        id: String::new(),
         levels,
         connections,
         water,
@@ -937,6 +1005,13 @@ pub fn apply_cromatolis_interiors_to(canvas: &mut Canvas) {
                     plug_sealed_gate(canvas, wpos2d, conn);
                 }
             }
+            // Placed last so the lever sprites always win the column over
+            // whatever the room/connection/plug carving above wrote there.
+            for level in &interior.levels {
+                if level.id == GATE_ANTECHAMBER_LEVEL_ID {
+                    carve_gate_levers(canvas, wpos2d, level);
+                }
+            }
         }
     });
 }
@@ -1096,28 +1171,50 @@ fn carve_connection(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &
     }
 }
 
+/// If column `wpos2d` falls inside the solid plug built for a sealed
+/// connection, returns the inclusive `(floor_z, ceiling_z)` range the plug
+/// occupies there. Shared by [`plug_sealed_gate`] (world-gen carving) and
+/// [`UndercompactGateAntechamberGeometry::plug_contains_column`] (the COW-7b
+/// runtime clear-on-solve write), so the two can never disagree about the
+/// plug's exact shape.
+fn plug_column_z_range(seg: &ConnectionSeg, wpos2d: Vec2<i32>) -> Option<(i32, i32)> {
+    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+    let (t, dist) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5))?;
+    if (t - 0.5).abs() > GATE_PLUG_HALF_T || dist > (seg.style.radius as f64) + 1.0 {
+        return None;
+    }
+
+    let floor_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t) as i32 - 1;
+    let ceiling_z = Lerp::lerp_unclamped(seg.a_ceiling as f64, seg.b_ceiling as f64, t) as i32 + 1;
+    Some((floor_z, ceiling_z))
+}
+
 /// Fills a solid stone plug across the full cross-section of `seg` at its
 /// midpoint, guaranteeing a sealed connection stays physically blocked
 /// regardless of any carving `carve_connection` already did there. No
 /// puzzle/interaction logic.
 fn plug_sealed_gate(canvas: &mut Canvas, wpos2d: Vec2<i32>, seg: &ConnectionSeg) {
-    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
-    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let Some((t, dist)) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5)) else {
+    let Some((floor_z, ceiling_z)) = plug_column_z_range(seg, wpos2d) else {
         return;
     };
-    if (t - 0.5).abs() > GATE_PLUG_HALF_T {
-        return;
-    }
-    if dist > (seg.style.radius as f64) + 1.0 {
-        return;
-    }
-
-    let floor_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t) as i32 - 1;
-    let ceiling_z = Lerp::lerp_unclamped(seg.a_ceiling as f64, seg.b_ceiling as f64, t) as i32 + 1;
     let plug = Block::new(BlockKind::Rock, Rgb::new(60, 55, 60));
     for z in floor_z..=ceiling_z {
         canvas.set(wpos2d.with_z(z), plug);
+    }
+}
+
+/// Places the two lever sprites inside the antechamber room (COW-7b). Both
+/// start in their default, unpulled `Ori`. World-gen never needs to know
+/// which levers (if any) were already pulled in a previous session -- a
+/// solved gate is recovered on chunk load by clearing the *plug*
+/// (`server/src/undercompact_gate.rs`'s restart-recovery pass), not by
+/// re-carving the levers themselves.
+fn carve_gate_levers(canvas: &mut Canvas, wpos2d: Vec2<i32>, level: &LevelGeom) {
+    for lever_pos in antechamber_lever_positions(level.anchor2d, level.radius, level.floor_z) {
+        if wpos2d == lever_pos.xy() {
+            canvas.set(lever_pos, Block::air(SpriteKind::VaultLever));
+        }
     }
 }
 
@@ -1157,6 +1254,160 @@ fn carve_water(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &Water
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Public runtime accessors (COW-7b). Mirrors the "Public anchor accessors"
+// convention `world::civ::cromatolis_fortification_gate_world_aabb` already
+// established: resolve the authored geometry fresh from `sim` (not cached,
+// not requiring a live `Canvas`), so a server-side runtime consumer never
+// has to duplicate or hardcode this module's authoring math. Only ever
+// called by low-cadence server code (a lever interaction, a restart-recovery
+// check on chunk load) -- never a per-column hot path.
+// ---------------------------------------------------------------------
+
+/// World-space geometry for the Undercompact gate antechamber's two-lever
+/// puzzle: the antechamber room itself (for lever placement -- though
+/// world-gen is the one that actually carves the levers; this lets runtime
+/// code recognize an interaction against the same positions) and the sealed
+/// connection's solid plug (for the one-shot clear-on-solve write).
+pub struct UndercompactGateAntechamberGeometry {
+    /// The antechamber room's own 2D center and vertical band.
+    pub room_center2d: Vec2<i32>,
+    pub room_radius: f32,
+    pub room_floor_z: i32,
+    pub room_ceiling_z: i32,
+    /// The two lever world positions, in the exact same order/positions
+    /// `carve_gate_levers` placed their sprites at.
+    pub lever_positions: [Vec3<i32>; 2],
+    /// A conservative world-space AABB covering the sealed gate's solid
+    /// plug. Only a scan bound -- [`Self::plug_contains_column`] is the
+    /// precise per-column test.
+    pub plug_aabb: Aabb<i32>,
+    plug_seg: ConnectionSeg,
+}
+
+impl UndercompactGateAntechamberGeometry {
+    /// If column `wpos2d` is inside the sealed gate's solid plug, returns
+    /// the inclusive `(floor_z, ceiling_z)` range to clear there -- the
+    /// exact same test [`plug_sealed_gate`] used to fill it in the first
+    /// place (via the shared [`plug_column_z_range`] helper), so clearing
+    /// never carves outside, or leaves a sliver inside, the authored plug
+    /// shape.
+    pub fn plug_contains_column(&self, wpos2d: Vec2<i32>) -> Option<(i32, i32)> {
+        plug_column_z_range(&self.plug_seg, wpos2d)
+    }
+}
+
+/// Resolves [`UndercompactGateAntechamberGeometry`] from the same cached,
+/// per-`Index` `Vec<InteriorLayout>` [`apply_cromatolis_interiors_to`]
+/// already populates at world-gen time (`Index::cromatolis_interiors`) --
+/// **not** a fresh RON-parse-plus-BFS-rebuild on every call. By the time any
+/// server-side runtime consumer (COW-7b's lever-activation event, its
+/// restart-recovery chunk-load check) has a reason to call this, the
+/// relevant chunk has already been generated once through the ordinary
+/// world-gen pipeline, which means that cache is already warm and this call
+/// is just a cheap `OnceLock` read. The `get_or_init` closure below only
+/// ever actually runs in the (practically unreachable, but still handled
+/// correctly) case where this is called before any authored Cromatolis
+/// chunk has ever been generated for this `Index`.
+///
+/// Returns `None` if the authored asset is missing, malformed, or (should
+/// never happen for the real data) does not contain both the antechamber
+/// level and the sealed connection.
+pub fn undercompact_gate_antechamber_world_geometry(
+    index: IndexRef,
+    sim: &WorldSim,
+) -> Option<UndercompactGateAntechamberGeometry> {
+    let map_size = sim.map_size_lg();
+    let layouts = index
+        .cromatolis_interiors
+        .get_or_init(|| build_all_layouts_for_map_size(map_size));
+    let layout = layouts
+        .iter()
+        .find(|layout| layout.id == UNDERCOMPACT_INTERIOR_ID)?;
+    geometry_from_layout(layout)
+}
+
+/// The `map_size`-only core of
+/// [`undercompact_gate_antechamber_world_geometry`], split out so it is
+/// testable without a full, expensive `WorldSim::generate`/`Index` -- every
+/// other test in this module already builds layouts from a bare `MapSizeLg`
+/// the same way. Always builds fresh (no cache), which is fine: it exists
+/// only for tests, never called on any per-tick path -- `#[cfg(test)]` since
+/// it genuinely has no non-test caller (unlike the pub accessor above,
+/// which always goes through the `Index` cache instead).
+#[cfg(test)]
+fn undercompact_gate_antechamber_geometry_for_map_size(
+    map_size: MapSizeLg,
+) -> Option<UndercompactGateAntechamberGeometry> {
+    let layouts = build_all_layouts_for_map_size(map_size);
+    let layout = layouts
+        .iter()
+        .find(|layout| layout.id == UNDERCOMPACT_INTERIOR_ID)?;
+    geometry_from_layout(layout)
+}
+
+/// Shared by both accessors above: picks the antechamber room and the
+/// sealed connection's segment out of an already-resolved `layout`.
+fn geometry_from_layout(layout: &InteriorLayout) -> Option<UndercompactGateAntechamberGeometry> {
+    let room = layout
+        .levels
+        .iter()
+        .find(|level| level.id == GATE_ANTECHAMBER_LEVEL_ID)?;
+    let plug_seg = layout
+        .connections
+        .iter()
+        .find(|conn| conn.id == GATE_SEALED_CONNECTION_ID)?
+        .clone();
+
+    let lever_positions = antechamber_lever_positions(room.anchor2d, room.radius, room.floor_z);
+    let plug_aabb = plug_bounding_aabb(&plug_seg);
+
+    Some(UndercompactGateAntechamberGeometry {
+        room_center2d: room.anchor2d,
+        room_radius: room.radius,
+        room_floor_z: room.floor_z,
+        room_ceiling_z: room.ceiling_z,
+        lever_positions,
+        plug_aabb,
+        plug_seg,
+    })
+}
+
+/// A conservative world-space AABB covering `seg`'s solid plug: samples the
+/// plug's own `t` range (see [`GATE_PLUG_HALF_T`]) and unions each sample's
+/// footprint. The plug spans only a short arc of the connection's spline, so
+/// a handful of samples is enough to bound it tightly without evaluating
+/// every column.
+fn plug_bounding_aabb(seg: &ConnectionSeg) -> Aabb<i32> {
+    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+    let ctrl_offset = ((b2 - a2) * 0.5
+        + ((b2 - a2) * 0.5).rotated_z(std::f64::consts::FRAC_PI_2) * 6.0 * seg.curve as f64)
+        .map(|e| e as f32);
+    let spline = river_spline_coeffs(a2, ctrl_offset, b2);
+    let radius = seg.style.radius as f64 + 1.0;
+
+    const SAMPLES: i32 = 8;
+    let mut min = Vec3::new(i32::MAX, i32::MAX, i32::MAX);
+    let mut max = Vec3::new(i32::MIN, i32::MIN, i32::MIN);
+    for i in 0..=SAMPLES {
+        let t =
+            0.5 - GATE_PLUG_HALF_T + (GATE_PLUG_HALF_T * 2.0) * (f64::from(i) / f64::from(SAMPLES));
+        let p = spline.x * (t * t) + spline.y * t + spline.z;
+        let floor_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t) as i32 - 1;
+        let ceiling_z =
+            Lerp::lerp_unclamped(seg.a_ceiling as f64, seg.b_ceiling as f64, t) as i32 + 1;
+
+        min.x = min.x.min((p.x - radius).floor() as i32);
+        min.y = min.y.min((p.y - radius).floor() as i32);
+        min.z = min.z.min(floor_z);
+        max.x = max.x.max((p.x + radius).ceil() as i32);
+        max.y = max.y.max((p.y + radius).ceil() as i32);
+        max.z = max.z.max(ceiling_z);
+    }
+    Aabb { min, max }
 }
 
 #[cfg(test)]
@@ -1350,6 +1601,7 @@ mod tests {
     #[test]
     fn level_touches_chunk_accepts_a_near_chunk_and_rejects_a_far_one() {
         let level = LevelGeom {
+            id: "level.test".to_string(),
             anchor2d: Vec2::new(1000, 1000),
             floor_z: 0,
             ceiling_z: 40,
@@ -1392,6 +1644,7 @@ mod tests {
             Vec2::new(1000.0 + reach, 1000.0),
         ];
         let base = LevelGeom {
+            id: "level.test".to_string(),
             anchor2d: Vec2::new(1000, 1000),
             floor_z: 0,
             ceiling_z: 40,
@@ -1485,6 +1738,92 @@ mod tests {
         ]);
     }
 
+    /// COW-7b T8: the public runtime accessor must resolve against the real
+    /// authored asset, find the antechamber and the (moved) sealed
+    /// connection, and hand back two distinct lever positions actually
+    /// inside the antechamber room.
+    #[test]
+    fn undercompact_gate_antechamber_geometry_resolves_against_the_real_asset() {
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let geometry = undercompact_gate_antechamber_geometry_for_map_size(map_size)
+            .expect("the real asset must carry the antechamber level and the sealed connection");
+
+        let [lever_a, lever_b] = geometry.lever_positions;
+        assert_ne!(lever_a, lever_b, "the two levers must not coincide");
+        for lever in [lever_a, lever_b] {
+            assert_eq!(lever.z, geometry.room_floor_z);
+            let dist = lever
+                .xy()
+                .map(|e| e as f32)
+                .distance(geometry.room_center2d.map(|e| e as f32));
+            assert!(
+                dist <= geometry.room_radius,
+                "lever at {lever:?} must sit inside the antechamber room (radius {})",
+                geometry.room_radius
+            );
+        }
+
+        // The plug AABB must sit between the antechamber and the threshold,
+        // not overlap the room itself.
+        assert!(geometry.plug_aabb.min.x <= geometry.plug_aabb.max.x);
+        assert!(geometry.plug_aabb.min.y <= geometry.plug_aabb.max.y);
+        assert!(geometry.plug_aabb.min.z <= geometry.plug_aabb.max.z);
+    }
+
+    /// The one-shot clear-on-solve write (server-side) has to clear exactly
+    /// the columns `plug_sealed_gate` would have filled -- this pins that
+    /// [`UndercompactGateAntechamberGeometry::plug_contains_column`] agrees
+    /// with the real, resolved plug segment at its own midpoint.
+    #[test]
+    fn plug_contains_column_matches_the_real_plug_at_its_midpoint() {
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let geometry = undercompact_gate_antechamber_geometry_for_map_size(map_size).unwrap();
+
+        let a2 = geometry.plug_seg.a.xy().map(|e| e as f64 + 0.5);
+        let b2 = geometry.plug_seg.b.xy().map(|e| e as f64 + 0.5);
+        let midpoint = curve_midpoint(
+            geometry.plug_seg.a,
+            geometry.plug_seg.b,
+            geometry.plug_seg.curve,
+        );
+        let (t, _) = spline_sample(a2, b2, geometry.plug_seg.curve, midpoint).unwrap();
+        assert!((t - 0.5).abs() < 0.15);
+
+        let column = midpoint.map(|e| e.floor() as i32);
+        assert!(
+            geometry.plug_contains_column(column).is_some(),
+            "a column at the plug's own midpoint must be reported as inside the plug"
+        );
+
+        // Far away from the connection entirely: never inside the plug.
+        assert!(
+            geometry
+                .plug_contains_column(Vec2::new(-999_999, -999_999))
+                .is_none()
+        );
+    }
+
+    /// The plug bounding AABB is only a scan bound -- it must at least fully
+    /// contain the exact midpoint column [`plug_contains_column`] reports as
+    /// inside the plug, or a caller that only scans within the AABB (T7/T9's
+    /// clear-on-solve write) would miss real plug blocks.
+    #[test]
+    fn plug_aabb_contains_the_exact_plug_midpoint() {
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let geometry = undercompact_gate_antechamber_geometry_for_map_size(map_size).unwrap();
+        let midpoint = curve_midpoint(
+            geometry.plug_seg.a,
+            geometry.plug_seg.b,
+            geometry.plug_seg.curve,
+        )
+        .map(|e| e.floor() as i32);
+
+        assert!(geometry.plug_aabb.min.x <= midpoint.x && midpoint.x <= geometry.plug_aabb.max.x);
+        assert!(geometry.plug_aabb.min.y <= midpoint.y && midpoint.y <= geometry.plug_aabb.max.y);
+        let (floor_z, ceiling_z) = geometry.plug_contains_column(midpoint).unwrap();
+        assert!(geometry.plug_aabb.min.z <= floor_z && ceiling_z <= geometry.plug_aabb.max.z);
+    }
+
     /// Loads the real authored asset (not a hand-written fixture) and
     /// builds a full layout for every interior it defines -- both the
     /// enabled one and the not-yet-enabled one -- so a real data error
@@ -1535,8 +1874,8 @@ mod tests {
 
         assert_eq!(
             layout.levels.len(),
-            8,
-            "the_undercompact has 8 authored levels"
+            9,
+            "the_undercompact has 9 authored levels (including the COW-7b lever antechamber)"
         );
         let sealed: Vec<_> = layout.connections.iter().filter(|c| c.sealed).collect();
         assert_eq!(
@@ -1551,8 +1890,9 @@ mod tests {
             .filter(|l| l.generation == Generation::AuthoredGeometry)
             .count();
         assert_eq!(
-            authored_geometry_count, 2,
-            "the sealed gate room and the finale are the only authored_geometry levels"
+            authored_geometry_count, 3,
+            "the lever antechamber, the sealed gate room, and the finale are the only \
+             authored_geometry levels"
         );
     }
 

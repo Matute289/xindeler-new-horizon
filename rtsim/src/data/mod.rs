@@ -8,6 +8,7 @@ pub mod quest;
 pub mod report;
 pub mod sentiment;
 pub mod site;
+pub mod undercompact_gate;
 
 pub use self::{
     actor::{Actor, Actors},
@@ -18,6 +19,7 @@ pub use self::{
     report::{Report, ReportId, ReportKind, Reports},
     sentiment::{Sentiment, Sentiments},
     site::{Site, SiteId, Sites},
+    undercompact_gate::{UndercompactGateLever, UndercompactGateLevers},
 };
 use airship::AirshipSim;
 use architect::Architect;
@@ -64,6 +66,13 @@ pub struct Data {
     /// empty registry.
     #[serde(default)]
     pub banished: Banishments,
+
+    /// COW-7b: which of the Undercompact gate antechamber's two vault
+    /// levers have been pulled, and whether the gate has been solved.
+    /// Additive `#[serde(default)]` field, same convention as `banished`
+    /// above -- an older save simply loads with an unsolved, empty state.
+    #[serde(default)]
+    pub undercompact_gate: UndercompactGateLevers,
 
     #[serde(default)]
     pub tick: u64,
@@ -234,5 +243,58 @@ mod tests {
         let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
         assert_eq!(data.tick, 7);
         assert!(data.banished.is_empty());
+    }
+
+    /// The exact wire shape of an rtsim save written *before*
+    /// `undercompact_gate` existed (COW-7b): every field `Data` has today
+    /// except that one.
+    #[derive(Serialize)]
+    struct PreUndercompactGateData {
+        version: u32,
+        nature: Nature,
+        actors: Actors,
+        sites: Sites,
+        factions: Factions,
+        reports: Reports,
+        architect: Architect,
+        quests: Quests,
+        banished: Banishments,
+        tick: u64,
+        time_of_day: TimeOfDay,
+        should_purge: bool,
+    }
+
+    /// `undercompact_gate` is an additive `#[serde(default)]` field, same
+    /// convention as `banished` above, so `CURRENT_VERSION` does not move
+    /// for it either. This pins that a save missing the key entirely still
+    /// loads through the real MessagePack codec, at the unchanged version,
+    /// with the puzzle unsolved.
+    #[test]
+    fn a_save_written_before_the_undercompact_gate_registry_still_loads_at_the_same_version() {
+        let old = PreUndercompactGateData {
+            version: CURRENT_VERSION,
+            nature: Nature {
+                chunks: Grid::populate_from(Vec2::new(1, 1), |_| nature::Chunk {
+                    res: Default::default(),
+                }),
+            },
+            actors: Default::default(),
+            sites: Default::default(),
+            factions: Default::default(),
+            reports: Default::default(),
+            architect: Default::default(),
+            quests: Default::default(),
+            banished: Default::default(),
+            tick: 11,
+            time_of_day: TimeOfDay(4321.0),
+            should_purge: false,
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect("serialise the old save");
+
+        let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
+        assert_eq!(data.tick, 11);
+        assert!(!data.undercompact_gate.is_solved());
     }
 }
