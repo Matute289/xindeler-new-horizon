@@ -363,4 +363,101 @@ mod tests {
         assert_eq!(data.tick, 13);
         assert!(data.terrain_overrides.active.is_empty());
     }
+
+    /// `TerrainOverridePayload::Damage` is a brand new enum variant added
+    /// alongside terrain-damage healing -- `TerrainOverrides` itself already
+    /// loads fine on an old save (see the test above), but adding a variant
+    /// to something already serialized deserves its own dedicated check.
+    /// This pins that a `terrain_overrides.active` list written before
+    /// `Damage` existed (containing only `Climate`-payload entries) still
+    /// loads through the real MessagePack codec.
+    #[test]
+    fn a_climate_only_override_list_written_before_the_damage_payload_existed_still_loads() {
+        use common::terrain::{
+            ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride,
+            TerrainOverrideId, TerrainOverridePayload,
+        };
+
+        let old = TerrainOverrides {
+            version: 3,
+            active: vec![RegionalTerrainOverride {
+                id: TerrainOverrideId(7),
+                region: OverrideRegion::Circle {
+                    center: Vec2::new(10, 20),
+                    radius: 50.0,
+                    edge: 8.0,
+                },
+                payload: TerrainOverridePayload::Climate(ClimateOverride {
+                    temp: Some(ClimateValue::Set(-5.0)),
+                    humidity: None,
+                    tree_density_mul: None,
+                }),
+                priority: 5,
+                activated_at: 0.0,
+                wipe_player_edits: false,
+                ephemeral: false,
+            }],
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old)
+            .expect("serialise a climate-only override list");
+
+        let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..])
+            .expect("a climate-only override list written before Damage existed must still load");
+        assert_eq!(decoded, old);
+    }
+
+    /// A save containing a `Damage`-payload override (the new payload kind
+    /// added alongside terrain-damage healing) must round-trip through the
+    /// same MessagePack codec real rtsim saves use.
+    #[test]
+    fn a_damage_payload_override_round_trips_through_the_real_codec() {
+        use common::terrain::{
+            DamageOverride, DamageShape, OverrideRegion, RegionalTerrainOverride,
+            TerrainOverrideId, TerrainOverridePayload,
+        };
+
+        let overrides = TerrainOverrides {
+            version: 9,
+            active: vec![RegionalTerrainOverride {
+                id: TerrainOverrideId(42),
+                region: OverrideRegion::Circle {
+                    center: Vec2::new(-30, 40),
+                    radius: 24.0,
+                    edge: 6.0,
+                },
+                payload: TerrainOverridePayload::Damage(DamageOverride {
+                    shapes: vec![
+                        DamageShape::Crater {
+                            max_depth: 12.0,
+                            rim_height: 2.0,
+                        },
+                        DamageShape::Debris {
+                            rubble_density: 0.2,
+                            felled_tree_chance: 0.05,
+                        },
+                    ],
+                    scorch: 0.8,
+                    vegetation_mul: 0.1,
+                    heal_progress: 0.25,
+                    heal_stages: 4,
+                    heal_interval: 600.0,
+                    next_heal_at: 1234.5,
+                }),
+                priority: 50,
+                activated_at: 10.0,
+                wipe_player_edits: true,
+                ephemeral: false,
+            }],
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &overrides)
+            .expect("serialise a damage override");
+
+        let decoded: TerrainOverrides = rmp_serde::decode::from_read(&encoded[..])
+            .expect("a damage-payload override must load through the real codec");
+        assert_eq!(decoded, overrides);
+    }
 }

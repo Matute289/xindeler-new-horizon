@@ -21,6 +21,12 @@ pub mod server_info;
 pub mod subscription;
 pub mod teleporter;
 pub mod terrain;
+// Reads `joined_player_positions`/other `worldgen`-only pieces of
+// `crate::terrain_override` with no non-worldgen fallback (a `Damage`
+// override can only ever be created by the `worldgen`-gated
+// `/terrain_override` admin command in the first place).
+#[cfg(feature = "worldgen")]
+pub mod terrain_damage_heal;
 pub mod terrain_sync;
 pub mod waypoint;
 pub mod wiring;
@@ -95,6 +101,12 @@ pub fn add_server_systems(dispatch_builder: &mut DispatcherBuilder) {
     // reveal set out of every crate the client dispatches is what makes it
     // structurally impossible for a client to grant itself one.
     dispatch::<detection::Sys>(dispatch_builder, &["Common_buff_sys"]);
+    // Gated by its own internal `SysScheduler` (once/minute), same pattern
+    // as `persistence::Sys` above -- no dependency, it only ever reads
+    // `Arc<TerrainOverrides>` and emits events for
+    // `events::terrain_override`'s handler to act on later this tick.
+    #[cfg(feature = "worldgen")]
+    dispatch::<terrain_damage_heal::Sys>(dispatch_builder, &[]);
 }
 
 pub fn run_sync_systems(ecs: &mut specs::World) {

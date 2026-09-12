@@ -435,11 +435,12 @@ impl World {
         // this chunk.
         let sim_chunk: Cow<SimChunk> = match touching_overrides.as_ref() {
             Some(overrides) => {
-                let (temp, humidity, tree_density_mul) = overrides.climate_and_tree_density_mul_at(
-                    chunk_center_wpos2d,
-                    sim_chunk.temp,
-                    sim_chunk.humidity,
-                );
+                let (temp, humidity, tree_density_mul, damage) = overrides
+                    .climate_tree_density_and_damage_at(
+                        chunk_center_wpos2d,
+                        sim_chunk.temp,
+                        sim_chunk.humidity,
+                    );
                 // NOTE: `(*sim_chunk).clone()`, not `sim_chunk.clone()` --
                 // `sim_chunk` is already `&SimChunk` here, and `&T` is
                 // itself always `Clone` (a cheap pointer copy) regardless of
@@ -448,7 +449,15 @@ impl World {
                 let mut patched: SimChunk = (*sim_chunk).clone();
                 patched.temp = temp;
                 patched.humidity = humidity;
-                patched.tree_density *= tree_density_mul;
+                // `damage.vegetation_mul` reuses the exact same multiplier
+                // mechanism `ClimateOverride::tree_density_mul` already
+                // threads through here, rather than a parallel path.
+                patched.tree_density *= tree_density_mul * damage.vegetation_mul;
+                // Best-effort: only affects this chunk's informational
+                // metadata (minimap coloring, etc, via `TerrainChunkMeta`
+                // below) at the chunk CENTER -- the real per-column terrain
+                // height change happens in `ColumnGen::get`, not here.
+                patched.alt += damage.rim - damage.depth;
                 Cow::Owned(patched)
             },
             None => Cow::Borrowed(sim_chunk),
@@ -540,6 +549,7 @@ impl World {
                 index,
                 chunk: sim_chunk,
                 calendar,
+                overrides: touching_overrides.as_ref(),
             },
             chunk: &mut chunk,
             entity_spawns: Vec::new(),
@@ -570,6 +580,11 @@ impl World {
         if index.features.trees {
             layer::apply_trees_to(&mut canvas, &mut dynamic_rng, calendar);
         }
+        // Not gated behind any `index.features` flag: a `Damage` override's
+        // debris field is an explicit, admin/event-activated regional
+        // effect, not an ambient world-gen feature toggle -- it has nothing
+        // to do with the trees/scatter features immediately around it.
+        layer::apply_terrain_damage_to(&mut canvas, &mut dynamic_rng);
         if index.features.scatter {
             layer::apply_scatter_to(&mut canvas, &mut dynamic_rng, calendar);
         }

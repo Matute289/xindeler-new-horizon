@@ -15,8 +15,9 @@ pub use self::{
     block::{Block, BlockKind},
     map::MapSizeLg,
     regional_override::{
-        ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride, TerrainOverrideId,
-        TerrainOverridePayload, TerrainOverrides,
+        ClimateOverride, ClimateValue, DamageEffectsAt, DamageOverride, DamageShape,
+        OverrideRegion, RegionalTerrainOverride, TerrainOverrideId, TerrainOverridePayload,
+        TerrainOverrides,
     },
     site::SiteKindMeta,
     sprite::{SpriteCfg, SpriteKind, StructureSprite, UnlockKind},

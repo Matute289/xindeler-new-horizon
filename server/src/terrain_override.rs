@@ -23,8 +23,8 @@ mod worldgen_impl {
         vol::RectVolSize,
     };
     use common_state::TerrainChanges;
-    use specs::{Entities, Join, ReadStorage, WriteStorage};
-    use vek::Vec2;
+    use specs::{Entities, Entity as EcsEntity, Join, ReadStorage, WriteStorage};
+    use vek::{Aabr, Vec2, Vec3};
     use world::{IndexOwned, World};
 
     use crate::{chunk_generator::ChunkGenerator, presence::RepositionToFreeSpace, rtsim::RtSim};
@@ -99,6 +99,31 @@ mod worldgen_impl {
                 // *during* it.
                 regenerate_region(&removed.region, false, ctx);
             },
+            TerrainOverrideOp::Replace(new_override) => {
+                let mut snapshot = (**ctx.terrain_overrides).clone();
+                let Some(index) = snapshot.active.iter().position(|o| o.id == new_override.id)
+                else {
+                    // No active override to replace -- same "already the
+                    // state the caller wanted" no-op as `Deactivate`'s
+                    // not-found case, e.g. the healing scheduler racing a
+                    // manual `/terrain_override` clear.
+                    return;
+                };
+                let old_region = snapshot.active[index].region.clone();
+                let new_region = new_override.region.clone();
+                snapshot.active[index] = new_override;
+                snapshot.version = snapshot.version.wrapping_add(1);
+                persist_and_install(snapshot, ctx);
+
+                // Regenerate the UNION of the old and new bounds exactly
+                // once -- a deactivate-then-activate pair would double the
+                // chunk-regen work and bump `version` twice for what is
+                // conceptually a single change (e.g. one healing step).
+                // Never wipes player edits: a `Replace` describes an
+                // override's state evolving over its own lifetime (healing
+                // progress advancing), not a fresh activation.
+                regenerate_regions_union(&old_region, &new_region, ctx);
+            },
         }
     }
 
@@ -145,37 +170,93 @@ mod worldgen_impl {
     ///   outside every player's view distance are left to regenerate lazily on
     ///   demand, same as any other unloaded chunk.
     fn regenerate_region(region: &OverrideRegion, wipe_player_edits: bool, ctx: &mut ApplyContext) {
+        regenerate_chunks(
+            region.bounds(),
+            |key| region.touches_chunk(key, TerrainChunkSize::RECT_SIZE),
+            wipe_player_edits,
+            ctx,
+        );
+    }
+
+    /// Same as [`regenerate_region`], but for the UNION of two regions' bounds
+    /// (a chunk is regenerated if EITHER region touches it) -- used by
+    /// [`apply`]'s `Replace` handling so an override's region/payload
+    /// changing in place regenerates every affected chunk exactly once,
+    /// never via two separate `regenerate_region` calls (which would
+    /// double-process any chunk both regions touch, and bump `version`
+    /// twice).
+    fn regenerate_regions_union(a: &OverrideRegion, b: &OverrideRegion, ctx: &mut ApplyContext) {
         let chunk_size = TerrainChunkSize::RECT_SIZE;
-        let bounds = region.bounds();
+        let bounds_a = a.bounds();
+        let bounds_b = b.bounds();
+        let union = Aabr {
+            min: bounds_a.min.map2(bounds_b.min, |x, y| x.min(y)),
+            max: bounds_a.max.map2(bounds_b.max, |x, y| x.max(y)),
+        };
+        regenerate_chunks(
+            union,
+            |key| a.touches_chunk(key, chunk_size) || b.touches_chunk(key, chunk_size),
+            false,
+            ctx,
+        );
+    }
+
+    /// Every connected player's entity, world-space position, current chunk
+    /// key, and current terrain view distance -- one ECS join, shared by
+    /// [`regenerate_chunks`]'s per-chunk reposition/view-distance checks and
+    /// `server::sys::terrain_damage_heal::Sys`'s "is anyone currently
+    /// standing in this override's region" check, so the underlying
+    /// `(Entities, Pos, Presence)` join is only ever written once.
+    pub fn joined_player_positions(
+        entities: &Entities<'_>,
+        positions: &ReadStorage<'_, Pos>,
+        presences: &ReadStorage<'_, Presence>,
+    ) -> Vec<(EcsEntity, Vec3<f32>, Vec2<i32>, u32)> {
+        (entities, positions, presences)
+            .join()
+            .map(|(entity, pos, presence)| {
+                (
+                    entity,
+                    pos.0,
+                    TerrainGrid::chunk_key(pos.0.xy().as_::<i32>()),
+                    presence.terrain_view_distance.current(),
+                )
+            })
+            .collect()
+    }
+
+    /// The shared core of [`regenerate_region`]/[`regenerate_regions_union`]:
+    /// unloads every chunk within `bounds` for which `touches(key)` is true
+    /// so the next generation of each one honors the new override state, and
+    /// (per-chunk) clears persisted edits / repositions players / proactively
+    /// re-enqueues generation -- see [`regenerate_region`]'s own doc comment
+    /// for the exact behavior, which applies here unchanged.
+    fn regenerate_chunks(
+        bounds: Aabr<i32>,
+        touches: impl Fn(Vec2<i32>) -> bool,
+        wipe_player_edits: bool,
+        ctx: &mut ApplyContext,
+    ) {
+        let chunk_size = TerrainChunkSize::RECT_SIZE;
         let center_chunk = bounds
             .center()
             .map2(chunk_size, |e, sz: u32| e.div_euclid(sz as i32));
         let half_extent = (bounds.max - bounds.min) / 2;
         let radius_chunks = (half_extent.x.max(half_extent.y) / chunk_size.x as i32).max(0) + 2;
 
-        // Every connected player's entity, chunk position, and current view
-        // distance -- computed once, outside the per-chunk loop below, via
-        // a single ECS join. Reused inside the loop for BOTH the
-        // reposition check (is a player standing in this chunk?) and the
-        // view-distance check (is this chunk in anyone's view?) in one
-        // pass over this small `Vec`, rather than re-joining
-        // `(&ctx.entities, &ctx.positions)` from scratch for every touched
-        // chunk.
-        let player_chunks: Vec<(specs::Entity, Vec2<i32>, u32)> =
-            (&ctx.entities, &ctx.positions, &ctx.presences)
-                .join()
-                .map(|(entity, pos, presence)| {
-                    (
-                        entity,
-                        TerrainGrid::chunk_key(pos.0.xy().as_::<i32>()),
-                        presence.terrain_view_distance.current(),
-                    )
-                })
+        // See `joined_player_positions`'s own doc comment -- computed once,
+        // outside the per-chunk loop below, and reused inside it for BOTH
+        // the reposition check (is a player standing in this chunk?) and
+        // the view-distance check (is this chunk in anyone's view?).
+        let player_chunks: Vec<(EcsEntity, Vec2<i32>, u32)> =
+            joined_player_positions(&ctx.entities, &ctx.positions, &ctx.presences)
+                .into_iter()
+                .map(|(entity, _pos, chunk_key, vd)| (entity, chunk_key, vd))
                 .collect();
 
         for offset in Spiral2d::with_radius(radius_chunks) {
             let key = center_chunk + offset;
-            if !region.touches_chunk(key, chunk_size) {
+            if !touches(key) {
                 continue;
             }
 
@@ -237,7 +318,7 @@ mod worldgen_impl {
 }
 
 #[cfg(feature = "worldgen")]
-pub use worldgen_impl::{ApplyContext, apply};
+pub use worldgen_impl::{ApplyContext, apply, joined_player_positions};
 
 // ---- Heavy, real-terrain-backed test: requires the real Cromatolis LFS
 // assets pulled locally, same precedent as `undercompact_gate.rs`'s own
@@ -248,16 +329,19 @@ pub use worldgen_impl::{ApplyContext, apply};
 mod tests {
     use std::sync::Arc;
 
+    use std::time::Duration;
+
     use common::{
         ViewDistances,
         calendar::Calendar,
         comp::{Pos, Presence, PresenceKind},
-        event::{SetRegionalTerrainOverrideEvent, TerrainOverrideOp},
+        event::{EventBus, SetRegionalTerrainOverrideEvent, TerrainOverrideOp},
         resources::TimeOfDay,
         slowjob::SlowJobPool,
         terrain::{
-            ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride,
-            TerrainChunkSize, TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+            ClimateOverride, ClimateValue, DamageOverride, DamageShape, OverrideRegion,
+            RegionalTerrainOverride, TerrainChunkSize, TerrainOverrideId, TerrainOverridePayload,
+            TerrainOverrides,
         },
         vol::RectVolSize,
     };
@@ -274,6 +358,7 @@ mod tests {
         events::ServerEvent,
         metrics::ChunkGenMetrics,
         presence::RepositionToFreeSpace,
+        sys::{SysScheduler, terrain_damage_heal},
         undercompact_gate::test_support::{insert_rtsim, setup},
     };
 
@@ -499,5 +584,189 @@ mod tests {
             overridden.temp
         );
         assert!(overridden.humidity > ambient.humidity || ambient.humidity >= 0.9);
+    }
+
+    fn crater_override(
+        center: vek::Vec2<i32>,
+        radius: f32,
+        heal_stages: u8,
+        heal_interval: f64,
+    ) -> RegionalTerrainOverride {
+        RegionalTerrainOverride {
+            id: TerrainOverrideId::new_unique(),
+            region: OverrideRegion::Circle {
+                center,
+                radius,
+                edge: 8.0,
+            },
+            payload: TerrainOverridePayload::Damage(DamageOverride {
+                shapes: vec![DamageShape::Crater {
+                    max_depth: 20.0,
+                    rim_height: 2.0,
+                }],
+                scorch: 0.6,
+                vegetation_mul: 0.1,
+                heal_progress: 0.0,
+                heal_stages,
+                heal_interval,
+                next_heal_at: heal_interval,
+            }),
+            priority: 100,
+            activated_at: 0.0,
+            wipe_player_edits: true,
+            ephemeral: false,
+        }
+    }
+
+    /// End-to-end across BOTH the crater and healing halves of the
+    /// terrain-damage payload: activating a `Damage::Crater` override must
+    /// read a materially LOWER altitude at its own center than the same
+    /// position with no override applied (the column-level bowl depression
+    /// -- see `world/src/column.rs`'s crater hook). Driving
+    /// `server::sys::terrain_damage_heal::Sys` forward through every stage
+    /// (each due, unoccupied step advancing `heal_progress` by
+    /// `1 / heal_stages` via a `Replace` event) must progressively raise it
+    /// and, on the final stage, deactivate the override outright -- at
+    /// which point the column reads EXACTLY the ambient altitude again (a
+    /// fully healed `Damage` override contributes a bit-exact zero
+    /// depth/rim, see `DamageOverride::effects_at`), and every healing step
+    /// along the way unloads the touched chunk rather than regenerating it
+    /// in place -- the same no-duplication invariant already established
+    /// for plain activate/deactivate above.
+    #[test]
+    #[ignore]
+    fn activating_a_crater_lowers_terrain_and_healing_progressively_restores_it() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (world, index) = World::generate(
+            0,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+        let world = Arc::new(world);
+
+        let mut state = setup();
+        insert_rtsim(&mut state, &world, &index);
+        state.ecs_mut().register::<Pos>();
+        state.ecs_mut().register::<Presence>();
+        state.ecs_mut().register::<RepositionToFreeSpace>();
+
+        let slow_jobs = SlowJobPool::new(4, 8, Arc::new(threadpool));
+        slow_jobs.configure("CHUNK_GENERATOR", |n| n.max(1));
+        state.ecs_mut().insert(slow_jobs);
+        state.ecs_mut().insert(ChunkGenerator::new(
+            ChunkGenMetrics::new(&Registry::new()).unwrap(),
+        ));
+        state.ecs_mut().insert(Arc::clone(&world));
+        state.ecs_mut().insert(index.clone());
+        state.ecs_mut().insert(TimeOfDay(0.0));
+        state.ecs_mut().insert(Calendar::default());
+        state
+            .ecs_mut()
+            .insert(Arc::new(TerrainOverrides::default()));
+        // `terrain_damage_heal::Sys`'s own `SystemData` -- not fetched by
+        // `fire()`'s direct `ServerEvent::handle` call above, so not
+        // otherwise present in this test's `State`.
+        state
+            .ecs_mut()
+            .insert(EventBus::<SetRegionalTerrainOverrideEvent>::default());
+        state
+            .ecs_mut()
+            .insert(SysScheduler::<terrain_damage_heal::Sys>::every(
+                Duration::ZERO,
+            ));
+
+        let center_wpos = near_map_center(&world);
+        let key = state.terrain().pos_key(center_wpos.with_z(0));
+        let ambient = world
+            .sample_blocks()
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("a real map export must have terrain at its own center");
+
+        const HEAL_STAGES: u8 = 4;
+        const HEAL_INTERVAL: f64 = 600.0;
+        let new_override = crater_override(center_wpos, 48.0, HEAL_STAGES, HEAL_INTERVAL);
+        fire(&state, TerrainOverrideOp::Activate(new_override));
+
+        let after_activate = Arc::clone(&*state.ecs().read_resource::<Arc<TerrainOverrides>>());
+        let overridden = world
+            .sample_blocks_with_overrides(Some(&after_activate))
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("the override must not change whether this column generates at all");
+        assert!(
+            overridden.alt < ambient.alt - 1.0,
+            "a fresh crater must read materially lower altitude at its own center than ambient \
+             (ambient={}, overridden={})",
+            ambient.alt,
+            overridden.alt
+        );
+
+        // Drive the healing scheduler forward through every stage.
+        for stage in 1..=HEAL_STAGES {
+            state.ecs_mut().write_resource::<TimeOfDay>().0 += HEAL_INTERVAL + 1.0;
+            common_ecs::run_now::<terrain_damage_heal::Sys>(state.ecs());
+
+            let emitted: Vec<_> = state
+                .ecs()
+                .read_resource::<EventBus<SetRegionalTerrainOverrideEvent>>()
+                .recv_all()
+                .collect();
+            assert_eq!(
+                emitted.len(),
+                1,
+                "exactly one heal step must fire per due scheduler run (stage {stage})"
+            );
+            fire(&state, emitted.into_iter().next().unwrap().op);
+
+            assert!(
+                state.terrain().get_key(key).is_none(),
+                "every healing step must unload the touched chunk, never regenerate it in place \
+                 (stage {stage})"
+            );
+
+            if stage < HEAL_STAGES {
+                let overrides_now =
+                    Arc::clone(&*state.ecs().read_resource::<Arc<TerrainOverrides>>());
+                let damage = overrides_now.active[0]
+                    .damage()
+                    .expect("still a Damage payload mid-heal");
+                assert!(
+                    (damage.heal_progress - stage as f32 / HEAL_STAGES as f32).abs() < 0.001,
+                    "heal_progress must advance by exactly 1/heal_stages per stage (stage {stage})"
+                );
+            }
+        }
+
+        let overrides_after_healing =
+            Arc::clone(&*state.ecs().read_resource::<Arc<TerrainOverrides>>());
+        assert!(
+            overrides_after_healing.active.is_empty(),
+            "the final healing stage must deactivate the override outright"
+        );
+        assert_eq!(
+            state
+                .ecs()
+                .read_resource::<crate::rtsim::RtSim>()
+                .with_terrain_overrides(|o| o.active.len()),
+            0,
+            "deactivation via the healing scheduler must also clear the persisted rtsim mirror"
+        );
+
+        let healed = world
+            .sample_blocks_with_overrides(Some(&overrides_after_healing))
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("terrain must still generate once the override is gone");
+        assert_eq!(
+            healed.alt, ambient.alt,
+            "once fully healed and deactivated, the column must read EXACTLY the ambient altitude \
+             again"
+        );
     }
 }

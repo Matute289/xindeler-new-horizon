@@ -1303,7 +1303,12 @@ impl ServerChatCommand {
                 vec![
                     Enum(
                         "kind",
-                        vec!["snow".to_string(), "clear".to_string()],
+                        vec![
+                            "snow".to_string(),
+                            "crater".to_string(),
+                            "debris".to_string(),
+                            "clear".to_string(),
+                        ],
                         Required,
                     ),
                     Integer("radius", 64, Optional),

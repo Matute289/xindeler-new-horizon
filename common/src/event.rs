@@ -807,9 +807,20 @@ pub struct ActivateVaultLeverEvent {
 /// `server/src/events/terrain_override.rs` for the handler, and
 /// `server/src/terrain_override.rs::apply` for the actual activate/deactivate
 /// logic it's a thin wrapper around.
+#[derive(Debug)]
 pub enum TerrainOverrideOp {
     Activate(RegionalTerrainOverride),
     Deactivate(TerrainOverrideId),
+    /// Replaces the active override matching `RegionalTerrainOverride::id`
+    /// in place (its region and/or payload may differ from what's currently
+    /// active) -- e.g. the terrain-damage healing scheduler
+    /// (`server/src/sys/terrain_damage_heal.rs`) advancing a `Damage`
+    /// override's `heal_progress`. A no-op if no active override has that
+    /// id (mirrors `Deactivate`'s own not-found handling). Regenerates the
+    /// UNION of the old and new override's bounds exactly once, never a
+    /// deactivate-then-activate pair -- see
+    /// `server/src/terrain_override.rs::apply`.
+    Replace(RegionalTerrainOverride),
 }
 
 pub struct SetRegionalTerrainOverrideEvent {

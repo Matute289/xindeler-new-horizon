@@ -9408,11 +9408,12 @@ fn handle_repair_equipment(
 }
 
 /// Manual test entry point for the Regional Terrain Event Engine: activates
-/// a simple climate override centered on `target`, or clears every currently
-/// active override. Not intended for real gameplay use -- future features
-/// (weather-linked events, craters, authored bespoke biome events) will
-/// activate overrides themselves, via `SetRegionalTerrainOverrideEvent`
-/// directly, not through this command.
+/// a simple climate override (`snow`), a terrain-damage crater (`crater`), a
+/// terrain-damage debris field (`debris`) centered on `target`, or clears
+/// every currently active override (`clear`). Not intended for real
+/// gameplay use -- future features (weather-linked events, authored bespoke
+/// biome events) will activate overrides themselves, via
+/// `SetRegionalTerrainOverrideEvent` directly, not through this command.
 #[cfg(feature = "worldgen")]
 fn handle_terrain_override(
     server: &mut Server,
@@ -9424,8 +9425,8 @@ fn handle_terrain_override(
     use common::{
         event::{SetRegionalTerrainOverrideEvent, TerrainOverrideOp},
         terrain::{
-            ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride,
-            TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+            ClimateOverride, ClimateValue, DamageOverride, DamageShape, OverrideRegion,
+            RegionalTerrainOverride, TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
         },
     };
 
@@ -9451,6 +9452,70 @@ fn handle_terrain_override(
                     temp: Some(ClimateValue::Set(-10.0)),
                     humidity: Some(ClimateValue::Set(0.9)),
                     tree_density_mul: Some(0.1),
+                }),
+                priority: 100,
+                activated_at,
+                wipe_player_edits: false,
+                ephemeral: true,
+            };
+            events.emit_now(SetRegionalTerrainOverrideEvent {
+                op: TerrainOverrideOp::Activate(new_override),
+            });
+            Ok(())
+        },
+        "crater" => {
+            let radius = radius.unwrap_or(32).clamp(8, 256) as f32;
+            let activated_at = ecs.read_resource::<Time>().0;
+            let new_override = RegionalTerrainOverride {
+                id: TerrainOverrideId::new_unique(),
+                region: OverrideRegion::Circle {
+                    center: pos.0.xy().as_::<i32>(),
+                    radius,
+                    edge: (radius * 0.25).max(8.0),
+                },
+                payload: TerrainOverridePayload::Damage(DamageOverride {
+                    shapes: vec![DamageShape::Crater {
+                        max_depth: (radius * 0.3).clamp(4.0, 24.0),
+                        rim_height: (radius * 0.05).clamp(1.0, 4.0),
+                    }],
+                    scorch: 0.7,
+                    vegetation_mul: 0.05,
+                    heal_progress: 0.0,
+                    heal_stages: 8,
+                    heal_interval: 600.0,
+                    next_heal_at: activated_at + 600.0,
+                }),
+                priority: 100,
+                activated_at,
+                wipe_player_edits: true,
+                ephemeral: true,
+            };
+            events.emit_now(SetRegionalTerrainOverrideEvent {
+                op: TerrainOverrideOp::Activate(new_override),
+            });
+            Ok(())
+        },
+        "debris" => {
+            let radius = radius.unwrap_or(48).clamp(8, 256) as f32;
+            let activated_at = ecs.read_resource::<Time>().0;
+            let new_override = RegionalTerrainOverride {
+                id: TerrainOverrideId::new_unique(),
+                region: OverrideRegion::Circle {
+                    center: pos.0.xy().as_::<i32>(),
+                    radius,
+                    edge: (radius * 0.25).max(8.0),
+                },
+                payload: TerrainOverridePayload::Damage(DamageOverride {
+                    shapes: vec![DamageShape::Debris {
+                        rubble_density: 0.05,
+                        felled_tree_chance: 0.4,
+                    }],
+                    scorch: 0.5,
+                    vegetation_mul: 0.2,
+                    heal_progress: 0.0,
+                    heal_stages: 8,
+                    heal_interval: 600.0,
+                    next_heal_at: activated_at + 600.0,
                 }),
                 priority: 100,
                 activated_at,

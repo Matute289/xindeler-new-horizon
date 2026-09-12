@@ -103,6 +103,31 @@ impl OverrideRegion {
         }
     }
 
+    /// `0.0` at the region's center, `1.0` at `radius`, and `None` outside
+    /// the falloff band entirely (i.e. beyond `radius + edge`) -- unlike
+    /// [`Self::blend_factor`], this is never flat inside `radius`, so it's
+    /// what a crater's bowl-depth formula (or anything else that needs to
+    /// taper smoothly from the center outward, rather than snap to full
+    /// strength anywhere inside `radius`) should use. Values above `1.0`
+    /// (inside the falloff band, past `radius` but within `radius + edge`)
+    /// are meaningful too -- e.g. a crater's raised rim uses them.
+    pub fn normalized_distance(&self, wpos: Vec2<i32>) -> Option<f32> {
+        match self {
+            OverrideRegion::Circle {
+                center,
+                radius,
+                edge,
+            } => {
+                if *radius <= 0.0 {
+                    return None;
+                }
+                let dist = wpos.map(|e| e as f32).distance(center.map(|e| e as f32));
+                let far_edge = radius + edge.max(0.0);
+                (dist <= far_edge).then_some(dist / radius)
+            },
+        }
+    }
+
     /// Whether this region can have ANY effect (even a sliver of falloff) on
     /// the chunk at `chunk_key` (chunk coordinates, not world/block
     /// coordinates). A cheap AABB-vs-AABB test using [`Self::bounds`].
@@ -160,13 +185,68 @@ pub struct ClimateOverride {
     pub tree_density_mul: Option<f32>,
 }
 
-/// `#[non_exhaustive]`: only climate overrides exist so far. Later, unrelated
-/// work is expected to add variants (a biome-profile override, a
-/// damage/crater layer) — deliberately not stubbed out speculatively here.
+/// A single shape contributing to a [`DamageOverride`]'s terrain-level
+/// effect. `#[non_exhaustive]`: only a crater and a debris field exist so
+/// far.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DamageShape {
+    /// A bowl-shaped depression, `max_depth` deep at the region's center,
+    /// tapering smoothly to `0.0` at `radius` (see
+    /// [`OverrideRegion::normalized_distance`]), with an optional raised rim
+    /// of `rim_height` just outside `radius`, tapering to `0.0` by the far
+    /// edge of the falloff band.
+    Crater { max_depth: f32, rim_height: f32 },
+    /// A scattered field of felled trees/rubble, no terrain-height change.
+    /// `rubble_density`/`felled_tree_chance` are per-candidate-position
+    /// probabilities (see `world/src/layer/terrain_damage.rs`), not
+    /// fractions of the region's area.
+    Debris {
+        rubble_density: f32,
+        felled_tree_chance: f32,
+    },
+}
+
+/// A terrain-damage override (craters, storm/blast debris) that heals back
+/// to ambient over time as [`Self::heal_progress`] advances (see
+/// `server/src/sys/terrain_damage_heal.rs`). Siblings, not replacements, of
+/// [`ClimateOverride`] -- both payload kinds can be active over the same
+/// region (though typically aren't the same override, since a single
+/// override has exactly one payload).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DamageOverride {
+    pub shapes: Vec<DamageShape>,
+    /// 0..1: how far to blend surface/sub-surface color toward a
+    /// scorched/burnt look, and whether to force snow off. Fades toward
+    /// `0.0` as `heal_progress` rises, same as everything else here.
+    pub scorch: f32,
+    /// Multiplies tree/rock-placement-relevant density at `heal_progress ==
+    /// 0.0`, lerped back toward `1.0` (no-op) as `heal_progress` rises.
+    /// Reuses the exact mechanism [`ClimateOverride::tree_density_mul`]
+    /// already threads through -- not a parallel path.
+    pub vegetation_mul: f32,
+    /// `0.0` fresh (just activated) .. `1.0` fully healed. The only field
+    /// the healing scheduler advances; everything else on this struct is
+    /// static for the override's lifetime.
+    pub heal_progress: f32,
+    /// How many discrete steps `heal_progress` takes from `0.0` to `1.0`
+    /// (i.e. each scheduler step advances it by `1.0 / heal_stages`).
+    pub heal_stages: u8,
+    /// `TimeOfDay` units between healing steps.
+    pub heal_interval: f64,
+    /// `TimeOfDay` units at which the next healing step should occur.
+    pub next_heal_at: f64,
+}
+
+/// `#[non_exhaustive]`: only climate and damage overrides exist so far.
+/// Later, unrelated work is expected to add variants (a biome-profile
+/// override, an authored bespoke event) — deliberately not stubbed out
+/// speculatively here.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TerrainOverridePayload {
     Climate(ClimateOverride),
+    Damage(DamageOverride),
 }
 
 /// One active (or, once deactivated, about-to-be-removed) regional terrain
@@ -203,6 +283,14 @@ impl RegionalTerrainOverride {
     pub fn climate(&self) -> Option<&ClimateOverride> {
         match &self.payload {
             TerrainOverridePayload::Climate(climate) => Some(climate),
+            _ => None,
+        }
+    }
+
+    pub fn damage(&self) -> Option<&DamageOverride> {
+        match &self.payload {
+            TerrainOverridePayload::Damage(damage) => Some(damage),
+            _ => None,
         }
     }
 }
@@ -245,83 +333,228 @@ impl TerrainOverrides {
             .is_some()
     }
 
-    /// Picks the single override that governs climate at `wpos`, if any:
-    /// the highest-`priority` active `Climate` override whose blend factor
-    /// at `wpos` is greater than zero (ties broken by position in
-    /// `active`). Overlapping overrides are never blended together — see
-    /// `RegionalTerrainOverride::priority`'s doc comment.
-    fn governing_climate_override(&self, wpos: Vec2<i32>) -> Option<(&ClimateOverride, f32)> {
-        self.active
-            .iter()
-            .filter_map(|o| {
-                let climate = o.climate()?;
-                let blend = o.region.blend_factor(wpos);
-                (blend > 0.0).then_some((o, climate, blend))
-            })
-            .max_by(|(a, ..), (b, ..)| {
-                a.priority
-                    .cmp(&b.priority)
-                    .then(std::cmp::Ordering::Greater)
-            })
-            .map(|(_, climate, blend)| (climate, blend))
-    }
-
     /// Blends `base_temp`/`base_humidity` (whatever ambient world-gen already
     /// computed at `wpos`) toward the governing active `Climate` override's
-    /// value, and computes its tree-density multiplier, all from a SINGLE
-    /// [`Self::governing_climate_override`] scan-and-distance-calc pass over
-    /// `active` -- this is the method `world/src/column.rs`'s
+    /// value, computes its tree-density multiplier, AND computes the
+    /// governing active `Damage` override's crater/rim/scorch/vegetation
+    /// effect at `wpos` -- all from a SINGLE pass over `active` (one `for o
+    /// in &self.active` loop tracking the best `Climate` candidate and the
+    /// best `Damage` candidate side by side, each independently
+    /// priority-maxed with first-registered-wins tie-breaking, exactly like
+    /// the old climate-only scan). This is the method `world/src/column.rs`'s
     /// `ColumnGen::get` actually calls (once per block-column, the hottest
     /// per-chunk-generation path in the engine), specifically so it never
-    /// pays for that scan twice over for the same `wpos`.
-    /// [`Self::climate_at`]/[`Self::tree_density_mul_at`] are thin
+    /// pays for a second independent scan over `active` for the damage
+    /// payload -- see this module's and `ColumnGen::get`'s own doc comments
+    /// for why that matters.
+    /// [`Self::climate_and_tree_density_mul_at`]/[`Self::climate_at`]/
+    /// [`Self::tree_density_mul_at`]/[`Self::damage_effects_at`] are thin
     /// single-purpose wrappers around this for callers (tests, future
-    /// one-off consumers) that only want one piece and don't care about
-    /// paying for the scan twice.
+    /// one-off consumers, `world/src/lib.rs`'s chunk-level patch) that only
+    /// want a subset of the outputs and don't care about paying for the scan
+    /// twice.
     ///
     /// Called at COLUMN granularity (once per block-column), which is what
-    /// gives the override's edge its soft radial falloff rather than a hard
-    /// per-chunk cutoff. Returns the ambient inputs unchanged (and a `1.0`
-    /// tree-density multiplier) if no `Climate` override applies here.
+    /// gives every override's edge its soft radial falloff rather than a
+    /// hard per-chunk cutoff. Returns the ambient climate inputs unchanged
+    /// (and a `1.0` tree-density multiplier / [`DamageEffectsAt::neutral`])
+    /// wherever no matching override applies.
+    pub fn climate_tree_density_and_damage_at(
+        &self,
+        wpos: Vec2<i32>,
+        base_temp: f32,
+        base_humidity: f32,
+    ) -> (f32, f32, f32, DamageEffectsAt) {
+        let mut best_climate: Option<(&RegionalTerrainOverride, &ClimateOverride, f32)> = None;
+        let mut best_damage: Option<(&RegionalTerrainOverride, &DamageOverride, f32)> = None;
+
+        for o in &self.active {
+            let blend = o.region.blend_factor(wpos);
+            if blend <= 0.0 {
+                continue;
+            }
+            match &o.payload {
+                TerrainOverridePayload::Climate(climate) => {
+                    let replace = best_climate.is_none_or(|(best, ..)| o.priority > best.priority);
+                    if replace {
+                        best_climate = Some((o, climate, blend));
+                    }
+                },
+                TerrainOverridePayload::Damage(damage) => {
+                    let replace = best_damage.is_none_or(|(best, ..)| o.priority > best.priority);
+                    if replace {
+                        best_damage = Some((o, damage, blend));
+                    }
+                },
+                // #[non_exhaustive]: future payload kinds have no
+                // column-level climate/damage effect of their own (yet).
+                #[allow(unreachable_patterns)]
+                _ => {},
+            }
+        }
+
+        let (temp, humidity, tree_density_mul) = match best_climate {
+            Some((_, climate, blend)) => {
+                let temp = climate
+                    .temp
+                    .map(|v| lerp(base_temp, v.target(base_temp), blend))
+                    .unwrap_or(base_temp);
+                let humidity = climate
+                    .humidity
+                    .map(|v| lerp(base_humidity, v.target(base_humidity), blend))
+                    .unwrap_or(base_humidity);
+                let tree_density_mul = climate
+                    .tree_density_mul
+                    .map(|mul| lerp(1.0, mul, blend))
+                    .unwrap_or(1.0);
+                (temp, humidity, tree_density_mul)
+            },
+            None => (base_temp, base_humidity, 1.0),
+        };
+
+        let damage = match best_damage {
+            Some((o, damage, blend)) => damage.effects_at(&o.region, wpos, blend),
+            None => DamageEffectsAt::neutral(),
+        };
+
+        (temp, humidity, tree_density_mul, damage)
+    }
+
+    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
+    /// damage-effect output. Prefer the combined method in a hot loop that
+    /// needs both.
     pub fn climate_and_tree_density_mul_at(
         &self,
         wpos: Vec2<i32>,
         base_temp: f32,
         base_humidity: f32,
     ) -> (f32, f32, f32) {
-        let Some((climate, blend)) = self.governing_climate_override(wpos) else {
-            return (base_temp, base_humidity, 1.0);
-        };
-        let temp = climate
-            .temp
-            .map(|v| lerp(base_temp, v.target(base_temp), blend))
-            .unwrap_or(base_temp);
-        let humidity = climate
-            .humidity
-            .map(|v| lerp(base_humidity, v.target(base_humidity), blend))
-            .unwrap_or(base_humidity);
-        let tree_density_mul = climate
-            .tree_density_mul
-            .map(|mul| lerp(1.0, mul, blend))
-            .unwrap_or(1.0);
+        let (temp, humidity, tree_density_mul, _) =
+            self.climate_tree_density_and_damage_at(wpos, base_temp, base_humidity);
         (temp, humidity, tree_density_mul)
     }
 
-    /// See [`Self::climate_and_tree_density_mul_at`] -- this discards its
-    /// `tree_density_mul` output. Prefer the combined method in a hot loop
-    /// that needs both.
+    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
+    /// `tree_density_mul`/damage output. Prefer the combined method in a hot
+    /// loop that needs more than one piece.
     pub fn climate_at(&self, wpos: Vec2<i32>, base_temp: f32, base_humidity: f32) -> (f32, f32) {
         let (temp, humidity, _) =
             self.climate_and_tree_density_mul_at(wpos, base_temp, base_humidity);
         (temp, humidity)
     }
 
-    /// See [`Self::climate_and_tree_density_mul_at`] -- this discards its
-    /// temp/humidity output. Prefer the combined method in a hot loop that
-    /// needs both.
+    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
+    /// temp/humidity/damage output. Prefer the combined method in a hot loop
+    /// that needs more than one piece.
     pub fn tree_density_mul_at(&self, wpos: Vec2<i32>) -> f32 {
         let (_, _, tree_density_mul) = self.climate_and_tree_density_mul_at(wpos, 0.0, 0.0);
         tree_density_mul
+    }
+
+    /// See [`Self::climate_tree_density_and_damage_at`] -- this discards its
+    /// climate output. Prefer the combined method in a hot loop that needs
+    /// more than one piece.
+    pub fn damage_effects_at(&self, wpos: Vec2<i32>) -> DamageEffectsAt {
+        let (_, _, _, damage) = self.climate_tree_density_and_damage_at(wpos, 0.0, 0.0);
+        damage
+    }
+}
+
+/// The governing `Damage` override's terrain-level effect at one column,
+/// computed by [`TerrainOverrides::climate_tree_density_and_damage_at`].
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct DamageEffectsAt {
+    /// World-unit depression to subtract from `alt`/`basement`/
+    /// `riverless_alt` (bowl profile, `0.0` outside the override's
+    /// `radius`).
+    pub depth: f32,
+    /// World-unit rise to add to `alt`/`basement`/`riverless_alt` just
+    /// outside `radius`, tapering to `0.0` by the far edge of the falloff
+    /// band (`0.0` inside `radius` or beyond the falloff band).
+    pub rim: f32,
+    /// 0..1: how far to blend surface/sub-surface color toward a
+    /// scorched/burnt look at this column, already faded by `heal_progress`
+    /// and radial blend strength.
+    pub scorch: f32,
+    /// Multiplies tree/rock-placement-relevant density; `1.0` = no change.
+    /// Already faded toward `1.0` by `heal_progress` and radial blend
+    /// strength.
+    pub vegetation_mul: f32,
+    /// Whether snow cover should be forced off at this column (tied to
+    /// `scorch`, since a scorched crater/debris field shouldn't have snow
+    /// sitting on it).
+    pub force_no_snow: bool,
+}
+
+impl DamageEffectsAt {
+    /// No active `Damage` override applies here.
+    pub fn neutral() -> Self {
+        Self {
+            depth: 0.0,
+            rim: 0.0,
+            scorch: 0.0,
+            vegetation_mul: 1.0,
+            force_no_snow: false,
+        }
+    }
+}
+
+impl DamageOverride {
+    /// `region`/`blend` must be the SAME [`OverrideRegion`] and
+    /// [`OverrideRegion::blend_factor`] result the caller already picked
+    /// this override for (see
+    /// [`TerrainOverrides::climate_tree_density_and_damage_at`]) -- this
+    /// never re-scans `active` itself.
+    fn effects_at(&self, region: &OverrideRegion, wpos: Vec2<i32>, blend: f32) -> DamageEffectsAt {
+        let heal = self.heal_progress.clamp(0.0, 1.0);
+        let remaining = 1.0 - heal;
+
+        let norm_dist = region.normalized_distance(wpos);
+        // Inside the bowl radius (`t <= 1.0`): a smooth `(1 - t^2)` profile,
+        // full depth at the center, zero right at `radius`.
+        let bowl_t = norm_dist.filter(|t| *t <= 1.0);
+        // At or outside the bowl radius but still inside the falloff band
+        // (`t >= 1.0`): `blend_factor` is already exactly the "how much
+        // rim" fraction here (`1.0` right at `radius`, tapering to `0.0` by
+        // the far edge) -- reused rather than re-derived. `t == 1.0` (the
+        // rim's own starting edge) is included here rather than in
+        // `bowl_t` -- harmless either way for `depth` (the bowl profile is
+        // already exactly `0.0` at `t == 1.0`), but required for `rim` to
+        // read its full `rim_height` right at `radius`, not just past it.
+        let rim_frac = if norm_dist.is_some_and(|t| t >= 1.0) {
+            region.blend_factor(wpos)
+        } else {
+            0.0
+        };
+
+        let mut depth = 0.0f32;
+        let mut rim = 0.0f32;
+        for shape in &self.shapes {
+            if let DamageShape::Crater {
+                max_depth,
+                rim_height,
+            } = shape
+            {
+                if let Some(t) = bowl_t {
+                    depth += max_depth * remaining * (1.0 - t * t).max(0.0);
+                }
+                rim += rim_height * remaining * rim_frac;
+            }
+        }
+
+        // Scorch/vegetation effects apply to every shape kind (a debris
+        // field is scorched too, not just a crater), scaled by both the
+        // radial blend and how much healing remains.
+        let fade = blend * remaining;
+        let scorch = self.scorch * fade;
+
+        DamageEffectsAt {
+            depth,
+            rim,
+            scorch,
+            vegetation_mul: lerp(1.0, self.vegetation_mul, fade),
+            force_no_snow: scorch > 0.0,
+        }
     }
 }
 
@@ -491,5 +724,257 @@ mod tests {
         };
         assert!(region.touches_chunk(Vec2::new(1000 / 32, 1000 / 32), Vec2::new(32, 32)));
         assert!(!region.touches_chunk(Vec2::new(0, 0), Vec2::new(32, 32)));
+    }
+
+    #[test]
+    fn normalized_distance_is_zero_at_center_one_at_radius_and_none_past_the_falloff_band() {
+        let region = OverrideRegion::Circle {
+            center: Vec2::zero(),
+            radius: 50.0,
+            edge: 10.0,
+        };
+        assert_eq!(region.normalized_distance(Vec2::zero()), Some(0.0));
+        assert_eq!(region.normalized_distance(Vec2::new(50, 0)), Some(1.0));
+        assert!(region.normalized_distance(Vec2::new(55, 0)).unwrap() > 1.0);
+        assert_eq!(region.normalized_distance(Vec2::new(61, 0)), None);
+    }
+
+    fn damage_override(
+        id: u64,
+        center: Vec2<i32>,
+        radius: f32,
+        edge: f32,
+        shapes: Vec<DamageShape>,
+        scorch: f32,
+        vegetation_mul: f32,
+        heal_progress: f32,
+    ) -> RegionalTerrainOverride {
+        RegionalTerrainOverride {
+            id: TerrainOverrideId(id),
+            region: OverrideRegion::Circle {
+                center,
+                radius,
+                edge,
+            },
+            payload: TerrainOverridePayload::Damage(DamageOverride {
+                shapes,
+                scorch,
+                vegetation_mul,
+                heal_progress,
+                heal_stages: 4,
+                heal_interval: 600.0,
+                next_heal_at: 600.0,
+            }),
+            priority: 0,
+            activated_at: 0.0,
+            wipe_player_edits: false,
+            ephemeral: true,
+        }
+    }
+
+    #[test]
+    fn a_fresh_crater_is_deepest_at_its_center_and_zero_at_the_rim() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![damage_override(
+                1,
+                Vec2::zero(),
+                50.0,
+                10.0,
+                vec![DamageShape::Crater {
+                    max_depth: 20.0,
+                    rim_height: 0.0,
+                }],
+                0.0,
+                1.0,
+                0.0,
+            )],
+        };
+
+        let center = overrides.damage_effects_at(Vec2::zero());
+        assert!(
+            (center.depth - 20.0).abs() < 0.001,
+            "a fresh crater must be at full `max_depth` at its own center, got {}",
+            center.depth
+        );
+
+        let rim = overrides.damage_effects_at(Vec2::new(50, 0));
+        assert!(
+            rim.depth.abs() < 0.001,
+            "the crater bowl must taper to zero depth exactly at `radius`, got {}",
+            rim.depth
+        );
+
+        let outside = overrides.damage_effects_at(Vec2::new(1000, 0));
+        assert_eq!(outside, DamageEffectsAt::neutral());
+    }
+
+    #[test]
+    fn healing_progress_shrinks_crater_depth_and_lerps_vegetation_back_to_noop() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![damage_override(
+                1,
+                Vec2::zero(),
+                50.0,
+                10.0,
+                vec![DamageShape::Crater {
+                    max_depth: 20.0,
+                    rim_height: 0.0,
+                }],
+                0.5,
+                0.1,
+                0.5,
+            )],
+        };
+
+        let effects = overrides.damage_effects_at(Vec2::zero());
+        assert!(
+            (effects.depth - 10.0).abs() < 0.001,
+            "50% healed must halve the fresh depth, got {}",
+            effects.depth
+        );
+        assert!(
+            (effects.vegetation_mul - 0.55).abs() < 0.001,
+            "50% healed must halve the remaining distance from vegetation_mul back to 1.0, got {}",
+            effects.vegetation_mul
+        );
+        assert!(effects.scorch > 0.0 && effects.scorch < 0.5);
+        assert!(effects.force_no_snow);
+    }
+
+    #[test]
+    fn a_fully_healed_override_has_no_effect_at_all() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![damage_override(
+                1,
+                Vec2::zero(),
+                50.0,
+                10.0,
+                vec![DamageShape::Crater {
+                    max_depth: 20.0,
+                    rim_height: 5.0,
+                }],
+                1.0,
+                0.1,
+                1.0,
+            )],
+        };
+
+        assert_eq!(
+            overrides.damage_effects_at(Vec2::zero()),
+            DamageEffectsAt::neutral()
+        );
+        assert_eq!(
+            overrides.damage_effects_at(Vec2::new(55, 0)),
+            DamageEffectsAt::neutral()
+        );
+    }
+
+    #[test]
+    fn a_rim_rises_just_outside_radius_and_tapers_to_zero_by_the_far_edge() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![damage_override(
+                1,
+                Vec2::zero(),
+                50.0,
+                10.0,
+                vec![DamageShape::Crater {
+                    max_depth: 20.0,
+                    rim_height: 8.0,
+                }],
+                0.0,
+                1.0,
+                0.0,
+            )],
+        };
+
+        let at_radius = overrides.damage_effects_at(Vec2::new(50, 0));
+        assert!(
+            (at_radius.rim - 8.0).abs() < 0.001,
+            "the rim must be at full `rim_height` right at `radius`, got {}",
+            at_radius.rim
+        );
+        let mid_band = overrides.damage_effects_at(Vec2::new(55, 0));
+        assert!(mid_band.rim > 0.0 && mid_band.rim < 8.0);
+        let far_edge = overrides.damage_effects_at(Vec2::new(60, 0));
+        assert!(far_edge.rim.abs() < 0.001);
+        let inside = overrides.damage_effects_at(Vec2::new(10, 0));
+        assert_eq!(
+            inside.rim, 0.0,
+            "the rim must not apply inside the crater bowl itself"
+        );
+    }
+
+    #[test]
+    fn a_debris_field_scorches_and_reduces_vegetation_without_any_depth_change() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![damage_override(
+                1,
+                Vec2::zero(),
+                50.0,
+                10.0,
+                vec![DamageShape::Debris {
+                    rubble_density: 0.2,
+                    felled_tree_chance: 0.05,
+                }],
+                0.6,
+                0.3,
+                0.0,
+            )],
+        };
+
+        let effects = overrides.damage_effects_at(Vec2::zero());
+        assert_eq!(effects.depth, 0.0);
+        assert_eq!(effects.rim, 0.0);
+        assert!(effects.scorch > 0.0);
+        assert!(effects.vegetation_mul < 1.0);
+        assert!(effects.force_no_snow);
+    }
+
+    #[test]
+    fn climate_and_damage_overrides_are_governed_independently() {
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![
+                climate_override(
+                    1,
+                    Vec2::zero(),
+                    50.0,
+                    0.0,
+                    Some(ClimateValue::Set(-10.0)),
+                    0,
+                ),
+                damage_override(
+                    2,
+                    Vec2::zero(),
+                    50.0,
+                    10.0,
+                    vec![DamageShape::Crater {
+                        max_depth: 20.0,
+                        rim_height: 0.0,
+                    }],
+                    0.0,
+                    1.0,
+                    0.0,
+                ),
+            ],
+        };
+
+        let (temp, _) = overrides.climate_at(Vec2::zero(), 20.0, 0.5);
+        assert_eq!(
+            temp, -10.0,
+            "a Climate override must still govern climate even with a Damage override also active \
+             over the same region"
+        );
+        let damage = overrides.damage_effects_at(Vec2::zero());
+        assert!(
+            (damage.depth - 20.0).abs() < 0.001,
+            "a Damage override must still govern damage even with a Climate override also active \
+             over the same region"
+        );
     }
 }

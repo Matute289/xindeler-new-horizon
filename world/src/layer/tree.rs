@@ -100,7 +100,16 @@ pub fn apply_trees_to(
                     .choose_seeded(seed)
                     .as_ref()?;
 
-            let col = ColumnGen::new(info.chunks()).get((wpos, info.index(), calendar))?;
+            // Reads active regional terrain overrides (see
+            // `world/src/canvas.rs`'s `CanvasInfo::overrides` doc comment)
+            // so a tree isn't placed at the un-cratered altitude -- floating
+            // over a bowl a crater/debris override just carved into this
+            // chunk.
+            let column_gen = match info.overrides() {
+                Some(overrides) => ColumnGen::with_overrides(info.chunks(), overrides),
+                None => ColumnGen::new(info.chunks()),
+            };
+            let col = column_gen.get((wpos, info.index(), calendar))?;
 
             let crowding = col.tree_density;
 
