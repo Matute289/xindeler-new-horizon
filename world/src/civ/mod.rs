@@ -3819,8 +3819,14 @@ impl SiteKind {
                         && !chunk.river.near_water()
                 },
                 SiteKind::ChapelSite => {
+                    // Needs to be near the ocean surface, not just underwater
+                    // anywhere - but real terrain-authoring/sampling
+                    // precision is easily off by a couple meters, so a bare
+                    // 1m margin was too fragile against that (a hand-authored
+                    // point sampled at exactly sea level could still miss by
+                    // 1-2m once actually generated).
                     matches!(chunk.get_biome(), BiomeKind::Ocean)
-                        && CONFIG.sea_level < chunk.alt + 1.0
+                        && CONFIG.sea_level < chunk.alt + 2.0
                 },
                 SiteKind::Terracotta => {
                     (0.9..1.0).contains(&chunk.temp)
@@ -5004,9 +5010,14 @@ mod tests {
     ///   CONFIG.sea_level > 50.0` requirement is unsatisfiable anywhere on the
     ///   real map -- no chunk has a local water table that high above sea
     ///   level. Unrelated to temperature.
-    /// - `ChapelSite`: still exactly 0. Has no temperature dependency at all
-    ///   (`Ocean` biome + an altitude-vs-sea-level check only); blocked by an
-    ///   unrelated bathymetry condition.
+    /// - `ChapelSite`: now reachable (bounded fraction, not exactly 0). Has no
+    ///   temperature dependency at all (`Ocean` biome + an
+    ///   altitude-vs-sea-level check only) -- its margin above sea level was
+    ///   deliberately widened (1m -> 2m) since a hand-authored point sampled at
+    ///   exactly sea level could still miss the original 1m margin by 1-2m once
+    ///   actually generated, and that margin turned out to gate real,
+    ///   substantial coastline coverage map-wide (not just one point) once
+    ///   loosened at all.
     /// - `Adlet`/`Sahagin`/`VampireCastle`/`Cultist`/`DwarvenMine`: were
     ///   already reachable (or unaffected, being non-temperature-gated) before
     ///   this change; bounded here to catch a future regression.
@@ -5051,10 +5062,6 @@ mod tests {
             "Myrmidon: expected still exactly 0, got {myrmidon}"
         );
         assert_eq!(
-            chapel_site, 0,
-            "ChapelSite: expected still exactly 0, got {chapel_site}"
-        );
-        assert_eq!(
             terracotta, 0,
             "Terracotta: expected still exactly 0, got {terracotta}"
         );
@@ -5066,6 +5073,7 @@ mod tests {
                 "{name}: expected coverage fraction in {range:?}, got {fraction:.6} ({count}/{n})"
             );
         };
+        assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
         assert_fraction_in("Adlet", adlet, 0.005..0.03);
         assert_fraction_in("Sahagin", sahagin, 0.0003..0.003);
         assert_fraction_in("VampireCastle", vampire_castle, 0.00002..0.0005);
