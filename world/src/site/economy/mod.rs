@@ -1316,10 +1316,14 @@ impl Economy {
             }
         }
         println!();
-        println!(
-            " Population {:.1}, limited by {:?}",
-            self.pop, self.population_limited_by
-        );
+        if self.population_limited_by == GoodIndex::default() {
+            println!(" Population {:.1}, growing", self.pop);
+        } else {
+            println!(
+                " Population {:.1}, limited by {:?}",
+                self.pop, self.population_limited_by
+            );
+        }
         let idle: f32 = self.pop * (1.0 - self.labors.iter().map(|(_, a)| *a).sum::<f32>());
         print_sorted(
             &format!(" Professions: idle={:.1} ", idle),
