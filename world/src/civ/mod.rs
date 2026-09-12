@@ -1964,6 +1964,7 @@ impl Civs {
                 let index_ref = IndexRef {
                     colors: &index.colors(),
                     features: &index.features(),
+                    biome_profiles: &index.biome_profiles(),
                     index,
                 };
                 let generated_site = match &sim_site.kind {

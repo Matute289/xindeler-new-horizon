@@ -9517,10 +9517,20 @@ fn handle_terrain_override(
     use common::{
         event::{SetRegionalTerrainOverrideEvent, TerrainOverrideOp},
         terrain::{
-            ClimateOverride, ClimateValue, OverrideRegion, RegionalTerrainOverride,
-            TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
+            BiomeProfileOverride, ClimateOverride, ClimateValue, OverrideRegion,
+            RegionalTerrainOverride, TerrainOverrideId, TerrainOverridePayload, TerrainOverrides,
         },
     };
+
+    // Captured before `parse_cmd_args!` below moves `args`. `"biome"` needs a
+    // raw positional `String` (the catalog profile id) at index 1;
+    // `parse_cmd_args!` only consumes an argument once it parses cleanly as
+    // the requested type in position, so asking it for a second `String`
+    // ahead of the existing `i32` radius would swallow every other mode's
+    // radius argument as a (trivially-always-parseable) string instead.
+    // Reading the raw args directly for this one mode avoids reshuffling
+    // everyone else's positions.
+    let raw_args = args.clone();
 
     let (Some(kind), radius) = parse_cmd_args!(args, String, i32) else {
         return Err(action.help_content());
@@ -9572,6 +9582,44 @@ fn handle_terrain_override(
             let time_of_day = ecs.read_resource::<TimeOfDay>().0;
             let new_override =
                 debris_override(pos.0.xy().as_::<i32>(), radius, activated_at, time_of_day);
+            events.emit_now(SetRegionalTerrainOverrideEvent {
+                op: TerrainOverrideOp::Activate(new_override),
+            });
+            Ok(())
+        },
+        "biome" => {
+            // Not consumed by `parse_cmd_args!` above (it only ever parses
+            // `args[1]` as an `i32` radius) -- see `raw_args`'s own doc
+            // comment.
+            let Some(profile) = raw_args.get(1).cloned() else {
+                return Err(action.help_content());
+            };
+            let radius = raw_args
+                .get(2)
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(48)
+                .clamp(8, 256) as f32;
+            let activated_at = ecs.read_resource::<Time>().0;
+            let new_override = RegionalTerrainOverride {
+                id: TerrainOverrideId::new_unique(),
+                region: OverrideRegion::Circle {
+                    center: pos.0.xy().as_::<i32>(),
+                    radius,
+                    edge: (radius * 0.25).max(8.0),
+                },
+                payload: TerrainOverridePayload::BiomeProfile(BiomeProfileOverride {
+                    profile,
+                    intensity: 1.0,
+                    // Baked from the catalog's own `flood_depth` by
+                    // `terrain_override::apply` at activation time -- never
+                    // set here.
+                    flood_to: None,
+                }),
+                priority: 100,
+                activated_at,
+                wipe_player_edits: false,
+                ephemeral: true,
+            };
             events.emit_now(SetRegionalTerrainOverrideEvent {
                 op: TerrainOverrideOp::Activate(new_override),
             });
