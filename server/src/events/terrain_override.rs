@@ -39,6 +39,7 @@ mod worldgen_impl {
 
     use crate::{
         chunk_generator::ChunkGenerator,
+        client::Client,
         presence::RepositionToFreeSpace,
         rtsim::RtSim,
         terrain_override::{self, ApplyContext},
@@ -71,6 +72,7 @@ mod worldgen_impl {
             ReadStorage<'a, Pos>,
             ReadStorage<'a, Presence>,
             WriteStorage<'a, RepositionToFreeSpace>,
+            ReadStorage<'a, Client>,
         );
 
         fn handle(
@@ -91,6 +93,7 @@ mod worldgen_impl {
                 positions,
                 presences,
                 reposition,
+                clients,
             ): Self::SystemData<'_>,
         ) {
             #[cfg(feature = "persistent_world")]
@@ -115,6 +118,7 @@ mod worldgen_impl {
                 positions,
                 presences,
                 reposition,
+                clients,
             };
 
             for ev in events {

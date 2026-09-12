@@ -130,6 +130,18 @@ impl OverrideRegion {
         }
     }
 
+    /// Whether `wpos` is inside the region proper -- its full-strength core,
+    /// not the falloff band [`Self::blend_factor`] still tapers through just
+    /// outside it. Used to tell a player standing squarely inside an event
+    /// apart from one who merely has it somewhere in view.
+    pub fn contains(&self, wpos: Vec2<i32>) -> bool {
+        match self {
+            OverrideRegion::Circle { center, radius, .. } => {
+                wpos.map(|e| e as f32).distance(center.map(|e| e as f32)) <= *radius
+            },
+        }
+    }
+
     /// Whether this region can have ANY effect (even a sliver of falloff) on
     /// the chunk at `chunk_key` (chunk coordinates, not world/block
     /// coordinates). A cheap AABB-vs-AABB test using [`Self::bounds`].
@@ -280,6 +292,22 @@ pub enum TerrainOverridePayload {
     Climate(ClimateOverride),
     Damage(DamageOverride),
     BiomeProfile(BiomeProfileOverride),
+}
+
+impl TerrainOverridePayload {
+    /// The `snake_case` fragment identifying this payload kind in the
+    /// localized transition-fallback i18n keys (`hud-terrain_transition-
+    /// <kind>-activate`/`-deactivate`, see
+    /// `assets/voxygen/i18n/en/hud/terrain_transition.ftl`) -- one fragment
+    /// per variant, kept in sync with those keys by hand since the keys
+    /// themselves live in a data file this enum can't see.
+    pub fn transition_kind_key(&self) -> &'static str {
+        match self {
+            TerrainOverridePayload::Climate(_) => "climate",
+            TerrainOverridePayload::Damage(_) => "damage",
+            TerrainOverridePayload::BiomeProfile(_) => "biome_profile",
+        }
+    }
 }
 
 /// Per-byte-length cap on each field of [`TransitionNarrative`], enforced by
@@ -734,6 +762,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: false,
             ephemeral: true,
+            transition: Default::default(),
         }
     }
 
@@ -915,6 +944,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: false,
             ephemeral: true,
+            transition: Default::default(),
         }
     }
 
@@ -1150,6 +1180,7 @@ mod tests {
             activated_at: 0.0,
             wipe_player_edits: false,
             ephemeral: true,
+            transition: Default::default(),
         }
     }
 

@@ -9564,8 +9564,7 @@ fn handle_terrain_override(
                 ephemeral: true,
                 transition: TransitionNarrative {
                     on_activate: Some(
-                        "The air turns bitterly cold as an unnatural frost creeps over the \
-                         land."
+                        "The air turns bitterly cold as an unnatural frost creeps over the land."
                             .to_string(),
                     ),
                     on_deactivate: Some("The frost recedes, and warmth returns.".to_string()),
