@@ -12,7 +12,7 @@ use specs::WorldExt;
 use tracing::{error, info};
 use vek::*;
 
-use client::{self, Client};
+use client::{self, Client, UserNotification};
 use common::{
     CachedSpatialGrid,
     comp::{
@@ -30,7 +30,7 @@ use common::{
     mounting::{Mount, VolumePos},
     outcome::Outcome,
     recipe::{self, RecipeBookManifest},
-    terrain::{Block, BlockKind},
+    terrain::{Block, BlockKind, CoordinateConversions},
     trade::TradeResult,
     uid::Uid,
     util::{Dir, Plane},
@@ -82,6 +82,11 @@ use voxygen_egui::EguiDebugInfo;
     is not being detected at a low enough scroll speed).
 */
 const ZOOM_LOCK_SCROLL_DELTA_INTENT: f32 = 14.0;
+
+/// Minimum time after a terrain-transition full-screen takeover ends before
+/// another one is allowed to start. A toast notification is unaffected by
+/// this and can still show every time regardless.
+const TERRAIN_TRANSITION_COOLDOWN: Duration = Duration::from_secs(10);
 
 /// The action to perform after a tick
 enum TickAction {
@@ -188,6 +193,10 @@ pub struct SessionState {
     lines: PlayerDebugLines,
     tracks: HashMap<Vec2<i32>, Vec<DebugShapeId>>,
     gizmos: Vec<(DebugShapeId, common::resources::Time, bool)>,
+    /// When the last terrain-transition full-screen takeover ended (see
+    /// `Scene::transition_active`). Gates a fresh takeover from firing again
+    /// too soon; `None` means none has ended yet this session.
+    last_terrain_transition_end: Option<std::time::Instant>,
 }
 
 /// Represents an active game session (i.e., the one being played).
@@ -269,6 +278,7 @@ impl SessionState {
             tracks: HashMap::new(),
             lines: Default::default(),
             gizmos: Vec::new(),
+            last_terrain_transition_end: None,
         }
     }
 
@@ -472,7 +482,41 @@ impl SessionState {
                 },
                 client::Event::Notification(n) => {
                     global_state.profile.tutorial.event_notification(&n);
-                    self.hud.new_notification(n);
+                    match n {
+                        UserNotification::TerrainTransition { text, inside } => {
+                            let cooldown_elapsed = self
+                                .last_terrain_transition_end
+                                .is_none_or(|end| end.elapsed() >= TERRAIN_TRANSITION_COOLDOWN);
+                            let takeover = inside
+                                && cooldown_elapsed
+                                && global_state.settings.interface.terrain_transitions;
+
+                            if takeover {
+                                let resolved = global_state.i18n.read().get_content(&text);
+                                self.hud.show_terrain_transition(resolved);
+
+                                let current_chunk = client
+                                    .state()
+                                    .ecs()
+                                    .read_storage::<Pos>()
+                                    .get(client.entity())
+                                    .map(|pos| pos.0.xy().as_::<i32>().wpos_to_cpos())
+                                    .unwrap_or_default();
+                                self.scene.begin_transition(current_chunk);
+                            } else {
+                                // Out-of-view, cooldown still active, or the
+                                // player disabled full-screen takeovers --
+                                // fall back to the non-blocking toast, which
+                                // isn't gated by any of those.
+                                self.hud
+                                    .new_notification(UserNotification::TerrainTransition {
+                                        text,
+                                        inside,
+                                    });
+                            }
+                        },
+                        other => self.hud.new_notification(other),
+                    }
                 },
                 client::Event::SetViewDistance(_vd) => {},
                 client::Event::Outcome(outcome) => {
@@ -2640,6 +2684,15 @@ impl PlayState for SessionState {
                         &global_state.settings,
                         global_state.settings.interface.minimap_face_north,
                     );
+
+                    // The takeover overlay's lifetime is tied to the scene's
+                    // transition, not to a timer of its own -- once the
+                    // scene ends the transition, dismiss the text and start
+                    // this session's cooldown against starting another one.
+                    if !self.scene.transition_active() && self.hud.has_terrain_transition() {
+                        self.hud.clear_terrain_transition();
+                        self.last_terrain_transition_end = Some(std::time::Instant::now());
+                    }
 
                     // Process outcomes from client
                     for outcome in outcomes {
