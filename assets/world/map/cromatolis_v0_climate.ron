@@ -1,4 +1,5 @@
 (
+    schema: "xindeler_open_world.authored_climate.v1",
     // Baseline temperature curve for Cromatolis's world-gen (see
     // `AuthoredCromatolisClimate`/`cromatolis_baseline_temp` in
     // world/src/sim/mod.rs): real degrees Celsius at sea level, cooling
