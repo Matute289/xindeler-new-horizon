@@ -1,5 +1,6 @@
 use crate::{
     BiomeProfiles, Colors, Features,
+    biome_profile::BIOME_PROFILES_SCHEMA,
     layer::{
         cromatolis_aerial_citadel::AerialCitadelConfig,
         cromatolis_cave_features::GeneratedCave,
@@ -16,6 +17,7 @@ use common::{
 use core::ops::Deref;
 use noise::{Fbm, MultiFractal, Perlin, SuperSimplex};
 use std::sync::{Arc, OnceLock};
+use tracing::warn;
 
 const WORLD_COLORS_MANIFEST: &str = "world.style.colors";
 const WORLD_FEATURES_MANIFEST: &str = "world.features";
@@ -136,11 +138,44 @@ impl Index {
     }
 }
 
+/// Validates a freshly-loaded/reloaded [`BiomeProfiles`] catalog, warning
+/// and falling back to an empty catalog on failure -- mirrors
+/// `world/src/civ/mod.rs`'s `SettlementTemplateContract`/
+/// `AuthoredCromatolisLandmarkProfiles` validate-then-fall-back idiom
+/// exactly (load, then `.validate()`, then warn+substitute a harmless
+/// fallback on failure rather than propagating the error), so a stale or
+/// malformed catalog fails loudly (a warning, not silence) without taking
+/// down the whole server -- no `BiomeProfile` override will resolve to any
+/// effect until it's fixed, but everything else keeps working.
+///
+/// Called from [`IndexOwned::new`] and [`IndexOwned::reload_if_changed`]
+/// (not [`Index::new`]) because those are what actually clone the value out
+/// of the shared, `'static`, immutable-from-outside [`AssetHandle`] and hand
+/// it to every real reader (`IndexRef::biome_profiles`,
+/// `Index::biome_profiles`) -- `Index` itself only ever holds the handle,
+/// so there is nowhere to install a fallback if it validated there instead.
+fn validated_biome_profiles(profiles: Arc<BiomeProfiles>) -> Arc<BiomeProfiles> {
+    match profiles.validate() {
+        Ok(()) => profiles,
+        Err(err) => {
+            warn!(
+                ?err,
+                "Could not validate the biome profiles catalog; falling back to an empty catalog \
+                 (no BiomeProfile override will resolve to any effect until this is fixed)"
+            );
+            Arc::new(BiomeProfiles {
+                schema: BIOME_PROFILES_SCHEMA.to_string(),
+                entries: Vec::new(),
+            })
+        },
+    }
+}
+
 impl IndexOwned {
     pub fn new(index: Index) -> Self {
         let colors = index.colors.cloned();
         let features = index.features.cloned();
-        let biome_profiles = index.biome_profiles.cloned();
+        let biome_profiles = validated_biome_profiles(index.biome_profiles.cloned());
         let colors_reload_watcher = index.colors.reload_watcher();
         let features_reload_watcher = index.features.reload_watcher();
         let biome_profiles_reload_watcher = index.biome_profiles.reload_watcher();
@@ -172,7 +207,7 @@ impl IndexOwned {
             // Reload the fields from the asset handle, which is updated automatically
             self.colors = self.index.colors.cloned();
             self.features = self.index.features.cloned();
-            self.biome_profiles = self.index.biome_profiles.cloned();
+            self.biome_profiles = validated_biome_profiles(self.index.biome_profiles.cloned());
             // Update wildlife spawns which is based on base_density in features
             reload(self)
         })
@@ -263,6 +298,70 @@ mod tests {
         assert!(
             b.cromatolis_aerial_citadel.get().is_none(),
             "index b's cache must still be empty -- it must not share state with index a"
+        );
+    }
+
+    /// The real shipped catalog must validate cleanly and pass through
+    /// unchanged -- confirms the happy path of `validated_biome_profiles`
+    /// isn't itself broken before testing the fallback path below.
+    #[test]
+    fn validated_biome_profiles_passes_through_a_valid_catalog_unchanged() {
+        let real = Arc::<BiomeProfiles>::load_expect(WORLD_BIOME_PROFILES_MANIFEST).cloned();
+        let real_entry_count = real.entries.len();
+        let validated = validated_biome_profiles(real);
+        assert_eq!(validated.entries.len(), real_entry_count);
+    }
+
+    /// A malformed catalog (here: a duplicate id, one of the invariants
+    /// `BiomeProfiles::validate` checks) must not panic or propagate an
+    /// error -- it must warn and fall back to a harmless EMPTY catalog, the
+    /// same graceful-degradation posture
+    /// `SettlementTemplateContract`/`AuthoredCromatolisLandmarkProfiles`
+    /// (`world/src/civ/mod.rs`) already establish for their own catalogs.
+    #[test]
+    fn validated_biome_profiles_falls_back_to_empty_on_a_malformed_catalog() {
+        use crate::biome_profile::BiomeProfile;
+
+        let malformed = Arc::new(BiomeProfiles {
+            schema: BIOME_PROFILES_SCHEMA.to_string(),
+            entries: vec![
+                BiomeProfile {
+                    id: "duplicate".to_string(),
+                    ground: (0.0, 0.0, 0.0),
+                    sub_surface: (0.0, 0.0, 0.0),
+                    surface_block: None,
+                    force_no_snow: false,
+                    tree_density_mul: 1.0,
+                    forest: Vec::new(),
+                    flood_depth: None,
+                    flood_block: common::terrain::BlockKind::Water,
+                    scatter_deny: Vec::new(),
+                    scatter_boost: Vec::new(),
+                },
+                BiomeProfile {
+                    id: "duplicate".to_string(),
+                    ground: (0.0, 0.0, 0.0),
+                    sub_surface: (0.0, 0.0, 0.0),
+                    surface_block: None,
+                    force_no_snow: false,
+                    tree_density_mul: 1.0,
+                    forest: Vec::new(),
+                    flood_depth: None,
+                    flood_block: common::terrain::BlockKind::Water,
+                    scatter_deny: Vec::new(),
+                    scatter_boost: Vec::new(),
+                },
+            ],
+        });
+        // Sanity-check the fixture actually IS invalid before relying on
+        // that to exercise the fallback branch below.
+        assert!(malformed.validate().is_err());
+
+        let validated = validated_biome_profiles(malformed);
+        assert!(
+            validated.entries.is_empty(),
+            "a malformed catalog must fall back to an EMPTY catalog, not panic or keep the bad \
+             data"
         );
     }
 }

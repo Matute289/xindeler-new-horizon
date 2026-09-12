@@ -832,12 +832,14 @@ mod tests {
     }
 
     /// The shipped catalog's own throwaway test fixture (see
-    /// `assets/world/manifests/biome_profiles.ron`) -- `intensity: 1.0` so
-    /// every continuous effect below is at full blended strength within the
-    /// override's radius, `flood_to: None` because that's ALWAYS baked by
-    /// `apply` at activation time (see `bake_biome_profile_flood_to`), never
-    /// supplied by the caller.
-    fn biome_profile_override(center: vek::Vec2<i32>, radius: f32) -> RegionalTerrainOverride {
+    /// `assets/world/manifests/biome_profiles.ron`). `flood_to: None`
+    /// because that's ALWAYS baked by `apply` at activation time (see
+    /// `bake_biome_profile_flood_to`), never supplied by the caller.
+    fn biome_profile_override(
+        center: vek::Vec2<i32>,
+        radius: f32,
+        intensity: f32,
+    ) -> RegionalTerrainOverride {
         RegionalTerrainOverride {
             id: TerrainOverrideId::new_unique(),
             region: OverrideRegion::Circle {
@@ -847,7 +849,7 @@ mod tests {
             },
             payload: TerrainOverridePayload::BiomeProfile(common::terrain::BiomeProfileOverride {
                 profile: "test_fixture_do_not_use_in_content".to_string(),
-                intensity: 1.0,
+                intensity,
                 flood_to: None,
             }),
             priority: 100,
@@ -913,7 +915,7 @@ mod tests {
             .expect("a real map export must have terrain at its own center");
 
         const RADIUS: f32 = 48.0;
-        let new_override = biome_profile_override(center_wpos, RADIUS);
+        let new_override = biome_profile_override(center_wpos, RADIUS, 1.0);
         let id = new_override.id;
         fire(&state, TerrainOverrideOp::Activate(new_override));
 
@@ -1003,6 +1005,83 @@ mod tests {
         );
     }
 
+    /// The flood-to-water-level effect must scale by `rp.strength()` (radial
+    /// blend × the override's own `intensity`), exactly like every OTHER
+    /// continuous effect this payload has (ground/sub-surface color,
+    /// tree-density multiplier) -- NOT by radial blend alone. A regression
+    /// test for a real bug: the flood lerp originally used `rp.blend` on its
+    /// own, so a low-`intensity` override would still flood all the way to
+    /// the full baked `flood_to` altitude at the region's core even while
+    /// every other effect on the same profile stayed dialed down.
+    ///
+    /// Bakes `flood_to` by hand (rather than going through the full
+    /// activate/deactivate ECS flow the test above already covers) so this
+    /// test isolates exactly the column-level blend arithmetic in
+    /// `world/src/column.rs`, independent of `bake_biome_profile_flood_to`.
+    #[test]
+    #[ignore]
+    fn a_low_intensity_biome_profile_override_scales_down_the_flood_level_not_just_color() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (world, index) = World::generate(
+            0,
+            WorldOpts {
+                seed_elements: true,
+                world_file: FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+
+        let center_wpos = near_map_center(&world);
+        let ambient = world
+            .sample_blocks()
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("a real map export must have terrain at its own center");
+
+        // Must match the fixture's own authored `flood_depth` (see
+        // `assets/world/manifests/biome_profiles.ron`).
+        const FLOOD_DEPTH: f32 = 2.0;
+        const INTENSITY: f32 = 0.1;
+        let full_flood_to = ambient.alt + FLOOD_DEPTH;
+
+        let mut low_intensity_override = biome_profile_override(center_wpos, 48.0, INTENSITY);
+        let TerrainOverridePayload::BiomeProfile(profile) = &mut low_intensity_override.payload
+        else {
+            unreachable!("biome_profile_override always builds a BiomeProfile payload");
+        };
+        profile.flood_to = Some(full_flood_to);
+
+        let overrides = TerrainOverrides {
+            version: 1,
+            active: vec![low_intensity_override],
+        };
+        let overridden = world
+            .sample_blocks_with_overrides(Some(&overrides))
+            .column_gen
+            .get((center_wpos, index.as_index_ref(), None))
+            .expect("the override must not change whether this column generates at all");
+
+        // At the region's own center, radial blend is `1.0`, so
+        // `strength() == blend * intensity == INTENSITY` exactly.
+        let expected_water_level = ambient
+            .water_level
+            .max(ambient.water_level + (full_flood_to - ambient.water_level) * INTENSITY);
+        assert!(
+            (overridden.water_level - expected_water_level).abs() < 0.01,
+            "the flood level must scale by strength() (blend * intensity = {INTENSITY}), not by \
+             blend alone -- expected {expected_water_level}, got {}",
+            overridden.water_level
+        );
+        assert!(
+            overridden.water_level < full_flood_to - 0.5,
+            "at intensity {INTENSITY} the flood must be scaled far below the full baked flood_to \
+             (full_flood_to={full_flood_to}, water_level={})",
+            overridden.water_level
+        );
+    }
+
     /// `world/src/layer/shrub.rs`'s `apply_shrubs_to` used to call the raw,
     /// un-overridden `WorldSim::make_forest_lottery` directly, completely
     /// ignoring every active regional terrain override (climate, damage, AND
@@ -1036,7 +1115,7 @@ mod tests {
         let center_wpos = near_map_center(&world);
         let overrides = TerrainOverrides {
             version: 1,
-            active: vec![biome_profile_override(center_wpos, 48.0)],
+            active: vec![biome_profile_override(center_wpos, 48.0, 1.0)],
         };
 
         // The exact same column lookup `CanvasInfo::col_or_gen` performs

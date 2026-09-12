@@ -771,20 +771,23 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // `common::terrain::regional_override::BiomeProfileOverride::flood_to`
         // -- an absolute world-z the server bakes once at activation time
         // from the profile's authored *relative* `flood_depth`) floods this
-        // column's water level UP TO that altitude, radially blended in by
-        // distance from the override's region -- never below whatever
-        // ambient water level already applies here. This is a genuinely new
+        // column's water level UP TO that altitude, blended in by
+        // `rp.strength()` (radial blend × the override's own `intensity` --
+        // same as every other continuous effect this profile has, e.g. the
+        // ground-color blend just below) -- never below whatever ambient
+        // water level already applies here. This is a genuinely new
         // mechanism (`Climate`/`Damage` overrides never needed to raise the
         // water table itself), so it has no existing blend point to reuse.
         let flood_block = biome_profile
             .filter(|rp| rp.flood_to.is_some())
             .map_or(BlockKind::Water, |rp| rp.profile.flood_block);
-        let water_level = match biome_profile
-            .and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to)))
-        {
-            Some((rp, flood_to)) => water_level.max(Lerp::lerp(water_level, flood_to, rp.blend)),
-            None => water_level,
-        };
+        let water_level =
+            match biome_profile.and_then(|rp| rp.flood_to.map(|flood_to| (rp, flood_to))) {
+                Some((rp, flood_to)) => {
+                    water_level.max(Lerp::lerp(water_level, flood_to, rp.strength()))
+                },
+                None => water_level,
+            };
 
         let mut spawn_rules = SpawnRules::default();
         for site in sim_chunk.sites.iter().map(|site| &index.sites[*site]) {

@@ -1210,14 +1210,23 @@ pub fn apply_scatter_to(canvas: &mut Canvas, _rng: &mut impl Rng, calendar: Opti
                         }
                     })
                     .unwrap_or(density);
+                // `scatter_deny` above is binary (a sprite either spawns or
+                // doesn't -- there's no meaningful "half-denied"), but
+                // `scatter_boost` is a continuous multiplier and must fade
+                // in with the SAME `rp.strength()` (radial blend ×
+                // intensity) every other continuous effect on this profile
+                // uses, or it would visibly "pop" to full boost right at
+                // the override's falloff edge instead of smoothly fading
+                // like ground color/tree density do.
                 let density = match col.governing_biome_profile {
                     Some(rp) => {
-                        density
-                            * rp.profile
-                                .scatter_boost
-                                .iter()
-                                .find(|(boosted_kind, _)| boosted_kind == kind)
-                                .map_or(1.0, |(_, weight)| *weight)
+                        let weight = rp
+                            .profile
+                            .scatter_boost
+                            .iter()
+                            .find(|(boosted_kind, _)| boosted_kind == kind)
+                            .map_or(1.0, |(_, weight)| *weight);
+                        density * Lerp::lerp(1.0, weight, rp.strength())
                     },
                     None => density,
                 };
