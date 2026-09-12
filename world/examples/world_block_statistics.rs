@@ -138,6 +138,14 @@ fn block_statistics_db(db_path: &str) -> Result<Connection, Box<dyn Error>> {
     Ok(conn)
 }
 
+// A full-world scan over-samples common terrain and under-samples rare,
+// site-gated BlockKinds (GlowingMushroom, GlowingWeakRock, ArtSnow,
+// ArtLeaves) that only appear near specific structures (caves, desert-city
+// temples). To backfill one of those reliably without a brute-force
+// full-world pass, scan around every dungeon/desert-city site instead
+// (`world.civs().sites()`, filtered to `is_dungeon()`/`SiteKind::DesertCity`)
+// plus a coarse map-wide grid for kinds that vary continuously across normal
+// terrain (e.g. Sand).
 fn generate(db_path: &str, ymin: Option<i32>, ymax: Option<i32>) -> Result<(), Box<dyn Error>> {
     common_frontend::init_stdout(None);
     println!("Loading world");
