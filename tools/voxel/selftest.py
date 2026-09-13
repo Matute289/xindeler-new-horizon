@@ -15,7 +15,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from voxlib import (  # noqa: E402
-    GLOWY, MATTE, MAX_INDEX, SHINY, Palette, VoxModel, lint, read_vox, write_vox,
+    GLOWY, SHINY, Palette, VoxModel, lint, read_vox, write_vox,
 )
 
 FAILURES = []
@@ -93,6 +93,28 @@ def main() -> int:
     check("read reserves used indices", rpal.add((7, 7, 7), GLOWY) != glowy)
     check("header is VOX ", open(path, "rb").read(4) == b"VOX ")
 
+    print("SIZE preservation (a shipped asset must not move on re-write)")
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    src = os.path.join(repo, "assets/voxygen/voxel/object/portal.vox")
+    if os.path.exists(src) and open(src, "rb").read(4) == b"VOX ":
+        smodels, spal = read_vox(src)
+        declared = smodels[0].declared_size
+        out = os.path.join(tmp, "portal.vox")
+        origins2 = write_vox(out, smodels, spal)
+        rmodels, _ = read_vox(out)
+        check("declared SIZE survives a read->write round-trip",
+              rmodels[0].declared_size == declared,
+              f"{declared} -> {rmodels[0].declared_size}")
+        check("re-write does not translate the asset", origins2 == [(0, 0, 0)],
+              f"got {origins2}")
+        check("voxel count survives", len(rmodels[0]) == len(smodels[0]))
+        smodels[0].translate(0, 0, 5)
+        _, _, moved_origin = smodels[0].normalised()
+        check("an edited model re-bases to its real content",
+              moved_origin != (0, 0, 0), f"got {moved_origin}")
+    else:
+        print("  skip (portal.vox unavailable — LFS blob not fetched?)")
+
     print("lint")
     good = VoxModel().box((0, 0, 0), (2, 2, 2), matte)
     check("clean model lints clean", lint([good], pal) == [])
@@ -101,14 +123,32 @@ def main() -> int:
     stray = Palette()
     stray.set(13, (1, 1, 1))
     accidental = VoxModel().box((0, 0, 0), (2, 2, 2), 13)
-    check("accidental glow is flagged", len(lint([accidental], stray)) == 1,
+    check("accidental glow is flagged",
+          any("GLOWY" in p for p in lint([accidental], stray)),
           lint([accidental], stray))
+    unalloc = VoxModel().box((0, 0, 0), (2, 2, 2), 90)
+    check("never-allocated index is flagged",
+          any("never allocated" in p for p in lint([unalloc], Palette())),
+          lint([unalloc], Palette()))
     hollow = VoxModel().box((0, 0, 0), (2, 2, 2), 16)
     check("index 16 is flagged", any("16" in p for p in lint([hollow], stray)))
     humanoid = VoxModel().box((0, 0, 0), (2, 2, 2), 0)
     check("humanoid clash is flagged",
           any("humanoid" in p for p in lint([humanoid], stray, humanoid=True)))
     check("empty model is flagged", lint([VoxModel()], pal) != [])
+    big = VoxModel().box((0, 0, 0), (40, 40, 10), matte)
+    check("figure kind accepts 41 voxels wide", not any(
+        "mesher asserts" in p for p in lint([big], pal)))
+    check("sprite kind rejects 41 voxels wide", any(
+        "mesher asserts" in p for p in lint([big], pal, kind="sprite")),
+        lint([big], pal, kind="sprite"))
+    check("particle kind rejects it too", any(
+        "mesher asserts" in p for p in lint([big], pal, kind="particle")))
+    try:
+        lint([good], pal, kind="nonsense")
+        check("unknown kind rejected", False, "no exception")
+    except ValueError:
+        check("unknown kind rejected", True)
 
     print()
     if FAILURES:

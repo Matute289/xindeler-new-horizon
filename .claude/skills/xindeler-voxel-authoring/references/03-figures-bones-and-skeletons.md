@@ -4,24 +4,24 @@
 
 ```
 assets/voxygen/voxel/**/*.vox
-        │  graceful_load_segment(name, model_index)      voxygen/src/scene/figure/load.rs:69
+        │  graceful_load_segment(name, model_index)        [figure/load.rs]
         ▼
    Segment  (Dyna<Cell>)  ── paired with a Vec3<f32> offset ──> BoneMeshes
         │  make_vox_spec! closure returns [Option<BoneMeshes>; 16]
         ▼
-   FigureModelCache::get_or_create_model                voxygen/src/scene/figure/cache.rs:514
+   FigureModelCache::get_or_create_model                   [figure/cache.rs]
         │  for each array slot i: generate_mesh(.., offset, bone_idx = i)
         ▼
    one greedy mesh in a shared atlas, every vertex tagged with its 4-bit bone_idx
         │
         ▼
-   Skeleton::compute_matrices -> [FigureBoneData; 16]   voxygen/anim/src/lib.rs:134
+   Skeleton::compute_matrices -> [FigureBoneData; 16]      [anim/src/lib.rs]
         │
         ▼
    figure-vert.glsl:  f_pos = bones[bone_idx].bone_mat * pos
 ```
 
-`pub type BoneMeshes = (Segment, Vec3<f32>);` — `load.rs:44`.
+`pub type BoneMeshes = (Segment, Vec3<f32>);` — `load.rs`.
 
 ## The one rule that has no compiler check
 
@@ -30,9 +30,9 @@ assets/voxygen/voxel/**/*.vox
 
 The RON field names (`head:`, `neck:`, `leg_fl:`) are just field names of the
 per-species spec struct. The wiring is the *order of the array literal* inside
-`make_vox_spec!` (e.g. `load.rs:1423-1510` for quadruped-medium) matched
-against the `+` bone order in the skeleton (e.g.
-`voxygen/anim/src/quadruped_medium/mod.rs:31-48`). Get them out of sync and
+`make_vox_spec!` (the `make_vox_spec!` invocation for that body kind in `load.rs`) matched
+against the `+` bone order in the skeleton (the `skeleton_impls!` invocation in e.g.
+`voxygen/anim/src/quadruped_medium/mod.rs`). Get them out of sync and
 the head renders on the tail bone — no warning, no error, at runtime or
 compile time. If you change either list, diff them side by side.
 
@@ -58,7 +58,7 @@ intermediate transforms and never receive a mesh.
 added to every voxel position *before* the bone matrix is applied:
 
 ```rust
-// voxygen/src/mesh/segment.rs:69
+// voxygen/src/mesh/segment.rs, generate_mesh_base_vol_figure
 TerrainVertex::new_figure(atlas_pos, (pos + offs) * scale, norm, bone_idx)
 ```
 
@@ -69,11 +69,11 @@ why almost every offset in the shipped manifests is negative.
 
 The manifests carry hand-written pivot conventions worth copying:
 
-- `quadruped_medium_central_manifest.ron:17` —
+- `quadruped_medium_central_manifest.ron` (grolgar `head`) —
   `offset: (-7.0, -11.0, -8.0), //value in y dimension is full length of model`
-- `quadruped_medium_lateral_manifest.ron:25` —
+- `quadruped_medium_lateral_manifest.ron` (grolgar `foot_fl`) —
   `offset: (-2.5, -4.5, -8.0), //y pivot should be -1/4 of the y dimension of the model`
-- `quadruped_medium_lateral_manifest.ron:4` — `//these are done very case by case`
+- the same file's header — `//these are done very case by case`
 
 **Workflow that makes this painless:** build every part in `voxlib` with the
 pivot at the origin and let coordinates go negative. `VoxModel.normalised()`
@@ -82,7 +82,7 @@ returns `(shifted_model, size, original_min)`; `write_vox` returns the same
 
 Scale is applied by the skeleton, not the mesh — `base_mat *
 Mat4::scaling_3d(s_a.scaler / 11.0)` for quadruped-medium
-(`voxygen/anim/src/quadruped_medium/mod.rs:70`), `/8.0` for biped_large,
+(`compute_matrices_inner`, `voxygen/anim/src/quadruped_medium/mod.rs`), `/8.0` for biped_large,
 `BASE_HEIGHT * scaler * (1.0/25.0)` for characters. So **≈11 voxels ≈ 1 world
 metre for a quadruped-medium**; match the existing species' proportions or
 your creature will be the wrong size regardless of its `dimensions()`.
@@ -100,8 +100,10 @@ An **axial split, not a hierarchy split**:
 
 The payoff is that **one `.vox` serves both sides**: the left-side loader
 passes `flipped = true` and the engine mirrors on X. `grolgar`'s `leg_fl` and
-`leg_fr` both point at `"npc.grolgar.male.leg_fr"`, each with its own offset
-(mirroring flips the model but not its pivot).
+`leg_fr` both point at `"npc.grolgar.male.leg_fr"`. Each side still gets its
+own `offset` row, because mirroring flips the model but not its pivot — for a
+symmetric limb the two offsets happen to match (grolgar's front legs), while
+its `leg_bl`/`leg_br` show the case where they differ.
 
 So: **do not generate mirrored left/right pairs as separate files.** Generate
 one, let the manifest mirror it. Use `voxlib`'s `mirror_x()` only when you
@@ -156,22 +158,36 @@ default.
 
 ### (b) A new *species* of an existing body kind — small but nonzero Rust ⚠️
 
-No new animation functions, but the `SkeletonAttr` matches are **exhaustive
-with no wildcard**, so a new enum variant won't compile until you fill them
-all. Files to touch (traced against `ClaySteed`, the most recent addition):
+No new animation functions, but several matches are exhaustive, so a new enum
+variant won't compile until you fill them. **The dangerous half is the ones
+that are *not* exhaustive** — those compile clean and give you a wrong
+creature. Traced against `ClaySteed`, the most recent addition:
 
-1. `common/src/comp/body/quadruped_medium.rs` — `Species` variant with an
-   explicit discriminant (⚠️ *renaming* an entry needs a DB migration for
-   pets), the `AllSpecies` field, the `Index` arm.
-2. `assets/common/npc_names.ron` — a matching entry, or startup asset load
-   fails.
-3. `common/src/comp/body/mod.rs` — exhaustive arms in `dimensions()`,
-   `mass()`, `base_health()`, `base_poise()`, `threat_tier()`, plus grouped
-   predicates and `mount_offset()`.
-4. `voxygen/anim/src/quadruped_medium/mod.rs` — ~16 `SkeletonAttr` arms
-   (head, neck, jaw, tail, torso_back, torso_front, ears, leg_f, leg_b,
-   feet_f, feet_b, scaler, startangle, tempo, spring, feed, ears_for_trunk).
-   Tuning numbers, not logic.
+1. `common/src/comp/body/quadruped_medium.rs` — `Species` variant, the
+   `AllSpecies` field, the `Index` arm. ⚠️ **Append at the end of the enum.**
+   The explicit `= N` discriminant is not the wire tag: serde encodes by
+   positional variant index, and rtsim persists `comp::Body` through
+   `rmp_serde`, so inserting or reordering silently breaks existing saves.
+   (Character/pet persistence is different again — it stores the species *by
+   name* via `to_string`/`from_str`, so adding needs no migration but
+   *renaming* does. The humanoid path is the exception to the exception: it
+   stores `species as u8` and reads it back by index into `ALL_SPECIES`.)
+2. `assets/common/npc_names.ron` — a matching entry. `AllSpecies` derives a
+   plain `Deserialize` with no `serde(default)` and `NPC_NAMES` is a
+   `load_expect` `lazy_static`, so a missing entry panics on the first
+   NPC-name lookup.
+3. `common/src/comp/body/mod.rs` — **compiler-enforced** (you cannot forget):
+   `dimensions()`, `base_health()`, `base_poise()`, `mount_offset()`.
+   **Silently defaulted** (you must fill these deliberately): `mass()` falls
+   through to `200.0` and `threat_tier()` to `2`, so a forgotten species is a
+   200 kg tier-2 combatant with a clean build.
+4. `voxygen/anim/src/quadruped_medium/mod.rs` — 11 `SkeletonAttr` fields are
+   exhaustive (`head`, `neck`, `jaw`, `tail`, `torso_front`, `torso_back`,
+   `ears`, `leg_f`, `leg_b`, `feet_f`, `feet_b`); 5 more silently default
+   (`scaler` → `0.9`, `startangle`, `tempo`, `spring`, `feed`), and
+   `ears_for_trunk` isn't a match at all. Getting the silent ones wrong yields
+   a wrong-sized creature with a wrong gait and no warning. Tuning numbers,
+   not logic.
 5. Both `*_manifest.ron` files — rows for **Male and Female**, or the figure
    logs `"No head specification exists for the combination of …"` and falls
    back to `not_found`.
@@ -182,7 +198,8 @@ loadouts, i18n names, world spawn tables.
 
 ### (c) A new *body kind* — a real subsystem 🚫 for a one-off
 
-New `Body` variant with a wire/DB-stable discriminant and arms in every method
+A new `Body` variant **appended at the end** (same serde-index rule as above)
+with arms in every method
 in `common/src/comp/body/mod.rs`; a new body module; a new skeleton module
 with `skeleton_impls!`, `compute_matrices_inner`, `SkeletonAttr` and at
 minimum `idle`/`run`/`jump` animations; a new `make_vox_spec!`; a new
@@ -209,7 +226,7 @@ Mat4::from(self.main)`.
 
 Which model is chosen comes from `ToolKey` (the item's definition id, or a
 modular-weapon key) looked up in `assets/voxygen/voxel/biped_weapon_manifest.ron`
-— shared by humanoid and biped_large. Off-hand mirroring recomputes the
+— shared by humanoid, biped_large and biped_small. Off-hand mirroring recomputes the
 offset: `offset.x = -offset.x - segment.sz.x`.
 
 So authoring a new weapon is: one `.vox` under
@@ -217,14 +234,28 @@ So authoring a new weapon is: one `.vox` under
 id, done. **No Rust, no new bone.** This is the single easiest category to
 hand-author.
 
-## Hot-reload, and why it doesn't help on this machine
+## Hot-reload: two different features, often confused
 
-`voxygen/anim` (crate `xindeler-anim`) is rebuilt as a dylib at runtime by
-`common/dynlib` shelling out to `cargo rustc --crate-type dylib -Z
-unstable-options` — hence the nightly requirement. **It does not work on
-macOS** (`common/dynlib/src/lib.rs:22-27` logs an error and gives up), which
-is Matías's platform. Animation-code iteration on macOS means a rebuild.
+These are **separate cargo features** and it matters a great deal to an asset
+author which one you have:
 
-**Asset** hot-reload is a different mechanism and *does* work: manifests and
-`.vox` files are watched by `assets_manager`, so regenerating a `.vox` and
-retuning offsets updates the running client. Lean on that.
+| Feature | What reloads | In `default`? |
+|---|---|---|
+| `hot-reloading` → `common/hot-reloading` → `assets_manager/hot-reloading` | **assets**: `.vox` files and RON manifests | ✅ yes |
+| `hot-anim` → `anim/use-dyn-lib` → `common/dynlib` | **animation code**, as a runtime-built dylib | ❌ no |
+| `hot-egui` → `voxygen-egui/use-dyn-lib` → `common/dynlib` | the egui overlay's code | ❌ no |
+
+`common/dynlib` shells out to `cargo rustc --crate-type dylib -Z
+unstable-options` (hence the nightly requirement) and **does not work on
+macOS** (`common/dynlib/src/lib.rs` logs `"The hot reloading feature does not work on macos."` and gives up). So
+animation-*code* iteration on macOS means a rebuild — but that was never in a
+default build anyway.
+
+⚠️ **The repo CLAUDE.md's macOS run command conflates the two**: it drops
+`hot-reloading` citing the `common/dynlib` macOS failure, but `hot-reloading`
+is the *asset* feature and doesn't touch `common/dynlib` at all. Dropping it
+turns off exactly the thing an asset author wants — the `.vox`/manifest
+watcher (`BodySpec::reload_watcher`) that lets you regenerate a model and
+retune offsets without restarting the client. Try keeping `hot-reloading` on
+while iterating on art; if the client misbehaves on macOS for an unrelated
+reason, fall back to the documented command and restart between iterations.

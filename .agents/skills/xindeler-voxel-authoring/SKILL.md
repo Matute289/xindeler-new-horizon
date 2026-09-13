@@ -29,8 +29,11 @@ running code against the real engine, not read off a format spec.
 
 1. **The engine reads a tiny subset of `.vox`.** `Segment::from_vox`
    (`common/src/figure/mod.rs:65`) reads `models[model_index]` and `palette`.
-   It ignores the scene graph, layers and materials entirely. Every shipped
-   figure asset has `scenes = 0, layers = 0, materials = 0`. So a valid
+   It ignores the scene graph, layers and materials entirely — no consumer in
+   the repo reads `.scenes`, `.layers`, `.materials` or `.index_map`. Every
+   shipped asset sampled has `scenes = 0, layers = 0, materials = 0`
+   (the exception, `char_template.vox`, is an authoring reference that no code
+   loads). So a valid
    asset is just `MAIN { SIZE + XYZI …, RGBA }` — and you never need
    `nTRN`/`nGRP`/`nSHP` to make a segmented, animatable figure.
 
@@ -85,6 +88,14 @@ The authoring library itself is `tools/voxel/voxlib.py` (no third-party
 dependencies, Python 3.9+). `python3 tools/voxel/selftest.py` proves it still
 round-trips.
 
+> **Known doc conflict, not yet resolved:** the repo `CLAUDE.md`'s macOS run
+> command drops the `hot-reloading` feature, citing the `common/dynlib` macOS
+> failure — but `hot-reloading` is the *asset* watcher and never touches
+> `common/dynlib`; only `hot-anim`/`hot-egui` do, and neither is in the default
+> feature set. Reference 03 has the verified feature table. `CLAUDE.md` should
+> be corrected rather than have this skill quietly override it — raise it with
+> Matías rather than assuming either document is authoritative.
+
 ## Workflow
 
 1. **Decide it's a voxel problem at all.** For a spell effect, read
@@ -116,7 +127,10 @@ round-trips.
   end returns a *zero-sized segment* silently; a mismatched bone array puts
   the head on the tail with no warning.
 - **Never use palette index 255.** `dot_vox` serialises index `i` as `i + 1`;
-  255 overflows a `u8` and panics the writer. Verified.
+  255 overflows a `u8` and panics *its* writer (`voxlib` rejects it up front
+  with a clear error instead). Verified by running it.
+- **Pass the right `kind` to `lint()`.** The sprite mesher asserts 32×32×64 and
+  the particle mesher 16×16×64 — hard panics, far below the 512³ figure cap.
 - **Never use indices 0–7 on a `Body::Humanoid` asset.** They are the
   skin/hair/eye recolour channels and will be repainted at runtime.
 - **Reserve before you extend.** When adding colours to an existing asset's

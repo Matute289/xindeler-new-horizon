@@ -146,13 +146,6 @@ class Palette:
     def to_bytes(self) -> bytes:
         return b"".join(struct.pack("<4B", *c) for c in self.colors)
 
-    @classmethod
-    def from_bytes(cls, raw: bytes) -> "Palette":
-        pal = cls()
-        pal.colors = [tuple(raw[i:i + 4]) for i in range(0, min(len(raw), 1024), 4)]  # type: ignore[misc]
-        pal.colors += [(0, 0, 0, 255)] * (256 - len(pal.colors))
-        return pal
-
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Palette {len(self._claimed)} claimed, {len(self._by_key)} allocated>"
 
@@ -188,6 +181,11 @@ class VoxModel:
 
     voxels: Dict[Coord, int] = field(default_factory=dict)
     name: str = ""
+    #: The extent declared by the source file's SIZE chunk, when this model
+    #: came from :func:`read_vox`. Preserved so a read→write round-trip does
+    #: not silently translate an asset whose voxels don't touch the min
+    #: corner — several shipped assets don't (`portal.vox` starts at (1,1,0)).
+    declared_size: Optional[Coord] = None
 
     # -- primitives --------------------------------------------------------
 
@@ -215,6 +213,13 @@ class VoxModel:
 
     def ellipsoid(self, center: Coord, radii: Coord, index: int,
                   hollow: bool = False) -> "VoxModel":
+        """Filled (or hollow) ellipsoid.
+
+        ⚠️ `hollow=True` has the same cost inversion as :meth:`shell` — it adds
+        an inward-facing surface rather than saving anything. Use it only when
+        the inside is meant to be seen, e.g. a translucent shell over a glowing
+        core.
+        """
         cx, cy, cz = center
         rx, ry, rz = (max(float(r), 0.5) for r in radii)
         for x in range(int(cx - rx) - 1, int(cx + rx) + 2):
@@ -290,9 +295,17 @@ class VoxModel:
     def shell(self) -> "VoxModel":
         """Delete every voxel that has all six neighbours filled.
 
-        Figure meshing is greedy but still pays for interior faces during
-        meshing; more importantly a hollow model halves the voxel count of
-        large VFX props with no visible difference.
+        ⚠️ **This does not make the model cheaper to render — it makes it more
+        expensive.** The greedy mesher emits a quad at every filled↔empty
+        boundary with no visibility culling (`should_draw_greedy`,
+        `voxygen/src/mesh/segment.rs:437`), so hollowing a solid volume adds a
+        whole second, invisible, inward-facing surface and roughly doubles the
+        quads and atlas usage. Interior voxels of a solid model are already
+        free at render time.
+
+        Use it only when the interior is genuinely meant to be seen (a dome, a
+        broken shell, an open vessel), or to cut generator memory and file
+        size for a very large prop where you accept the extra faces.
         """
         keep = {}
         for (x, y, z), i in self.voxels.items():
@@ -364,8 +377,19 @@ class VoxModel:
         Returns `(model, size, original_min)`. Keep `original_min`: it is what
         you add to the manifest `offset` so the part stays where you designed
         it relative to the bone pivot.
+
+        If this model came from :func:`read_vox` and still fits inside the
+        extent its source file declared, that extent is preserved and
+        `original_min` is `(0, 0, 0)` — so re-writing a shipped asset does not
+        move it relative to the manifest offset it was tuned against.
         """
         (mnx, mny, mnz), (mxx, mxy, mxz) = self.bounds()
+        if self.declared_size is not None and self.voxels:
+            dx, dy, dz = self.declared_size
+            if (mnx >= 0 and mny >= 0 and mnz >= 0
+                    and mxx < dx and mxy < dy and mxz < dz):
+                return (VoxModel(dict(self.voxels), self.name, self.declared_size),
+                        (dx, dy, dz), (0, 0, 0))
         shifted = VoxModel({(x - mnx, y - mny, z - mnz): i
                             for (x, y, z), i in self.voxels.items()}, self.name)
         size = (mxx - mnx + 1, mxy - mny + 1, mxz - mnz + 1) if self.voxels else (0, 0, 0)
@@ -461,9 +485,14 @@ def read_vox(path: str) -> Tuple[List[VoxModel], Palette]:
                 pending_size = struct.unpack("<III", buf[c0:c0 + 12])  # type: ignore[assignment]
             elif cid == b"XYZI":
                 count = struct.unpack("<I", buf[c0:c0 + 4])[0]
-                m = VoxModel()
+                m = VoxModel(declared_size=pending_size)
+                pending_size = None
                 for k in range(count):
                     x, y, z, i = struct.unpack("<4B", buf[c0 + 4 + k * 4:c0 + 8 + k * 4])
+                    if i == 0:
+                        raise ValueError(
+                            f"{path}: XYZI holds palette index 0, which the format "
+                            f"reserves as 'unused' — the file is malformed")
                     m.set(x, y, z, i - 1)
                 models.append(m)
             elif cid == b"RGBA":
@@ -485,14 +514,35 @@ def read_vox(path: str) -> Tuple[List[VoxModel], Palette]:
 # ---------------------------------------------------------------------------
 
 
+#: Per-consumer size ceilings, each a hard `assert!` in the mesher that panics
+#: the client on first draw. `voxygen/src/mesh/segment.rs`: figure/terrain 512³,
+#: sprite 32×32×64, particle 16×16×64.
+MESH_LIMITS = {
+    "figure": (512, 512, 512),
+    "terrain": (512, 512, 512),
+    "sprite": (32, 32, 64),
+    "particle": (16, 16, 64),
+}
+
+
 def lint(models: Sequence[VoxModel], palette: Palette,
-         humanoid: bool = False) -> List[str]:
+         humanoid: bool = False, kind: str = "figure") -> List[str]:
     """Return a list of problems the engine would show as wrong art, not errors.
 
     Almost every `.vox` mistake in this engine is silent: a voxel whose index
-    has no palette colour is *dropped* without a warning, and a voxel in the
-    8..15 band quietly becomes shiny or emissive.
+    is past the end of the palette is *dropped* without a warning by
+    `Segment::from_vox` (and rendered *black* by `MatSegment::from_vox`, the
+    humanoid path), and a voxel in the 8..15 band quietly becomes shiny or
+    emissive.
+
+    `kind` selects which consumer's size ceiling to check — see
+    :data:`MESH_LIMITS`. Those are hard `assert!`s that panic the client, not
+    silent failures, and the sprite and particle ones are much tighter than
+    the figure one.
     """
+    if kind not in MESH_LIMITS:
+        raise ValueError(f"kind must be one of {sorted(MESH_LIMITS)}, got {kind!r}")
+    limit = MESH_LIMITS[kind]
     problems: List[str] = []
     for n, model in enumerate(models):
         if not model.voxels:
@@ -503,12 +553,26 @@ def lint(models: Sequence[VoxModel], palette: Palette,
         except ValueError as e:
             problems.append(f"model[{n}]: {e}")
             continue
+        for axis, got, cap in zip("xyz", size, limit):
+            if got > cap:
+                problems.append(
+                    f"model[{n}] is {got} voxels on {axis}; the {kind} mesher asserts "
+                    f"<= {cap} and panics the client above it")
         used = set(model.voxels.values())
         for i in sorted(used):
             if i > MAX_INDEX:
                 problems.append(f"model[{n}] uses index {i}; max is {MAX_INDEX}")
+                continue
             if palette.colors[i] == (0, 0, 0, 0):
                 problems.append(f"model[{n}] index {i} has a fully transparent palette entry")
+        # An index nobody allocated still has a colour — the default fill,
+        # usually opaque black. That renders as black voxels, not as an error,
+        # so it is the most common silent authoring mistake.
+        unallocated = sorted(i for i in used if i <= MAX_INDEX and i not in palette._claimed)
+        if unallocated:
+            problems.append(
+                f"model[{n}] uses indices {unallocated} that were never allocated in this "
+                f"palette — they will render as the palette's fill colour")
         # Only flag a special index when nobody asked for that material — a
         # colour allocated with `Palette.add(..., GLOWY)` is deliberate.
         accidental_glow = sorted(i for i in used & set(_GLOWY_RANGE)
@@ -536,8 +600,10 @@ def lint(models: Sequence[VoxModel], palette: Palette,
                     f"Body::Humanoid asset these are recoloured at runtime")
         if size[0] * size[1] * size[2] and len(model) > 60_000:
             problems.append(
-                f"model[{n}] has {len(model)} voxels; consider `.shell()` — figure meshes "
-                f"are rebuilt per body variant and cached in one texture atlas")
+                f"model[{n}] has {len(model)} voxels — large for a figure, which is "
+                f"re-meshed per body variant into one shared texture atlas. Prefer a "
+                f"smaller model; do NOT reach for `.shell()`, which adds an invisible "
+                f"inner surface (see its docstring)")
     return problems
 
 

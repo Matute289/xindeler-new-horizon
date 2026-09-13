@@ -26,7 +26,8 @@ read by the engine**. Confirmed by inspection of every consumer:
 `voxygen/src/ui/img_ids.rs`, `common/src/terrain/structure.rs` — none of them
 touch `.scenes`, `.layers`, `.materials` or `.index_map`.
 
-Measured on real assets:
+Measured on a sample of real assets (one per category — an NPC part, a
+hand-authored prop, the particle model, and the authoring template):
 
 | Asset | models | scenes | layers | materials |
 |---|---|---|---|---|
@@ -52,7 +53,7 @@ scene graph** — it is dead weight the engine skips.
 `Voxel { x: u8, y: u8, z: u8, i: u8 }`. Right-handed, **Z up**, matching
 MagicaVoxel and the engine's `Vec3`. In-engine that becomes
 `Segment::set(Vec3::new(x, y, z), cell)` with no axis swizzle
-(`common/src/figure/mod.rs:96-110`), so **+X right, +Y forward, +Z up** end to
+(`Segment::from_vox`, `common/src/figure/mod.rs`), so **+X right, +Y forward, +Z up** end to
 end.
 
 `SIZE` is `u32` and a file can claim `size.x = 300`, but voxel coordinates are
@@ -69,9 +70,17 @@ in-memory index i  ──write──>  file byte i+1  ──read──>  in-memo
                                     └─ MagicaVoxel shows this colour at slot i+1
 ```
 
-`RGBA` entry `k` is the colour for in-memory index `k`. `Segment::from_vox`
-does `palette.get(voxel.i as usize)` — so **an index with no palette entry
-makes the voxel disappear, with no warning**. Always write all 256 entries.
+`RGBA` entry `k` is the colour for in-memory index `k`. An index past the end
+of the palette fails **silently, and differently per loader**:
+
+- `Segment::from_vox` does `palette.get(voxel.i as usize)` and skips the voxel
+  — it simply **disappears** (`common/src/figure/mod.rs`, the `from_vox` loop).
+- `MatSegment::from_vox` (the humanoid path) falls back to `Rgb::broadcast(0)`
+  — the voxel is **there and black**.
+
+Always write all 256 entries. And note that an index which *is* in range but
+was never assigned a colour is not an error either: it renders as whatever the
+palette's fill is, usually opaque black. `voxlib.lint()` flags that case.
 
 `voxlib.write_vox` handles the `+1` for you; you always work in in-memory
 (engine) indices.
@@ -81,15 +90,27 @@ makes the voxel disappear, with no warning**. Always write all 256 entries.
 | Limit | Value | Where it bites |
 |---|---|---|
 | Coordinate range | 0..=255 per axis | `XYZI` stores `u8` |
-| Palette index | 0..=**254** | `write_vox` does `i + 1`; **`i = 255` panics** `attempt to add with overflow` |
-| Palette entries | write all 256 | missing entry ⇒ voxel silently dropped |
-| Segment size | ≤ 512 per axis | `assert!` in `voxygen/src/mesh/segment.rs:51` |
-| `voxel_pos + manifest offset` | **[-128.0, +127.5]**, quantised to 0.5 | packed as 9 bits at half-voxel precision, `voxygen/src/render/pipelines/terrain.rs:55-58`; the shader unpacks `(bits - 256.0) / 2.0` |
+| Palette index | 0..=**254** | `dot_vox`'s `write_vox` does `i + 1`; **`i = 255` panics** it with `attempt to add with overflow`. `voxlib` rejects it up front with a `ValueError` instead |
+| Palette entries | write all 256 | missing entry ⇒ voxel dropped (`Segment`) or black (`MatSegment`) |
+| **Figure/terrain** segment size | ≤ 512 per axis | `assert!`, `voxygen/src/mesh/segment.rs` (`generate_mesh_base_vol_figure`) |
+| **Sprite** size | ≤ **32 × 32 × 64** | `assert!`, same file (`generate_mesh_base_vol_sprite`) — *panics the client*, and 64× tighter per axis than the figure cap |
+| **Particle** model size | ≤ **16 × 16 × 64** | `assert!`, same file (`generate_mesh_base_vol_particle`) |
+| `voxel_pos + manifest offset` | **[-128.0, +127.5]**, quantised to 0.5 | packed as 9 bits at half-voxel precision, `TerrainVertex::new_figure` in `voxygen/src/render/pipelines/terrain.rs`; the shader unpacks `(bits - 256.0) / 2.0` |
 | Bones per figure | **16** | `anim::MAX_BONE_COUNT`; 4 bits in the vertex, `assert!(bone_idx <= 15)` |
 
-The ±128 figure limit is the one that surprises people: it is the *sum* of the
-voxel coordinate and the bone offset, so a 200-voxel-tall model with a −100
-offset is already at the edge.
+Two of these bite differently from the rest:
+
+- The 512³ figure cap is **unreachable from a single `.vox`** (coordinates are
+  bytes, so ≤256) — it only matters for segments assembled by
+  `DynaUnionizer`. The caps that will actually panic a generated asset are the
+  **sprite** and **particle** ones, which are much tighter. `voxlib.lint(…,
+  kind="sprite")` checks the right one for you.
+- The ±128 limit is the *sum* of the voxel coordinate and the bone offset, so
+  a 200-voxel-tall model with a −100 offset is already at the edge.
+
+> Line numbers are deliberately omitted for upstream-owned files here — this
+> is a Veloren-derived engine that merges `gitlab/master` periodically and
+> they drift. Symbol names are stable; grep for them.
 
 ## The engine-side readers
 
@@ -105,11 +126,11 @@ MatSegment::from_vox(&DotVoxData, flipped, model_index) -> MatSegment
 - `flipped` mirrors on X as `size.x - 1 - voxel.x`. This is how one limb model
   serves both sides in the `*_lateral_manifest.ron` specs — see reference 03.
 - **`model_index` out of range returns a zero-sized segment, silently**
-  (`mod.rs:114-116`). A typo'd index is an invisible body part, not an error.
+  (the `else` branch of `Segment::from_vox`). A typo'd index is an invisible body part, not an error.
 - Assets are loaded through `common/assets`'s `DotVox` wrapper
-  (`common/assets/src/lib.rs:238`), addressed as dotted ids with
+  (the `DotVox` newtype in `common/assets/src/lib.rs`), addressed as dotted ids with
   `voxygen.voxel.` prepended by `graceful_load_vox`
-  (`voxygen/src/scene/figure/load.rs:56`). A missing file logs
+  (`graceful_load_vox`, `voxygen/src/scene/figure/load.rs`). A missing file logs
   `"Could not load vox file for figure"` and substitutes
   `voxygen.voxel.not_found` — the pink error blob.
 

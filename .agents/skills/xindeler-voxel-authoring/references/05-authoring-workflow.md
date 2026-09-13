@@ -17,7 +17,8 @@ from voxlib import Palette, VoxModel, write_vox, read_vox, lint, MATTE, SHINY, G
 | `add(color, material=MATTE)` | allocates (or reuses) a legal index; `MATTE` from 22 up, `SHINY` 8–12, `GLOWY` 13–15; never returns a claimed index |
 | `set(index, color, material=None)` | exact index, for hollow markers or matching an existing asset |
 | `reserve(indices)` | mark indices in use so `add` skips them |
-| `material_of(i)` / `intent` | what an index *is* vs what it was *asked* to be (drives `lint`) |
+| `material_of(i)` | what material an index *is*, by range |
+| `intent` | what each index was *asked* for — this is what lets `lint` tell a deliberate glow from an accidental one |
 
 ### `VoxModel`
 
@@ -33,8 +34,15 @@ negative while you build.
 - `torus` is the workhorse for rune rings, halos and orbit bands.
 - Transforms: `translate`, `mirror_x(plane=None, merge=True)`,
   `recolor({old: new})`, `map_indices(fn)`, `union(other, offset)`.
-- `shell()` deletes every fully-enclosed voxel. Halves the voxel count of
-  large props with no visible change.
+- `shell()` deletes every fully-enclosed voxel. ⚠️ **It does not make a model
+  cheaper to render — it makes it more expensive.** The greedy mesher emits a
+  quad at every filled↔empty boundary with no visibility culling
+  (`should_draw_greedy`, `voxygen/src/mesh/segment.rs`), so hollowing a
+  solid volume adds a whole second inward-facing surface. Interior voxels of a
+  solid model are already free at render time. Use `shell()` only when the
+  inside is meant to be seen, or to cut file size on a very large prop and
+  accept the extra faces. The same caveat applies to `sphere(..., hollow=True)`
+  and `ellipsoid(..., hollow=True)`.
 - `normalised()` → `(shifted, size, original_min)`; `bounds()`; `len(model)`.
 
 ### `write_vox(path, models, palette) -> [origin per model]`
@@ -46,16 +54,31 @@ position.
 ### `read_vox(path) -> (models, palette)`
 
 Parses the same subset and **reserves every index the asset uses**, so you can
-extend a shipped asset's palette without repainting it. Scene/`MATL`/`LAYR`
-chunks in a MagicaVoxel-authored source are dropped on re-write — which
-changes nothing about how the engine renders it.
+extend a shipped asset's palette without repainting it. It also records the
+source file's declared `SIZE` on each model, and `normalised()` preserves it
+while the edits still fit — so re-writing a shipped asset does **not** shift
+it. That matters because several shipped assets don't start at their min
+corner (`portal.vox` begins at `(1,1,0)`), and a silent shift would desync the
+model from the manifest offset it was tuned against. Move a model deliberately
+(`translate`, or edits outside the declared box) and it re-bases to its real
+content, returning a non-zero origin you must fold into the offset.
 
-### `lint(models, palette, humanoid=False)`
+Scene/`MATL`/`LAYR` chunks in a MagicaVoxel-authored source are dropped on
+re-write — the engine never read them, so the render is unchanged.
 
-Catches the silent failures: empty models, out-of-range sizes, transparent
-palette entries, *accidental* glowy/shiny indices (deliberate ones, allocated
-via `add(..., GLOWY)`, are not flagged), index 16, humanoid material clashes,
-and models large enough to be worth `shell()`-ing.
+### `lint(models, palette, humanoid=False, kind="figure")`
+
+Catches the silent failures: empty models, indices that were **never allocated
+in this palette** (they render as the palette fill, usually black — the most
+common mistake), transparent palette entries, *accidental* glowy/shiny indices
+(deliberate ones, allocated via `add(..., GLOWY)`, are not flagged), index 16,
+humanoid material clashes, and models large enough to be worth reconsidering.
+
+`kind` selects which mesher's size ceiling to check — `"figure"` (default),
+`"terrain"`, `"sprite"` (32×32×64) or `"particle"` (16×16×64). Those are hard
+`assert!`s that *panic the client*, and the sprite/particle ones are much
+tighter than the figure one, so pass the right `kind` for where the asset is
+going.
 
 ## Recipes
 
@@ -84,10 +107,16 @@ the `*_lateral_manifest.ron` spec mirror it (reference 03).
 
 ```python
 for tier, (r, col) in enumerate([(4, (90,140,255)), (6, (160,90,255)), (8, (255,90,140))]):
-    pal = Palette(); core = pal.add(col, GLOWY); rim = pal.add((40,40,60))
-    m = VoxModel().sphere((0,0,0), r, rim).shell().sphere((0,0,0), r-2, core)
+    pal = Palette()
+    core = pal.add(col, GLOWY)              # emissive heart
+    glass = pal.add((180, 210, 255), SHINY) # renders at alpha 0.1, so the core shows
+    m = VoxModel().sphere((0, 0, 0), r, glass).shell()   # a legitimate hollow: you see in
+    m.sphere((0, 0, 0), max(r - 3, 1), core)
     write_vox(f"assets/voxygen/voxel/object/arcane_orb_t{tier}.vox", [m], pal)
 ```
+
+An opaque outer layer would simply hide the core — remember the palette index
+is the material, so a matte rim is a solid wall.
 
 **A palette-exact recolour of a shipped asset**
 
@@ -138,10 +167,13 @@ voxels you meant to glow come back as `Glowy`. A zero-sized segment means a
 bad `model_index`; a voxel count lower than your generator's means dropped
 voxels (palette entry missing).
 
-Then look at it in game — `cargo run --bin xindeler-voxygen` (on macOS add
-`--no-default-features --features default-publish,shaderc-from-source,egui-ui`;
-hot-reloading doesn't work there). Asset hot-reload *does* work, so you can
-regenerate the `.vox` and retune manifest offsets without restarting.
+Then look at it in game — `cargo run --bin xindeler-voxygen`. Keep the
+`hot-reloading` feature on if you can: it is the **asset** watcher
+(`assets_manager`), not the dylib code reload, so regenerating a `.vox` or
+editing a manifest offset updates the running client. The repo CLAUDE.md's
+macOS command drops it for a reason that actually applies to `hot-anim` —
+see reference 03's hot-reload table before you copy that command while
+iterating on art.
 
 ## Where files go
 
@@ -167,7 +199,7 @@ Asset ids in RON are dot-separated and rooted at `assets/voxygen/voxel/`:
 | Reskin of an existing NPC species | `<kind>_central_manifest.ron` + `_lateral_manifest.ron` | **none** |
 | New species of an existing kind | same two manifests, Male **and** Female rows | `Species` variant + ~16 `SkeletonAttr` arms + `npc_names.ron` (reference 03) |
 | Object / prop / VFX / projectile | `object_manifest.ron` (`bone0`/`bone1`, `model_index`, `custom_indices`) | `object::Body` variant arms |
-| Terrain sprite | `sprite_manifest.ron` | `SpriteKind` variant |
+| Terrain sprite | `sprite_manifest.ron` | `SpriteKind` variant — ⚠️ **not a peer of the rows above**: its discriminant is `(category << 16) \| id` baked into terrain block data, so adding one is a persisted chunk-format change. Also capped at 32×32×64 |
 | Dropped item | `item_drop_manifest.ron` | none (offset auto-centred) |
 
 ## Git LFS
@@ -179,7 +211,17 @@ gets a pointer. Never add a workflow that does `actions/checkout` with
 
 Per-asset size is small (a wolf head is ~1 KB) but a batch generator can add
 hundreds of objects in one PR; prefer `model_index` packing when you're
-generating a family, and `shell()` large props.
+generating a family. Keep props solid: hollowing them costs faces, not saves them.
+
+## One thing generators must not do
+
+`voxlib` scripts live in `tools/`, which is dev tooling — not a second source
+of truth for game data. A generator that hardcodes spell radii, tier
+thresholds or damage numbers to derive its geometry duplicates balance data
+that belongs in `assets/common/**.ron`. Either read the RON at generation
+time, or keep the parameterisation purely cosmetic (segment counts, colour
+ramps, silhouette proportions). See the `game-architecture` skill if you're
+unsure which side of that line something is on.
 
 ## Repo discipline
 

@@ -4,8 +4,8 @@ The colour of a voxel comes from the palette entry. **What kind of surface it
 is comes from the index number itself.** Two voxels with identical RGB behave
 completely differently depending on which slot that RGB lives in.
 
-Source of truth: `Cell::from_index` in `common/src/figure/cell.rs:100-114` and
-`MatSegment::from_vox` in `common/src/figure/mod.rs:252-269`. Both were
+Source of truth: `Cell::from_index` in `common/src/figure/cell.rs` and the
+index match inside `MatSegment::from_vox` in `common/src/figure/mod.rs`. Both were
 verified by round-tripping one voxel per index 0..24 through the real engine
 loader.
 
@@ -19,11 +19,11 @@ loader.
 | **16** | **Hollowing** — draws *nothing*, and *deletes* whatever an earlier-layered segment put at that position |
 | **17–21** | Matte, and **carve-proof**: immune to another segment's index-16 |
 | **22–254** | Matte |
-| **255** | **Unusable** — `write_vox` panics (`i + 1` overflows `u8`) |
+| **255** | **Unusable** — `dot_vox`'s writer panics on it (`i + 1` overflows `u8`); `voxlib` rejects it up front |
 
 MagicaVoxel's own palette is 1-based, so **engine index `i` is MagicaVoxel
-slot `i + 1`**. `assets/voxygen/voxel/sprite_manifest.ron:1-22` says the same
-thing in its header comment — but note that comment claims *"16-255: Matte"*,
+slot `i + 1`**. `assets/voxygen/voxel/sprite_manifest.ron`'s header comment says the same
+thing — but note that comment claims *"16-255: Matte"*,
 which is **stale**: index 16 hollows and 17–21 are carve-proof. Trust the code
 and this table.
 
@@ -50,7 +50,7 @@ use them for anything else. A non-humanoid creature using index 0 is fine —
 the shipped `citadel_arcane_cannon` models use 0–7 throughout.
 
 Armour has a *different* recolouring mechanism again: `recolor_grey`
-(`voxygen/src/scene/figure/load.rs:117-129`) tints only voxels where
+(`voxygen/src/scene/figure/load.rs`) tints only voxels where
 `R == G == B`, around a neutral of 178. That is why the shipped armour assets
 are named `*grayscale`. If you generate armour, author it in greys and let the
 manifest's `color: Some((r,g,b))` do the tinting.
@@ -59,7 +59,7 @@ manifest's `color: Some((r,g,b))` do the tinting.
 
 Only meaningful when several segments are combined with
 `DynaUnionizer::unify_with`, which today is the humanoid head
-(`load.rs:393-421`: head + eyes + hair + beard + accessory + helmet). The rule
+(`HumHeadSpec::mesh_head` in `load.rs`: head + eyes + hair + beard + accessory + helmet). The rule
 it implements:
 
 ```
@@ -99,12 +99,12 @@ CampfireLit: (
 ```
 
 `custom_indices` is supported by **`object_manifest.ron`** (every
-`Body::Object`, via `ObjectCentralSubSpec`, `load.rs:5990-5997`) and by
-**`sprite_manifest.ron`** (`voxygen/src/scene/terrain/sprite.rs:30`). It is
+`Body::Object`, via `ObjectCentralSubSpec` in `load.rs`) and by
+**`sprite_manifest.ron`** (`SpriteSpec` in `voxygen/src/scene/terrain/sprite.rs`). It is
 **not** available on NPC central/lateral specs, humanoid armour, or weapons —
 those structs have no such field.
 
-What each does in the shader (`assets/voxygen/shaders/include/light.glsl:190-230`):
+What each does in the shader (`apply_cell_material` in `assets/voxygen/shaders/include/light.glsl`):
 
 | Surface | Shader behaviour |
 |---|---|
