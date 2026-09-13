@@ -2297,7 +2297,34 @@ impl WorldSim {
                         if let Some(c) = self.get_mut(cliff + rpos) {
                             let warp = 1.0 / (1.0 + dist);
                             if !c.river.near_water() {
-                                c.tree_density *= 1.0 - warp;
+                                // Cliff steepness is real physical terrain and
+                                // stays authoritative for every world (it
+                                // still drives `near_cliffs()`/`cliff_height`
+                                // below), but crushing `tree_density` toward
+                                // zero near a detected cliff is a purely
+                                // procedural heuristic. For ANY authored
+                                // region it would silently override a
+                                // hand-painted vegetation density with
+                                // engine noise -- the same principle
+                                // `cromatolis_forces_sea_level` already
+                                // applies to `water_alt` (that one stays
+                                // scoped to `authored_cromatolis_v0`
+                                // deliberately, since forcing sea level for
+                                // closed basins is a Cromatolis-specific
+                                // hydrology rule, not a general "authored
+                                // data wins" rule). This check uses the
+                                // broader `authored_region_id` instead of
+                                // `authored_cromatolis_v0` because THIS rule
+                                // -- don't let procedural noise override
+                                // hand-painted vegetation -- isn't
+                                // Cromatolis-specific the way the
+                                // Snowland/Desert exemptions near
+                                // `CROMATOLIS_V0_REGION_ID` are: any future
+                                // authored region should get the same
+                                // priority for its own painted vegetation.
+                                if c.authored_region_id.is_none() {
+                                    c.tree_density *= 1.0 - warp;
+                                }
                                 c.cliff_height = Lerp::lerp(44.0, 0.0, -1.0 + dist / 3.5);
                             }
                         }
