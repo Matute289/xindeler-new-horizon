@@ -175,6 +175,7 @@ impl World {
 
     pub fn get_map_data(&self, index: IndexRef, threadpool: &rayon::ThreadPool) -> WorldMapMsg {
         prof_span!("World::get_map_data");
+        let land = Land::from_sim(self.sim());
         threadpool.install(|| {
             WorldMapMsg {
                 pois: self
@@ -206,8 +207,18 @@ impl World {
                         }))
                     })
                     .chain(
-                        layer::cave::surface_entrances(&Land::from_sim(self.sim()), index)
-                            .map(|wpos| Marker::at(wpos.as_()).with_kind(MarkerKind::Cave)),
+                        // Only when the procedural cave layer actually runs:
+                        // `Tunnel`s are hash-derived on demand, so a world that
+                        // skips `apply_caves_to` still has tunnel *data* and
+                        // would otherwise push a cave marker to every client's
+                        // map for a cave that was never carved.
+                        (index.features.caves && self.sim().authored_procedural_caves_enabled())
+                            .then(|| {
+                                layer::cave::surface_entrances(&land, index)
+                                    .map(|wpos| Marker::at(wpos.as_()).with_kind(MarkerKind::Cave))
+                            })
+                            .into_iter()
+                            .flatten(),
                     )
                     .collect(),
                 possible_starting_sites: {
@@ -594,10 +605,29 @@ impl World {
             layer::apply_trains_to(&mut canvas, &self.sim, sim_chunk, chunk_center_wpos2d);
         }
 
-        if index.features.caverns {
+        // Purely procedural voxel layers. They read no authored data and stamp
+        // hash-derived content straight into the block volume, so whether an
+        // authored region wants them is per-region *content policy*, not a
+        // data-priority invariant -- it lives in that region's
+        // `{map_asset}_features` RON rather than as a literal here, and
+        // composes with the global `index.features` toggles (a layer runs only
+        // when both allow it). See `sim::AuthoredProceduralLayers` for the
+        // rationale and for what turning `caves` off actually costs.
+        //
+        // `apply_trees_to`/`apply_shrubs_to`/`apply_scatter_to` are
+        // deliberately absent from that set: they are driven *by* the authored
+        // `tree_density`, i.e. they consume authored data rather than override
+        // it. `apply_paths_to` likewise draws from the authored
+        // `SimChunk.path`.
+        let authored_layers = self.sim.authored_procedural_layers();
+        let procedural_layer_enabled = |pick: fn(&sim::AuthoredProceduralLayers) -> bool| -> bool {
+            authored_layers.as_ref().is_none_or(pick)
+        };
+
+        if index.features.caverns && procedural_layer_enabled(|l| l.caverns) {
             layer::apply_caverns_to(&mut canvas, &mut dynamic_rng);
         }
-        if index.features.caves {
+        if index.features.caves && procedural_layer_enabled(|l| l.caves) {
             layer::apply_caves_to(&mut canvas, &mut dynamic_rng);
         }
         if sim_chunk.authored_cromatolis_v0 {
@@ -605,7 +635,7 @@ impl World {
             layer::apply_cromatolis_cave_features_to(&mut canvas);
             layer::apply_cromatolis_local_aerial_features_to(&mut canvas);
         }
-        if index.features.rocks {
+        if index.features.rocks && procedural_layer_enabled(|l| l.rocks) {
             layer::apply_rocks_to(&mut canvas, &mut dynamic_rng);
         }
         if index.features.shrubs {
@@ -625,7 +655,12 @@ impl World {
         if index.features.paths {
             layer::apply_paths_to(&mut canvas);
         }
-        if index.features.spots {
+        // Belt-and-braces with `Spot::generate`, which already refuses to place
+        // the `SimChunk::spot` marker at all when a region disables spots --
+        // deliberately both, so the marker and the structure can never
+        // disagree. A marker with no structure would leave rtsim's
+        // `get_nearest_spot` quest targeting pointing players at empty ground.
+        if index.features.spots && procedural_layer_enabled(|l| l.spots) {
             layer::apply_spots_to(&mut canvas, &mut dynamic_rng);
         }
         // layer::apply_coral_to(&mut canvas);

@@ -1,0 +1,40 @@
+(
+    schema: "xindeler_open_world.authored_procedural_layers.v1",
+    // Which purely-procedural voxel layers still run inside Cromatolis.
+    // `true` = the layer still runs. These compose with the global
+    // assets/world/features.ron toggles, so a layer runs only when BOTH
+    // allow it. Full rationale (and what each one costs) lives on
+    // `AuthoredProceduralLayers` in world/src/sim/mod.rs -- not repeated
+    // here, so the two can't drift.
+    //
+    // All four off: Cromatolis is hand-authored, and each of these passes
+    // stamps hash-derived geometry into its block volumes without reading
+    // any authored data. Two consequences are gameplay-visible rather than
+    // cosmetic, and are tracked as an open decision in COW-15:
+    //   - `caves: false` removes the region's entire *procedural*
+    //     underground -- cave biomes, cave fauna, cave loot, and nearly
+    //     all mineral wealth. `world/src/layer/cave.rs` is the only place
+    //     in world-gen that puts Iron, Coal, Cobalt and Silver anywhere,
+    //     and likewise every gem (Gold, Ruby, Emerald, Diamond, Sapphire,
+    //     Topaz, Amethyst, Bloodstone). What survives: surface scatter
+    //     still yields Copper and Tin (`layer/scatter.rs`), and Gnarling
+    //     huts and town plazas still place Velorite/VeloriteFrag
+    //     (`site/plot/gnarling.rs`, `site/plot/plaza.rs`) -- Cromatolis
+    //     has ~50 suitable Gnarling locations. So the smithing ladder
+    //     stops after Copper/Tin, and `ChunkResource::Ore` -- which feeds
+    //     the sim2 economy's blacksmith inputs -- goes to zero. The
+    //     authored cave replacement carves geometry only and backfills
+    //     none of it.
+    //   - `caves: false` also means the world map shows no cave markers at
+    //     all here: the authored cave catalogue has no marker emitter yet,
+    //     so the map's "show caves" filter is inert on this region.
+    //   - `spots: false` means GnarlingCarving courier quests can never
+    //     roll here, since they target a procedural spot.
+    // Flipping either back on is a one-line change with no recompile; the
+    // engine keeps the world-map cave markers and the tree/shrub
+    // tunnel-avoidance consistent with whichever way these point.
+    caverns: false,  // no-op today: features.ron has caverns off globally
+    caves: false,
+    rocks: false,
+    spots: false,
+)

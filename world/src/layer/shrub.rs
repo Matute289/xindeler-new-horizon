@@ -45,8 +45,13 @@ pub fn apply_shrubs_to(canvas: &mut Canvas, _dynamic_rng: &mut impl Rng) {
                 && col.alt > col.water_level
                 && col.spawn_rate > 0.9
                 && col.path.is_none_or(|(d, _, _, _)| d > 6.0)
-                && !tunnel_bounds_at(wpos, &info, &info.land())
-                    .any(|(_, z_range, _, _, _, _)| z_range.contains(&(col.alt as i32 - 1)))
+                // Mirrors `tree.rs`: only avoid a near-surface procedural
+                // tunnel when that layer actually runs, since the tunnel data
+                // exists whether or not `apply_caves_to` carved it.
+                && !(info.index().features.caves
+                    && info.chunks().authored_procedural_caves_enabled()
+                    && tunnel_bounds_at(wpos, &info, &info.land())
+                        .any(|(_, z_range, _, _, _, _)| z_range.contains(&(col.alt as i32 - 1))))
             {
                 // Mirrors `world/src/layer/tree.rs`'s already-fixed call
                 // site: a governing `BiomeProfile` override with a nonempty

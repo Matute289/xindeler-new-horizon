@@ -733,6 +733,98 @@ impl Default for AuthoredCromatolisClimate {
     }
 }
 
+/// Which purely-procedural voxel layers still run inside an authored
+/// region's chunks.
+///
+/// These four passes in `World::generate_chunk` (`apply_caverns_to`,
+/// `apply_caves_to`, `apply_rocks_to`, `apply_spots_to`) read no authored
+/// data at all and stamp hash-derived geometry straight into the block
+/// volume, so inside a hand-authored region they compete with authored
+/// geometry — procedural caves against the carved interiors/cave features
+/// of `apply_cromatolis_cave_features_to` being the clearest case, since
+/// the two are voxel-indistinguishable.
+///
+/// Whether a given region wants them is **content policy, not a
+/// data-priority invariant**: unlike `tree_density`/`path` (hand-painted
+/// fields a procedural pass can silently overwrite), nothing authored is
+/// destroyed by a boulder or a hut. And the blast radius is real —
+/// switching `caves` off removes that region's entire *procedural*
+/// underground (cave biomes, cave fauna, ore and cave loot), which
+/// `apply_cromatolis_cave_features_to` does not backfill: it carves
+/// physical geometry only. So this lives in a RON asset
+/// (`{region.map_asset}_features`, e.g.
+/// `assets/world/map/cromatolis_v0_features.ron`) and is flippable without
+/// a recompile — the same convention this crate already uses for every
+/// other authored parameter (climate, settlements, landmarks, bridges,
+/// fortifications, ...), rather than as Rust literals at the call sites.
+///
+/// `true` means "this procedural layer still runs inside the region".
+/// These compose with the global `assets/world/features.ron` toggles: a
+/// layer runs only when both allow it.
+///
+/// IMPORTANT: resolved **map-globally**, matching the fact that
+/// `authored_region_id` is itself map-global today (see `GenCdf`). The day
+/// authored regions cover only part of a map (the `COW-2` debt), these
+/// need to be resolved per source feature — a spot structure spans a 3x3
+/// chunk neighbourhood and a tunnel spans many, so a per-rendered-chunk
+/// answer would slice geometry in half exactly on the region border.
+///
+/// Per-field `#[serde(default)]` on purpose: this asset exists to be
+/// hand-edited, and without it deleting one line (or adding a fifth toggle
+/// later) fails the *whole* file to parse, which the loader answers by
+/// warning and reverting all four toggles at once. Per-field, a missing
+/// entry only relaxes that one layer back to upstream behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub(crate) struct AuthoredProceduralLayers {
+    #[serde(default = "layer_enabled_by_default")]
+    pub caverns: bool,
+    #[serde(default = "layer_enabled_by_default")]
+    pub caves: bool,
+    #[serde(default = "layer_enabled_by_default")]
+    pub rocks: bool,
+    #[serde(default = "layer_enabled_by_default")]
+    pub spots: bool,
+}
+
+/// See [`AuthoredProceduralLayers::default`] for why an absent toggle
+/// means "this layer still runs" rather than "suppressed".
+fn layer_enabled_by_default() -> bool { true }
+
+impl FileAsset for AuthoredProceduralLayers {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+impl Default for AuthoredProceduralLayers {
+    /// Used only if a region's procedural-layer asset is missing or fails
+    /// to parse (same graceful-degradation posture as this module's other
+    /// authored loaders: warn, then fall back instead of panicking).
+    ///
+    /// Deliberately the *permissive* fallback — every layer on, i.e.
+    /// upstream behaviour — rather than a copy of whatever one region
+    /// happens to ship. Two reasons. This type is region-generic, so a
+    /// Cromatolis-shaped default would silently hand some future region a
+    /// policy it never asked for. And it fails in the safe direction: one
+    /// typo in a RON would otherwise delete a whole map's procedural
+    /// caves, ore, rocks and spots behind nothing louder than a `warn!`,
+    /// whereas falling back to "nothing is suppressed" can only ever add
+    /// content back.
+    ///
+    /// Each region's real policy lives in its own asset. The shipped
+    /// Cromatolis values are pinned by
+    /// `cromatolis_procedural_layer_asset_pins_the_shipped_policy`, so a
+    /// silent fall back to this default cannot go unnoticed either.
+    fn default() -> Self {
+        Self {
+            caverns: true,
+            caves: true,
+            rocks: true,
+            spots: true,
+        }
+    }
+}
+
 /// Data for the most recent map type.  Update this when you add a new map
 /// version.
 pub type ModernMap = WorldMap_0_7_0;
@@ -868,6 +960,11 @@ pub struct WorldSim {
     pub rng: ChaChaRng,
 
     pub(crate) calendar: Option<Calendar>,
+
+    /// Which purely-procedural voxel layers still run inside this world's
+    /// authored region. `None` for a normal procedural world, where every
+    /// layer always runs. See [`AuthoredProceduralLayers`].
+    pub(crate) authored_procedural_layers: Option<AuthoredProceduralLayers>,
 }
 
 /// The forest-species lottery for a position, given the [`Environment`]
@@ -961,6 +1058,7 @@ impl WorldSim {
             gen_ctx,
             rng: rand_chacha::ChaCha20Rng::from_seed([0; 32]),
             calendar: None,
+            authored_procedural_layers: None,
         }
     }
 
@@ -1048,6 +1146,24 @@ impl WorldSim {
                 }
             })
             .unwrap_or_default();
+        // Also not a raster layer: which purely-procedural voxel layers are
+        // still allowed to run inside this region (see
+        // `AuthoredProceduralLayers`). `None` for a procedural world.
+        let authored_procedural_layers = authored_region.map(|region| {
+            let specifier = format!("{}_procedural_layers", region.map_asset);
+            match AuthoredProceduralLayers::load_owned(&specifier) {
+                Ok(layers) => layers,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        region = region.id,
+                        "Could not load authored procedural-layer toggles; falling back to the \
+                         shipped defaults"
+                    );
+                    AuthoredProceduralLayers::default()
+                },
+            }
+        });
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
         let fresh = parsed_world_file.is_none();
@@ -2102,6 +2218,7 @@ impl WorldSim {
             gen_ctx,
             rng,
             calendar,
+            authored_procedural_layers,
         };
 
         this.generate_cliffs();
@@ -2117,6 +2234,31 @@ impl WorldSim {
     pub const fn map_size_lg(&self) -> MapSizeLg { self.map_size_lg }
 
     pub fn get_size(&self) -> Vec2<u32> { self.map_size_lg().chunks().map(u32::from) }
+
+    /// Which purely-procedural voxel layers still run in this world.
+    /// `None` means no authored region is loaded, i.e. every layer runs —
+    /// the upstream-Veloren case. See [`AuthoredProceduralLayers`].
+    pub(crate) fn authored_procedural_layers(&self) -> Option<AuthoredProceduralLayers> {
+        self.authored_procedural_layers
+    }
+
+    /// Whether this world's *region* allows the purely-procedural
+    /// cave/tunnel layer. Only half the answer — the global
+    /// `Features::caves` toggle is the other half, and callers must `&&`
+    /// it in (see `World::generate_chunk`, which is where the two are
+    /// composed for the carving pass itself).
+    ///
+    /// Callers outside `apply_caves_to` need this at all because `Tunnel`s
+    /// are hash-derived on demand rather than stored: skipping the carving
+    /// pass does not make the tunnel *data* go away. Anything that reacts
+    /// to a tunnel's presence — the surface cave markers on the world map,
+    /// the tree/shrub suppression above a near-surface tunnel — has to
+    /// ask the same question, or it reacts to caves that were never
+    /// carved.
+    pub(crate) fn authored_procedural_caves_enabled(&self) -> bool {
+        self.authored_procedural_layers
+            .is_none_or(|layers| layers.caves)
+    }
 
     pub fn get_aabr(&self) -> Aabr<i32> {
         let size = self.get_size();
@@ -2844,6 +2986,22 @@ impl WorldSim {
         chunk_pos: Vec2<i32>,
         predicate: impl Fn(&Spot) -> bool,
     ) -> Option<Vec2<i32>> {
+        // The spiral below is bounded only by the map area, so it terminates
+        // early *only* because it finds something. In a world whose region
+        // disables the spot layer there is no `SimChunk::spot` anywhere, so
+        // every call would walk all ~1M chunk positions -- one random index
+        // into the chunk `Vec`, i.e. a cache miss, per probe -- and this runs
+        // on the rtsim NPC-AI tick (courier-quest rolls), not at startup.
+        // Answer immediately instead.
+        //
+        // `None` for a procedural world, so upstream behaviour is unchanged.
+        if self
+            .authored_procedural_layers
+            .is_some_and(|layers| !layers.spots)
+        {
+            return None;
+        }
+
         Spiral2d::new()
             .map(|o| chunk_pos + o)
             .take(self.map_size_lg().chunks_len())
@@ -3619,6 +3777,41 @@ impl SimChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- AuthoredProceduralLayers: the per-region RON toggles ----
+
+    /// A parse failure here degrades silently — the loader warns and falls
+    /// back to [`AuthoredProceduralLayers::default()`] — and a warn-level
+    /// log line during world-gen is not something anyone reads. So assert
+    /// every registered region actually ships a loadable asset, and pin
+    /// Cromatolis's shipped policy explicitly rather than against
+    /// `Default` (which is deliberately the permissive upstream fallback,
+    /// not a copy of this region's choices). Not `#[ignore]`d: RON assets
+    /// are plain git files, not LFS binaries, so this runs everywhere.
+    #[test]
+    fn cromatolis_procedural_layer_asset_pins_the_shipped_policy() {
+        for region in AUTHORED_REGIONS {
+            let specifier = format!("{}_procedural_layers", region.map_asset);
+            let layers = AuthoredProceduralLayers::load_owned(&specifier)
+                .unwrap_or_else(|err| panic!("{specifier} failed to load/parse: {err:?}"));
+
+            if region.id == CROMATOLIS_V0_REGION_ID {
+                assert_eq!(
+                    layers,
+                    AuthoredProceduralLayers {
+                        caverns: false,
+                        caves: false,
+                        rocks: false,
+                        spots: false,
+                    },
+                    "{specifier} has changed Cromatolis's procedural-layer policy. That is a real \
+                     content decision (notably, `caves` gates the region's entire procedural \
+                     underground: cave biomes, fauna, loot and ore) -- update this assertion \
+                     deliberately, don't just make it pass"
+                );
+            }
+        }
+    }
 
     // ---- AuthoredF32Layer: raw f32le format ----
 
