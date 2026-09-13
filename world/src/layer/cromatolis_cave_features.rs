@@ -47,14 +47,40 @@
 //! geometry never collides with that already-carved, hand-authored
 //! content.
 //!
-//! No content/NPC/loot population -- physical cave geometry only.
+//! Geometry is still all this module *invents*. The one piece of content it
+//! places is the authored mineral set each catalog entry carries (the
+//! `minerals` field of `cromatolis_v0_cave_features.ron`) -- see
+//! [`apply_minerals_to_floor`]. That exists because the engine's only other
+//! source of Iron/Coal/Cobalt/Silver and every gem is `cave.rs`'s procedural
+//! generator, which deliberately does **not** run in Cromatolis; without it
+//! the region's 281 authored caves contribute nothing to the mineral
+//! economy. No NPC or loot population -- that stays out. (This supersedes
+//! the module's earlier "no content population" promise, which was written
+//! before there was an authored mineral field to honour.)
+//!
+//! Two things worth knowing before tuning the authored abundances:
+//!
+//! - **They are a ceiling, not the realized spawn rate.** Everything placed
+//!   here flows into `canvas.rtsim_resource_blocks` and is then subject to
+//!   rtsim's depletion roll in `World::generate_chunk`, exactly as `cave.rs`'s
+//!   procedural ore is. A depleted world yields less than the catalog says, by
+//!   design.
+//! - **`Velorite`/`VeloriteFrag` account to rtsim's `Loot` bucket, not
+//!   `Ore`/`Gem`** (`Block::get_rtsim_resource` has no explicit arm for them,
+//!   so they fall through to the `default_loot_spec` catch-all). They are still
+//!   minable and still authored deliberately; just don't expect them to move
+//!   the ore/gem depletion pools.
 
-use crate::{Canvas, CanvasInfo, Land, util::SQUARE_4};
+use crate::{
+    Canvas, CanvasInfo, Land,
+    util::{RandomField, SQUARE_4},
+};
 use common::{
     assets::{AssetExt, BoxedError, FileAsset, load_ron},
+    comp::tool::ToolKind,
     terrain::{
-        Block, CoordinateConversions, MapSizeLg, TerrainChunkSize, quadratic_nearest_point,
-        river_spline_coeffs,
+        Block, CoordinateConversions, MapSizeLg, SpriteKind, TerrainChunkSize,
+        quadratic_nearest_point, river_spline_coeffs,
     },
     vol::RectVolSize,
 };
@@ -127,6 +153,96 @@ const SMALL_DEPTH: i32 = 18;
 /// of one connected cave system rather than an absurd vertical shaft.
 const MAX_BRANCH_FLOOR_DRIFT: i32 = 24;
 
+// ---------------------------------------------------------------------
+// Authored minerals.
+// ---------------------------------------------------------------------
+
+/// Per-column probability that one abundance tier places its sprite on a
+/// carved cave floor, **before** the size-class correction below.
+///
+/// Reference point, computed rather than asserted: `cave.rs` gates its own
+/// ore roll on `rand.chance(.., 0.007)` and then draws from a weighted table
+/// (`world/src/layer/cave.rs:1568-1586`) in which `(None, 10.0)` and
+/// `(Stones, 1.5)` eat 82-97% of the gate, so its *effective* rate is
+/// ~6.1e-4 ore + 1.5e-4 gem = **~7.6e-4 mineral per floor column**,
+/// depth-averaged (peak ~1.4e-3 in the shallow layers). So `Trace` here is
+/// about the procedural rate and `Abundant` is roughly 14x it: an authored,
+/// named-vein-grade deposit, which is the point -- `cave.rs` does not run in
+/// Cromatolis at all (`cromatolis_v0_procedural_layers.ron`, `caves: false`),
+/// so these 281 finite caves carry the region's entire mineral economy.
+///
+/// Calibrated against a **Medium** cave (~2.3k floor columns). Giant and
+/// Large caves are 4x and 10x that area, which is what
+/// [`SizeClass::mineral_scale`] exists to correct.
+///
+/// Kept as code constants rather than asset data on purpose: this is the
+/// same side of the code/data line `cave.rs` already puts its own ore rates
+/// on, and the *content* decision (which mineral, how rich, where) lives in
+/// the catalog. If tuning these ever needs to happen without a recompile,
+/// move all of them -- these and `cave.rs`'s -- together.
+const ABUNDANT_CHANCE: f32 = 0.020;
+const COMMON_CHANCE: f32 = 0.010;
+const SPARSE_CHANCE: f32 = 0.004;
+const TRACE_CHANCE: f32 = 0.0015;
+
+/// Per-column density correction by cave size.
+///
+/// Without it the same authored Spanish word buys wildly different hauls: a
+/// `Giant`'s carved floor is ~24k columns against a `Small`'s ~470, so a
+/// flat per-column chance makes one `abundante` mean ~480 ore in a Giant and
+/// ~9 in a Small -- a 50x swing the catalog author cannot see. Scaling the
+/// big classes down keeps "abundant" meaning roughly the same *find* at
+/// every size while still letting a Giant out-yield a Small several times
+/// over, because it is still several times larger.
+const GIANT_MINERAL_SCALE: f32 = 0.55;
+const LARGE_MINERAL_SCALE: f32 = 0.40;
+const MEDIUM_MINERAL_SCALE: f32 = 1.0;
+const SMALL_MINERAL_SCALE: f32 = 1.0;
+
+/// Hard ceiling on one cave's summed effective per-column mineral chance,
+/// i.e. after [`SizeClass::mineral_scale`]. Nothing in the authoring catalog
+/// stops a future edit from declaring six `Abundant` minerals on one entry;
+/// without this, a long enough list drives the total past 1.0 and turns
+/// every carved floor column into ore. Set just above three richest-tier
+/// minerals at `Medium` scale, the densest thing the catalog authors today.
+const MAX_TOTAL_MINERAL_CHANCE: f32 = 0.037;
+
+/// Salt for the per-column mineral roll. Distinct from every other
+/// `RandomField` seed used by this crate's layers so two features never
+/// correlate.
+const MINERAL_NOISE_SEED: u32 = 0x00C4_7E01;
+
+/// Is this sprite something a player can actually mine out of a cave wall?
+///
+/// Deliberately delegates to `SpriteKind::mine_tool` rather than keeping a
+/// hand-written list: that predicate is the engine's own definition of the
+/// ore/gem set (`common/src/terrain/sprite/mod.rs`), it tracks any ore added
+/// upstream for free, and a hand-written copy had already drifted from it in
+/// both directions during review (it omitted `Lodestone` and wrongly
+/// admitted `IceCrystal`, which is scenery -- no `mine_tool`, so a player
+/// could never extract it and it would contribute nothing to the mineral
+/// economy this whole feature exists for).
+fn is_minable_mineral(kind: SpriteKind) -> bool { kind.mine_tool() == Some(ToolKind::Pick) }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum MineralAbundance {
+    Abundant,
+    Common,
+    Sparse,
+    Trace,
+}
+
+impl MineralAbundance {
+    fn base_chance(self) -> f32 {
+        match self {
+            Self::Abundant => ABUNDANT_CHANCE,
+            Self::Common => COMMON_CHANCE,
+            Self::Sparse => SPARSE_CHANCE,
+            Self::Trace => TRACE_CHANCE,
+        }
+    }
+}
+
 struct SizeProfile {
     branch_count: usize,
     hub_radius: f32,
@@ -145,6 +261,17 @@ pub(crate) enum SizeClass {
 }
 
 impl SizeClass {
+    /// See the `*_MINERAL_SCALE` constants: corrects the per-column mineral
+    /// chance for how much carved floor this class actually has.
+    fn mineral_scale(self) -> f32 {
+        match self {
+            Self::Giant => GIANT_MINERAL_SCALE,
+            Self::Large => LARGE_MINERAL_SCALE,
+            Self::Medium => MEDIUM_MINERAL_SCALE,
+            Self::Small => SMALL_MINERAL_SCALE,
+        }
+    }
+
     fn profile(self) -> SizeProfile {
         match self {
             Self::Giant => SizeProfile {
@@ -226,6 +353,16 @@ impl CaveFeaturesAsset {
         }
         Ok(())
     }
+
+    /// Whether any entry declares a mineral at all.
+    ///
+    /// `minerals` is `#[serde(default)]`, so the asset that predates the
+    /// authoring pass loads perfectly and produces 281 ore-free caves --
+    /// indistinguishable, from inside the engine, from a working feature.
+    /// Used only to say so out loud at load time.
+    fn declares_no_minerals_at_all(&self) -> bool {
+        self.features.iter().all(|f| f.minerals.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -233,6 +370,20 @@ struct CaveFeatureEntry {
     id: String,
     position: NormalizedPosition,
     size_class: SizeClass,
+    /// Authored upstream in `xindeler-open-world`'s Cromatolis cave catalog
+    /// and exported into this asset; the asset's own `notes:` header carries
+    /// the exact provenance, so it isn't restated (and left to rot) here.
+    /// `#[serde(default)]` so an asset predating the authoring pass -- or a
+    /// hand-written test fixture -- still loads as "no mineral here" rather
+    /// than failing the whole world's cave layer.
+    #[serde(default)]
+    minerals: Vec<CaveMineral>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct CaveMineral {
+    kind: SpriteKind,
+    abundance: MineralAbundance,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -295,6 +446,10 @@ struct BranchSeg {
 pub(crate) struct GeneratedCave {
     hub: HubGeom,
     branches: Vec<BranchSeg>,
+    /// Authored minerals, pre-flattened to `(sprite, cumulative chance)` so
+    /// the per-column hot path is one noise sample plus a short linear scan
+    /// instead of a fresh weighted-choice allocation per block.
+    minerals: Vec<(SpriteKind, f32)>,
     /// Rough bounding circle (center, radius) covering every carved shape,
     /// used to cheaply skip chunks nowhere near this cave.
     bounds: (Vec2<i32>, f32),
@@ -319,6 +474,14 @@ pub(crate) fn build_all_generated_caves(info: &CanvasInfo) -> Vec<GeneratedCave>
     if let Err(err) = asset.validate() {
         warn!(%err, "Invalid Cromatolis cave features asset, skipping");
         return Vec::new();
+    }
+    if asset.declares_no_minerals_at_all() {
+        warn!(
+            "Cromatolis cave features asset declares no minerals on any of its {} entries; every \
+             authored cave will generate ore-free. This is what a pre-authoring-pass asset looks \
+             like, not a bug in generation.",
+            asset.features.len()
+        );
     }
 
     let map_size = info.chunks().map_size_lg();
@@ -379,7 +542,98 @@ fn build_generated_cave(
     GeneratedCave {
         hub,
         branches,
+        minerals: flatten_minerals(&feature.id, &feature.minerals, feature.size_class),
         bounds: (hub_wpos, max_reach + EDGE_SOFTNESS),
+    }
+}
+
+/// Turn one entry's authored mineral list into the cumulative
+/// `(sprite, chance)` bands [`mineral_for_column`] scans.
+///
+/// Degrades per-mineral rather than per-asset: a hand-edited catalog typo
+/// drops that one mineral with a `warn!` and leaves the other 280 caves'
+/// geometry alone. Rejecting the whole asset (the load path's only other
+/// option, see [`build_all_generated_caves`]) would let one bad content
+/// token delete every cave in the region, which is wildly out of proportion
+/// to the mistake.
+fn flatten_minerals(
+    feature_id: &str,
+    declared: &[CaveMineral],
+    size_class: SizeClass,
+) -> Vec<(SpriteKind, f32)> {
+    let scale = size_class.mineral_scale();
+    let mut bands: Vec<(SpriteKind, f32)> = Vec::with_capacity(declared.len());
+    let mut cumulative = 0.0;
+    for mineral in declared {
+        if !is_minable_mineral(mineral.kind) {
+            warn!(
+                "Cromatolis cave {feature_id} declares {:?}, which is not minable; skipping that \
+                 mineral",
+                mineral.kind
+            );
+            continue;
+        }
+        if bands.iter().any(|(kind, _)| *kind == mineral.kind) {
+            warn!(
+                "Cromatolis cave {feature_id} declares {:?} more than once; keeping the first \
+                 abundance only",
+                mineral.kind
+            );
+            continue;
+        }
+        let next = cumulative + mineral.abundance.base_chance() * scale;
+        if next > MAX_TOTAL_MINERAL_CHANCE {
+            warn!(
+                "Cromatolis cave {feature_id} exceeds the {MAX_TOTAL_MINERAL_CHANCE} total \
+                 mineral density cap at {:?}; dropping it and everything after it",
+                mineral.kind
+            );
+            break;
+        }
+        cumulative = next;
+        bands.push((mineral.kind, cumulative));
+    }
+    bands
+}
+
+/// Pick the authored mineral for one carved floor column, if any.
+///
+/// One noise sample per column, compared against the cave's cumulative
+/// abundance chances: the first band the sample falls into wins, and a
+/// sample past the last band (the overwhelmingly common case) means bare
+/// floor. Deterministic in world position, so a chunk regenerates
+/// identically and two neighbouring chunks agree on the shared columns.
+fn mineral_for_column(minerals: &[(SpriteKind, f32)], wpos: Vec3<i32>) -> Option<SpriteKind> {
+    let total = minerals.last()?.1;
+    let roll = RandomField::new(MINERAL_NOISE_SEED).get_f32(wpos);
+    if roll >= total {
+        return None;
+    }
+    minerals
+        .iter()
+        .find(|(_, cumulative)| roll < *cumulative)
+        .map(|(kind, _)| *kind)
+}
+
+/// Replace a just-carved floor block with an ore/gem sprite when the
+/// authored mineral roll hits. Mirrors how `cave.rs` places its ore: the
+/// sprite lives in the first air block above the cave floor, as
+/// `Block::air(sprite)`.
+fn apply_minerals_to_floor(
+    canvas: &mut Canvas,
+    minerals: &[(SpriteKind, f32)],
+    floor_pos: Vec3<i32>,
+) {
+    // An ore sprite needs something under it. `floor_pos` is the lowest
+    // floor any of this cave's shapes carved in this column, so normally the
+    // block below is untouched rock -- but two authored caves can overlap,
+    // and the lower one's carve would otherwise leave the upper one's sprite
+    // hanging in mid-air.
+    if !canvas.get(floor_pos - Vec3::unit_z()).is_solid() {
+        return;
+    }
+    if let Some(sprite) = mineral_for_column(minerals, floor_pos) {
+        canvas.set(floor_pos, Block::air(sprite));
     }
 }
 
@@ -395,6 +649,7 @@ fn build_generated_cave(
 struct RelevantCave<'a> {
     hub: Option<&'a HubGeom>,
     branches: Vec<&'a BranchSeg>,
+    minerals: &'a [(SpriteKind, f32)],
 }
 
 pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
@@ -438,7 +693,11 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
             if hub.is_none() && branches.is_empty() {
                 None
             } else {
-                Some(RelevantCave { hub, branches })
+                Some(RelevantCave {
+                    hub,
+                    branches,
+                    minerals: &cave.minerals,
+                })
             }
         })
         .collect();
@@ -449,11 +708,22 @@ pub fn apply_cromatolis_cave_features_to(canvas: &mut Canvas) {
     canvas.foreach_col(|canvas, wpos2d, col| {
         let col_alt = col.alt;
         for cave in &relevant {
+            // Carve every shape of this cave first, then run exactly one
+            // mineral pass over the column. Doing it inside the carve calls
+            // would let a branch's `Block::empty()` sweep erase a sprite the
+            // hub had just placed in the overlap region, so ore density near
+            // a hub would be decided by carve order instead of by the
+            // authored abundance.
+            let mut lowest_floor: Option<i32> = None;
             if let Some(hub) = cave.hub {
-                carve_hub(canvas, wpos2d, col_alt, hub);
+                lowest_floor = min_floor(lowest_floor, carve_hub(canvas, wpos2d, col_alt, hub));
             }
             for branch in &cave.branches {
-                carve_branch(canvas, wpos2d, col_alt, branch);
+                lowest_floor =
+                    min_floor(lowest_floor, carve_branch(canvas, wpos2d, col_alt, branch));
+            }
+            if let Some(floor_z) = lowest_floor {
+                apply_minerals_to_floor(canvas, cave.minerals, wpos2d.with_z(floor_z));
             }
         }
     });
@@ -496,49 +766,67 @@ fn spline_sample(a2: Vec2<f64>, b2: Vec2<f64>, curve: f32, point: Vec2<f64>) -> 
     Some((t, closest.distance(point).min(dist_sq.sqrt())))
 }
 
-fn carve_hub(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, hub: &HubGeom) {
+/// Carve this column's slice of a hub chamber. Returns the floor `z` it
+/// carved, if any, so the caller can run a single mineral pass per column.
+fn carve_hub(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, hub: &HubGeom) -> Option<i32> {
     let dist = wpos2d
         .map(|e| e as f32)
         .distance(hub.anchor2d.map(|e| e as f32));
     if dist > hub.radius + EDGE_SOFTNESS {
-        return;
+        return None;
     }
     if edge_weight(dist, hub.radius) <= 0.0 {
-        return;
+        return None;
     }
 
     let ceiling_cap = (col_alt - SURFACE_MARGIN).floor() as i32;
     let ceiling_z = hub.ceiling_z.min(ceiling_cap);
     if ceiling_z <= hub.floor_z {
-        return;
+        return None;
     }
 
     for z in hub.floor_z..=ceiling_z {
         canvas.set(wpos2d.with_z(z), Block::empty());
     }
+    Some(hub.floor_z)
 }
 
-fn carve_branch(canvas: &mut Canvas, wpos2d: Vec2<i32>, col_alt: f32, seg: &BranchSeg) {
+/// Lowest of two optional carved floors -- the floor a mineral should sit
+/// on when a hub and one or more branches all cross the same column.
+fn min_floor(a: Option<i32>, b: Option<i32>) -> Option<i32> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (some, None) | (None, some) => some,
+    }
+}
+
+/// Carve this column's slice of a branch tunnel. Returns the floor `z` it
+/// carved, if any -- see [`carve_hub`].
+fn carve_branch(
+    canvas: &mut Canvas,
+    wpos2d: Vec2<i32>,
+    col_alt: f32,
+    seg: &BranchSeg,
+) -> Option<i32> {
     let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
     let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
-    let Some((t, dist)) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5)) else {
-        return;
-    };
+    let (t, dist) = spline_sample(a2, b2, seg.curve, wpos2d.map(|e| e as f64 + 0.5))?;
     let radius = Lerp::lerp_unclamped(seg.a_radius as f64, seg.b_radius as f64, t) as f32;
     if edge_weight(dist as f32, radius) <= 0.0 {
-        return;
+        return None;
     }
 
     let floor_z = Lerp::lerp_unclamped(seg.a.z as f64, seg.b.z as f64, t);
     let ceiling_cap = (col_alt - SURFACE_MARGIN) as f64;
     let ceiling_z = (floor_z + seg.headroom as f64).min(ceiling_cap);
     if ceiling_z <= floor_z {
-        return;
+        return None;
     }
 
     for z in floor_z.floor() as i32..=ceiling_z.ceil() as i32 {
         canvas.set(wpos2d.with_z(z), Block::empty());
     }
+    Some(floor_z.floor() as i32)
 }
 
 #[cfg(test)]
@@ -554,11 +842,22 @@ mod tests {
                     id: "cave.test_giant".to_string(),
                     position: NormalizedPosition { x: 0.4, y: 0.4 },
                     size_class: SizeClass::Giant,
+                    minerals: vec![
+                        CaveMineral {
+                            kind: SpriteKind::Iron,
+                            abundance: MineralAbundance::Abundant,
+                        },
+                        CaveMineral {
+                            kind: SpriteKind::Sapphire,
+                            abundance: MineralAbundance::Trace,
+                        },
+                    ],
                 },
                 CaveFeatureEntry {
                     id: "cave.test_small".to_string(),
                     position: NormalizedPosition { x: 0.6, y: 0.6 },
                     size_class: SizeClass::Small,
+                    minerals: Vec::new(),
                 },
             ],
         }
@@ -567,6 +866,186 @@ mod tests {
     #[test]
     fn validate_accepts_the_expected_schema_and_coordinate_space() {
         assert!(sample_asset().validate().is_ok());
+    }
+
+    fn mineral(kind: SpriteKind, abundance: MineralAbundance) -> CaveMineral {
+        CaveMineral { kind, abundance }
+    }
+
+    /// The cumulative-chance table must stay strictly increasing and end at
+    /// the sum of every declared tier, or `mineral_for_column`'s
+    /// single-sample scan silently starves the later minerals. Exercises the
+    /// real production flattening, not a hand-built copy of it.
+    #[test]
+    fn flatten_minerals_builds_strictly_increasing_cumulative_bands() {
+        let bands = flatten_minerals(
+            "cave.test",
+            &[
+                mineral(SpriteKind::Iron, MineralAbundance::Abundant),
+                mineral(SpriteKind::Sapphire, MineralAbundance::Trace),
+            ],
+            SizeClass::Medium,
+        );
+        assert_eq!(bands.len(), 2);
+        assert_eq!(bands[0], (SpriteKind::Iron, ABUNDANT_CHANCE));
+        assert!(bands[0].1 < bands[1].1);
+        assert!((bands[1].1 - (ABUNDANT_CHANCE + TRACE_CHANCE)).abs() < 1e-6);
+    }
+
+    /// A hand-edited catalog typo must cost that one mineral, never the
+    /// whole region's cave geometry.
+    #[test]
+    fn flatten_minerals_drops_a_non_minable_sprite_and_keeps_the_rest() {
+        let bands = flatten_minerals(
+            "cave.test",
+            &[
+                mineral(SpriteKind::IceCrystal, MineralAbundance::Abundant),
+                mineral(SpriteKind::DungeonChest0, MineralAbundance::Common),
+                mineral(SpriteKind::Iron, MineralAbundance::Common),
+            ],
+            SizeClass::Medium,
+        );
+        assert_eq!(bands, vec![(SpriteKind::Iron, COMMON_CHANCE)]);
+    }
+
+    #[test]
+    fn flatten_minerals_keeps_only_the_first_abundance_of_a_repeated_kind() {
+        let bands = flatten_minerals(
+            "cave.test",
+            &[
+                mineral(SpriteKind::Iron, MineralAbundance::Trace),
+                mineral(SpriteKind::Iron, MineralAbundance::Abundant),
+            ],
+            SizeClass::Medium,
+        );
+        assert_eq!(bands, vec![(SpriteKind::Iron, TRACE_CHANCE)]);
+    }
+
+    /// Without the cap, a long enough authored list drives the summed
+    /// chance past 1.0 and every carved floor column becomes ore.
+    #[test]
+    fn flatten_minerals_caps_total_density() {
+        let greedy: Vec<CaveMineral> = [
+            SpriteKind::Iron,
+            SpriteKind::Coal,
+            SpriteKind::Cobalt,
+            SpriteKind::Silver,
+            SpriteKind::Copper,
+            SpriteKind::Tin,
+            SpriteKind::Gold,
+            SpriteKind::Ruby,
+        ]
+        .into_iter()
+        .map(|kind| mineral(kind, MineralAbundance::Abundant))
+        .collect();
+        let bands = flatten_minerals("cave.test", &greedy, SizeClass::Medium);
+        assert!(bands.len() < greedy.len(), "the cap must actually bind");
+        assert!(bands.last().unwrap().1 <= MAX_TOTAL_MINERAL_CHANCE);
+    }
+
+    /// A Giant cave's carved floor is ~50x a Small's, so the same authored
+    /// tier must not mean the same per-column chance in both.
+    #[test]
+    fn bigger_size_classes_get_a_lower_per_column_mineral_chance() {
+        let declared = [mineral(SpriteKind::Iron, MineralAbundance::Abundant)];
+        let chance = |size| flatten_minerals("cave.test", &declared, size)[0].1;
+        let giant = chance(SizeClass::Giant);
+        let large = chance(SizeClass::Large);
+        let medium = chance(SizeClass::Medium);
+        let small = chance(SizeClass::Small);
+        assert!(
+            large < giant,
+            "Large ({large}) should be below Giant ({giant})"
+        );
+        assert!(
+            giant < medium,
+            "Giant ({giant}) should be below Medium ({medium})"
+        );
+        assert_eq!(medium, small, "Medium and Small are both calibrated at 1.0");
+        assert_eq!(medium, ABUNDANT_CHANCE);
+    }
+
+    /// `is_minable_mineral` must agree with the engine's own ore/gem
+    /// definition -- the exact drift a hand-written allow-list produced.
+    #[test]
+    fn minable_predicate_tracks_the_engine_ore_set() {
+        for kind in [
+            SpriteKind::Iron,
+            SpriteKind::Coal,
+            SpriteKind::Velorite,
+            SpriteKind::Lodestone,
+            SpriteKind::Diamond,
+        ] {
+            assert!(is_minable_mineral(kind), "{kind:?} should be minable");
+        }
+        for kind in [
+            SpriteKind::IceCrystal,
+            SpriteKind::DungeonChest0,
+            SpriteKind::Stones,
+        ] {
+            assert!(!is_minable_mineral(kind), "{kind:?} should not be minable");
+        }
+    }
+
+    #[test]
+    fn an_asset_with_no_minerals_anywhere_is_detectable() {
+        let mut asset = sample_asset();
+        assert!(!asset.declares_no_minerals_at_all());
+        for feature in &mut asset.features {
+            feature.minerals.clear();
+        }
+        assert!(asset.declares_no_minerals_at_all());
+    }
+
+    #[test]
+    fn a_cave_with_no_minerals_never_places_a_sprite() {
+        for x in 0..64 {
+            assert_eq!(mineral_for_column(&[], Vec3::new(x, x * 7, -40)), None);
+        }
+    }
+
+    /// Every column must be either bare or one of the declared minerals,
+    /// both bands must actually be reachable (i.e. the roll is really
+    /// weighted, not first-entry-wins), and the realized density must match
+    /// the declared one -- the concrete bound the "not a loot pinata"
+    /// intent actually rests on.
+    #[test]
+    fn mineral_rolls_respect_the_declared_abundance_order_and_density() {
+        let bands = flatten_minerals(
+            "cave.test",
+            &[
+                mineral(SpriteKind::Iron, MineralAbundance::Abundant),
+                mineral(SpriteKind::Sapphire, MineralAbundance::Trace),
+            ],
+            SizeClass::Medium,
+        );
+        let (mut iron, mut sapphire, mut bare) = (0u32, 0u32, 0u32);
+        for x in 0..600 {
+            for y in 0..600 {
+                match mineral_for_column(&bands, Vec3::new(x, y, -37)) {
+                    Some(SpriteKind::Iron) => iron += 1,
+                    Some(SpriteKind::Sapphire) => sapphire += 1,
+                    Some(other) => panic!("unexpected sprite {other:?}"),
+                    None => bare += 1,
+                }
+            }
+        }
+        assert!(iron > 0 && sapphire > 0, "both bands must be reachable");
+        assert!(iron > sapphire, "Abundant must out-spawn Trace");
+
+        let total = f64::from(iron + sapphire + bare);
+        let iron_rate = f64::from(iron) / total;
+        let sapphire_rate = f64::from(sapphire) / total;
+        // 360k samples: the sampling error on a ~1% rate is well under 10%
+        // relative, so a 25% tolerance only fires on a real regression.
+        assert!(
+            (iron_rate - f64::from(ABUNDANT_CHANCE)).abs() < f64::from(ABUNDANT_CHANCE) * 0.25,
+            "Abundant realized at {iron_rate}, expected ~{ABUNDANT_CHANCE}"
+        );
+        assert!(
+            (sapphire_rate - f64::from(TRACE_CHANCE)).abs() < f64::from(TRACE_CHANCE) * 0.25,
+            "Trace realized at {sapphire_rate}, expected ~{TRACE_CHANCE}"
+        );
     }
 
     #[test]
@@ -628,6 +1107,61 @@ mod tests {
                 "expected the real catalog to contain the cross-referenced id {excluded}"
             );
         }
+    }
+
+    /// The authored `minerals` field is `#[serde(default)]` so that the
+    /// asset that predates the authoring pass still loads. That makes a
+    /// silent deserialization failure invisible against the real asset, so
+    /// the round trip is pinned against an inline fixture instead: the exact
+    /// shape the upstream authoring exporter emits, including an entry
+    /// that deliberately declares none (sewers, necropolises and guild
+    /// hideouts do) and one that omits the field entirely.
+    #[test]
+    fn minerals_round_trip_from_the_exported_ron_shape() {
+        let asset: CaveFeaturesAsset = load_ron(
+            br#"(
+                schema: "xindeler_open_world.cave_features.v1",
+                coordinate_space: "normalized_map_xy_top_left_origin",
+                features: [
+                    (
+                        id: "cave.with_minerals",
+                        position: (x: 0.5, y: 0.5),
+                        size_class: Giant,
+                        minerals: [
+                            (kind: Iron, abundance: Abundant),
+                            (kind: Sapphire, abundance: Trace),
+                        ],
+                    ),
+                    (
+                        id: "cave.declared_empty",
+                        position: (x: 0.5, y: 0.5),
+                        size_class: Medium,
+                        minerals: [],
+                    ),
+                    (
+                        id: "cave.field_absent",
+                        position: (x: 0.5, y: 0.5),
+                        size_class: Small,
+                    ),
+                ],
+            )"#
+            .as_slice(),
+        )
+        .expect("the exporter's RON shape must deserialize");
+        asset.validate().expect("fixture should validate");
+
+        assert_eq!(asset.features[0].minerals.len(), 2);
+        assert_eq!(asset.features[0].minerals[0].kind, SpriteKind::Iron);
+        assert_eq!(
+            asset.features[0].minerals[0].abundance,
+            MineralAbundance::Abundant
+        );
+        assert_eq!(
+            asset.features[0].minerals[1].abundance,
+            MineralAbundance::Trace
+        );
+        assert!(asset.features[1].minerals.is_empty());
+        assert!(asset.features[2].minerals.is_empty());
     }
 
     /// Exercises the exact filter predicate `build_all_generated_caves`
@@ -709,6 +1243,7 @@ mod tests {
         GeneratedCave {
             hub,
             branches,
+            minerals: Vec::new(),
             bounds: (hub_wpos, max_reach + EDGE_SOFTNESS),
         }
     }
