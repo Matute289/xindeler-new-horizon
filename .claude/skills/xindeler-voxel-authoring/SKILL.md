@@ -98,13 +98,18 @@ The authoring library itself is `tools/voxel/voxlib.py` (no third-party
 dependencies, Python 3.9+). `python3 tools/voxel/selftest.py` proves it still
 round-trips.
 
-> **Known doc conflict, not yet resolved:** the repo `CLAUDE.md`'s macOS run
-> command drops the `hot-reloading` feature, citing the `common/dynlib` macOS
-> failure — but `hot-reloading` is the *asset* watcher and never touches
-> `common/dynlib`; only `hot-anim`/`hot-egui` do, and neither is in the default
-> feature set. Reference 03 has the verified feature table. `CLAUDE.md` should
-> be corrected rather than have this skill quietly override it — raise it with
-> Matías rather than assuming either document is authoritative.
+> **Doc conflict, resolved:** the repo `CLAUDE.md`'s macOS run command used to
+> drop the `hot-reloading` feature, citing the `common/dynlib` macOS failure —
+> but `hot-reloading` is the *asset* watcher and never touches `common/dynlib`;
+> only `hot-anim`/`hot-egui` do, and neither is in the default feature set.
+> Reference 03 has the verified feature table. Fixed in `CLAUDE.md` directly
+> (2026-09-13, `#326`).
+
+> **Sibling skill:** for spell VFX that reference 04 sends to particles instead
+> of a `.vox` mesh, use `xindeler-particle-authoring` — it covers the same
+> particle system reference 04 only names (per-mode GLSL, the emission/trigger
+> paths, the shipped-effect catalogue) and is the actual authoring surface for
+> anything on the particle side of the split.
 
 ## Workflow
 
