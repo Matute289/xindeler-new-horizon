@@ -4999,17 +4999,35 @@ mod tests {
     /// coverage shift big enough to leave the bound is exactly what this
     /// should catch.
     ///
-    /// - `Gnarling`: still exactly 0. Its temperature band (`-0.3..0.4`) is
-    ///   reachable (unlike before this change), but its `tree_density > 0.75`
-    ///   requirement almost never coincides with it in the real authored
-    ///   vegetation data (dense forest sits almost exclusively in the hot
-    ///   lowlands in Cromatolis's authored layer) -- a real content correlation
-    ///   unrelated to the curve's shape.
-    /// - `Myrmidon`/`Terracotta`: still exactly 0. Their temperature gate
-    ///   (`0.9..1.0`) is now reachable, but their separate `water_alt -
-    ///   CONFIG.sea_level > 50.0` requirement is unsatisfiable anywhere on the
-    ///   real map -- no chunk has a local water table that high above sea
-    ///   level. Unrelated to temperature.
+    /// - `Gnarling`: now reachable (bounded fraction, not exactly 0) as of the
+    ///   `l16-v10` mask reimport that landed real authored forest density in
+    ///   its temperature band. Getting there required a second, unrelated fix:
+    ///   `WorldSim::generate_cliffs()` was unconditionally crushing
+    ///   `tree_density` for any chunk within a few cells of a detected cliff,
+    ///   silently overriding hand-authored vegetation density with engine noise
+    ///   -- guarded off for any authored-region chunk (`authored_region_id`),
+    ///   the same authored-data-wins principle `cromatolis_forces_sea_level`
+    ///   already applies to `water_alt` (that one stays deliberately scoped to
+    ///   `authored_cromatolis_v0`, since it's a Cromatolis-specific hydrology
+    ///   rule rather than something every authored region should inherit).
+    ///   Before that fix, dense forest coincided with the reachable temp band
+    ///   at only one authored location, and that location was itself near a
+    ///   detected cliff, so it measured exactly 0 despite the mask being
+    ///   painted correctly.
+    /// - `Myrmidon`/`Terracotta`: still exactly 0, but for a different reason
+    ///   than before. Their temperature gate (`0.9..1.0`) is reachable and,
+    ///   after the same mask reimport, a real elevated lake now exists
+    ///   (measured margin ~545 m over `CONFIG.sea_level`, confirmed as a real
+    ///   `RiverKind::Lake` by the sim, not merely a hypothetical fill height)
+    ///   -- so the `water_alt - CONFIG.sea_level > 50.0` requirement is
+    ///   satisfiable. What is not satisfiable anywhere on the real map (checked
+    ///   exhaustively, not just near the lake) is a chunk that is
+    ///   simultaneously dry, `on_flat_terrain()`, `!near_cliffs()`, and has
+    ///   that same >50 m margin: every elevated-lake rim on the current
+    ///   authored terrain is cliff-steep all the way around. This needs a real
+    ///   flat/gentle shoreline segment authored somewhere around an elevated
+    ///   lake, not an engine fix -- terrain steepness legitimately gates these
+    ///   two types the same way it gates `Adlet`/`Cultist`/ `VampireCastle`.
     /// - `ChapelSite`: now reachable (bounded fraction, not exactly 0). Has no
     ///   temperature dependency at all (`Ocean` biome + an
     ///   altitude-vs-sea-level check only) -- its margin above sea level was
@@ -5054,10 +5072,6 @@ mod tests {
         }
 
         assert_eq!(
-            gnarling, 0,
-            "Gnarling: expected still exactly 0, got {gnarling}"
-        );
-        assert_eq!(
             myrmidon, 0,
             "Myrmidon: expected still exactly 0, got {myrmidon}"
         );
@@ -5073,6 +5087,7 @@ mod tests {
                 "{name}: expected coverage fraction in {range:?}, got {fraction:.6} ({count}/{n})"
             );
         };
+        assert_fraction_in("Gnarling", gnarling, 0.00002..0.0001);
         assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
         assert_fraction_in("Adlet", adlet, 0.005..0.03);
         assert_fraction_in("Sahagin", sahagin, 0.0003..0.003);
