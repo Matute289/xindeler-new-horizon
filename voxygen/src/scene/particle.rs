@@ -3473,6 +3473,30 @@ impl ParticleMgr {
                                 scene_data,
                             )
                         });
+
+                        // Burning additionally smoulders: a few motionless smoke
+                        // wisps dotted around the body, on top of the flame licks
+                        // above. Cursed is a magical flame, not real fire, so it
+                        // gets no smoke.
+                        if matches!(buff_kind, BuffKind::Burning) {
+                            let smoke_amount =
+                                usize::from(self.scheduler.heartbeats(Duration::from_millis(200)));
+                            self.add_particles(scene_data.particles_chance, smoke_amount, || {
+                                let smoke_pos = pos
+                                    + Vec3::unit_z() * body.height() * rng.random_range(0.1..0.75)
+                                    + Vec3::<f32>::zero()
+                                        .map(|_| rng.random_range(-1.0..1.0))
+                                        .normalized()
+                                        * body.max_radius();
+                                Particle::new(
+                                    Duration::from_secs_f32(1.5),
+                                    time,
+                                    ParticleMode::StaticSmoke,
+                                    smoke_pos,
+                                    scene_data,
+                                )
+                            });
+                        }
                     },
                     BuffKind::PotionSickness => {
                         let mut multiplicity = 0;

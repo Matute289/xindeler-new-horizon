@@ -227,6 +227,16 @@ belongs in a smoke-test checklist, not in a test.
 `ParticleMode::SnowStorm = 44` has no shader constant, no `case`, and no
 emitter anywhere in the tree — it is inherited dead weight, and it is the reason
 the invariant test carries an explicit exemption list
-(`MODES_WITHOUT_SHADER_CASE`). `StaticSmoke = 24` has a shader case but no
-emitter. Do not add to either category: a mode you introduce must be declared,
-handled, and emitted, or it should not exist yet.
+(`MODES_WITHOUT_SHADER_CASE`). This was investigated again (2026-09) and left
+as-is on purpose: this engine's weather system (`common/src/weather.rs`) has no
+snow/blizzard concept at all to hook a snowstorm burst to, and deleting the
+enum variant would only widen the diff against any future upstream merge for
+no gameplay gain. If a real snow-storm weather event is ever added, wire
+`SnowStorm` then; until then it stays declared-and-exempted, not deleted.
+
+`StaticSmoke = 24` **is no longer a gap** — it now has a real emitter:
+`BuffKind::Burning` spawns a few low-rate smoulder wisps around the body
+alongside its flame licks (`maintain_buff_particles`, `particle.rs`; `Cursed`,
+a magical flame rather than real fire, does not get it). Do not add to either
+category going forward: a mode you introduce must be declared, handled, and
+emitted, or it should not exist yet.

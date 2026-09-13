@@ -81,7 +81,7 @@ it on.
 |---|---|---|---|
 | `CampfireSmoke` | 0 | 312 | The reference smoke: slow rise, `blown_by_wind(1.0, 0.25)`, tumbling, fades by shrinking |
 | `BlackSmoke` | 37 | 323 | Heavier: `blown_by_wind(7.0, 0.5)` — higher `mass` delays the drift |
-| `StaticSmoke` | 24 | 603 | Non-rising smoke. **Declared but emitted by nothing** |
+| `StaticSmoke` | 24 | 603 | Non-rising smoke: zero offset, shrinks in place. Wired to `BuffKind::Burning` — a few low-rate smoulder wisps around the body, alongside the flame licks (`maintain_buff_particles`, `particle.rs`). `Cursed` (a magical flame, not real fire) does not get it |
 | `PipeSmoke`, `TrainSmoke` | 74, 75 | 1233, 1244 | Small ambient sources |
 | `Dust`, `CaveDust` | 81, 82 | 1317, 1330 | `Dust` reads `inst_dir` **as a colour** through `srgb_to_linear` — the trap from `references/01` in the wild |
 | `Airflow` | 59 | 1073 | Wind visualisation |
