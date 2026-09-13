@@ -417,14 +417,12 @@ macOS** (`common/dynlib/src/lib.rs` logs `"The hot reloading feature does not wo
 animation-*code* iteration on macOS means a rebuild — but that was never in a
 default build anyway.
 
-⚠️ **The repo CLAUDE.md's macOS run command conflates the two**: it drops
-`hot-reloading` citing the `common/dynlib` macOS failure, but `hot-reloading`
-is the *asset* feature and doesn't touch `common/dynlib` at all. Dropping it
-turns off exactly the thing an asset author wants — the `.vox`/manifest
-watcher (`BodySpec::reload_watcher`) that lets you regenerate a model and
-retune offsets without restarting the client. Try keeping `hot-reloading` on
-while iterating on art; if the client misbehaves on macOS for an unrelated
-reason, fall back to the documented command and restart between iterations.
+The repo `CLAUDE.md` used to conflate the two, telling macOS readers to drop
+`hot-reloading` for a bug that belongs to `hot-anim` — which would have turned
+off exactly the thing an asset author wants, the `.vox`/manifest watcher
+(`BodySpec::reload_watcher`) that lets you regenerate a model and retune
+offsets without restarting the client. That was corrected in PR #326: a plain
+`cargo run --bin xindeler-voxygen` keeps the watcher on, on every platform.
 
 ## Proposal: fully named mesh slots (not built — needs sign-off)
 

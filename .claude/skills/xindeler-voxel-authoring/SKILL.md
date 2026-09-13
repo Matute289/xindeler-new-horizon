@@ -105,13 +105,12 @@ The authoring library itself is `tools/voxel/voxlib.py` (no third-party
 dependencies, Python 3.9+). `python3 tools/voxel/selftest.py` proves it still
 round-trips.
 
-> **Known doc conflict, not yet resolved:** the repo `CLAUDE.md`'s macOS run
-> command drops the `hot-reloading` feature, citing the `common/dynlib` macOS
-> failure — but `hot-reloading` is the *asset* watcher and never touches
-> `common/dynlib`; only `hot-anim`/`hot-egui` do, and neither is in the default
-> feature set. Reference 03 has the verified feature table. `CLAUDE.md` should
-> be corrected rather than have this skill quietly override it — raise it with
-> Matías rather than assuming either document is authoritative.
+> **Resolved (PR #326):** the repo `CLAUDE.md` used to tell macOS readers to
+> drop `hot-reloading`, blaming the `common/dynlib` failure that actually
+> belongs to `hot-anim`. It has been corrected — `cargo run --bin
+> xindeler-voxygen` keeps the asset watcher on everywhere, macOS included, and
+> only an explicit `--features hot-anim` hits the dylib bug. Reference 03 has
+> the verified feature table.
 
 ## Workflow
 
