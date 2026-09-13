@@ -80,6 +80,19 @@ pivot at the origin and let coordinates go negative. `VoxModel.normalised()`
 returns `(shifted_model, size, original_min)`; `write_vox` returns the same
 `original_min` per model. That vector *is* your manifest offset. No guessing.
 
+For a part whose pivot is simply its own centre, the offset is exactly
+`-size/2` — confirmed against `humanoid_armor_hand_manifest.ron`, whose
+`(-1.5, -1.5, -2.5)` is `-size/2` of the `(3, 3, 5)` hand model.
+
+**If the art came out of MagicaVoxel rather than `voxlib`**, its scene graph
+records each part's name, its `model_index` and its placement in the
+assembled figure — the only record of which model is the head. Read it with
+`voxlib.read_scene()`; see `references/06-magicavoxel-interop.md`. Note that a
+scene-graph `_t` is the part's **assembled-pose centre**, a different quantity
+in a different space from the manifest `offset` above — useful as a starting
+estimate for the `SkeletonAttr` numbers in §(b) below, never as the offset
+itself.
+
 Scale is applied by the skeleton, not the mesh — `base_mat *
 Mat4::scaling_3d(s_a.scaler / 11.0)` for quadruped-medium
 (`compute_matrices_inner`, `voxygen/anim/src/quadruped_medium/mod.rs`), `/8.0` for biped_large,
@@ -127,6 +140,14 @@ Trade-off: one file is tidier for a generator and halves the LFS object count,
 but a per-part file lets you regenerate one limb without touching the others,
 and matches the majority of shipped assets. Either is fine; be consistent
 within a creature.
+
+⚠️ **`model_index` is not an animation frame.** It is read off the RON spec
+inside `bone_meshes()` and baked into the cached mesh at build time; the
+`FigureModelCache` key (`FigureKey { body, item_key, extra }`) has no frame or
+tick component, so the mesh is built once and reused. A model list is a list
+of *parts*, never a list of *poses*. `references/06-magicavoxel-interop.md`
+works through why baked multi-frame animation does not fit this engine and
+what would have to be built for it.
 
 Two RON shapes exist for naming a model, depending on the body kind:
 

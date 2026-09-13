@@ -39,10 +39,15 @@ hand-authored prop, the particle model, and the authoring template):
 
 `char_template.vox` is the exception that proves the rule: it is a MagicaVoxel
 **working file** kept as an authoring reference (its scene nodes are named
-`"female"`, `"female-0"`, `"female-10"` …), and it is not loaded as a figure
-by anything. If you author in MagicaVoxel you get scene chunks for free and
-they're harmless; if you generate files in code, **do not bother writing a
-scene graph** — it is dead weight the engine skips.
+`"female"`, `"female-0"`, `"female-10"`, `"hand_left"`, `"belt_dark"` …), and
+it is not loaded as a figure by anything. If you author in MagicaVoxel you get
+scene chunks for free and they're harmless; if you generate files in code,
+**do not bother writing a scene graph** — it is dead weight the engine skips.
+
+Dead weight to the *engine*, that is. It is not dead weight to an **importer**:
+those node names are the only record of which of the 12 models is the head,
+and the engine's loader needs exactly that as `model_index`. `voxlib.read_scene()`
+recovers it — see `references/06-magicavoxel-interop.md`.
 
 > Both forms round-trip: a hand-built two-model file with `scenes: vec![]` and
 > a hand-built file with a full root-transform → group → named-transform →

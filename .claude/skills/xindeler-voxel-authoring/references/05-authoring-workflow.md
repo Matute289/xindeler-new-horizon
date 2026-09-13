@@ -66,6 +66,18 @@ content, returning a non-zero origin you must fold into the offset.
 Scene/`MATL`/`LAYR` chunks in a MagicaVoxel-authored source are dropped on
 re-write — the engine never read them, so the render is unchanged.
 
+### `read_scene(path) -> List[Placement]`
+
+Reads the one thing `read_vox` drops and an **importer** still needs: the
+scene graph's part names, their `model_id`, and where each sits in the
+assembled figure. Returns `[]` for a file without one (everything `voxlib`
+writes, and essentially every shipped asset). Use it whenever art arrives from
+MagicaVoxel with several models in one file and you need to know which
+`model_index` is the head. `animation_frames()` groups the result by
+MagicaVoxel's `_f` frame attribute, for inspection only — the engine cannot
+play baked frames. Full detail and the conversion rules:
+`references/06-magicavoxel-interop.md`.
+
 ### `lint(models, palette, humanoid=False, kind="figure")`
 
 Catches the silent failures: empty models, indices that were **never allocated

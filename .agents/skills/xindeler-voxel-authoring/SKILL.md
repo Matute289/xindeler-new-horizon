@@ -21,6 +21,7 @@ This skill is the **code-authored** path. The sibling paths, for contrast:
 | An organic creature you'd rather describe in words than in code | the user-level `meshy` skill (Meshy AI → GLB → `.vox`) or `voxelai` |
 | Terrain heightmaps/masks for Cromatolis | `cromatolis-cartography` |
 | Where a new body/ability/asset *belongs* in the repo | `game-architecture` |
+| A turntable/flythrough **render** of a model for key art or marketing | MagicaVoxel + `MagicaVoxel-Animation-Script`, filed with `xindeler-graphic-assets` — **not** a game-asset tool, see `references/06` |
 
 ## The big idea, in four facts
 
@@ -29,11 +30,12 @@ running code against the real engine, not read off a format spec.
 
 1. **The engine reads a tiny subset of `.vox`.** `Segment::from_vox`
    (`common/src/figure/mod.rs:65`) reads `models[model_index]` and `palette`.
-   It ignores the scene graph, layers and materials entirely — no consumer in
-   the repo reads `.scenes`, `.layers`, `.materials` or `.index_map`. Every
+   It ignores the scene graph, layers and materials entirely — no *engine*
+   consumer reads `.scenes`, `.layers`, `.materials` or `.index_map`. Every
    shipped asset sampled has `scenes = 0, layers = 0, materials = 0`
    (the exception, `char_template.vox`, is an authoring reference that no code
-   loads). So a valid
+   loads — and whose scene graph turns out to be the only record of which
+   model is which body part, see `references/06`). So a valid
    asset is just `MAIN { SIZE + XYZI …, RGBA }` — and you never need
    `nTRN`/`nGRP`/`nSHP` to make a segmented, animatable figure.
 
@@ -58,7 +60,10 @@ running code against the real engine, not read off a format spec.
    attach our own `.vox` skins* — is **true for reskinning an existing
    species** (genuinely zero Rust) and **false for a new species** (zero new
    animation *functions*, but ~16 mandatory match arms of tuning numbers).
-   → `references/03` has the honest breakdown.
+   → `references/03` has the honest breakdown. Baked multi-frame animation
+   was investigated against real prior art and **does not fit**: `model_index`
+   is fixed at mesh-build time and the mesh cache has no time dimension.
+   → `references/06`.
 
 ## Read first
 
@@ -83,6 +88,11 @@ session must be able to read them without a private-repo pull.
 - `references/05-authoring-workflow.md` — the actual process: `voxlib.py`,
   shape primitives, symmetry, the verify loop, where files go, manifest
   wiring, Git LFS.
+- `references/06-magicavoxel-interop.md` — importing a MagicaVoxel-authored
+  file: reading the scene graph to recover which `model_index` is which part,
+  `_t` vs manifest `offset`, and the verdict on MagicaVoxel's animation
+  features and the `MagicaVoxel-Animation-Script` tool (a camera/lighting
+  render robot — it does not apply to game assets).
 
 The authoring library itself is `tools/voxel/voxlib.py` (no third-party
 dependencies, Python 3.9+). `python3 tools/voxel/selftest.py` proves it still

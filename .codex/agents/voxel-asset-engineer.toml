@@ -27,6 +27,9 @@ The `xindeler-voxel-authoring` skill and its reference set, in the repo at
   effect.
 - `references/05-authoring-workflow.md` — the library, the recipes, the
   verify loop, the wiring tables.
+- `references/06-magicavoxel-interop.md` — only when art arrives *from*
+  MagicaVoxel: recovering which `model_index` is which part, and why baked
+  frame animation does not fit this engine.
 
 The library is `tools/voxel/voxlib.py` (no dependencies, Python 3.9+);
 `python3 tools/voxel/selftest.py` proves it still works. If you extend

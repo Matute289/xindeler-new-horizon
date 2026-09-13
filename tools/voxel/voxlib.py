@@ -18,6 +18,12 @@ layers, no materials. Every shipped figure asset in `assets/voxygen/voxel/`
 has `scenes = 0, layers = 0, materials = 0`, so files written by this module
 are structurally identical to the ones already in the repo.
 
+`read_scene()` is the one deliberate exception: it reads the scene graph the
+engine ignores, because when art arrives *from* MagicaVoxel the node names are
+the only record of which model is which body part — and that mapping is what
+the engine's `model_index` needs. It is a reader only; nothing here ever
+writes a scene graph. See `references/06-magicavoxel-interop.md`.
+
 Palette indices are load-bearing: see `INDEX_*` below and
 `references/02-palette-and-materials.md` in the `xindeler-voxel-authoring`
 skill.
@@ -460,6 +466,10 @@ def read_vox(path: str) -> Tuple[List[VoxModel], Palette]:
     exactly as the engine skips them. If you re-write a file you read with
     this, any such chunks a MagicaVoxel-authored source had are dropped —
     which changes nothing about how the engine renders it.
+
+    If the source *did* come from MagicaVoxel, call :func:`read_scene` on it
+    first: the part names and placements it holds are lost by this function
+    and are not recoverable afterwards.
     """
     with open(path, "rb") as f:
         data = f.read()
@@ -507,6 +517,229 @@ def read_vox(path: str) -> Tuple[List[VoxModel], Palette]:
     for m in models:
         palette.reserve(m.voxels.values())
     return models, palette
+
+
+# ---------------------------------------------------------------------------
+# Scene graph — the part the *engine* ignores but an *importer* needs
+# ---------------------------------------------------------------------------
+#
+# The engine reads `models[model_index]` and nothing else, so the scene graph
+# is irrelevant at runtime. It is not irrelevant at *authoring* time: when a
+# `.vox` comes out of MagicaVoxel's world editor with a dozen models in it,
+# the only record of *which model is the head* lives in the scene graph's
+# `nTRN` `_name` attributes. Without reading it you are guessing `model_index`
+# by trial and error.
+#
+# Chunk layouts per the official extension spec
+# (ephtracy/voxel-model, MagicaVoxel-file-format-vox-extension.txt):
+#
+#   nTRN: int32 node_id, DICT attrs, int32 child, int32 reserved(-1),
+#         int32 layer_id, int32 num_frames, {DICT frame_attrs} * num_frames
+#   nGRP: int32 node_id, DICT attrs, int32 num_children, {int32 child} * n
+#   nSHP: int32 node_id, DICT attrs, int32 num_models,
+#         {int32 model_id, DICT model_attrs} * num_models
+#   DICT: int32 n, {STRING key, STRING value} * n
+#   STRING: int32 length, <length> bytes of UTF-8
+
+
+@dataclass
+class Placement:
+    """One shape node resolved to its absolute placement in the scene.
+
+    `translation` is MagicaVoxel's `_t`, accumulated down the node tree. It is
+    the position of the model's **centre**, in voxel units, in the same Z-up
+    space the skeleton works in — *not* a manifest `offset`. Verified against
+    `assets/voxygen/voxel/char_template.vox`, whose `hand_left`/`hand_right`
+    sit symmetrically at x = -8 / +7 about the midline while every midline
+    part sits at x = 0.
+
+    `frame_index` is the `_f` attribute — `None` for a static scene, and the
+    frame number for a file using MagicaVoxel 0.99.7's frame animation.
+    """
+
+    name: Optional[str]
+    model_id: int
+    translation: Coord
+    layer_id: int
+    hidden: bool
+    frame_index: Optional[int]
+
+    def min_corner(self, size: Coord) -> Coord:
+        """Convert the centre `translation` to the model's minimum corner.
+
+        MagicaVoxel places a model by its centre; `size // 2` is the offset
+        back to the corner the XYZI voxel coordinates are relative to.
+        """
+        return (self.translation[0] - size[0] // 2,
+                self.translation[1] - size[1] // 2,
+                self.translation[2] - size[2] // 2)
+
+
+def _read_string(buf: bytes, p: int) -> Tuple[str, int]:
+    (n,) = struct.unpack("<i", buf[p:p + 4])
+    if n < 0:
+        raise ValueError("negative string length in .vox scene graph")
+    return buf[p + 4:p + 4 + n].decode("utf-8", "replace"), p + 4 + n
+
+
+def _read_dict(buf: bytes, p: int) -> Tuple[Dict[str, str], int]:
+    (n,) = struct.unpack("<i", buf[p:p + 4])
+    p += 4
+    out: Dict[str, str] = {}
+    for _ in range(n):
+        key, p = _read_string(buf, p)
+        val, p = _read_string(buf, p)
+        out[key] = val
+    return out, p
+
+
+def _parse_translation(attrs: Dict[str, str]) -> Coord:
+    raw = attrs.get("_t")
+    if not raw:
+        return (0, 0, 0)
+    parts = raw.split()
+    if len(parts) != 3:
+        return (0, 0, 0)
+    try:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return (0, 0, 0)
+
+
+def _parse_frame_index(attrs: Dict[str, str]) -> Optional[int]:
+    raw = attrs.get("_f")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def read_scene(path: str) -> List[Placement]:
+    """Resolve a MagicaVoxel `.vox` scene graph to a flat list of placements.
+
+    Returns one :class:`Placement` per model reference, in scene order, with
+    translations accumulated from the root. An empty list means the file has
+    no scene graph at all — which is true of every hand-written file this
+    module produces and of essentially every shipped asset in this repo.
+
+    Rotations (`_r`) are deliberately **not** applied: the engine has no way
+    to consume a rotated segment (it meshes voxels on the grid and rotates via
+    the bone matrix), so a rotated part in a MagicaVoxel scene has to be
+    re-authored upright rather than imported.
+
+    Only a transform node's **first** frame contributes its translation. This
+    engine imports a single static pose, so a `nTRN` carrying an animated
+    transform track collapses to its first keyframe rather than producing one
+    placement per keyframe.
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"VOX ":
+        raise ValueError(f"{path} is not a .vox file")
+
+    nodes: Dict[int, Tuple[str, object]] = {}
+
+    def walk(buf: bytes, start: int, end: int) -> None:
+        p = start
+        while p + 12 <= end:
+            cid = buf[p:p + 4]
+            n_content, n_children = struct.unpack("<II", buf[p + 4:p + 12])
+            c0 = p + 12
+            c1 = c0 + n_content
+            if cid == b"MAIN":
+                walk(buf, c1, c1 + n_children)
+            elif cid in (b"nTRN", b"nGRP", b"nSHP"):
+                (node_id,) = struct.unpack("<i", buf[c0:c0 + 4])
+                attrs, q = _read_dict(buf, c0 + 4)
+                if cid == b"nTRN":
+                    child, _reserved, layer_id, n_frames = struct.unpack(
+                        "<iiii", buf[q:q + 16])
+                    q += 16
+                    frames: List[Dict[str, str]] = []
+                    for _ in range(n_frames):
+                        fa, q = _read_dict(buf, q)
+                        frames.append(fa)
+                    nodes[node_id] = ("nTRN", (attrs, child, layer_id, frames))
+                elif cid == b"nGRP":
+                    (n_child,) = struct.unpack("<i", buf[q:q + 4])
+                    q += 4
+                    kids = list(struct.unpack(f"<{n_child}i", buf[q:q + 4 * n_child]))
+                    nodes[node_id] = ("nGRP", kids)
+                else:  # nSHP
+                    (n_models,) = struct.unpack("<i", buf[q:q + 4])
+                    q += 4
+                    refs: List[Tuple[int, Dict[str, str]]] = []
+                    for _ in range(n_models):
+                        (model_id,) = struct.unpack("<i", buf[q:q + 4])
+                        ma, q = _read_dict(buf, q + 4)
+                        refs.append((model_id, ma))
+                    nodes[node_id] = ("nSHP", refs)
+            p = c1 + n_children
+
+    walk(data, 8, len(data))
+    if not nodes:
+        return []
+
+    out: List[Placement] = []
+    seen: set = set()
+
+    def visit(node_id: int, offset: Coord, name: Optional[str],
+              layer_id: int, hidden: bool) -> None:
+        # A malformed or cyclic graph must not hang the importer.
+        if node_id in seen or node_id not in nodes:
+            return
+        seen.add(node_id)
+        kind, payload = nodes[node_id]
+        if kind == "nTRN":
+            attrs, child, node_layer, frames = payload  # type: ignore[misc]
+            frame = frames[0] if frames else {}
+            t = _parse_translation(frame)
+            visit(child,
+                  (offset[0] + t[0], offset[1] + t[1], offset[2] + t[2]),
+                  attrs.get("_name") or name,
+                  node_layer if node_layer >= 0 else layer_id,
+                  hidden or attrs.get("_hidden") in ("1", "true"))
+        elif kind == "nGRP":
+            for kid in payload:  # type: ignore[union-attr]
+                visit(kid, offset, name, layer_id, hidden)
+        else:  # nSHP
+            for model_id, ma in payload:  # type: ignore[misc]
+                out.append(Placement(
+                    name=name,
+                    model_id=model_id,
+                    translation=offset,
+                    layer_id=layer_id,
+                    hidden=hidden,
+                    frame_index=_parse_frame_index(ma),
+                ))
+
+    # Per the spec the first transform node written is the scene root; dicts
+    # preserve insertion order, so that is simply the first node parsed.
+    root = next(iter(nodes))
+    visit(root, (0, 0, 0), None, 0, False)
+    return out
+
+
+def animation_frames(placements: Sequence[Placement]) -> List[List[Placement]]:
+    """Group scene placements by MagicaVoxel frame index.
+
+    Returns a list of frames, each a list of the placements visible in it,
+    ordered by `_f`. A file with no `_f` attributes anywhere yields a single
+    frame holding everything — i.e. a static scene.
+
+    This is only a *reader*. This engine cannot play baked frames: a figure's
+    `model_index` is fixed in its RON manifest and baked into a cached mesh
+    (see `references/06-magicavoxel-interop.md`), so consuming more than one
+    frame needs engine work that does not exist today.
+    """
+    if not any(p.frame_index is not None for p in placements):
+        return [list(placements)]
+    frames: Dict[int, List[Placement]] = {}
+    for p in placements:
+        frames.setdefault(p.frame_index or 0, []).append(p)
+    return [frames[k] for k in sorted(frames)]
 
 
 # ---------------------------------------------------------------------------
