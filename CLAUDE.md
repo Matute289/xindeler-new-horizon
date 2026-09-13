@@ -98,12 +98,16 @@ Nightly Rust is required (pinned in `rust-toolchain`). The project uses the 2024
 ## Commands
 
 ```bash
-# Run the game client (hot-reloading enabled by default in dev builds)
+# Run the game client (dev builds enable the asset hot-reload watcher,
+# `hot-reloading`, by default — this works fine on every platform including
+# macOS, and needs no special handling for a normal run)
 cargo run --bin xindeler-voxygen
-# On macOS, hot-reloading doesn't work (common/dynlib/src/lib.rs logs an error
-# and the dylib reload never succeeds) — run with everything else `default`
-# gives you, minus `hot-reloading`, instead:
-cargo run --bin xindeler-voxygen --no-default-features --features default-publish,shaderc-from-source,egui-ui
+# `hot-anim` (dylib-reloaded animation/agent code) is a SEPARATE, opt-in
+# feature — it is not part of `default` and is not enabled by the command
+# above. Only if you explicitly add `--features hot-anim` does macOS hit a
+# real bug (common/dynlib/src/lib.rs logs an error and the dylib reload
+# never succeeds); the previous version of this note incorrectly blamed
+# `hot-reloading` for that and told you to disable the wrong feature.
 
 # Run the server
 cargo run --bin xindeler-server-cli
