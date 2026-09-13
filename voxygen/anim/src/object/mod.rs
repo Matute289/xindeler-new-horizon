@@ -96,14 +96,14 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 Crossbow => (0.0, 0.0, 11.0),
                 Flamethrower => (0.0, 0.0, 11.0),
                 HaniwaSentry => (0.0, 0.0, 10.5),
-                _ => (0.0, 0.0, 0.0),
+                _ => attr_fallback!("Object", "bone0", (0.0, 0.0, 0.0)),
             },
             bone1: match body {
                 Crossbow => (0.0, 0.0, 8.0),
                 Flamethrower => (0.0, 0.0, 8.0),
                 HaniwaSentry => (0.0, 0.0, 3.0),
                 CitadelArcaneCannon | CitadelArcaneSphereCannon => (0.0, 0.0, 17.0),
-                _ => (0.0, 0.0, 0.0),
+                _ => attr_fallback!("Object", "bone1", (0.0, 0.0, 0.0)),
             },
         }
     }

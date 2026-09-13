@@ -70,3 +70,18 @@ jobs:
 
       - name: Clippy (×3 feature sets) + rustfmt --check
         run: bash .github/scripts/code-quality.sh
+
+      # The per-species attribute fall-through audits are unit tests, not lints:
+      # `attr_fallback!` is a no-op outside `cfg(test)`, so clippy cannot see
+      # them. Without this step they would be opt-in local tooling and a new
+      # species that forgets a `mass`/`threat_tier`/`scaler` value would merge
+      # exactly as silently as before.
+      #
+      # Deliberately filtered to `attr_audit` rather than running each crate's
+      # whole suite: this checkout has no LFS, so `.vox`/`.ogg` assets are
+      # pointer files and the asset-loading tests (e.g.
+      # `terrain::structure::tests::test_structure_manifests`) would fail on
+      # content that is fine. The audits load no assets at all.
+      - name: Attribute fall-through audits (common + anim)
+        run: |
+          time cargo test --locked -p xindeler-common -p xindeler-anim --lib attr_audit

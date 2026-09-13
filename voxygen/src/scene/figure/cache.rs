@@ -397,6 +397,51 @@ where
     }
 }
 
+/// Checks that a body's mesh array does not place geometry on a bone its
+/// skeleton does not have.
+///
+/// Slot `N` of `BodySpec::bone_meshes` feeds skeleton bone `N` **by position**
+/// — `make_vox_spec!` verifies that mapping's *order* at compile time, but the
+/// array is always 16 slots wide regardless of how many bones the skeleton
+/// actually declares, so a mesh parked past the last bone is still expressible.
+/// Such a mesh is meshed into the atlas and then transformed by a bone matrix
+/// that is never written: it renders at the origin, or not at all, silently.
+///
+/// This is the runtime half of the guarantee; the compile-time half lives in
+/// `make_vox_spec!`, which most bodies go through. `ship::Body`,
+/// `plugin::Body` and `VolumeKey` hand-roll their `BodySpec` impls and so get
+/// no compile-time bone check at all — for them this is the only check there
+/// is, which is why it stays a runtime one rather than moving entirely into
+/// `const`.
+///
+/// Runs once per figure model built (not per frame) and only walks the tail of
+/// a 16-element array — and folds away entirely for the eight skeletons with
+/// all 16 bones — so it is free in practice.
+///
+/// Deliberately *not* a `debug_assert!`: both call sites run inside a slow-job
+/// closure on a pool with no panic handler, so a panic there aborts the
+/// process instead of failing the job. The `error!` already says exactly what
+/// is wrong and where. `cfg!(debug_assertions)` keeps the whole body compiled
+/// (no unused-parameter warnings) while letting release builds drop it, so a
+/// mis-slotted mesh cannot spam a player's log on every cache eviction.
+fn debug_check_bone_slots<Skel: Skeleton, M>(meshes: &[Option<M>; anim::MAX_BONE_COUNT]) {
+    if cfg!(debug_assertions)
+        && let Some(slot) = meshes
+            .iter()
+            .enumerate()
+            .skip(Skel::BONE_COUNT)
+            .find_map(|(i, mesh)| mesh.as_ref().map(|_| i))
+    {
+        tracing::error!(
+            "{}: bone_meshes() returned a mesh in slot {slot}, but its skeleton only has {} \
+             bones. That mesh is transformed by a bone matrix that is never computed and will not \
+             render correctly. Check the mesh array against the skeleton's `+` bones.",
+            core::any::type_name::<Skel>(),
+            Skel::BONE_COUNT,
+        );
+    }
+}
+
 impl<Skel: Skeleton> FigureModelCache<Skel>
 where
     Skel::Body: BodySpec<
@@ -489,6 +534,7 @@ where
                 let job = move || {
                     // First, load all the base vertex data.
                     let meshes = <Skel::Body as BodySpec>::bone_meshes(&key, &manifests, extra);
+                    debug_check_bone_slots::<Skel, _>(&meshes);
 
                     // Then, set up meshing context.
                     let mut greedy = FigureModel::make_greedy();
@@ -742,6 +788,7 @@ where
                     // First, load all the base vertex data.
                     let meshes =
                         <Skel::Body as BodySpec>::bone_meshes(&key, &manifests, extra);
+                    debug_check_bone_slots::<Skel, _>(&meshes);
 
                     // Then, set up meshing context.
                     let mut greedy = FigureModel::make_greedy();

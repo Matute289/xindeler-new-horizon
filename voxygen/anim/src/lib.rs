@@ -3,6 +3,10 @@
 #[cfg(all(feature = "be-dyn-lib", feature = "use-dyn-lib"))]
 compile_error!("Can't use both \"be-dyn-lib\" and \"use-dyn-lib\" features at once");
 
+#[macro_use]
+mod attr_audit;
+#[cfg(test)] mod attr_audit_test;
+
 macro_rules! replace_with_unit {
     ($_:tt) => {
         ()
@@ -42,6 +46,33 @@ macro_rules! skeleton_impls {
                 pub $field : $field_ty,
             )*)?
         }
+
+        impl $Skeleton {
+            /// The mesh-carrying bones — the ones marked `+` above — **in the
+            /// exact order a figure's mesh array is indexed by**.
+            ///
+            /// Slot `N` of `BodySpec::bone_meshes` feeds bone `N` here, by
+            /// position and never by name, so this array is the authority on
+            /// what that position means. `make_vox_spec!` takes the same list
+            /// and checks it against this one at compile time, which is what
+            /// turns "put the head mesh in the wrong slot and it renders on
+            /// the tail, silently" into a build failure.
+            ///
+            /// Helper bones (declared without `+`) are absent: they are CPU-side
+            /// intermediate transforms and never receive a mesh.
+            pub const MESH_BONE_NAMES: [&'static str; $ComputedSkeleton::BONE_COUNT] =
+                [$(stringify!($mesh_bone),)*];
+        }
+
+        // A skeleton with more mesh bones than the shader's bone array can
+        // hold would otherwise fail at runtime, inside `set_figure_bone_data`.
+        const _: () = assert!(
+            $ComputedSkeleton::BONE_COUNT <= $crate::MAX_BONE_COUNT,
+            concat!(
+                stringify!($Skeleton),
+                " declares more `+` (mesh-carrying) bones than MAX_BONE_COUNT",
+            ),
+        );
 
         impl<'a, Factor> $crate::vek::Lerp<Factor> for &'a $Skeleton
             where
@@ -111,6 +142,41 @@ type MatRaw = [[f32; 4]; 4];
 pub struct FigureBoneData(pub MatRaw, pub MatRaw);
 
 pub const MAX_BONE_COUNT: usize = 16;
+
+/// `const`-evaluable string equality, for comparing bone-name lists inside a
+/// `const` assert. `str`'s own `PartialEq` is not `const`.
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `const`-evaluable equality for two bone-name lists.
+///
+/// Used by `make_vox_spec!` to verify that the bone order a figure's mesh
+/// array is written against really is the order its skeleton declares.
+pub const fn bone_names_eq(declared: &[&str], skeleton: &[&str]) -> bool {
+    if declared.len() != skeleton.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < declared.len() {
+        if !str_eq(declared[i], skeleton[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
 
 pub fn make_bone(mat: Mat4<f32>) -> FigureBoneData {
     let normal = mat.map_cols(Vec4::normalized);

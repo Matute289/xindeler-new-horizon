@@ -215,11 +215,11 @@ impl<'a> From<&'a Body> for SkeletonAttr {
             },
             side_head_lower: match (body.species, body.body_type) {
                 (Hydra, _) => (9.0, 10.0, -6.5),
-                _ => (0.0, 0.0, 0.0),
+                _ => attr_fallback!("QuadrupedLow", "side_head_lower", (0.0, 0.0, 0.0)),
             },
             side_head_upper: match (body.species, body.body_type) {
                 (Hydra, _) => ((1.0), (7.0), (17.0)),
-                _ => (0.0, 0.0, 0.0),
+                _ => attr_fallback!("QuadrupedLow", "side_head_upper", (0.0, 0.0, 0.0)),
             },
             jaw: match (body.species, body.body_type) {
                 (Crocodile, _) => (2.5, -3.0),
@@ -406,7 +406,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
             },
             lean: match (body.species, body.body_type) {
                 (Pangolin, _) => (0.4, 0.0),
-                _ => (0.0, 1.0),
+                _ => attr_fallback!("QuadrupedLow", "lean", (0.0, 1.0)),
             },
             scaler: match (body.species, body.body_type) {
                 (Crocodile, _) => 1.05,
@@ -429,7 +429,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Mossdrake, _) => 1.12,
                 (Snaretongue, _) => 1.0,
                 (Hydra, _) => 1.5,
-                _ => 0.9,
+                _ => attr_fallback!("QuadrupedLow", "scaler", 0.9),
             },
             tempo: match (body.species, body.body_type) {
                 (Crocodile, _) => 0.7,
@@ -452,7 +452,7 @@ impl<'a> From<&'a Body> for SkeletonAttr {
                 (Mossdrake, _) => 1.1,
                 (Snaretongue, _) => 0.7,
                 (Hydra, _) => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedLow", "tempo", 1.0),
             },
             // bool to special case Snaretongue
             tongue_for_tail: matches!(body.species, Snaretongue),

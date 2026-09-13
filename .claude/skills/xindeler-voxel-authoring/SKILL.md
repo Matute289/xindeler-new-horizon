@@ -51,15 +51,20 @@ running code against the real engine, not read off a format spec.
    *N separate `.vox` models* (either N files or one file with N models
    picked by `model_index`), each named in a RON manifest, each with an
    `offset`, and each assigned to a skeleton bone **by position in a 16-slot
-   array**. Nothing checks that the array order matches the skeleton's bone
-   order. → `references/03-figures-bones-and-skeletons.md`
+   array**. That mapping used to be checked by nothing at all; the *bone-name
+   order* a body is written against is now compiler-checked, via
+   `make_vox_spec!`'s `bones:` clause against the skeleton's
+   `MESH_BONE_NAMES`. Which expression you put in which slot is still
+   convention. → `references/03-figures-bones-and-skeletons.md`
 
 4. **There is no keyframe animation in `.vox` anywhere in this engine.**
    "Animating a voxel model" means writing Rust that transforms rigid
    segments per frame. Matías's framing — *start from existing skeletons and
    attach our own `.vox` skins* — is **true for reskinning an existing
    species** (genuinely zero Rust) and **false for a new species** (zero new
-   animation *functions*, but ~16 mandatory match arms of tuning numbers).
+   animation *functions*, but ~16 mandatory match arms of tuning numbers, plus
+   a handful more that silently *default* rather than failing to compile —
+   those are now caught by a fall-through audit, see `references/03`).
    → `references/03` has the honest breakdown. Baked multi-frame animation
    was investigated against real prior art and **does not fit**: `model_index`
    is fixed at mesh-build time and the mesh cache has no time dimension.
@@ -81,7 +86,9 @@ session must be able to read them without a private-repo pull.
   Water / SwirlyCrystal.
 - `references/03-figures-bones-and-skeletons.md` — bones, offsets and pivots,
   central/lateral manifests, `model_index` packing, what "reuse an existing
-  skeleton" really costs, per-body-kind bone lists.
+  skeleton" really costs, per-body-kind bone lists, the **two safety nets**
+  (compile-time bone-order check, and the attribute fall-through audit), and
+  the standing proposal for fully named mesh slots.
 - `references/04-spell-vfx-what-fits-voxels.md` — the six VFX surfaces the
   engine has, and a blunt verdict on which spell effects should be authored
   `.vox` and which must stay particles or shaders.
@@ -134,8 +141,17 @@ round-trips.
 
 - **Verify against the engine's own loader, not a viewer.** A voxel whose
   palette index has no colour is *dropped silently*; a model index past the
-  end returns a *zero-sized segment* silently; a mismatched bone array puts
-  the head on the tail with no warning.
+  end returns a *zero-sized segment* silently. (A bone *name list* that drifts
+  out of sync with its skeleton is now a compile error — see `references/03` —
+  but nothing else on this list is, and putting the right name on the wrong
+  array slot still isn't.)
+- **Run the audits after adding a species.**
+  `cargo test -p xindeler-common -p xindeler-anim --lib attr_audit` (the same
+  command CI runs) names any *audited* attribute you left to a silent default —
+  `mass`, `base_health`, `base_poise`, `base_energy`, `threat_tier`, `scaler`,
+  `tempo` and friends. It is a real gate, not a complete one: `references/03`
+  lists exactly what is in and out of scope. Fix the species; re-bless the
+  ledger only when the catch-all genuinely is right for it.
 - **Never use palette index 255.** `dot_vox` serialises index `i` as `i + 1`;
   255 overflows a `u8` and panics *its* writer (`voxlib` rejects it up front
   with a clear error instead). Verified by running it.

@@ -144,26 +144,26 @@ impl<'a> From<&'a Body> for SkeletonAttr {
             },
             bone1_ori: match body {
                 Carriage | Cart | Train => std::f32::consts::PI * 0.5,
-                _ => 0.0,
+                _ => attr_fallback!("Ship", "bone1_ori", 0.0),
             },
             bone2_ori: match body {
                 Carriage | Cart | Train => std::f32::consts::PI * -0.5,
-                _ => 0.0,
+                _ => attr_fallback!("Ship", "bone2_ori", 0.0),
             },
             bone_rotation_rate: match body {
                 Carriage => 0.25,
                 Cart => 0.4,
                 Train => 0.25,
-                _ => 0.8,
+                _ => attr_fallback!("Ship", "bone_rotation_rate", 0.8),
             },
             bone1_prop_trail_offset: match body {
                 DefaultAirship => Some(8.5),
                 Submarine => Some(3.5),
-                _ => None,
+                _ => attr_fallback!("Ship", "bone1_prop_trail_offset", None),
             },
             bone2_prop_trail_offset: match body {
                 DefaultAirship => Some(8.5),
-                _ => None,
+                _ => attr_fallback!("Ship", "bone2_prop_trail_offset", None),
             },
         }
     }
