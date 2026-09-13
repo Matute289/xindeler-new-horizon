@@ -344,6 +344,20 @@ impl SpotGenerate for Spot {
         // Should we allow trees and other trivial structures to spawn close to the spot?
         spawn: bool,
     ) {
+        // A region that disables the procedural spot layer gets no spot
+        // *markers* either, not just no rendered structures. `SimChunk::spot`
+        // is read on its own by rtsim's `get_nearest_spot` quest targeting and
+        // by the `/spot` admin lookup, both of which already have correct
+        // "no such spot" paths -- leaving a marker behind for a structure
+        // `apply_spots_to` will never stamp would aim a quest map-marker at
+        // empty ground.
+        if world
+            .authored_procedural_layers()
+            .is_some_and(|layers| !layers.spots)
+        {
+            return;
+        }
+
         let world_size = world.get_size();
         for _ in
             0..(world_size.product() as f32 * TerrainChunkSize::RECT_SIZE.product() as f32 * freq
@@ -357,7 +371,23 @@ impl SpotGenerate for Spot {
                 .filter(|(grad, chunk)| valid(*grad, chunk))
             {
                 chunk.spot = Some(spot);
-                if !spawn {
+                // `spawn: false` zeroes `tree_density`/`spawn_rate` outright,
+                // assuming they are seed-derived values nothing else cares
+                // about. In an authored region they are hand-painted content,
+                // so this silently discards authoring work -- the same bug
+                // class as the `generate_cliffs` vegetation crush. Authored
+                // data wins; the spot itself is still placed.
+                //
+                // Be aware of the real trade-off this makes, rather than
+                // reading it as a pure win: the clearing also serves as
+                // structure clearance (don't grow a tree through the witch
+                // house), so an authored region that *enables* the spot layer
+                // accepts trees crowding its spot structures. The two can't
+                // both hold as written. If that combination is ever wanted,
+                // the answer is to clamp `tree_density` locally instead of
+                // choosing between zeroing it and leaving it untouched.
+                // Inert while the region disables spots (early return above).
+                if !spawn && chunk.authored_region_id.is_none() {
                     chunk.tree_density = 0.0;
                     chunk.spawn_rate = 0.0;
                 }
