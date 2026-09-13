@@ -2084,8 +2084,50 @@ impl Civs {
                             let mut update_offset = |original: Vec2<i32>, new: Vec2<i32>| {
                                 let chunk = original.wpos_to_cpos();
                                 if let Some(c) = ctx.sim.get_mut(chunk) {
-                                    c.path.0.offset = (new - chunk.cpos_to_wpos_center())
-                                        .map(|e| e.clamp(-16, 16) as i8);
+                                    // Don't overwrite an offset an authored
+                                    // route actually specified.
+                                    //
+                                    // Note this is deliberately NOT the usual
+                                    // `authored_region_id.is_none()` guard. In
+                                    // an authored region `path` comes from
+                                    // `authored_route_way`, which builds a
+                                    // `Way::default()` and sets only
+                                    // `neighbors` -- `offset` is an unauthored
+                                    // default, not hand-painted content. And
+                                    // the procedural track pass that would
+                                    // otherwise write it cannot run there
+                                    // (`establish_site` returns early for
+                                    // authored chunks), so this line is the
+                                    // *only* thing bending an authored road to
+                                    // meet its authored bridge's real
+                                    // start/end. Blanket-guarding it would
+                                    // freeze the road at chunk centre and
+                                    // reintroduce the seam upstream added this
+                                    // for. Keying on "the offset is still the
+                                    // default" is a no-op today and becomes
+                                    // the correct protection the day the routes
+                                    // exporter starts emitting real offsets.
+                                    //
+                                    // The `is_none()` half keeps procedural
+                                    // worlds byte-identical: there the
+                                    // procedural track pass legitimately writes
+                                    // a random offset before this runs, so
+                                    // testing the offset alone would start
+                                    // skipping bridge alignment upstream.
+                                    //
+                                    // Accepted asymmetry: inside an authored
+                                    // region this is first-write-wins rather
+                                    // than last-write-wins, so if two authored
+                                    // bridges ever put endpoints in the same
+                                    // chunk the second alignment is dropped.
+                                    // Not reachable on the current map, and the
+                                    // conservative direction either way.
+                                    if c.authored_region_id.is_none()
+                                        || c.path.0.offset == Vec2::zero()
+                                    {
+                                        c.path.0.offset = (new - chunk.cpos_to_wpos_center())
+                                            .map(|e| e.clamp(-16, 16) as i8);
+                                    }
                                 }
                             };
 
@@ -3115,7 +3157,19 @@ impl Civs {
                 // Find a novel path.
                 let get_bridge = |start| self.bridges.get(&start).map(|(end, _)| *end);
                 if let Some((path, cost)) = find_path(ctx, get_bridge, start, end, max_novel_cost) {
-                    // Write the track to the world as a path
+                    // Write the track to the world as a path.
+                    //
+                    // IMPORTANT: these writes are unguarded and would clobber an
+                    // authored route layer outright -- `neighbors` is
+                    // `|=`-merged, and `offset` below is overwritten with a
+                    // random value. The only thing keeping them away from
+                    // authored chunks is the early return at the top of this
+                    // function (`authored_cromatolis_v0`), which is therefore
+                    // load-bearing: do not move or weaken it without guarding
+                    // here instead. See `COW-15`/`COW-2` -- that early return
+                    // also only holds while authored regions are map-global,
+                    // since it tests the *site's* chunk rather than each chunk
+                    // the path writes through.
                     for locs in path.nodes().windows(3) {
                         if let Some((i, _)) = NEIGHBORS
                             .iter()
@@ -5046,6 +5100,18 @@ mod tests {
     /// - `Adlet`/`Sahagin`/`VampireCastle`/`Cultist`/`DwarvenMine`: were
     ///   already reachable (or unaffected, being non-temperature-gated) before
     ///   this change; bounded here to catch a future regression.
+    ///
+    /// Scope note, measured rather than assumed: this harness calls
+    /// [`WorldSim::generate`] directly, and `Spot::generate` is **not** part of
+    /// it -- it runs one level up, in `World::generate`, *after*
+    /// `civ::Civs::generate` (`world/src/lib.rs`). So every chunk here has
+    /// `spot == None`, and a change to `Spot::generate`'s `tree_density`
+    /// handling cannot move these counts even though `Gnarling` is
+    /// `tree_density`-gated. By the same ordering, spot-driven `tree_density`
+    /// changes never reach site placement in a real world either: sites are
+    /// already chosen by the time spots exist. Anything that *does* run inside
+    /// `WorldSim::generate` (`generate_cliffs`, the authored layers, erosion)
+    /// still moves these counts and still needs a re-baseline.
     #[test]
     #[ignore]
     fn cromatolis_dungeon_type_coverage_regression_against_real_lfs_assets() {

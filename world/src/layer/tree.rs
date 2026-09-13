@@ -45,9 +45,16 @@ pub fn tree_valid_at(
         || col.spawn_rate < 0.9
         || col.water_dist.map(|d| d < 8.0).unwrap_or(false)
         || col.path.map(|(d, _, _, _)| d < 12.0).unwrap_or(false)
+        // Keep clear of a near-surface procedural tunnel -- but only when that
+        // layer actually runs. `Tunnel`s are hash-derived on demand, so in a
+        // world that skips `apply_caves_to` this would carve treeless corridors
+        // across the surface with no cave underneath them, crushing authored
+        // `tree_density` for nothing.
         || info.is_some_and(|info| {
-            tunnel_bounds_at(wpos, &info, &info.land())
-                .any(|(_, z_range, _, _, _, _)| z_range.contains(&(col.alt as i32 - 2)))
+            info.index().features.caves
+                && info.chunks().authored_procedural_caves_enabled()
+                && tunnel_bounds_at(wpos, &info, &info.land())
+                    .any(|(_, z_range, _, _, _, _)| z_range.contains(&(col.alt as i32 - 2)))
         })
     {
         return false;
