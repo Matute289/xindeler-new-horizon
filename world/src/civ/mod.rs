@@ -5014,20 +5014,27 @@ mod tests {
     ///   at only one authored location, and that location was itself near a
     ///   detected cliff, so it measured exactly 0 despite the mask being
     ///   painted correctly.
-    /// - `Myrmidon`/`Terracotta`: still exactly 0, but for a different reason
-    ///   than before. Their temperature gate (`0.9..1.0`) is reachable and,
-    ///   after the same mask reimport, a real elevated lake now exists
-    ///   (measured margin ~545 m over `CONFIG.sea_level`, confirmed as a real
-    ///   `RiverKind::Lake` by the sim, not merely a hypothetical fill height)
-    ///   -- so the `water_alt - CONFIG.sea_level > 50.0` requirement is
-    ///   satisfiable. What is not satisfiable anywhere on the real map (checked
-    ///   exhaustively, not just near the lake) is a chunk that is
-    ///   simultaneously dry, `on_flat_terrain()`, `!near_cliffs()`, and has
-    ///   that same >50 m margin: every elevated-lake rim on the current
-    ///   authored terrain is cliff-steep all the way around. This needs a real
-    ///   flat/gentle shoreline segment authored somewhere around an elevated
-    ///   lake, not an engine fix -- terrain steepness legitimately gates these
-    ///   two types the same way it gates `Adlet`/`Cultist`/ `VampireCastle`.
+    /// - `Myrmidon`/`Terracotta`: now reachable too (exactly 3 each, not a
+    ///   bounded fraction -- see below for why an exact count is the right
+    ///   assertion here). The original `l16-v10` lake at chunk (962,996) had a
+    ///   real elevated-lake margin (~545 m over `CONFIG.sea_level`, confirmed
+    ///   as a real `RiverKind::Lake` by the sim, not a hypothetical fill
+    ///   height) but its rim was cliff-steep all the way around -- checked
+    ///   exhaustively, not just near that lake: no chunk anywhere on the map
+    ///   was simultaneously dry, `on_flat_terrain()`, `!near_cliffs()`, and
+    ///   above the required 50 m margin. Terrain steepness legitimately gates
+    ///   these two types the same way it gates
+    ///   `Adlet`/`Cultist`/`VampireCastle`, so the fix had to be a real
+    ///   authored terrain feature, not an engine change: a second, small,
+    ///   deliberately gentle-shored elevated lake carved into the `l16-v10`
+    ///   masks (chunk (832,768), sea_level+85m rim, ~12-17m/chunk slopes,
+    ///   comfortably under both the cliff-detection and `on_flat_terrain`
+    ///   thresholds) gives exactly one small ring of qualifying dry shoreline.
+    ///   The count (3) is small and directly tied to that one authored
+    ///   feature's exact shape/position, not a broad population spread across
+    ///   many unrelated locations the way `Adlet`/`Sahagin` etc. are -- an
+    ///   exact-count assertion is the honest one; a `0.00002..0.0001`-style
+    ///   fraction range would imply a distribution this isn't.
     /// - `ChapelSite`: now reachable (bounded fraction, not exactly 0). Has no
     ///   temperature dependency at all (`Ocean` biome + an
     ///   altitude-vs-sea-level check only) -- its margin above sea level was
@@ -5072,12 +5079,20 @@ mod tests {
         }
 
         assert_eq!(
-            myrmidon, 0,
-            "Myrmidon: expected still exactly 0, got {myrmidon}"
+            myrmidon, 3,
+            "Myrmidon: expected exactly 3 (the carved lake at chunk (832,768)), got {myrmidon}. \
+             If this fails without anyone having touched that lake's masks, suspect an unrelated \
+             terrain-algorithm change (on_flat_terrain's gradient threshold, near_cliffs' \
+             detection radius, erosion/noise parameters) rather than mask corruption -- the \
+             lake's shoreline margin against those thresholds is not huge."
         );
         assert_eq!(
-            terracotta, 0,
-            "Terracotta: expected still exactly 0, got {terracotta}"
+            terracotta, 3,
+            "Terracotta: expected exactly 3 (the carved lake at chunk (832,768)), got \
+             {terracotta}. If this fails without anyone having touched that lake's masks, suspect \
+             an unrelated terrain-algorithm change (on_flat_terrain's gradient threshold, \
+             near_cliffs' detection radius, erosion/noise parameters) rather than mask corruption \
+             -- the lake's shoreline margin against those thresholds is not huge."
         );
 
         let assert_fraction_in = |name: &str, count: usize, range: std::ops::Range<f64>| {
