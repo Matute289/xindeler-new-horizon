@@ -7,7 +7,10 @@ description: Use when authoring or editing Xindeler's hand-designed world maps �
 
 Authoring Xindeler's **designed** maps on top of Veloren's procedural worldgen. The design lives in
 `docs/design/specs/2026-06-24-xindeler-worldmap-design.md` (+ plan + `tasks/21`). For the procedural
-pipeline internals, pair with the **xindeler-worldgen** skill. Delegate map layout/cartography to the
+pipeline internals, pair with the **xindeler-worldgen** skill. For Cromatolis specifically — the one
+region with a real, pixel-level authored-mask pipeline (`xindeler-open-world`, L16 TIFFs) — use the
+**cromatolis-cartography** skill instead; it covers coordinate math, encoding gotchas, and
+placement-predicate diagnostics this skill doesn't. Delegate map layout/cartography to the
 **`worldmap-cartographer`** agent.
 
 ## The big idea
