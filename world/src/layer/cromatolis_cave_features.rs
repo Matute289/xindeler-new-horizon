@@ -166,10 +166,15 @@ const MAX_BRANCH_FLOOR_DRIFT: i32 = 24;
 /// `(Stones, 1.5)` eat 82-97% of the gate, so its *effective* rate is
 /// ~6.1e-4 ore + 1.5e-4 gem = **~7.6e-4 mineral per floor column**,
 /// depth-averaged (peak ~1.4e-3 in the shallow layers). So `Trace` here is
-/// about the procedural rate and `Abundant` is roughly 14x it: an authored,
-/// named-vein-grade deposit, which is the point -- `cave.rs` does not run in
-/// Cromatolis at all (`cromatolis_v0_procedural_layers.ron`, `caves: false`),
-/// so these 281 finite caves carry the region's entire mineral economy.
+/// still well above the procedural rate and `Abundant` is roughly 12x it:
+/// an authored, named-vein-grade deposit, which is the point -- `cave.rs`
+/// does not run in Cromatolis at all (`cromatolis_v0_procedural_layers.ron`,
+/// `caves: false`), so these 281 finite caves carry the region's entire
+/// mineral economy.
+///
+/// `Trace` carries a slightly bigger proportional weight than the other
+/// three tiers so it stays a real, findable deposit rather than fading into
+/// noise as the rest scale up around it.
 ///
 /// Calibrated against a **Medium** cave (~2.3k floor columns). Giant and
 /// Large caves are 4x and 10x that area, which is what
@@ -180,10 +185,10 @@ const MAX_BRANCH_FLOOR_DRIFT: i32 = 24;
 /// on, and the *content* decision (which mineral, how rich, where) lives in
 /// the catalog. If tuning these ever needs to happen without a recompile,
 /// move all of them -- these and `cave.rs`'s -- together.
-const ABUNDANT_CHANCE: f32 = 0.020;
-const COMMON_CHANCE: f32 = 0.010;
-const SPARSE_CHANCE: f32 = 0.004;
-const TRACE_CHANCE: f32 = 0.0015;
+const ABUNDANT_CHANCE: f32 = 0.030;
+const COMMON_CHANCE: f32 = 0.015;
+const SPARSE_CHANCE: f32 = 0.006;
+const TRACE_CHANCE: f32 = 0.0025;
 
 /// Per-column density correction by cave size.
 ///
@@ -203,9 +208,11 @@ const SMALL_MINERAL_SCALE: f32 = 1.0;
 /// i.e. after [`SizeClass::mineral_scale`]. Nothing in the authoring catalog
 /// stops a future edit from declaring six `Abundant` minerals on one entry;
 /// without this, a long enough list drives the total past 1.0 and turns
-/// every carved floor column into ore. Set just above three richest-tier
-/// minerals at `Medium` scale, the densest thing the catalog authors today.
-const MAX_TOTAL_MINERAL_CHANCE: f32 = 0.037;
+/// every carved floor column into ore. Raised roughly in proportion with
+/// the `*_CHANCE` tiers above (which is why the cap doesn't clip any real
+/// entry in the catalog that fit under the old one) rather than tied to
+/// them by an exact ratio.
+const MAX_TOTAL_MINERAL_CHANCE: f32 = 0.055;
 
 /// Salt for the per-column mineral roll. Distinct from every other
 /// `RandomField` seed used by this crate's layers so two features never
