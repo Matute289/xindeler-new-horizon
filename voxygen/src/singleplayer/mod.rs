@@ -24,27 +24,16 @@ pub use singleplayer_world::{SingleplayerWorld, SingleplayerWorlds};
 
 const TPS: u64 = 30;
 const SINGLEPLAYER_MAP_ASSET_OVERRIDE_ENV: &str = "XINDELER_SINGLEPLAYER_MAP_ASSET";
+const SINGLEPLAYER_DEFAULT_MAP_ASSET: &str = "world.map.cromatolis_v0";
 
-/// Chooses an authored map asset for an explicit QA session, or preserves the
-/// existing generated/saved-world behavior when no override is supplied.
-fn singleplayer_file_opts(
-    world: &SingleplayerWorld,
-    map_asset_override: Option<&str>,
-) -> server::FileOpts {
-    if let Some(map_asset) = map_asset_override {
-        return server::FileOpts::LoadAsset(map_asset.to_owned());
-    }
-
-    if let Some(gen_opts) = &world.gen_opts
-        && !world.is_generated
-    {
-        server::FileOpts::Save(world.map_path.clone(), gen_opts.clone())
-    } else {
-        if !world.is_generated && world.gen_opts.is_none() {
-            world.copy_default_world();
-        }
-        server::FileOpts::Load(world.map_path.clone())
-    }
+/// Chooses Cromatolis for normal singleplayer sessions. An explicit
+/// environment override remains available for isolated map QA.
+fn singleplayer_file_opts(map_asset_override: Option<&str>) -> server::FileOpts {
+    server::FileOpts::LoadAsset(
+        map_asset_override
+            .unwrap_or(SINGLEPLAYER_DEFAULT_MAP_ASSET)
+            .to_owned(),
+    )
 }
 
 #[cfg(test)]
@@ -53,17 +42,17 @@ mod tests {
 
     #[test]
     fn map_asset_override_loads_the_asset_without_touching_the_saved_map() {
-        let world = SingleplayerWorld {
-            name: "QA world".to_string(),
-            gen_opts: None,
-            day_length: 86_400.0,
-            seed: 0,
-            is_generated: false,
-            path: Default::default(),
-            map_path: Default::default(),
-        };
+        let file_opts = singleplayer_file_opts(Some("world.map.cromatolis_v0"));
 
-        let file_opts = singleplayer_file_opts(&world, Some("world.map.cromatolis_v0"));
+        assert!(matches!(
+            file_opts,
+            server::FileOpts::LoadAsset(asset) if asset == "world.map.cromatolis_v0"
+        ));
+    }
+
+    #[test]
+    fn cromatolis_is_the_singleplayer_default_without_an_environment_override() {
+        let file_opts = singleplayer_file_opts(None);
 
         assert!(matches!(
             file_opts,
@@ -153,8 +142,13 @@ impl SingleplayerState {
                     %map_asset,
                     "Using the singleplayer map asset override for this session"
                 );
+            } else {
+                info!(
+                    map_asset = SINGLEPLAYER_DEFAULT_MAP_ASSET,
+                    "Using Cromatolis as the singleplayer map by default"
+                );
             }
-            let file_opts = singleplayer_file_opts(world, map_asset_override.as_deref());
+            let file_opts = singleplayer_file_opts(map_asset_override.as_deref());
 
             settings.map_file = Some(file_opts);
             settings.world_seed = world.seed;
