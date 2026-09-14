@@ -28,9 +28,11 @@ use common::{
     states::utils::{ForcedMovement, StageSection},
     terrain::TerrainGrid,
     uid::{IdMaps, Uid},
+    weather::{WeatherGrid, WeatherTuning},
 };
 use common_base::dev_panic;
 use specs::{Entities, Entity as EcsEntity, Read, ReadExpect, ReadStorage, SystemData, shred};
+use vek::Vec2;
 
 event_emitters! {
     pub struct AgentEvents[AgentEmitters] {
@@ -72,6 +74,10 @@ pub struct AgentData<'a> {
     pub poise: Option<&'a Poise>,
     pub stance: Option<&'a Stance>,
     pub cached_spatial_grid: &'a common::CachedSpatialGrid,
+    /// Multiplier on this agent's sight distance from the weather where it is
+    /// standing (`1.0` in clear air). Resolved once per agent tick rather than
+    /// once per candidate target, since it depends only on the observer.
+    pub weather_visibility: f32,
     pub msm: &'a MaterialStatManifest,
     pub ability_map: &'a AbilityMap,
     pub rtsim_actor: Option<&'a rtsim::ActorId>,
@@ -479,6 +485,16 @@ pub struct ReadData<'a> {
     pub is_volume_riders: ReadStorage<'a, Is<VolumeRider>>,
     pub interactors: ReadStorage<'a, Interactors>,
     pub time_of_day: Read<'a, TimeOfDay>,
+    /// `Option` for the same reason the physics system's copy is: `WeatherGrid`
+    /// has no `Default`, so a plain `Read` will not compile, and `ReadExpect`
+    /// would panic in a build with no weather simulation. The resource itself
+    /// is always inserted — in a build without the weather system it simply
+    /// stays a 0×0 grid, which reads back as clear weather everywhere.
+    ///
+    /// This is last tick's grid: the agent system is ordered before the weather
+    /// system, which is deliberate and harmless, since weather moves on a
+    /// multi-second cadence.
+    pub weather: Option<Read<'a, WeatherGrid>>,
     pub light_emitter: ReadStorage<'a, LightEmitter>,
     #[cfg(feature = "worldgen")]
     pub world: ReadExpect<'a, std::sync::Arc<world::World>>,
@@ -492,6 +508,28 @@ pub struct ReadData<'a> {
     pub stances: ReadStorage<'a, Stance>,
     pub presences: ReadStorage<'a, Presence>,
     pub ability_map: ReadExpect<'a, AbilityMap>,
+}
+
+impl ReadData<'_> {
+    /// How far anything standing at `wpos` can see through the current
+    /// weather, as a proportion of its clear-air sight distance.
+    ///
+    /// Snowfall and fog both obscure; whether precipitation there falls as
+    /// snow or as rain comes from the terrain's own baked temperature, so this
+    /// needs nothing the server doesn't already have loaded.
+    ///
+    /// Takes the tuning rather than loading it so the caller can read the asset
+    /// once for a whole tick's worth of agents instead of once per agent.
+    pub fn weather_visibility_at(&self, wpos: Vec2<f32>, tuning: &WeatherTuning) -> f32 {
+        let Some(weather) = self.weather.as_ref() else {
+            return 1.0;
+        };
+        let snow_factor =
+            common::weather::snow_factor_at(&self.terrain, wpos, tuning).unwrap_or(0.0);
+        weather
+            .get_interpolated(wpos)
+            .visibility_factor(snow_factor, tuning)
+    }
 }
 
 pub enum Path {
