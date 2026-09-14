@@ -1,5 +1,5 @@
 (
-    schema: "xindeler_open_world.authored_climate.v1",
+    schema: "xindeler_open_world.authored_climate.v2",
     // Baseline temperature curve for Cromatolis's world-gen (see
     // `AuthoredCromatolisClimate`/`cromatolis_baseline_temp` in
     // world/src/sim/mod.rs): real degrees Celsius at sea level, cooling
@@ -12,4 +12,9 @@
     // clustered in the warm end.
     sea_level_temp_c: 36.0,
     lapse_rate_c_per_m: 0.023,
+    // The biome mask is a linear authored vegetation-density scale. These
+    // are only hard physical exclusions, deliberately data-driven so map
+    // authoring never has an undocumented response curve.
+    tree_min_temp: 0.0,
+    max_tree_altitude_m: 970.0,
 )

@@ -5168,7 +5168,11 @@ mod tests {
                 "{name}: expected coverage fraction in {range:?}, got {fraction:.6} ({count}/{n})"
             );
         };
-        assert_fraction_in("Gnarling", gnarling, 0.00002..0.0001);
+        // The linear biome-mask contract intentionally expands this from
+        // the former response-curve baseline (50 suitable chunks) to 249.
+        // Keep a generous range around the measured authored coverage while
+        // still catching a return of the non-linear curve.
+        assert_fraction_in("Gnarling", gnarling, 0.00015..0.0004);
         assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
         assert_fraction_in("Adlet", adlet, 0.005..0.03);
         assert_fraction_in("Sahagin", sahagin, 0.0003..0.003);

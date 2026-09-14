@@ -710,7 +710,21 @@ struct AuthoredCromatolisClimate {
     /// How fast the curve cools with altitude, in degrees Celsius per meter
     /// of relief above sea level.
     lapse_rate_c_per_m: f32,
+    /// Below this abstract temperature, trees are physically excluded even
+    /// when the authored mask is white. Kept in the region asset because it
+    /// is a climate/content policy, not a generic engine invariant.
+    #[serde(default = "default_cromatolis_tree_min_temp")]
+    tree_min_temp: f32,
+    /// At or above this relief in meters, trees are physically excluded even
+    /// when the authored mask is white. This is authored regional policy,
+    /// rather than a response curve for the biome mask.
+    #[serde(default = "default_cromatolis_max_tree_altitude_m")]
+    max_tree_altitude_m: f32,
 }
+
+const fn default_cromatolis_tree_min_temp() -> f32 { 0.0 }
+
+const fn default_cromatolis_max_tree_altitude_m() -> f32 { 970.0 }
 
 impl FileAsset for AuthoredCromatolisClimate {
     const EXTENSION: &'static str = "ron";
@@ -729,6 +743,8 @@ impl Default for AuthoredCromatolisClimate {
         Self {
             sea_level_temp_c: 36.0,
             lapse_rate_c_per_m: 0.023,
+            tree_min_temp: default_cromatolis_tree_min_temp(),
+            max_tree_altitude_m: default_cromatolis_max_tree_altitude_m(),
         }
     }
 }
@@ -3142,6 +3158,30 @@ fn authored_layer_value_for_cromatolis_v0(
         .clamp(0.0, 1.0)
 }
 
+/// Applies Cromatolis's authored biome-mask contract to a sampled mask value.
+///
+/// The grayscale is a direct vegetation-density scale: black is `0.0` (no
+/// vegetation) and white is `1.0` (maximum vegetation). Intermediate grays
+/// are linear authoring values, so a 50% gray reduction must remain 0.50 in
+/// `tree_density`; do not add response curves or density floors here.
+///
+/// Water, a temperature below the regional threshold, and the extreme
+/// high-altitude cap are physical exclusions rather than reinterpretations
+/// of the painted scale.
+fn cromatolis_authored_tree_density(
+    painted_density: f32,
+    is_underwater: bool,
+    temp: f32,
+    alt_pre: f32,
+    climate: AuthoredCromatolisClimate,
+) -> f32 {
+    if is_underwater || temp < climate.tree_min_temp || alt_pre >= climate.max_tree_altitude_m {
+        0.0
+    } else {
+        painted_density
+    }
+}
+
 /// Decides whether a chunk's `water_alt` should be forced to sea level
 /// (`true`) rather than the erosion sim's own `fill_sinks` height (`false`),
 /// for the basin identified by `dh_lake_idx`/`lake_is_authored_elevated`.
@@ -3456,24 +3496,15 @@ impl SimChunk {
                 .authored_vegetation_layer
                 .as_ref()
                 .map(|vegetation| {
-                    let vegetation =
+                    let painted_density =
                         authored_layer_value_for_cromatolis_v0(map_size_lg, posi, vegetation);
-                    let altitude_tree_factor = if alt_pre < 520.0 {
-                        1.0
-                    } else if alt_pre < 760.0 {
-                        Lerp::lerp(1.0, 0.45, (alt_pre - 520.0) / 240.0)
-                    } else if alt_pre < 970.0 {
-                        Lerp::lerp(0.45, 0.04, (alt_pre - 760.0) / 210.0)
-                    } else {
-                        0.0
-                    };
-                    if is_underwater {
-                        0.0
-                    } else if temp < 0.0 {
-                        vegetation * 0.02
-                    } else {
-                        vegetation * altitude_tree_factor
-                    }
+                    cromatolis_authored_tree_density(
+                        painted_density,
+                        is_underwater,
+                        temp,
+                        alt_pre,
+                        gen_cdf.cromatolis_climate,
+                    )
                 });
         if let Some(vegetation_density) = authored_vegetation_density
             && temp >= 0.0
@@ -3542,14 +3573,10 @@ impl SimChunk {
             // ...but is ultimately limited by available sunlight (and our tree generation system)
             .min(1.0);
         if let Some(vegetation_density) = authored_vegetation_density {
-            tree_density = if temp < 0.0 {
-                vegetation_density.min(0.04)
-            } else {
-                vegetation_density.powf(1.55)
-            };
-            if temp >= 0.0 && vegetation_density > 0.82 {
-                tree_density = tree_density.max(0.90);
-            }
+            // Cromatolis's authored mask is the density contract itself.
+            // `cromatolis_authored_tree_density` has already applied only
+            // the water/cold/extreme-altitude exclusions above.
+            tree_density = vegetation_density;
         }
 
         // Add geologically short timescale undulation to the world for various reasons
@@ -3994,6 +4021,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cromatolis_biome_mask_density_is_linear_except_for_physical_exclusions() {
+        let climate = AuthoredCromatolisClimate::default();
+        // Matías's authored table is expressed as blackness: 100% black is
+        // bare terrain and 0% black (white) is maximum vegetation. The
+        // runtime input is the inverse grayscale intensity, which must pass
+        // through unchanged at every named authoring step.
+        for blackness_percent in [
+            100.0, 96.0, 90.0, 85.0, 80.0, 75.0, 70.0, 65.0, 60.0, 55.0, 50.0, 45.0, 40.0, 35.0,
+            30.0, 25.0, 20.0, 15.0, 10.0, 5.0, 0.0,
+        ] {
+            let painted_density = 1.0 - blackness_percent / 100.0;
+            assert_eq!(
+                cromatolis_authored_tree_density(painted_density, false, 0.5, 300.0, climate),
+                painted_density,
+                "{blackness_percent}% black must retain its authored vegetation density"
+            );
+        }
+
+        // No gradual altitude attenuation or response curve is permitted:
+        // a mid-gray forest value remains mid-gray up to the hard cap.
+        assert_eq!(
+            cromatolis_authored_tree_density(0.50, false, 0.5, 700.0, climate),
+            0.50
+        );
+        assert_eq!(
+            cromatolis_authored_tree_density(0.82, false, 0.5, 300.0, climate),
+            0.82
+        );
+        assert_eq!(
+            cromatolis_authored_tree_density(0.83, false, 0.5, 300.0, climate),
+            0.83
+        );
+
+        assert_eq!(
+            cromatolis_authored_tree_density(1.0, true, 0.5, 300.0, climate),
+            0.0
+        );
+        assert_eq!(
+            cromatolis_authored_tree_density(1.0, false, -0.01, 300.0, climate),
+            0.0
+        );
+        assert_eq!(
+            cromatolis_authored_tree_density(1.0, false, 0.5, 970.0, climate),
+            0.0
+        );
+
+        // The regional asset owns the two non-water exclusions. A different
+        // reviewed Cromatolis climate profile can move either limit without
+        // adding another response curve to the mask interpretation.
+        let permissive_climate = AuthoredCromatolisClimate {
+            tree_min_temp: -0.5,
+            max_tree_altitude_m: 1_200.0,
+            ..climate
+        };
+        assert_eq!(
+            cromatolis_authored_tree_density(0.50, false, -0.25, 1_000.0, permissive_climate),
+            0.50
+        );
+    }
+
     // ---- Authored river-kind priority (elevated lake > water body > river
     // channel > nothing) ----
 
@@ -4332,6 +4420,57 @@ mod tests {
         assert!(
             (0.02..0.75).contains(&water_fraction),
             "unexpected authored water coverage fraction: {water_fraction:.3}"
+        );
+    }
+
+    /// Requires the real Cromatolis LFS assets. The authored biome-mask
+    /// scale is a design contract: for land below the hard altitude cap in a
+    /// climate above the regional tree threshold, the raw mask value must
+    /// arrive unchanged as the
+    /// generated chunk's `tree_density`. This catches response curves,
+    /// density floors, and hidden gradual altitude attenuation.
+    #[test]
+    #[ignore]
+    fn cromatolis_biome_mask_density_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        let vegetation = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_vegetation")
+            .expect("real Cromatolis LFS assets must be pulled locally to run this test");
+        let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
+            .expect("Cromatolis climate asset must load for the biome-mask regression");
+        assert_eq!(vegetation.values.len(), map_size_lg.chunks_len());
+
+        let mut checked = 0usize;
+        for (idx, chunk) in sim.chunks.iter().enumerate() {
+            let underwater = matches!(
+                chunk.river.river_kind,
+                Some(RiverKind::Ocean) | Some(RiverKind::Lake { .. })
+            );
+            let alt_pre = chunk.alt - CONFIG.sea_level;
+            if underwater
+                || chunk.temp < climate.tree_min_temp
+                || alt_pre >= climate.max_tree_altitude_m
+            {
+                continue;
+            }
+
+            let expected = vegetation.values
+                [authored_layer_idx_for_cromatolis_v0(map_size_lg, idx)]
+            .clamp(0.0, 1.0);
+            assert!(
+                (chunk.tree_density - expected).abs() <= f32::EPSILON,
+                "chunk {idx} changed its authored vegetation density: mask={expected:.6}, \
+                 tree_density={:.6}, alt_pre={alt_pre:.1}, temp={:.3}",
+                chunk.tree_density,
+                chunk.temp,
+            );
+            checked += 1;
+        }
+
+        assert!(
+            checked > 100_000,
+            "expected a substantial sample of temperate, above-water Cromatolis chunks, got \
+             {checked}"
         );
     }
 
