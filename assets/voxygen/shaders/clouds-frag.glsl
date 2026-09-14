@@ -327,7 +327,23 @@ void main() {
         #ifndef RAIN_ENABLED
             color.rgb = apply_point_glow(cam_pos.xyz + focus_off.xyz, dir, dist, color.rgb);
         #else
-            if (medium.x == MEDIUM_AIR && rain_density > 0.001) {
+            // Falling precipitation, rain and snow alike. Snow rides the same
+            // screen-space march rather than a particle system of its own:
+            // `rain_dir_mat`/`integrated_rain_vel` already carry the far
+            // slower, wind-blown fall velocity snow was built with Rust-side,
+            // so all that is left here is to draw round white flakes instead
+            // of blue-grey streaks. This costs no extra march and no extra
+            // pipeline.
+            float precip_density = rain_density + snow_density;
+            if (medium.x == MEDIUM_AIR && precip_density > 0.001) {
+                float snow_frac = clamp(snow_density / max(precip_density, 0.0001), 0.0, 1.0);
+                // Rain is stretched into vertical streaks; snowflakes are
+                // roughly round and a little larger on screen.
+                vec2 drop_aspect = mix(vec2(4.0, 0.3), vec2(2.2, 2.2), snow_frac);
+                float drop_radius_sqr = mix(0.01, 0.035, snow_frac);
+                vec3 drop_color = mix(RAIN_TINT, SNOW_TINT, snow_frac);
+                float drop_alpha = mix(0.5, 0.75, snow_frac);
+
                 vec3 cam_wpos = cam_pos.xyz + focus_off.xyz;
 
                 vec3 adjusted_dir = (vec4(cam_dir, 0) * rain_dir_mat).xyz;
@@ -353,7 +369,7 @@ void main() {
 
                     vec2 diff = abs(round(rpos.xy) - rpos.xy);
                     vec3 wall_pos = vec3((diff.x > diff.y) ? rpos.xy : rpos.yx, rpos.z + integrated_rain_vel);
-                    wall_pos.xz *= vec2(4, 0.3);
+                    wall_pos.xz *= drop_aspect;
                     wall_pos.z += hash_two(uvec2(wall_pos.xy + vec2(0, 0.5)));
 
                     float depth_adjust = fract(hash_two(uvec2(wall_pos.xz) + 500u));
@@ -362,13 +378,13 @@ void main() {
 
                     if (wpos_dist > dist) { break; }
                     vec2 wall_pos_half = fract(wall_pos.xz) - 0.5;
-                    if (dot(wall_pos_half, wall_pos_half) < 0.01 + pow(max(0.0, wpos_dist - (dist - 0.25)) / 0.25, 4.0) * 0.2) {
-                        float density = rain_density * rain_occlusion_at(wpos);
+                    if (dot(wall_pos_half, wall_pos_half) < drop_radius_sqr + pow(max(0.0, wpos_dist - (dist - 0.25)) / 0.25, 4.0) * 0.2) {
+                        float density = precip_density * rain_occlusion_at(wpos);
                         if (fract(hash_two(uvec2(wall_pos.xz) + 1000u)) >= density) { continue; }
 
-                        float alpha = 0.5 * clamp((wpos_dist - 1.0) * 0.5, 0.0, 1.0);
+                        float alpha = drop_alpha * clamp((wpos_dist - 1.0) * 0.5, 0.0, 1.0);
                         float light = dot(color.rgb, vec3(1)) + 0.05 + (get_sun_brightness() + get_moon_brightness()) * 0.2;
-                        color.rgb = mix(color.rgb, vec3(0.3, 0.35, 0.5) * light, alpha);
+                        color.rgb = mix(color.rgb, drop_color * light, alpha);
                     }
                 }
             }

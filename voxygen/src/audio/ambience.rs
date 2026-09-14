@@ -233,10 +233,18 @@ impl AmbienceMgr {
                     1.0
                 };
 
-                (client.weather_at_player().rain * 3.0) * camera_factor * indoor_factor
+                // Liquid rain only: falling snow is silent, so a blizzard must
+                // not drive the rain loop.
+                let rain = client
+                    .weather_at_player()
+                    .liquid_rain(client.snow_factor_at_player());
+                (rain * 3.0) * camera_factor * indoor_factor
             },
             AmbienceChannelTag::ThunderRumbling => {
-                let rain_intensity = client.weather_at_player().rain * 3.0;
+                let rain_intensity = client
+                    .weather_at_player()
+                    .liquid_rain(client.snow_factor_at_player())
+                    * 3.0;
 
                 if rain_intensity < 0.7 {
                     0.0

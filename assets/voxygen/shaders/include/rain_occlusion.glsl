@@ -14,9 +14,22 @@ uniform u_rain_occlusion {
     mat4 rain_occlusion_texture_mat;
     mat4 rain_dir_mat;
     float integrated_rain_vel;
+    // Precipitation at the camera, split by what form it is falling in. Their
+    // sum is the total precipitation; which way the split falls is decided by
+    // the temperature of the ground below, not by the weather cell.
+    //
+    // `rain-occlusion-directed-vert.glsl` and `rain-occlusion-figure-vert.glsl`
+    // declare this same block themselves rather than including this file --
+    // keep all three, and `render::pipelines::rain_occlusion::Locals`, in sync.
     float rain_density;
-    vec2 occlusion_dummy; // Fix alignment.
+    float snow_density;
+    float occlusion_dummy; // Fix alignment.
 };
+
+// Colour of falling rain streaks and of snowflakes, shared by everything that
+// draws or hazes precipitation.
+const vec3 RAIN_TINT = vec3(0.3, 0.35, 0.5);
+const vec3 SNOW_TINT = vec3(0.92, 0.95, 1.0);
 
 float rain_occlusion_at(in vec3 fragPos)
 {

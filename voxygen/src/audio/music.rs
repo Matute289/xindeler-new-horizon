@@ -84,8 +84,10 @@ pub struct SoundtrackItem {
     loop_points: Option<(f32, f32)>,
     /// Whether this track should play during day or night
     timing: Option<DayPeriod>,
-    /// Whether this track should play during a certain weather
-    weather: Option<WeatherKind>,
+    /// Which weathers this track should play in. `None` means any weather; a
+    /// list means the track plays if the current weather is any of them (a rain
+    /// theme that also suits snowfall lists both).
+    weather: Option<Vec<WeatherKind>>,
     /// What biomes this track should play in with chance of play
     biomes: Vec<(BiomeKind, u8)>,
     /// Whether this track should play in a specific site
@@ -108,7 +110,7 @@ enum RawSoundtrackItem {
     Segmented {
         title: String,
         timing: Option<DayPeriod>,
-        weather: Option<WeatherKind>,
+        weather: Option<Vec<WeatherKind>>,
         biomes: Vec<(BiomeKind, u8)>,
         sites: Vec<SiteKindMeta>,
         segments: Vec<(String, f32, MusicState, Option<MusicActivity>)>,
@@ -468,6 +470,7 @@ impl MusicMgr {
         let is_dark = state.get_day_period().is_dark();
         let current_period_of_day = Self::get_current_day_period(is_dark);
         let current_weather = client.weather_at_player();
+        let current_weather_kind = current_weather.get_kind_at(client.snow_factor_at_player());
         let current_biome = client.current_biome();
         let current_site = client.current_site();
 
@@ -486,7 +489,7 @@ impl MusicMgr {
                     Some(period_of_day) => period_of_day == &current_period_of_day,
                     None => true,
                 }) && match &track.weather {
-                    Some(weather) => weather == &current_weather.get_kind(),
+                    Some(weathers) => weathers.contains(&current_weather_kind),
                     None => true,
                 }
             })
@@ -798,7 +801,7 @@ impl Asset for SoundtrackCollection<SoundtrackItem> {
                             length,
                             loop_points: Some(loop_points),
                             timing: timing.clone(),
-                            weather,
+                            weather: weather.clone(),
                             biomes: biomes.clone(),
                             sites: sites.clone(),
                             music_state,

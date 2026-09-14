@@ -104,6 +104,17 @@ pub enum ParticleMode {
     PotionSickness = 41,
     GigaSnow = 42,
     CyclopsCharge = 43,
+    /// Deliberately unwired: no Rust emitter and no `case` in
+    /// `particle-vert.glsl`.
+    ///
+    /// Ambient snowfall is drawn by the screen-space precipitation march in
+    /// `clouds-frag.glsl`, which covers the whole view at a fixed cost instead
+    /// of scaling with particle count, so there is nothing for a weather-driven
+    /// snow particle emitter to add. `ParticleMode::Snow` is a different and
+    /// still-live effect (ground drift off existing `BlockKind::Snow` voxels,
+    /// not precipitation). The slot is kept rather than removed because these
+    /// discriminants are shared with upstream and renumbering them for a dead
+    /// variant would only widen the merge surface.
     SnowStorm = 44,
     PortalFizz = 45,
     Ink = 46,

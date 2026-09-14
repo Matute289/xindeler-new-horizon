@@ -83,7 +83,13 @@ vec2 wpos_to_uv(vec2 wpos) {
     return vec2(uv_pos.x, uv_pos.y);
 }
 
-// Weather texture
+// Weather texture.
+//
+// Channel layout (written by `Lod::maintain`):
+//   r = cloud cover
+//   g = precipitation, whatever form it falls in
+//   b = fraction of that precipitation falling as snow rather than rain
+//   a = fog density
 layout(set = 0, binding = 12) uniform texture2D t_weather;
 layout(set = 0, binding = 13) uniform sampler s_weather;
 
@@ -95,8 +101,20 @@ float cloud_tendency_at(vec2 wpos) {
     return sample_weather(wpos).r;
 }
 
+// Total precipitation, rain and snow alike. Named for the rain it originally
+// only described; the callers that care about how wet things get should scale
+// this by `1.0 - snow_fraction_at(wpos)`.
 float rain_density_at(vec2 wpos) {
     return sample_weather(wpos).g;
+}
+
+// How much of the precipitation here is snow: 0 is all rain, 1 all snow.
+float snow_fraction_at(vec2 wpos) {
+    return sample_weather(wpos).b;
+}
+
+float fog_density_at(vec2 wpos) {
+    return sample_weather(wpos).a;
 }
 
 float cloud_shadow(vec3 pos, vec3 light_dir) {

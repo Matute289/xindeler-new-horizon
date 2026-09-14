@@ -16,7 +16,10 @@ use common::{
     weather,
 };
 use hashbrown::HashMap;
-use std::ops::Range;
+use std::{
+    ops::Range,
+    time::{Duration, Instant},
+};
 use treeculler::{AABB, BVol, Frustum};
 use vek::*;
 
@@ -44,7 +47,22 @@ pub struct Lod {
     zone_objects: HashMap<Vec2<i32>, HashMap<lod::ObjectKind, ObjectGroup>>,
     // (model, radius, height)
     object_data: HashMap<lod::ObjectKind, (Model<LodObjectVertex>, f32, Range<f32>)>,
+    /// Staging buffer for the weather texture, reused every frame so that
+    /// rebuilding it doesn't allocate once per frame.
+    weather_texels: Vec<[u8; 4]>,
+    /// Per-weather-cell snow fraction, kept between frames because it changes
+    /// only as terrain loads. See [`SNOW_MASK_REFRESH_INTERVAL`].
+    snow_mask: Vec<u8>,
+    /// When `snow_mask` was last rebuilt; `None` until the first rebuild.
+    snow_mask_age: Option<Instant>,
 }
+
+/// How often the per-cell snow fraction is recomputed from loaded terrain.
+///
+/// Short enough that newly streamed-in terrain starts snowing almost at once,
+/// long enough that the one terrain lookup per weather cell it costs is not a
+/// per-frame expense.
+const SNOW_MASK_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 // TODO: Make constant when possible.
 pub fn water_color() -> Rgba<f32> {
@@ -69,6 +87,9 @@ impl Lod {
             model: None,
             data,
             zone_objects: HashMap::new(),
+            weather_texels: Vec::new(),
+            snow_mask: Vec::new(),
+            snow_mask_age: None,
             object_data: [
                 (
                     lod::ObjectKind::GenericTree,
@@ -249,16 +270,69 @@ impl Lod {
         // Update weather texture
         // NOTE: consider moving the lerping to a shader if the overhead of uploading to
         // the gpu each frame becomes an issue.
-        let weather = client.state().weather_grid();
+        //
+        // Channel layout, matching `sample_weather()` in `sky.glsl`:
+        //   r = cloud cover
+        //   g = precipitation (rain *and* snow — form doesn't change how much
+        //       falls, only what it looks like and what it lands as)
+        //   b = fraction of that precipitation falling as snow
+        //   a = fog density
+        let state = client.state();
+        let weather = state.weather_grid();
         let size = weather.size().as_::<u32>();
+        let cell_count = (size.x as usize) * (size.y as usize);
+        // Read once for the whole grid, not once per cell.
+        let tuning = weather::WeatherTuning::load();
+
+        // The snow fraction of each cell depends on the ground below it, not on
+        // the weather, so unlike cloud and rain it only changes as terrain
+        // loads — far more slowly than the frame rate. Rebuilding it costs one
+        // terrain lookup per cell, so it is refreshed on a timer instead of
+        // every frame.
+        if self.snow_mask.len() != cell_count
+            || self
+                .snow_mask_age
+                .is_none_or(|age| age.elapsed() >= SNOW_MASK_REFRESH_INTERVAL)
+        {
+            let terrain = state.terrain();
+            // The client only knows the ground temperature for terrain it has
+            // loaded. Cells over unloaded terrain inherit the player's own
+            // value rather than defaulting to rain, so the sky stays consistent
+            // instead of showing a hard snow/rain seam at the edge of the
+            // loaded world.
+            let default_snow_factor = client
+                .position()
+                .and_then(|p| weather::snow_factor_at(&terrain, p.xy(), &tuning))
+                .unwrap_or(0.0);
+            let cell_centre = weather::CELL_SIZE as f32 / 2.0;
+
+            self.snow_mask.clear();
+            self.snow_mask.reserve(cell_count);
+            self.snow_mask.extend(weather.iter().map(|(pos, _)| {
+                let wpos = pos.as_::<f32>() * weather::CELL_SIZE as f32 + cell_centre;
+                let snow_factor =
+                    weather::snow_factor_at(&terrain, wpos, &tuning).unwrap_or(default_snow_factor);
+                (snow_factor * 255.0) as u8
+            }));
+            self.snow_mask_age = Some(Instant::now());
+        }
+
+        self.weather_texels.clear();
+        self.weather_texels.reserve(cell_count);
+        self.weather_texels
+            .extend(weather.iter().zip(&self.snow_mask).map(|((_, w), &snow)| {
+                [
+                    (w.cloud * 255.0) as u8,
+                    (w.rain * 255.0) as u8,
+                    snow,
+                    (w.fog_density(&tuning) * 255.0) as u8,
+                ]
+            }));
         renderer.update_texture(
             &self.data.weather,
             [0, 0],
             [size.x, size.y],
-            &weather
-                .iter()
-                .map(|(_, w)| [(w.cloud * 255.0) as u8, (w.rain * 255.0) as u8, 0, 0])
-                .collect::<Vec<_>>(),
+            &self.weather_texels,
         );
     }
 

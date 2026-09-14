@@ -1836,14 +1836,25 @@ impl ParticleMgr {
                         });
                         // Exposure to sunlight: proxy for how wet the ground is
                         if char_state.meta.last_light > 0.9 {
-                            // Splashing in the rain
-                            let splash_particles =
-                                ((state.weather_at(interpolated.pos.xy()).rain - RAIN_THRESHOLD)
-                                    .max(0.0)
-                                    * scale
-                                    * 100.0)
-                                    .ceil()
-                                    .min(16.0) as usize;
+                            // Splashing in the rain — only liquid rain leaves
+                            // puddles to splash through, so this fades out as
+                            // the same precipitation turns to snow.
+                            let snow_factor = common::weather::snow_factor_at(
+                                &state.terrain(),
+                                interpolated.pos.xy(),
+                                &common::weather::WeatherTuning::load(),
+                            )
+                            .unwrap_or(0.0);
+                            let splash_particles = ((state
+                                .weather_at(interpolated.pos.xy())
+                                .liquid_rain(snow_factor)
+                                - RAIN_THRESHOLD)
+                                .max(0.0)
+                                * scale
+                                * 100.0)
+                                .ceil()
+                                .min(16.0)
+                                as usize;
                             self.add_particles(
                                 scene_data.particles_chance,
                                 splash_particles,

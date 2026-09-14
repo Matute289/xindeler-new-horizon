@@ -28,8 +28,12 @@ uniform u_rain_occlusion {
     mat4 rain_occlusion_texture_mat;
     mat4 rain_dir_mat;
     float integrated_rain_vel;
+    // Keep in sync with `include/rain_occlusion.glsl` and
+    // `render::pipelines::rain_occlusion::Locals` -- three separate
+    // declarations of the same std140 block.
     float rain_density;
-    vec2 occlusion_dummy; // Fix alignment.
+    float snow_density;
+    float occlusion_dummy; // Fix alignment.
 };
 
 /* Accurate packed shadow maps for many lights at once!

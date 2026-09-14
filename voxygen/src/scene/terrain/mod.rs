@@ -1455,8 +1455,10 @@ impl<V: RectRasterableVol> Terrain<V> {
                 min: visible_bounding_box.min.as_::<f64>(),
                 max: visible_bounding_box.max.as_::<f64>(),
             };
-            let weather = scene_data.client.weather_at_player();
-            let ray_direction = weather.rain_vel().normalized();
+            // Must match the axis the occlusion map is rendered and sampled
+            // along everywhere else; snow falls far slower and more slanted
+            // than rain.
+            let ray_direction = scene_data.client.precip_vel_at_player().normalized();
 
             // NOTE: We use proj_mat_treeculler here because
             // calc_focused_light_volume_points makes the assumption that the
