@@ -159,6 +159,7 @@ fn do_command(
         ServerChatCommand::AreaAdd => handle_area_add,
         ServerChatCommand::AreaList => handle_area_list,
         ServerChatCommand::AreaRemove => handle_area_remove,
+        ServerChatCommand::ArenaTotem => handle_spawn_arena_totem,
         ServerChatCommand::Aura => handle_aura,
         ServerChatCommand::Ban => handle_ban,
         ServerChatCommand::BanIp => handle_ban_ip,
@@ -3795,6 +3796,36 @@ fn handle_spawn_campfire(
         ServerGeneral::server_msg(
             ChatType::CommandInfo,
             Content::localized("command-spawned-campfire"),
+        ),
+    );
+    Ok(())
+}
+
+/// Spawn the same `Immovable` Gnarling totem fixture used by generated arena
+/// sites. Its zero-radius auras make this safe for local physics QA while
+/// keeping the entity construction path identical to the world fixture.
+fn handle_spawn_arena_totem(
+    server: &mut Server,
+    client: EcsEntity,
+    target: EcsEntity,
+    _args: Vec<String>,
+    _action: &ServerChatCommand,
+) -> CmdResult<()> {
+    let pos = position(server, target, "target")?;
+    server
+        .state
+        .ecs()
+        .read_resource::<EventBus<CreateSpecialEntityEvent>>()
+        .emit_now(CreateSpecialEntityEvent {
+            pos: pos.0,
+            entity: SpecialEntity::ArenaTotem { range: 0.0 },
+        });
+
+    server.notify_client(
+        client,
+        ServerGeneral::server_msg(
+            ChatType::CommandInfo,
+            Content::Plain("Spawned an immovable Gnarling arena totem.".into()),
         ),
     );
     Ok(())
