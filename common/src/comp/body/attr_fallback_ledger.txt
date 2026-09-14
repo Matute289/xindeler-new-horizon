@@ -1,0 +1,945 @@
+# Ledger of per-species attribute fall-throughs — generated, then reviewed by hand.
+#
+# Every line is a (body kind, attribute, species) that has NO explicit value in
+# `common/src/comp/body/mod.rs` and is quietly inheriting a catch-all arm. Each line
+# is technical debt, not an endorsement: it is here so the debt is countable, and so
+# that a *newly added* species that forgets a value fails
+# `cargo test -p xindeler-common` instead of shipping silently wrong.
+#
+# Maintained by `attr_audit_test.rs`. When the test fails it prints the exact `+`/`-`
+# lines to add or delete; `ATTR_LEDGER_BLESS=1 cargo test -p xindeler-common --lib
+# attr_audit` regenerates this file wholesale.
+#
+# Adding a species: give it an explicit arm. Only let a line appear here if the
+# catch-all genuinely is the right value for it.
+# Fixing a species: give it an explicit arm; the line disappears on the next bless.
+#
+# SCOPE: this covers the getters in `AUDITED` minus those in `DEFAULTS_BY_DESIGN`
+# (attributes whose catch-all is the neutral value, not a guess). It is not a
+# complete inventory of every default in the engine — see the module docs.
+
+# --- Arthropod.base_energy ---
+Arthropod.base_energy Antlion
+Arthropod.base_energy Blackwidow
+Arthropod.base_energy Cavespider
+Arthropod.base_energy Dagonite
+Arthropod.base_energy Emberfly
+Arthropod.base_energy Hornbeetle
+Arthropod.base_energy Leafbeetle
+Arthropod.base_energy Moltencrawler
+Arthropod.base_energy Mosscrawler
+Arthropod.base_energy Sandcrawler
+Arthropod.base_energy Stagbeetle
+Arthropod.base_energy Tarantula
+Arthropod.base_energy Weevil
+
+# --- Arthropod.base_poise ---
+Arthropod.base_poise Antlion
+Arthropod.base_poise Blackwidow
+Arthropod.base_poise Cavespider
+Arthropod.base_poise Dagonite
+Arthropod.base_poise Emberfly
+Arthropod.base_poise Hornbeetle
+Arthropod.base_poise Leafbeetle
+Arthropod.base_poise Moltencrawler
+Arthropod.base_poise Mosscrawler
+Arthropod.base_poise Sandcrawler
+Arthropod.base_poise Stagbeetle
+Arthropod.base_poise Tarantula
+Arthropod.base_poise Weevil
+
+# --- Arthropod.threat_tier ---
+Arthropod.threat_tier Cavespider
+Arthropod.threat_tier Dagonite
+Arthropod.threat_tier Emberfly
+Arthropod.threat_tier Hornbeetle
+Arthropod.threat_tier Leafbeetle
+Arthropod.threat_tier Moltencrawler
+Arthropod.threat_tier Mosscrawler
+Arthropod.threat_tier Sandcrawler
+Arthropod.threat_tier Stagbeetle
+Arthropod.threat_tier Weevil
+
+# --- BipedLarge.base_energy ---
+BipedLarge.base_energy AdletElder
+BipedLarge.base_energy Blueoni
+BipedLarge.base_energy Cavetroll
+BipedLarge.base_energy Cursekeeper
+BipedLarge.base_energy Cyclops
+BipedLarge.base_energy Executioner
+BipedLarge.base_energy Forgemaster
+BipedLarge.base_energy Gigasfire
+BipedLarge.base_energy Gigasfrost
+BipedLarge.base_energy HaniwaGeneral
+BipedLarge.base_energy Harvester
+BipedLarge.base_energy Huskbrute
+BipedLarge.base_energy Mightysaurok
+BipedLarge.base_energy Mindflayer
+BipedLarge.base_energy Minotaur
+BipedLarge.base_energy Mountaintroll
+BipedLarge.base_energy Occultsaurok
+BipedLarge.base_energy Ogre
+BipedLarge.base_energy Redoni
+BipedLarge.base_energy SeaBishop
+BipedLarge.base_energy Slysaurok
+BipedLarge.base_energy Strigoi
+BipedLarge.base_energy Swamptroll
+BipedLarge.base_energy TerracottaBesieger
+BipedLarge.base_energy TerracottaDemolisher
+BipedLarge.base_energy TerracottaPunisher
+BipedLarge.base_energy TerracottaPursuer
+BipedLarge.base_energy Tidalwarrior
+BipedLarge.base_energy Tursus
+BipedLarge.base_energy Wendigo
+BipedLarge.base_energy Werewolf
+BipedLarge.base_energy Yeti
+
+# --- BipedLarge.base_health ---
+BipedLarge.base_health Mightysaurok
+BipedLarge.base_health Occultsaurok
+BipedLarge.base_health Slysaurok
+BipedLarge.base_health Werewolf
+
+# --- BipedLarge.base_poise ---
+BipedLarge.base_poise AdletElder
+BipedLarge.base_poise Blueoni
+BipedLarge.base_poise Cavetroll
+BipedLarge.base_poise Cultistwarlock
+BipedLarge.base_poise Cultistwarlord
+BipedLarge.base_poise Cursekeeper
+BipedLarge.base_poise Cyclops
+BipedLarge.base_poise Dullahan
+BipedLarge.base_poise Executioner
+BipedLarge.base_poise HaniwaGeneral
+BipedLarge.base_poise Harvester
+BipedLarge.base_poise Huskbrute
+BipedLarge.base_poise Mightysaurok
+BipedLarge.base_poise Mountaintroll
+BipedLarge.base_poise Occultsaurok
+BipedLarge.base_poise Ogre
+BipedLarge.base_poise Redoni
+BipedLarge.base_poise SeaBishop
+BipedLarge.base_poise Slysaurok
+BipedLarge.base_poise Strigoi
+BipedLarge.base_poise Swamptroll
+BipedLarge.base_poise TerracottaBesieger
+BipedLarge.base_poise TerracottaDemolisher
+BipedLarge.base_poise TerracottaPunisher
+BipedLarge.base_poise TerracottaPursuer
+BipedLarge.base_poise Tidalwarrior
+BipedLarge.base_poise Tursus
+BipedLarge.base_poise Wendigo
+BipedLarge.base_poise Werewolf
+BipedLarge.base_poise Yeti
+
+# --- BipedLarge.mass ---
+BipedLarge.mass Blueoni
+BipedLarge.mass Cultistwarlock
+BipedLarge.mass Cultistwarlord
+BipedLarge.mass Cyclops
+BipedLarge.mass Dullahan
+BipedLarge.mass Executioner
+BipedLarge.mass Harvester
+BipedLarge.mass Huskbrute
+BipedLarge.mass Ogre
+BipedLarge.mass Redoni
+BipedLarge.mass SeaBishop
+BipedLarge.mass Strigoi
+BipedLarge.mass Tidalwarrior
+BipedLarge.mass Tursus
+BipedLarge.mass Wendigo
+BipedLarge.mass Werewolf
+BipedLarge.mass Yeti
+
+# --- BipedLarge.threat_tier ---
+BipedLarge.threat_tier AdletElder
+BipedLarge.threat_tier Blueoni
+BipedLarge.threat_tier Cavetroll
+BipedLarge.threat_tier Cultistwarlock
+BipedLarge.threat_tier Cultistwarlord
+BipedLarge.threat_tier Dullahan
+BipedLarge.threat_tier Executioner
+BipedLarge.threat_tier HaniwaGeneral
+BipedLarge.threat_tier Harvester
+BipedLarge.threat_tier Huskbrute
+BipedLarge.threat_tier Mightysaurok
+BipedLarge.threat_tier Mountaintroll
+BipedLarge.threat_tier Occultsaurok
+BipedLarge.threat_tier Ogre
+BipedLarge.threat_tier Redoni
+BipedLarge.threat_tier SeaBishop
+BipedLarge.threat_tier Slysaurok
+BipedLarge.threat_tier Strigoi
+BipedLarge.threat_tier Swamptroll
+BipedLarge.threat_tier TerracottaBesieger
+BipedLarge.threat_tier TerracottaDemolisher
+BipedLarge.threat_tier TerracottaPunisher
+BipedLarge.threat_tier TerracottaPursuer
+BipedLarge.threat_tier Tidalwarrior
+BipedLarge.threat_tier Tursus
+BipedLarge.threat_tier Wendigo
+BipedLarge.threat_tier Werewolf
+BipedLarge.threat_tier Yeti
+
+# --- BipedSmall.base_energy ---
+BipedSmall.base_energy Adlet
+BipedSmall.base_energy Ashen
+BipedSmall.base_energy BloodmoonHeiress
+BipedSmall.base_energy Bloodservant
+BipedSmall.base_energy Boreal
+BipedSmall.base_energy Bushly
+BipedSmall.base_energy Cactid
+BipedSmall.base_energy Flamekeeper
+BipedSmall.base_energy Gnarling
+BipedSmall.base_energy GnarlingChieftain
+BipedSmall.base_energy Gnoll
+BipedSmall.base_energy Gnome
+BipedSmall.base_energy GoblinChucker
+BipedSmall.base_energy GoblinRuffian
+BipedSmall.base_energy GoblinThug
+BipedSmall.base_energy GreenLegoom
+BipedSmall.base_energy Haniwa
+BipedSmall.base_energy Harlequin
+BipedSmall.base_energy Husk
+BipedSmall.base_energy IronDwarf
+BipedSmall.base_energy Irrwurz
+BipedSmall.base_energy Jiangshi
+BipedSmall.base_energy Kappa
+BipedSmall.base_energy Mandragora
+BipedSmall.base_energy Myrmidon
+BipedSmall.base_energy OchreLegoom
+BipedSmall.base_energy PurpleLegoom
+BipedSmall.base_energy RedLegoom
+BipedSmall.base_energy Sahagin
+BipedSmall.base_energy ShamanicSpirit
+BipedSmall.base_energy TreasureEgg
+BipedSmall.base_energy UmberLegoom
+
+# --- BipedSmall.base_health ---
+BipedSmall.base_health Bushly
+BipedSmall.base_health Gnoll
+BipedSmall.base_health Gnome
+BipedSmall.base_health Kappa
+BipedSmall.base_health TreasureEgg
+
+# --- BipedSmall.base_poise ---
+BipedSmall.base_poise Adlet
+BipedSmall.base_poise Ashen
+BipedSmall.base_poise BloodmoonHeiress
+BipedSmall.base_poise Bloodservant
+BipedSmall.base_poise Bushly
+BipedSmall.base_poise Cactid
+BipedSmall.base_poise Gnarling
+BipedSmall.base_poise Gnoll
+BipedSmall.base_poise Gnome
+BipedSmall.base_poise GoblinChucker
+BipedSmall.base_poise GoblinRuffian
+BipedSmall.base_poise GoblinThug
+BipedSmall.base_poise GreenLegoom
+BipedSmall.base_poise Haniwa
+BipedSmall.base_poise Harlequin
+BipedSmall.base_poise Husk
+BipedSmall.base_poise Irrwurz
+BipedSmall.base_poise Jiangshi
+BipedSmall.base_poise Kappa
+BipedSmall.base_poise Mandragora
+BipedSmall.base_poise Myrmidon
+BipedSmall.base_poise OchreLegoom
+BipedSmall.base_poise PurpleLegoom
+BipedSmall.base_poise RedLegoom
+BipedSmall.base_poise Sahagin
+BipedSmall.base_poise ShamanicSpirit
+BipedSmall.base_poise TreasureEgg
+BipedSmall.base_poise UmberLegoom
+
+# --- BipedSmall.mass ---
+BipedSmall.mass Adlet
+BipedSmall.mass Ashen
+BipedSmall.mass BloodmoonHeiress
+BipedSmall.mass Bloodservant
+BipedSmall.mass Bushly
+BipedSmall.mass Cactid
+BipedSmall.mass Gnarling
+BipedSmall.mass GnarlingChieftain
+BipedSmall.mass Gnoll
+BipedSmall.mass Gnome
+BipedSmall.mass GoblinChucker
+BipedSmall.mass GoblinRuffian
+BipedSmall.mass GoblinThug
+BipedSmall.mass GreenLegoom
+BipedSmall.mass Haniwa
+BipedSmall.mass Harlequin
+BipedSmall.mass Husk
+BipedSmall.mass Irrwurz
+BipedSmall.mass Jiangshi
+BipedSmall.mass Kappa
+BipedSmall.mass Mandragora
+BipedSmall.mass Myrmidon
+BipedSmall.mass OchreLegoom
+BipedSmall.mass PurpleLegoom
+BipedSmall.mass RedLegoom
+BipedSmall.mass Sahagin
+BipedSmall.mass ShamanicSpirit
+BipedSmall.mass TreasureEgg
+BipedSmall.mass UmberLegoom
+
+# --- BipedSmall.threat_tier ---
+BipedSmall.threat_tier Adlet
+BipedSmall.threat_tier Ashen
+BipedSmall.threat_tier BloodmoonHeiress
+BipedSmall.threat_tier Bloodservant
+BipedSmall.threat_tier Boreal
+BipedSmall.threat_tier Bushly
+BipedSmall.threat_tier Cactid
+BipedSmall.threat_tier Flamekeeper
+BipedSmall.threat_tier Gnarling
+BipedSmall.threat_tier GnarlingChieftain
+BipedSmall.threat_tier Gnoll
+BipedSmall.threat_tier Gnome
+BipedSmall.threat_tier GoblinChucker
+BipedSmall.threat_tier GoblinRuffian
+BipedSmall.threat_tier GoblinThug
+BipedSmall.threat_tier GreenLegoom
+BipedSmall.threat_tier Haniwa
+BipedSmall.threat_tier Harlequin
+BipedSmall.threat_tier Husk
+BipedSmall.threat_tier IronDwarf
+BipedSmall.threat_tier Irrwurz
+BipedSmall.threat_tier Kappa
+BipedSmall.threat_tier Mandragora
+BipedSmall.threat_tier Myrmidon
+BipedSmall.threat_tier OchreLegoom
+BipedSmall.threat_tier PurpleLegoom
+BipedSmall.threat_tier RedLegoom
+BipedSmall.threat_tier Sahagin
+BipedSmall.threat_tier ShamanicSpirit
+BipedSmall.threat_tier TreasureEgg
+BipedSmall.threat_tier UmberLegoom
+
+# --- BirdLarge.base_poise ---
+BirdLarge.base_poise Cockatrice
+BirdLarge.base_poise Phoenix
+BirdLarge.base_poise Roc
+
+# --- BirdLarge.threat_tier ---
+BirdLarge.threat_tier CloudWyvern
+BirdLarge.threat_tier Cockatrice
+BirdLarge.threat_tier FlameWyvern
+BirdLarge.threat_tier FrostWyvern
+BirdLarge.threat_tier Roc
+BirdLarge.threat_tier SeaWyvern
+BirdLarge.threat_tier WealdWyvern
+
+# --- BirdMedium.base_energy ---
+BirdMedium.base_energy Bat
+BirdMedium.base_energy BloodmoonBat
+BirdMedium.base_energy Chicken
+BirdMedium.base_energy Cockatiel
+BirdMedium.base_energy Crow
+BirdMedium.base_energy Dodo
+BirdMedium.base_energy Duck
+BirdMedium.base_energy Eagle
+BirdMedium.base_energy Goose
+BirdMedium.base_energy HornedOwl
+BirdMedium.base_energy Parakeet
+BirdMedium.base_energy Parrot
+BirdMedium.base_energy Peacock
+BirdMedium.base_energy Penguin
+BirdMedium.base_energy Puffin
+BirdMedium.base_energy SnowyOwl
+BirdMedium.base_energy Toucan
+BirdMedium.base_energy VampireBat
+
+# --- BirdMedium.base_poise ---
+BirdMedium.base_poise Bat
+BirdMedium.base_poise BloodmoonBat
+BirdMedium.base_poise Chicken
+BirdMedium.base_poise Cockatiel
+BirdMedium.base_poise Crow
+BirdMedium.base_poise Dodo
+BirdMedium.base_poise Duck
+BirdMedium.base_poise Eagle
+BirdMedium.base_poise Goose
+BirdMedium.base_poise HornedOwl
+BirdMedium.base_poise Parakeet
+BirdMedium.base_poise Parrot
+BirdMedium.base_poise Peacock
+BirdMedium.base_poise Penguin
+BirdMedium.base_poise Puffin
+BirdMedium.base_poise SnowyOwl
+BirdMedium.base_poise Toucan
+BirdMedium.base_poise VampireBat
+
+# --- BirdMedium.threat_tier ---
+BirdMedium.threat_tier Bat
+BirdMedium.threat_tier Chicken
+BirdMedium.threat_tier Cockatiel
+BirdMedium.threat_tier Dodo
+BirdMedium.threat_tier Duck
+BirdMedium.threat_tier Parakeet
+BirdMedium.threat_tier Peacock
+BirdMedium.threat_tier Penguin
+BirdMedium.threat_tier Puffin
+
+# --- Crustacean.base_energy ---
+Crustacean.base_energy Crab
+Crustacean.base_energy Karkatha
+Crustacean.base_energy SoldierCrab
+
+# --- Crustacean.base_poise ---
+Crustacean.base_poise Crab
+Crustacean.base_poise Karkatha
+Crustacean.base_poise SoldierCrab
+
+# --- Crustacean.threat_tier ---
+Crustacean.threat_tier Crab
+
+# --- Dragon.base_energy ---
+Dragon.base_energy Reddragon
+
+# --- Dragon.base_poise ---
+Dragon.base_poise Reddragon
+
+# --- FishMedium.base_energy ---
+FishMedium.base_energy Icepike
+FishMedium.base_energy Marlin
+
+# --- FishMedium.base_poise ---
+FishMedium.base_poise Icepike
+FishMedium.base_poise Marlin
+
+# --- FishSmall.base_energy ---
+FishSmall.base_energy Clownfish
+FishSmall.base_energy Piranha
+
+# --- FishSmall.base_poise ---
+FishSmall.base_poise Clownfish
+FishSmall.base_poise Piranha
+
+# --- Golem.base_energy ---
+Golem.base_energy AncientEffigy
+Golem.base_energy ClayGolem
+Golem.base_energy CoralGolem
+Golem.base_energy Gravewarden
+Golem.base_energy IronGolem
+Golem.base_energy Mogwai
+Golem.base_energy StoneGolem
+Golem.base_energy Treant
+Golem.base_energy WoodGolem
+
+# --- Golem.base_health ---
+Golem.base_health StoneGolem
+Golem.base_health Treant
+
+# --- Golem.threat_tier ---
+Golem.threat_tier ClayGolem
+Golem.threat_tier CoralGolem
+Golem.threat_tier Mogwai
+Golem.threat_tier StoneGolem
+Golem.threat_tier Treant
+Golem.threat_tier WoodGolem
+
+# --- Object.base_energy ---
+Object.base_energy AdletSpear
+Object.base_energy AdletTrap
+Object.base_energy Apple
+Object.base_energy ArcaneEye
+Object.base_energy Arrow
+Object.base_energy ArrowClay
+Object.base_energy ArrowHeavy
+Object.base_energy ArrowSnake
+Object.base_energy ArrowTurret
+Object.base_energy BarrelOrgan
+Object.base_energy BeastMeat
+Object.base_energy BloodBomb
+Object.base_energy BoltBesieger
+Object.base_energy BoltFire
+Object.base_energy BoltFireBig
+Object.base_energy BoltIcicle
+Object.base_energy BoltNature
+Object.base_energy Bomb
+Object.base_energy BorealTrap
+Object.base_energy BubbleBomb
+Object.base_energy Campfire
+Object.base_energy CampfireLit
+Object.base_energy CitadelArcaneCannon
+Object.base_energy CitadelArcaneSphereCannon
+Object.base_energy ClayRocket
+Object.base_energy Coconut
+Object.base_energy Crossbow
+Object.base_energy DagonBomb
+Object.base_energy Dart
+Object.base_energy FieryTornado
+Object.base_energy FireRainDrop
+Object.base_energy FireRing
+Object.base_energy FireworkBlue
+Object.base_energy FireworkGreen
+Object.base_energy FireworkPurple
+Object.base_energy FireworkRed
+Object.base_energy FireworkWhite
+Object.base_energy FireworkYellow
+Object.base_energy Flamethrower
+Object.base_energy GnarlingTotemGreen
+Object.base_energy GnarlingTotemRed
+Object.base_energy GnarlingTotemWhite
+Object.base_energy GrenadeClay
+Object.base_energy HaniwaSentry
+Object.base_energy HarlequinDagger
+Object.base_energy Hive
+Object.base_energy IceBomb
+Object.base_energy IronPikeBomb
+Object.base_energy LaserBeam
+Object.base_energy LaserBeamLarge
+Object.base_energy LaserBeamSmall
+Object.base_energy LaserSphereLarge
+Object.base_energy LaserSphereSmall
+Object.base_energy Lavathrower
+Object.base_energy LightningBolt
+Object.base_energy Mine
+Object.base_energy MinotaurAxe
+Object.base_energy MultiArrow
+Object.base_energy NapalmPool
+Object.base_energy NapalmShot
+Object.base_energy Pebble
+Object.base_energy PoisonBall
+Object.base_energy Portal
+Object.base_energy PortalActive
+Object.base_energy Pumpkin
+Object.base_energy PyroclasmBolt
+Object.base_energy RemoteSensor
+Object.base_energy Scarecrow
+Object.base_energy SeaLantern
+Object.base_energy Snowball
+Object.base_energy SpearIcicle
+Object.base_energy SpectralSwordLarge
+Object.base_energy SpectralSwordSmall
+Object.base_energy SpitPoison
+Object.base_energy StrigoiHead
+Object.base_energy SurpriseEgg
+Object.base_energy TerracottaDemolisherBomb
+Object.base_energy TerracottaStatue
+Object.base_energy ThornStake
+Object.base_energy Tornado
+Object.base_energy ToughMeat
+Object.base_energy TrainingDummy
+
+# --- Object.base_health ---
+Object.base_health AdletSpear
+Object.base_health AdletTrap
+Object.base_health Apple
+Object.base_health Arrow
+Object.base_health ArrowClay
+Object.base_health ArrowHeavy
+Object.base_health ArrowSnake
+Object.base_health ArrowTurret
+Object.base_health BeastMeat
+Object.base_health BloodBomb
+Object.base_health BoltBesieger
+Object.base_health BoltFire
+Object.base_health BoltFireBig
+Object.base_health BoltIcicle
+Object.base_health BoltNature
+Object.base_health Bomb
+Object.base_health BorealTrap
+Object.base_health BubbleBomb
+Object.base_health Campfire
+Object.base_health CampfireLit
+Object.base_health CitadelArcaneCannon
+Object.base_health CitadelArcaneSphereCannon
+Object.base_health ClayRocket
+Object.base_health Coconut
+Object.base_health DagonBomb
+Object.base_health Dart
+Object.base_health FieryTornado
+Object.base_health FireRainDrop
+Object.base_health FireRing
+Object.base_health FireworkBlue
+Object.base_health FireworkGreen
+Object.base_health FireworkPurple
+Object.base_health FireworkRed
+Object.base_health FireworkWhite
+Object.base_health FireworkYellow
+Object.base_health GrenadeClay
+Object.base_health HarlequinDagger
+Object.base_health Hive
+Object.base_health IceBomb
+Object.base_health IronPikeBomb
+Object.base_health LaserBeam
+Object.base_health LaserBeamLarge
+Object.base_health LaserBeamSmall
+Object.base_health LaserSphereLarge
+Object.base_health LaserSphereSmall
+Object.base_health LightningBolt
+Object.base_health Mine
+Object.base_health MinotaurAxe
+Object.base_health MultiArrow
+Object.base_health NapalmPool
+Object.base_health NapalmShot
+Object.base_health Pebble
+Object.base_health PoisonBall
+Object.base_health Portal
+Object.base_health PortalActive
+Object.base_health Pumpkin
+Object.base_health PyroclasmBolt
+Object.base_health Scarecrow
+Object.base_health Snowball
+Object.base_health SpearIcicle
+Object.base_health SpectralSwordLarge
+Object.base_health SpectralSwordSmall
+Object.base_health SpitPoison
+Object.base_health StrigoiHead
+Object.base_health SurpriseEgg
+Object.base_health TerracottaDemolisherBomb
+Object.base_health ThornStake
+Object.base_health Tornado
+Object.base_health ToughMeat
+
+# --- Object.base_poise ---
+Object.base_poise AdletSpear
+Object.base_poise AdletTrap
+Object.base_poise Apple
+Object.base_poise ArcaneEye
+Object.base_poise Arrow
+Object.base_poise ArrowClay
+Object.base_poise ArrowHeavy
+Object.base_poise ArrowSnake
+Object.base_poise ArrowTurret
+Object.base_poise BarrelOrgan
+Object.base_poise BeastMeat
+Object.base_poise BloodBomb
+Object.base_poise BoltBesieger
+Object.base_poise BoltFire
+Object.base_poise BoltFireBig
+Object.base_poise BoltIcicle
+Object.base_poise BoltNature
+Object.base_poise Bomb
+Object.base_poise BorealTrap
+Object.base_poise BubbleBomb
+Object.base_poise Campfire
+Object.base_poise CampfireLit
+Object.base_poise CitadelArcaneCannon
+Object.base_poise CitadelArcaneSphereCannon
+Object.base_poise ClayRocket
+Object.base_poise Coconut
+Object.base_poise Crossbow
+Object.base_poise Crux
+Object.base_poise DagonBomb
+Object.base_poise Dart
+Object.base_poise FieryTornado
+Object.base_poise FireRainDrop
+Object.base_poise FireRing
+Object.base_poise FireworkBlue
+Object.base_poise FireworkGreen
+Object.base_poise FireworkPurple
+Object.base_poise FireworkRed
+Object.base_poise FireworkWhite
+Object.base_poise FireworkYellow
+Object.base_poise Flamethrower
+Object.base_poise GnarlingTotemGreen
+Object.base_poise GnarlingTotemRed
+Object.base_poise GnarlingTotemWhite
+Object.base_poise GrenadeClay
+Object.base_poise HaniwaSentry
+Object.base_poise HarlequinDagger
+Object.base_poise Hive
+Object.base_poise IceBomb
+Object.base_poise IronPikeBomb
+Object.base_poise LaserBeam
+Object.base_poise LaserBeamLarge
+Object.base_poise LaserBeamSmall
+Object.base_poise LaserSphereLarge
+Object.base_poise LaserSphereSmall
+Object.base_poise Lavathrower
+Object.base_poise LightningBolt
+Object.base_poise Mine
+Object.base_poise MinotaurAxe
+Object.base_poise MultiArrow
+Object.base_poise NapalmPool
+Object.base_poise NapalmShot
+Object.base_poise Pebble
+Object.base_poise PoisonBall
+Object.base_poise Portal
+Object.base_poise PortalActive
+Object.base_poise Pumpkin
+Object.base_poise PyroclasmBolt
+Object.base_poise RemoteSensor
+Object.base_poise Scarecrow
+Object.base_poise SeaLantern
+Object.base_poise Snowball
+Object.base_poise SpearIcicle
+Object.base_poise SpectralSwordLarge
+Object.base_poise SpectralSwordSmall
+Object.base_poise SpitPoison
+Object.base_poise StrigoiHead
+Object.base_poise SurpriseEgg
+Object.base_poise TerracottaDemolisherBomb
+Object.base_poise TerracottaStatue
+Object.base_poise ThornStake
+Object.base_poise Tornado
+Object.base_poise ToughMeat
+Object.base_poise TrainingDummy
+
+# --- QuadrupedLow.base_energy ---
+QuadrupedLow.base_energy Alligator
+QuadrupedLow.base_energy Asp
+QuadrupedLow.base_energy Basilisk
+QuadrupedLow.base_energy Crocodile
+QuadrupedLow.base_energy Dagon
+QuadrupedLow.base_energy Deadwood
+QuadrupedLow.base_energy Driggle
+QuadrupedLow.base_energy Elbst
+QuadrupedLow.base_energy Hakulaq
+QuadrupedLow.base_energy Hydra
+QuadrupedLow.base_energy Icedrake
+QuadrupedLow.base_energy Lavadrake
+QuadrupedLow.base_energy Maneater
+QuadrupedLow.base_energy Monitor
+QuadrupedLow.base_energy Mossdrake
+QuadrupedLow.base_energy Pangolin
+QuadrupedLow.base_energy Reefsnapper
+QuadrupedLow.base_energy Rocksnapper
+QuadrupedLow.base_energy Rootsnapper
+QuadrupedLow.base_energy Salamander
+QuadrupedLow.base_energy Sandshark
+QuadrupedLow.base_energy SeaCrocodile
+QuadrupedLow.base_energy Snaretongue
+QuadrupedLow.base_energy Tortoise
+
+# --- QuadrupedLow.threat_tier ---
+QuadrupedLow.threat_tier Alligator
+QuadrupedLow.threat_tier Asp
+QuadrupedLow.threat_tier Crocodile
+QuadrupedLow.threat_tier Deadwood
+QuadrupedLow.threat_tier Elbst
+QuadrupedLow.threat_tier Hakulaq
+QuadrupedLow.threat_tier Icedrake
+QuadrupedLow.threat_tier Monitor
+QuadrupedLow.threat_tier Mossdrake
+QuadrupedLow.threat_tier Salamander
+QuadrupedLow.threat_tier SeaCrocodile
+
+# --- QuadrupedMedium.base_energy ---
+QuadrupedMedium.base_energy Akhlut
+QuadrupedMedium.base_energy Alpaca
+QuadrupedMedium.base_energy Antelope
+QuadrupedMedium.base_energy Barghest
+QuadrupedMedium.base_energy Bear
+QuadrupedMedium.base_energy Bonerattler
+QuadrupedMedium.base_energy Bristleback
+QuadrupedMedium.base_energy Camel
+QuadrupedMedium.base_energy Catoblepas
+QuadrupedMedium.base_energy Cattle
+QuadrupedMedium.base_energy ClaySteed
+QuadrupedMedium.base_energy Darkhound
+QuadrupedMedium.base_energy Deer
+QuadrupedMedium.base_energy Donkey
+QuadrupedMedium.base_energy Dreadhorn
+QuadrupedMedium.base_energy Elephant
+QuadrupedMedium.base_energy Frostfang
+QuadrupedMedium.base_energy Grolgar
+QuadrupedMedium.base_energy Highland
+QuadrupedMedium.base_energy Hirdrasil
+QuadrupedMedium.base_energy Horse
+QuadrupedMedium.base_energy Kelpie
+QuadrupedMedium.base_energy Lion
+QuadrupedMedium.base_energy Llama
+QuadrupedMedium.base_energy Mammoth
+QuadrupedMedium.base_energy Moose
+QuadrupedMedium.base_energy Mouflon
+QuadrupedMedium.base_energy Ngoubou
+QuadrupedMedium.base_energy Panda
+QuadrupedMedium.base_energy Roshwalr
+QuadrupedMedium.base_energy Saber
+QuadrupedMedium.base_energy Snowleopard
+QuadrupedMedium.base_energy Tarasque
+QuadrupedMedium.base_energy Tiger
+QuadrupedMedium.base_energy Tuskram
+QuadrupedMedium.base_energy Wolf
+QuadrupedMedium.base_energy Yak
+QuadrupedMedium.base_energy Zebra
+
+# --- QuadrupedMedium.mass ---
+QuadrupedMedium.mass Akhlut
+QuadrupedMedium.mass Alpaca
+QuadrupedMedium.mass Antelope
+QuadrupedMedium.mass Barghest
+QuadrupedMedium.mass Bonerattler
+QuadrupedMedium.mass Bristleback
+QuadrupedMedium.mass Camel
+QuadrupedMedium.mass ClaySteed
+QuadrupedMedium.mass Darkhound
+QuadrupedMedium.mass Frostfang
+QuadrupedMedium.mass Grolgar
+QuadrupedMedium.mass Hirdrasil
+QuadrupedMedium.mass Llama
+QuadrupedMedium.mass Moose
+QuadrupedMedium.mass Mouflon
+QuadrupedMedium.mass Ngoubou
+QuadrupedMedium.mass Roshwalr
+QuadrupedMedium.mass Snowleopard
+QuadrupedMedium.mass Tarasque
+QuadrupedMedium.mass Tiger
+QuadrupedMedium.mass Tuskram
+QuadrupedMedium.mass Wolf
+QuadrupedMedium.mass Zebra
+
+# --- QuadrupedMedium.threat_tier ---
+QuadrupedMedium.threat_tier Barghest
+QuadrupedMedium.threat_tier Bear
+QuadrupedMedium.threat_tier Bristleback
+QuadrupedMedium.threat_tier Darkhound
+QuadrupedMedium.threat_tier Frostfang
+QuadrupedMedium.threat_tier Highland
+QuadrupedMedium.threat_tier Kelpie
+QuadrupedMedium.threat_tier Lion
+QuadrupedMedium.threat_tier Moose
+QuadrupedMedium.threat_tier Panda
+QuadrupedMedium.threat_tier Saber
+QuadrupedMedium.threat_tier Snowleopard
+QuadrupedMedium.threat_tier Tiger
+QuadrupedMedium.threat_tier Tuskram
+QuadrupedMedium.threat_tier Wolf
+QuadrupedMedium.threat_tier Yak
+
+# --- QuadrupedSmall.base_energy ---
+QuadrupedSmall.base_energy Axolotl
+QuadrupedSmall.base_energy Batfox
+QuadrupedSmall.base_energy Beaver
+QuadrupedSmall.base_energy Boar
+QuadrupedSmall.base_energy Cat
+QuadrupedSmall.base_energy Dog
+QuadrupedSmall.base_energy Fox
+QuadrupedSmall.base_energy Frog
+QuadrupedSmall.base_energy Fungome
+QuadrupedSmall.base_energy Gecko
+QuadrupedSmall.base_energy Goat
+QuadrupedSmall.base_energy Hare
+QuadrupedSmall.base_energy Holladon
+QuadrupedSmall.base_energy Hyena
+QuadrupedSmall.base_energy Jackalope
+QuadrupedSmall.base_energy MossySnail
+QuadrupedSmall.base_energy Pig
+QuadrupedSmall.base_energy Porcupine
+QuadrupedSmall.base_energy Quokka
+QuadrupedSmall.base_energy Rabbit
+QuadrupedSmall.base_energy Raccoon
+QuadrupedSmall.base_energy Rat
+QuadrupedSmall.base_energy Seal
+QuadrupedSmall.base_energy Sheep
+QuadrupedSmall.base_energy Skunk
+QuadrupedSmall.base_energy Squirrel
+QuadrupedSmall.base_energy TreantSapling
+QuadrupedSmall.base_energy Truffler
+QuadrupedSmall.base_energy Turtle
+
+# --- QuadrupedSmall.base_health ---
+QuadrupedSmall.base_health Axolotl
+QuadrupedSmall.base_health Frog
+QuadrupedSmall.base_health Gecko
+QuadrupedSmall.base_health Squirrel
+
+# --- QuadrupedSmall.base_poise ---
+QuadrupedSmall.base_poise Axolotl
+QuadrupedSmall.base_poise Batfox
+QuadrupedSmall.base_poise Beaver
+QuadrupedSmall.base_poise Boar
+QuadrupedSmall.base_poise Cat
+QuadrupedSmall.base_poise Dog
+QuadrupedSmall.base_poise Fox
+QuadrupedSmall.base_poise Frog
+QuadrupedSmall.base_poise Fungome
+QuadrupedSmall.base_poise Gecko
+QuadrupedSmall.base_poise Goat
+QuadrupedSmall.base_poise Hare
+QuadrupedSmall.base_poise Holladon
+QuadrupedSmall.base_poise Hyena
+QuadrupedSmall.base_poise Jackalope
+QuadrupedSmall.base_poise MossySnail
+QuadrupedSmall.base_poise Pig
+QuadrupedSmall.base_poise Porcupine
+QuadrupedSmall.base_poise Quokka
+QuadrupedSmall.base_poise Rabbit
+QuadrupedSmall.base_poise Raccoon
+QuadrupedSmall.base_poise Rat
+QuadrupedSmall.base_poise Seal
+QuadrupedSmall.base_poise Sheep
+QuadrupedSmall.base_poise Skunk
+QuadrupedSmall.base_poise Squirrel
+QuadrupedSmall.base_poise TreantSapling
+QuadrupedSmall.base_poise Truffler
+QuadrupedSmall.base_poise Turtle
+
+# --- QuadrupedSmall.threat_tier ---
+QuadrupedSmall.threat_tier Axolotl
+QuadrupedSmall.threat_tier Batfox
+QuadrupedSmall.threat_tier Beaver
+QuadrupedSmall.threat_tier Boar
+QuadrupedSmall.threat_tier Cat
+QuadrupedSmall.threat_tier Dog
+QuadrupedSmall.threat_tier Fox
+QuadrupedSmall.threat_tier Frog
+QuadrupedSmall.threat_tier Fungome
+QuadrupedSmall.threat_tier Gecko
+QuadrupedSmall.threat_tier Goat
+QuadrupedSmall.threat_tier Hare
+QuadrupedSmall.threat_tier Holladon
+QuadrupedSmall.threat_tier Jackalope
+QuadrupedSmall.threat_tier MossySnail
+QuadrupedSmall.threat_tier Pig
+QuadrupedSmall.threat_tier Porcupine
+QuadrupedSmall.threat_tier Quokka
+QuadrupedSmall.threat_tier Rabbit
+QuadrupedSmall.threat_tier Raccoon
+QuadrupedSmall.threat_tier Rat
+QuadrupedSmall.threat_tier Seal
+QuadrupedSmall.threat_tier Sheep
+QuadrupedSmall.threat_tier Skunk
+QuadrupedSmall.threat_tier Squirrel
+QuadrupedSmall.threat_tier TreantSapling
+QuadrupedSmall.threat_tier Truffler
+QuadrupedSmall.threat_tier Turtle
+
+# --- Ship.base_energy ---
+Ship.base_energy AirBalloon
+Ship.base_energy DefaultAirship
+Ship.base_energy Galleon
+Ship.base_energy SailBoat
+Ship.base_energy Skiff
+Ship.base_energy Submarine
+
+# --- Ship.base_poise ---
+Ship.base_poise AirBalloon
+Ship.base_poise DefaultAirship
+Ship.base_poise Galleon
+Ship.base_poise SailBoat
+Ship.base_poise Skiff
+Ship.base_poise Submarine
+
+# --- Theropod.base_energy ---
+Theropod.base_energy Archaeos
+Theropod.base_energy Axebeak
+Theropod.base_energy Dodarock
+Theropod.base_energy Ntouka
+Theropod.base_energy Odonto
+Theropod.base_energy Sandraptor
+Theropod.base_energy Snowraptor
+Theropod.base_energy Sunlizard
+Theropod.base_energy Woodraptor
+Theropod.base_energy Yale
+
+# --- Theropod.base_poise ---
+Theropod.base_poise Axebeak
+Theropod.base_poise Dodarock
+Theropod.base_poise Sandraptor
+Theropod.base_poise Snowraptor
+Theropod.base_poise Sunlizard
+Theropod.base_poise Woodraptor
+
+# --- Theropod.threat_tier ---
+Theropod.threat_tier Archaeos
+Theropod.threat_tier Axebeak
+Theropod.threat_tier Dodarock
+Theropod.threat_tier Ntouka
+Theropod.threat_tier Odonto
+Theropod.threat_tier Sunlizard
+Theropod.threat_tier Yale

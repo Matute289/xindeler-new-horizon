@@ -1,4 +1,6 @@
 pub mod arthropod;
+pub(crate) mod attr_audit;
+#[cfg(test)] mod attr_audit_test;
 pub mod biped_large;
 pub mod biped_small;
 pub mod bird_large;
@@ -21,6 +23,7 @@ pub mod theropod;
 
 use crate::{
     assets::{BoxedError, FileAsset, load_ron},
+    comp::body::attr_audit::attr_fallback,
     consts::{HUMAN_DENSITY, WATER_DENSITY},
     npc::NpcKind,
 };
@@ -385,9 +388,9 @@ impl Body {
         let s = match self {
             Body::BirdMedium(bird_medium) => match bird_medium.species {
                 bird_medium::Species::Bat | bird_medium::Species::VampireBat => 0.5,
-                _ => 1.0,
+                _ => attr_fallback!("BirdMedium", "scale", 1.0),
             },
-            _ => 1.0,
+            _ => attr_fallback!("*", "scale", 1.0),
         };
         Scale(s)
     }
@@ -435,13 +438,13 @@ impl Body {
                 | biped_large::Species::TerracottaPursuer
                 | biped_large::Species::Cursekeeper => 380.0,
                 biped_large::Species::Forgemaster => 1600.0,
-                _ => 400.0,
+                _ => attr_fallback!("BipedLarge", "mass", 400.0),
             },
             Body::BipedSmall(body) => match body.species {
                 biped_small::Species::IronDwarf => 1000.0,
                 biped_small::Species::Flamekeeper => 1000.0,
                 biped_small::Species::Boreal => 270.0,
-                _ => 50.0,
+                _ => attr_fallback!("BipedSmall", "mass", 50.0),
             },
             // ravens are 0.69-2 kg, crows are 0.51 kg on average.
             Body::BirdMedium(body) => match body.species {
@@ -526,7 +529,7 @@ impl Body {
                 quadruped_medium::Species::Mammoth => 1500.0,
                 quadruped_medium::Species::Elephant => 1500.0,
                 quadruped_medium::Species::Catoblepas => 300.0,
-                _ => 200.0,
+                _ => attr_fallback!("QuadrupedMedium", "mass", 200.0),
             },
             Body::QuadrupedSmall(body) => match body.species {
                 quadruped_small::Species::Axolotl => 1.0,
@@ -948,17 +951,17 @@ impl Body {
             + match self {
                 Body::QuadrupedSmall(body) => match body.species {
                     quadruped_small::Species::Rat => 0.0,
-                    _ => 2.0,
+                    _ => attr_fallback!("QuadrupedSmall", "spacing_radius", 2.0),
                 },
                 Body::QuadrupedLow(body) => match body.species {
                     quadruped_low::Species::Hakulaq => 0.0,
-                    _ => 2.0,
+                    _ => attr_fallback!("QuadrupedLow", "spacing_radius", 2.0),
                 },
                 Body::BipedSmall(body) => match body.species {
                     biped_small::Species::Husk => 3.0,
-                    _ => 2.0,
+                    _ => attr_fallback!("BipedSmall", "spacing_radius", 2.0),
                 },
-                _ => 2.0,
+                _ => attr_fallback!("*", "spacing_radius", 2.0),
             }
     }
 
@@ -970,7 +973,7 @@ impl Body {
             Body::BipedLarge(biped_large) => match biped_large.species {
                 biped_large::Species::Dullahan => 400,
                 biped_large::Species::Cultistwarlord | biped_large::Species::Cultistwarlock => 240,
-                _ => 300,
+                _ => attr_fallback!("BipedLarge", "base_energy", 300),
             },
             Body::BirdLarge(body) => match body.species {
                 bird_large::Species::Cockatrice => 400,
@@ -984,7 +987,7 @@ impl Body {
             },
             Body::Humanoid(_) => 100,
             Body::Object(object::Body::Crux) => 0,
-            _ => 100,
+            _ => attr_fallback!("*", "base_energy", 100),
         }
     }
 
@@ -1007,7 +1010,7 @@ impl Body {
             // Hyena is a combatant; everything else is a critter/pet (T0).
             Body::QuadrupedSmall(b) => match b.species {
                 quadruped_small::Species::Hyena => 2,
-                _ => 0,
+                _ => attr_fallback!("QuadrupedSmall", "threat_tier", 0),
             },
 
             // ── QuadrupedMedium ───────────────────────────────────────────
@@ -1039,7 +1042,7 @@ impl Body {
                 | quadruped_medium::Species::Roshwalr
                 | quadruped_medium::Species::Tarasque => 3,
                 // default combatants (Bear/Lion/Wolf/Saber/Tiger/etc.)
-                _ => 2,
+                _ => attr_fallback!("QuadrupedMedium", "threat_tier", 2),
             },
 
             // ── FishMedium / FishSmall ────────────────────────────────────
@@ -1051,7 +1054,7 @@ impl Body {
             // ── BirdLarge ─────────────────────────────────────────────────
             Body::BirdLarge(b) => match b.species {
                 bird_large::Species::Phoenix => 4,
-                _ => 3,
+                _ => attr_fallback!("BirdLarge", "threat_tier", 3),
             },
 
             // ── BirdMedium ────────────────────────────────────────────────
@@ -1076,7 +1079,7 @@ impl Body {
                 | bird_medium::Species::Toucan => 1,
                 bird_medium::Species::VampireBat => 2,
                 bird_medium::Species::BloodmoonBat => 3,
-                _ => 0,
+                _ => attr_fallback!("BirdMedium", "threat_tier", 0),
             },
 
             // ── BipedLarge ────────────────────────────────────────────────
@@ -1089,14 +1092,14 @@ impl Body {
                 | biped_large::Species::Gigasfrost
                 | biped_large::Species::Gigasfire
                 | biped_large::Species::Forgemaster => 4,
-                _ => 3,
+                _ => attr_fallback!("BipedLarge", "threat_tier", 3),
             },
 
             // ── BipedSmall ────────────────────────────────────────────────
             // Default T1; Jiangshi → T2 (notably tougher undead).
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::Jiangshi => 2,
-                _ => 1,
+                _ => attr_fallback!("BipedSmall", "threat_tier", 1),
             },
 
             // ── Golem ─────────────────────────────────────────────────────
@@ -1105,7 +1108,7 @@ impl Body {
                 golem::Species::Gravewarden
                 | golem::Species::IronGolem
                 | golem::Species::AncientEffigy => 3,
-                _ => 2,
+                _ => attr_fallback!("Golem", "threat_tier", 2),
             },
 
             // ── Theropod ─────────────────────────────────────────────────
@@ -1114,7 +1117,7 @@ impl Body {
                 theropod::Species::Sandraptor
                 | theropod::Species::Snowraptor
                 | theropod::Species::Woodraptor => 1,
-                _ => 3,
+                _ => attr_fallback!("Theropod", "threat_tier", 3),
             },
 
             // ── QuadrupedLow ──────────────────────────────────────────────
@@ -1133,7 +1136,7 @@ impl Body {
                 | quadruped_low::Species::Basilisk
                 | quadruped_low::Species::Snaretongue
                 | quadruped_low::Species::Dagon => 3,
-                _ => 2,
+                _ => attr_fallback!("QuadrupedLow", "threat_tier", 2),
             },
 
             // ── Arthropod ─────────────────────────────────────────────────
@@ -1142,7 +1145,7 @@ impl Body {
                 arthropod::Species::Tarantula
                 | arthropod::Species::Blackwidow
                 | arthropod::Species::Antlion => 2,
-                _ => 1,
+                _ => attr_fallback!("Arthropod", "threat_tier", 1),
             },
 
             // ── Crustacean ────────────────────────────────────────────────
@@ -1157,7 +1160,7 @@ impl Body {
             Body::Crustacean(b) => match b.species {
                 crustacean::Species::SoldierCrab => 2,
                 crustacean::Species::Karkatha => 3,
-                _ => 0,
+                _ => attr_fallback!("Crustacean", "threat_tier", 0),
             },
 
             // ── Object ────────────────────────────────────────────────────
@@ -1255,7 +1258,7 @@ impl Body {
                 quadruped_small::Species::Seal => 20,
                 quadruped_small::Species::Skunk => 20,
                 quadruped_small::Species::Turtle => 10,
-                _ => 5,
+                _ => attr_fallback!("QuadrupedSmall", "base_health", 5),
             },
             Body::QuadrupedMedium(quadruped_medium) => match quadruped_medium.species {
                 // T1
@@ -1379,7 +1382,7 @@ impl Body {
                 biped_large::Species::Forgemaster => 10000,
                 biped_large::Species::Strigoi => 800,
                 biped_large::Species::Executioner => 800,
-                _ => 120,
+                _ => attr_fallback!("BipedLarge", "base_health", 120),
             },
             Body::BipedSmall(biped_small) => match biped_small.species {
                 biped_small::Species::GoblinThug
@@ -1409,7 +1412,7 @@ impl Body {
                 biped_small::Species::BloodmoonHeiress => 2000,
                 biped_small::Species::Bloodservant => 300,
                 biped_small::Species::Harlequin => 500,
-                _ => 60,
+                _ => attr_fallback!("BipedSmall", "base_health", 60),
             },
             Body::Object(object) => match object {
                 object::Body::TrainingDummy => 60000,
@@ -1430,7 +1433,7 @@ impl Body {
                 // Same one-shot 30 HP pool as `RemoteSensor` -- see that
                 // arm's own comment.
                 object::Body::ArcaneEye => 30,
-                _ => 1000,
+                _ => attr_fallback!("Object", "base_health", 1000),
             },
             Body::Item(_) => 1000,
             Body::Golem(golem) => match golem.species {
@@ -1441,7 +1444,7 @@ impl Body {
                 golem::Species::AncientEffigy => 250,
                 golem::Species::Mogwai => 500,
                 golem::Species::IronGolem => 2500,
-                _ => 1000,
+                _ => attr_fallback!("Golem", "base_health", 1000),
             },
             Body::Theropod(theropod) => match theropod.species {
                 // T1
@@ -1699,7 +1702,7 @@ impl Body {
             Body::Object(object) => match object {
                 object::Body::BarrelOrgan | object::Body::ArrowTurret => 0.05,
                 object::Body::TerracottaStatue => 1.5,
-                _ => 0.0,
+                _ => attr_fallback!("Object", "combat_multiplier", 0.0),
             },
             Body::Ship(_) => 0.0,
             Body::BipedLarge(b) => match b.species {
@@ -1708,7 +1711,7 @@ impl Body {
                 biped_large::Species::Minotaur => 4.05,
                 biped_large::Species::Tidalwarrior => 2.75,
                 biped_large::Species::Yeti => 2.25,
-                _ => 1.0,
+                _ => attr_fallback!("BipedLarge", "combat_multiplier", 1.0),
             },
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::Ashen => 1.33,
@@ -1719,35 +1722,35 @@ impl Body {
                 | biped_small::Species::PurpleLegoom
                 | biped_small::Species::RedLegoom
                 | biped_small::Species::UmberLegoom => 0.8,
-                _ => 1.0,
+                _ => attr_fallback!("BipedSmall", "combat_multiplier", 1.0),
             },
             Body::Golem(g) => match g.species {
                 golem::Species::Gravewarden => 2.45,
-                _ => 1.0,
+                _ => attr_fallback!("Golem", "combat_multiplier", 1.0),
             },
             Body::QuadrupedLow(b) => match b.species {
                 quadruped_low::Species::Snaretongue => 2.0,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedLow", "combat_multiplier", 1.0),
             },
             Body::QuadrupedSmall(b) => match b.species {
                 quadruped_small::Species::Axolotl | quadruped_small::Species::Gecko => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("QuadrupedSmall", "combat_multiplier", 1.0),
             },
             #[expect(unreachable_patterns)] // TODO: Remove when more medium fish species are added
             Body::FishMedium(b) => match b.species {
                 fish_medium::Species::Marlin | fish_medium::Species::Icepike => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("FishMedium", "combat_multiplier", 1.0),
             },
             #[expect(unreachable_patterns)] // TODO: Remove when more small fish species are added
             Body::FishSmall(b) => match b.species {
                 fish_small::Species::Clownfish | fish_small::Species::Piranha => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("FishSmall", "combat_multiplier", 1.0),
             },
             Body::Crustacean(b) => match b.species {
                 crustacean::Species::Crab | crustacean::Species::SoldierCrab => 0.6,
-                _ => 1.0,
+                _ => attr_fallback!("Crustacean", "combat_multiplier", 1.0),
             },
-            _ => 1.0,
+            _ => attr_fallback!("*", "combat_multiplier", 1.0),
         }
     }
 
@@ -1774,7 +1777,7 @@ impl Body {
                 | biped_large::Species::Dullahan
                 | biped_large::Species::Harvester
                 | biped_large::Species::Huskbrute => MagicResistTier::Major,
-                _ => MagicResistTier::None,
+                _ => attr_fallback!("BipedLarge", "magic_resist_tier", MagicResistTier::None),
             },
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::Flamekeeper => MagicResistTier::Legendary,
@@ -1785,9 +1788,9 @@ impl Body {
                 biped_small::Species::Haniwa
                 | biped_small::Species::Boreal
                 | biped_small::Species::Ashen => MagicResistTier::Minor,
-                _ => MagicResistTier::None,
+                _ => attr_fallback!("BipedSmall", "magic_resist_tier", MagicResistTier::None),
             },
-            _ => MagicResistTier::None,
+            _ => attr_fallback!("*", "magic_resist_tier", MagicResistTier::None),
         }
     }
 
@@ -1800,13 +1803,13 @@ impl Body {
                 biped_large::Species::Forgemaster => 300,
                 biped_large::Species::Gigasfrost => 990,
                 biped_large::Species::Gigasfire => 990,
-                _ => 300,
+                _ => attr_fallback!("BipedLarge", "base_poise", 300),
             },
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::GnarlingChieftain => 130,
                 biped_small::Species::IronDwarf | biped_small::Species::Flamekeeper => 300,
                 biped_small::Species::Boreal => 470,
-                _ => 100,
+                _ => attr_fallback!("BipedSmall", "base_poise", 100),
             },
             Body::BirdLarge(b) => match b.species {
                 bird_large::Species::FlameWyvern
@@ -1814,7 +1817,7 @@ impl Body {
                 | bird_large::Species::CloudWyvern
                 | bird_large::Species::SeaWyvern
                 | bird_large::Species::WealdWyvern => 220,
-                _ => 165,
+                _ => attr_fallback!("BirdLarge", "base_poise", 165),
             },
             Body::Golem(_) => 365,
             Body::QuadrupedMedium(b) => match b.species {
@@ -1887,9 +1890,9 @@ impl Body {
                 | theropod::Species::Ntouka
                 | theropod::Species::Odonto => 240,
                 theropod::Species::Yale => 220,
-                _ => 195,
+                _ => attr_fallback!("Theropod", "base_poise", 195),
             },
-            _ => 100,
+            _ => attr_fallback!("*", "base_poise", 100),
         }
     }
 
