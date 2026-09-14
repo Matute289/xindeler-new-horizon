@@ -69,10 +69,14 @@ pub mod bounds {
     pub const TRANSITION_SECS: (f32, f32) = (0.0, 3600.0);
 }
 
-/// Mirrors `common::weather::WeatherKind`'s variant set (Clear/Cloudy/Rain/
-/// Storm) so a later conversion into that engine type is a straight 1:1
-/// match. Kept as a local copy rather than depending on the engine crate for
-/// a single enum — this crate has no engine/specs deps.
+/// Mirrors `common::weather::WeatherKind` (Clear/Cloudy/Rain/Storm) so a later
+/// conversion into that engine type is a straight 1:1 match. Kept as a local
+/// copy rather than depending on the engine crate for a single enum — this
+/// crate has no engine/specs deps.
+///
+/// Deliberately omits the engine's `Snow`: an authored atmosphere overrides the
+/// weather *cell*, and whether precipitation there falls as snow is decided
+/// downstream by the temperature of the ground, not by the override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WeatherEffect {
     #[default]

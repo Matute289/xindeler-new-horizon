@@ -1,0 +1,40 @@
+// Weather tuning — how snow and fog form, and how much they obscure.
+// Read (cached) by `common::weather::WeatherTuning::load`.
+//
+// Fields are `#[serde(default)]`, so a partial asset stays forward/backward
+// compatible with the struct.
+//
+// NOT here on purpose: the rain/snow fall rates. They define the axis the
+// rain-occlusion map is rendered along AND sampled along, so hot-reloading
+// them mid-frame would desync the map against its own lookup. They live as
+// constants in `common/src/weather.rs`.
+(
+    // --- rain vs. snow ---
+    // Precipitation is fully snow at or below the world-gen snow line
+    // (`common::terrain::SNOW_TEMP`, -0.8 abstract == 8 degC) and fully rain
+    // this far above it; in between it sleets. The band exists so that walking
+    // across a biome boundary doesn't snap between two different visuals at a
+    // single chunk border. In abstract world-gen temperature units.
+    snow_temp_band: 0.2,
+
+    // --- fog ---
+    // Fog is the overcast-but-not-raining case (stratus / radiation fog).
+    // Below fog_cloud_min there is no fog at all; at fog_cloud_max it is at
+    // full thickness. Kept high enough that fog is a distinct weather event
+    // rather than the default state of any cloudy day -- it also costs GPU
+    // time in the cloud raymarch, so "always slightly foggy" is not free.
+    fog_cloud_min: 0.45,
+    fog_cloud_max: 0.9,
+    // Heavy convective rain clears fog out: no effect below fog_rain_min,
+    // fully cleared at fog_rain_max.
+    fog_rain_min: 0.05,
+    fog_rain_max: 0.35,
+
+    // --- visibility (gameplay) ---
+    // Sight distance in the thickest possible snow / fog, as a proportion of
+    // the clear-air value. These scale NPC perception range server-side, so
+    // they are real balance numbers, not just a look. Neither can reach 0 --
+    // an NPC standing next to you always sees you.
+    snow_min_visibility: 0.5,
+    fog_min_visibility: 0.35,
+)

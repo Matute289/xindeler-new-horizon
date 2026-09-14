@@ -9,6 +9,11 @@ pub struct Config {
     /// Abstract engine temperature scale (not a real unit -- see
     /// `celsius_to_abstract_temp`'s doc comment for the affine mapping this
     /// value's real-Celsius equivalent, `8.0`, is derived from).
+    ///
+    /// Defined as `common::terrain::SNOW_TEMP` rather than as its own literal:
+    /// the same line decides both where `BlockKind::Snow` is placed on the
+    /// ground here and whether falling precipitation is snow rather than rain
+    /// in `common`, and the two must not be able to drift apart.
     pub snow_temp: f32,
     /// See `snow_temp`'s doc comment. Real-Celsius equivalent: `14.0`.
     pub temperate_temp: f32,
@@ -67,7 +72,7 @@ pub const CONFIG: Config = Config {
     sea_level: 140.0,
     mountain_scale: 2048.0,
     // temperature
-    snow_temp: -0.8,
+    snow_temp: common::terrain::SNOW_TEMP,
     temperate_temp: -0.4,
     tropical_temp: 0.4,
     desert_temp: 0.8,
@@ -175,6 +180,16 @@ mod tests {
     fn celsius_to_abstract_temp_matches_documented_reference_points() {
         assert!((celsius_to_abstract_temp(5.0) - (-1.0)).abs() < 1e-4);
         assert!((celsius_to_abstract_temp(35.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn snow_line_is_the_documented_eight_degrees_celsius() {
+        // The one place both halves of the snow line can be checked against
+        // each other: `CONFIG.snow_temp` decides where world-gen lays
+        // `BlockKind::Snow`, `common`'s constant decides when falling
+        // precipitation is snow, and the doc comments on both claim 8 degC.
+        assert_eq!(CONFIG.snow_temp, common::terrain::SNOW_TEMP);
+        assert!((celsius_to_abstract_temp(8.0) - CONFIG.snow_temp).abs() < 1e-4);
     }
 
     #[test]
