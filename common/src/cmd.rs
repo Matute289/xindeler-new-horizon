@@ -451,6 +451,7 @@ pub enum ServerChatCommand {
     AreaAdd,
     AreaList,
     AreaRemove,
+    ArenaTotem,
     Aura,
     Ban,
     BanIp,
@@ -719,6 +720,14 @@ impl ServerChatCommand {
                     Enum("kind", AREA_KINDS.clone(), Required),
                 ],
                 Content::localized("command-area_remove-desc"),
+                Some(Admin),
+            ),
+            // A deliberately narrow fixture-spawn command. `/object
+            // GnarlingTotemGreen` does not apply `Immovable`, so it cannot
+            // exercise physics that real arena totems use.
+            ServerChatCommand::ArenaTotem => cmd(
+                vec![],
+                Content::Plain("Spawns an immovable Gnarling arena totem for fixture QA".into()),
                 Some(Admin),
             ),
             ServerChatCommand::Campfire => cmd(
@@ -1567,6 +1576,7 @@ impl ServerChatCommand {
             ServerChatCommand::AreaAdd => "area_add",
             ServerChatCommand::AreaList => "area_list",
             ServerChatCommand::AreaRemove => "area_remove",
+            ServerChatCommand::ArenaTotem => "arena_totem",
             ServerChatCommand::Aura => "aura",
             ServerChatCommand::Ban => "ban",
             ServerChatCommand::BanIp => "ban_ip",
@@ -2073,6 +2083,15 @@ mod tests {
                  player-choosable-faction-name check",
             );
         }
+    }
+
+    #[test]
+    fn arena_totem_command_is_a_no_argument_admin_command() {
+        let command = ServerChatCommand::ArenaTotem;
+
+        assert_eq!(command.keyword(), "arena_totem");
+        assert!(command.data().args.is_empty());
+        assert_eq!(command.data().needs_role, Some(Role::Admin));
     }
 
     #[test]
