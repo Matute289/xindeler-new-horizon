@@ -112,6 +112,12 @@ round-trips.
 > only an explicit `--features hot-anim` hits the dylib bug. Reference 03 has
 > the verified feature table.
 
+> **Sibling skill:** for spell VFX that reference 04 sends to particles instead
+> of a `.vox` mesh, use `xindeler-particle-authoring` — it covers the same
+> particle system reference 04 only names (per-mode GLSL, the emission/trigger
+> paths, the shipped-effect catalogue) and is the actual authoring surface for
+> anything on the particle side of the split.
+
 ## Workflow
 
 1. **Decide it's a voxel problem at all.** For a spell effect, read

@@ -34,6 +34,17 @@ jobs:
         with:
           lfs: false
 
+      # Cheap, no-build gate that runs before the ~30-minute Rust job: the
+      # particle system's look is selected by an integer shared between
+      # `ParticleMode` (Rust) and a `switch` in particle-vert.glsl, and a
+      # mismatch renders as generic white motes with no error anywhere. The
+      # authoritative check is `shader_modes_match_particle_modes` in
+      # voxygen/src/render/pipelines/particle.rs, but CI runs clippy + fmt,
+      # not `cargo test`, so this dependency-free equivalent is what actually
+      # guards the invariant here. ~1 second.
+      - name: Particle mode / shader agreement
+        run: python3 tools/particles/particle_modes.py --quiet
+
       - name: Install system dependencies
         # `mold` — the repo's .cargo/config.toml forces `-fuse-ld=mold` globally,
         # so the linker MUST be present or every build fails with "cannot find ld".
