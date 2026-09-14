@@ -23,18 +23,71 @@ assets/voxygen/voxel/**/*.vox
 
 `pub type BoneMeshes = (Segment, Vec3<f32>);` — `load.rs`.
 
-## The one rule that has no compiler check
+## The one rule — now compiler-checked
 
 **Array slot N of `bone_meshes()` ↔ the Nth `+`-marked bone declared in
 `skeleton_impls!`.** By position. Never by name.
 
 The RON field names (`head:`, `neck:`, `leg_fl:`) are just field names of the
 per-species spec struct. The wiring is the *order of the array literal* inside
-`make_vox_spec!` (the `make_vox_spec!` invocation for that body kind in `load.rs`) matched
-against the `+` bone order in the skeleton (the `skeleton_impls!` invocation in e.g.
-`voxygen/anim/src/quadruped_medium/mod.rs`). Get them out of sync and
-the head renders on the tail bone — no warning, no error, at runtime or
-compile time. If you change either list, diff them side by side.
+`make_vox_spec!` (the `make_vox_spec!` invocation for that body kind in
+`load.rs`) matched against the `+` bone order in the skeleton (the
+`skeleton_impls!` invocation in e.g.
+`voxygen/anim/src/quadruped_medium/mod.rs`).
+
+This used to have **no check of any kind** — get them out of sync and the head
+rendered on the tail bone, with no warning at runtime or compile time. Three
+guards now exist:
+
+1. **`<Skeleton>::MESH_BONE_NAMES`** (`voxygen/anim/src/lib.rs`,
+   `skeleton_impls!`) — every skeleton now publishes its `+` bone names as a
+   const array, in mesh-slot order. This is the authority on what slot N means,
+   and it is generated from the skeleton declaration itself, so it cannot drift
+   from it.
+2. **A mandatory `bones:` clause on `make_vox_spec!`**
+   (`voxygen/src/scene/figure/load.rs`). Every invocation now names its
+   skeleton and lists the bone order the mesh array was written against:
+
+   ```rust
+   make_vox_spec!(
+       quadruped_medium::Body,
+       bones: anim::quadruped_medium::QuadrupedMediumSkeleton [head, neck, jaw, tail,
+           torso_front, torso_back, ears, leg_fl, leg_fr, leg_bl, leg_br, foot_fl,
+           foot_fr, foot_bl, foot_br],
+       struct QuadrupedMediumSpec { … },
+       …
+   );
+   ```
+
+   A `const` `assert!(anim::bone_names_eq(…))` compares that list to
+   `MESH_BONE_NAMES` **at compile time**. Reorder either side and the build
+   fails with the body kind, the skeleton, and an explanation — verified by
+   deliberately swapping `neck`/`jaw` and watching `cargo check` reject it. It
+   also asserts the list fits in `MAX_BONE_COUNT`, and `skeleton_impls!` now
+   asserts the same for the skeleton itself.
+3. **A load-time check for meshes past the last bone**
+   (`debug_check_bone_slots`, `voxygen/src/scene/figure/cache.rs`). The array
+   is always 16 slots wide no matter how many bones the skeleton has, so a
+   mesh parked beyond the end is still *expressible* — it would be meshed into
+   the atlas and then transformed by a bone matrix that is never written.
+   Running once per figure model built, in dev builds only, it logs a
+   `tracing::error!` naming the skeleton and the slot. (No `debug_assert` — it
+   runs inside a slow-job closure on a pool with no panic handler, where a
+   panic aborts the process rather than failing the job.)
+
+   This is also the *only* check for the three `BodySpec` impls that bypass
+   `make_vox_spec!` and therefore guard 2: `ship::Body` and `plugin::Body`
+   (`load.rs`) and `VolumeKey` (`voxygen/src/scene/figure/volume.rs`). All
+   three were verified by hand to fill only slots their skeleton has.
+
+The one thing still **not** machine-checked is which expression sits in which
+slot: the names are verified against the skeleton, but binding *this* array
+element to *that* name is still positional convention. Note also that the names
+in the three places need not agree — `golem`'s `mesh_torso_upper` fills the
+`upper_torso` bone, `quadruped_small`'s `mesh_foot_fl` fills the `leg_fl` bone.
+The `bones:` clause must use the **skeleton's** names, because that is what it
+is checked against. See "Proposal: fully named mesh slots" at the end of this
+file for the remaining gap and what closing it would cost.
 
 `None` in a slot means "this bone has no mesh"; the array is padded to 16.
 
@@ -198,17 +251,19 @@ creature. Traced against `ClaySteed`, the most recent addition:
    `load_expect` `lazy_static`, so a missing entry panics on the first
    NPC-name lookup.
 3. `common/src/comp/body/mod.rs` — **compiler-enforced** (you cannot forget):
-   `dimensions()`, `base_health()`, `base_poise()`, `mount_offset()`.
-   **Silently defaulted** (you must fill these deliberately): `mass()` falls
-   through to `200.0` and `threat_tier()` to `2`, so a forgotten species is a
-   200 kg tier-2 combatant with a clean build.
+   `dimensions()`, `base_health()`, `base_poise()`, `mount_offset()` for the
+   body kinds whose matches are exhaustive. The rest **default** — `mass()`
+   falls through to `200.0` for a quadruped-medium and `threat_tier()` to `2`,
+   so a forgotten species used to be a 200 kg tier-2 combatant with a clean
+   build and no signal. **These are now caught by a test**, see
+   "Fall-through audit" below.
 4. `voxygen/anim/src/quadruped_medium/mod.rs` — 11 `SkeletonAttr` fields are
    exhaustive (`head`, `neck`, `jaw`, `tail`, `torso_front`, `torso_back`,
-   `ears`, `leg_f`, `leg_b`, `feet_f`, `feet_b`); 5 more silently default
+   `ears`, `leg_f`, `leg_b`, `feet_f`, `feet_b`); 5 more default
    (`scaler` → `0.9`, `startangle`, `tempo`, `spring`, `feed`), and
-   `ears_for_trunk` isn't a match at all. Getting the silent ones wrong yields
-   a wrong-sized creature with a wrong gait and no warning. Tuning numbers,
-   not logic.
+   `ears_for_trunk` isn't a match at all. Getting the defaulted ones wrong
+   yields a wrong-sized creature with a wrong gait. Tuning numbers, not logic
+   — and, again, **now caught by a test**.
 5. Both `*_manifest.ron` files — rows for **Male and Female**, or the figure
    logs `"No head specification exists for the combination of …"` and falls
    back to `not_found`.
@@ -236,6 +291,96 @@ skeleton work at all: a `Body` variant, a two-bone row in
 `object_manifest.ron`, and you get an animated figure with lighting, shadows,
 `visual_scale()`, `custom_indices` and a `DeleteAfter` lifetime. This is the
 path the Cromatolis Aerial Citadel took (COW-8). See reference 04.
+
+## Fall-through audit — the silent defaults, now with a tripwire
+
+The dangerous half of adding a species is the attributes that are **not**
+exhaustive matches. There is no way for Rust to tell "explicitly 200 kg" from
+"never given a mass", so the compiler cannot help. Two audits now do.
+
+**How it works.** Every per-species wildcard arm that matters is wrapped in an
+`attr_fallback!("<BodyKind>", "<attr>", <value>)` macro. The value and the
+behaviour are unchanged; outside `cfg(test)` the macro expands to the value and
+nothing else, so there is no branch, no atomic and no code in a shipped build
+(it sits on a once-per-frame path, so that matters). Under `cfg(test)` it
+records which body kind and attribute fell through. A test then walks the
+entire creature roster — every species × body type of every body kind, plus
+every `Body::Object` and `Ship` — and diffs the fall-throughs it sees against a
+checked-in ledger.
+
+| Side | Macro + recorder | Test | Ledger |
+|---|---|---|---|
+| Game data | `common/src/comp/body/attr_audit.rs` | `common/src/comp/body/attr_audit_test.rs` | `common/src/comp/body/attr_fallback_ledger.txt` |
+| Animation | `voxygen/anim/src/attr_audit.rs` | `voxygen/anim/src/attr_audit_test.rs` | `voxygen/anim/src/attr_fallback_ledger.txt` |
+
+**What this means for you.** Add a species and forget a value, and
+`cargo test -p xindeler-common -p xindeler-anim --lib attr_audit` fails with the
+species and attribute named, plus the exact ledger lines to add or delete.
+**CI runs that exact command** on every PR to `development`/`main`
+(`.github/workflows/ci-code-quality.yml`), so this is a real merge gate and not
+a ritual. The pre-existing roster is grandfathered *by name*, so nothing
+changed behaviourally — but the debt is now countable instead of invisible
+(~880 game-data entries, ~700 animation entries at the time of writing). The
+right response to a new `+` line is almost always to give the species an
+explicit value, not to bless it into the ledger.
+
+**Audited on the game-data side** (`common/src/comp/body/mod.rs`): `mass`,
+`base_health`, `base_poise`, `base_energy`, `threat_tier` — the substantive
+per-creature numbers. `scale`, `spacing_radius`, `magic_resist_tier` and
+`combat_multiplier` are wrapped and label-checked but kept *out* of the ledger
+via `DEFAULTS_BY_DESIGN`, because their catch-all is the neutral value
+(`1.0` = no scaling, `None` = no innate magic resistance) rather than a guess,
+and their matches are sparse by design — the source of `magic_resist_tier` says
+so outright. Flipping one back to audited is a one-line change.
+
+Both the per-species wildcards *and* the outer `match self` ones are wrapped,
+so a body kind that has no species-level arm at all — an `Arthropod`'s
+`base_poise`, a `Crustacean`'s `base_energy` — is covered too; those were the
+biggest blind spot in the first cut of this audit.
+
+**Explicitly out of scope**, and deliberately so: attributes whose catch-all
+*is* the meaning (`immune_to`, `negates_buff`, `is_same_species_as`,
+`localize_npc`, `humanoid_gender`), and everything already exhaustive and
+compiler-enforced. `Body::Item` and `Body::Plugin` are not in the roster —
+`Item`'s variants carry payloads so there is no flat list, and constructing a
+`plugin::Body` in a unit test panics (its getters index a registry that is
+empty without plugins loaded, a pre-existing sharp edge in
+`common/src/comp/body/plugin.rs`). A `the_roster_reaches_every_body_kind` test
+plus an exhaustive `body_kind` match make sure nothing *else* silently drops
+out.
+
+**Audited on the animation side**: the 40 `SkeletonAttr` fields across
+`arthropod`, `biped_large`, `object`, `quadruped_low`, `quadruped_medium`,
+`quadruped_small` and `ship` whose matches end in a wildcard. Every other
+`SkeletonAttr` field is already exhaustive and needs no audit — the compiler
+has it. The roster walks every body kind that has a `SkeletonAttr`, including
+the ones with no wildcards today, so a fall-through added to one of them later
+cannot pass vacuously.
+
+Its `DEFAULTS_BY_DESIGN` exempts fields whose wildcard means *"this creature
+has no such feature"* rather than *"nobody said what this creature's number
+is"*: the twelve `biped_large` weapon-grip offsets (they position a held
+weapon relative to the hand, not the creature), `BipedLarge.tail` → no tail,
+`Arthropod.snapper` → `false`, `QuadrupedLow.side_head_{lower,upper}` → only
+Hydra has side heads, and `QuadrupedSmall.lateral`. `Object.bone0`/`bone1`
+stay audited on purpose — `Body::Object` is the two-bone escape hatch a new
+prop or spell object takes, so that is exactly where you want to be asked.
+Liveness tests assert that every `AUDITED_FIELDS` and every
+`DEFAULTS_BY_DESIGN` entry is still a real fall-through, so neither list can
+outlive its reason.
+
+**Known scope limit, not yet closed:** the animation audit covers
+`SkeletonAttr` only. The per-species `mount_point` / `mount_mat` tables (e.g.
+`voxygen/anim/src/quadruped_medium/mod.rs`, and eight other body kinds) have
+the same wildcard shape and are *not* audited — a new rideable species gets a
+default saddle position silently. Same mechanism would fix it; it needs the
+test to call those functions too, which their differing signatures make
+fiddlier than one macro.
+
+**Regenerating a ledger.** Run the test; the failure message is a
+ready-to-paste `+`/`-` diff, or re-bless wholesale with
+`ATTR_LEDGER_BLESS=1 cargo test -p xindeler-common -p xindeler-anim --lib attr_audit`.
+Both ledgers are plain text, `#`-commented, grouped by `<BodyKind>.<attr>`.
 
 ## Weapons
 
@@ -272,11 +417,99 @@ macOS** (`common/dynlib/src/lib.rs` logs `"The hot reloading feature does not wo
 animation-*code* iteration on macOS means a rebuild — but that was never in a
 default build anyway.
 
-⚠️ **The repo CLAUDE.md's macOS run command conflates the two**: it drops
-`hot-reloading` citing the `common/dynlib` macOS failure, but `hot-reloading`
-is the *asset* feature and doesn't touch `common/dynlib` at all. Dropping it
-turns off exactly the thing an asset author wants — the `.vox`/manifest
-watcher (`BodySpec::reload_watcher`) that lets you regenerate a model and
-retune offsets without restarting the client. Try keeping `hot-reloading` on
-while iterating on art; if the client misbehaves on macOS for an unrelated
-reason, fall back to the documented command and restart between iterations.
+The repo `CLAUDE.md` used to conflate the two, telling macOS readers to drop
+`hot-reloading` for a bug that belongs to `hot-anim` — which would have turned
+off exactly the thing an asset author wants, the `.vox`/manifest watcher
+(`BodySpec::reload_watcher`) that lets you regenerate a model and retune
+offsets without restarting the client. That was corrected in PR #326: a plain
+`cargo run --bin xindeler-voxygen` keeps the watcher on, on every platform.
+
+## Proposal: fully named mesh slots (not built — needs sign-off)
+
+The `bones:` clause closes most of the geometry↔skeleton gap, but one step is
+still convention: the *expression* in array slot N is not bound to the name in
+position N of the clause. Someone can still write the head expression second
+and the neck expression first, and both checks pass.
+
+Closing that properly means replacing the bare array literal in each
+`make_vox_spec!` block with labelled entries — the macro would build the array
+from named slots and reject a name that is not the skeleton's, in the
+skeleton's order:
+
+```rust
+|FigureKey { body, .. }, spec| bone_meshes! {
+    head:  Some(spec.central.read().0.mesh_head(body.species, body.body_type)),
+    neck:  Some(spec.central.read().0.mesh_neck(body.species, body.body_type)),
+    …
+}
+```
+
+**Why it is not done here.** It is a ~200-site mechanical rewrite inside a
+6,300-line file that upstream Veloren edits regularly, on a code path shared by
+every creature in the game. The value it adds over the existing compile-time
+order check is real but incremental — it catches "right names, wrong
+expression order", which is rarer than "the two lists drifted apart", the case
+already covered. The cost is a large permanent merge-conflict surface against
+`gitlab/master`. That trade needs Matías's call, not an agent's.
+
+**If it is approved**, the shape above is the one to build: `make_vox_spec!`
+already receives the skeleton type and the bone list, so `bone_meshes!` can be
+generated inside it and the per-name check is a `const` string comparison
+against `MESH_BONE_NAMES` exactly like the existing one. The migration is
+mechanical (prefix each top-level array element with its bone name, in order)
+and should be done one body kind per commit so a bad edit is bisectable.
+
+A cheaper adjacent idea, worth doing first if the full migration is declined:
+`voxlib.read_scene()` can already recover part names and `model_index` from a
+MagicaVoxel-authored `.vox`'s scene graph (see `references/06`). A
+`tools/voxel/` lint could compare a manifest's declared `model_index` order
+against those names for the assets that *have* a scene graph, catching the
+same class of mistake at authoring time without touching engine code at all.
+Most shipped assets have no scene graph, so it is a partial check — but it is
+free and it targets exactly the new-asset path this skill is about.
+
+## Proposal: move per-species balance numbers into RON (not built — needs sign-off)
+
+The fall-through audit above is a **tripwire around a design smell, not a cure
+for it.** `mass`, `base_health`, `base_poise`, `base_energy`, `threat_tier`,
+`combat_multiplier` and friends are designer-facing balance tables written as
+Rust match arms in a shipped engine crate. Nerfing a Minotaur means editing
+Rust and recompiling; there is no hot-reload and no data file a designer can
+touch.
+
+The repo already has the right container for this and uses it elsewhere:
+
+- `common/src/comp/body/mod.rs`'s `AllBodies<BodyMeta, SpeciesMeta>` is already
+  a `FileAsset`, keyed body kind → species.
+- Each body module's `AllSpecies<SpeciesMeta>` is a **struct with one required
+  field per species**, so a RON file of that shape *cannot omit a species*:
+  serde fails at load, by name, with no test needed.
+- `assets/common/npc_names.ron` already ships exactly this shape, and
+  `assets/common/combat_tuning.ron` is the precedent for balance numbers in RON.
+
+So the honest end-state is `assets/common/body_stats.ron` as
+`AllBodies<BodyStatsDefaults, SpeciesStats>` — which gives the same guarantee
+the audit spends ~1,600 ledger lines, a macro and two test modules to
+approximate, for free, at load, with hot-reload and designer editability
+thrown in. On that day the whole audit gets deleted.
+
+**Why it is not done here.** It is a migration of every per-species number in
+the game out of code and into data, touching balance for ~250 creatures, and it
+needs a decision about which numbers are *content* (RON) versus *engine
+behaviour* (code) that is Matías's to make, not an agent's. Treat both ledgers
+as scaffolding with a known expiry, not a permanent register.
+
+A smaller, strictly-good step available first: `threat_tier` and
+`magic_resist_tier` are **Xindeler-authored, not inherited from upstream
+Veloren**. For those two, deleting the wildcard and making the match exhaustive
+is better than auditing it — upstream cannot conflict with a function it does
+not have, a new species then fails the *build* rather than a test, and it drops
+a large slice of the ledger.
+
+## Note for upstream merges
+
+`make_vox_spec!`'s `bones:` clause is mandatory, so a body kind that arrives
+from a `gitlab/master` merge **will not compile** until someone adds its bone
+list. That is the intended forcing function, not a broken merge — the error
+message says exactly what to do. Worth remembering when running the
+`gitlab-master-merger` skill.
