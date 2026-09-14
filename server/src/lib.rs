@@ -178,11 +178,43 @@ impl Default for SpawnPoint {
     fn default() -> Self { Self(Vec3::new(0.0, 0.0, 256.0)) }
 }
 
+#[cfg(test)]
+mod scheduler_registration_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "worldgen")]
+    fn server_startup_registers_the_terrain_damage_healing_scheduler() {
+        let mut ecs = specs::World::new();
+
+        register_system_schedulers(&mut ecs);
+
+        assert!(
+            ecs.try_fetch::<sys::SysScheduler<sys::terrain_damage_heal::Sys>>()
+                .is_some(),
+            "the dispatched terrain_damage_heal system must have its scheduler resource before \
+             the first server tick"
+        );
+    }
+}
+
 // This is the minimum chunk range that is kept loaded around each player
 // server-side. This is independent of the client's view distance and exists to
 // avoid exploits such as small view distance chunk reloading and also to keep
 // various mechanics working fluidly (i.e: not unloading nearby entities).
 pub const MIN_VD: u32 = 6;
+
+/// Insert every scheduler required by a server-only dispatched system before
+/// the first server tick. A `SysScheduler` is a distinct ECS resource per
+/// system type, so registering a dispatcher alone is not sufficient.
+fn register_system_schedulers(ecs: &mut specs::World) {
+    ecs.insert(sys::PersistenceScheduler::every(Duration::from_secs(10)));
+
+    #[cfg(feature = "worldgen")]
+    ecs.insert(sys::SysScheduler::<sys::terrain_damage_heal::Sys>::every(
+        Duration::from_secs(30),
+    ));
+}
 
 // Tick count used for throttling network updates
 // Note this doesn't account for dt (so update rate changes with tick rate)
@@ -611,10 +643,8 @@ impl Server {
             Arc::<RwLock<DatabaseSettings>>::clone(&database_settings),
         )?);
 
-        // System schedulers to control execution of systems
-        state
-            .ecs_mut()
-            .insert(sys::PersistenceScheduler::every(Duration::from_secs(10)));
+        // System schedulers must exist before the first dispatched server tick.
+        register_system_schedulers(state.ecs_mut());
 
         // Region map (spatial structure for entity synchronization)
         state.ecs_mut().insert(RegionMap::new());
