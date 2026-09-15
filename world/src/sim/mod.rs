@@ -4474,6 +4474,58 @@ mod tests {
         );
     }
 
+    /// COW-17 binds the terrain `.bin` and river-channel raster into one
+    /// reviewed package. Belletoile is a dry authored lowland: the v21
+    /// terrain master samples it at about 92.94 m above the external sea
+    /// level. The real WorldSim interpolation yields about 96.82 m at the
+    /// matching chunk, while the paired river raster retains all 28,200
+    /// binary channel cells.
+    ///
+    /// Requires the real LFS assets, so CI without the VPS asset store skips
+    /// it just like the other real-Cromatolis regressions in this module.
+    #[test]
+    #[ignore]
+    fn cromatolis_v21_relief_and_river_package_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        let source_x = 499;
+        let source_y = 476;
+        let engine_y = i32::from(map_size_lg.chunks().y) - 1 - source_y;
+        let probe_idx = vec2_as_uniform_idx(map_size_lg, Vec2::new(source_x, engine_y));
+        let probe = &sim.chunks[probe_idx];
+        let alt_pre = probe.alt - CONFIG.sea_level;
+
+        assert!(
+            (95.5..=98.0).contains(&alt_pre),
+            "Belletoile relief must come from the v21 terrain package; expected ~96.817 m above \
+             sea level after WorldSim interpolation, got {alt_pre:.3} m"
+        );
+        assert!(
+            probe.river.river_kind.is_none(),
+            "Belletoile probe is authored dry land, not a river/lake/ocean chunk"
+        );
+
+        let river_channels = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_river_channels")
+            .expect("real Cromatolis LFS assets must include the river-channel raster");
+        assert_eq!(river_channels.values.len(), map_size_lg.chunks_len());
+        assert!(
+            river_channels
+                .values
+                .iter()
+                .all(|value| *value == 0.0 || *value == 1.0),
+            "river-channel raster must remain binary"
+        );
+        assert_eq!(
+            river_channels
+                .values
+                .iter()
+                .filter(|value| **value == 1.0)
+                .count(),
+            28_200,
+            "v21 terrain must never be paired with the obsolete 1,876-cell river raster"
+        );
+    }
+
     /// Requires the real Cromatolis LFS assets, same precedent as
     /// `cromatolis_world_orientation_regression_against_real_lfs_assets`
     /// above. Sanity-bounds `Swamp` coverage (re-enabled by this row, COW-4)
