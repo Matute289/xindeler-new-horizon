@@ -657,6 +657,7 @@ struct AuthoredRegion {
     id: &'static str,
     /// Which authored layers this region ships.
     layers: &'static [AuthoredLayerKind],
+    ground_cover_profile: &'static str,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -688,6 +689,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     map_asset: "world.map.cromatolis_v0",
     id: CROMATOLIS_V0_REGION_ID,
     layers: &AuthoredLayerKind::ALL,
+    ground_cover_profile: "world.map.cromatolis_v0_ground_cover",
 }];
 
 fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredRegion> {
@@ -746,6 +748,116 @@ impl Default for AuthoredCromatolisClimate {
             tree_min_temp: default_cromatolis_tree_min_temp(),
             max_tree_altitude_m: default_cromatolis_max_tree_altitude_m(),
         }
+    }
+}
+
+/// Named bands over the authored linear `tree_density` signal.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) enum GroundCoverBand {
+    BareDry,
+    Grassland,
+    SparseWoodland,
+    Forest,
+    Jungle,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct GroundCoverBandDefinition {
+    pub band: GroundCoverBand,
+    pub max_density: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct AuthoredGroundCoverProfile {
+    pub bands: Vec<GroundCoverBandDefinition>,
+}
+
+impl AuthoredGroundCoverProfile {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.bands.len() != 5 {
+            return Err(format!(
+                "expected five ground-cover bands, got {}",
+                self.bands.len()
+            ));
+        }
+        let expected = [
+            GroundCoverBand::BareDry,
+            GroundCoverBand::Grassland,
+            GroundCoverBand::SparseWoodland,
+            GroundCoverBand::Forest,
+            GroundCoverBand::Jungle,
+        ];
+        let mut previous = 0.0;
+        for (index, definition) in self.bands.iter().enumerate() {
+            if definition.band != expected[index] {
+                return Err(format!("ground-cover band {index} is out of order"));
+            }
+            if !(0.0..=1.0).contains(&definition.max_density) {
+                return Err(format!(
+                    "ground-cover threshold {index} is outside 0..=1: {}",
+                    definition.max_density
+                ));
+            }
+            if index > 0 && definition.max_density <= previous {
+                return Err(format!(
+                    "ground-cover thresholds must be strictly increasing: {} then {}",
+                    previous, definition.max_density
+                ));
+            }
+            previous = definition.max_density;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn classify(&self, density: f32) -> GroundCoverBand {
+        self.bands
+            .iter()
+            .find(|definition| density <= definition.max_density)
+            .map(|definition| definition.band)
+            .unwrap_or_else(|| {
+                self.bands
+                    .last()
+                    .expect("validated profile is non-empty")
+                    .band
+            })
+    }
+
+    #[cfg(test)]
+    fn test_profile() -> Self {
+        Self {
+            bands: vec![
+                GroundCoverBandDefinition {
+                    band: GroundCoverBand::BareDry,
+                    max_density: 0.1,
+                },
+                GroundCoverBandDefinition {
+                    band: GroundCoverBand::Grassland,
+                    max_density: 0.25,
+                },
+                GroundCoverBandDefinition {
+                    band: GroundCoverBand::SparseWoodland,
+                    max_density: 0.35,
+                },
+                GroundCoverBandDefinition {
+                    band: GroundCoverBand::Forest,
+                    max_density: 0.55,
+                },
+                GroundCoverBandDefinition {
+                    band: GroundCoverBand::Jungle,
+                    max_density: 1.0,
+                },
+            ],
+        }
+    }
+}
+
+impl FileAsset for AuthoredGroundCoverProfile {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let profile: Self = load_ron(&bytes)?;
+        profile.validate().map_err(Into::into).map(|_| profile)
     }
 }
 
@@ -981,6 +1093,10 @@ pub struct WorldSim {
     /// authored region. `None` for a normal procedural world, where every
     /// layer always runs. See [`AuthoredProceduralLayers`].
     pub(crate) authored_procedural_layers: Option<AuthoredProceduralLayers>,
+    /// Ground-cover classification profile for the loaded authored region.
+    /// `None` for procedural worlds or when the configured profile is invalid.
+    #[allow(dead_code)]
+    pub(crate) authored_ground_cover_profile: Option<AuthoredGroundCoverProfile>,
 }
 
 /// The forest-species lottery for a position, given the [`Environment`]
@@ -1075,6 +1191,7 @@ impl WorldSim {
             rng: rand_chacha::ChaCha20Rng::from_seed([0; 32]),
             calendar: None,
             authored_procedural_layers: None,
+            authored_ground_cover_profile: None,
         }
     }
 
@@ -1177,6 +1294,21 @@ impl WorldSim {
                          shipped defaults"
                     );
                     AuthoredProceduralLayers::default()
+                },
+            }
+        });
+        let authored_ground_cover_profile = authored_region.and_then(|region| {
+            match AuthoredGroundCoverProfile::load_owned(region.ground_cover_profile) {
+                Ok(profile) => Some(profile),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        region = region.id,
+                        profile = region.ground_cover_profile,
+                        "Could not load authored ground-cover profile; authored region has no \
+                         valid profile"
+                    );
+                    None
                 },
             }
         });
@@ -2235,6 +2367,7 @@ impl WorldSim {
             rng,
             calendar,
             authored_procedural_layers,
+            authored_ground_cover_profile,
         };
 
         this.generate_cliffs();
@@ -3838,6 +3971,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ground_cover_profile_classifies_luminance_boundaries_and_endpoints() {
+        let profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+
+        assert_eq!(profile.classify(0.0), GroundCoverBand::BareDry);
+        assert_eq!(profile.classify(1.0), GroundCoverBand::Jungle);
+        assert_eq!(profile.classify(0.10), GroundCoverBand::BareDry);
+        assert_eq!(profile.classify(0.25), GroundCoverBand::Grassland);
+        assert_eq!(profile.classify(0.35), GroundCoverBand::SparseWoodland);
+        assert_eq!(profile.classify(0.55), GroundCoverBand::Forest);
+        assert_eq!(profile.classify(0.550_001), GroundCoverBand::Jungle);
+    }
+
+    #[test]
+    fn ground_cover_profile_preserves_luminance_as_density_and_blackness_is_inverse() {
+        let luminance = 0.25;
+        assert_eq!(luminance, 0.25, "tree_density remains equal to luminance");
+        assert!((1.0 - luminance) * 100.0 - 75.0 < f32::EPSILON);
+    }
+
+    #[test]
+    fn ground_cover_profile_validation_rejects_unordered_and_out_of_range_thresholds() {
+        let mut profile = AuthoredGroundCoverProfile::test_profile();
+        profile.bands[1].max_density = profile.bands[0].max_density;
+        assert!(profile.validate().is_err());
+
+        let mut profile = AuthoredGroundCoverProfile::test_profile();
+        profile.bands[0].max_density = -0.1;
+        assert!(profile.validate().is_err());
+
+        let mut profile = AuthoredGroundCoverProfile::test_profile();
+        profile.bands[4].max_density = 1.1;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn every_configured_authored_region_has_a_valid_ground_cover_profile() {
+        for region in AUTHORED_REGIONS {
+            let profile = AuthoredGroundCoverProfile::load_owned(region.ground_cover_profile)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "{} is configured for {} but failed to load: {err:?}",
+                        region.ground_cover_profile, region.id
+                    )
+                });
+            profile
+                .validate()
+                .unwrap_or_else(|err| panic!("{} is invalid: {err}", region.ground_cover_profile));
+        }
+        assert!(WorldSim::empty().authored_ground_cover_profile.is_none());
     }
 
     // ---- AuthoredF32Layer: raw f32le format ----

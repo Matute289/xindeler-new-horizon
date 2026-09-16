@@ -1,0 +1,12 @@
+(
+    schema: "xindeler_open_world.ground_cover_profile.v1",
+    // `tree_density` is authored luminance: blackness percentage is
+    // `(1 - luminance) * 100`, and the density itself is unchanged.
+    bands: [
+        (band: BareDry, max_density: 0.10),
+        (band: Grassland, max_density: 0.25),
+        (band: SparseWoodland, max_density: 0.35),
+        (band: Forest, max_density: 0.55),
+        (band: Jungle, max_density: 1.0),
+    ],
+)
