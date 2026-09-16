@@ -602,6 +602,314 @@ impl FileAsset for AuthoredF32Layer {
     }
 }
 
+type TreeCandidateField = (Vec2<i32>, u32);
+
+/// A coordinate in source-map space: X increases eastward and Y increases
+/// southward, matching the normalized top-left polygons exported by Open
+/// World. World positions use the opposite Y direction, so conversion is
+/// deliberately centralized in
+/// [`AuthoredTreeCandidateZone::contains_world_pos`].
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+struct NormalizedTopLeftPoint {
+    x: f32,
+    y: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct TreeCandidateGridSpec {
+    frequency_blocks: u32,
+    spread_blocks: u32,
+    seed_salt: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct AuthoredTreeCandidateZone {
+    id: String,
+    source_region_shape: String,
+    polygon_normalized_top_left: Vec<NormalizedTopLeftPoint>,
+    additional_grid: TreeCandidateGridSpec,
+}
+
+impl AuthoredTreeCandidateZone {
+    fn contains_world_pos(&self, wpos: Vec2<i32>, world_blocks: Vec2<i32>) -> bool {
+        if world_blocks.x <= 0 || world_blocks.y <= 0 {
+            return false;
+        }
+        let point = NormalizedTopLeftPoint {
+            x: wpos.x as f32 / world_blocks.x as f32,
+            y: 1.0 - wpos.y as f32 / world_blocks.y as f32,
+        };
+        point_in_normalized_top_left_polygon(point, &self.polygon_normalized_top_left)
+    }
+}
+
+fn point_in_normalized_top_left_polygon(
+    point: NormalizedTopLeftPoint,
+    polygon: &[NormalizedTopLeftPoint],
+) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+
+    let mut inside = false;
+    for (start, end) in polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+    {
+        let cross =
+            (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
+        let on_segment = cross.abs() <= f32::EPSILON
+            && point.x >= start.x.min(end.x)
+            && point.x <= start.x.max(end.x)
+            && point.y >= start.y.min(end.y)
+            && point.y <= start.y.max(end.y);
+        if on_segment {
+            return true;
+        }
+
+        let crosses_ray = (start.y > point.y) != (end.y > point.y)
+            && point.x < (end.x - start.x) * (point.y - start.y) / (end.y - start.y) + start.x;
+        if crosses_ray {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Data-owned, region-scoped supplement to the normal tree-root lattice.
+/// This is intentionally separate from the vegetation mask: it controls
+/// only which roots are offered to the existing placement gates.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+struct AuthoredTreeCandidatePolicy {
+    schema: u32,
+    zones: Vec<AuthoredTreeCandidateZone>,
+}
+
+impl AuthoredTreeCandidatePolicy {
+    fn validate(&self) -> Result<(), String> {
+        if self.schema != 1 {
+            return Err(format!(
+                "expected tree candidate policy schema 1, got {}",
+                self.schema
+            ));
+        }
+        if self.zones.is_empty() {
+            return Err("tree candidate policy requires at least one zone".to_owned());
+        }
+
+        let mut ids = DHashSet::default();
+        for zone in &self.zones {
+            if zone.id.is_empty() || !ids.insert(zone.id.as_str()) {
+                return Err("tree candidate zone ids must be unique and non-empty".to_owned());
+            }
+            if zone.source_region_shape.is_empty() {
+                return Err(format!(
+                    "tree candidate zone '{}' has no source region shape",
+                    zone.id
+                ));
+            }
+            if zone.polygon_normalized_top_left.len() < 3
+                || zone.polygon_normalized_top_left.iter().any(|point| {
+                    !point.x.is_finite()
+                        || !point.y.is_finite()
+                        || !(0.0..=1.0).contains(&point.x)
+                        || !(0.0..=1.0).contains(&point.y)
+                })
+            {
+                return Err(format!(
+                    "tree candidate zone '{}' requires a finite normalized polygon with at least \
+                     three points",
+                    zone.id
+                ));
+            }
+            let grid = &zone.additional_grid;
+            if grid.frequency_blocks == 0
+                || grid.frequency_blocks > i32::MAX as u32
+                || grid.spread_blocks.saturating_mul(2) > grid.frequency_blocks
+            {
+                return Err(format!(
+                    "tree candidate zone '{}' has an invalid grid frequency/spread",
+                    zone.id
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn compile(&self, world_seed: u32) -> Result<RegionalTreeCandidatePolicy, String> {
+        self.validate()?;
+        Ok(RegionalTreeCandidatePolicy {
+            zones: self
+                .zones
+                .iter()
+                .cloned()
+                .map(|zone| RegionalTreeCandidateZone {
+                    generator: StructureGen2d::new(
+                        world_seed ^ zone.additional_grid.seed_salt,
+                        zone.additional_grid.frequency_blocks,
+                        zone.additional_grid.spread_blocks,
+                    ),
+                    zone,
+                })
+                .collect(),
+        })
+    }
+}
+
+impl FileAsset for AuthoredTreeCandidatePolicy {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> { load_ron(&bytes) }
+}
+
+struct RegionalTreeCandidateZone {
+    zone: AuthoredTreeCandidateZone,
+    generator: StructureGen2d,
+}
+
+struct RegionalTreeCandidatePolicy {
+    zones: Vec<RegionalTreeCandidateZone>,
+}
+
+impl RegionalTreeCandidateZone {
+    /// A `StructureGen2d::get` samples its cell plus the eight neighbours.
+    /// This is the largest possible root distance from the queried column,
+    /// including the grid's jitter. It is deliberately conservative: a false
+    /// positive merely evaluates the normal regional filter, whereas a false
+    /// negative would drop a tree at the edge of an authored forest.
+    fn candidate_query_margin(&self) -> i32 {
+        let grid = &self.zone.additional_grid;
+        let frequency = grid.frequency_blocks as i32;
+        frequency
+            .saturating_add(frequency / 2)
+            .saturating_add(grid.spread_blocks as i32)
+    }
+
+    fn world_bounds(&self, world_blocks: Vec2<i32>) -> (Vec2<i32>, Vec2<i32>) {
+        let (min_x, max_x, min_y, max_y) = self.zone.polygon_normalized_top_left.iter().fold(
+            (
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+            ),
+            |(min_x, max_x, min_y, max_y), point| {
+                (
+                    min_x.min(point.x),
+                    max_x.max(point.x),
+                    min_y.min(point.y),
+                    max_y.max(point.y),
+                )
+            },
+        );
+        (
+            Vec2::new(
+                (min_x * world_blocks.x as f32).floor() as i32,
+                ((1.0 - max_y) * world_blocks.y as f32).floor() as i32,
+            ),
+            Vec2::new(
+                (max_x * world_blocks.x as f32).ceil() as i32,
+                ((1.0 - min_y) * world_blocks.y as f32).ceil() as i32,
+            ),
+        )
+    }
+
+    fn query_can_reach_bounds(
+        &self,
+        min: Vec2<i32>,
+        max: Vec2<i32>,
+        world_blocks: Vec2<i32>,
+    ) -> bool {
+        let (zone_min, zone_max) = self.world_bounds(world_blocks);
+        let margin = self.candidate_query_margin();
+        zone_min.x.saturating_sub(margin) <= max.x
+            && zone_max.x.saturating_add(margin) >= min.x
+            && zone_min.y.saturating_sub(margin) <= max.y
+            && zone_max.y.saturating_add(margin) >= min.y
+    }
+
+    fn may_supply_candidates_near(&self, wpos: Vec2<i32>, world_blocks: Vec2<i32>) -> bool {
+        self.query_can_reach_bounds(wpos, wpos, world_blocks)
+    }
+
+    fn may_supply_candidates_in_area(
+        &self,
+        min: Vec2<i32>,
+        max: Vec2<i32>,
+        world_blocks: Vec2<i32>,
+    ) -> bool {
+        self.query_can_reach_bounds(min, max, world_blocks)
+    }
+}
+
+impl RegionalTreeCandidatePolicy {
+    fn may_supply_candidates_near(&self, wpos: Vec2<i32>, world_blocks: Vec2<i32>) -> bool {
+        self.zones
+            .iter()
+            .any(|zone| zone.may_supply_candidates_near(wpos, world_blocks))
+    }
+
+    fn may_supply_candidates_in_area(
+        &self,
+        min: Vec2<i32>,
+        max: Vec2<i32>,
+        world_blocks: Vec2<i32>,
+    ) -> bool {
+        self.zones
+            .iter()
+            .any(|zone| zone.may_supply_candidates_in_area(min, max, world_blocks))
+    }
+
+    fn additional_candidates_near(
+        &self,
+        wpos: Vec2<i32>,
+        world_blocks: Vec2<i32>,
+    ) -> Vec<TreeCandidateField> {
+        self.zones
+            .iter()
+            .filter(|zone| zone.may_supply_candidates_near(wpos, world_blocks))
+            .flat_map(|zone| {
+                zone.generator
+                    .get(wpos)
+                    .into_iter()
+                    .filter(move |(candidate, _)| {
+                        zone.zone.contains_world_pos(*candidate, world_blocks)
+                    })
+            })
+            .collect()
+    }
+
+    fn additional_candidates_in_area(
+        &self,
+        min: Vec2<i32>,
+        max: Vec2<i32>,
+        world_blocks: Vec2<i32>,
+    ) -> Vec<TreeCandidateField> {
+        self.zones
+            .iter()
+            .filter(|zone| zone.may_supply_candidates_in_area(min, max, world_blocks))
+            .flat_map(|zone| {
+                zone.generator.iter(min, max).filter(move |(candidate, _)| {
+                    zone.zone.contains_world_pos(*candidate, world_blocks)
+                })
+            })
+            .collect()
+    }
+}
+
+fn merge_tree_candidate_fields(
+    global: impl IntoIterator<Item = TreeCandidateField>,
+    regional: impl IntoIterator<Item = TreeCandidateField>,
+) -> Vec<TreeCandidateField> {
+    let mut positions = DHashSet::default();
+    global
+        .into_iter()
+        .chain(regional)
+        .filter(|(position, _)| positions.insert(*position))
+        .collect()
+}
+
 /// One of the authored raster layers a region may ship alongside its base
 /// heightmap `.bin`. The asset specifier for a given region + kind is always
 /// `"{region.map_asset}_{kind.asset_suffix()}"` (e.g.
@@ -658,6 +966,7 @@ struct AuthoredRegion {
     /// Which authored layers this region ships.
     layers: &'static [AuthoredLayerKind],
     ground_cover_profile: &'static str,
+    tree_candidate_policy: &'static str,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -690,6 +999,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     id: CROMATOLIS_V0_REGION_ID,
     layers: &AuthoredLayerKind::ALL,
     ground_cover_profile: "world.map.cromatolis_v0_ground_cover",
+    tree_candidate_policy: "world.map.cromatolis_v0_tree_candidate_policy",
 }];
 
 fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredRegion> {
@@ -1108,6 +1418,10 @@ pub struct WorldSim {
     /// `None` for procedural worlds or when the configured profile is invalid.
     #[allow(dead_code)]
     pub(crate) authored_ground_cover_profile: Option<AuthoredGroundCoverProfile>,
+    /// Additional tree-root lattices supplied by a loaded authored region.
+    /// Procedural worlds intentionally leave this empty and retain the exact
+    /// upstream `StructureGen2d` candidate sequence.
+    authored_tree_candidate_policy: Option<RegionalTreeCandidatePolicy>,
 }
 
 /// The forest-species lottery for a position, given the [`Environment`]
@@ -1203,6 +1517,7 @@ impl WorldSim {
             calendar: None,
             authored_procedural_layers: None,
             authored_ground_cover_profile: None,
+            authored_tree_candidate_policy: None,
         }
     }
 
@@ -1317,6 +1632,24 @@ impl WorldSim {
                     )
                 },
             )
+        });
+        // The tree candidate policy is load-bearing authored content: silently
+        // falling back to a sparse global lattice would make a missing asset
+        // look like a valid but different forest design.
+        let authored_tree_candidate_policy = authored_region.map(|region| {
+            let policy = AuthoredTreeCandidatePolicy::load_owned(region.tree_candidate_policy)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "authored region '{}' requires valid tree candidate policy '{}': {err:?}",
+                        region.id, region.tree_candidate_policy
+                    )
+                });
+            policy.compile(seed).unwrap_or_else(|err| {
+                panic!(
+                    "authored region '{}' has invalid tree candidate policy '{}': {err}",
+                    region.id, region.tree_candidate_policy
+                )
+            })
         });
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
@@ -2374,6 +2707,7 @@ impl WorldSim {
             calendar,
             authored_procedural_layers,
             authored_ground_cover_profile,
+            authored_tree_candidate_policy,
         };
 
         this.generate_cliffs();
@@ -2413,6 +2747,52 @@ impl WorldSim {
     pub(crate) fn authored_procedural_caves_enabled(&self) -> bool {
         self.authored_procedural_layers
             .is_none_or(|layers| layers.caves)
+    }
+
+    /// Returns the unmodified global candidate lattice plus any data-owned,
+    /// authored regional candidates whose polygons contain their roots.
+    /// Position de-duplication preserves the global candidate's seed and
+    /// order, so a procedural world is bit-identical and overlapping grids
+    /// never create a duplicate tree.
+    pub(crate) fn tree_candidate_fields_near(&self, wpos: Vec2<i32>) -> Vec<TreeCandidateField> {
+        let world_blocks = self.world_blocks();
+        match self.authored_tree_candidate_policy.as_ref() {
+            Some(policy) if policy.may_supply_candidates_near(wpos, world_blocks) => {
+                merge_tree_candidate_fields(
+                    self.gen_ctx.structure_gen.get(wpos),
+                    policy.additional_candidates_near(wpos, world_blocks),
+                )
+            },
+            _ => self.gen_ctx.structure_gen.get(wpos).to_vec(),
+        }
+    }
+
+    pub(crate) fn has_additional_tree_candidate_fields_near(&self, wpos: Vec2<i32>) -> bool {
+        self.authored_tree_candidate_policy
+            .as_ref()
+            .is_some_and(|policy| policy.may_supply_candidates_near(wpos, self.world_blocks()))
+    }
+
+    pub(crate) fn tree_candidate_fields_in_area(
+        &self,
+        min: Vec2<i32>,
+        max: Vec2<i32>,
+    ) -> Vec<TreeCandidateField> {
+        let world_blocks = self.world_blocks();
+        match self.authored_tree_candidate_policy.as_ref() {
+            Some(policy) if policy.may_supply_candidates_in_area(min, max, world_blocks) => {
+                merge_tree_candidate_fields(
+                    self.gen_ctx.structure_gen.iter(min, max),
+                    policy.additional_candidates_in_area(min, max, world_blocks),
+                )
+            },
+            _ => self.gen_ctx.structure_gen.iter(min, max).collect(),
+        }
+    }
+
+    fn world_blocks(&self) -> Vec2<i32> {
+        self.map_size_lg().chunks().map(|chunks| chunks as i32)
+            * TerrainChunkSize::RECT_SIZE.as_::<i32>()
     }
 
     pub fn get_aabr(&self) -> Aabr<i32> {
@@ -3206,9 +3586,8 @@ impl WorldSim {
         wpos_min: Vec2<i32>,
         wpos_max: Vec2<i32>,
     ) -> impl Iterator<Item = TreeAttr> + '_ {
-        self.gen_ctx
-            .structure_gen
-            .iter(wpos_min, wpos_max)
+        self.tree_candidate_fields_in_area(wpos_min, wpos_max)
+            .into_iter()
             .filter_map(move |(wpos, seed)| {
                 let lottery = self.make_forest_lottery(wpos);
                 Some(TreeAttr {
@@ -3943,6 +4322,156 @@ impl SimChunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_candidate_zone_uses_normalized_top_left_coordinates() {
+        let zone = AuthoredTreeCandidateZone {
+            id: "forest.test".to_owned(),
+            source_region_shape: "region_shape.test".to_owned(),
+            polygon_normalized_top_left: vec![
+                NormalizedTopLeftPoint { x: 0.25, y: 0.25 },
+                NormalizedTopLeftPoint { x: 0.75, y: 0.25 },
+                NormalizedTopLeftPoint { x: 0.75, y: 0.75 },
+                NormalizedTopLeftPoint { x: 0.25, y: 0.75 },
+            ],
+            additional_grid: TreeCandidateGridSpec {
+                frequency_blocks: 12,
+                spread_blocks: 5,
+                seed_salt: 0x434F_5731,
+            },
+        };
+        let world_blocks = Vec2::new(32_768, 32_768);
+
+        assert!(zone.contains_world_pos(Vec2::new(16_384, 16_384), world_blocks));
+        assert!(zone.contains_world_pos(Vec2::new(16_384, 8_192), world_blocks));
+        assert!(!zone.contains_world_pos(Vec2::new(16_384, 4_096), world_blocks));
+        assert!(!zone.contains_world_pos(Vec2::new(4_096, 16_384), world_blocks));
+    }
+
+    #[test]
+    fn tree_candidate_union_keeps_global_order_and_deduplicates_root_positions() {
+        let global = vec![(Vec2::new(8, 8), 11), (Vec2::new(20, 20), 22)];
+        let regional = vec![(Vec2::new(20, 20), 99), (Vec2::new(12, 12), 33)];
+
+        assert_eq!(merge_tree_candidate_fields(global, regional), vec![
+            (Vec2::new(8, 8), 11),
+            (Vec2::new(20, 20), 22),
+            (Vec2::new(12, 12), 33),
+        ]);
+    }
+
+    #[test]
+    fn tree_candidate_policy_adds_roots_only_inside_its_authored_polygon() {
+        let policy = AuthoredTreeCandidatePolicy {
+            schema: 1,
+            zones: vec![AuthoredTreeCandidateZone {
+                id: "forest.test".to_owned(),
+                source_region_shape: "region_shape.test".to_owned(),
+                polygon_normalized_top_left: vec![
+                    NormalizedTopLeftPoint { x: 0.25, y: 0.25 },
+                    NormalizedTopLeftPoint { x: 0.75, y: 0.25 },
+                    NormalizedTopLeftPoint { x: 0.75, y: 0.75 },
+                    NormalizedTopLeftPoint { x: 0.25, y: 0.75 },
+                ],
+                additional_grid: TreeCandidateGridSpec {
+                    frequency_blocks: 12,
+                    spread_blocks: 5,
+                    seed_salt: 0x434F_5731,
+                },
+            }],
+        };
+        let compiled = policy.compile(0).expect("test policy must be valid");
+        let world_blocks = Vec2::new(32_768, 32_768);
+
+        let inside = compiled.additional_candidates_near(Vec2::new(16_384, 16_384), world_blocks);
+        assert!(!inside.is_empty());
+        assert!(
+            inside.iter().all(|(position, _)| {
+                policy.zones[0].contains_world_pos(*position, world_blocks)
+            })
+        );
+        assert!(
+            compiled
+                .additional_candidates_near(Vec2::new(2_048, 2_048), world_blocks)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn tree_candidate_policy_broad_phase_skips_columns_far_from_its_polygon() {
+        let policy = AuthoredTreeCandidatePolicy {
+            schema: 1,
+            zones: vec![AuthoredTreeCandidateZone {
+                id: "forest.test".to_owned(),
+                source_region_shape: "region_shape.test".to_owned(),
+                polygon_normalized_top_left: vec![
+                    NormalizedTopLeftPoint { x: 0.25, y: 0.25 },
+                    NormalizedTopLeftPoint { x: 0.75, y: 0.25 },
+                    NormalizedTopLeftPoint { x: 0.75, y: 0.75 },
+                    NormalizedTopLeftPoint { x: 0.25, y: 0.75 },
+                ],
+                additional_grid: TreeCandidateGridSpec {
+                    frequency_blocks: 12,
+                    spread_blocks: 5,
+                    seed_salt: 0x434F_5731,
+                },
+            }],
+        };
+        let compiled = policy.compile(0).expect("test policy must be valid");
+        let world_blocks = Vec2::new(32_768, 32_768);
+
+        assert!(compiled.may_supply_candidates_near(Vec2::new(16_384, 16_384), world_blocks));
+        assert!(!compiled.may_supply_candidates_near(Vec2::new(2_048, 2_048), world_blocks));
+    }
+
+    #[test]
+    fn procedural_worlds_keep_the_unmodified_global_tree_candidate_lattice() {
+        let sim = WorldSim::empty();
+        let wpos = Vec2::new(1_024, -512);
+
+        assert_eq!(
+            sim.tree_candidate_fields_near(wpos),
+            sim.gen_ctx.structure_gen.get(wpos).to_vec()
+        );
+    }
+
+    #[test]
+    fn procedural_worlds_keep_the_unmodified_global_tree_candidate_area_sequence() {
+        let sim = WorldSim::empty();
+        let min = Vec2::new(-64, -64);
+        let max = Vec2::new(64, 64);
+
+        assert_eq!(
+            sim.tree_candidate_fields_in_area(min, max),
+            sim.gen_ctx.structure_gen.iter(min, max).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cromatolis_tree_candidate_policy_pins_the_single_waning_moon_zone() {
+        let policy = AuthoredTreeCandidatePolicy::load_owned(
+            "world.map.cromatolis_v0_tree_candidate_policy",
+        )
+        .expect("Cromatolis requires a valid authored tree candidate policy");
+
+        assert_eq!(policy.schema, 1);
+        assert_eq!(policy.zones.len(), 1);
+        let zone = &policy.zones[0];
+        assert_eq!(zone.id, "forest.waning_moon");
+        assert_eq!(zone.source_region_shape, "region_shape.waning_moon_forest");
+        assert_eq!(zone.additional_grid.frequency_blocks, 12);
+        assert_eq!(zone.additional_grid.spread_blocks, 5);
+        assert_eq!(zone.additional_grid.seed_salt, 0x434F_5731);
+        assert_eq!(zone.polygon_normalized_top_left, vec![
+            NormalizedTopLeftPoint { x: 0.66, y: 0.35 },
+            NormalizedTopLeftPoint { x: 0.74, y: 0.33 },
+            NormalizedTopLeftPoint { x: 0.78, y: 0.41 },
+            NormalizedTopLeftPoint { x: 0.74, y: 0.51 },
+            NormalizedTopLeftPoint { x: 0.66, y: 0.49 },
+            NormalizedTopLeftPoint { x: 0.62, y: 0.42 },
+        ]);
+        policy.validate().expect("shipped policy must validate");
+    }
 
     // ---- AuthoredProceduralLayers: the per-region RON toggles ----
 
@@ -4713,6 +5242,36 @@ mod tests {
             "expected a substantial sample of temperate, above-water Cromatolis chunks, got \
              {checked}"
         );
+    }
+
+    /// Requires the real Cromatolis LFS assets. Waning Moon's authored mask
+    /// was measured at 0.890196 tree density in both probes; its sparse
+    /// appearance came from the global 24/10 root lattice offering just one
+    /// and two candidates. The regional 12/5 lattice must supply at least
+    /// four unique roots inside each measured 32×32 block chunk before the
+    /// unchanged water/path/cave/density filters run.
+    #[test]
+    #[ignore]
+    fn cromatolis_waning_moon_policy_offers_dense_root_candidates_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let chunk_size = TerrainChunkSize::RECT_SIZE.as_::<i32>();
+
+        for chunk_pos in [Vec2::new(684, 599), Vec2::new(675, 587)] {
+            let min = chunk_pos * chunk_size;
+            let max = min + chunk_size;
+            let root_count = sim
+                .tree_candidate_fields_in_area(min, max)
+                .into_iter()
+                .filter(|(root, _)| {
+                    root.x >= min.x && root.x < max.x && root.y >= min.y && root.y < max.y
+                })
+                .count();
+            assert!(
+                root_count >= 4,
+                "{chunk_pos:?} must offer at least four unique tree roots before placement \
+                 filters, got {root_count}"
+            );
+        }
     }
 
     /// Requires the real Cromatolis LFS assets. These hand-picked source-map

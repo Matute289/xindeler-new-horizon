@@ -92,6 +92,13 @@ pub fn apply_trees_to(
     let mut tree_cache = StructureGenCache::new(info.chunks().gen_ctx.structure_gen.clone());
 
     canvas.foreach_col(|canvas, wpos2d, col| {
+        if info
+            .chunks()
+            .has_additional_tree_candidate_fields_near(wpos2d)
+        {
+            tree_cache
+                .use_fields_for_next_get(wpos2d, info.chunks().tree_candidate_fields_near(wpos2d));
+        }
         let trees = tree_cache.get(wpos2d, |wpos, seed| {
             let scale = 1.0;
             let inhabited = false;
