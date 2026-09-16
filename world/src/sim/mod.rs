@@ -657,6 +657,7 @@ struct AuthoredRegion {
     id: &'static str,
     /// Which authored layers this region ships.
     layers: &'static [AuthoredLayerKind],
+    ground_cover_profile: &'static str,
 }
 
 /// Threshold above which an authored water/elevated-lake/river-channel mask
@@ -688,6 +689,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     map_asset: "world.map.cromatolis_v0",
     id: CROMATOLIS_V0_REGION_ID,
     layers: &AuthoredLayerKind::ALL,
+    ground_cover_profile: "world.map.cromatolis_v0_ground_cover",
 }];
 
 fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredRegion> {
@@ -746,6 +748,127 @@ impl Default for AuthoredCromatolisClimate {
             tree_min_temp: default_cromatolis_tree_min_temp(),
             max_tree_altitude_m: default_cromatolis_max_tree_altitude_m(),
         }
+    }
+}
+
+/// Named bands over the authored linear `tree_density` signal.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) enum GroundCoverBand {
+    BareDry,
+    Grassland,
+    SparseWoodland,
+    Forest,
+    Jungle,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct GroundCoverBandDefinition {
+    pub band: GroundCoverBand,
+    pub max_density: f32,
+    /// Content-authored surface tint for this density band. The column
+    /// generator blends it over its normal thermal/noise-derived color.
+    pub surface_tint: (f32, f32, f32),
+    /// Strength of [`Self::surface_tint`] in `0.0..=1.0`.
+    pub surface_blend: f32,
+    /// Content-authored tint for this band in the start-area map preview.
+    pub map_tint: (f32, f32, f32),
+    /// Strength of [`Self::map_tint`] in `0.0..=1.0`.
+    pub map_blend: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct AuthoredGroundCoverProfile {
+    pub bands: Vec<GroundCoverBandDefinition>,
+}
+
+impl AuthoredGroundCoverProfile {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.bands.len() != 5 {
+            return Err(format!(
+                "expected five ground-cover bands, got {}",
+                self.bands.len()
+            ));
+        }
+        let expected = [
+            GroundCoverBand::BareDry,
+            GroundCoverBand::Grassland,
+            GroundCoverBand::SparseWoodland,
+            GroundCoverBand::Forest,
+            GroundCoverBand::Jungle,
+        ];
+        let mut previous = 0.0;
+        for (index, definition) in self.bands.iter().enumerate() {
+            if definition.band != expected[index] {
+                return Err(format!("ground-cover band {index} is out of order"));
+            }
+            if !(0.0..=1.0).contains(&definition.max_density) {
+                return Err(format!(
+                    "ground-cover threshold {index} is outside 0..=1: {}",
+                    definition.max_density
+                ));
+            }
+            if index > 0 && definition.max_density <= previous {
+                return Err(format!(
+                    "ground-cover thresholds must be strictly increasing: {} then {}",
+                    previous, definition.max_density
+                ));
+            }
+            if !definition.surface_tint.0.is_finite()
+                || !definition.surface_tint.1.is_finite()
+                || !definition.surface_tint.2.is_finite()
+            {
+                return Err(format!(
+                    "ground-cover surface tint {index} must have finite RGB"
+                ));
+            }
+            if !definition.surface_blend.is_finite()
+                || !(0.0..=1.0).contains(&definition.surface_blend)
+            {
+                return Err(format!(
+                    "ground-cover surface blend {index} is outside 0..=1: {}",
+                    definition.surface_blend
+                ));
+            }
+            if !definition.map_tint.0.is_finite()
+                || !definition.map_tint.1.is_finite()
+                || !definition.map_tint.2.is_finite()
+            {
+                return Err(format!(
+                    "ground-cover map tint {index} must have finite RGB"
+                ));
+            }
+            if !definition.map_blend.is_finite() || !(0.0..=1.0).contains(&definition.map_blend) {
+                return Err(format!(
+                    "ground-cover map blend {index} is outside 0..=1: {}",
+                    definition.map_blend
+                ));
+            }
+            previous = definition.max_density;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn classify(&self, density: f32) -> GroundCoverBand {
+        self.bands
+            .iter()
+            .find(|definition| density <= definition.max_density)
+            .map(|definition| definition.band)
+            .unwrap_or_else(|| {
+                self.bands
+                    .last()
+                    .expect("validated profile is non-empty")
+                    .band
+            })
+    }
+}
+
+impl FileAsset for AuthoredGroundCoverProfile {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let profile: Self = load_ron(&bytes)?;
+        profile.validate().map_err(Into::into).map(|_| profile)
     }
 }
 
@@ -981,6 +1104,10 @@ pub struct WorldSim {
     /// authored region. `None` for a normal procedural world, where every
     /// layer always runs. See [`AuthoredProceduralLayers`].
     pub(crate) authored_procedural_layers: Option<AuthoredProceduralLayers>,
+    /// Ground-cover classification profile for the loaded authored region.
+    /// `None` for procedural worlds or when the configured profile is invalid.
+    #[allow(dead_code)]
+    pub(crate) authored_ground_cover_profile: Option<AuthoredGroundCoverProfile>,
 }
 
 /// The forest-species lottery for a position, given the [`Environment`]
@@ -1075,6 +1202,7 @@ impl WorldSim {
             rng: rand_chacha::ChaCha20Rng::from_seed([0; 32]),
             calendar: None,
             authored_procedural_layers: None,
+            authored_ground_cover_profile: None,
         }
     }
 
@@ -1179,6 +1307,16 @@ impl WorldSim {
                     AuthoredProceduralLayers::default()
                 },
             }
+        });
+        let authored_ground_cover_profile = authored_region.map(|region| {
+            AuthoredGroundCoverProfile::load_owned(region.ground_cover_profile).unwrap_or_else(
+                |err| {
+                    panic!(
+                        "authored region '{}' requires valid ground-cover profile '{}': {err:?}",
+                        region.id, region.ground_cover_profile
+                    )
+                },
+            )
         });
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
@@ -2235,6 +2373,7 @@ impl WorldSim {
             rng,
             calendar,
             authored_procedural_layers,
+            authored_ground_cover_profile,
         };
 
         this.generate_cliffs();
@@ -3840,6 +3979,108 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ground_cover_profile_classifies_luminance_boundaries_and_endpoints() {
+        let profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+
+        assert_eq!(profile.classify(0.0), GroundCoverBand::BareDry);
+        assert_eq!(profile.classify(1.0), GroundCoverBand::Jungle);
+        for (index, definition) in profile.bands.iter().enumerate() {
+            assert_eq!(profile.classify(definition.max_density), definition.band);
+            if let Some(next) = profile.bands.get(index + 1) {
+                assert_eq!(profile.classify(next.max_density), next.band);
+            }
+        }
+        let forest_max = profile.bands[3].max_density;
+        let jungle_max = profile.bands[4].max_density;
+        assert_eq!(
+            profile.classify((forest_max + jungle_max) / 2.0),
+            GroundCoverBand::Jungle
+        );
+    }
+
+    #[test]
+    fn ground_cover_profile_preserves_luminance_as_density_and_blackness_is_inverse() {
+        let profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        let luminance = profile.bands[1].max_density;
+        let tree_density = luminance;
+        let blackness_percent = (1.0 - tree_density) * 100.0;
+        assert!((tree_density - luminance).abs() < f32::EPSILON);
+        assert!((blackness_percent - (1.0 - luminance) * 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ground_cover_profile_validation_rejects_unordered_and_out_of_range_thresholds() {
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[1].max_density = profile.bands[0].max_density;
+        assert!(profile.validate().is_err());
+
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].max_density = -0.1;
+        assert!(profile.validate().is_err());
+
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[4].max_density = 1.1;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn ground_cover_profile_validation_rejects_non_finite_tints_and_invalid_blends() {
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].surface_tint = (f32::NAN, 0.2, 0.3);
+        assert!(profile.validate().is_err());
+
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].surface_blend = 1.1;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn ground_cover_profile_validation_rejects_invalid_map_preview_values() {
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].map_tint = (f32::NAN, 0.2, 0.3);
+        assert!(profile.validate().is_err());
+
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].map_blend = -0.1;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn every_configured_authored_region_has_a_valid_ground_cover_profile() {
+        for region in AUTHORED_REGIONS {
+            let profile = AuthoredGroundCoverProfile::load_owned(region.ground_cover_profile)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "{} is configured for {} but failed to load: {err:?}",
+                        region.ground_cover_profile, region.id
+                    )
+                });
+            profile
+                .validate()
+                .unwrap_or_else(|err| panic!("{} is invalid: {err}", region.ground_cover_profile));
+        }
+        assert!(WorldSim::empty().authored_ground_cover_profile.is_none());
+    }
+
     // ---- AuthoredF32Layer: raw f32le format ----
 
     #[test]
@@ -4472,6 +4713,84 @@ mod tests {
             "expected a substantial sample of temperate, above-water Cromatolis chunks, got \
              {checked}"
         );
+    }
+
+    /// Requires the real Cromatolis LFS assets. These hand-picked source-map
+    /// positions are temperate, dry land below the preview's mountain cutoff
+    /// and away from authored water. They pin the complete authored contract:
+    /// raster luminance -> generated density -> shared cover band -> preview.
+    #[test]
+    #[ignore]
+    fn cromatolis_ground_cover_profile_matches_real_lfs_raster_and_preview() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        let vegetation = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_vegetation")
+            .expect("real Cromatolis LFS assets must be pulled locally to run this test");
+        let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
+            .expect("Cromatolis climate asset must load for the biome-mask regression");
+        let profile = sim.authored_ground_cover_profile.as_ref().expect(
+            "generated Cromatolis WorldSim must retain its configured ground-cover profile",
+        );
+        let representatives = [
+            (Vec2::new(476, 13), GroundCoverBand::BareDry),
+            (Vec2::new(213, 43), GroundCoverBand::Grassland),
+            (Vec2::new(199, 44), GroundCoverBand::SparseWoodland),
+            (Vec2::new(201, 43), GroundCoverBand::Forest),
+            (Vec2::new(204, 43), GroundCoverBand::Jungle),
+        ];
+
+        for (position, expected_band) in representatives {
+            let chunk_idx = vec2_as_uniform_idx(map_size_lg, position);
+            let chunk = &sim.chunks[chunk_idx];
+            let alt_pre = chunk.alt - CONFIG.sea_level;
+            assert_eq!(
+                chunk.authored_region_id,
+                Some(CROMATOLIS_V0_REGION_ID),
+                "{position:?} must remain an authored Cromatolis chunk"
+            );
+            assert!(
+                chunk.river.river_kind.is_none(),
+                "{position:?} must stay dry land"
+            );
+            assert!(
+                chunk.temp >= climate.tree_min_temp,
+                "{position:?} must stay temperate"
+            );
+            assert!(
+                alt_pre < 294.0,
+                "{position:?} must stay below preview mountain treatment"
+            );
+            assert!(
+                alt_pre < climate.max_tree_altitude_m,
+                "{position:?} must stay below the tree altitude cap"
+            );
+
+            let luminance = vegetation.values
+                [authored_layer_idx_for_cromatolis_v0(map_size_lg, chunk_idx)]
+            .clamp(0.0, 1.0);
+            assert_eq!(
+                chunk.tree_density, luminance,
+                "{position:?} changed its authored density"
+            );
+            assert_eq!(
+                profile.classify(chunk.tree_density),
+                expected_band,
+                "{position:?} changed band"
+            );
+
+            let (preview_band, _) = map::authored_ground_cover_preview_tint(
+                Rgb::new(0x80, 0x80, 0x80),
+                Some(profile),
+                chunk.tree_density,
+                false,
+                false,
+            );
+            assert_eq!(
+                preview_band,
+                Some(expected_band),
+                "{position:?} preview drifted from profile"
+            );
+        }
     }
 
     /// COW-17 binds the terrain `.bin` and river-channel raster into one
