@@ -1369,23 +1369,6 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // dirt
         let ground = Lerp::lerp(ground, sub_surface_color, marble_mid * tree_density);
 
-        // The profile is a visual consumer of the unmodified painted density:
-        // it never changes terrain, water, tree placement, or the generic
-        // color pipeline it blends over. Physical terrain remains more
-        // authoritative than authored ground cover.
-        let physical_ground_cover_exclusion = water_dist.is_some_and(|dist| dist <= 3.0)
-            || snow_cover
-            || temp <= CONFIG.snow_temp
-            || alt >= 500.0
-            || cliff_offset > 0.0;
-        let ground = apply_authored_ground_cover_surface_tint(
-            ground,
-            self.sim.authored_ground_cover_profile.as_ref(),
-            sim_chunk.authored_region_id,
-            authored_tree_density,
-            physical_ground_cover_exclusion,
-        );
-
         let path = if spawn_rules.paths {
             sim.get_nearest_path(wpos)
         } else {
@@ -1462,16 +1445,22 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             chaos,
             water_level,
             warp_factor,
-            surface_color: Rgb::lerp(
+            surface_color: resolve_final_column_surface_color(
                 sub_surface_color,
-                Rgb::lerp(
-                    // Beach
-                    Rgb::lerp(cliff, sand, alt.sub(basement).mul(0.25)),
-                    // Land
-                    ground,
-                    ((alt - base_sea_level) / 12.0).clamped(0.0, 1.0),
-                ),
+                cliff,
+                sand,
+                ground,
+                alt,
+                basement,
+                base_sea_level,
                 surface_veg,
+                self.sim.authored_ground_cover_profile.as_ref(),
+                sim_chunk.authored_region_id,
+                authored_tree_density,
+                water_dist,
+                snow_cover,
+                temp,
+                cliff_offset,
             ),
             sub_surface_color,
             // No growing directly on bedrock.
@@ -1526,16 +1515,45 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
     }
 }
 
-/// Blends the authored cover band's content tint over a fully-resolved normal
-/// terrain color. Keeping this independent of the color selection itself
-/// preserves marble/noise and rock variation below the authored surface.
-fn apply_authored_ground_cover_surface_tint(
-    base: Rgb<f32>,
+/// Resolves the final color stored in [`ColumnSample::surface_color`]. The
+/// authored tint is intentionally applied after the beach/shore interpolation
+/// so a lowland forest cannot become thermal sand again at the last step.
+fn resolve_final_column_surface_color(
+    sub_surface_color: Rgb<f32>,
+    cliff: Rgb<f32>,
+    sand: Rgb<f32>,
+    ground: Rgb<f32>,
+    alt: f32,
+    basement: f32,
+    base_sea_level: f32,
+    surface_veg: f32,
     profile: Option<&AuthoredGroundCoverProfile>,
     authored_region_id: Option<&str>,
     density: f32,
-    physical_exclusion: bool,
+    water_dist: Option<f32>,
+    snow_cover: bool,
+    temp: f32,
+    cliff_offset: f32,
 ) -> Rgb<f32> {
+    let base = Rgb::lerp(
+        sub_surface_color,
+        Rgb::lerp(
+            // Beach
+            Rgb::lerp(cliff, sand, alt.sub(basement).mul(0.25)),
+            // Land
+            ground,
+            ((alt - base_sea_level) / 12.0).clamped(0.0, 1.0),
+        ),
+        surface_veg,
+    );
+    // The profile is a visual consumer of the unmodified painted density:
+    // it never changes terrain, water, tree placement, or the generic color
+    // pipeline it blends over. Physical terrain remains more authoritative.
+    let physical_exclusion = water_dist.is_some_and(|dist| dist <= 3.0)
+        || snow_cover
+        || temp <= CONFIG.snow_temp
+        || alt >= 500.0
+        || cliff_offset > 0.0;
     if physical_exclusion || authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
         return base;
     }
@@ -1637,14 +1655,24 @@ mod tests {
     }
 
     #[test]
-    fn forest_profile_tints_a_hot_lowland_surface_away_from_generic_sand() {
+    fn forest_profile_tints_the_final_hot_lowland_column_surface_away_from_sand() {
         let generic_sand = Rgb::new(0.86, 0.73, 0.43);
-        let resolved = apply_authored_ground_cover_surface_tint(
+        let resolved = resolve_final_column_surface_color(
+            Rgb::new(0.30, 0.30, 0.30),
+            Rgb::new(0.30, 0.30, 0.30),
             generic_sand,
+            generic_sand,
+            101.0,
+            101.0,
+            100.0,
+            0.0,
             Some(&cromatolis_profile()),
             Some(CROMATOLIS_V0_REGION_ID),
             0.45,
+            None,
             false,
+            CONFIG.desert_temp + 0.1,
+            0.0,
         );
 
         assert_ne!(
@@ -1660,26 +1688,46 @@ mod tests {
     #[test]
     fn bare_dry_profile_leaves_the_existing_dry_surface_unchanged() {
         let generic_sand = Rgb::new(0.86, 0.73, 0.43);
-        let resolved = apply_authored_ground_cover_surface_tint(
+        let resolved = resolve_final_column_surface_color(
             generic_sand,
+            generic_sand,
+            generic_sand,
+            generic_sand,
+            112.0,
+            112.0,
+            100.0,
+            0.0,
             Some(&cromatolis_profile()),
             Some(CROMATOLIS_V0_REGION_ID),
             0.10,
+            None,
             false,
+            CONFIG.desert_temp + 0.1,
+            0.0,
         );
 
         assert_rgb_near(resolved, generic_sand);
     }
 
     #[test]
-    fn physical_surface_exclusion_bypasses_the_authored_profile_tint() {
+    fn snow_physical_input_bypasses_the_authored_profile_on_the_final_surface() {
         let existing_snow = Rgb::new(0.92, 0.94, 0.97);
-        let resolved = apply_authored_ground_cover_surface_tint(
+        let resolved = resolve_final_column_surface_color(
             existing_snow,
+            existing_snow,
+            existing_snow,
+            existing_snow,
+            112.0,
+            112.0,
+            100.0,
+            0.0,
             Some(&cromatolis_profile()),
             Some(CROMATOLIS_V0_REGION_ID),
             0.8,
+            None,
             true,
+            CONFIG.snow_temp - 0.1,
+            0.0,
         );
 
         assert_rgb_near(resolved, existing_snow);
@@ -1688,12 +1736,22 @@ mod tests {
     #[test]
     fn procedural_world_surface_keeps_the_preexisting_color_path() {
         let generic_sand = Rgb::new(0.86, 0.73, 0.43);
-        let resolved = apply_authored_ground_cover_surface_tint(
+        let resolved = resolve_final_column_surface_color(
             generic_sand,
+            generic_sand,
+            generic_sand,
+            generic_sand,
+            112.0,
+            112.0,
+            100.0,
+            0.0,
             Some(&cromatolis_profile()),
             None,
             0.8,
+            None,
             false,
+            CONFIG.desert_temp + 0.1,
+            0.0,
         );
 
         assert_rgb_near(resolved, generic_sand);
