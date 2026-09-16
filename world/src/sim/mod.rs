@@ -4780,7 +4780,7 @@ mod tests {
 
             let (preview_band, _) = map::authored_ground_cover_preview_tint(
                 Rgb::new(0x80, 0x80, 0x80),
-                Some(&profile),
+                Some(profile),
                 chunk.tree_density,
                 false,
                 false,

@@ -77,104 +77,6 @@ pub(super) fn authored_ground_cover_preview_tint(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        index::{Index, IndexOwned},
-        sim::{AuthoredGroundCoverProfile, GroundCoverBand},
-    };
-    use common::assets::AssetExt;
-
-    fn cromatolis_profile() -> AuthoredGroundCoverProfile {
-        AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
-            .expect("the shipped Cromatolis ground-cover profile must load")
-    }
-
-    #[test]
-    fn hot_authored_forest_preview_uses_its_profile_band_tint() {
-        let profile = cromatolis_profile();
-        let dry_beige = Rgb::new(0xbd, 0xad, 0x5a);
-
-        let (band, color) =
-            authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, false, false);
-
-        assert_eq!(band, Some(GroundCoverBand::Forest));
-        assert_eq!(color, Rgb::new(0x1e, 0x61, 0x32));
-        assert_ne!(color, dry_beige);
-    }
-
-    #[test]
-    fn preview_classification_matches_runtime_profile_and_preserves_physical_layers() {
-        let profile = cromatolis_profile();
-        let original = Rgb::new(0x51, 0x62, 0x73);
-
-        let (band, _) =
-            authored_ground_cover_preview_tint(original, Some(&profile), 0.60, false, false);
-        assert_eq!(band, Some(profile.classify(0.60)));
-        assert_eq!(band, Some(GroundCoverBand::Jungle));
-
-        for (is_water, is_physical_mountain) in [(true, false), (false, true)] {
-            assert_eq!(
-                authored_ground_cover_preview_tint(
-                    original,
-                    Some(&profile),
-                    0.90,
-                    is_water,
-                    is_physical_mountain,
-                ),
-                (None, original),
-                "physical water and mountains keep their map treatment",
-            );
-        }
-
-        assert_eq!(
-            authored_ground_cover_preview_tint(original, None, 0.90, false, false),
-            (None, original),
-            "procedural maps stay on the legacy rendering path",
-        );
-    }
-
-    #[test]
-    fn physical_water_bypasses_the_complete_authored_post_processing_branch() {
-        let sea_level = 0.5;
-
-        assert!(!authored_map_post_processing_applies(
-            Some(RiverKind::Ocean),
-            0.9,
-            sea_level,
-        ));
-        assert!(!authored_map_post_processing_applies(
-            Some(RiverKind::Lake {
-                neighbor_pass_pos: Vec2::zero(),
-            }),
-            0.9,
-            sea_level,
-        ));
-        assert!(!authored_map_post_processing_applies(None, 0.49, sea_level));
-        assert!(authored_map_post_processing_applies(None, 0.5, sea_level));
-    }
-
-    #[test]
-    fn sample_pos_keeps_authored_ocean_color_outside_land_post_processing() {
-        let mut sampler = WorldSim::empty();
-        let sample = &mut sampler.chunks[0];
-        sample.authored_cromatolis_v0 = true;
-        sample.river.river_kind = Some(RiverKind::Ocean);
-        sample.water_alt = 100.0;
-        sample.temp = 1.0;
-        sample.tree_density = 1.0;
-        sampler.authored_ground_cover_profile = Some(cromatolis_profile());
-
-        let config = MapConfig::orthographic(sampler.map_size_lg(), 0.0..=1_000.0);
-        let index = IndexOwned::new(Index::new(0));
-
-        let result = sample_pos(&config, &sampler, index.as_index_ref(), None, Vec2::zero());
-
-        assert_eq!(result.rgb, Rgb::new(0x00, 0x4b, 0x82));
-    }
-}
-
 /// A sample function that grabs the connections at a chunk.
 ///
 /// Currently this just supports rivers, but ideally it can be extended past
@@ -439,25 +341,23 @@ pub fn sample_pos(
         let profile = sampler.authored_ground_cover_profile.as_ref();
 
         let mut out = rgb;
-        if sample.temp >= 0.0 {
-            if profile.is_some() {
-                (_, out) = authored_ground_cover_preview_tint(
-                    out,
-                    profile,
-                    sample.tree_density,
-                    is_physical_water,
-                    altitude > 0.28,
-                );
-                if !is_physical_water && altitude > 0.28 {
-                    let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
-                    let mountain = if mountain_t > 0.6 {
-                        Rgb::new(0x3d, 0x28, 0x1a)
-                    } else {
-                        Rgb::new(0x78, 0x55, 0x32)
-                    };
-                    let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
-                    out = blend_rgb(out, mountain, mountain_blend);
-                }
+        if sample.temp >= 0.0 && profile.is_some() {
+            (_, out) = authored_ground_cover_preview_tint(
+                out,
+                profile,
+                sample.tree_density,
+                is_physical_water,
+                altitude > 0.28,
+            );
+            if !is_physical_water && altitude > 0.28 {
+                let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
+                let mountain = if mountain_t > 0.6 {
+                    Rgb::new(0x3d, 0x28, 0x1a)
+                } else {
+                    Rgb::new(0x78, 0x55, 0x32)
+                };
+                let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
+                out = blend_rgb(out, mountain, mountain_blend);
             }
         }
         let neighbor_alt = |offset: Vec2<i32>| {
@@ -539,5 +439,103 @@ pub fn sample_pos(
         } else {
             None
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        index::{Index, IndexOwned},
+        sim::{AuthoredGroundCoverProfile, GroundCoverBand},
+    };
+    use common::assets::AssetExt;
+
+    fn cromatolis_profile() -> AuthoredGroundCoverProfile {
+        AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+            .expect("the shipped Cromatolis ground-cover profile must load")
+    }
+
+    #[test]
+    fn hot_authored_forest_preview_uses_its_profile_band_tint() {
+        let profile = cromatolis_profile();
+        let dry_beige = Rgb::new(0xbd, 0xad, 0x5a);
+
+        let (band, color) =
+            authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, false, false);
+
+        assert_eq!(band, Some(GroundCoverBand::Forest));
+        assert_eq!(color, Rgb::new(0x1e, 0x61, 0x32));
+        assert_ne!(color, dry_beige);
+    }
+
+    #[test]
+    fn preview_classification_matches_runtime_profile_and_preserves_physical_layers() {
+        let profile = cromatolis_profile();
+        let original = Rgb::new(0x51, 0x62, 0x73);
+
+        let (band, _) =
+            authored_ground_cover_preview_tint(original, Some(&profile), 0.60, false, false);
+        assert_eq!(band, Some(profile.classify(0.60)));
+        assert_eq!(band, Some(GroundCoverBand::Jungle));
+
+        for (is_water, is_physical_mountain) in [(true, false), (false, true)] {
+            assert_eq!(
+                authored_ground_cover_preview_tint(
+                    original,
+                    Some(&profile),
+                    0.90,
+                    is_water,
+                    is_physical_mountain,
+                ),
+                (None, original),
+                "physical water and mountains keep their map treatment",
+            );
+        }
+
+        assert_eq!(
+            authored_ground_cover_preview_tint(original, None, 0.90, false, false),
+            (None, original),
+            "procedural maps stay on the legacy rendering path",
+        );
+    }
+
+    #[test]
+    fn physical_water_bypasses_the_complete_authored_post_processing_branch() {
+        let sea_level = 0.5;
+
+        assert!(!authored_map_post_processing_applies(
+            Some(RiverKind::Ocean),
+            0.9,
+            sea_level,
+        ));
+        assert!(!authored_map_post_processing_applies(
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::zero(),
+            }),
+            0.9,
+            sea_level,
+        ));
+        assert!(!authored_map_post_processing_applies(None, 0.49, sea_level));
+        assert!(authored_map_post_processing_applies(None, 0.5, sea_level));
+    }
+
+    #[test]
+    fn sample_pos_keeps_authored_ocean_color_outside_land_post_processing() {
+        let mut sampler = WorldSim::empty();
+        let sample = &mut sampler.chunks[0];
+        sample.authored_cromatolis_v0 = true;
+        sample.river.river_kind = Some(RiverKind::Ocean);
+        sample.water_alt = 100.0;
+        sample.temp = 1.0;
+        sample.tree_density = 1.0;
+        sampler.authored_ground_cover_profile = Some(cromatolis_profile());
+
+        let config = MapConfig::orthographic(sampler.map_size_lg(), 0.0..=1_000.0);
+        let index = IndexOwned::new(Index::new(0));
+
+        let result = sample_pos(&config, &sampler, index.as_index_ref(), None, Vec2::zero());
+
+        assert_eq!(result.rgb, Rgb::new(0x00, 0x4b, 0x82));
     }
 }
