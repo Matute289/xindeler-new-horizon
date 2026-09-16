@@ -3,10 +3,10 @@
     // `tree_density` is authored luminance: blackness percentage is
     // `(1 - luminance) * 100`, and the density itself is unchanged.
     bands: [
-        (band: BareDry, max_density: 0.10),
-        (band: Grassland, max_density: 0.25),
-        (band: SparseWoodland, max_density: 0.35),
-        (band: Forest, max_density: 0.55),
-        (band: Jungle, max_density: 1.0),
+        (band: BareDry, max_density: 0.10, surface_tint: (0.61, 0.47, 0.28), surface_blend: 0.0),
+        (band: Grassland, max_density: 0.25, surface_tint: (0.39, 0.48, 0.18), surface_blend: 0.36),
+        (band: SparseWoodland, max_density: 0.35, surface_tint: (0.26, 0.40, 0.16), surface_blend: 0.50),
+        (band: Forest, max_density: 0.55, surface_tint: (0.16, 0.34, 0.12), surface_blend: 0.68),
+        (band: Jungle, max_density: 1.0, surface_tint: (0.08, 0.30, 0.13), surface_blend: 0.78),
     ],
 )

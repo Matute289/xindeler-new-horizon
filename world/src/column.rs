@@ -2,7 +2,10 @@ use crate::{
     CONFIG, IndexRef, Land,
     all::ForestKind,
     biome_profile::BiomeProfile,
-    sim::{Path, RiverKind, SimChunk, WorldSim, local_cells},
+    sim::{
+        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundCoverBand, Path, RiverKind,
+        SimChunk, WorldSim, local_cells,
+    },
     site::SpawnRules,
     util::{RandomField, RandomPerm, Sampler},
 };
@@ -214,9 +217,8 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
             }
         };
         let rockiness = sim.get_interpolated(wpos, |chunk| chunk.rockiness)?;
-        let tree_density = sim.get_interpolated(wpos, |chunk| chunk.tree_density)?
-            * tree_density_mul
-            * damage.vegetation_mul;
+        let authored_tree_density = sim.get_interpolated(wpos, |chunk| chunk.tree_density)?;
+        let tree_density = authored_tree_density * tree_density_mul * damage.vegetation_mul;
         let spawn_rate = sim.get_interpolated(wpos, |chunk| chunk.spawn_rate)?;
         let near_water =
             sim.get_interpolated(
@@ -1367,6 +1369,23 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         // dirt
         let ground = Lerp::lerp(ground, sub_surface_color, marble_mid * tree_density);
 
+        // The profile is a visual consumer of the unmodified painted density:
+        // it never changes terrain, water, tree placement, or the generic
+        // color pipeline it blends over. Physical terrain remains more
+        // authoritative than authored ground cover.
+        let physical_ground_cover_exclusion = water_dist.is_some_and(|dist| dist <= 3.0)
+            || snow_cover
+            || temp <= CONFIG.snow_temp
+            || alt >= 500.0
+            || cliff_offset > 0.0;
+        let ground = apply_authored_ground_cover_surface_tint(
+            ground,
+            self.sim.authored_ground_cover_profile.as_ref(),
+            sim_chunk.authored_region_id,
+            authored_tree_density,
+            physical_ground_cover_exclusion,
+        );
+
         let path = if spawn_rules.paths {
             sim.get_nearest_path(wpos)
         } else {
@@ -1507,6 +1526,39 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
     }
 }
 
+/// Blends the authored cover band's content tint over a fully-resolved normal
+/// terrain color. Keeping this independent of the color selection itself
+/// preserves marble/noise and rock variation below the authored surface.
+fn apply_authored_ground_cover_surface_tint(
+    base: Rgb<f32>,
+    profile: Option<&AuthoredGroundCoverProfile>,
+    authored_region_id: Option<&str>,
+    density: f32,
+    physical_exclusion: bool,
+) -> Rgb<f32> {
+    if physical_exclusion || authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
+        return base;
+    }
+
+    let Some(profile) = profile else {
+        return base;
+    };
+    let band = profile.classify(density);
+    if band == GroundCoverBand::BareDry {
+        return base;
+    }
+    let definition = profile
+        .bands
+        .iter()
+        .find(|definition| definition.band == band)
+        .expect("validated ground-cover profile contains every band");
+    Rgb::lerp(
+        base,
+        Rgb::from(definition.surface_tint),
+        definition.surface_blend,
+    )
+}
+
 #[derive(Clone)]
 pub struct ColumnSample<'a> {
     pub alt: f32,
@@ -1561,6 +1613,90 @@ impl ColumnSample<'_> {
             cliff_offset: self.cliff_offset,
             cliff_height: self.cliff_height,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::{AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID};
+    use common::assets::AssetExt;
+
+    fn cromatolis_profile() -> AuthoredGroundCoverProfile {
+        AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+            .expect("the Cromatolis ground-cover profile must load")
+    }
+
+    fn assert_rgb_near(actual: Rgb<f32>, expected: Rgb<f32>) {
+        assert!(
+            (actual.r - expected.r).abs() < f32::EPSILON
+                && (actual.g - expected.g).abs() < f32::EPSILON
+                && (actual.b - expected.b).abs() < f32::EPSILON,
+            "expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn forest_profile_tints_a_hot_lowland_surface_away_from_generic_sand() {
+        let generic_sand = Rgb::new(0.86, 0.73, 0.43);
+        let resolved = apply_authored_ground_cover_surface_tint(
+            generic_sand,
+            Some(&cromatolis_profile()),
+            Some(CROMATOLIS_V0_REGION_ID),
+            0.45,
+            false,
+        );
+
+        assert_ne!(
+            resolved, generic_sand,
+            "forest density must not render as thermal sand"
+        );
+        assert!(
+            resolved.g > resolved.r,
+            "forest surface must resolve toward its ecological tint"
+        );
+    }
+
+    #[test]
+    fn bare_dry_profile_leaves_the_existing_dry_surface_unchanged() {
+        let generic_sand = Rgb::new(0.86, 0.73, 0.43);
+        let resolved = apply_authored_ground_cover_surface_tint(
+            generic_sand,
+            Some(&cromatolis_profile()),
+            Some(CROMATOLIS_V0_REGION_ID),
+            0.10,
+            false,
+        );
+
+        assert_rgb_near(resolved, generic_sand);
+    }
+
+    #[test]
+    fn physical_surface_exclusion_bypasses_the_authored_profile_tint() {
+        let existing_snow = Rgb::new(0.92, 0.94, 0.97);
+        let resolved = apply_authored_ground_cover_surface_tint(
+            existing_snow,
+            Some(&cromatolis_profile()),
+            Some(CROMATOLIS_V0_REGION_ID),
+            0.8,
+            true,
+        );
+
+        assert_rgb_near(resolved, existing_snow);
+    }
+
+    #[test]
+    fn procedural_world_surface_keeps_the_preexisting_color_path() {
+        let generic_sand = Rgb::new(0.86, 0.73, 0.43);
+        let resolved = apply_authored_ground_cover_surface_tint(
+            generic_sand,
+            Some(&cromatolis_profile()),
+            None,
+            0.8,
+            false,
+        );
+
+        assert_rgb_near(resolved, generic_sand);
     }
 }
 

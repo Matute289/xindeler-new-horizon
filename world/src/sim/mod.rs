@@ -765,6 +765,11 @@ pub(crate) enum GroundCoverBand {
 pub(crate) struct GroundCoverBandDefinition {
     pub band: GroundCoverBand,
     pub max_density: f32,
+    /// Content-authored surface tint for this density band. The column
+    /// generator blends it over its normal thermal/noise-derived color.
+    pub surface_tint: (f32, f32, f32),
+    /// Strength of [`Self::surface_tint`] in `0.0..=1.0`.
+    pub surface_blend: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -802,6 +807,22 @@ impl AuthoredGroundCoverProfile {
                 return Err(format!(
                     "ground-cover thresholds must be strictly increasing: {} then {}",
                     previous, definition.max_density
+                ));
+            }
+            if !definition.surface_tint.0.is_finite()
+                || !definition.surface_tint.1.is_finite()
+                || !definition.surface_tint.2.is_finite()
+            {
+                return Err(format!(
+                    "ground-cover surface tint {index} must have finite RGB"
+                ));
+            }
+            if !definition.surface_blend.is_finite()
+                || !(0.0..=1.0).contains(&definition.surface_blend)
+            {
+                return Err(format!(
+                    "ground-cover surface blend {index} is outside 0..=1: {}",
+                    definition.surface_blend
                 ));
             }
             previous = definition.max_density;
@@ -3992,6 +4013,21 @@ mod tests {
             AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
                 .expect("the configured Cromatolis ground-cover profile must load");
         profile.bands[4].max_density = 1.1;
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn ground_cover_profile_validation_rejects_non_finite_tints_and_invalid_blends() {
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].surface_tint = (f32::NAN, 0.2, 0.3);
+        assert!(profile.validate().is_err());
+
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        profile.bands[0].surface_blend = 1.1;
         assert!(profile.validate().is_err());
     }
 
