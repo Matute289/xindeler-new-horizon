@@ -4728,9 +4728,9 @@ mod tests {
             .expect("real Cromatolis LFS assets must be pulled locally to run this test");
         let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
             .expect("Cromatolis climate asset must load for the biome-mask regression");
-        let profile =
-            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
-                .expect("the configured Cromatolis ground-cover profile must load");
+        let profile = sim.authored_ground_cover_profile.as_ref().expect(
+            "generated Cromatolis WorldSim must retain its configured ground-cover profile",
+        );
         let representatives = [
             (Vec2::new(476, 13), GroundCoverBand::BareDry),
             (Vec2::new(213, 43), GroundCoverBand::Grassland),
@@ -4743,6 +4743,11 @@ mod tests {
             let chunk_idx = vec2_as_uniform_idx(map_size_lg, position);
             let chunk = &sim.chunks[chunk_idx];
             let alt_pre = chunk.alt - CONFIG.sea_level;
+            assert_eq!(
+                chunk.authored_region_id,
+                Some(CROMATOLIS_V0_REGION_ID),
+                "{position:?} must remain an authored Cromatolis chunk"
+            );
             assert!(
                 chunk.river.river_kind.is_none(),
                 "{position:?} must stay dry land"
