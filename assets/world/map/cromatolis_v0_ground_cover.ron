@@ -3,10 +3,10 @@
     // `tree_density` is authored luminance: blackness percentage is
     // `(1 - luminance) * 100`, and the density itself is unchanged.
     bands: [
-        (band: BareDry, max_density: 0.10, surface_tint: (0.61, 0.47, 0.28), surface_blend: 0.0),
-        (band: Grassland, max_density: 0.25, surface_tint: (0.39, 0.48, 0.18), surface_blend: 0.36),
-        (band: SparseWoodland, max_density: 0.35, surface_tint: (0.26, 0.40, 0.16), surface_blend: 0.50),
-        (band: Forest, max_density: 0.55, surface_tint: (0.16, 0.34, 0.12), surface_blend: 0.68),
-        (band: Jungle, max_density: 1.0, surface_tint: (0.08, 0.30, 0.13), surface_blend: 0.78),
+        (band: BareDry, max_density: 0.10, surface_tint: (0.61, 0.47, 0.28), surface_blend: 0.0, map_tint: (0.74117647, 0.67843137, 0.35294118), map_blend: 0.72),
+        (band: Grassland, max_density: 0.25, surface_tint: (0.39, 0.48, 0.18), surface_blend: 0.36, map_tint: (0.50980392, 0.61568627, 0.25882353), map_blend: 0.78),
+        (band: SparseWoodland, max_density: 0.35, surface_tint: (0.26, 0.40, 0.16), surface_blend: 0.50, map_tint: (0.15686275, 0.45098039, 0.20784314), map_blend: 0.88),
+        (band: Forest, max_density: 0.55, surface_tint: (0.16, 0.34, 0.12), surface_blend: 0.68, map_tint: (0.11764706, 0.38039216, 0.19607843), map_blend: 1.0),
+        (band: Jungle, max_density: 1.0, surface_tint: (0.08, 0.30, 0.13), surface_blend: 0.78, map_tint: (0.03137255, 0.21176471, 0.12549020), map_blend: 1.0),
     ],
 )

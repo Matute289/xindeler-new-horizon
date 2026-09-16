@@ -1,7 +1,7 @@
 use crate::{
     CONFIG, IndexRef,
     column::ColumnSample,
-    sim::{RiverKind, WorldSim},
+    sim::{AuthoredGroundCoverProfile, GroundCoverBand, RiverKind, WorldSim},
     site::SiteKind,
 };
 use common::{
@@ -32,6 +32,92 @@ fn shade_rgb(base: Rgb<u8>, factor: f64) -> Rgb<u8> {
         (base.g as f64 * factor).clamp(0.0, 255.0) as u8,
         (base.b as f64 * factor).clamp(0.0, 255.0) as u8,
     )
+}
+
+/// Applies the authored ground-cover band's map-preview tint. Physical map
+/// layers deliberately bypass this stage: their water/mountain rendering is
+/// applied by `sample_pos` and must not inherit a vegetation tint.
+fn authored_ground_cover_preview_tint(
+    base: Rgb<u8>,
+    profile: Option<&AuthoredGroundCoverProfile>,
+    density: f32,
+    is_water: bool,
+    is_physical_mountain: bool,
+) -> (Option<GroundCoverBand>, Rgb<u8>) {
+    let Some(profile) = profile.filter(|_| !is_water && !is_physical_mountain) else {
+        return (None, base);
+    };
+    let band = profile.classify(density.clamp(0.0, 1.0));
+    let definition = profile
+        .bands
+        .iter()
+        .find(|definition| definition.band == band)
+        .expect("validated ground-cover profile contains its classified band");
+    let tint = Rgb::new(
+        (definition.map_tint.0 * 255.0) as u8,
+        (definition.map_tint.1 * 255.0) as u8,
+        (definition.map_tint.2 * 255.0) as u8,
+    );
+    (
+        Some(band),
+        blend_rgb(base, tint, definition.map_blend as f64),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::{AuthoredGroundCoverProfile, GroundCoverBand};
+    use common::assets::AssetExt;
+
+    fn cromatolis_profile() -> AuthoredGroundCoverProfile {
+        AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+            .expect("the shipped Cromatolis ground-cover profile must load")
+    }
+
+    #[test]
+    fn hot_authored_forest_preview_uses_its_profile_band_tint() {
+        let profile = cromatolis_profile();
+        let dry_beige = Rgb::new(0xbd, 0xad, 0x5a);
+
+        let (band, color) =
+            authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, false, false);
+
+        assert_eq!(band, Some(GroundCoverBand::Forest));
+        assert_eq!(color, Rgb::new(0x1e, 0x61, 0x32));
+        assert_ne!(color, dry_beige);
+    }
+
+    #[test]
+    fn preview_classification_matches_runtime_profile_and_preserves_physical_layers() {
+        let profile = cromatolis_profile();
+        let original = Rgb::new(0x51, 0x62, 0x73);
+
+        let (band, _) =
+            authored_ground_cover_preview_tint(original, Some(&profile), 0.60, false, false);
+        assert_eq!(band, Some(profile.classify(0.60)));
+        assert_eq!(band, Some(GroundCoverBand::Jungle));
+
+        for (is_water, is_physical_mountain) in [(true, false), (false, true)] {
+            assert_eq!(
+                authored_ground_cover_preview_tint(
+                    original,
+                    Some(&profile),
+                    0.90,
+                    is_water,
+                    is_physical_mountain,
+                ),
+                (None, original),
+                "physical water and mountains keep their map treatment",
+            );
+        }
+
+        assert_eq!(
+            authored_ground_cover_preview_tint(original, None, 0.90, false, false),
+            (None, original),
+            "procedural maps stay on the legacy rendering path",
+        );
+    }
 }
 
 /// A sample function that grabs the connections at a chunk.
@@ -288,59 +374,34 @@ pub fn sample_pos(
     let rgb = if let Some(sample) = sampler
         .get(pos)
         .filter(|sample| sample.authored_cromatolis_v0)
-        .filter(|_| {
-            !matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
-                && true_alt >= true_sea_level
-        }) {
+    {
         let altitude = ((sample.alt - CONFIG.sea_level) as f64 / 1050.0).clamp(0.0, 1.0);
         let vegetation = sample.tree_density.clamp(0.0, 1.0) as f64;
+        let is_physical_water = is_water
+            || matches!(river_kind, Some(RiverKind::Lake { .. } | RiverKind::Ocean))
+            || true_alt < true_sea_level;
+        let profile = sampler.authored_ground_cover_profile.as_ref();
 
         let mut out = rgb;
         if sample.temp >= 0.0 {
-            let dry = Rgb::new(0xbd, 0xad, 0x5a);
-            let dry_blend = ((0.48 - vegetation) / 0.48).clamp(0.0, 1.0)
-                * (1.0 - (altitude / 0.35).clamp(0.0, 1.0))
-                * 0.72;
-            out = Rgb::new(
-                (out.r as f64 * (1.0 - dry_blend) + dry.r as f64 * dry_blend) as u8,
-                (out.g as f64 * (1.0 - dry_blend) + dry.g as f64 * dry_blend) as u8,
-                (out.b as f64 * (1.0 - dry_blend) + dry.b as f64 * dry_blend) as u8,
-            );
-
-            if altitude > 0.28 {
-                let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
-                let mountain = if mountain_t > 0.6 {
-                    Rgb::new(0x3d, 0x28, 0x1a)
-                } else {
-                    Rgb::new(0x78, 0x55, 0x32)
-                };
-                let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
-                out = Rgb::new(
-                    (out.r as f64 * (1.0 - mountain_blend) + mountain.r as f64 * mountain_blend)
-                        as u8,
-                    (out.g as f64 * (1.0 - mountain_blend) + mountain.g as f64 * mountain_blend)
-                        as u8,
-                    (out.b as f64 * (1.0 - mountain_blend) + mountain.b as f64 * mountain_blend)
-                        as u8,
+            if profile.is_some() {
+                (_, out) = authored_ground_cover_preview_tint(
+                    out,
+                    profile,
+                    sample.tree_density,
+                    is_physical_water,
+                    altitude > 0.28,
                 );
-            }
-
-            if vegetation > 0.24 {
-                let forest = if vegetation > 0.72 {
-                    Rgb::new(0x08, 0x36, 0x20)
-                } else if vegetation > 0.46 {
-                    Rgb::new(0x28, 0x73, 0x35)
-                } else {
-                    Rgb::new(0x82, 0x9d, 0x42)
-                };
-                let altitude_limit =
-                    (1.0 - ((altitude - 0.32) / 0.52).clamp(0.0, 1.0) * 0.78).clamp(0.0, 1.0);
-                let blend = ((vegetation - 0.24) / 0.76).clamp(0.0, 1.0) * altitude_limit * 0.94;
-                out = Rgb::new(
-                    (out.r as f64 * (1.0 - blend) + forest.r as f64 * blend) as u8,
-                    (out.g as f64 * (1.0 - blend) + forest.g as f64 * blend) as u8,
-                    (out.b as f64 * (1.0 - blend) + forest.b as f64 * blend) as u8,
-                );
+                if !is_physical_water && altitude > 0.28 {
+                    let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
+                    let mountain = if mountain_t > 0.6 {
+                        Rgb::new(0x3d, 0x28, 0x1a)
+                    } else {
+                        Rgb::new(0x78, 0x55, 0x32)
+                    };
+                    let mountain_blend = mountain_t * (1.0 - vegetation * 0.42) * 0.95;
+                    out = blend_rgb(out, mountain, mountain_blend);
+                }
             }
         }
         let neighbor_alt = |offset: Vec2<i32>| {
