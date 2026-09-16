@@ -50,7 +50,7 @@ fn authored_map_post_processing_applies(
 /// Applies the authored ground-cover band's map-preview tint. Physical map
 /// layers deliberately bypass this stage: their water/mountain rendering is
 /// applied by `sample_pos` and must not inherit a vegetation tint.
-fn authored_ground_cover_preview_tint(
+pub(super) fn authored_ground_cover_preview_tint(
     base: Rgb<u8>,
     profile: Option<&AuthoredGroundCoverProfile>,
     density: f32,

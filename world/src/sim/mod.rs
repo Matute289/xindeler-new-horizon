@@ -4715,6 +4715,79 @@ mod tests {
         );
     }
 
+    /// Requires the real Cromatolis LFS assets. These hand-picked source-map
+    /// positions are temperate, dry land below the preview's mountain cutoff
+    /// and away from authored water. They pin the complete authored contract:
+    /// raster luminance -> generated density -> shared cover band -> preview.
+    #[test]
+    #[ignore]
+    fn cromatolis_ground_cover_profile_matches_real_lfs_raster_and_preview() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        let vegetation = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_vegetation")
+            .expect("real Cromatolis LFS assets must be pulled locally to run this test");
+        let climate = AuthoredCromatolisClimate::load_owned("world.map.cromatolis_v0_climate")
+            .expect("Cromatolis climate asset must load for the biome-mask regression");
+        let profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        let representatives = [
+            (Vec2::new(476, 13), GroundCoverBand::BareDry),
+            (Vec2::new(213, 43), GroundCoverBand::Grassland),
+            (Vec2::new(199, 44), GroundCoverBand::SparseWoodland),
+            (Vec2::new(201, 43), GroundCoverBand::Forest),
+            (Vec2::new(204, 43), GroundCoverBand::Jungle),
+        ];
+
+        for (position, expected_band) in representatives {
+            let chunk_idx = vec2_as_uniform_idx(map_size_lg, position);
+            let chunk = &sim.chunks[chunk_idx];
+            let alt_pre = chunk.alt - CONFIG.sea_level;
+            assert!(
+                chunk.river.river_kind.is_none(),
+                "{position:?} must stay dry land"
+            );
+            assert!(
+                chunk.temp >= climate.tree_min_temp,
+                "{position:?} must stay temperate"
+            );
+            assert!(
+                alt_pre < 294.0,
+                "{position:?} must stay below preview mountain treatment"
+            );
+            assert!(
+                alt_pre < climate.max_tree_altitude_m,
+                "{position:?} must stay below the tree altitude cap"
+            );
+
+            let luminance = vegetation.values
+                [authored_layer_idx_for_cromatolis_v0(map_size_lg, chunk_idx)]
+            .clamp(0.0, 1.0);
+            assert_eq!(
+                chunk.tree_density, luminance,
+                "{position:?} changed its authored density"
+            );
+            assert_eq!(
+                profile.classify(chunk.tree_density),
+                expected_band,
+                "{position:?} changed band"
+            );
+
+            let (preview_band, _) = map::authored_ground_cover_preview_tint(
+                Rgb::new(0x80, 0x80, 0x80),
+                Some(&profile),
+                chunk.tree_density,
+                false,
+                false,
+            );
+            assert_eq!(
+                preview_band,
+                Some(expected_band),
+                "{position:?} preview drifted from profile"
+            );
+        }
+    }
+
     /// COW-17 binds the terrain `.bin` and river-channel raster into one
     /// reviewed package. Belletoile is a dry authored lowland: the v21
     /// terrain master samples it at about 92.94 m above the external sea
