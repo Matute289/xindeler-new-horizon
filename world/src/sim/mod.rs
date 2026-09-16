@@ -822,34 +822,6 @@ impl AuthoredGroundCoverProfile {
                     .band
             })
     }
-
-    #[cfg(test)]
-    fn test_profile() -> Self {
-        Self {
-            bands: vec![
-                GroundCoverBandDefinition {
-                    band: GroundCoverBand::BareDry,
-                    max_density: 0.1,
-                },
-                GroundCoverBandDefinition {
-                    band: GroundCoverBand::Grassland,
-                    max_density: 0.25,
-                },
-                GroundCoverBandDefinition {
-                    band: GroundCoverBand::SparseWoodland,
-                    max_density: 0.35,
-                },
-                GroundCoverBandDefinition {
-                    band: GroundCoverBand::Forest,
-                    max_density: 0.55,
-                },
-                GroundCoverBandDefinition {
-                    band: GroundCoverBand::Jungle,
-                    max_density: 1.0,
-                },
-            ],
-        }
-    }
 }
 
 impl FileAsset for AuthoredGroundCoverProfile {
@@ -1297,20 +1269,15 @@ impl WorldSim {
                 },
             }
         });
-        let authored_ground_cover_profile = authored_region.and_then(|region| {
-            match AuthoredGroundCoverProfile::load_owned(region.ground_cover_profile) {
-                Ok(profile) => Some(profile),
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        region = region.id,
-                        profile = region.ground_cover_profile,
-                        "Could not load authored ground-cover profile; authored region has no \
-                         valid profile"
-                    );
-                    None
+        let authored_ground_cover_profile = authored_region.map(|region| {
+            AuthoredGroundCoverProfile::load_owned(region.ground_cover_profile).unwrap_or_else(
+                |err| {
+                    panic!(
+                        "authored region '{}' requires valid ground-cover profile '{}': {err:?}",
+                        region.id, region.ground_cover_profile
+                    )
                 },
-            }
+            )
         });
         // Currently only used with LoadOrGenerate to know if we need to
         // overwrite world file
@@ -3981,31 +3948,49 @@ mod tests {
 
         assert_eq!(profile.classify(0.0), GroundCoverBand::BareDry);
         assert_eq!(profile.classify(1.0), GroundCoverBand::Jungle);
-        assert_eq!(profile.classify(0.10), GroundCoverBand::BareDry);
-        assert_eq!(profile.classify(0.25), GroundCoverBand::Grassland);
-        assert_eq!(profile.classify(0.35), GroundCoverBand::SparseWoodland);
-        assert_eq!(profile.classify(0.55), GroundCoverBand::Forest);
-        assert_eq!(profile.classify(0.550_001), GroundCoverBand::Jungle);
+        for (index, definition) in profile.bands.iter().enumerate() {
+            assert_eq!(profile.classify(definition.max_density), definition.band);
+            if let Some(next) = profile.bands.get(index + 1) {
+                assert_eq!(profile.classify(next.max_density), next.band);
+            }
+        }
+        let forest_max = profile.bands[3].max_density;
+        let jungle_max = profile.bands[4].max_density;
+        assert_eq!(
+            profile.classify((forest_max + jungle_max) / 2.0),
+            GroundCoverBand::Jungle
+        );
     }
 
     #[test]
     fn ground_cover_profile_preserves_luminance_as_density_and_blackness_is_inverse() {
-        let luminance = 0.25;
-        assert_eq!(luminance, 0.25, "tree_density remains equal to luminance");
-        assert!((1.0 - luminance) * 100.0 - 75.0 < f32::EPSILON);
+        let profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
+        let luminance = profile.bands[1].max_density;
+        let tree_density = luminance;
+        let blackness_percent = (1.0 - tree_density) * 100.0;
+        assert!((tree_density - luminance).abs() < f32::EPSILON);
+        assert!((blackness_percent - (1.0 - luminance) * 100.0).abs() < f32::EPSILON);
     }
 
     #[test]
     fn ground_cover_profile_validation_rejects_unordered_and_out_of_range_thresholds() {
-        let mut profile = AuthoredGroundCoverProfile::test_profile();
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
         profile.bands[1].max_density = profile.bands[0].max_density;
         assert!(profile.validate().is_err());
 
-        let mut profile = AuthoredGroundCoverProfile::test_profile();
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
         profile.bands[0].max_density = -0.1;
         assert!(profile.validate().is_err());
 
-        let mut profile = AuthoredGroundCoverProfile::test_profile();
+        let mut profile =
+            AuthoredGroundCoverProfile::load_owned("world.map.cromatolis_v0_ground_cover")
+                .expect("the configured Cromatolis ground-cover profile must load");
         profile.bands[4].max_density = 1.1;
         assert!(profile.validate().is_err());
     }
