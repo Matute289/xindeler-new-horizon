@@ -18,9 +18,15 @@
 //   base_poise   the stagger pool. 100 is the standard creature value.
 //   base_energy  the stamina/ability pool. 100 is the standard creature value.
 //
-// Edits hot-reload, but every one of these numbers is snapshotted into a
-// component when an entity spawns, so a change only reaches creatures that
-// spawn after it -- respawn or re-enter the chunk to see it.
+// Edits hot-reload. base_health/base_poise/base_energy are snapshotted into
+// a component when an entity spawns, so a change to those only reaches
+// creatures that spawn after it -- respawn or re-enter the chunk to see it.
+// mass is the exception: several per-tick physics/movement paths read it
+// live rather than the spawned `Mass` component (see stats.rs's module doc),
+// so editing mass here can affect already-alive creatures' physics
+// immediately while their cached `Mass` component (used elsewhere, e.g. for
+// impulse) stays at the old value until they respawn -- a known follow-up,
+// not a design choice.
 //
 // Body kinds NOT here, and where their numbers live instead:
 //   Humanoid  derived from the body scaler (`common/src/comp/body/mod.rs`)

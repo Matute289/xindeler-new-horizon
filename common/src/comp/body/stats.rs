@@ -25,11 +25,22 @@
 //!
 //! # What is here and what is not
 //!
-//! Only numbers that are **read once, when an entity spawns** live here:
+//! Only numbers meant to be **read once, when an entity spawns**, live here:
 //! `Health`, `Poise`, `Energy` and `Mass` are all components built at spawn
-//! from these four getters. That matters, because reading an asset costs a
-//! `RwLock` read in hot-reloading (dev) builds and nothing at all otherwise —
-//! see [`BODY_STATS`].
+//! from these four getters. That is true in practice for `base_health`,
+//! `base_poise` and `base_energy` — every call site is inside
+//! `Health::new`/`Poise::new`/`Energy::new`. `Body::mass()` is the one
+//! exception: several hot per-tick paths (`common/systems/src/phys.rs`'s
+//! `integrate_forces`, `fluid_dynamics.rs`'s drag functions, and
+//! `common/src/states/utils.rs`'s swim/fly/jump thrust) call it directly
+//! instead of reading the already-spawned `Mass` component they're passed —
+//! a pre-existing recompute pattern this migration didn't introduce, but did
+//! change from a free constant-folded match to a real `BODY_STATS` read.
+//! Tracked as a follow-up to route those call sites through `Mass` instead
+//! (or at least skip the read for `Body::Humanoid`, the by-far most common
+//! case, which never touches the table). Reading an asset costs a `RwLock`
+//! read in hot-reloading (dev) builds and nothing at all otherwise — see
+//! [`BODY_STATS`].
 //!
 //! Deliberately left in code:
 //!
