@@ -750,5 +750,41 @@
             center: (x: 0.47728, y: 0.29772),
             requires_capital_castle: false,
         ),
+        (
+            id: "site.twin_dreams",
+            name: "Twin Dreams",
+            category: Inn,
+            size: Minimal,
+            population: (
+                tag: Human,
+                peoples: [Human],
+            ),
+            center: (x: 0.32542, y: 0.26897),
+            requires_capital_castle: false,
+        ),
+        (
+            id: "site.under_the_river",
+            name: "Under the River",
+            category: Inn,
+            size: Minimal,
+            population: (
+                tag: Human,
+                peoples: [Human],
+            ),
+            center: (x: 0.27061, y: 0.22661),
+            requires_capital_castle: false,
+        ),
+        (
+            id: "site.el_ojo_de_luna",
+            name: "El Ojo de Luna",
+            category: Inn,
+            size: Minimal,
+            population: (
+                tag: Human,
+                peoples: [Human],
+            ),
+            center: (x: 0.72118, y: 0.43414),
+            requires_capital_castle: false,
+        ),
     ],
 )
