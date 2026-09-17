@@ -184,6 +184,7 @@ pub struct WorldData {
     /// any land chunk (i.e. the sea level) in its x coordinate, and the maximum
     /// land height above this height (i.e. the max height) in its y coordinate.
     map: (Vec<Arc<DynamicImage>>, Vec2<u16>, Vec2<f32>),
+    minimap_voxel_overlay_alpha: u8,
 }
 
 impl WorldData {
@@ -198,6 +199,8 @@ impl WorldData {
     pub fn min_chunk_alt(&self) -> f32 { self.map.2.x }
 
     pub fn max_chunk_alt(&self) -> f32 { self.map.2.y }
+
+    pub fn minimap_voxel_overlay_alpha(&self) -> u8 { self.minimap_voxel_overlay_alpha }
 
     pub fn alt_at(&self, cpos: Vec2<i32>) -> Option<f32> {
         let [a, b, _, _] = self.lod_alt.get(cpos)?.to_le_bytes();
@@ -786,6 +789,7 @@ impl Client {
 
             let map_size = map_size_lg.chunks();
             let max_height = world_map.max_height;
+            let minimap_voxel_overlay_alpha = world_map.minimap_voxel_overlay_alpha;
             let rgba = world_map.rgba;
             let alt = world_map.alt;
             if rgba.size() != map_size.map(|e| e as i32) {
@@ -1191,6 +1195,7 @@ impl Client {
                 lod_alt,
                 Grid::from_raw(map_size.map(|e| e as i32), lod_horizon),
                 (world_map_layers, map_size, map_bounds),
+                minimap_voxel_overlay_alpha,
                 world_map.sites,
                 world_map.possible_starting_sites,
                 world_map.pois,
@@ -1209,6 +1214,7 @@ impl Client {
             lod_alt,
             lod_horizon,
             world_map,
+            minimap_voxel_overlay_alpha,
             sites,
             possible_starting_sites,
             pois,
@@ -1244,6 +1250,7 @@ impl Client {
                 lod_alt,
                 lod_horizon,
                 map: world_map,
+                minimap_voxel_overlay_alpha,
             },
             weather: WeatherLerp::default(),
             player_list: HashMap::new(),

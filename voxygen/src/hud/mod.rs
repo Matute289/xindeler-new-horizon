@@ -1655,7 +1655,11 @@ impl Hud {
         span!(_guard, "update_layout", "Hud::update_layout");
         let mut events = core::mem::take(&mut self.events);
         if global_state.settings.interface.map_show_voxel_map {
-            self.voxel_minimap.maintain(client, &mut self.ui);
+            self.voxel_minimap.maintain(
+                client,
+                &mut self.ui,
+                client.world_data().minimap_voxel_overlay_alpha(),
+            );
         }
         let scale = self.ui.scale();
         let (ui_widgets, item_tooltip_manager, tooltip_manager) = &mut self.ui.set_widgets();

@@ -463,6 +463,7 @@ impl Server {
         let map = common_net::msg::WorldMapMsg {
             dimensions_lg: Vec2::zero(),
             max_height: 1.0,
+            minimap_voxel_overlay_alpha: u8::MAX,
             rgba: Grid::new(Vec2::new(1, 1), 1),
             horizons: [(vec![0], vec![0]), (vec![0], vec![0])],
             alt: Grid::new(Vec2::new(1, 1), 1),
