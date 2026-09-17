@@ -25,7 +25,7 @@ use crate::{
             convert_waypoint_to_database_json,
         },
         character_loader::{CharacterCreationResult, CharacterDataResult, CharacterListResult},
-        character_updater::PetPersistenceData,
+        character_updater::{CharacterUpdateData, PetPersistenceData},
         error::PersistenceError::DatabaseError,
         json_models,
     },
@@ -218,6 +218,7 @@ pub fn load_character_data(
                 c.secondary_class_future_levels,
                 c.trigger_slots,
                 c.spell_mastery,
+                c.narrative_state,
                 c.pact_standing,
                 c.pact_patron_id,
                 c.pact_boon,
@@ -250,13 +251,14 @@ pub fn load_character_data(
                 secondary_class_future_levels: row.get(13)?,
                 trigger_slots: row.get(14)?,
                 spell_mastery: row.get(15)?,
-                pact_standing: row.get(16)?,
-                pact_patron_id: row.get(17)?,
-                pact_boon: row.get(18)?,
-                pact_blade_summoned: row.get(19)?,
-                pact_blade_exp: row.get(20)?,
-                pact_blade_name: row.get(21)?,
-                pact_favour: row.get(22)?,
+                narrative_state: row.get(16)?,
+                pact_standing: row.get(17)?,
+                pact_patron_id: row.get(18)?,
+                pact_boon: row.get(19)?,
+                pact_blade_summoned: row.get(20)?,
+                pact_blade_exp: row.get(21)?,
+                pact_blade_name: row.get(22)?,
+                pact_favour: row.get(23)?,
             };
 
             let body_data = Body {
@@ -443,6 +445,10 @@ pub fn load_character_data(
             spell_mastery: json_models::db_string_to_spell_mastery(
                 character_data.spell_mastery.as_deref(),
             ),
+            narrative_state: json_models::db_string_to_narrative_state(
+                character_data.narrative_state.as_deref(),
+                &comp::narrative_manifest(),
+            ),
         },
         UpdateCharacterMetadata {
             skill_set_persistence_load_error,
@@ -493,6 +499,8 @@ pub fn load_character_list(player_uuid_: &str, connection: &Connection) -> Chara
                 trigger_slots: None,
                 // Nor spell mastery: the list view never shows it either.
                 spell_mastery: None,
+                // Nor the narrative state: the list view never shows it either.
+                narrative_state: None,
                 // Nor the pact: the list view never shows it either.
                 pact_standing: None,
                 pact_patron_id: None,
@@ -613,6 +621,9 @@ pub fn create_character(
         trigger_slots: _,
         // Nothing accrued yet either; same reasoning as `trigger_slots`.
         spell_mastery: _,
+        // Nor has a brand-new character made any authored choice yet; the
+        // column stays NULL and every read falls back to the manifest default.
+        narrative_state: _,
         // A brand-new character has no pact yet either; the columns stay
         // NULL and load back as `Pact::default()`, same reasoning.
         pact: _,
@@ -1661,26 +1672,35 @@ fn delete_pets(
 }
 
 pub fn update(
-    char_id: CharacterId,
-    char_skill_set: comp::SkillSet,
-    inventory: Inventory,
-    pets: Vec<PetPersistenceData>,
-    char_waypoint: Option<comp::Waypoint>,
-    active_abilities: comp::ability::ActiveAbilities,
-    // Xindeler: the character's live pool, needed to persist `Innate` hotbar
-    // slots by key. Passed in rather than rebuilt: this runs on every save
-    // batch, the caller already has the component in its ECS storage, and
-    // rebuilding would also need a `Body` this function is not given.
-    ability_pool: comp::ability::AbilityPool,
-    map_marker: Option<comp::MapMarker>,
-    character_class: comp::CharacterClass,
-    ethos: comp::Ethos,
-    background: comp::Background,
-    pact: comp::Pact,
-    trigger_slots: comp::TriggerSlots,
-    spell_mastery: comp::SpellMastery,
+    data: CharacterUpdateData,
     transaction: &mut Transaction,
 ) -> Result<(), PersistenceError> {
+    // Destructured rather than field-accessed, so a field added to
+    // `CharacterUpdateData` and then forgotten here is a compile error instead
+    // of a column that silently stops being written.
+    let CharacterUpdateData {
+        character_id: char_id,
+        skill_set: char_skill_set,
+        inventory,
+        pets,
+        waypoint: char_waypoint,
+        active_abilities,
+        // Xindeler: the character's live pool, needed to persist `Innate`
+        // hotbar slots by key. Passed in rather than rebuilt: this runs on
+        // every save batch, the caller already has the component in its ECS
+        // storage, and rebuilding would also need a `Body` this function is
+        // not given.
+        ability_pool,
+        map_marker,
+        character_class,
+        ethos,
+        background,
+        pact,
+        trigger_slots,
+        spell_mastery,
+        narrative_state,
+    } = data;
+
     // Run pet persistence
     update_pets(char_id, pets, transaction)?;
 
@@ -1849,14 +1869,15 @@ pub fn update(
                 secondary_class_future_levels = ?9,
                 trigger_slots = ?10,
                 spell_mastery = ?11,
-                pact_standing = ?12,
-                pact_patron_id = ?13,
-                pact_boon = ?14,
-                pact_blade_summoned = ?15,
-                pact_blade_exp = ?16,
-                pact_blade_name = ?17,
-                pact_favour = ?18
-        WHERE   character_id = ?19
+                narrative_state = ?12,
+                pact_standing = ?13,
+                pact_patron_id = ?14,
+                pact_boon = ?15,
+                pact_blade_summoned = ?16,
+                pact_blade_exp = ?17,
+                pact_blade_name = ?18,
+                pact_favour = ?19
+        WHERE   character_id = ?20
     ",
     )?;
 
@@ -1872,6 +1893,7 @@ pub fn update(
         &convert_future_levels_to_secondary_to_database(character_class),
         &json_models::trigger_slots_to_db_string(&trigger_slots, &ability_pool),
         &json_models::spell_mastery_to_db_string(&spell_mastery),
+        &json_models::narrative_state_to_db_string(&narrative_state),
         &pact_standing_db,
         &pact_patron_db,
         &pact_boon_db,
@@ -1986,6 +2008,7 @@ mod spell_book_persistence_tests {
             pact: comp::Pact::default(),
             trigger_slots: comp::TriggerSlots::default(),
             spell_mastery: comp::SpellMastery::default(),
+            narrative_state: comp::NarrativeState::default(),
         }
     }
 
@@ -2019,20 +2042,23 @@ mod spell_book_persistence_tests {
         let mut conn = db.connection();
         let mut transaction = conn.connection.transaction().expect("transaction");
         update(
-            id,
-            loaded.skill_set.clone(),
-            loaded.inventory.clone(),
-            Vec::new(),
-            loaded.waypoint,
-            loaded.active_abilities.clone(),
-            pool.clone(),
-            loaded.map_marker,
-            loaded.character_class,
-            loaded.ethos,
-            loaded.background,
-            loaded.pact.clone(),
-            loaded.trigger_slots.clone(),
-            loaded.spell_mastery,
+            CharacterUpdateData {
+                character_id: id,
+                skill_set: loaded.skill_set.clone(),
+                inventory: loaded.inventory.clone(),
+                pets: Vec::new(),
+                waypoint: loaded.waypoint,
+                active_abilities: loaded.active_abilities.clone(),
+                ability_pool: pool.clone(),
+                map_marker: loaded.map_marker,
+                character_class: loaded.character_class,
+                ethos: loaded.ethos,
+                background: loaded.background,
+                pact: loaded.pact.clone(),
+                trigger_slots: loaded.trigger_slots.clone(),
+                spell_mastery: loaded.spell_mastery,
+                narrative_state: loaded.narrative_state.clone(),
+            },
             &mut transaction,
         )
         .expect("character update");
@@ -2592,6 +2618,82 @@ mod spell_book_persistence_tests {
             "re-taking Blade must resume, not reset, blade_exp"
         );
     }
+
+    /// A brand-new character has no narrative state at all, and that is a
+    /// fully valid state: the column stays NULL and every read falls back to
+    /// the manifest default. This is also the shape a character created before
+    /// the column existed loads in, which is why it is asserted rather than
+    /// assumed.
+    #[test]
+    fn a_fresh_character_loads_with_an_empty_narrative_state() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-narrative-fresh", &[]);
+        let loaded = load(&db, "uuid-narrative-fresh", id);
+        assert!(loaded.narrative_state.is_empty());
+
+        let manifest = comp::narrative_manifest();
+        assert_eq!(
+            loaded
+                .narrative_state
+                .get(&manifest, "quest.the_kind_work.commissions"),
+            0,
+            "an untouched variable must read its manifest default"
+        );
+    }
+
+    /// The whole point of the layer: a choice made in one session is still
+    /// there in the next one. Drives the real save and the real load against
+    /// the real migration set, so the column, the converters and the SELECT
+    /// index are all exercised together.
+    #[test]
+    fn narrative_state_survives_a_save_and_reload() {
+        let db = TestDb::new();
+        let id = create(&db, "uuid-narrative-roundtrip", &[]);
+        let mut loaded = load(&db, "uuid-narrative-roundtrip", id);
+        let pool = pool_of(&loaded);
+        let manifest = comp::narrative_manifest();
+
+        loaded.narrative_state.apply(
+            &manifest,
+            &comp::NarrativeEffect::SetChoice(
+                comp::NarrativeVarId::new("quest.the_kind_work.offer"),
+                "declined".to_string(),
+            ),
+        );
+        loaded.narrative_state.apply(
+            &manifest,
+            &comp::NarrativeEffect::Add(
+                comp::NarrativeVarId::new("quest.the_kind_work.commissions"),
+                3,
+            ),
+        );
+        save(&db, id, &loaded, &pool);
+
+        let after = load(&db, "uuid-narrative-roundtrip", id);
+        assert_eq!(
+            after
+                .narrative_state
+                .choice(&manifest, "quest.the_kind_work.offer"),
+            Some("declined"),
+            "a recorded choice must survive the relog"
+        );
+        assert_eq!(
+            after
+                .narrative_state
+                .get(&manifest, "quest.the_kind_work.commissions"),
+            3
+        );
+        // Derived variables are recomputed, never stored, so the reloaded
+        // state must hold exactly the two rows that were written.
+        assert_eq!(after.narrative_state.len(), 2);
+        assert_eq!(
+            after
+                .narrative_state
+                .choice(&manifest, "quest.the_kind_work.footing"),
+            Some("trusted"),
+            "the derived reading must come back from the inputs, not from a row"
+        );
+    }
 }
 
 /// NH-79: end-to-end tests for the character-summary/rename path added in
@@ -2650,6 +2752,7 @@ mod nh79_character_summary_tests {
             pact: comp::Pact::default(),
             trigger_slots: comp::TriggerSlots::default(),
             spell_mastery: comp::SpellMastery::default(),
+            narrative_state: comp::NarrativeState::default(),
         }
     }
 
@@ -2871,6 +2974,7 @@ mod character_suspension_persistence_tests {
             pact: comp::Pact::default(),
             trigger_slots: comp::TriggerSlots::default(),
             spell_mastery: comp::SpellMastery::default(),
+            narrative_state: comp::NarrativeState::default(),
         }
     }
 

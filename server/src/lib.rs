@@ -1346,6 +1346,7 @@ impl Server {
                                         pact,
                                         trigger_slots,
                                         spell_mastery,
+                                        narrative_state,
                                     } = character_data;
                                     let character_data = (
                                         body,
@@ -1363,6 +1364,7 @@ impl Server {
                                         pact,
                                         trigger_slots,
                                         spell_mastery,
+                                        narrative_state,
                                     );
                                     // TODO: Does this need to be a server event? E.g. we could
                                     // just handle it here.

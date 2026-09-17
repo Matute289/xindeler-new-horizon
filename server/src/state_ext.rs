@@ -708,6 +708,7 @@ impl StateExt for State {
             pact,
             mut trigger_slots,
             spell_mastery,
+            narrative_state,
         } = components;
 
         if let Some(player_uid) = self.read_component_copied::<Uid>(entity) {
@@ -774,6 +775,11 @@ impl StateExt for State {
             // nothing to reproject -- unlike `trigger_slots` above, it is
             // ready to insert as loaded.
             self.write_component_ignore_entity_dead(entity, spell_mastery);
+            // Narrative state is inserted even when empty, and empty is the
+            // normal state for a new character: the component has to exist for
+            // a choice made this session to have somewhere to land, and for the
+            // save tick to write it back.
+            self.write_component_ignore_entity_dead(entity, narrative_state);
             // Grant class active-ability keys + racial innate + anything the
             // character has learned into its spellbook, plus whatever the
             // pact projects (a summoned Blade boon's three attack keys).

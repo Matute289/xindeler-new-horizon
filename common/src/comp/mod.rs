@@ -36,6 +36,7 @@ mod location;
 pub mod loot_owner;
 pub mod melee;
 pub mod misc;
+pub mod narrative;
 pub mod ori;
 pub mod pact;
 pub mod pet;
@@ -133,6 +134,12 @@ pub use self::{
     loot_owner::LootOwner,
     melee::{Melee, MeleeConstructor, MeleeConstructorKind},
     misc::Object,
+    narrative::{
+        DerivedRule, DerivedValue, EffectOutcome, EffectRefusal, MAX_NARRATIVE_VARS,
+        NarrativeCondition, NarrativeEffect, NarrativeManifest, NarrativeScope, NarrativeState,
+        NarrativeVarDef, NarrativeVarId, NarrativeVarKind, NarrativeVisibility, SentimentTarget,
+        StandingTier, SumTerm, ThresholdBand, narrative_manifest,
+    },
     ori::Ori,
     pact::{Pact, PactBoon, PactStanding, PatronId, Summons},
     pet::Pet,

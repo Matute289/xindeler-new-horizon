@@ -3,6 +3,7 @@ pub mod airship;
 pub mod architect;
 pub mod banished;
 pub mod faction;
+pub mod narrative;
 pub mod nature;
 pub mod quest;
 pub mod report;
@@ -13,6 +14,7 @@ pub use self::{
     actor::{Actor, Actors},
     banished::{BanishedCreature, BanishedKind, Banishments},
     faction::{Faction, FactionId, Factions},
+    narrative::WorldNarrative,
     nature::Nature,
     quest::Quests,
     report::{Report, ReportId, ReportKind, Reports},
@@ -64,6 +66,13 @@ pub struct Data {
     /// empty registry.
     #[serde(default)]
     pub banished: Banishments,
+    /// World-scoped narrative variables: facts that became true for everyone
+    /// (a revelation made public, a structure permanently destroyed). Additive
+    /// `#[serde(default)]` field, same convention as `banished` above -- per
+    /// `CURRENT_VERSION`'s doc comment this needs **no** version bump, and an
+    /// older save simply loads with no world narrative state.
+    #[serde(default)]
+    pub world_narrative: WorldNarrative,
 
     #[serde(default)]
     pub tick: u64,
@@ -234,5 +243,60 @@ mod tests {
         let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
         assert_eq!(data.tick, 7);
         assert!(data.banished.is_empty());
+    }
+
+    /// The exact wire shape of an rtsim save written *before* `world_narrative`
+    /// existed: every field `Data` has today except that one, in order, named
+    /// the same way `write_named` names them.
+    #[derive(Serialize)]
+    struct PreWorldNarrativeData {
+        version: u32,
+        nature: Nature,
+        actors: Actors,
+        sites: Sites,
+        factions: Factions,
+        reports: Reports,
+        architect: Architect,
+        quests: Quests,
+        banished: Banishments,
+        tick: u64,
+        time_of_day: TimeOfDay,
+        should_purge: bool,
+    }
+
+    /// `world_narrative` is an additive `#[serde(default)]` field, which is why
+    /// `CURRENT_VERSION` does **not** move for it (see the constant's own doc
+    /// comment, and `banished`/`quests`, which were added the same way). This
+    /// pins that claim end to end: a payload missing the key entirely must
+    /// still load through the real MessagePack codec, at the *unchanged*
+    /// version, and come up with no world narrative state. It fails loudly if
+    /// anyone drops the `#[serde(default)]` or bumps the version for it.
+    #[test]
+    fn a_save_written_before_world_narrative_existed_still_loads_at_the_same_version() {
+        let old = PreWorldNarrativeData {
+            version: CURRENT_VERSION,
+            nature: Nature {
+                chunks: Grid::populate_from(Vec2::new(1, 1), |_| nature::Chunk {
+                    res: Default::default(),
+                }),
+            },
+            actors: Default::default(),
+            sites: Default::default(),
+            factions: Default::default(),
+            reports: Default::default(),
+            architect: Default::default(),
+            quests: Default::default(),
+            banished: Default::default(),
+            tick: 11,
+            time_of_day: TimeOfDay(4321.0),
+            should_purge: false,
+        };
+
+        let mut encoded = Vec::new();
+        rmp_serde::encode::write_named(&mut encoded, &old).expect("serialise the old save");
+
+        let data = Data::from_reader(&encoded[..]).expect("an old save must still load");
+        assert_eq!(data.tick, 11);
+        assert!(data.world_narrative.is_empty());
     }
 }

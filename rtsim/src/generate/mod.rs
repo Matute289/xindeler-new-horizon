@@ -100,6 +100,7 @@ impl Data {
             architect: Default::default(),
             quests: Default::default(),
             banished: Default::default(),
+            world_narrative: Default::default(),
 
             tick: 0,
             time_of_day: TimeOfDay(settings.start_time),

@@ -22,25 +22,34 @@ use std::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-pub type CharacterUpdateData = (
-    CharacterId,
-    comp::SkillSet,
-    comp::Inventory,
-    Vec<PetPersistenceData>,
-    Option<comp::Waypoint>,
-    comp::ability::ActiveAbilities,
-    // Xindeler: carried alongside `ActiveAbilities` because persisted `Innate`
-    // hotbar slots are stored by pool key; the writer needs the pool those keys
-    // index to translate them.
-    comp::ability::AbilityPool,
-    Option<comp::MapMarker>,
-    comp::CharacterClass,
-    comp::Ethos,
-    comp::Background,
-    comp::Pact,
-    comp::TriggerSlots,
-    comp::SpellMastery,
-);
+/// Everything one character's save writes, gathered in one place.
+///
+/// A struct rather than a positional tuple: every field here is threaded
+/// through the save scheduler, the batch queue and the SQL writer, and at this
+/// width a positional list means two same-typed neighbours can be swapped at a
+/// call site with nothing to catch it. Named fields also make adding one an
+/// ordinary additive change instead of a renumbering.
+#[derive(Clone)]
+pub struct CharacterUpdateData {
+    pub character_id: CharacterId,
+    pub skill_set: comp::SkillSet,
+    pub inventory: comp::Inventory,
+    pub pets: Vec<PetPersistenceData>,
+    pub waypoint: Option<comp::Waypoint>,
+    pub active_abilities: comp::ability::ActiveAbilities,
+    /// Xindeler: carried alongside `active_abilities` because persisted
+    /// `Innate` hotbar slots are stored by pool key; the writer needs the pool
+    /// those keys index to translate them.
+    pub ability_pool: comp::ability::AbilityPool,
+    pub map_marker: Option<comp::MapMarker>,
+    pub character_class: comp::CharacterClass,
+    pub ethos: comp::Ethos,
+    pub background: comp::Background,
+    pub pact: comp::Pact,
+    pub trigger_slots: comp::TriggerSlots,
+    pub spell_mastery: comp::SpellMastery,
+    pub narrative_state: comp::NarrativeState,
+}
 
 pub type PetPersistenceData = (comp::Pet, comp::Body, comp::Stats);
 
@@ -269,22 +278,25 @@ impl CharacterUpdater {
             warn!(
                 "Ignoring request to add pending logout update for character ID {} as there is a \
                  disconnection of all clients in progress",
-                update_data.0.0
+                update_data.character_id.0
             );
             return;
         }
 
-        if self.pending_database_actions.contains_key(&update_data.0) {
+        if self
+            .pending_database_actions
+            .contains_key(&update_data.character_id)
+        {
             warn!(
                 "Ignoring request to add pending logout update for character ID {} as there is \
                  already a pending delete for this character",
-                update_data.0.0
+                update_data.character_id.0
             );
             return;
         }
 
         self.pending_database_actions.insert(
-            update_data.0, // CharacterId
+            update_data.character_id,
             DatabaseAction::New(DatabaseActionKind::UpdateCharacter(Box::new(update_data))),
         );
     }
@@ -446,38 +458,9 @@ fn execute_batch_update(
     transaction.set_drop_behavior(DropBehavior::Rollback);
     trace!("Transaction started for character batch update");
     updates.into_iter().try_for_each(|event| match event {
-        DatabaseActionKind::UpdateCharacter(box (
-            character_id,
-            stats,
-            inventory,
-            pets,
-            waypoint,
-            active_abilities,
-            ability_pool,
-            map_marker,
-            character_class,
-            ethos,
-            background,
-            pact,
-            trigger_slots,
-            spell_mastery,
-        )) => super::character::update(
-            character_id,
-            stats,
-            inventory,
-            pets,
-            waypoint,
-            active_abilities,
-            ability_pool,
-            map_marker,
-            character_class,
-            ethos,
-            background,
-            pact,
-            trigger_slots,
-            spell_mastery,
-            &mut transaction,
-        ),
+        DatabaseActionKind::UpdateCharacter(data) => {
+            super::character::update(*data, &mut transaction)
+        },
         DatabaseActionKind::DeleteCharacter {
             requesting_player_uuid,
             character_id,

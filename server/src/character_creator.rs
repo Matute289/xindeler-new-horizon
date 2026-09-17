@@ -243,6 +243,9 @@ pub fn create_character(
         trigger_slots: common::comp::TriggerSlots::default(),
         // Mastery accrues in-game, never at creation.
         spell_mastery: common::comp::SpellMastery::default(),
+        // Every narrative variable starts at its manifest default; a character
+        // has made no authored choice before they exist.
+        narrative_state: common::comp::NarrativeState::default(),
     });
     Ok(())
 }

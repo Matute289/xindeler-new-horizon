@@ -94,6 +94,7 @@ pub fn handle_loaded_character_data(server: &mut Server, ev: UpdateCharacterData
         pact: ev.components.12,
         trigger_slots: ev.components.13,
         spell_mastery: ev.components.14,
+        narrative_state: ev.components.15,
     };
     if let Some(marker) = loaded_components.map_marker {
         server.notify_client(
