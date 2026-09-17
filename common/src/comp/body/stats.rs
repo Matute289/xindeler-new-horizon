@@ -37,10 +37,10 @@
 //!   [`Body::magic_resist_tier`](super::Body::magic_resist_tier) — both are
 //!   *taxonomies* (which bucket is this creature in), not tunable numbers; the
 //!   numbers each bucket maps to already live in data (`Body::TIER_*` and
-//!   `combat_tuning.ron`). Both are now exhaustive matches, which is a
-//!   strictly stronger check than this file's — a compile error rather than a
-//!   start-up error. `threat_tier` is also read per entity per tick by the
-//!   buff system, where an asset read would not be free.
+//!   `combat_tuning.ron`). Both are now exhaustive matches, which is a strictly
+//!   stronger check than this file's — a compile error rather than a start-up
+//!   error. `threat_tier` is also read per entity per tick by the buff system,
+//!   where an asset read would not be free.
 //! - `scale`, `spacing_radius`, `combat_multiplier` — sparse matches whose
 //!   catch-all is the *neutral* value (`1.0`, `2.0`, `1.0`), i.e. "this
 //!   creature has no such trait", not a forgotten decision. They stay wrapped

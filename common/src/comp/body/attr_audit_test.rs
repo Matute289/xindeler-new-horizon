@@ -13,12 +13,13 @@
 //! Re-bless the ledger after a deliberate change with
 //! `ATTR_LEDGER_BLESS=1 cargo test -p xindeler-common --lib attr_audit`.
 //!
-//! **Scope.** Only the getters in [`AUDITED`] are covered — the per-species
-//! attributes that feed balance, physics or AI targeting. Attributes whose
+//! **Scope.** Only the getters in [`AUDITED`] are covered. Attributes whose
 //! catch-all *is* the meaning (`immune_to`, `negates_buff`,
 //! `is_same_species_as`, `localize_npc`, `humanoid_gender`) are deliberately
-//! out of scope, as are `dimensions`/`base_health`-style matches that are
-//! already exhaustive and enforced by the compiler.
+//! out of scope, as are matches that are already exhaustive and enforced by
+//! the compiler, and the four numbers that now live in
+//! `assets/common/body_stats.ron` (see [`super::stats`]) where serde enforces
+//! them instead.
 
 use std::collections::HashMap;
 
@@ -33,33 +34,30 @@ use super::{
 /// Every entry is a per-species attribute that feeds game balance, physics or
 /// AI targeting — the class where a silent default produces a creature that is
 /// quietly wrong rather than merely unstyled.
+///
+/// `mass`, `base_energy` and `base_poise` used to be here and are not any
+/// more: they now come from `assets/common/body_stats.ron`, where leaving a
+/// species out is a load error rather than a fall-through, so there is nothing
+/// left for this audit to watch. `threat_tier` and `magic_resist_tier` left
+/// for the other reason — their matches are exhaustive now, so the *compiler*
+/// catches an unclassified species. Both are stronger guarantees than this
+/// file, which is why the ledger shrank by 763 of its 832 lines.
 const AUDITED: &[(&str, fn(&Body))] = &[
     ("scale", |b| {
         b.scale();
     }),
-    ("mass", |b| {
-        b.mass();
-    }),
     ("spacing_radius", |b| {
         b.spacing_radius();
     }),
-    ("base_energy", |b| {
-        b.base_energy();
-    }),
-    ("threat_tier", |b| {
-        b.threat_tier();
-    }),
+    // Only `Body::Object` still reaches a wildcard here — its bodies are
+    // props, projectiles and turrets rather than a species roster, so there is
+    // no `AllSpecies` struct to make the list required. Every creature's
+    // health is in `body_stats.ron`.
     ("base_health", |b| {
         b.base_health();
     }),
     ("combat_multiplier", |b| {
         b.combat_multiplier();
-    }),
-    ("magic_resist_tier", |b| {
-        b.magic_resist_tier();
-    }),
-    ("base_poise", |b| {
-        b.base_poise();
     }),
 ];
 
@@ -230,28 +228,17 @@ fn observed_fallbacks() -> Vec<String> {
 /// information.
 ///
 /// The line is: does the wildcard mean **"this creature has no such trait"**,
-/// or **"nobody said what this creature's number is"**? The four below are the
-/// first kind — each of their matches is deliberately sparse, and the source
-/// says so (`magic_resist_tier`: *"A sparse match; anything not listed has no
-/// innate resistance"*):
+/// or **"nobody said what this creature's number is"**? The three below are
+/// the first kind — each of their matches is deliberately sparse:
 ///
 /// - `scale` — `1.0` is "no scaling"; body size lives in `dimensions()`.
 /// - `spacing_radius` — `2.0` is the standard AI spacing; only Rat, Hakulaq and
 ///   Husk deviate.
-/// - `magic_resist_tier` — `None` is "no innate magic resistance".
 /// - `combat_multiplier` — `1.0` is "no difficulty adjustment".
 ///
-/// Everything left audited (`mass`, `base_health`, `base_poise`,
-/// `base_energy`, `threat_tier`) is a substantive number about the creature,
-/// where a catch-all really is somebody's forgotten decision. They stay
-/// wrapped in `attr_fallback!` either way, so flipping one of these back to
-/// audited is a one-line change.
-const DEFAULTS_BY_DESIGN: &[&str] = &[
-    "scale",
-    "spacing_radius",
-    "magic_resist_tier",
-    "combat_multiplier",
-];
+/// That leaves `base_health` as the only audited attribute where a catch-all
+/// really is somebody's forgotten decision, and only for `Body::Object`.
+const DEFAULTS_BY_DESIGN: &[&str] = &["scale", "spacing_radius", "combat_multiplier"];
 
 /// True if `key` (`"<BodyKind>.<attr> <species>"`) names a
 /// [`DEFAULTS_BY_DESIGN`] attribute.
@@ -311,7 +298,13 @@ fn bless(observed: &[String]) {
          Fixing a species: give it an explicit arm; the line disappears on the next bless.\n#\n# \
          SCOPE: this covers the getters in `AUDITED` minus those in `DEFAULTS_BY_DESIGN`\n# \
          (attributes whose catch-all is the neutral value, not a guess). It is not a\n# complete \
-         inventory of every default in the engine — see the module docs.\n",
+         inventory of every default in the engine — see the module docs.\n#\n# Everything that \
+         used to be in here for a *creature* is gone: `mass`,\n# `base_health`, `base_poise` and \
+         `base_energy` are now required fields in\n# `assets/common/body_stats.ron` (a missing \
+         species fails the load, by name),\n# and `threat_tier`/`magic_resist_tier` are \
+         exhaustive matches (a missing\n# species fails the build). What is left is \
+         `Body::Object` — props,\n# projectiles and turrets, which have no species roster to make \
+         required.\n",
     );
     let mut group = String::new();
     for line in observed {
@@ -403,20 +396,15 @@ fn the_audit_mechanism_is_wired_up() {
         !roster().is_empty(),
         "the body roster is empty — the audit would vacuously pass"
     );
-    // `Wolf` has no explicit `mass` arm and must be seen falling through.
-    let wolf = Body::from(quadruped_medium::Body {
-        species: quadruped_medium::Species::Wolf,
-        body_type: quadruped_medium::BodyType::Male,
-    });
+    // A `Bomb` has no explicit `base_health` arm and must be seen falling
+    // through.
+    let bomb = Body::Object(object::Body::Bomb);
     assert_eq!(
-        probe(|| wolf.mass()),
-        vec![("QuadrupedMedium", "mass")],
+        probe(|| bomb.base_health()),
+        vec![("Object", "base_health")],
         "the `attr_fallback!` recorder is not firing — the whole audit is dead"
     );
-    // …and a species that *does* have one must not be reported.
-    let bear = Body::from(quadruped_medium::Body {
-        species: quadruped_medium::Species::Bear,
-        body_type: quadruped_medium::BodyType::Male,
-    });
-    assert!(probe(|| bear.mass()).is_empty());
+    // …and an object that *does* have one must not be reported.
+    let dummy = Body::Object(object::Body::TrainingDummy);
+    assert!(probe(|| dummy.base_health()).is_empty());
 }
