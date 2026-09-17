@@ -2185,11 +2185,12 @@ impl Civs {
                         WorldSite::generate_vampire_castle(&Land::from_sim(ctx.sim), &mut rng, wpos)
                     },
                 };
-                if let Some(name) = sim_site.authored_name() {
+                let generated_site = if let Some(name) = sim_site.authored_name() {
                     generated_site.with_name(name.to_string())
                 } else {
                     generated_site
-                }
+                };
+                generated_site.with_authored_settlement(sim_site.is_authored_settlement())
             });
             sim_site.site_tmp = Some(site);
             let site_ref = &index.sites[site];
@@ -3718,6 +3719,16 @@ impl Site {
             .is_some_and(|settlement| settlement.start_eligible)
     }
 
+    /// Whether this site was established from an authored settlement pin
+    /// (`establish_authored_cromatolis_settlements`; any category -- city,
+    /// town, inn, post, ... -- covered by `AuthoredSettlementCategory`), as
+    /// opposed to procedural civilisation simulation, a landmark, a bridge,
+    /// or a fortification. Deliberately narrower than `authored_name`
+    /// (which also covers landmarks) -- this feeds
+    /// `site::Site::with_authored_settlement`, which only makes sense for
+    /// genuine settlement pins.
+    pub fn is_authored_settlement(&self) -> bool { self.authored.is_some() }
+
     /// Whether player-start selection should consider this site at all.
     /// Procedural sites (not authored) are always eligible -- the authored
     /// map only ever *restricts* the pool, it never adds eligibility a
@@ -5206,6 +5217,100 @@ mod tests {
             1,
             "exactly one civilisation must be created, rooted at the authored capital"
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn cromatolis_authored_inns_and_posts_are_marked_as_authored_settlements() {
+        // The bug this guards against: all 7 authored Cromatolis inns (4 old
+        // + 3 newly-installed) plus the authored posts resolve to
+        // `SiteKind::Camp` as a physical stand-in (no dedicated inn/post
+        // generator exists yet -- see `resolve_settlement_site_kind`), the
+        // same `SiteKind` genuine wild procedural bandit camps use. Without
+        // `site::Site::is_authored_settlement` set correctly on every one of
+        // them, rtsim's `good_or_evil` classifier can't tell them apart from
+        // a real bandit camp and assigns them a hostile faction.
+        let mut sim = generate_cromatolis_world();
+        let mut index = crate::index::Index::new(0);
+        let civs = crate::civ::Civs::generate(0, &mut sim, &mut index, None, &|_| {});
+
+        let authored_inn_and_post_sites: Vec<_> = civs
+            .sites()
+            .filter(|site| {
+                site.authored.as_ref().is_some_and(|meta| {
+                    matches!(
+                        meta.category,
+                        AuthoredSettlementCategory::Inn | AuthoredSettlementCategory::Post
+                    )
+                })
+            })
+            .collect();
+
+        let settlements = real_settlements();
+        let real_inn_and_post_count = settlements
+            .settlements
+            .iter()
+            .filter(|settlement| {
+                matches!(
+                    settlement.category,
+                    AuthoredSettlementCategory::Inn | AuthoredSettlementCategory::Post
+                )
+            })
+            .count();
+        assert!(
+            real_inn_and_post_count >= 7,
+            "expected at least the 7 reviewed inns among the real authored settlements, found \
+             {real_inn_and_post_count}"
+        );
+        assert_eq!(
+            authored_inn_and_post_sites.len(),
+            real_inn_and_post_count,
+            "every authored inn/post settlement must have been established as a site"
+        );
+
+        for civ_site in &authored_inn_and_post_sites {
+            let site_id = civ_site.site_tmp.unwrap_or_else(|| {
+                panic!(
+                    "authored settlement {:?} was never placed in the world",
+                    civ_site.authored.as_ref().map(|m| &m.id)
+                )
+            });
+            let world_site = index.sites.get(site_id);
+            assert_eq!(
+                world_site.kind,
+                Some(SiteKind::Camp),
+                "authored inn/post settlement {:?} unexpectedly stopped resolving to the Camp \
+                 stand-in",
+                civ_site.authored.as_ref().map(|m| &m.id)
+            );
+            assert!(
+                world_site.is_authored_settlement,
+                "authored inn/post settlement {:?} was not marked is_authored_settlement -- rtsim \
+                 would classify it as a hostile bandit camp",
+                civ_site.authored.as_ref().map(|m| &m.id)
+            );
+        }
+
+        // A genuine wild procedural `Camp` (not from the authored
+        // settlement pipeline) must NOT be marked as an authored
+        // settlement -- it must keep resolving Evil in rtsim.
+        let wild_camp_found = civs.sites().any(|site| {
+            site.authored.is_none()
+                && site
+                    .site_tmp
+                    .is_some_and(|id| index.sites.get(id).kind == Some(SiteKind::Camp))
+        });
+        if wild_camp_found {
+            assert!(
+                civs.sites()
+                    .filter(|site| site.authored.is_none())
+                    .all(|site| {
+                        site.site_tmp
+                            .is_none_or(|id| !index.sites.get(id).is_authored_settlement)
+                    }),
+                "a non-authored site was incorrectly marked is_authored_settlement"
+            );
+        }
     }
 
     #[test]

@@ -13,6 +13,13 @@ pub struct Camp {
     bounds: Aabr<i32>,
     pub(crate) alt: i32,
     temp: f32,
+    /// See `site::Site::is_authored_settlement`. A genuine wild procedural
+    /// `Camp` spawns `Alignment::Enemy` pirate NPCs in a tropical biome
+    /// (see `render_inner` below); an authored settlement (inn/post) reusing
+    /// this generator as a physical stand-in must never spawn hostile NPCs,
+    /// regardless of local temperature, so it always falls back to the
+    /// peaceful village-aligned NPC set instead.
+    is_authored_settlement: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -39,6 +46,7 @@ impl Camp {
             bounds,
             alt: land.get_alt_approx(site.tile_center_wpos(tile_aabr.center())) as i32 + 2,
             temp,
+            is_authored_settlement: site.is_authored_settlement,
         }
     }
 }
@@ -86,8 +94,12 @@ impl Structure for Camp {
 
         // npcs
         let npc_rng = rng.random_range(1..=5);
+        // An authored settlement (inn/post) reusing this generator never
+        // spawns the hostile pirate NPC set, even in a tropical biome where
+        // a genuine wild camp would -- see the `is_authored_settlement`
+        // field doc.
         match camp_type {
-            CampType::Pirate => {
+            CampType::Pirate if !self.is_authored_settlement => {
                 for p in 0..npc_rng {
                     painter.spawn(
                         EntityInfo::at((center + p).with_z(base + 2).as_()).with_asset_expect(
