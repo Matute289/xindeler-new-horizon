@@ -4,10 +4,17 @@
 // Fields are `#[serde(default)]`, so a partial asset stays forward/backward
 // compatible with the struct.
 //
-// NOT here on purpose: the rain/snow fall rates. They define the axis the
-// rain-occlusion map is rendered along AND sampled along, so hot-reloading
-// them mid-frame would desync the map against its own lookup. They live as
-// constants in `common/src/weather.rs`.
+// NOT here on purpose: the rain/snow fall rates. They are a look, not balance,
+// and they define the axis the rain-occlusion map is rendered along AND sampled
+// along, which voxygen re-derives three times a frame. They live as constants
+// in `common/src/weather.rs` -- see the note on `WeatherTuning` there for what
+// that does and does not actually guarantee.
+//
+// Every value below is clamped or made degenerate-safe on load, because this
+// file hot-reloads: a typo here reaches a running server without passing a
+// single test. Setting fog_cloud_min == fog_cloud_max, or a negative
+// visibility, must not be able to blind (or super-sight) every NPC in the
+// world -- see `WeatherTuning::load` and `smoothstep`.
 (
     // --- rain vs. snow ---
     // Precipitation is fully snow at or below the world-gen snow line

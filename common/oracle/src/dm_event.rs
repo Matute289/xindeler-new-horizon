@@ -13,7 +13,9 @@
 //! uses [`PlanoAtmosphere`], a reduced schema carrying only the fields that
 //! map onto primitives this engine already has: `time_lock`
 //! (`common::resources::TimeOfDay`, hours-of-day), `weather_effect` (mirrors
-//! `common::weather::WeatherKind`'s variant set), and `transition_secs`.
+//! the *cell-level* variants of `common::weather::WeatherKind` — see
+//! [`WeatherEffect`] for why `Snow` is deliberately not among them), and
+//! `transition_secs`.
 //! Applying those to the live sim is not implemented here — this crate only
 //! loads and validates the values.
 

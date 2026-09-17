@@ -72,6 +72,33 @@ impl<T> Default for SoundtrackCollection<T> {
     fn default() -> Self { Self { tracks: Vec::new() } }
 }
 
+/// Which weathers a track is authored for.
+///
+/// Untagged, and accepting both a bare `WeatherKind` and a list of them, purely
+/// so that this fork's schema stays a superset of upstream Veloren's. Upstream
+/// adds tracks to `assets/voxygen/audio/soundtrack.ron` routinely and writes
+/// `weather: Rain`; without the `One` arm the first such track merged in would
+/// compile fine and then panic the client at startup, inside
+/// `SoundtrackCollection::load_expect`. Authoring here should prefer the list
+/// form — `weather: [Rain, Snow]` — since that is the whole point of the split.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum WeatherFilter {
+    /// Upstream's single-weather form, kept loadable.
+    One(WeatherKind),
+    /// Any of these.
+    Any(Vec<WeatherKind>),
+}
+
+impl WeatherFilter {
+    fn matches(&self, kind: WeatherKind) -> bool {
+        match self {
+            Self::One(only) => *only == kind,
+            Self::Any(kinds) => kinds.contains(&kind),
+        }
+    }
+}
+
 /// Configuration for a single music track in the soundtrack
 #[derive(Clone, Debug, Deserialize)]
 pub struct SoundtrackItem {
@@ -84,10 +111,8 @@ pub struct SoundtrackItem {
     loop_points: Option<(f32, f32)>,
     /// Whether this track should play during day or night
     timing: Option<DayPeriod>,
-    /// Which weathers this track should play in. `None` means any weather; a
-    /// list means the track plays if the current weather is any of them (a rain
-    /// theme that also suits snowfall lists both).
-    weather: Option<Vec<WeatherKind>>,
+    /// Which weathers this track should play in. `None` means any weather.
+    weather: Option<WeatherFilter>,
     /// What biomes this track should play in with chance of play
     biomes: Vec<(BiomeKind, u8)>,
     /// Whether this track should play in a specific site
@@ -110,7 +135,7 @@ enum RawSoundtrackItem {
     Segmented {
         title: String,
         timing: Option<DayPeriod>,
-        weather: Option<Vec<WeatherKind>>,
+        weather: Option<WeatherFilter>,
         biomes: Vec<(BiomeKind, u8)>,
         sites: Vec<SiteKindMeta>,
         segments: Vec<(String, f32, MusicState, Option<MusicActivity>)>,
@@ -489,7 +514,7 @@ impl MusicMgr {
                     Some(period_of_day) => period_of_day == &current_period_of_day,
                     None => true,
                 }) && match &track.weather {
-                    Some(weathers) => weathers.contains(&current_weather_kind),
+                    Some(weathers) => weathers.matches(current_weather_kind),
                     None => true,
                 }
             })
@@ -820,6 +845,40 @@ impl Asset for SoundtrackCollection<SoundtrackItem> {
 mod tests {
     use super::*;
     use strum::IntoEnumIterator;
+
+    /// A soundtrack entry written the way **upstream Veloren** writes it —
+    /// `weather: Rain`, a bare variant — must keep loading, because upstream
+    /// adds tracks to `soundtrack.ron` routinely and a merge that brought one
+    /// in would otherwise compile clean and then panic the client on startup.
+    ///
+    /// This is the whole reason `WeatherFilter` is `#[serde(untagged)]` rather
+    /// than a plain `Vec<WeatherKind>`; without the test, the next person to
+    /// tidy it into a `Vec` gets no warning.
+    #[test]
+    fn weather_filter_accepts_upstreams_single_variant_form() {
+        let one: WeatherFilter = ron::from_str("Rain").expect("upstream's scalar form must load");
+        assert!(one.matches(WeatherKind::Rain));
+        assert!(!one.matches(WeatherKind::Snow));
+
+        let many: WeatherFilter =
+            ron::from_str("[Rain, Snow]").expect("this fork's list form must load");
+        assert!(many.matches(WeatherKind::Rain));
+        assert!(many.matches(WeatherKind::Snow));
+        assert!(!many.matches(WeatherKind::Clear));
+
+        // An empty list is legal and matches nothing, rather than everything —
+        // "any weather" is spelled `None`, not `[]`.
+        let none: WeatherFilter = ron::from_str("[]").expect("empty list must load");
+        for kind in [
+            WeatherKind::Clear,
+            WeatherKind::Cloudy,
+            WeatherKind::Rain,
+            WeatherKind::Storm,
+            WeatherKind::Snow,
+        ] {
+            assert!(!none.matches(kind), "an empty filter must match nothing");
+        }
+    }
 
     #[test]
     fn test_load_soundtracks() {

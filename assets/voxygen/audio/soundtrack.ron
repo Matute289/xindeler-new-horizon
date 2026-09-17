@@ -1,8 +1,8 @@
 // Times: Day, Night, or None (both)
-// Weathers: a list of Clear, Cloudy, Rain, Storm, Snow — the track plays if
-//          the current weather is any of them — or None (any weather).
-//          Snow is precipitation over ground cold enough to freeze it, so a
-//          rain track that also suits snowfall lists both.
+// Weathers: Clear, Cloudy, Rain, Storm, Snow — one of them, or a list of them
+//          (the track plays if the current weather is any), or None (any
+//          weather). Snow is precipitation over ground cold enough to freeze
+//          it, so a rain track that also suits snowfall lists both.
 // Biomes: Grassland, Forest, Desert, Snowland, Lake, Mountain, Ocean, Jungle, Savannah, Taiga
 //          planned biomes: Swamp
 // Number after biome indicates weighting; higher numbers are less frequent

@@ -485,15 +485,22 @@ pub struct ReadData<'a> {
     pub is_volume_riders: ReadStorage<'a, Is<VolumeRider>>,
     pub interactors: ReadStorage<'a, Interactors>,
     pub time_of_day: Read<'a, TimeOfDay>,
-    /// `Option` for the same reason the physics system's copy is: `WeatherGrid`
-    /// has no `Default`, so a plain `Read` will not compile, and `ReadExpect`
-    /// would panic in a build with no weather simulation. The resource itself
-    /// is always inserted — in a build without the weather system it simply
-    /// stays a 0×0 grid, which reads back as clear weather everywhere.
+    /// `Option<Read>` to match the physics system's handling of this same
+    /// resource (`common/systems/src/phys/mod.rs`): `WeatherGrid` has no
+    /// `Default`, so a plain `Read` will not compile, and the `Option` costs
+    /// nothing.
     ///
-    /// This is last tick's grid: the agent system is ordered before the weather
-    /// system, which is deliberate and harmless, since weather moves on a
-    /// multi-second cadence.
+    /// In practice it is never `None`: `State::new` inserts the grid
+    /// unconditionally, and with no weather system running it simply stays a
+    /// 0×0 grid, which reads back as clear weather everywhere. (`ReadExpect`
+    /// would therefore also have been safe — `server/src/rtsim/tick.rs` uses
+    /// it — but there is no reason to diverge from `phys`.)
+    ///
+    /// This is last tick's grid: `sys::add_server_systems` is called before
+    /// `weather::add_server_systems` and the weather tick takes
+    /// `WriteExpect<WeatherGrid>`, so specs puts it in a later stage. That is
+    /// insertion order rather than a declared dependency, and harmless either
+    /// way — `WEATHER_DT` is 5 seconds, so a one-tick lag is invisible.
     pub weather: Option<Read<'a, WeatherGrid>>,
     pub light_emitter: ReadStorage<'a, LightEmitter>,
     #[cfg(feature = "worldgen")]

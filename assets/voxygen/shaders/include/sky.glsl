@@ -102,19 +102,15 @@ float cloud_tendency_at(vec2 wpos) {
 }
 
 // Total precipitation, rain and snow alike. Named for the rain it originally
-// only described; the callers that care about how wet things get should scale
-// this by `1.0 - snow_fraction_at(wpos)`.
+// only described; a caller that means *water* specifically must scale this by
+// `1.0 - sample_weather(wpos).b`.
+//
+// There are deliberately no `snow_fraction_at`/`fog_density_at` siblings: both
+// of this diff's readers of `.b` and `.a` already hold a `sample_weather()`
+// result and take their channel straight off it, so an accessor would be dead
+// GLSL. Read the channel layout off `t_weather` above.
 float rain_density_at(vec2 wpos) {
     return sample_weather(wpos).g;
-}
-
-// How much of the precipitation here is snow: 0 is all rain, 1 all snow.
-float snow_fraction_at(vec2 wpos) {
-    return sample_weather(wpos).b;
-}
-
-float fog_density_at(vec2 wpos) {
-    return sample_weather(wpos).a;
 }
 
 float cloud_shadow(vec3 pos, vec3 light_dir) {

@@ -1,6 +1,14 @@
 #include <lod.glsl>
 #include <sky.glsl>
 
+// How precipitation tints distance haze on this path: a multiplier on sky
+// light, not a drop colour, which is why these are their own pair rather than
+// `RAIN_TINT`/`SNOW_TINT` from `include/rain_occlusion.glsl` (that header is
+// not even included here). RAIN_HAZE_TINT is the upstream value, unchanged.
+// Retuning "the colour of snow" means touching both pairs.
+const vec3 RAIN_HAZE_TINT = vec3(0.1, 0.3, 0.5);
+const vec3 SNOW_HAZE_TINT = vec3(0.75, 0.8, 0.9);
+
 // Everything in here is entirely non-physical: it's the cheap fallback
 vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, float quality) {
     // Underwater light attenuation
@@ -14,7 +22,7 @@ vec3 get_cloud_color(vec3 surf_color, vec3 dir, vec3 origin, float max_dist, flo
     // value that would need a fetch, and the cheap path has no mist to thicken.
     float precip_density = rain_density + snow_density;
     float snow_frac = clamp(snow_density / max(precip_density, 0.0001), 0.0, 1.0);
-    vec3 haze_tint = mix(vec3(0.1, 0.3, 0.5), vec3(0.75, 0.8, 0.9), snow_frac);
+    vec3 haze_tint = mix(RAIN_HAZE_TINT, SNOW_HAZE_TINT, snow_frac);
     vec3 haze_color = mix(sky_light, sky_light * haze_tint, min(precip_density * 4, 1.0));
 
     #ifndef EXPERIMENTAL_NOHAZE

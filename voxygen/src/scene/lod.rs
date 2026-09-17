@@ -289,6 +289,16 @@ impl Lod {
         // loads — far more slowly than the frame rate. Rebuilding it costs one
         // terrain lookup per cell, so it is refreshed on a timer instead of
         // every frame.
+        //
+        // The timer is the *only* invalidation: nothing rebuilds on a chunk
+        // load or a teleport, so crossing the snow line can show up to
+        // SNOW_MASK_REFRESH_INTERVAL of stale sky. Accepted — it is a one-off
+        // second of the wrong precipitation tint, not a persistent error.
+        //
+        // Note also that each cell samples only the chunk at its centre, so the
+        // airborne snow line is quantised to CELL_SIZE (512 blocks) while the
+        // ground `BlockKind::Snow` line is per-chunk (32). They agree on the
+        // threshold, not on the resolution.
         if self.snow_mask.len() != cell_count
             || self
                 .snow_mask_age
@@ -306,14 +316,42 @@ impl Lod {
                 .unwrap_or(0.0);
             let cell_centre = weather::CELL_SIZE as f32 / 2.0;
 
+            // Fill with the fallback, then look up only the cells that can
+            // possibly have loaded terrain under them. Walking the whole grid
+            // instead would scale this rebuild with map *area* rather than with
+            // view distance, and on a large world the overwhelming majority of
+            // those lookups are guaranteed misses that all resolve to exactly
+            // this fallback anyway.
             self.snow_mask.clear();
-            self.snow_mask.reserve(cell_count);
-            self.snow_mask.extend(weather.iter().map(|(pos, _)| {
-                let wpos = pos.as_::<f32>() * weather::CELL_SIZE as f32 + cell_centre;
-                let snow_factor =
-                    weather::snow_factor_at(&terrain, wpos, &tuning).unwrap_or(default_snow_factor);
-                (snow_factor * 255.0) as u8
-            }));
+            self.snow_mask
+                .resize(cell_count, (default_snow_factor * 255.0) as u8);
+
+            if let Some(player_wpos) = client.position().map(|p| p.xy()) {
+                let grid_size = weather.size().as_::<i32>();
+                // `loaded_distance` is in blocks. One extra cell of margin
+                // covers a cell whose centre falls just outside it but whose
+                // terrain is loaded.
+                let radius =
+                    (client.loaded_distance() / weather::CELL_SIZE as f32).ceil() as i32 + 1;
+                let player_cell =
+                    (player_wpos / weather::CELL_SIZE as f32).map(|e| e.floor() as i32);
+                let min = (player_cell - radius).map(|e| e.max(0));
+                let max = (player_cell + radius + 1).map2(grid_size, |e, sz| e.min(sz));
+
+                for y in min.y..max.y {
+                    for x in min.x..max.x {
+                        let wpos =
+                            Vec2::new(x, y).as_::<f32>() * weather::CELL_SIZE as f32 + cell_centre;
+                        if let Some(snow_factor) = weather::snow_factor_at(&terrain, wpos, &tuning)
+                        {
+                            // Row-major, matching `Grid::idx` and the order
+                            // `Grid::iter` yields for the zip below.
+                            self.snow_mask[y as usize * grid_size.x as usize + x as usize] =
+                                (snow_factor * 255.0) as u8;
+                        }
+                    }
+                }
+            }
             self.snow_mask_age = Some(Instant::now());
         }
 

@@ -26,9 +26,20 @@ const SNOW_WIND_DRIFT: f32 = 2.5;
 /// is read in `Attack::apply_attack`. `#[serde(default)]` keeps older and newer
 /// copies of the asset mutually loadable.
 ///
-/// Deliberately does *not* hold the precipitation fall rates: those define the
-/// axis the rain-occlusion map is both rendered and sampled along, so a
-/// hot-reload mid-frame would desync the map against its own lookup.
+/// Deliberately does *not* hold the precipitation fall rates
+/// ([`RAIN_FALL_RATE`] and friends). They are look constants rather than
+/// balance numbers, and the voxygen client re-derives the precipitation axis
+/// from them at three separate points in a frame — `Scene::maintain`, which
+/// renders the rain-occlusion map, and `FigureMgr`/`Terrain`, which sample it —
+/// so keeping them out of a hot-reloadable asset removes one way those three
+/// could disagree within a frame.
+///
+/// Be precise about what that does and does not buy, though: `snow_temp_band`
+/// below *is* hot-reloadable and also feeds that same axis, so the axis is not
+/// actually pinned today. Resolving it once per frame and threading it through
+/// `SceneData` (as `wind_vel` already is) would pin it properly, and would then
+/// make the fall rates perfectly safe to move here. Until that happens this
+/// split is a reasonable default, not a guarantee.
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(default)]
 pub struct WeatherTuning {
@@ -70,13 +81,30 @@ impl Default for WeatherTuning {
 }
 
 impl WeatherTuning {
-    /// Reads the cached tuning asset.
+    /// Reads the cached tuning asset, with the visibility floors clamped into
+    /// the range the rest of this module assumes.
     ///
     /// Cheap but not free (a keyed asset-cache lookup), so callers that use it
     /// across many weather cells or many entities should hoist this out of
     /// their loop rather than calling it per item.
-    pub fn load() -> Self { Ron::<Self>::load_expect("common.weather_tuning").read().0 }
+    ///
+    /// The clamp is not belt-and-braces: this asset **hot-reloads**, so a typo
+    /// reaches a running server without passing any test. A negative
+    /// `snow_min_visibility` would make [`Weather::visibility_factor`] return a
+    /// negative multiplier, and since every sight check squares the resulting
+    /// distance (`dist_sqrd < sight_dist.powi(2)`) the sign is thrown away —
+    /// a blizzard would silently make NPCs see *further*.
+    pub fn load() -> Self {
+        let mut tuning = Ron::<Self>::load_expect("common.weather_tuning").read().0;
+        tuning.snow_min_visibility = clamp_unit(tuning.snow_min_visibility);
+        tuning.fog_min_visibility = clamp_unit(tuning.fog_min_visibility);
+        tuning
+    }
 }
+
+/// Clamps into `0.0..=1.0`, mapping NaN to `1.0` (the no-effect value) rather
+/// than letting it propagate — `f32::clamp` passes NaN straight through.
+fn clamp_unit(v: f32) -> f32 { if v.is_nan() { 1.0 } else { v.clamp(0.0, 1.0) } }
 
 /// Fraction of precipitation that falls as snow rather than rain at a given
 /// abstract world-gen temperature: `1.0` is all snow, `0.0` all rain.
@@ -122,8 +150,23 @@ pub fn snow_factor_at(
 
 /// Hermite interpolation between two edges, matching GLSL's `smoothstep` so
 /// the Rust and shader sides of a weather term can't drift apart.
+///
+/// Degenerate and non-finite edges collapse to a hard step instead of dividing
+/// by zero. This matters because both edge pairs come from a **hot-reloadable**
+/// asset: `fog_cloud_min == fog_cloud_max` would otherwise yield `NaN`, which
+/// `f32::clamp` propagates rather than pins, and that `NaN` flows through
+/// `fog_density` → `visibility_factor` → `psyche.sight_dist`, where
+/// `dist_sqrd < NaN` is always `false` — every NPC in the world would go
+/// permanently blind with no panic and no log line.
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    let denom = edge1 - edge0;
+    if !denom.is_finite() || denom.abs() <= f32::EPSILON {
+        return if x >= edge1 { 1.0 } else { 0.0 };
+    }
+    let t = ((x - edge0) / denom).clamp(0.0, 1.0);
+    if t.is_nan() {
+        return 0.0;
+    }
     t * t * (3.0 - 2.0 * t)
 }
 
@@ -168,6 +211,12 @@ impl Weather {
     /// the experience, and content keyed on `Storm` should keep matching.
     /// Likewise precipitation too light to register as `Rain` stays `Cloudy`;
     /// flurries under overcast are not a snow *event*.
+    ///
+    /// The `0.5` below is not an independent knob and deliberately does not
+    /// live in [`WeatherTuning`]: [`snow_factor_at_temp`] ramps linearly from
+    /// `1.0` at `SNOW_TEMP` to `0.0` at `SNOW_TEMP + snow_temp_band`, so `0.5`
+    /// is by construction the midpoint of the sleet band. Naming the sleet
+    /// band is what a designer retunes; where its middle is, is arithmetic.
     pub fn get_kind_at(&self, snow_factor: f32) -> WeatherKind {
         match self.get_kind() {
             WeatherKind::Rain if snow_factor >= 0.5 => WeatherKind::Snow,
@@ -206,13 +255,23 @@ impl Weather {
     /// `1.0` in clear air. Applied to NPC sight distance so reduced visibility
     /// is a real, server-authoritative mechanic rather than only a client-side
     /// visual.
+    ///
+    /// Always in `0.0..=1.0`. The final clamp is load-bearing rather than
+    /// defensive: every sight check squares this into a distance, so a value
+    /// outside the unit range does not degrade gracefully — above `1.0` an NPC
+    /// sees *further* in a blizzard than in clear air, and a `NaN` makes every
+    /// `dist_sqrd < sight_dist.powi(2)` comparison `false`, blinding it
+    /// entirely. `WeatherTuning::load` clamps the two floors and `smoothstep`
+    /// refuses to divide by zero, so this should be unreachable — it is here
+    /// because the failure is silent and world-wide if it ever is not.
     pub fn visibility_factor(&self, snow_factor: f32, tuning: &WeatherTuning) -> f32 {
         let snow = self.snow(snow_factor).clamp(0.0, 1.0);
         let fog = self.fog_density(tuning).clamp(0.0, 1.0);
         // Multiplicative so snowfall inside fog is worse than either alone,
         // but neither can drive sight to zero.
-        (1.0 - snow * (1.0 - tuning.snow_min_visibility))
-            * (1.0 - fog * (1.0 - tuning.fog_min_visibility))
+        let factor = (1.0 - snow * (1.0 - tuning.snow_min_visibility))
+            * (1.0 - fog * (1.0 - tuning.fog_min_visibility));
+        clamp_unit(factor)
     }
 
     pub fn lerp_unclamped(&self, to: &Self, t: f32) -> Self {
@@ -587,5 +646,96 @@ mod tests {
         // Snow over cold ground must obscure more than the same cell's rain.
         let precip = Weather::new(0.6, 0.8, Vec2::zero());
         assert!(precip.visibility_factor(1.0, &t) < precip.visibility_factor(0.0, &t));
+    }
+
+    /// `weather_tuning.ron` hot-reloads, so a typo in it reaches a running
+    /// server without passing a single test. These two failure modes are
+    /// silent and world-wide: a `NaN` sight distance makes every
+    /// `dist_sqrd < sight_dist.powi(2)` false (every NPC blind), and a
+    /// negative one is squared back to positive (every NPC sees *further* in a
+    /// blizzard). Neither logs anything.
+    #[test]
+    fn broken_tuning_cannot_blind_or_super_sight_every_npc() {
+        let weathers = [
+            Weather::new(0.0, 0.0, Vec2::zero()),
+            Weather::new(1.0, 0.0, Vec2::zero()),
+            Weather::new(0.45, 0.05, Vec2::zero()),
+            Weather::new(1.0, 1.0, Vec2::new(30.0, 0.0)),
+            // Sitting exactly ON the degenerate edges below. This is the case
+            // that actually produced `NaN` (0.0 / 0.0) rather than an infinity
+            // that `clamp` would have pinned, so without it this test passes
+            // against the broken implementation too.
+            Weather::new(0.5, 0.2, Vec2::zero()),
+        ];
+
+        // Degenerate fog edges (min == max) used to divide by zero; NaN and
+        // inverted edges are the other plausible hand-edit mistakes.
+        let mut broken = vec![
+            WeatherTuning {
+                fog_cloud_min: 0.5,
+                fog_cloud_max: 0.5,
+                ..WeatherTuning::default()
+            },
+            WeatherTuning {
+                fog_rain_min: 0.2,
+                fog_rain_max: 0.2,
+                ..WeatherTuning::default()
+            },
+            WeatherTuning {
+                fog_cloud_min: 0.9,
+                fog_cloud_max: 0.1,
+                ..WeatherTuning::default()
+            },
+            WeatherTuning {
+                fog_cloud_min: f32::NAN,
+                ..WeatherTuning::default()
+            },
+        ];
+        // `load()` clamps the two floors, so out-of-range values are only
+        // reachable here by constructing the struct directly — which is exactly
+        // why `visibility_factor` clamps its own result too.
+        for bad in [-1.0, 2.0, f32::NAN, f32::INFINITY] {
+            broken.push(WeatherTuning {
+                snow_min_visibility: bad,
+                ..WeatherTuning::default()
+            });
+            broken.push(WeatherTuning {
+                fog_min_visibility: bad,
+                ..WeatherTuning::default()
+            });
+        }
+
+        for tuning in &broken {
+            for weather in &weathers {
+                for snow_factor in [0.0, 0.5, 1.0] {
+                    let v = weather.visibility_factor(snow_factor, tuning);
+                    assert!(
+                        v.is_finite() && (0.0..=1.0).contains(&v),
+                        "visibility must stay a finite 0..=1 multiplier, got {v} for {weather:?} \
+                         / snow {snow_factor} / {tuning:?}"
+                    );
+                    let fog = weather.fog_density(tuning);
+                    assert!(
+                        fog.is_finite() && (0.0..=1.0).contains(&fog),
+                        "fog density must stay a finite 0..=1 value, got {fog}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shipped_tuning_survives_the_load_clamp_unchanged() {
+        // If this ever fails, the shipped asset is out of range and `load()`
+        // has been quietly correcting it — fix the asset, not the test.
+        let loaded = WeatherTuning::load();
+        assert_eq!(
+            loaded.snow_min_visibility,
+            clamp_unit(loaded.snow_min_visibility)
+        );
+        assert_eq!(
+            loaded.fog_min_visibility,
+            clamp_unit(loaded.fog_min_visibility)
+        );
     }
 }

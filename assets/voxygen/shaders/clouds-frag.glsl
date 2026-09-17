@@ -337,12 +337,13 @@ void main() {
             float precip_density = rain_density + snow_density;
             if (medium.x == MEDIUM_AIR && precip_density > 0.001) {
                 float snow_frac = clamp(snow_density / max(precip_density, 0.0001), 0.0, 1.0);
-                // Rain is stretched into vertical streaks; snowflakes are
-                // roughly round and a little larger on screen.
-                vec2 drop_aspect = mix(vec2(4.0, 0.3), vec2(2.2, 2.2), snow_frac);
-                float drop_radius_sqr = mix(0.01, 0.035, snow_frac);
+                // How one drop looks, hoisted out of the march below since it
+                // is the same for every step. The constants live beside each
+                // other in `include/rain_occlusion.glsl`.
+                vec2 drop_aspect = mix(RAIN_DROP_ASPECT, SNOW_DROP_ASPECT, snow_frac);
+                float drop_radius_sqr = mix(RAIN_DROP_RADIUS_SQR, SNOW_DROP_RADIUS_SQR, snow_frac);
                 vec3 drop_color = mix(RAIN_TINT, SNOW_TINT, snow_frac);
-                float drop_alpha = mix(0.5, 0.75, snow_frac);
+                float drop_alpha = mix(RAIN_DROP_ALPHA, SNOW_DROP_ALPHA, snow_frac);
 
                 vec3 cam_wpos = cam_pos.xyz + focus_off.xyz;
 

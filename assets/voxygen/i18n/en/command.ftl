@@ -291,7 +291,7 @@ command-location-deleted = Deleted location '{ $location }'
 command-locations-empty = No locations currently exist
 command-locations-list = Available locations: { $locations }
 # Note: Do not translate these weather names
-command-weather-valid-values = Valid values are 'clear', 'rain', 'wind' and 'storm'.
+command-weather-valid-values = Valid values are 'clear', 'cloudy', 'rain', 'wind', 'storm', 'snow' and 'fog'.
 command-scale-set = Set scale to { $scale }
 command-repaired-items = Repaired all equipped items
 command-repaired-inventory_items = Repaired all items
