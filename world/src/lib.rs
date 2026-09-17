@@ -992,7 +992,7 @@ mod tests {
         // `start_eligible: false`, so this test exercises the exclusion
         // mechanism directly: take the *baseline* `possible_starting_sites`
         // result, pick a real authored settlement that's actually part of
-        // it (not just any authored settlement -- most of the 62 wouldn't
+        // it (not just any authored settlement -- most of the 65 wouldn't
         // rank in the top slots anyway, so excluding an arbitrary one
         // wouldn't move the result), force-exclude it, and confirm it drops
         // out.

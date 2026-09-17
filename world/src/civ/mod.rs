@@ -4154,10 +4154,17 @@ mod tests {
     /// whole point of this figure is to be the reference an in-game "this
     /// place has no road" report is checked against.
     ///
-    /// It is **not** a list of deliberate design decisions. Six of the 22 are
-    /// towns and four are villages; nothing on record says those are meant to
-    /// be roadless. Treat a report against one of them as a likely authoring
-    /// gap in the route source data, not as expected behaviour.
+    /// It is **not** a list of deliberate design decisions. Six towns and four
+    /// villages are on it; nothing on record says those are meant to be
+    /// roadless. Treat a report against one of them as a likely authoring gap
+    /// in the route source data, not as expected behaviour.
+    ///
+    /// The route source carries no track to `site.el_ojo_de_luna`,
+    /// `site.twin_dreams` or `site.under_the_river` either, so those sit in
+    /// the list on the same terms as everything else: an inn off the road
+    /// network is the same authoring gap as any other entry, not a separate
+    /// category of expected behaviour. All three use the `inn_roadside`
+    /// template, which makes them the clearest candidates for route authoring.
     const CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD: &[&str] = &[
         // Town x6
         "site.bronze_shore",
@@ -4183,31 +4190,39 @@ mod tests {
         "site.bg_west_post",
         "site.hita_post",
         "site.trident_post",
-        // Inn x2
+        // Inn x5
+        "site.el_ojo_de_luna",
         "site.the_fish_journey",
         "site.the_sapphire_pillow",
+        "site.twin_dreams",
+        "site.under_the_river",
     ];
 
     /// COW-19: what the *installed* `cromatolis_v0_sites.ron` is attested to
     /// contain, per class.
     ///
-    /// `xindeler-open-world` authors 65 settlements; New Horizon installs 62.
-    /// Three later inns -- `site.el_ojo_de_luna`, `site.twin_dreams` and
-    /// `site.under_the_river` -- have not been reconciled into this repository
-    /// yet. Engine RONs are reconciled field-by-field, never bulk-copied, so
-    /// that is an open decision rather than drift; see
-    /// `cromatolis_settlement_template_contract_overrides_name_installed_settlements`
-    /// for the regression that pins exactly which three are pending.
+    /// `xindeler-open-world` authors 65 settlements and this repository now
+    /// installs all 65: the settlement set is fully reconciled, so a count
+    /// that stops matching is drift on one side, never an accepted gap.
     ///
-    /// When they are reconciled in, change `Inn` here (4 -> 7) and nothing
-    /// else: every total below is derived from this table.
+    /// Every total below is derived from this table, so a category that gains
+    /// or loses a settlement fails here rather than silently changing a
+    /// number the rest of the module trusts.
+    ///
+    /// Reconcile new settlements by **appending** them, matching the order the
+    /// authoring export already uses. Sites are placed in insertion order and
+    /// each draws a fresh reseeded RNG, so a record inserted mid-file
+    /// reshuffles the generated interior of every site after it --
+    /// landmarks and fortifications included -- for no reason. Appending
+    /// leaves the existing records bit-identical and confines that shift to
+    /// the tail.
     const AUTHORED_SETTLEMENTS_BY_CATEGORY: &[(AuthoredSettlementCategory, usize)] = &[
         (AuthoredSettlementCategory::Capital, 1),
         (AuthoredSettlementCategory::City, 7),
         (AuthoredSettlementCategory::Town, 17),
         (AuthoredSettlementCategory::Village, 20),
         (AuthoredSettlementCategory::Hamlet, 5),
-        (AuthoredSettlementCategory::Inn, 4),
+        (AuthoredSettlementCategory::Inn, 7),
         (AuthoredSettlementCategory::Post, 8),
     ];
 
@@ -4221,19 +4236,6 @@ mod tests {
         }
         total
     };
-
-    /// COW-19: the `settlement_template_contract.ron` site overrides that name
-    /// a settlement this repository does not install.
-    ///
-    /// All three are the pending inns above. `xindeler-open-world` has no
-    /// orphan override at all -- its control-plane validator would fail if it
-    /// did -- so this list is exactly the shape of the open reconciliation, and
-    /// it must shrink to empty when the three inns are installed.
-    const CROMATOLIS_PENDING_TEMPLATE_OVERRIDES: &[&str] = &[
-        "site.el_ojo_de_luna",
-        "site.twin_dreams",
-        "site.under_the_river",
-    ];
 
     #[test]
     fn cromatolis_authored_settlements_parse_and_validate_real_export_without_panicking() {
@@ -4336,13 +4338,17 @@ mod tests {
     /// cross-asset drift this row exists to catch, so it is asserted rather
     /// than described.
     ///
-    /// Three orphans exist right now, and all three are the inns pending
-    /// reconciliation from `xindeler-open-world` -- which has no orphan at all,
-    /// because it carries all 65 settlements, and whose control-plane validator
-    /// now fails if one ever appears. Pinning the exact set means a *fourth*
-    /// orphan fails immediately, and reconciling these three in also fails here
-    /// until the list is emptied: deliberately, so the decision cannot be
-    /// half-applied.
+    /// No orphan exists any more: every override names one of the 65
+    /// settlements installed here, matching `xindeler-open-world`, whose
+    /// control-plane validator fails if an orphan ever appears there.
+    ///
+    /// Emptiness is the assertion, rather than a pinned set of known orphans,
+    /// because there is no longer a known orphan to pin -- and an empty set
+    /// fails on the *first* new one instead of the second. It guards one
+    /// direction only: an override naming a settlement that does not exist.
+    /// A settlement gaining no override is not a fault and is not checked here
+    /// (only 11 of the 65 carry one); what guards the settlement side is
+    /// `AUTHORED_SETTLEMENTS_BY_CATEGORY`.
     #[test]
     fn cromatolis_settlement_template_contract_overrides_name_installed_settlements() {
         let settlements = real_settlements();
@@ -4365,10 +4371,10 @@ mod tests {
             .collect::<Vec<_>>();
         orphans.sort_unstable();
 
-        assert_eq!(
-            orphans, CROMATOLIS_PENDING_TEMPLATE_OVERRIDES,
-            "settlement template overrides naming uninstalled settlements changed: either a new \
-             orphan appeared, or the pending inns were reconciled in and this list must be emptied"
+        assert!(
+            orphans.is_empty(),
+            "settlement template overrides name settlements this repository does not install: \
+             {orphans:?}"
         );
     }
 
