@@ -270,6 +270,21 @@ pub struct Site {
     pub roads: Vec<Id<Plot>>,
     pub economy: Option<Box<Economy>>,
     pub kind: Option<SiteKind>,
+    /// Whether this site was established from a designer-authored settlement
+    /// pin (e.g. a Cromatolis city/town/inn/post) rather than placed by
+    /// procedural civilisation simulation. Orthogonal to `kind`: some
+    /// authored settlement categories (currently `inn`/`post`, see
+    /// `civ::AuthoredSettlementCategory::default_site_kind` and
+    /// `civ::resolve_settlement_site_kind`) reuse a generic generator --
+    /// e.g. `SiteKind::Camp`, otherwise also used for genuine wild
+    /// procedural bandit camps -- purely as a physical stand-in for a
+    /// building type this engine doesn't have a dedicated generator for
+    /// yet. Consumers that infer site semantics (hostility, alignment, ...)
+    /// from `kind` alone need this to tell "authored settlement reusing
+    /// this generator's geometry" apart from "genuine wild site of this
+    /// kind" -- see `rtsim::data::Site::generate`'s `good_or_evil`
+    /// classifier for the motivating case.
+    pub is_authored_settlement: bool,
 }
 
 impl Site {
@@ -888,6 +903,14 @@ impl Site {
     /// was generated.
     pub fn with_name(mut self, name: String) -> Self {
         self.name = Some(name);
+        self
+    }
+
+    /// Marks this site as established from a designer-authored settlement
+    /// pin. See the `is_authored_settlement` field doc for why this is
+    /// needed even though `kind` is also set.
+    pub fn with_authored_settlement(mut self, is_authored_settlement: bool) -> Self {
+        self.is_authored_settlement = is_authored_settlement;
         self
     }
 
