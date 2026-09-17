@@ -4171,11 +4171,12 @@ mod tests {
     /// in the route source data, not as expected behaviour.
     ///
     /// The route source carries no track to `site.el_ojo_de_luna`,
-    /// `site.twin_dreams` or `site.under_the_river` either, so those sit in
-    /// the list on the same terms as everything else: an inn off the road
-    /// network is the same authoring gap as any other entry, not a separate
-    /// category of expected behaviour. All three use the `inn_roadside`
-    /// template, which makes them the clearest candidates for route authoring.
+    /// `site.trident_dreams`, `site.twin_dreams` or `site.under_the_river`
+    /// either, so those sit in the list on the same terms as everything
+    /// else: an inn off the road network is the same authoring gap as any
+    /// other entry, not a separate category of expected behaviour. All four
+    /// use the `inn_roadside` template, which makes them the clearest
+    /// candidates for route authoring.
     const CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD: &[&str] = &[
         // Town x6
         "site.bronze_shore",
@@ -4195,16 +4196,16 @@ mod tests {
         "site.malicious_haven.merid.gha_rrul_uth",
         "site.malicious_haven.susy.thlug_nyarr",
         "site.tenoxitlan",
-        // Post x5
+        // Post x4
         "site.bg_central_post",
         "site.bg_east_post",
         "site.bg_west_post",
         "site.hita_post",
-        "site.trident_post",
-        // Inn x5
+        // Inn x6
         "site.el_ojo_de_luna",
         "site.the_fish_journey",
         "site.the_sapphire_pillow",
+        "site.trident_dreams",
         "site.twin_dreams",
         "site.under_the_river",
     ];
