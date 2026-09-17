@@ -601,6 +601,42 @@ impl World {
             rtsim_resource_blocks: Vec::new(),
         };
 
+        // `apply_trains_to` only appends `ChunkMeta::tracks` bezier splines
+        // -- it stamps zero voxels. Those splines feed two readers: real
+        // rail-snapping vehicle physics for a `Body::Ship(ship::Body::Train)`
+        // entity (`common/systems/src/phys`, which clamps a train's
+        // position/orientation to the nearest track every tick) and
+        // voxygen's debug-hitbox overlay (`DebugShape::TrainTrack`). Trains
+        // are a real, admin-spawnable ship body today (`ALL_SHIPS`, the
+        // `/ship Train` command) with working animation and audio -- this is
+        // NOT dead/debug-only code, just currently-unshipped content:
+        // `assets/world/features.ron` sets `train_tracks: false` map-wide
+        // ("TODO: train stations, train entities"), so `apply_trains_to`
+        // doesn't run anywhere in the shipped game.
+        //
+        // That's still why this stays a flat kill switch rather than a 5th
+        // `AuthoredProceduralLayers` toggle like caverns/caves/rocks/spots,
+        // just not for a "debug-only" reason: `AuthoredProceduralLayers`
+        // exists specifically for layers that "read no authored data at all
+        // and stamp hash-derived geometry straight into the block volume"
+        // (see its doc comment) -- i.e. they can physically collide with
+        // authored geometry in the same voxel. Rail splines never touch the
+        // block volume, so that block-volume race can't happen here, and
+        // with `train_tracks` globally off and no per-region train policy to
+        // encode yet, a per-region RON toggle would be speculative
+        // machinery. Revisit if/when trains actually ship (stations,
+        // entities, `train_tracks: true`).
+        //
+        // Scoped to the map-global `authored_cromatolis_v0` rather than the
+        // more general `authored_region_id` because, unlike
+        // `sim::generate_cliffs`'s `tree_density` crush guard (a genuine
+        // "authored data wins over procedural noise" rule that should
+        // extend to any future region), this isn't a claim about
+        // authored-content priority at all -- it's "don't lay rail splines
+        // through a hand-authored region's geometry", which today is
+        // exactly the same population as "any region is loaded" and has no
+        // shipped behavior to get wrong if a second region ever needs a
+        // different answer.
         if index.features.train_tracks && !sim_chunk.authored_cromatolis_v0 {
             layer::apply_trains_to(&mut canvas, &self.sim, sim_chunk, chunk_center_wpos2d);
         }

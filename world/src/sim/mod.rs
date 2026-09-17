@@ -959,9 +959,15 @@ impl AuthoredLayerKind {
 struct AuthoredRegion {
     /// The `FileOpts::LoadAsset` specifier that activates this region.
     map_asset: &'static str,
-    /// Stable region id, independent of the map asset name. Not currently
-    /// consumed outside logging, but kept distinct from `map_asset` so a
-    /// region can be renamed/re-pointed without changing its identity.
+    /// Stable region id, independent of the map asset name -- kept distinct
+    /// from `map_asset` so a region can be renamed/re-pointed without
+    /// changing its identity. Load-bearing, not just logging: this flows
+    /// into `SimChunk::authored_region_id` (see `CROMATOLIS_V0_REGION_ID`),
+    /// which 25+ call sites gate on, including biome Snowland/Desert
+    /// scoping and `generate_cliffs`'s vegetation-crush guard here in
+    /// `sim/mod.rs`, ground-cover resolution in `column.rs`, wildlife
+    /// density gating in `layer/wildlife.rs`, `layer/spot.rs`, and
+    /// settlement/landmark/pathfinding gating in `civ/mod.rs`.
     id: &'static str,
     /// Which authored layers this region ships.
     layers: &'static [AuthoredLayerKind],
