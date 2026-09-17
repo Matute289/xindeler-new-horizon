@@ -335,7 +335,7 @@
                 tag: Custom,
                 peoples: [Human, Elven, Dwarf, Goblins, Dhampirs, Orc],
             ),
-            center: (x: 0.73307, y: 0.62606),
+            center: (x: 0.72939, y: 0.62539),
             requires_capital_castle: false,
         ),
         (
@@ -347,7 +347,7 @@
                 tag: HumanoidMix,
                 peoples: [Human, Elven, Dwarf],
             ),
-            center: (x: 0.73327, y: 0.62476),
+            center: (x: 0.73315, y: 0.62531),
             requires_capital_castle: false,
         ),
         (
