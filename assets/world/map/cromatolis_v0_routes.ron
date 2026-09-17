@@ -384,7 +384,7 @@
         (
             id: "route_path.trident_path.segment_02",
             start_site_id: "site.ourez",
-            end_site_id: "site.trident_dreams",
+            end_site_id: "site.trident_post",
             points: [
                 (x: 0.67855, y: 0.54655),
                 (x: 0.70000, y: 0.70000),
@@ -393,7 +393,7 @@
         ),
         (
             id: "route_path.trident_path.segment_03",
-            start_site_id: "site.trident_dreams",
+            start_site_id: "site.trident_post",
             end_site_id: "site.sutar_town",
             points: [
                 (x: 0.73758, y: 0.62026),
@@ -430,7 +430,7 @@
         (
             id: "route_path.fallen_soldier_walk.segment_01",
             start_site_id: "site.levannois_village",
-            end_site_id: "site.trident_dreams",
+            end_site_id: "site.trident_post",
             points: [
                 (x: 0.63453, y: 0.66695),
                 (x: 0.73758, y: 0.62026),
