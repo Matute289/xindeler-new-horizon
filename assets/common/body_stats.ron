@@ -288,7 +288,14 @@
         llama: (mass: 150.0, base_health: 65, base_poise: 165, base_energy: 100),
         // ~✅ alpacas are 60-80 kg
         alpaca: (mass: 70.0, base_health: 55, base_poise: 165, base_energy: 100),
-        akhlut: (mass: 1000.0, base_health: 720, base_poise: 190, base_energy: 100),  // orca-sized
+        // orca-sized: other real-animal giants on this body compress
+        // real-world mass by roughly 35-40% (mammoth/elephant: ~4-6 t
+        // real -> 1500 kg here); applying the same ratio to a real orca's
+        // 3000-6000 kg range lands around 2000 kg, which this follows.
+        // That clears roshwalr (1200 kg, a real walrus, which a real orca
+        // vastly outweighs) by a comfortable margin instead of sitting
+        // below it as the old 1000 kg did.
+        akhlut: (mass: 2000.0, base_health: 720, base_poise: 190, base_energy: 100),
         // boar-sized
         bristleback: (mass: 200.0, base_health: 175, base_poise: 190, base_energy: 100),
         // fired clay, not flesh, at horse scale and up

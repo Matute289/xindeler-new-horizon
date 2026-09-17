@@ -33,7 +33,6 @@ Object.base_health Arrow
 Object.base_health ArrowClay
 Object.base_health ArrowHeavy
 Object.base_health ArrowSnake
-Object.base_health ArrowTurret
 Object.base_health BeastMeat
 Object.base_health BloodBomb
 Object.base_health BoltBesieger
