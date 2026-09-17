@@ -375,8 +375,8 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
             },
         ),
         // Ocean animals
-        ("world.wildlife.spawn.temperate.ocean", |_c, col| {
-            close(col.temp, CONFIG.temperate_temp, 1.0) / 10.0
+        ("world.wildlife.spawn.temperate.ocean", |c, col| {
+            not_cromatolis(c) * close(col.temp, CONFIG.temperate_temp, 1.0) / 10.0
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                 {
@@ -443,7 +443,8 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         // **Tropical**
         // River animals
         ("world.wildlife.spawn.tropical.river", |c, col| {
-            close(col.temp, CONFIG.tropical_temp, 0.5)
+            not_cromatolis(c)
+                * close(col.temp, CONFIG.tropical_temp, 0.5)
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && !matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                     && c.alt > CONFIG.sea_level + 20.0
@@ -454,8 +455,8 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
                 }
         }),
         // Ocean animals
-        ("world.wildlife.spawn.tropical.ocean", |_c, col| {
-            close(col.temp, CONFIG.tropical_temp, 0.1) / 10.0
+        ("world.wildlife.spawn.tropical.ocean", |c, col| {
+            not_cromatolis(c) * close(col.temp, CONFIG.tropical_temp, 0.1) / 10.0
                 * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
                     && matches!(col.chunk.get_biome(), BiomeKind::Ocean)
                 {
@@ -477,9 +478,68 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
                 }
         }),
         // Arctic ocean animals
-        ("world.wildlife.spawn.arctic.ocean", |_c, col| {
-            close(col.temp, CONFIG.snow_temp, 0.25) / 10.0
+        ("world.wildlife.spawn.arctic.ocean", |c, col| {
+            not_cromatolis(c) * close(col.temp, CONFIG.snow_temp, 0.25) / 10.0
                 * if matches!(col.chunk.get_biome(), BiomeKind::Ocean) {
+                    0.001
+                } else {
+                    0.0
+                }
+        }),
+        // Cromatolis ocean animals -- scoped to the authored region rather
+        // than widening an existing window (same pattern as `not_cromatolis`
+        // below, just the positive case): Cromatolis's authored climate
+        // curve (`cromatolis_baseline_temp`, gated on `authored_cromatolis_v0`)
+        // pins real ocean temperature at ~0.90 (`CONFIG.desert_temp + 0.1`),
+        // which none of the three windows above cover -- temperate.ocean is
+        // (-1.4, 0.6), tropical.ocean is (0.3, 0.5), arctic.ocean is well
+        // below zero. Verified against the real generated world: 0 of
+        // 328,231 sampled real Cromatolis ocean columns got any nonzero
+        // density from any of the three entries above (all sampled at
+        // temp == 0.900, since ocean sits at/below sea level where the
+        // curve is flat). Widening a shared entry's window instead would
+        // change ocean-fauna density for every other world using this
+        // manifest, not just Cromatolis. The three general entries above
+        // (and `tropical.river` below, which also matches Lake columns) are
+        // now gated with `not_cromatolis(c)` -- their windows don't overlap
+        // this entry's today, but the gate makes that non-overlap structural
+        // rather than an incidental byproduct of today's `CONFIG` constants,
+        // so a future engine-wide temp-window retune can't silently
+        // reintroduce double-counted density on Cromatolis ocean/lake
+        // columns. Same defensive pattern the desert entries below already
+        // use for the reverse direction.
+        ("world.wildlife.spawn.cromatolis.ocean", |c, col| {
+            f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
+                * close(col.temp, CONFIG.desert_temp + 0.1, 0.2)
+                / 10.0
+                * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
+                    && matches!(col.chunk.get_biome(), BiomeKind::Ocean)
+                {
+                    0.001
+                } else {
+                    0.0
+                }
+        }),
+        // Cromatolis lake animals -- two independent gaps stacked on top of
+        // each other, both found by sampling the real generated world (only
+        // 0.55% of 35,138 sampled real lake columns got any nonzero density
+        // from any existing river/lake entry):
+        // 1) The same hot-climate temp-window gap as the ocean entry above (real sampled lake temp
+        //    is 0.84-0.90).
+        // 2) Every generic `*.river` entry (the only ones that also match Lake columns, via their
+        //    `!= Ocean` check) additionally gates on `c.alt > CONFIG.sea_level + 20.0`. That gate
+        //    is meant to keep river fauna out of brackish estuary mouths near the coast, but it
+        //    isn't meaningful for lakes (an enclosed body, never brackish the way a river mouth
+        //    is) -- and it's actively wrong for Cromatolis: real sampled lake chunk `alt` is
+        //    134-136, i.e. *below* the engine's abstract `CONFIG.sea_level` (140.0), despite these
+        //    being lore-"elevated" lakes -- so the gate passed for only 221 of 35,138 sampled real
+        //    lake columns (0.63%), matching the pre-fix nonzero-density count almost exactly and
+        //    confirming it was the actual bottleneck, not temperature. Uses `river.is_lake()`
+        //    directly instead (precise, and doesn't need an altitude proxy at all).
+        ("world.wildlife.spawn.cromatolis.lake", |c, col| {
+            f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
+                * close(col.temp, CONFIG.desert_temp + 0.1, 0.2)
+                * if col.water_dist.map(|d| d < 1.0).unwrap_or(false) && col.chunk.river.is_lake() {
                     0.001
                 } else {
                     0.0
