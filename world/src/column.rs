@@ -3,8 +3,8 @@ use crate::{
     all::ForestKind,
     biome_profile::BiomeProfile,
     sim::{
-        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundCoverBand, Path, RiverKind,
-        SimChunk, WorldSim, local_cells,
+        AuthoredGroundCoverProfile, CROMATOLIS_V0_REGION_ID, GroundCoverBand, GroundSubstrate,
+        Path, RiverKind, SimChunk, WorldSim, local_cells,
     },
     site::SpawnRules,
     util::{RandomField, RandomPerm, Sampler},
@@ -218,6 +218,7 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
         };
         let rockiness = sim.get_interpolated(wpos, |chunk| chunk.rockiness)?;
         let authored_tree_density = sim.get_interpolated(wpos, |chunk| chunk.tree_density)?;
+        let authored_ground_cover = sim.get_interpolated(wpos, |chunk| chunk.ground_cover)?;
         let tree_density = authored_tree_density * tree_density_mul * damage.vegetation_mul;
         let spawn_rate = sim.get_interpolated(wpos, |chunk| chunk.spawn_rate)?;
         let near_water =
@@ -1455,12 +1456,17 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
                 base_sea_level,
                 surface_veg,
                 self.sim.authored_ground_cover_profile.as_ref(),
-                sim_chunk.authored_region_id,
-                authored_tree_density,
-                water_dist,
-                snow_cover,
-                temp,
-                cliff_offset,
+                AuthoredGroundCoverRenderContext {
+                    authored_region_id: sim_chunk.authored_region_id,
+                    ground_cover: authored_ground_cover,
+                    ground_substrate: sim_chunk.ground_substrate,
+                    physical_exclusion: water_dist.is_some_and(|dist| dist <= 3.0)
+                        || snow_cover
+                        || temp <= CONFIG.snow_temp
+                        || alt >= 500.0
+                        || cliff_offset > 0.0
+                        || surface_block_override.is_some(),
+                },
             ),
             sub_surface_color,
             // No growing directly on bedrock.
@@ -1518,6 +1524,16 @@ impl<'a> Sampler<'a> for ColumnGen<'a> {
 /// Resolves the final color stored in [`ColumnSample::surface_color`]. The
 /// authored tint is intentionally applied after the beach/shore interpolation
 /// so a lowland forest cannot become thermal sand again at the last step.
+#[derive(Clone, Copy)]
+struct AuthoredGroundCoverRenderContext<'a> {
+    authored_region_id: Option<&'a str>,
+    ground_cover: f32,
+    ground_substrate: Option<GroundSubstrate>,
+    /// Water, snow, alpine/cliff terrain and a governing forced surface block
+    /// all retain visual priority over authored ground-cover/substrate data.
+    physical_exclusion: bool,
+}
+
 fn resolve_final_column_surface_color(
     sub_surface_color: Rgb<f32>,
     cliff: Rgb<f32>,
@@ -1528,12 +1544,7 @@ fn resolve_final_column_surface_color(
     base_sea_level: f32,
     surface_veg: f32,
     profile: Option<&AuthoredGroundCoverProfile>,
-    authored_region_id: Option<&str>,
-    density: f32,
-    water_dist: Option<f32>,
-    snow_cover: bool,
-    temp: f32,
-    cliff_offset: f32,
+    context: AuthoredGroundCoverRenderContext,
 ) -> Rgb<f32> {
     let base = Rgb::lerp(
         sub_surface_color,
@@ -1546,22 +1557,21 @@ fn resolve_final_column_surface_color(
         ),
         surface_veg,
     );
-    // The profile is a visual consumer of the unmodified painted density:
-    // it never changes terrain, water, tree placement, or the generic color
-    // pipeline it blends over. Physical terrain remains more authoritative.
-    let physical_exclusion = water_dist.is_some_and(|dist| dist <= 3.0)
-        || snow_cover
-        || temp <= CONFIG.snow_temp
-        || alt >= 500.0
-        || cliff_offset > 0.0;
-    if physical_exclusion || authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
+    // The profile is a visual consumer of the independent authored ground
+    // cover signal: it never changes terrain, water, tree placement, or the generic
+    // color pipeline it blends over. Physical terrain remains more
+    // authoritative.
+    if context.physical_exclusion || context.authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
         return base;
     }
 
     let Some(profile) = profile else {
         return base;
     };
-    let band = profile.classify(density);
+    if context.ground_substrate == Some(GroundSubstrate::Sand) {
+        return Rgb::new(0.61, 0.47, 0.28);
+    }
+    let band = profile.classify(context.ground_cover);
     if band == GroundCoverBand::BareDry {
         return base;
     }
@@ -1654,6 +1664,20 @@ mod tests {
         );
     }
 
+    fn cover_context(
+        authored_region_id: Option<&'static str>,
+        ground_cover: f32,
+        ground_substrate: Option<GroundSubstrate>,
+        physical_exclusion: bool,
+    ) -> AuthoredGroundCoverRenderContext<'static> {
+        AuthoredGroundCoverRenderContext {
+            authored_region_id,
+            ground_cover,
+            ground_substrate,
+            physical_exclusion,
+        }
+    }
+
     #[test]
     fn forest_profile_tints_the_final_hot_lowland_column_surface_away_from_sand() {
         let generic_sand = Rgb::new(0.86, 0.73, 0.43);
@@ -1667,12 +1691,7 @@ mod tests {
             100.0,
             0.0,
             Some(&cromatolis_profile()),
-            Some(CROMATOLIS_V0_REGION_ID),
-            0.45,
-            None,
-            false,
-            CONFIG.desert_temp + 0.1,
-            0.0,
+            cover_context(Some(CROMATOLIS_V0_REGION_ID), 0.45, None, false),
         );
 
         assert_ne!(
@@ -1698,12 +1717,7 @@ mod tests {
             100.0,
             0.0,
             Some(&cromatolis_profile()),
-            Some(CROMATOLIS_V0_REGION_ID),
-            0.10,
-            None,
-            false,
-            CONFIG.desert_temp + 0.1,
-            0.0,
+            cover_context(Some(CROMATOLIS_V0_REGION_ID), 0.10, None, false),
         );
 
         assert_rgb_near(resolved, generic_sand);
@@ -1722,12 +1736,7 @@ mod tests {
             100.0,
             0.0,
             Some(&cromatolis_profile()),
-            Some(CROMATOLIS_V0_REGION_ID),
-            0.8,
-            None,
-            true,
-            CONFIG.snow_temp - 0.1,
-            0.0,
+            cover_context(Some(CROMATOLIS_V0_REGION_ID), 0.8, None, true),
         );
 
         assert_rgb_near(resolved, existing_snow);
@@ -1746,15 +1755,52 @@ mod tests {
             100.0,
             0.0,
             Some(&cromatolis_profile()),
-            None,
-            0.8,
-            None,
-            false,
-            CONFIG.desert_temp + 0.1,
-            0.0,
+            cover_context(None, 0.8, None, false),
         );
 
         assert_rgb_near(resolved, generic_sand);
+    }
+
+    #[test]
+    fn explicit_sand_zone_is_categorical_but_rock_override_stays_physical() {
+        let generic_ground = Rgb::new(0.25, 0.45, 0.18);
+        let sand = resolve_final_column_surface_color(
+            generic_ground,
+            generic_ground,
+            generic_ground,
+            generic_ground,
+            112.0,
+            112.0,
+            100.0,
+            0.0,
+            Some(&cromatolis_profile()),
+            cover_context(
+                Some(CROMATOLIS_V0_REGION_ID),
+                0.8,
+                Some(GroundSubstrate::Sand),
+                false,
+            ),
+        );
+        assert_rgb_near(sand, Rgb::new(0.61, 0.47, 0.28));
+
+        let forced_rock = resolve_final_column_surface_color(
+            generic_ground,
+            generic_ground,
+            generic_ground,
+            generic_ground,
+            112.0,
+            112.0,
+            100.0,
+            0.0,
+            Some(&cromatolis_profile()),
+            cover_context(
+                Some(CROMATOLIS_V0_REGION_ID),
+                0.8,
+                Some(GroundSubstrate::Sand),
+                true,
+            ),
+        );
+        assert_rgb_near(forced_rock, generic_ground);
     }
 }
 

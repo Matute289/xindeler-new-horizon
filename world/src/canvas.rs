@@ -131,6 +131,8 @@ impl<'a> CanvasInfo<'a> {
             humidity: 0.0,
             rockiness: 0.0,
             tree_density: 0.0,
+            ground_cover: 0.0,
+            ground_substrate: None,
             forest_kind: crate::all::ForestKind::Palm,
             spawn_rate: 0.0,
             river: Default::default(),
