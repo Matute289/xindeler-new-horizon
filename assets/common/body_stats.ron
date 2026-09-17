@@ -1,0 +1,343 @@
+// Per-species balance numbers for every creature body kind.
+//
+// This file is the ONLY source of these four numbers. The struct behind each
+// body kind below has one required field per species, so leaving a species out
+// is a hard deserialisation error naming the missing field at start-up -- it
+// cannot silently inherit somebody else's number, which is exactly what the
+// `_ =>` arms this file replaced used to do.
+//
+//   mass         kilograms. Feeds physics: buoyancy, drag, swim/fly thrust and
+//                knockback. Values marked `~` + a check mark were sanity-checked
+//                against the real-world animal; discrepancies between our model
+//                size and the real animal have not necessarily been accounted
+//                for.
+//   base_health  hit points before any scaling. Roughly tracks the threat tier
+//                in `Body::threat_tier` (which is still code -- it is a
+//                taxonomy, read per tick, and the compiler checks it
+//                exhaustively).
+//   base_poise   the stagger pool. 100 is the standard creature value.
+//   base_energy  the stamina/ability pool. 100 is the standard creature value.
+//
+// Edits hot-reload. base_health/base_poise/base_energy are snapshotted into
+// a component when an entity spawns, so a change to those only reaches
+// creatures that spawn after it -- respawn or re-enter the chunk to see it.
+// mass is the exception: several per-tick physics/movement paths read it
+// live rather than the spawned `Mass` component (see stats.rs's module doc),
+// so editing mass here can affect already-alive creatures' physics
+// immediately while their cached `Mass` component (used elsewhere, e.g. for
+// impulse) stays at the old value until they respawn -- a known follow-up,
+// not a design choice.
+//
+// Body kinds NOT here, and where their numbers live instead:
+//   Humanoid  derived from the body scaler (`common/src/comp/body/mod.rs`)
+//   Object    per-object arms in `mod.rs` -- props/projectiles, not creatures
+//   Item      flat, in `mod.rs`
+//   Ship      `common/src/comp/body/ship.rs`
+//   Plugin    `assets/common/plugin_bodies.ron`
+(
+    arthropod: (
+        tarantula: (mass: 200.0, base_health: 155, base_poise: 100, base_energy: 100),
+        black_widow: (mass: 200.0, base_health: 370, base_poise: 100, base_energy: 100),
+        antlion: (mass: 200.0, base_health: 480, base_poise: 100, base_energy: 100),
+        horn_beetle: (mass: 200.0, base_health: 170, base_poise: 100, base_energy: 100),
+        leaf_beetle: (mass: 200.0, base_health: 40, base_poise: 100, base_energy: 100),
+        stag_beetle: (mass: 200.0, base_health: 170, base_poise: 100, base_energy: 100),
+        weevil: (mass: 200.0, base_health: 40, base_poise: 100, base_energy: 100),
+        cave_spider: (mass: 200.0, base_health: 170, base_poise: 100, base_energy: 100),
+        crawler_molten: (mass: 200.0, base_health: 145, base_poise: 100, base_energy: 100),
+        crawler_moss: (mass: 200.0, base_health: 145, base_poise: 100, base_energy: 100),
+        crawler_sand: (mass: 200.0, base_health: 145, base_poise: 100, base_energy: 100),
+        dagonite: (mass: 200.0, base_health: 70, base_poise: 100, base_energy: 100),
+        emberfly: (mass: 200.0, base_health: 20, base_poise: 100, base_energy: 100),
+    ),
+    biped_large: (
+        // bigger than a troll (600 kg)
+        ogre: (mass: 700.0, base_health: 320, base_poise: 300, base_energy: 300),
+        // 8 m tall, the largest non-Forgemaster frame here
+        cyclops: (mass: 1200.0, base_health: 1000, base_poise: 300, base_energy: 300),
+        // tall but gaunt
+        wendigo: (mass: 450.0, base_health: 280, base_poise: 300, base_energy: 300),
+        troll_cave: (mass: 600.0, base_health: 240, base_poise: 300, base_energy: 300),
+        troll_mountain: (mass: 600.0, base_health: 240, base_poise: 300, base_energy: 300),
+        troll_swamp: (mass: 600.0, base_health: 240, base_poise: 300, base_energy: 300),
+        // armoured undead
+        dullahan: (mass: 500.0, base_health: 600, base_poise: 300, base_energy: 400),
+        // on par with Wendigo, the other large beast-man
+        werewolf: (mass: 350.0, base_health: 280, base_poise: 300, base_energy: 300),
+        // the caster saurok
+        saurok_occult: (mass: 400.0, base_health: 200, base_poise: 300, base_energy: 300),
+        // the melee saurok
+        saurok_mighty: (mass: 400.0, base_health: 260, base_poise: 300, base_energy: 300),
+        // the ranged saurok
+        saurok_sly: (mass: 400.0, base_health: 220, base_poise: 300, base_energy: 300),
+        mindflayer: (mass: 420.0, base_health: 2000, base_poise: 777, base_energy: 300),
+        minotaur: (mass: 500.0, base_health: 3000, base_poise: 340, base_energy: 300),
+        // a 7x8 m crab-bodied giant
+        tidalwarrior: (mass: 1500.0, base_health: 1600, base_poise: 300, base_energy: 300),
+        yeti: (mass: 600.0, base_health: 1800, base_poise: 300, base_energy: 300),  // troll-built
+        // straw and wood over a large frame
+        harvester: (mass: 350.0, base_health: 1300, base_poise: 300, base_energy: 300),
+        oni_blue: (mass: 550.0, base_health: 240, base_poise: 300, base_energy: 300),
+        oni_red: (mass: 550.0, base_health: 240, base_poise: 300, base_energy: 300),
+        // a human in heavy armour
+        cultist_warlord: (mass: 160.0, base_health: 200, base_poise: 300, base_energy: 240),
+        // a robed human
+        cultist_warlock: (mass: 110.0, base_health: 200, base_poise: 300, base_energy: 240),
+        husk_brute: (mass: 500.0, base_health: 800, base_poise: 300, base_energy: 300),
+        tursus: (mass: 500.0, base_health: 300, base_poise: 300, base_energy: 300),  // bear-built
+        gigas_frost: (mass: 400.0, base_health: 30000, base_poise: 990, base_energy: 300),
+        adlet_elder: (mass: 350.0, base_health: 1500, base_poise: 300, base_energy: 300),
+        sea_bishop: (mass: 300.0, base_health: 550, base_poise: 300, base_energy: 300),
+        haniwa_general: (mass: 360.0, base_health: 600, base_poise: 300, base_energy: 300),
+        terracotta_besieger: (mass: 380.0, base_health: 300, base_poise: 300, base_energy: 300),
+        terracotta_demolisher: (mass: 380.0, base_health: 300, base_poise: 300, base_energy: 300),
+        terracotta_punisher: (mass: 380.0, base_health: 300, base_poise: 300, base_energy: 300),
+        terracotta_pursuer: (mass: 380.0, base_health: 300, base_poise: 300, base_energy: 300),
+        cursekeeper: (mass: 380.0, base_health: 3000, base_poise: 300, base_energy: 300),
+        forgemaster: (mass: 1600.0, base_health: 10000, base_poise: 300, base_energy: 300),
+        strigoi: (mass: 400.0, base_health: 800, base_poise: 300, base_energy: 300),
+        // a human in plate
+        executioner: (mass: 200.0, base_health: 800, base_poise: 300, base_energy: 300),
+        gigas_fire: (mass: 400.0, base_health: 25000, base_poise: 990, base_energy: 300),
+    ),
+    biped_small: (
+        gnome: (mass: 25.0, base_health: 60, base_poise: 100, base_energy: 100),
+        sahagin: (mass: 55.0, base_health: 85, base_poise: 100, base_energy: 100),
+        adlet: (mass: 60.0, base_health: 65, base_poise: 100, base_energy: 100),
+        gnarling: (mass: 25.0, base_health: 50, base_poise: 100, base_energy: 100),
+        mandragora: (mass: 20.0, base_health: 65, base_poise: 100, base_energy: 100),  // a root
+        kappa: (mass: 30.0, base_health: 60, base_poise: 100, base_energy: 100),
+        // a water-filled succulent, dense for its size
+        cactid: (mass: 40.0, base_health: 50, base_poise: 100, base_energy: 100),
+        gnoll: (mass: 30.0, base_health: 60, base_poise: 100, base_energy: 100),
+        // a fired-clay funerary statue, not flesh
+        haniwa: (mass: 180.0, base_health: 100, base_poise: 100, base_energy: 100),
+        // fired clay, as Haniwa
+        myrmidon: (mass: 180.0, base_health: 100, base_poise: 100, base_energy: 100),
+        husk: (mass: 45.0, base_health: 50, base_poise: 100, base_energy: 100),  // gaunt undead
+        boreal: (mass: 270.0, base_health: 800, base_poise: 470, base_energy: 100),
+        bushly: (mass: 20.0, base_health: 60, base_poise: 100, base_energy: 100),  // a shrub
+        // a 2 m tall root-thing
+        irrwurz: (mass: 60.0, base_health: 100, base_poise: 100, base_energy: 100),
+        iron_dwarf: (mass: 1000.0, base_health: 250, base_poise: 300, base_energy: 100),
+        flamekeeper: (mass: 1000.0, base_health: 2000, base_poise: 300, base_energy: 100),
+        // barely corporeal
+        shamanic_spirit: (mass: 20.0, base_health: 240, base_poise: 100, base_energy: 100),
+        jiangshi: (mass: 70.0, base_health: 250, base_poise: 100, base_energy: 100),
+        // a chest-sized mimic
+        treasure_egg: (mass: 40.0, base_health: 60, base_poise: 100, base_energy: 100),
+        gnarling_chieftain: (mass: 30.0, base_health: 150, base_poise: 130, base_energy: 100),
+        // a 5.5 m boss on a small-biped skeleton
+        bloodmoon_heiress: (mass: 400.0, base_health: 2000, base_poise: 100, base_energy: 100),
+        bloodservant: (mass: 70.0, base_health: 300, base_poise: 100, base_energy: 100),
+        harlequin: (mass: 70.0, base_health: 500, base_poise: 100, base_energy: 100),
+        goblin_thug: (mass: 35.0, base_health: 30, base_poise: 100, base_energy: 100),
+        goblin_chucker: (mass: 35.0, base_health: 30, base_poise: 100, base_energy: 100),
+        goblin_ruffian: (mass: 35.0, base_health: 30, base_poise: 100, base_energy: 100),
+        green_legoom: (mass: 15.0, base_health: 25, base_poise: 100, base_energy: 100),
+        ochre_legoom: (mass: 15.0, base_health: 25, base_poise: 100, base_energy: 100),
+        purple_legoom: (mass: 15.0, base_health: 25, base_poise: 100, base_energy: 100),
+        red_legoom: (mass: 15.0, base_health: 25, base_poise: 100, base_energy: 100),
+        ashen: (mass: 70.0, base_health: 300, base_poise: 100, base_energy: 100),
+        umber_legoom: (mass: 15.0, base_health: 25, base_poise: 100, base_energy: 100),
+    ),
+    bird_large: (
+        phoenix: (mass: 250.0, base_health: 2000, base_poise: 165, base_energy: 600),
+        cockatrice: (mass: 250.0, base_health: 540, base_poise: 165, base_energy: 400),
+        roc: (mass: 250.0, base_health: 450, base_poise: 165, base_energy: 500),
+        wyvern_flame: (mass: 250.0, base_health: 1000, base_poise: 220, base_energy: 600),
+        wyvern_cloud: (mass: 250.0, base_health: 1000, base_poise: 220, base_energy: 600),
+        wyvern_frost: (mass: 250.0, base_health: 1000, base_poise: 220, base_energy: 600),
+        wyvern_sea: (mass: 250.0, base_health: 1000, base_poise: 220, base_energy: 600),
+        wyvern_weald: (mass: 250.0, base_health: 1000, base_poise: 220, base_energy: 600),
+    ),
+    // Ravens are 0.69-2 kg, crows are 0.51 kg on average.
+    bird_medium: (
+        snowy_owl: (mass: 3.0, base_health: 35, base_poise: 100, base_energy: 100),
+        horned_owl: (mass: 3.0, base_health: 35, base_poise: 100, base_energy: 100),
+        duck: (mass: 3.5, base_health: 10, base_poise: 100, base_energy: 100),
+        cockatiel: (mass: 2.0, base_health: 10, base_poise: 100, base_energy: 100),
+        // ~✅ Red junglefowl are 1-1.5 kg
+        chicken: (mass: 2.5, base_health: 10, base_poise: 100, base_energy: 100),
+        bat: (mass: 1.5, base_health: 10, base_poise: 100, base_energy: 100),
+        penguin: (mass: 10.0, base_health: 10, base_poise: 100, base_energy: 100),
+        // ~✅ Swan geese are 2.8-3.5 kg
+        goose: (mass: 3.5, base_health: 25, base_poise: 100, base_energy: 100),
+        peacock: (mass: 6.0, base_health: 20, base_poise: 100, base_energy: 100),
+        // ~✅ Steller's sea eagle are 5-9 kg
+        eagle: (mass: 7.0, base_health: 35, base_poise: 100, base_energy: 100),
+        parrot: (mass: 1.0, base_health: 15, base_poise: 100, base_energy: 100),
+        crow: (mass: 3.0, base_health: 15, base_poise: 100, base_energy: 100),
+        dodo: (mass: 4.0, base_health: 20, base_poise: 100, base_energy: 100),
+        parakeet: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+        puffin: (mass: 2.0, base_health: 20, base_poise: 100, base_energy: 100),
+        toucan: (mass: 4.5, base_health: 15, base_poise: 100, base_energy: 100),
+        bloodmoon_bat: (mass: 1.5, base_health: 1200, base_poise: 100, base_energy: 100),
+        vampire_bat: (mass: 1.5, base_health: 100, base_poise: 100, base_energy: 100),
+    ),
+    crustacean: (
+        crab: (mass: 50.0, base_health: 40, base_poise: 100, base_energy: 100),
+        soldier_crab: (mass: 50.0, base_health: 50, base_poise: 100, base_energy: 100),
+        karkatha: (mass: 1200.0, base_health: 2000, base_poise: 100, base_energy: 100),
+    ),
+    dragon: (
+        reddragon: (mass: 20000.0, base_health: 500, base_poise: 100, base_energy: 100),
+    ),
+    fish_medium: (
+        marlin: (mass: 5.0, base_health: 50, base_poise: 100, base_energy: 100),
+        icepike: (mass: 5.0, base_health: 90, base_poise: 100, base_energy: 100),
+    ),
+    fish_small: (
+        clownfish: (mass: 1.0, base_health: 5, base_poise: 100, base_energy: 100),
+        piranha: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+    ),
+    golem: (
+        stonegolem: (mass: 10000.0, base_health: 1000, base_poise: 365, base_energy: 100),
+        treant: (mass: 10000.0, base_health: 1000, base_poise: 365, base_energy: 100),
+        claygolem: (mass: 10000.0, base_health: 350, base_poise: 365, base_energy: 100),
+        woodgolem: (mass: 10000.0, base_health: 120, base_poise: 365, base_energy: 100),
+        coralgolem: (mass: 10000.0, base_health: 550, base_poise: 365, base_energy: 100),
+        gravewarden: (mass: 10000.0, base_health: 1000, base_poise: 365, base_energy: 100),
+        ancienteffigy: (mass: 10000.0, base_health: 250, base_poise: 365, base_energy: 100),
+        mogwai: (mass: 10000.0, base_health: 500, base_poise: 365, base_energy: 100),
+        irongolem: (mass: 10000.0, base_health: 2500, base_poise: 365, base_energy: 100),
+    ),
+    // Saltwater crocodiles can weigh around a ton, but our versions are the
+    // size of an alligator or smaller, so whatever.
+    quadruped_low: (
+        crocodile: (mass: 360.0, base_health: 145, base_poise: 190, base_energy: 100),
+        sea_crocodile: (mass: 410.0, base_health: 180, base_poise: 190, base_energy: 100),
+        alligator: (mass: 360.0, base_health: 130, base_poise: 190, base_energy: 100),  // ~✅
+        salamander: (mass: 350.0, base_health: 210, base_poise: 130, base_energy: 100),
+        elbst: (mass: 350.0, base_health: 145, base_poise: 130, base_energy: 100),
+        monitor: (mass: 200.0, base_health: 95, base_poise: 130, base_energy: 100),
+        asp: (mass: 300.0, base_health: 175, base_poise: 190, base_energy: 100),
+        tortoise: (mass: 300.0, base_health: 45, base_poise: 205, base_energy: 100),
+        rocksnapper: (mass: 450.0, base_health: 400, base_poise: 205, base_energy: 100),
+        rootsnapper: (mass: 450.0, base_health: 400, base_poise: 205, base_energy: 100),
+        reefsnapper: (mass: 450.0, base_health: 400, base_poise: 205, base_energy: 100),
+        pangolin: (mass: 300.0, base_health: 20, base_poise: 130, base_energy: 100),
+        maneater: (mass: 80.0, base_health: 510, base_poise: 205, base_energy: 100),
+        sandshark: (mass: 450.0, base_health: 540, base_poise: 190, base_energy: 100),
+        hakulaq: (mass: 400.0, base_health: 155, base_poise: 205, base_energy: 100),
+        dagon: (mass: 600.0, base_health: 1200, base_poise: 270, base_energy: 100),
+        lavadrake: (mass: 700.0, base_health: 340, base_poise: 205, base_energy: 100),
+        basilisk: (mass: 800.0, base_health: 660, base_poise: 205, base_energy: 100),
+        deadwood: (mass: 200.0, base_health: 85, base_poise: 190, base_energy: 100),
+        icedrake: (mass: 700.0, base_health: 340, base_poise: 205, base_energy: 100),
+        mossdrake: (mass: 700.0, base_health: 340, base_poise: 205, base_energy: 100),
+        driggle: (mass: 55.0, base_health: 50, base_poise: 130, base_energy: 100),
+        snaretongue: (mass: 280.0, base_health: 1500, base_poise: 190, base_energy: 100),
+        hydra: (mass: 800.0, base_health: 1000, base_poise: 205, base_energy: 100),
+    ),
+    quadruped_medium: (
+        // larger and heavier than a tiger
+        grolgar: (mass: 300.0, base_health: 450, base_poise: 195, base_energy: 100),
+        saber: (mass: 130.0, base_health: 210, base_poise: 205, base_energy: 100),
+        // ~✅ Bengal tigers are 200-260 kg
+        tiger: (mass: 200.0, base_health: 205, base_poise: 190, base_energy: 100),
+        // boar-sized, tusked
+        tuskram: (mass: 200.0, base_health: 175, base_poise: 205, base_energy: 100),
+        // ~✅ (110-225 kg)
+        lion: (mass: 170.0, base_health: 175, base_poise: 190, base_energy: 100),
+        // armour plating over a Grolgar-sized frame
+        tarasque: (mass: 400.0, base_health: 370, base_poise: 205, base_energy: 100),
+        // ~✅ grey wolves are 30-50 kg
+        wolf: (mass: 50.0, base_health: 110, base_poise: 190, base_energy: 100),
+        // a heavier dire cousin of the wolf
+        frostfang: (mass: 70.0, base_health: 185, base_poise: 205, base_energy: 100),
+        // ~✅ mouflon are 25-55 kg; ours is oversized
+        mouflon: (mass: 60.0, base_health: 75, base_poise: 205, base_energy: 100),
+        catoblepas: (mass: 300.0, base_health: 720, base_poise: 190, base_energy: 100),
+        // a lean skeletal quadruped
+        bonerattler: (mass: 120.0, base_health: 100, base_poise: 190, base_energy: 100),
+        deer: (mass: 80.0, base_health: 55, base_poise: 140, base_energy: 100),
+        // a spirit-stag, heavier than a deer
+        hirdrasil: (mass: 250.0, base_health: 480, base_poise: 165, base_energy: 100),
+        // ~✅ walruses are 800-1700 kg
+        roshwalr: (mass: 1200.0, base_health: 640, base_poise: 205, base_energy: 100),
+        donkey: (mass: 200.0, base_health: 65, base_poise: 165, base_energy: 100),
+        // ~✅ dromedaries are 400-600 kg
+        camel: (mass: 500.0, base_health: 100, base_poise: 165, base_energy: 100),
+        // ~✅ plains zebras are 220-450 kg
+        zebra: (mass: 350.0, base_health: 90, base_poise: 165, base_energy: 100),
+        // ~✅ mid-sized antelope (impala to kudu)
+        antelope: (mass: 120.0, base_health: 70, base_poise: 165, base_energy: 100),
+        kelpie: (mass: 250.0, base_health: 150, base_poise: 165, base_energy: 100),
+        horse: (mass: 300.0, base_health: 75, base_poise: 165, base_energy: 100),  // ~✅
+        // a demon hound the size of a bear
+        barghest: (mass: 250.0, base_health: 120, base_poise: 190, base_energy: 100),
+        // ~✅ (500-650 kg)
+        cattle: (mass: 575.0, base_health: 90, base_poise: 165, base_energy: 100),
+        darkhound: (mass: 60.0, base_health: 80, base_poise: 190, base_energy: 100),  // hound-sized
+        highland: (mass: 200.0, base_health: 205, base_poise: 165, base_energy: 100),
+        yak: (mass: 200.0, base_health: 215, base_poise: 205, base_energy: 100),
+        panda: (mass: 200.0, base_health: 215, base_poise: 150, base_energy: 100),
+        // ~✅ (350-700 kg)
+        bear: (mass: 500.0, base_health: 240, base_poise: 195, base_energy: 100),
+        dreadhorn: (mass: 500.0, base_health: 690, base_poise: 205, base_energy: 100),
+        // ~✅ moose are 380-700 kg
+        moose: (mass: 500.0, base_health: 265, base_poise: 190, base_energy: 100),
+        // ~✅ snow leopards are 25-55 kg
+        snowleopard: (mass: 50.0, base_health: 175, base_poise: 190, base_energy: 100),
+        mammoth: (mass: 1500.0, base_health: 880, base_poise: 230, base_energy: 100),
+        elephant: (mass: 1500.0, base_health: 880, base_poise: 230, base_energy: 100),
+        // a ceratopsian bruiser
+        ngoubou: (mass: 600.0, base_health: 590, base_poise: 230, base_energy: 100),
+        // ~✅ llamas are 130-200 kg
+        llama: (mass: 150.0, base_health: 65, base_poise: 165, base_energy: 100),
+        // ~✅ alpacas are 60-80 kg
+        alpaca: (mass: 70.0, base_health: 55, base_poise: 165, base_energy: 100),
+        akhlut: (mass: 1000.0, base_health: 720, base_poise: 190, base_energy: 100),  // orca-sized
+        // boar-sized
+        bristleback: (mass: 200.0, base_health: 175, base_poise: 190, base_energy: 100),
+        // fired clay, not flesh, at horse scale and up
+        claysteed: (mass: 800.0, base_health: 400, base_poise: 165, base_energy: 100),
+    ),
+    quadruped_small: (
+        pig: (mass: 20.0, base_health: 25, base_poise: 100, base_energy: 100),
+        fox: (mass: 10.0, base_health: 25, base_poise: 100, base_energy: 100),
+        sheep: (mass: 50.0, base_health: 30, base_poise: 100, base_energy: 100),
+        boar: (mass: 80.0, base_health: 55, base_poise: 100, base_energy: 100),  // ~✅ (60-100 kg)
+        jackalope: (mass: 10.0, base_health: 30, base_poise: 100, base_energy: 100),
+        skunk: (mass: 5.0, base_health: 20, base_poise: 100, base_energy: 100),
+        cat: (mass: 4.0, base_health: 25, base_poise: 100, base_energy: 100),  // ~✅ (4-5 kg)
+        batfox: (mass: 10.0, base_health: 40, base_poise: 100, base_energy: 100),
+        raccoon: (mass: 30.0, base_health: 20, base_poise: 100, base_energy: 100),
+        quokka: (mass: 10.0, base_health: 15, base_poise: 100, base_energy: 100),
+        holladon: (mass: 70.0, base_health: 25, base_poise: 100, base_energy: 100),
+        hyena: (mass: 70.0, base_health: 85, base_poise: 100, base_energy: 100),  // ~✅ (vaguely)
+        rabbit: (mass: 2.0, base_health: 15, base_poise: 100, base_energy: 100),
+        truffler: (mass: 70.0, base_health: 70, base_poise: 100, base_energy: 100),
+        frog: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+        rat: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+        axolotl: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+        gecko: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+        turtle: (mass: 40.0, base_health: 10, base_poise: 100, base_energy: 100),
+        squirrel: (mass: 1.0, base_health: 10, base_poise: 100, base_energy: 100),
+        fungome: (mass: 10.0, base_health: 15, base_poise: 100, base_energy: 100),
+        porcupine: (mass: 5.0, base_health: 25, base_poise: 100, base_energy: 100),
+        beaver: (mass: 10.0, base_health: 20, base_poise: 100, base_energy: 100),
+        hare: (mass: 10.0, base_health: 20, base_poise: 100, base_energy: 100),
+        // ~✅ (German Shepherd: 30-40 kg)
+        dog: (mass: 30.0, base_health: 30, base_poise: 100, base_energy: 100),
+        goat: (mass: 50.0, base_health: 30, base_poise: 100, base_energy: 100),
+        seal: (mass: 15.0, base_health: 20, base_poise: 100, base_energy: 100),
+        treant_sapling: (mass: 80.0, base_health: 20, base_poise: 100, base_energy: 100),
+        mossy_snail: (mass: 5.0, base_health: 15, base_poise: 100, base_energy: 100),
+    ),
+    // For reference, elephants are in the range of 2.6-6.9 tons and
+    // Tyrannosaurus rex were ~8.4-14 tons.
+    theropod: (
+        archaeos: (mass: 8000.0, base_health: 880, base_poise: 240, base_energy: 100),
+        odonto: (mass: 8000.0, base_health: 1320, base_poise: 240, base_energy: 100),
+        raptor_sand: (mass: 500.0, base_health: 110, base_poise: 195, base_energy: 100),
+        raptor_snow: (mass: 500.0, base_health: 110, base_poise: 195, base_energy: 100),
+        raptor_wood: (mass: 500.0, base_health: 110, base_poise: 195, base_energy: 100),
+        sunlizard: (mass: 500.0, base_health: 110, base_poise: 195, base_energy: 100),
+        yale: (mass: 1000.0, base_health: 610, base_poise: 220, base_energy: 100),
+        dodarock: (mass: 700.0, base_health: 20, base_poise: 195, base_energy: 100),
+        ntouka: (mass: 8000.0, base_health: 880, base_poise: 240, base_energy: 100),
+        axebeak: (mass: 300.0, base_health: 275, base_poise: 195, base_energy: 100),
+    ),
+)

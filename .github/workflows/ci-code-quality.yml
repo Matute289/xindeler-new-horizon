@@ -82,17 +82,37 @@ jobs:
       - name: Clippy (×3 feature sets) + rustfmt --check
         run: bash .github/scripts/code-quality.sh
 
-      # The per-species attribute fall-through audits are unit tests, not lints:
-      # `attr_fallback!` is a no-op outside `cfg(test)`, so clippy cannot see
-      # them. Without this step they would be opt-in local tooling and a new
-      # species that forgets a `mass`/`threat_tier`/`scaler` value would merge
-      # exactly as silently as before.
+      # Two families of unit test that guard a per-species value and that
+      # clippy structurally cannot see:
       #
-      # Deliberately filtered to `attr_audit` rather than running each crate's
-      # whole suite: this checkout has no LFS, so `.vox`/`.ogg` assets are
-      # pointer files and the asset-loading tests (e.g.
+      #  - the `attr_fallback!` fall-through audits, which are a no-op outside
+      #    `cfg(test)`;
+      #  - `comp::body::stats`, which asserts `assets/common/body_stats.ron`
+      #    loads and is sane. A species missing from that file is a panic at
+      #    game start-up, so it has to fail here instead.
+      #
+      # Without this step both would be opt-in local tooling and a new species
+      # that forgets a `mass`/`threat_tier`/`scaler` value would merge exactly
+      # as silently as before.
+      #
+      # Deliberately filtered rather than running each crate's whole suite:
+      # this checkout has no LFS, so `.vox`/`.ogg` assets are pointer files and
+      # the asset-loading tests (e.g.
       # `terrain::structure::tests::test_structure_manifests`) would fail on
-      # content that is fine. The audits load no assets at all.
-      - name: Attribute fall-through audits (common + anim)
+      # content that is fine. The two filters below read one text asset
+      # (`body_stats.ron`), which is a real file here — RON is never
+      # LFS-tracked.
+      - name: Satisfy the asset-loader canary (this checkout has no LFS)
+        # `assets/common/canary.canary` is LFS-tracked precisely so that a
+        # player with a broken LFS setup gets a clear error instead of a
+        # mysterious one; `common/assets` panics on start-up when its contents
+        # are not the magic string. Here LFS is missing *on purpose* and the
+        # file is a pointer, which would abort the tests below before they
+        # load anything. The checkout is disposable, so satisfy the trip-wire
+        # rather than dragging ~GB of binaries off the VPS into a lint job.
+        run: printf 'VELOREN_CANARY_MAGIC\n' > assets/common/canary.canary
+
+      - name: Attribute fall-through audits + body stats table (common + anim)
         run: |
           time cargo test --locked -p xindeler-common -p xindeler-anim --lib attr_audit
+          time cargo test --locked -p xindeler-common --lib comp::body::stats

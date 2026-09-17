@@ -1,19 +1,30 @@
 //! Species-attribute fallback audit.
 //!
-//! Several per-species attribute lookups on [`super::Body`] — `mass`,
-//! `threat_tier`, `base_health`, … — end in a wildcard arm:
+//! Some per-species attribute lookups on [`super::Body`] end in a wildcard
+//! arm:
 //!
 //! ```ignore
-//! Body::QuadrupedMedium(body) => match body.species {
-//!     quadruped_medium::Species::Bear => 500.0,
+//! Body::Object(object) => match object {
+//!     object::Body::BarrelOrgan => 500,
 //!     // …
-//!     _ => 200.0,
+//!     _ => 1000,
 //! },
 //! ```
 //!
-//! That arm makes adding a species *compile clean and be quietly wrong*: a new
-//! creature silently becomes a 200 kg, threat-tier-2 combatant with no signal
-//! to the author, in code review, or in CI.
+//! That arm makes adding a body *compile clean and be quietly wrong*: a new
+//! one silently becomes a 1000 HP prop with no signal to the author, in code
+//! review, or in CI.
+//!
+//! **This is now the smaller half of the problem.** Every creature's `mass`,
+//! `base_health`, `base_poise` and `base_energy` moved to
+//! `assets/common/body_stats.ron`, whose per-species struct fields are
+//! required, so omitting one fails the load by name; `threat_tier` and
+//! `magic_resist_tier` became exhaustive matches, so omitting one fails the
+//! build. Both beat an audit. What is left here is `Body::Object` — props,
+//! projectiles and turrets, which are not a species roster and so have no
+//! `AllSpecies` struct to make required — plus three attributes whose
+//! catch-all is genuinely the neutral value (`scale`, `spacing_radius`,
+//! `combat_multiplier`).
 //!
 //! This module turns those wildcards from silent into **auditable**. Each one
 //! is wrapped in [`attr_fallback!`], which is a no-op expression in every
