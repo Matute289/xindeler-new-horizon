@@ -158,6 +158,13 @@ impl EventMapper for BlockEventMapper {
                 },
             ];
             // Iterate through each kind of block of interest
+            //
+            // NOTE: the `weather_at_player().rain` gates below mean
+            // precipitation of any form, snowfall included — audited when snow
+            // was added and deliberately left as `rain` rather than
+            // `liquid_rain`. Birds, owls and crickets fall quiet in a
+            // snowstorm for the same reason they do in rain; nothing here means
+            // *water* specifically.
             for sounds in sounds.iter() {
                 // If the timing condition is false, continue
                 // TODO Address bird hack properly. See TODO below

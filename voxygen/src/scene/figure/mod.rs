@@ -1243,7 +1243,10 @@ impl FigureMgr {
             (
                 can_shadow(sun_dir, can_shadow_sun, visible_psr_bounds),
                 can_shadow(
-                    weather.rain_vel(),
+                    // Must match the axis the occlusion map is rendered along
+                    // in `Scene::maintain`, which is slower and more slanted
+                    // when the precipitation is snow.
+                    scene_data.client.precip_vel_at_player(),
                     weather.rain > RAIN_THRESHOLD,
                     visible_por_bounds,
                 ),

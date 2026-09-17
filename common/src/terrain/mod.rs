@@ -141,6 +141,24 @@ impl CoordinateConversions for Vec2<f64> {
 
 // TerrainChunkMeta
 
+/// Abstract world-gen temperature at or below which a place is cold enough to
+/// freeze: world-gen covers its ground in `BlockKind::Snow`, and precipitation
+/// falling on it is snow rather than rain.
+///
+/// Lives here, beside the [`TerrainChunkMeta::temp`] it is compared against,
+/// because it is a property of the temperature scale rather than of any one
+/// consumer. `world`'s `CONFIG.snow_temp` is defined as this constant rather
+/// than as a second copy of the number, so the ground and the weather falling
+/// on it cannot disagree. See `world::config::celsius_to_abstract_temp` for the
+/// abstract↔Celsius mapping; `-0.8` abstract is `8.0` °C on that scale.
+///
+/// NOTE: 8 °C is the existing *biome* line, not the real freezing point. Moving
+/// it to a true 0 °C would mean rescaling the abstract temperature scale
+/// itself, which dozens of hand-tuned epsilon-width comparisons across
+/// world-gen are calibrated against; until that is done, snowfall reuses the
+/// biome line so the two never disagree.
+pub const SNOW_TEMP: f32 = -0.8;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerrainChunkMeta {
     name: Option<String>,

@@ -9294,6 +9294,33 @@ fn handle_weather_zone(
                 });
                 Ok(())
             },
+            // Precipitation heavy enough to register, with no wind so it does
+            // not read as a storm. Whether it actually *falls* as snow is
+            // decided by the temperature of the ground under the zone, not by
+            // this command — see `common::weather::snow_factor_at`. Over warm
+            // ground this is simply windless rain, which is the honest
+            // behaviour: a weather zone overrides the weather, never the
+            // terrain.
+            "snow" => {
+                add_zone(weather::Weather {
+                    cloud: 0.6,
+                    rain: 0.4,
+                    wind: Vec2::zero(),
+                });
+                Ok(())
+            },
+            // Fog is the overcast-but-dry case, so this is fully overcast with
+            // no precipitation at all — any rain would clear the fog back out.
+            // Unlike `snow`, this works anywhere: fog is derived from the
+            // weather cell alone and needs nothing from the ground.
+            "fog" => {
+                add_zone(weather::Weather {
+                    cloud: 1.0,
+                    rain: 0.0,
+                    wind: Vec2::zero(),
+                });
+                Ok(())
+            },
             _ => Err(Content::localized("command-weather-valid-values")),
         }
     } else {

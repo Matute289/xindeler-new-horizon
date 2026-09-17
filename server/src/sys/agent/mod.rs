@@ -41,6 +41,10 @@ impl<'a> System<'a> for Sys {
     ) {
         job.cpu_stats.measure(ParMode::Rayon);
 
+        // Read once for the whole tick rather than once per agent — every
+        // agent's weather-visibility resolution below needs the same tuning.
+        let weather_tuning = common::weather::WeatherTuning::load();
+
         (
             &read_data.entities,
             (
@@ -231,6 +235,8 @@ impl<'a> System<'a> for Sys {
                         buffs: read_data.buffs.get(entity),
                         stats: read_data.stats.get(entity),
                         cached_spatial_grid: &read_data.cached_spatial_grid,
+                        weather_visibility: read_data
+                            .weather_visibility_at(pos.0.xy(), &weather_tuning),
                         msm: &read_data.msm,
                         ability_map: &read_data.ability_map,
                         poise: read_data.poises.get(entity),

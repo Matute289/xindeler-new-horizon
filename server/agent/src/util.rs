@@ -80,6 +80,12 @@ pub fn stop_pursuing(
 }
 
 /// Scores the benefit of continuing the pursue in value from 0 to infinity.
+///
+/// Deliberately not scaled by weather visibility, unlike the perception checks
+/// in `action_nodes`: this scores whether to keep chasing a target already
+/// acquired, and an NPC mid-pursuit is tracking by more than line of sight.
+/// Snow shortens how far a thing can be *spotted*, not how stubbornly it is
+/// hunted once spotted.
 fn should_continue_to_pursue(
     dist_to_target_sqrd: f32,
     psyche: &Psyche,

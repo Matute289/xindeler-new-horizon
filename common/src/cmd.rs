@@ -130,7 +130,7 @@ lazy_static! {
     .collect();
 
     static ref WEATHERS: Vec<String> = [
-        "clear", "cloudy", "rain", "wind", "storm"
+        "clear", "cloudy", "rain", "wind", "storm", "snow", "fog"
     ]
     .iter()
     .map(|s| s.to_string())

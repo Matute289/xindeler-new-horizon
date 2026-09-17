@@ -1764,6 +1764,12 @@ impl ParticleMgr {
         let time = state.get_time();
         let dt = scene_data.state.get_delta_time();
         let mut rng = rand::rng();
+        // Hoisted out of the join below: the rain-splash particles need both,
+        // and an asset-cache lookup (which takes an `RwLock` read guard) plus a
+        // shred resource borrow do not belong inside a per-entity loop body.
+        // `WeatherTuning::load`'s own doc comment says as much.
+        let weather_tuning = common::weather::WeatherTuning::load();
+        let terrain = state.terrain();
 
         for (
             entity,
@@ -1836,14 +1842,30 @@ impl ParticleMgr {
                         });
                         // Exposure to sunlight: proxy for how wet the ground is
                         if char_state.meta.last_light > 0.9 {
-                            // Splashing in the rain
-                            let splash_particles =
-                                ((state.weather_at(interpolated.pos.xy()).rain - RAIN_THRESHOLD)
-                                    .max(0.0)
+                            // Splashing in the rain — only liquid rain leaves
+                            // puddles to splash through, so this fades out as
+                            // the same precipitation turns to snow.
+                            //
+                            // `rain` is total precipitation, so testing it
+                            // first short-circuits the terrain lookup on every
+                            // frame it isn't precipitating at all; `snow` can
+                            // only ever reduce the count from here.
+                            let precip = state.weather_at(interpolated.pos.xy());
+                            let splash_particles = if precip.rain > RAIN_THRESHOLD {
+                                let snow_factor = common::weather::snow_factor_at(
+                                    &terrain,
+                                    interpolated.pos.xy(),
+                                    &weather_tuning,
+                                )
+                                .unwrap_or(0.0);
+                                ((precip.liquid_rain(snow_factor) - RAIN_THRESHOLD).max(0.0)
                                     * scale
                                     * 100.0)
                                     .ceil()
-                                    .min(16.0) as usize;
+                                    .min(16.0) as usize
+                            } else {
+                                0
+                            };
                             self.add_particles(
                                 scene_data.particles_chance,
                                 splash_particles,

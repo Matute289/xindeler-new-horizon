@@ -9,14 +9,19 @@ use vek::*;
 pub struct Locals {
     rain_occlusion_matrices: [[f32; 4]; 4],
     rain_occlusion_texture_mat: [[f32; 4]; 4],
-    /// A rotation of the direction of the rain, relative to the players
-    /// velocity.
+    /// A rotation of the direction of the falling precipitation, relative to
+    /// the players velocity.
     rain_dir_mat: [[f32; 4]; 4],
-    /// A value to offset the rain, to make it move over time.
+    /// A value to offset the precipitation, to make it move over time.
     integrated_rain_vel: f32,
+    /// How much of the precipitation at the camera falls as liquid rain.
     rain_density: f32,
+    /// How much of it falls as snow. Occupies one of the two floats that used
+    /// to be pure alignment padding, so this costs no extra bytes in the
+    /// uniform block and no layout change.
+    snow_density: f32,
     // To keep 16-byte-aligned.
-    occlusion_dummy: [f32; 2],
+    occlusion_dummy: f32,
 }
 /// Make sure Locals is 16-byte-aligned.
 const _: () = assert!(core::mem::size_of::<Locals>().is_multiple_of(16));
@@ -27,6 +32,7 @@ impl Locals {
         rain_occlusion_texture_mat: Mat4<f32>,
         rain_dir_mat: Mat4<f32>,
         rain_density: f32,
+        snow_density: f32,
         integrated_rain_vel: f32,
     ) -> Self {
         Self {
@@ -35,7 +41,8 @@ impl Locals {
             rain_dir_mat: rain_dir_mat.into_col_arrays(),
             integrated_rain_vel,
             rain_density,
-            occlusion_dummy: [0.0; 2],
+            snow_density,
+            occlusion_dummy: 0.0,
         }
     }
 }

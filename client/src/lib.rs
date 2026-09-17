@@ -2541,6 +2541,31 @@ impl Client {
             .unwrap_or_default()
     }
 
+    /// How much of the precipitation falling on the player is snow rather than
+    /// rain, `0.0` to `1.0`.
+    ///
+    /// Decided by the temperature already baked into the terrain chunk the
+    /// player is standing in, so it needs nothing from the server beyond the
+    /// chunk itself. Falls back to rain while that chunk is still loading.
+    pub fn snow_factor_at_player(&self) -> f32 {
+        let tuning = common::weather::WeatherTuning::load();
+        self.position()
+            .and_then(|p| common::weather::snow_factor_at(&self.state.terrain(), p.xy(), &tuning))
+            .unwrap_or(0.0)
+    }
+
+    /// Velocity of the precipitation falling on the player, which is much
+    /// slower and far more wind-blown when it is snow.
+    ///
+    /// Every consumer of the precipitation direction must agree on it — the
+    /// rain-occlusion map is rendered along this axis and then sampled along
+    /// it again — so they all read it from here rather than deriving it
+    /// themselves.
+    pub fn precip_vel_at_player(&self) -> Vec3<f32> {
+        self.weather_at_player()
+            .precip_vel(self.snow_factor_at_player())
+    }
+
     pub fn current_chunk(&self) -> Option<Arc<TerrainChunk>> {
         let chunk_pos = Vec2::from(self.position()?)
             .map2(TerrainChunkSize::RECT_SIZE, |e: f32, sz| {

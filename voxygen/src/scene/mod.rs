@@ -1432,20 +1432,25 @@ impl Scene {
         self.wind_vel = weather.wind_vel();
         if weather.rain > RAIN_THRESHOLD {
             let weather = client.weather_at_player();
-            let rain_vel = weather.rain_vel();
-            let rain_view_mat = math::Mat4::look_at_rh(look_at, look_at + rain_vel, up);
+            // Whether the precipitation falling on the player is rain or snow
+            // is decided by the ground they're standing on, not by the weather
+            // cell — snow needs no networked field of its own for this reason.
+            let snow_factor = client.snow_factor_at_player();
+            let precip_vel = weather.precip_vel(snow_factor);
+            let rain_view_mat = math::Mat4::look_at_rh(look_at, look_at + precip_vel, up);
 
-            self.integrated_rain_vel += rain_vel.magnitude() * dt;
-            let rain_dir_mat = Mat4::rotation_from_to_3d(-Vec3::unit_z(), rain_vel);
+            self.integrated_rain_vel += precip_vel.magnitude() * dt;
+            let rain_dir_mat = Mat4::rotation_from_to_3d(-Vec3::unit_z(), precip_vel);
 
             let (shadow_mat, texture_mat) =
-                directed_mats(rain_view_mat, rain_vel, &visible_occlusion_volume);
+                directed_mats(rain_view_mat, precip_vel, &visible_occlusion_volume);
 
             let rain_occlusion_locals = RainOcclusionLocals::new(
                 shadow_mat,
                 texture_mat,
                 rain_dir_mat,
-                weather.rain,
+                weather.liquid_rain(snow_factor),
+                weather.snow(snow_factor),
                 self.integrated_rain_vel,
             );
 

@@ -3201,12 +3201,15 @@ impl Hud {
 
             // Weather
             let weather = client.weather_at_player();
+            let snow_factor = client.snow_factor_at_player();
             let debug_msg_weather = format!(
-                "Weather({kind}): {{cloud: {cloud:.2}, rain: {rain:.2}, wind: <{wind_x:.0}, \
-                 {wind_y:.0}>}}",
-                kind = weather.get_kind(),
+                "Weather({kind}): {{cloud: {cloud:.2}, rain: {rain:.2}, snow: {snow:.2}, fog: \
+                 {fog:.2}, wind: <{wind_x:.0}, {wind_y:.0}>}}",
+                kind = weather.get_kind_at(snow_factor),
                 cloud = weather.cloud,
-                rain = weather.rain,
+                rain = weather.liquid_rain(snow_factor),
+                snow = weather.snow(snow_factor),
+                fog = weather.fog_density(&common::weather::WeatherTuning::load()),
                 wind_x = weather.wind.x,
                 wind_y = weather.wind.y
             );
