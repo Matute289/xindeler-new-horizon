@@ -4124,6 +4124,117 @@ mod tests {
 
     fn synthetic_map_size() -> MapSizeLg { MapSizeLg::new(Vec2::new(10, 10)).unwrap() }
 
+    /// COW-19, measured against the installed `cromatolis_v0_routes.ron`: 49
+    /// tracks, under 20 distinct `route_path.*` names.
+    ///
+    /// Upstream `xindeler-open-world` authors 21 route paths, not 20. The
+    /// twenty-first, `route_path.leafhat_pathway`, exports no track of its own
+    /// because its only pair (`site.windgrave` <-> `site.green_post`) is
+    /// already carried by `route_path.fallen_oak_trail.segment_02` -- the
+    /// exporter deduplicates by unordered endpoint pair, so the connection
+    /// exists, just under another name. That is deduplication, not a dropped
+    /// road, and the check below proves the dedup actually held.
+    ///
+    /// Named for what it counts: rows in the route RON, not `Track`s in the
+    /// generated world. The two coincide only because every row survives
+    /// `establish_authored_cromatolis_routes`, which is itself asserted
+    /// separately.
+    const AUTHORED_CROMATOLIS_ROUTES: usize = 49;
+
+    /// Measured: the 49 authored tracks are spread over 20 `route_path.*`
+    /// names. Pinned so a whole authored path disappearing is caught even
+    /// though the row total would stay plausible.
+    const AUTHORED_CROMATOLIS_ROUTE_PATH_NAMES: usize = 20;
+
+    /// COW-19, measured: the settlements **no** authored track reaches.
+    ///
+    /// This is the list, not a count, on purpose. A rewire that connects one
+    /// settlement and strands another keeps any count identical and passes
+    /// green, while the answer for both places silently flipped -- and the
+    /// whole point of this figure is to be the reference an in-game "this
+    /// place has no road" report is checked against.
+    ///
+    /// It is **not** a list of deliberate design decisions. Six of the 22 are
+    /// towns and four are villages; nothing on record says those are meant to
+    /// be roadless. Treat a report against one of them as a likely authoring
+    /// gap in the route source data, not as expected behaviour.
+    const CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD: &[&str] = &[
+        // Town x6
+        "site.bronze_shore",
+        "site.elynshara",
+        "site.kalitos",
+        "site.morhe_dorei",
+        "site.rios_port",
+        "site.wanora",
+        // Village x4
+        "site.belletoile_village",
+        "site.itos_village",
+        "site.nugget_field_mines",
+        "site.ravenfair",
+        // Hamlet x5
+        "site.malicious_haven.alice.zha_lloig_rhaz",
+        "site.malicious_haven.elena.vhorr_azhal",
+        "site.malicious_haven.merid.gha_rrul_uth",
+        "site.malicious_haven.susy.thlug_nyarr",
+        "site.tenoxitlan",
+        // Post x5
+        "site.bg_central_post",
+        "site.bg_east_post",
+        "site.bg_west_post",
+        "site.hita_post",
+        "site.trident_post",
+        // Inn x2
+        "site.the_fish_journey",
+        "site.the_sapphire_pillow",
+    ];
+
+    /// COW-19: what the *installed* `cromatolis_v0_sites.ron` is attested to
+    /// contain, per class.
+    ///
+    /// `xindeler-open-world` authors 65 settlements; New Horizon installs 62.
+    /// Three later inns -- `site.el_ojo_de_luna`, `site.twin_dreams` and
+    /// `site.under_the_river` -- have not been reconciled into this repository
+    /// yet. Engine RONs are reconciled field-by-field, never bulk-copied, so
+    /// that is an open decision rather than drift; see
+    /// `cromatolis_settlement_template_contract_overrides_name_installed_settlements`
+    /// for the regression that pins exactly which three are pending.
+    ///
+    /// When they are reconciled in, change `Inn` here (4 -> 7) and nothing
+    /// else: every total below is derived from this table.
+    const AUTHORED_SETTLEMENTS_BY_CATEGORY: &[(AuthoredSettlementCategory, usize)] = &[
+        (AuthoredSettlementCategory::Capital, 1),
+        (AuthoredSettlementCategory::City, 7),
+        (AuthoredSettlementCategory::Town, 17),
+        (AuthoredSettlementCategory::Village, 20),
+        (AuthoredSettlementCategory::Hamlet, 5),
+        (AuthoredSettlementCategory::Inn, 4),
+        (AuthoredSettlementCategory::Post, 8),
+    ];
+
+    /// Derived, never restated, so the table and the total cannot disagree.
+    const AUTHORED_CROMATOLIS_SETTLEMENTS: usize = {
+        let mut total = 0;
+        let mut index = 0;
+        while index < AUTHORED_SETTLEMENTS_BY_CATEGORY.len() {
+            total += AUTHORED_SETTLEMENTS_BY_CATEGORY[index].1;
+            index += 1;
+        }
+        total
+    };
+
+    /// COW-19: the `settlement_template_contract.ron` site overrides that name
+    /// a settlement this repository does not install.
+    ///
+    /// All three are the pending inns above. `xindeler-open-world` has no
+    /// orphan override at all -- its control-plane validator would fail if it
+    /// did -- so this list is exactly the shape of the open reconciliation, and
+    /// it must shrink to empty when the three inns are installed.
+    const CROMATOLIS_PENDING_TEMPLATE_OVERRIDES: &[&str] = &[
+        "site.el_ojo_de_luna",
+        "site.twin_dreams",
+        "site.under_the_river",
+    ];
+
     #[test]
     fn cromatolis_authored_settlements_parse_and_validate_real_export_without_panicking() {
         let settlements = real_settlements();
@@ -4136,10 +4247,60 @@ mod tests {
             .validate(map_size)
             .expect("real Cromatolis settlements must be valid at runtime scale");
 
-        // Real, measured numbers as of this export -- not the round figure
-        // an earlier design pass estimated before the source data's last
-        // update.
-        assert_eq!(settlements.settlements.len(), 62);
+        let mut by_category: std::collections::HashMap<AuthoredSettlementCategory, usize> =
+            std::collections::HashMap::new();
+        for settlement in &settlements.settlements {
+            *by_category.entry(settlement.category).or_default() += 1;
+        }
+
+        for (category, expected) in AUTHORED_SETTLEMENTS_BY_CATEGORY {
+            // `unwrap_or(0)`, not `get(..) == Some(expected)`: a category the
+            // table legitimately drops to zero has no map entry, and must still
+            // be expressible as a `0` row rather than forcing the row's removal.
+            assert_eq!(
+                by_category.get(category).copied().unwrap_or(0),
+                *expected,
+                "authored settlement category {category:?} drifted from the reviewed export"
+            );
+        }
+        // No category may appear that the table above does not account for --
+        // otherwise a brand new settlement class would slip in without anyone
+        // deciding what physical template represents it. The exhaustive `match`
+        // makes adding a variant to `AuthoredSettlementCategory` a compile
+        // error here, so the data-side check below cannot be the only guard.
+        for category in by_category.keys() {
+            let covered = match category {
+                AuthoredSettlementCategory::Capital
+                | AuthoredSettlementCategory::City
+                | AuthoredSettlementCategory::Town
+                | AuthoredSettlementCategory::Village
+                | AuthoredSettlementCategory::Hamlet
+                | AuthoredSettlementCategory::Inn
+                | AuthoredSettlementCategory::Post => AUTHORED_SETTLEMENTS_BY_CATEGORY
+                    .iter()
+                    .any(|(known, _)| known == category),
+            };
+            assert!(
+                covered,
+                "the real export carries settlement category {category:?}, which this regression \
+                 does not cover"
+            );
+        }
+
+        // The total is derived from the table, never restated, so the two can
+        // never disagree.
+        assert_eq!(
+            settlements.settlements.len(),
+            AUTHORED_CROMATOLIS_SETTLEMENTS
+        );
+        assert_eq!(
+            by_category
+                .get(&AuthoredSettlementCategory::Capital)
+                .copied()
+                .unwrap_or(0),
+            1,
+            "Cromatolis has exactly one capital; its castle placement depends on it"
+        );
 
         let ids = settlements
             .settlements
@@ -4147,38 +4308,68 @@ mod tests {
             .map(|settlement| settlement.id.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(ids.len(), settlements.settlements.len());
+    }
 
-        let capitals = settlements
+    /// `SettlementTemplateContract` deliberately does not deserialize
+    /// `site_overrides` -- no generator consumes them yet, so the production
+    /// loader ignores the field. The regression below still has to read them,
+    /// and widening a production struct for a test's benefit would be exactly
+    /// the unused abstraction that shouldn't ship, so it parses the same asset
+    /// through its own reader instead.
+    #[derive(Debug, Deserialize)]
+    struct SettlementTemplateSiteOverrides {
+        site_overrides: Vec<SettlementTemplateSiteOverride>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct SettlementTemplateSiteOverride {
+        site_id: String,
+    }
+
+    /// COW-19: every `settlement_template_contract.ron` site override must name
+    /// a settlement this repository actually installs.
+    ///
+    /// An override pointing at an uninstalled settlement is dead configuration.
+    /// It is inert today only because the loader above drops the field; the
+    /// moment a generator starts honouring overrides it becomes a silent
+    /// no-op on a site that does not exist. Either way it is precisely the
+    /// cross-asset drift this row exists to catch, so it is asserted rather
+    /// than described.
+    ///
+    /// Three orphans exist right now, and all three are the inns pending
+    /// reconciliation from `xindeler-open-world` -- which has no orphan at all,
+    /// because it carries all 65 settlements, and whose control-plane validator
+    /// now fails if one ever appears. Pinning the exact set means a *fourth*
+    /// orphan fails immediately, and reconciling these three in also fails here
+    /// until the list is emptied: deliberately, so the decision cannot be
+    /// half-applied.
+    #[test]
+    fn cromatolis_settlement_template_contract_overrides_name_installed_settlements() {
+        let settlements = real_settlements();
+        let overrides: SettlementTemplateSiteOverrides = load_ron(include_bytes!(
+            "../../../assets/world/map/cromatolis_v0_settlement_template_contract.ron"
+        ))
+        .expect("the real settlement template contract must expose its site overrides");
+
+        let installed = settlements
             .settlements
             .iter()
-            .filter(|settlement| settlement.category == AuthoredSettlementCategory::Capital)
-            .count();
-        assert_eq!(capitals, 1);
+            .map(|settlement| settlement.id.as_str())
+            .collect::<HashSet<_>>();
 
-        let mut by_category: std::collections::HashMap<AuthoredSettlementCategory, usize> =
-            std::collections::HashMap::new();
-        for settlement in &settlements.settlements {
-            *by_category.entry(settlement.category).or_default() += 1;
-        }
+        let mut orphans = overrides
+            .site_overrides
+            .iter()
+            .map(|entry| entry.site_id.as_str())
+            .filter(|site_id| !installed.contains(site_id))
+            .collect::<Vec<_>>();
+        orphans.sort_unstable();
+
         assert_eq!(
-            by_category.get(&AuthoredSettlementCategory::Capital),
-            Some(&1)
+            orphans, CROMATOLIS_PENDING_TEMPLATE_OVERRIDES,
+            "settlement template overrides naming uninstalled settlements changed: either a new \
+             orphan appeared, or the pending inns were reconciled in and this list must be emptied"
         );
-        assert_eq!(by_category.get(&AuthoredSettlementCategory::City), Some(&7));
-        assert_eq!(
-            by_category.get(&AuthoredSettlementCategory::Town),
-            Some(&17)
-        );
-        assert_eq!(
-            by_category.get(&AuthoredSettlementCategory::Village),
-            Some(&20)
-        );
-        assert_eq!(
-            by_category.get(&AuthoredSettlementCategory::Hamlet),
-            Some(&5)
-        );
-        assert_eq!(by_category.get(&AuthoredSettlementCategory::Inn), Some(&4));
-        assert_eq!(by_category.get(&AuthoredSettlementCategory::Post), Some(&8));
     }
 
     #[test]
@@ -4235,11 +4426,10 @@ mod tests {
             .validate(map_size)
             .expect("real Cromatolis route graph must be valid at runtime scale");
 
-        // Real, measured count as of this export -- verified against the
-        // current `xindeler-open-world` export, not the design pass's
-        // earlier estimate (see the module-level note above and this row's
-        // spec §3/§6 for the "verify against the live export" rule).
-        assert_eq!(routes.routes.len(), 49);
+        // Real, measured count as of this export, not the design pass's earlier
+        // estimate. Unlike the settlement pins, the route graph is currently
+        // identical on both sides of the handoff.
+        assert_eq!(routes.routes.len(), AUTHORED_CROMATOLIS_ROUTES);
 
         let ids = routes
             .routes
@@ -4247,6 +4437,21 @@ mod tests {
             .map(|route| route.id.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(ids.len(), routes.routes.len());
+
+        // Row ids are `<path name>.segment_NN`. Pinning the number of distinct
+        // path names catches a whole authored path vanishing from the export,
+        // which a row total alone would happily absorb by growing another path
+        // a segment.
+        let path_names = routes
+            .routes
+            .iter()
+            .filter_map(|route| route.id.rsplit_once('.').map(|(name, _)| name))
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            path_names.len(),
+            AUTHORED_CROMATOLIS_ROUTE_PATH_NAMES,
+            "authored route path names changed: {path_names:?}"
+        );
     }
 
     #[test]
@@ -4273,6 +4478,80 @@ mod tests {
                 route.end_site_id
             );
         }
+    }
+
+    /// COW-19: at most one authored route per *unordered pair* of settlements.
+    ///
+    /// `establish_authored_cromatolis_routes` keeps its own `connected_pairs`
+    /// set and `continue`s past a repeat with only a `debug!` line -- so a
+    /// duplicated pair does not build two roads, it silently discards the
+    /// second route's authored path geometry. The Open World exporter already
+    /// deduplicates by unordered pair; this is the consumer-side half of that
+    /// contract, and it is coverage `validate()` does not provide (that only
+    /// rejects duplicate route *ids* and self-loops).
+    #[test]
+    fn cromatolis_authored_route_graph_has_no_duplicated_endpoint_pair() {
+        let routes = real_routes();
+        // Exercise the same validation production runs before consuming this
+        // graph, so the pair check below is this test's distinct contribution
+        // rather than a partial re-implementation of it.
+        routes
+            .validate(synthetic_map_size())
+            .expect("real Cromatolis route graph must be valid at runtime scale");
+
+        let mut pairs = HashSet::new();
+        for route in &routes.routes {
+            let pair = if route.start_site_id <= route.end_site_id {
+                (route.start_site_id.as_str(), route.end_site_id.as_str())
+            } else {
+                (route.end_site_id.as_str(), route.start_site_id.as_str())
+            };
+            assert!(
+                pairs.insert(pair),
+                "route {} repeats an endpoint pair another route already covers; \
+                 establish_authored_cromatolis_routes would drop its path geometry",
+                route.id
+            );
+        }
+    }
+
+    /// COW-19: exactly which installed settlements no authored road reaches.
+    ///
+    /// Asserted as a *set*, not a count: a rewire that connects one settlement
+    /// and strands another leaves any total unchanged and would pass green,
+    /// while the answer for both places had silently flipped. Since this list
+    /// is meant to be the reference an in-game "this place has no road" report
+    /// is checked against, it has to name the places.
+    #[test]
+    fn cromatolis_authored_routes_leave_exactly_the_reviewed_settlements_roadless() {
+        let routes = real_routes();
+        let settlements = real_settlements();
+
+        let connected = routes
+            .routes
+            .iter()
+            .flat_map(|route| [route.start_site_id.as_str(), route.end_site_id.as_str()])
+            .collect::<HashSet<_>>();
+
+        let mut roadless = settlements
+            .settlements
+            .iter()
+            .map(|settlement| settlement.id.as_str())
+            .filter(|site_id| !connected.contains(site_id))
+            .collect::<Vec<_>>();
+        roadless.sort_unstable();
+
+        let mut expected = CROMATOLIS_SETTLEMENTS_WITHOUT_A_ROAD.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            roadless, expected,
+            "the set of settlements with no authored road changed; check whether a road was \
+             added, removed, or rerouted before updating this list"
+        );
+        assert!(
+            connected.contains("site.kalthis"),
+            "the capital must be on the road network"
+        );
     }
 
     #[test]
@@ -4905,8 +5184,17 @@ mod tests {
             .sites()
             .filter(|site| site.authored_landmark.is_some())
             .count();
-        assert_eq!(settlement_sites, 62);
-        assert_eq!(landmark_sites, 16);
+        // COW-19 B3: pin the export against the reviewed attestation *first*,
+        // then compare generation against the export. Comparing generation
+        // straight to `real_settlements().len()` would pass trivially against a
+        // truncated export -- generation places N, the file says N.
+        let settlements = real_settlements();
+        assert_eq!(
+            settlements.settlements.len(),
+            AUTHORED_CROMATOLIS_SETTLEMENTS
+        );
+        assert_eq!(settlement_sites, settlements.settlements.len());
+        assert_eq!(landmark_sites, real_landmarks().landmarks.len());
         assert_eq!(
             civs.civs.iter().count(),
             1,
@@ -4932,6 +5220,15 @@ mod tests {
             .collect::<std::collections::HashMap<_, _>>();
 
         let routes = real_routes();
+        // COW-19 B4: pin the export before iterating it -- an export silently
+        // truncated to a handful of routes would otherwise pass this loop
+        // trivially.
+        assert_eq!(routes.routes.len(), AUTHORED_CROMATOLIS_ROUTES);
+
+        // Collecting the resolved `Track` ids, rather than counting loop turns,
+        // is what makes this more than a restatement of the assert above: it
+        // also fails if two authored routes ever resolve onto one shared track.
+        let mut tracks = HashSet::new();
         for route in &routes.routes {
             let start = *sites_by_authored_id
                 .get(route.start_site_id.as_str())
@@ -4949,12 +5246,19 @@ mod tests {
                         route.id, route.end_site_id
                     )
                 });
+            let track = civs.track_between(start, end).unwrap_or_else(|| {
+                panic!(
+                    "route {} did not resolve to a real Track between its authored settlements",
+                    route.id
+                )
+            });
             assert!(
-                civs.track_between(start, end).is_some(),
-                "route {} did not resolve to a real Track between its authored settlements",
+                tracks.insert(track),
+                "route {} resolved onto a Track another authored route already owns",
                 route.id
             );
         }
+        assert_eq!(tracks.len(), AUTHORED_CROMATOLIS_ROUTES);
     }
 
     #[test]
