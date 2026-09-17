@@ -211,16 +211,15 @@ const SMALL_MINERAL_SCALE: f32 = 1.0;
 /// every carved floor column into ore. Raised roughly in proportion with
 /// the `*_CHANCE` tiers above rather than tied to them by an exact ratio.
 ///
-/// It does currently clip real entries. Both Merid stormbound passages
-/// declare four minerals and are truncated at generation:
-/// `cave.merid_stormbound_passage_coast` is
-/// `Velorite/Sapphire/Cobalt Abundant` then `Bloodstone Common`, and
-/// `..._inner` is `Velorite Abundant, Sapphire Common, Cobalt Abundant,
-/// Bloodstone Common` -- see [`flatten_minerals`] for how, and
-/// `the_density_cap_truncates_the_two_caves_it_currently_truncates` for the
-/// pinned current result. That is an open COW-20 content decision
-/// (re-author the abundances, move this cap, or change the truncation rule),
-/// deliberately surfaced rather than silently resolved.
+/// [`flatten_minerals`] never truncates an over-cap list by declaration
+/// order: every declared mineral that survives non-minable/duplicate
+/// filtering is kept, and the whole set is compressed by one shared ratio
+/// so the total lands exactly on this cap. A catalog author never loses a
+/// declared mineral to list position; an over-rich cave just reads a little
+/// less generous than its raw numbers suggest, uniformly across every
+/// mineral it names. See
+/// `flatten_minerals_compresses_an_over_cap_list_instead_of_truncating_it`
+/// for the check that keeps this true.
 const MAX_TOTAL_MINERAL_CHANCE: f32 = 0.055;
 
 /// Resolution floor for every band width above.
@@ -588,14 +587,24 @@ fn build_generated_cave(
 /// option, see [`build_all_generated_caves`]) would let one bad content
 /// token delete every cave in the region, which is wildly out of proportion
 /// to the mistake.
+///
+/// Two independent passes. The first resolves `declared` down to the valid,
+/// deduplicated `(sprite, raw_chance)` set exactly as before (unminable and
+/// repeated-kind entries are dropped with a `warn!`, first declared
+/// abundance wins on a repeat). The second checks whether that set's total
+/// already fits [`MAX_TOTAL_MINERAL_CHANCE`]; if it does, chances pass
+/// through unchanged. If it does not, every one of them is scaled down by
+/// the same `cap / raw_total` ratio before the cumulative bands are built,
+/// so a too-rich cave reads uniformly less generous rather than losing
+/// whichever minerals happen to sort last.
 fn flatten_minerals(
     feature_id: &str,
     declared: &[CaveMineral],
     size_class: SizeClass,
 ) -> Vec<(SpriteKind, f32)> {
     let scale = size_class.mineral_scale();
-    let mut bands: Vec<(SpriteKind, f32)> = Vec::with_capacity(declared.len());
-    let mut cumulative = 0.0;
+
+    let mut resolved: Vec<(SpriteKind, f32)> = Vec::with_capacity(declared.len());
     for mineral in declared {
         if !is_minable_mineral(mineral.kind) {
             warn!(
@@ -605,7 +614,7 @@ fn flatten_minerals(
             );
             continue;
         }
-        if bands.iter().any(|(kind, _)| *kind == mineral.kind) {
+        if resolved.iter().any(|(kind, _)| *kind == mineral.kind) {
             warn!(
                 "Cromatolis cave {feature_id} declares {:?} more than once; keeping the first \
                  abundance only",
@@ -613,17 +622,28 @@ fn flatten_minerals(
             );
             continue;
         }
-        let next = cumulative + mineral.abundance.base_chance() * scale;
-        if next > MAX_TOTAL_MINERAL_CHANCE {
-            warn!(
-                "Cromatolis cave {feature_id} exceeds the {MAX_TOTAL_MINERAL_CHANCE} total \
-                 mineral density cap at {:?}; dropping it and everything after it",
-                mineral.kind
-            );
-            break;
-        }
-        cumulative = next;
-        bands.push((mineral.kind, cumulative));
+        resolved.push((mineral.kind, mineral.abundance.base_chance() * scale));
+    }
+
+    let raw_total: f32 = resolved.iter().map(|(_, chance)| *chance).sum();
+    let compression = if raw_total > MAX_TOTAL_MINERAL_CHANCE {
+        let ratio = MAX_TOTAL_MINERAL_CHANCE / raw_total;
+        warn!(
+            "Cromatolis cave {feature_id} declares {raw_total} total mineral density, above the \
+             {MAX_TOTAL_MINERAL_CHANCE} cap; compressing all {} declared minerals by a factor of \
+             {ratio:.3} rather than dropping any of them",
+            resolved.len()
+        );
+        ratio
+    } else {
+        1.0
+    };
+
+    let mut bands = Vec::with_capacity(resolved.len());
+    let mut cumulative = 0.0;
+    for (kind, chance) in resolved {
+        cumulative += chance * compression;
+        bands.push((kind, cumulative));
     }
     bands
 }
@@ -961,7 +981,10 @@ mod tests {
     }
 
     /// Without the cap, a long enough authored list drives the summed
-    /// chance past 1.0 and every carved floor column becomes ore.
+    /// chance past 1.0 and every carved floor column becomes ore. The cap
+    /// must still bind the total -- it just compresses now, see
+    /// `flatten_minerals_compresses_an_over_cap_list_instead_of_truncating_it`
+    /// for proof it keeps every mineral rather than dropping any.
     #[test]
     fn flatten_minerals_caps_total_density() {
         let greedy: Vec<CaveMineral> = [
@@ -978,8 +1001,77 @@ mod tests {
         .map(|kind| mineral(kind, MineralAbundance::Abundant))
         .collect();
         let bands = flatten_minerals("cave.test", &greedy, SizeClass::Medium);
-        assert!(bands.len() < greedy.len(), "the cap must actually bind");
-        assert!(bands.last().unwrap().1 <= MAX_TOTAL_MINERAL_CHANCE);
+        assert!(bands.last().unwrap().1 <= MAX_TOTAL_MINERAL_CHANCE + f32::EPSILON);
+    }
+
+    /// The proportional-compression rule this cap relies on: an over-cap
+    /// list keeps every declared mineral (none dropped by position), and
+    /// their *relative* weight survives -- an `Abundant` entry stays twice
+    /// an equally-scaled `Common` one -- while the summed total lands
+    /// exactly on the cap.
+    #[test]
+    fn flatten_minerals_compresses_an_over_cap_list_instead_of_truncating_it() {
+        let declared = vec![
+            mineral(SpriteKind::Velorite, MineralAbundance::Abundant),
+            mineral(SpriteKind::Sapphire, MineralAbundance::Abundant),
+            mineral(SpriteKind::Cobalt, MineralAbundance::Abundant),
+            mineral(SpriteKind::Bloodstone, MineralAbundance::Common),
+        ];
+        let bands = flatten_minerals("cave.test", &declared, SizeClass::Small);
+
+        assert_eq!(
+            bands.len(),
+            declared.len(),
+            "every declared mineral must survive compression, none dropped by list position"
+        );
+        assert!(
+            (bands.last().unwrap().1 - MAX_TOTAL_MINERAL_CHANCE).abs() < 1e-5,
+            "a compressed list's total should land exactly on the cap, got {}",
+            bands.last().unwrap().1
+        );
+
+        let width = |i: usize| {
+            if i == 0 {
+                bands[0].1
+            } else {
+                bands[i].1 - bands[i - 1].1
+            }
+        };
+        let velorite_width = width(0);
+        let bloodstone_width = width(3);
+        assert!(
+            (velorite_width - 2.0 * bloodstone_width).abs() < 1e-6,
+            "Abundant (velorite, width {velorite_width}) should stay exactly twice Common \
+             (bloodstone, width {bloodstone_width}) after a uniform compression"
+        );
+    }
+
+    /// Real-catalog regression for the two caves that motivated the
+    /// compression rule: both keep all four declared minerals now, where
+    /// the old drop-the-rest rule kept only one and two respectively.
+    #[test]
+    fn the_merid_stormbound_passages_keep_every_declared_mineral() {
+        let asset =
+            CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET).expect("the real asset should load");
+
+        for id in [
+            "cave.merid_stormbound_passage_coast",
+            "cave.merid_stormbound_passage_inner",
+        ] {
+            let feature = asset
+                .features
+                .iter()
+                .find(|f| f.id == id)
+                .unwrap_or_else(|| panic!("{id} should exist in the real catalog"));
+            let bands = flatten_minerals(&feature.id, &feature.minerals, feature.size_class);
+            assert_eq!(
+                bands.len(),
+                feature.minerals.len(),
+                "{id} should keep all {} declared minerals, kept {}",
+                feature.minerals.len(),
+                bands.len()
+            );
+        }
     }
 
     /// A Giant cave's carved floor is ~50x a Small's, so the same authored
@@ -1246,6 +1338,31 @@ mod tests {
         }
     }
 
+    /// `flatten_minerals` drops a repeated `SpriteKind` within one cave's own
+    /// list (keeping the first declared abundance), same as it drops a
+    /// non-minable one -- pinned independently, the same way
+    /// [`every_real_asset_mineral_is_minable`] pins the non-minable case, so
+    /// `no_real_cave_ever_loses_a_mineral_to_the_density_cap`'s failure
+    /// message can keep blaming the cap specifically without a duplicate
+    /// kind ever being able to masquerade as a cap compression.
+    #[test]
+    fn no_real_cave_declares_the_same_mineral_kind_twice() {
+        let asset =
+            CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET).expect("the real asset should load");
+        for feature in &asset.features {
+            let mut seen = std::collections::HashSet::new();
+            for mineral in &feature.minerals {
+                assert!(
+                    seen.insert(mineral.kind),
+                    "{} declares {:?} more than once; only the first declared abundance survives \
+                     flatten_minerals, silently dropping the repeat",
+                    feature.id,
+                    mineral.kind
+                );
+            }
+        }
+    }
+
     /// Every abundance tier must stay wide enough to actually be rolled.
     ///
     /// `mineral_for_column` compares against `RandomField::get_f32`, which
@@ -1277,31 +1394,16 @@ mod tests {
         }
     }
 
-    /// Records which authored entries the density cap currently truncates.
-    ///
-    /// `flatten_minerals` does not scale a too-rich list down: it drops the
-    /// offending mineral *and everything after it*, with only a `warn!`.
-    /// The coast passage declares `Velorite`, `Sapphire` and `Cobalt` all
-    /// `Abundant` plus `Bloodstone Common`, and keeps one of the four; the
-    /// inner declares `Velorite Abundant, Sapphire Common, Cobalt Abundant,
-    /// Bloodstone Common` and keeps two.
-    ///
-    /// **Open COW-20 decision, pinned rather than resolved here.** Three
-    /// different fixes are defensible and they are not this module's to
-    /// choose: re-author those abundances upstream (the catalog is authored
-    /// in `xindeler-open-world`, so this repo does not get to edit it),
-    /// move [`MAX_TOTAL_MINERAL_CHANCE`], or change the truncation rule
-    /// itself from "drop the rest" to "skip this one" -- note that under
-    /// the current rule the coast's `Bloodstone` is dropped despite fitting
-    /// inside the cap, purely because it is listed after an over-cap entry,
-    /// which makes the authored list's *order* silently load-bearing.
-    /// Whichever is chosen should make this test fail and be looked at.
+    /// Catalog-wide guarantee, not just the two caves that first exposed the
+    /// problem: with a compressing cap, no real entry can ever lose a
+    /// mineral to list position, so this loop should never find one, for
+    /// any future catalog edit, not only the ones known about today.
     #[test]
-    fn the_density_cap_truncates_the_two_caves_it_currently_truncates() {
+    fn no_real_cave_ever_loses_a_mineral_to_the_density_cap() {
         let asset =
             CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET).expect("the real asset should load");
 
-        let truncated: Vec<(String, usize, usize)> = asset
+        let dropped: Vec<(String, usize, usize)> = asset
             .features
             .iter()
             .filter(|f| !EXCLUDED_FEATURE_IDS.contains(&f.id.as_str()))
@@ -1312,12 +1414,11 @@ mod tests {
             .collect();
 
         assert_eq!(
-            truncated,
-            vec![
-                ("cave.merid_stormbound_passage_coast".to_string(), 4, 1),
-                ("cave.merid_stormbound_passage_inner".to_string(), 4, 2),
-            ],
-            "the set of caves whose authored mineral list is truncated at runtime changed"
+            dropped,
+            Vec::<(String, usize, usize)>::new(),
+            "these caves lost a mineral to the density cap, which the compressing rule should \
+             never allow (only actually-unminable or repeated-kind entries may still be dropped, \
+             and those aren't counted here): {dropped:?}"
         );
     }
 
