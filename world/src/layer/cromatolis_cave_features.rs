@@ -209,10 +209,35 @@ const SMALL_MINERAL_SCALE: f32 = 1.0;
 /// stops a future edit from declaring six `Abundant` minerals on one entry;
 /// without this, a long enough list drives the total past 1.0 and turns
 /// every carved floor column into ore. Raised roughly in proportion with
-/// the `*_CHANCE` tiers above (which is why the cap doesn't clip any real
-/// entry in the catalog that fit under the old one) rather than tied to
-/// them by an exact ratio.
+/// the `*_CHANCE` tiers above rather than tied to them by an exact ratio.
+///
+/// It does currently clip real entries. Both Merid stormbound passages
+/// declare four minerals and are truncated at generation:
+/// `cave.merid_stormbound_passage_coast` is
+/// `Velorite/Sapphire/Cobalt Abundant` then `Bloodstone Common`, and
+/// `..._inner` is `Velorite Abundant, Sapphire Common, Cobalt Abundant,
+/// Bloodstone Common` -- see [`flatten_minerals`] for how, and
+/// `the_density_cap_truncates_the_two_caves_it_currently_truncates` for the
+/// pinned current result. That is an open COW-20 content decision
+/// (re-author the abundances, move this cap, or change the truncation rule),
+/// deliberately surfaced rather than silently resolved.
 const MAX_TOTAL_MINERAL_CHANCE: f32 = 0.055;
+
+/// Resolution floor for every band width above.
+///
+/// [`mineral_for_column`] compares against `RandomField::get_f32`, which is
+/// `(get(pos) % 65536) / 65536.0` -- 16 bits, so ~1.5e-5 granularity. The
+/// narrowest band the current data produces is `TRACE_CHANCE *
+/// LARGE_MINERAL_SCALE` = 0.001, about 65 discrete steps, so nothing
+/// quantizes away today. Keep any new tier, or any reduction of the
+/// `*_MINERAL_SCALE` factors, well above this: a band narrower than the
+/// granularity can never be rolled at all, and would fail silently.
+///
+/// Kept next to the tiers it constrains rather than inside the test module,
+/// because this is what a future tuner needs to read before touching them;
+/// `every_abundance_tier_stays_above_the_noise_resolution_floor` enforces it.
+#[cfg(test)]
+const MIN_USEFUL_BAND_WIDTH: f32 = 1.0 / 65536.0;
 
 /// Salt for the per-column mineral roll. Distinct from every other
 /// `RandomField` seed used by this crate's layers so two features never
@@ -631,6 +656,13 @@ fn apply_minerals_to_floor(
     minerals: &[(SpriteKind, f32)],
     floor_pos: Vec3<i32>,
 ) {
+    // 31 of the authored caves declare no economy at all. Bail before the
+    // block lookup below so their carved floors cost nothing here, rather
+    // than paying a terrain read per column only to find no bands to roll
+    // against.
+    if minerals.is_empty() {
+        return;
+    }
     // An ore sprite needs something under it. `floor_pos` is the lowest
     // floor any of this cave's shapes carved in this column, so normally the
     // block below is untouched rock -- but two authored caves can overlap,
@@ -1114,6 +1146,179 @@ mod tests {
                 "expected the real catalog to contain the cross-referenced id {excluded}"
             );
         }
+    }
+
+    /// Pins the authored mineral economy against the real installed asset.
+    ///
+    /// `minerals` is `#[serde(default)]`, so a reconciliation that dropped
+    /// the field, or an upstream export that silently emitted empty lists,
+    /// still loads and still generates all 281 caves -- just without any
+    /// ore in them. `declares_no_minerals_at_all` only catches the total
+    /// wipe; these numbers catch a partial one. Nothing in this repo pins
+    /// the artifact's checksum, so in practice these totals are also what
+    /// would catch the asset being replaced by a stale copy.
+    ///
+    /// Asset rows and *generated* economy are deliberately counted
+    /// separately: the two `EXCLUDED_FEATURE_IDS` entries declare seven
+    /// deposits between them that are never placed, so an export that
+    /// quietly moved deposits onto an excluded entry would leave the asset
+    /// totals untouched while shrinking the real economy.
+    #[test]
+    fn real_asset_mineral_totals_match_the_authored_catalog() {
+        let asset = CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET)
+            .expect("assets/world/map/cromatolis_v0_cave_features.ron should load and parse");
+
+        let deposits: usize = asset.features.iter().map(|f| f.minerals.len()).sum();
+        let declaring = asset
+            .features
+            .iter()
+            .filter(|f| !f.minerals.is_empty())
+            .count();
+
+        assert_eq!(deposits, 657, "authored mineral deposit rows in the asset");
+        assert_eq!(
+            declaring, 250,
+            "asset entries carrying at least one deposit"
+        );
+        assert_eq!(
+            asset.features.len() - declaring,
+            31,
+            "asset entries that declared an empty economy"
+        );
+        assert!(!asset.declares_no_minerals_at_all());
+
+        // What generation actually sees, once the two cross-referenced
+        // entries are filtered out.
+        let generic: Vec<&CaveFeatureEntry> = asset
+            .features
+            .iter()
+            .filter(|f| !EXCLUDED_FEATURE_IDS.contains(&f.id.as_str()))
+            .collect();
+        let generic_deposits: usize = generic.iter().map(|f| f.minerals.len()).sum();
+        let generic_declaring = generic.iter().filter(|f| !f.minerals.is_empty()).count();
+
+        // Derived from the asset totals rather than pinned independently:
+        // these are not independent quantities, and pinning all of them
+        // means one re-export fails several assertions at once and someone
+        // recomputes six numbers by hand. The seven deposits stranded on
+        // the two excluded entries are the entire difference.
+        let excluded_deposits: usize = asset
+            .features
+            .iter()
+            .filter(|f| EXCLUDED_FEATURE_IDS.contains(&f.id.as_str()))
+            .map(|f| f.minerals.len())
+            .sum();
+
+        assert_eq!(generic.len(), 279, "generic caves the engine generates");
+        assert_eq!(
+            excluded_deposits, 7,
+            "deposits stranded on excluded entries"
+        );
+        assert_eq!(
+            generic_deposits,
+            deposits - excluded_deposits,
+            "deposits that can actually be placed"
+        );
+        assert_eq!(
+            generic_declaring,
+            declaring - EXCLUDED_FEATURE_IDS.len(),
+            "generic caves carrying a deposit"
+        );
+    }
+
+    /// Every mineral the real asset names must be something a player can
+    /// actually mine. A scenery sprite here would pass deserialization,
+    /// pass validation, and then be dropped one warning at a time at world
+    /// generation -- an authored deposit that simply never exists.
+    #[test]
+    fn every_real_asset_mineral_is_minable() {
+        let asset =
+            CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET).expect("the real asset should load");
+        for feature in &asset.features {
+            for mineral in &feature.minerals {
+                assert!(
+                    is_minable_mineral(mineral.kind),
+                    "{} declares {:?}, which has no mine_tool and would be skipped",
+                    feature.id,
+                    mineral.kind
+                );
+            }
+        }
+    }
+
+    /// Every abundance tier must stay wide enough to actually be rolled.
+    ///
+    /// `mineral_for_column` compares against `RandomField::get_f32`, which
+    /// has ~1.5e-5 granularity; a band narrower than that can never be hit,
+    /// and would fail silently rather than loudly. Guards
+    /// [`MIN_USEFUL_BAND_WIDTH`] against a future tier below `Trace` or a
+    /// smaller `*_MINERAL_SCALE`.
+    #[test]
+    fn every_abundance_tier_stays_above_the_noise_resolution_floor() {
+        for size_class in [
+            SizeClass::Giant,
+            SizeClass::Large,
+            SizeClass::Medium,
+            SizeClass::Small,
+        ] {
+            for abundance in [
+                MineralAbundance::Abundant,
+                MineralAbundance::Common,
+                MineralAbundance::Sparse,
+                MineralAbundance::Trace,
+            ] {
+                let width = abundance.base_chance() * size_class.mineral_scale();
+                assert!(
+                    width > MIN_USEFUL_BAND_WIDTH * 10.0,
+                    "{abundance:?} on a {size_class:?} cave is {width}, too close to the \
+                     {MIN_USEFUL_BAND_WIDTH} roll granularity to be reliably placed"
+                );
+            }
+        }
+    }
+
+    /// Records which authored entries the density cap currently truncates.
+    ///
+    /// `flatten_minerals` does not scale a too-rich list down: it drops the
+    /// offending mineral *and everything after it*, with only a `warn!`.
+    /// The coast passage declares `Velorite`, `Sapphire` and `Cobalt` all
+    /// `Abundant` plus `Bloodstone Common`, and keeps one of the four; the
+    /// inner declares `Velorite Abundant, Sapphire Common, Cobalt Abundant,
+    /// Bloodstone Common` and keeps two.
+    ///
+    /// **Open COW-20 decision, pinned rather than resolved here.** Three
+    /// different fixes are defensible and they are not this module's to
+    /// choose: re-author those abundances upstream (the catalog is authored
+    /// in `xindeler-open-world`, so this repo does not get to edit it),
+    /// move [`MAX_TOTAL_MINERAL_CHANCE`], or change the truncation rule
+    /// itself from "drop the rest" to "skip this one" -- note that under
+    /// the current rule the coast's `Bloodstone` is dropped despite fitting
+    /// inside the cap, purely because it is listed after an over-cap entry,
+    /// which makes the authored list's *order* silently load-bearing.
+    /// Whichever is chosen should make this test fail and be looked at.
+    #[test]
+    fn the_density_cap_truncates_the_two_caves_it_currently_truncates() {
+        let asset =
+            CaveFeaturesAsset::load_owned(CAVE_FEATURES_ASSET).expect("the real asset should load");
+
+        let truncated: Vec<(String, usize, usize)> = asset
+            .features
+            .iter()
+            .filter(|f| !EXCLUDED_FEATURE_IDS.contains(&f.id.as_str()))
+            .filter_map(|f| {
+                let kept = flatten_minerals(&f.id, &f.minerals, f.size_class).len();
+                (kept < f.minerals.len()).then(|| (f.id.clone(), f.minerals.len(), kept))
+            })
+            .collect();
+
+        assert_eq!(
+            truncated,
+            vec![
+                ("cave.merid_stormbound_passage_coast".to_string(), 4, 1),
+                ("cave.merid_stormbound_passage_inner".to_string(), 4, 2),
+            ],
+            "the set of caves whose authored mineral list is truncated at runtime changed"
+        );
     }
 
     /// The authored `minerals` field is `#[serde(default)]` so that the
