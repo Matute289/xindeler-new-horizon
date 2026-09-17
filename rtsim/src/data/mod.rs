@@ -268,9 +268,14 @@ mod tests {
     /// `CURRENT_VERSION` does **not** move for it (see the constant's own doc
     /// comment, and `banished`/`quests`, which were added the same way). This
     /// pins that claim end to end: a payload missing the key entirely must
-    /// still load through the real MessagePack codec, at the *unchanged*
-    /// version, and come up with no world narrative state. It fails loudly if
-    /// anyone drops the `#[serde(default)]` or bumps the version for it.
+    /// still load through the real MessagePack codec and come up with no world
+    /// narrative state. It fails loudly if anyone drops the
+    /// `#[serde(default)]`.
+    ///
+    /// It does **not** catch a `CURRENT_VERSION` bump — the payload is built
+    /// with `CURRENT_VERSION`, so it moves along with it. That is the same
+    /// limitation the `banished` test above has, and it is fine: a bump is a
+    /// deliberate hard purge, not something to guard against accidentally.
     #[test]
     fn a_save_written_before_world_narrative_existed_still_loads_at_the_same_version() {
         let old = PreWorldNarrativeData {

@@ -25,7 +25,7 @@
 use crate::assets::{Asset, AssetCache, AssetExt, AssetReadGuard, BoxedError, Ron, SharedString};
 use hashbrown::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
-use specs::{Component, DerefFlaggedStorage, HashMapStorage};
+use specs::{Component, HashMapStorage};
 use std::borrow::Borrow;
 
 /// The declared ceiling on how many narrative variables the manifest may hold,
@@ -708,7 +708,7 @@ impl NarrativeManifest {
     pub fn is_empty(&self) -> bool { self.vars.is_empty() }
 
     /// The entry declared under exactly this id. Does **not** follow renames —
-    /// use [`Self::resolve`] when reading a persisted payload.
+    /// this is what every read and every gameplay write goes through.
     pub fn get(&self, id: &str) -> Option<&NarrativeVarDef> {
         self.by_id.get(id).map(|i| &self.vars[*i])
     }
@@ -716,6 +716,18 @@ impl NarrativeManifest {
     /// Resolve a **persisted** id: the live entry declared under it, or the one
     /// that has it in `renamed_from`. The caller writes back under
     /// [`NarrativeVarDef::id`], which is how a rename migrates itself.
+    ///
+    /// 🔴 **For the persistence loader only.** A rename is a *migration*
+    /// concept, not an authoring one: content is expected to be updated to the
+    /// new id in the same change that renames it, and the alias exists purely
+    /// so rows already written under the old id can be carried forward once.
+    ///
+    /// Authoring paths deliberately use [`Self::get`] instead, so an alias in
+    /// a content asset is refused rather than silently redirected. The
+    /// alternative — resolving aliases on writes but not on reads — makes a
+    /// stale gate *write* successfully and then *read back the default*, which
+    /// is exactly the silent-never-fires failure the rename mechanism exists
+    /// to prevent.
     pub fn resolve(&self, id: &str) -> Option<&NarrativeVarDef> {
         self.by_id
             .get(id)
@@ -728,9 +740,19 @@ impl NarrativeManifest {
     pub fn is_retired(&self, id: &str) -> bool { self.retired.contains(id) }
 }
 
-/// The shipped manifest. Panics if the asset is missing or fails validation —
-/// deliberately, and at startup: a manifest that does not load means content
-/// ids do not mean what the content thinks they mean.
+/// The shipped manifest. **Panics** if the asset is missing or fails
+/// validation: a manifest that does not load means content ids do not mean
+/// what the content thinks they mean, so there is nothing sensible to
+/// continue with.
+///
+/// 🔴 Because it panics, call this only where a panic is survivable — i.e. at
+/// server startup, which is exactly why `Server::new` forces it there. Do
+/// **not** call it from a worker thread whose death would be silent; use
+/// [`NarrativeManifest::load`] and handle the `Err` instead. The character
+/// load path does the latter for that reason.
+///
+/// The result is cached by the asset system, so the validation cost is paid
+/// once at boot rather than per call.
 pub fn narrative_manifest() -> AssetReadGuard<NarrativeManifest> {
     NarrativeManifest::load_expect("common.narrative.variables").read()
 }
@@ -742,14 +764,38 @@ pub fn narrative_manifest() -> AssetReadGuard<NarrativeManifest> {
 /// drift from the manifest — every gameplay write goes through [`Self::apply`],
 /// which clamps, refuses derived variables, and enforces the kind/effect
 /// pairing.
+///
+/// **Nothing a load could not interpret is ever thrown away.** The save tick
+/// rewrites this column from the component, so anything the loader dropped
+/// would be erased from the database minutes later — a read-side "we refuse to
+/// interpret this" guard would be a delayed delete rather than a guard. The
+/// two carry-forward fields below exist to make that impossible; see
+/// [`Self::unresolved`] and [`Self::quarantined_payload`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NarrativeState {
     values: HashMap<NarrativeVarId, i32>,
+    /// Rows whose id this build cannot resolve and which were **not**
+    /// deliberately retired — a variable removed or renamed without declaring
+    /// it, or one belonging to a newer build. Carried forward verbatim so a
+    /// typo in the manifest cannot silently delete a variable for every
+    /// character on the next save.
+    unresolved: Vec<(String, i32)>,
+    /// A whole persisted payload this build declined to interpret (corrupt, or
+    /// written by a newer server). Re-emitted byte-for-byte on save instead of
+    /// being overwritten, so a downgrade deploy does not destroy narrative
+    /// records it merely could not read.
+    quarantine: Option<String>,
 }
 
 impl Component for NarrativeState {
     /// Rare: only player characters ever carry one.
-    type Storage = DerefFlaggedStorage<Self, HashMapStorage<Self>>;
+    ///
+    /// Plain `HashMapStorage`, deliberately not `DerefFlaggedStorage`: the
+    /// flagged wrapper is how this repo marks **net-synced** components, and
+    /// this one is never synced (see `NarrativeVisibility`). Nothing registers
+    /// a reader, so flagging would write a change event no one drains and,
+    /// worse, would tell the next reader that something subscribes.
+    type Storage = HashMapStorage<Self>;
 }
 
 /// Why [`NarrativeState::apply`] refused an effect.
@@ -769,10 +815,23 @@ pub enum EffectRefusal {
 /// What [`NarrativeState::apply`] did with one effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EffectOutcome {
-    /// Written to this character's state. `changed` is false when the stored
-    /// value was already the target — every effect but `Add` is idempotent or
-    /// monotonic, which is what makes a replayed effect harmless (spec §5.4).
+    /// Written to this character's state, and owed to nobody else. `changed`
+    /// is false when the stored value was already the target — every effect
+    /// but `Add` is idempotent or monotonic, which is what makes a replayed
+    /// effect harmless (spec §5.4).
     Applied {
+        changed: bool,
+    },
+    /// Written to this character's state, **and still owed to every other
+    /// eligible party member**: the variable is `Party`-scoped, which is a
+    /// write-time fan-out rather than a party-keyed store (spec §7).
+    ///
+    /// A separate variant rather than a flag on `Applied` on purpose. The
+    /// bearer's own write is identical either way, so a caller that forgot the
+    /// fan-out would look completely correct in single-player testing and only
+    /// desync once two people played the same chapter together. Making it its
+    /// own variant turns that into a match arm somebody has to write.
+    AppliedNeedsPartyFanout {
         changed: bool,
     },
     /// Not per-character narrative state: a `World`-scope variable (rtsim's
@@ -781,6 +840,25 @@ pub enum EffectOutcome {
     /// to route it.
     Deferred,
     Refused(EffectRefusal),
+}
+
+impl EffectOutcome {
+    /// Whether this effect reached the bearer's own state at all.
+    pub fn was_applied(&self) -> bool {
+        matches!(
+            self,
+            EffectOutcome::Applied { .. } | EffectOutcome::AppliedNeedsPartyFanout { .. }
+        )
+    }
+
+    /// Whether the stored value actually moved.
+    pub fn changed(&self) -> bool {
+        match self {
+            EffectOutcome::Applied { changed }
+            | EffectOutcome::AppliedNeedsPartyFanout { changed } => *changed,
+            EffectOutcome::Deferred | EffectOutcome::Refused(_) => false,
+        }
+    }
 }
 
 impl NarrativeState {
@@ -800,6 +878,33 @@ impl NarrativeState {
     /// through [`NarrativeManifest::resolve`] and clamped the value. Gameplay
     /// writes go through [`Self::apply`].
     pub fn insert_raw(&mut self, id: NarrativeVarId, value: i32) { self.values.insert(id, value); }
+
+    /// Carry a persisted row this build could not resolve, so the next save
+    /// writes it back untouched instead of dropping it. Loader only.
+    pub fn carry_unresolved(&mut self, id: String, value: i32) {
+        self.unresolved.push((id, value));
+    }
+
+    /// Rows being carried forward uninterpreted, for the writer to re-emit.
+    pub fn unresolved(&self) -> impl Iterator<Item = (&str, i32)> {
+        self.unresolved.iter().map(|(id, v)| (id.as_str(), *v))
+    }
+
+    /// Quarantine a whole payload this build declined to interpret, so the
+    /// next save re-emits it verbatim rather than overwriting it. Loader only.
+    pub fn quarantine_payload(&mut self, payload: String) { self.quarantine = Some(payload); }
+
+    /// The quarantined payload, if this character's narrative column could not
+    /// be read at all. While this is set the writer must re-emit it unchanged:
+    /// this build cannot know what those bytes mean, so it must not replace
+    /// them with its own reading of nothing.
+    pub fn quarantined_payload(&self) -> Option<&str> { self.quarantine.as_deref() }
+
+    /// Whether this state holds nothing at all — no values, nothing carried
+    /// forward, nothing quarantined — and so needs no database column.
+    pub fn is_entirely_absent(&self) -> bool {
+        self.values.is_empty() && self.unresolved.is_empty() && self.quarantine.is_none()
+    }
 
     /// Whether this character has a stored entry for `id`.
     ///
@@ -879,7 +984,11 @@ impl NarrativeState {
         let Some(id) = effect.variable() else {
             return EffectOutcome::Deferred;
         };
-        let Some(def) = manifest.resolve(id.as_str()) else {
+        // `get`, not `resolve`: an authored effect naming a retired alias is
+        // refused rather than silently redirected. Reads go through `get` too,
+        // so resolving here would let a stale gate write successfully and then
+        // read back the default — a condition that silently never fires.
+        let Some(def) = manifest.get(id.as_str()) else {
             return EffectOutcome::Refused(EffectRefusal::UnknownVariable);
         };
         if def.is_derived() {
@@ -945,7 +1054,15 @@ impl NarrativeState {
             Some(value) => self.values.insert(def.id.clone(), value) != Some(value),
             None => self.values.remove(def.id.as_str()).is_some(),
         };
-        EffectOutcome::Applied { changed }
+        match def.scope {
+            NarrativeScope::Character => EffectOutcome::Applied { changed },
+            // The bearer's write is done; the fan-out to the rest of the party
+            // is the caller's, and saying so in the return type is what stops
+            // it being forgotten.
+            NarrativeScope::Party => EffectOutcome::AppliedNeedsPartyFanout { changed },
+            // Handled before `write` is ever reached.
+            NarrativeScope::World => EffectOutcome::Deferred,
+        }
     }
 
     fn derive(
@@ -1119,6 +1236,12 @@ impl NarrativeCondition {
     }
 
     /// Whether this condition reaches into the emergent layer anywhere.
+    ///
+    /// Matched exhaustively on purpose — no `_` arm. This is what
+    /// `validate_derived_condition` uses to refuse a derived rule that reads
+    /// sentiment, so a future variant that reaches into the emergent layer and
+    /// fell through a wildcard here would silently disable that load-time
+    /// guard rather than failing to compile.
     pub fn reads_sentiment(&self) -> bool {
         match self {
             NarrativeCondition::SentimentAtLeast(_) => true,
@@ -1126,7 +1249,13 @@ impl NarrativeCondition {
                 conditions.iter().any(Self::reads_sentiment)
             },
             NarrativeCondition::Not(condition) => condition.reads_sentiment(),
-            _ => false,
+            NarrativeCondition::IsSet(_)
+            | NarrativeCondition::NotSet(_)
+            | NarrativeCondition::Equals(_, _)
+            | NarrativeCondition::ChoiceIs(_, _)
+            | NarrativeCondition::AtLeast(_, _)
+            | NarrativeCondition::AtMost(_, _)
+            | NarrativeCondition::TierAtLeast(_, _) => false,
         }
     }
 }
@@ -1416,14 +1545,14 @@ mod tests {
 
     #[test]
     fn an_unrecorded_choice_reads_as_no_choice_rather_than_option_zero() {
-        let m = manifest(vec![choice("quest.a.spine", &["hold", "cut"])]);
+        let m = manifest(vec![choice("quest.a.first_point", &["hold", "cut"])]);
         let mut state = NarrativeState::default();
-        assert_eq!(state.choice(&m, "quest.a.spine"), None);
+        assert_eq!(state.choice(&m, "quest.a.first_point"), None);
         state.apply(
             &m,
-            &NarrativeEffect::SetChoice(NarrativeVarId::new("quest.a.spine"), "hold".into()),
+            &NarrativeEffect::SetChoice(NarrativeVarId::new("quest.a.first_point"), "hold".into()),
         );
-        assert_eq!(state.choice(&m, "quest.a.spine"), Some("hold"));
+        assert_eq!(state.choice(&m, "quest.a.first_point"), Some("hold"));
     }
 
     #[test]
@@ -1595,6 +1724,40 @@ mod tests {
         assert!(state.is_empty());
     }
 
+    /// A `Party` variable is written to the bearer like any other, so the
+    /// outcome is the only place the still-owed fan-out can be signalled. A
+    /// caller that treated it as an ordinary `Applied` would look perfectly
+    /// correct alone and only desync once two people played the chapter
+    /// together — so the distinction lives in the type, not in a doc comment.
+    #[test]
+    fn a_party_scope_write_reports_that_a_fanout_is_still_owed() {
+        let mut solo = var("quest.a.personal", NarrativeVarKind::Flag);
+        solo.scope = NarrativeScope::Character;
+        let mut shared = var("quest.a.together", NarrativeVarKind::Flag);
+        shared.scope = NarrativeScope::Party;
+        let m = manifest(vec![solo, shared]);
+        let mut state = NarrativeState::default();
+
+        assert_eq!(
+            state.apply(
+                &m,
+                &NarrativeEffect::Set(NarrativeVarId::new("quest.a.personal"))
+            ),
+            EffectOutcome::Applied { changed: true }
+        );
+        let outcome = state.apply(
+            &m,
+            &NarrativeEffect::Set(NarrativeVarId::new("quest.a.together")),
+        );
+        assert_eq!(outcome, EffectOutcome::AppliedNeedsPartyFanout {
+            changed: true
+        });
+        // The bearer's own write still happened, and both helpers agree.
+        assert!(state.is_set("quest.a.together"));
+        assert!(outcome.was_applied());
+        assert!(outcome.changed());
+    }
+
     #[test]
     fn a_sentiment_effect_is_deferred_rather_than_silently_dropped() {
         let m = manifest(vec![]);
@@ -1610,42 +1773,67 @@ mod tests {
     }
 
     #[test]
-    fn a_write_under_an_old_id_lands_on_the_variable_that_renamed_it() {
+    fn an_authored_effect_naming_an_old_id_is_refused_rather_than_redirected() {
         let mut renamed = var("quest.a.new", NarrativeVarKind::Flag);
         renamed.renamed_from = vec![NarrativeVarId::new("quest.a.old")];
         let m = manifest(vec![renamed]);
         let mut state = NarrativeState::default();
-        state.apply(
-            &m,
-            &NarrativeEffect::Set(NarrativeVarId::new("quest.a.old")),
+        assert_eq!(
+            state.apply(
+                &m,
+                &NarrativeEffect::Set(NarrativeVarId::new("quest.a.old"))
+            ),
+            EffectOutcome::Refused(EffectRefusal::UnknownVariable),
         );
-        assert!(
-            state.is_set("quest.a.new"),
-            "a rename must be written back under the live id"
-        );
+        assert!(state.is_empty());
+        // Reads agree with writes: the alias resolves nowhere on this path, so
+        // there is no way to write one id and read another.
         assert!(!state.is_set("quest.a.old"));
+        assert!(!state.is_set("quest.a.new"));
+
+        // The persistence loader is the one place the alias does resolve, and
+        // it rewrites under the live id so the next save carries the rename.
+        let def = m
+            .resolve("quest.a.old")
+            .expect("the alias resolves for the loader");
+        assert_eq!(def.id.as_str(), "quest.a.new");
+        state.insert_raw(def.id.clone(), 1);
+        assert!(state.is_set("quest.a.new"));
+        assert_eq!(state.get(&m, "quest.a.new"), 1);
     }
 
     // ---- derived rules ----
 
-    fn hollow_choir() -> NarrativeManifest {
-        let mut outcome = choice("quest.a.outcome", &["rot_queen", "faceless_lord", "hold"]);
+    fn contested_outcome() -> NarrativeManifest {
+        let mut outcome = choice("quest.a.outcome", &[
+            "first_claimant",
+            "second_claimant",
+            "hold",
+        ]);
         outcome.derived = Some(DerivedRule::MajorityOf {
             inputs: vec![
-                NarrativeVarId::new("quest.a.spine"),
-                NarrativeVarId::new("quest.a.sluice"),
-                NarrativeVarId::new("quest.a.last_voice"),
+                NarrativeVarId::new("quest.a.first_point"),
+                NarrativeVarId::new("quest.a.second_point"),
+                NarrativeVarId::new("quest.a.third_point"),
             ],
             min_inputs: 2,
-            fallback: "faceless_lord".into(),
+            fallback: "second_claimant".into(),
             tie_breaker: "hold".into(),
         });
         manifest(vec![
-            choice("quest.a.spine", &["rot_queen", "faceless_lord", "hold"]),
-            choice("quest.a.sluice", &["rot_queen", "faceless_lord", "hold"]),
-            choice("quest.a.last_voice", &[
-                "rot_queen",
-                "faceless_lord",
+            choice("quest.a.first_point", &[
+                "first_claimant",
+                "second_claimant",
+                "hold",
+            ]),
+            choice("quest.a.second_point", &[
+                "first_claimant",
+                "second_claimant",
+                "hold",
+            ]),
+            choice("quest.a.third_point", &[
+                "first_claimant",
+                "second_claimant",
                 "hold",
             ]),
             outcome,
@@ -1664,32 +1852,32 @@ mod tests {
 
     #[test]
     fn majority_of_falls_back_when_too_few_inputs_are_set() {
-        let m = hollow_choir();
+        let m = contested_outcome();
         let mut state = NarrativeState::default();
         assert_eq!(
             state.choice(&m, "quest.a.outcome"),
-            Some("faceless_lord"),
+            Some("second_claimant"),
             "inaction has a named consequence because the rule declares one"
         );
-        pick(&m, &mut state, "quest.a.spine", "hold");
+        pick(&m, &mut state, "quest.a.first_point", "hold");
         assert_eq!(
             state.choice(&m, "quest.a.outcome"),
-            Some("faceless_lord"),
+            Some("second_claimant"),
             "one input is still under min_inputs"
         );
     }
 
     #[test]
     fn majority_of_takes_the_plurality_and_breaks_ties_as_declared() {
-        let m = hollow_choir();
+        let m = contested_outcome();
         let mut state = NarrativeState::default();
-        pick(&m, &mut state, "quest.a.spine", "hold");
-        pick(&m, &mut state, "quest.a.sluice", "hold");
+        pick(&m, &mut state, "quest.a.first_point", "hold");
+        pick(&m, &mut state, "quest.a.second_point", "hold");
         assert_eq!(state.choice(&m, "quest.a.outcome"), Some("hold"));
 
         let mut split = NarrativeState::default();
-        pick(&m, &mut split, "quest.a.spine", "rot_queen");
-        pick(&m, &mut split, "quest.a.sluice", "faceless_lord");
+        pick(&m, &mut split, "quest.a.first_point", "first_claimant");
+        pick(&m, &mut split, "quest.a.second_point", "second_claimant");
         assert_eq!(
             split.choice(&m, "quest.a.outcome"),
             Some("hold"),
@@ -1699,18 +1887,18 @@ mod tests {
 
     #[test]
     fn a_derived_value_is_recomputed_on_read_and_never_stored() {
-        let m = hollow_choir();
+        let m = contested_outcome();
         let mut state = NarrativeState::default();
-        pick(&m, &mut state, "quest.a.spine", "rot_queen");
-        pick(&m, &mut state, "quest.a.sluice", "rot_queen");
-        assert_eq!(state.choice(&m, "quest.a.outcome"), Some("rot_queen"));
+        pick(&m, &mut state, "quest.a.first_point", "first_claimant");
+        pick(&m, &mut state, "quest.a.second_point", "first_claimant");
+        assert_eq!(state.choice(&m, "quest.a.outcome"), Some("first_claimant"));
         assert!(
             !state.is_set("quest.a.outcome"),
             "a derived variable must never occupy a stored row"
         );
-        pick(&m, &mut state, "quest.a.last_voice", "hold");
+        pick(&m, &mut state, "quest.a.third_point", "hold");
         // Changing an input changes the outcome with no write anywhere.
-        assert_eq!(state.choice(&m, "quest.a.outcome"), Some("rot_queen"));
+        assert_eq!(state.choice(&m, "quest.a.outcome"), Some("first_claimant"));
         assert_eq!(state.len(), 3);
     }
 
@@ -1769,7 +1957,10 @@ mod tests {
 
     #[test]
     fn threshold_of_takes_the_highest_band_the_input_reaches() {
-        let mut survivor = choice("quest.a.survivor", &["demogorgon", "rot_queen"]);
+        let mut survivor = choice("quest.a.standing_claimant", &[
+            "the_drowned",
+            "first_claimant",
+        ]);
         survivor.derived = Some(DerivedRule::ThresholdOf {
             input: NarrativeVarId::new("quest.a.footing"),
             bands: vec![
@@ -1778,8 +1969,8 @@ mod tests {
                     then: DerivedValue::FromChoice {
                         input: NarrativeVarId::new("quest.a.outcome"),
                         map: [
-                            ("rot_queen".to_string(), "rot_queen".to_string()),
-                            ("hold".to_string(), "demogorgon".to_string()),
+                            ("first_claimant".to_string(), "first_claimant".to_string()),
+                            ("hold".to_string(), "the_drowned".to_string()),
                         ]
                         .into_iter()
                         .collect(),
@@ -1787,28 +1978,31 @@ mod tests {
                 },
                 ThresholdBand {
                     at_least: 0,
-                    then: DerivedValue::Const("demogorgon".into()),
+                    then: DerivedValue::Const("the_drowned".into()),
                 },
             ],
         });
         let m = manifest(vec![
             tally("quest.a.footing", 0, 3),
-            choice("quest.a.outcome", &["rot_queen", "hold"]),
+            choice("quest.a.outcome", &["first_claimant", "hold"]),
             survivor,
         ]);
 
         let mut state = NarrativeState::default();
-        pick(&m, &mut state, "quest.a.outcome", "rot_queen");
+        pick(&m, &mut state, "quest.a.outcome", "first_claimant");
         assert_eq!(
-            state.choice(&m, "quest.a.survivor"),
-            Some("demogorgon"),
-            "with no footing, Demogorgon regardless"
+            state.choice(&m, "quest.a.standing_claimant"),
+            Some("the_drowned"),
+            "below every band boundary, the constant wins regardless of the input choice"
         );
         state.apply(
             &m,
             &NarrativeEffect::SetValue(NarrativeVarId::new("quest.a.footing"), 2),
         );
-        assert_eq!(state.choice(&m, "quest.a.survivor"), Some("rot_queen"));
+        assert_eq!(
+            state.choice(&m, "quest.a.standing_claimant"),
+            Some("first_claimant")
+        );
     }
 
     // ---- the shipped manifest ----
@@ -1904,6 +2098,22 @@ mod tests {
                     options[i],
                 );
             }
+        }
+
+        // Fail CLOSED: a `Choice` added to the manifest without being pinned
+        // above would otherwise silently get no append-only protection at all,
+        // which is the failure mode this test exists to prevent.
+        for def in manifest.iter() {
+            if def.kind.options().is_none() {
+                continue;
+            }
+            assert!(
+                shipped.iter().any(|(id, _)| *id == def.id.as_str()),
+                "narrative Choice {} is not pinned in this test; add it with its option list as \
+                 shipped, so a later reorder or deletion is caught here instead of silently \
+                 rewriting every character's history",
+                def.id,
+            );
         }
     }
 }

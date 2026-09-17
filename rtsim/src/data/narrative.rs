@@ -1,4 +1,4 @@
-use common::comp::{NarrativeManifest, NarrativeVarId, NarrativeVarKind};
+use common::comp::{NarrativeManifest, NarrativeVarId};
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
@@ -13,9 +13,22 @@ use serde::{Deserialize, Serialize};
 /// player's saga. That asymmetry is the whole reason per-character state lives
 /// in the character DB instead.
 ///
-/// Sparse, with exactly the same semantics as the per-character store: a
-/// variable nothing has touched has no entry, and reads fall back to the
-/// manifest default.
+/// Sparse, with the same semantics as the per-character store: a variable
+/// nothing has touched has no entry, and reads fall back to the manifest
+/// default.
+///
+/// **Read-only for now, deliberately.** Nothing writes a world-scope variable
+/// yet — `NarrativeState::apply` hands a `World`-scope effect back as
+/// `EffectOutcome::Deferred` for a server-side seam that does not exist. The
+/// mutators are left out rather than shipped without a caller, because the
+/// routing seam is what should decide their shape.
+///
+/// 🔴 **When that seam lands, it also owes this store the migration pass the
+/// character store already has.** These values are deserialised straight out
+/// of the MessagePack save, so unlike `db_string_to_narrative_state` they get
+/// no `resolve` (renames), no retired-id sweep, and no `kind.clamp`. That is
+/// harmless while the map is always empty; it stops being harmless the moment
+/// anything writes to it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorldNarrative {
     values: HashMap<NarrativeVarId, i32>,
@@ -47,36 +60,4 @@ impl WorldNarrative {
             .copied()
             .unwrap_or_else(|| def.kind.default_value())
     }
-
-    /// The option name `id` currently holds, if it is a declared `Choice` and
-    /// the world has recorded one.
-    pub fn choice<'a>(&self, manifest: &'a NarrativeManifest, id: &str) -> Option<&'a str> {
-        let def = manifest.get(id)?;
-        let NarrativeVarKind::Choice { options } = &def.kind else {
-            return None;
-        };
-        let index = *self.values.get(id)?;
-        usize::try_from(index)
-            .ok()
-            .and_then(|i| options.get(i))
-            .map(String::as_str)
-    }
-
-    /// Store `value` for `id`, clamped to the variable's declared bounds.
-    /// Returns whether the stored value moved.
-    pub fn set(&mut self, manifest: &NarrativeManifest, id: &NarrativeVarId, value: i32) -> bool {
-        let Some(def) = manifest.resolve(id.as_str()) else {
-            return false;
-        };
-        let value = def.kind.clamp(value);
-        self.values.insert(def.id.clone(), value) != Some(value)
-    }
-
-    /// Remove `id`'s stored entry, returning it to the manifest default.
-    /// Returns whether anything was removed.
-    pub fn clear(&mut self, id: &str) -> bool { self.values.remove(id).is_some() }
-
-    /// Insert a raw stored value without validating it against the manifest,
-    /// for a loader that has already resolved and clamped it.
-    pub fn insert_raw(&mut self, id: NarrativeVarId, value: i32) { self.values.insert(id, value); }
 }

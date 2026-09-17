@@ -183,6 +183,34 @@ fn convert_waypoint_or_warn(
     }
 }
 
+/// Decode a character's persisted narrative state.
+///
+/// Split out from the load path purely so the manifest lookup cannot take the
+/// whole login system down with it. This runs on the `persistence_loader`
+/// thread, and a panic there unwinds that thread's receive loop, kills it, and
+/// leaves `CharacterLoader` queueing every later login into a channel with no
+/// consumer -- an indefinite hang on the character screen with nothing logged.
+/// `Server::new` already loads the manifest at boot precisely so a bad one is
+/// a refusal to start; if it is somehow unreadable by the time a character
+/// logs in (a hot-reload of a broken edit, say), that character loads with an
+/// empty narrative state and a loud error rather than bricking the server.
+fn narrative_state_from_database(payload: Option<&str>) -> comp::NarrativeState {
+    use common::assets::AssetExt;
+
+    match comp::NarrativeManifest::load("common.narrative.variables") {
+        Ok(manifest) => json_models::db_string_to_narrative_state(payload, &manifest.read()),
+        Err(err) => {
+            error!(
+                ?err,
+                "Narrative manifest is unreadable; loading this character with no narrative \
+                 state. Authored conditions will not fire until it is fixed and the server \
+                 restarted."
+            );
+            comp::NarrativeState::default()
+        },
+    }
+}
+
 /// Load stored data for a character.
 ///
 /// After first logging in, and after a character is selected, we fetch this
@@ -445,9 +473,8 @@ pub fn load_character_data(
             spell_mastery: json_models::db_string_to_spell_mastery(
                 character_data.spell_mastery.as_deref(),
             ),
-            narrative_state: json_models::db_string_to_narrative_state(
+            narrative_state: narrative_state_from_database(
                 character_data.narrative_state.as_deref(),
-                &comp::narrative_manifest(),
             ),
         },
         UpdateCharacterMetadata {
@@ -2667,6 +2694,18 @@ mod spell_book_persistence_tests {
                 3,
             ),
         );
+        // Captured before the save so the assertions below compare against
+        // what this character actually holds, rather than against content
+        // values written out here -- retuning the tally's cap or the derived
+        // variable's band boundaries is a pure content edit and must not break
+        // a persistence test.
+        let expected_commissions = loaded
+            .narrative_state
+            .get(&manifest, "quest.the_kind_work.commissions");
+        let expected_footing = loaded
+            .narrative_state
+            .choice(&manifest, "quest.the_kind_work.footing")
+            .map(str::to_owned);
         save(&db, id, &loaded, &pool);
 
         let after = load(&db, "uuid-narrative-roundtrip", id);
@@ -2681,7 +2720,7 @@ mod spell_book_persistence_tests {
             after
                 .narrative_state
                 .get(&manifest, "quest.the_kind_work.commissions"),
-            3
+            expected_commissions
         );
         // Derived variables are recomputed, never stored, so the reloaded
         // state must hold exactly the two rows that were written.
@@ -2689,9 +2728,14 @@ mod spell_book_persistence_tests {
         assert_eq!(
             after
                 .narrative_state
-                .choice(&manifest, "quest.the_kind_work.footing"),
-            Some("trusted"),
+                .choice(&manifest, "quest.the_kind_work.footing")
+                .map(str::to_owned),
+            expected_footing,
             "the derived reading must come back from the inputs, not from a row"
+        );
+        assert!(
+            expected_footing.is_some(),
+            "the derived variable must resolve for this test to prove anything"
         );
     }
 }
