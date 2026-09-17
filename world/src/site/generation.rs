@@ -1536,6 +1536,12 @@ impl Painter {
         }
         solid
     }
+
+    /// Test-only: every entity a `Structure::render_inner` recorded via
+    /// `Painter::spawn` during this test run.
+    pub(crate) fn spawned_entities_for_test(&self) -> Vec<EntityInfo> {
+        self.entities.borrow().clone()
+    }
 }
 
 pub fn render_prefab(file_path: &str, position: Vec3<i32>, painter: &Painter) {
