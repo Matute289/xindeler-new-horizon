@@ -643,6 +643,70 @@ pub(crate) fn not_cromatolis(c: &SimChunk) -> f32 {
     f32::from(c.authored_region_id != Some(CROMATOLIS_V0_REGION_ID))
 }
 
+/// Cromatolis-only density multiplier, loaded from `cromatolis_v0_density_
+/// boost.ron` (see `CromatolisWildlifeDensityBoost`) and applied once per
+/// column in `apply_wildlife_supplement` on top of every manifest entry's
+/// own density formula, rather than editing each affected land/jungle/
+/// tropical closure individually (which risks silently missing one as new
+/// entries are added). `BASE_DENSITY` (`spawn_manifest`) and the general,
+/// non-Cromatolis manifest entries are shared by every world this engine
+/// can generate, so they can't be raised without rebalancing every other
+/// world using this engine -- same constraint `not_cromatolis` above
+/// already documents, just the boost-instead-of-gate case.
+///
+/// Land and open ocean were both measured, via a real
+/// `World::generate_chunk`-instrumented audit (not just the column-density
+/// formula, which can be misleadingly optimistic vs. the real
+/// roll+gradient+footprint-clearance pipeline), as reading far too sparse
+/// during normal exploration; lake (whose presence bug, a separate root
+/// cause, is already fixed above by the `cromatolis.lake` manifest entry)
+/// measured already dense, so it's left alone (`1.0`). See the commit that
+/// introduced this constant for the full real before/after audit numbers
+/// and the exact tuning iteration.
+///
+/// `1.0` for every column outside the authored Cromatolis region (a no-op
+/// for every other world using this manifest) and for lake/river columns
+/// inside it (left unboosted -- already dense enough, see above).
+///
+/// Takes only the primitives it needs (rather than `&SimChunk`/
+/// `&ColumnSample`) so it stays trivially unit-testable without hand-
+/// constructing either of those large, many-field structs.
+fn cromatolis_wildlife_boost(
+    authored_region_id: Option<&'static str>,
+    is_underwater: bool,
+    is_ocean: bool,
+    boost: CromatolisWildlifeDensityBoost,
+) -> f32 {
+    if authored_region_id != Some(CROMATOLIS_V0_REGION_ID) {
+        return 1.0;
+    }
+    if !is_underwater {
+        boost.land
+    } else if is_ocean {
+        boost.ocean
+    } else {
+        1.0
+    }
+}
+
+/// Cromatolis-only wildlife-density tuning knob (see
+/// `cromatolis_wildlife_boost`), loaded from `assets/world/wildlife/
+/// cromatolis_v0_density_boost.ron` -- kept as data, alongside
+/// `AuthoredCromatolisClimate`'s `cromatolis_v0_climate.ron`, rather than a
+/// Rust constant, since it's a designer-tunable balance number that has
+/// already needed more than one measure-and-adjust iteration.
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct CromatolisWildlifeDensityBoost {
+    land: f32,
+    ocean: f32,
+}
+
+impl CromatolisWildlifeDensityBoost {
+    fn load() -> Self {
+        Ron::load_expect_cloned("world.wildlife.cromatolis_v0_density_boost").into_inner()
+    }
+}
+
 pub fn apply_wildlife_supplement<'a, R: Rng>(
     // NOTE: Used only for dynamic elements like chests and entities!
     dynamic_rng: &mut R,
@@ -657,6 +721,15 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
     let scatter = &index.wildlife_spawns;
     // Configurable density multiplier
     let wildlife_density_modifier = index.features.wildlife_density;
+    // Loaded once per chunk (not per column) and only when actually inside
+    // Cromatolis -- every other world never touches this asset at all. See
+    // `cromatolis_wildlife_boost`'s doc comment.
+    let cromatolis_density_boost = (chunk.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
+        .then(CromatolisWildlifeDensityBoost::load)
+        .unwrap_or(CromatolisWildlifeDensityBoost {
+            land: 1.0,
+            ocean: 1.0,
+        });
 
     for y in 0..vol.size_xy().y as i32 {
         for x in 0..vol.size_xy().x as i32 {
@@ -679,10 +752,22 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
                 (DayPeriod::Noon, None)
             };
 
+            // Cromatolis-scoped wildlife-density boost (see
+            // `cromatolis_wildlife_boost`'s doc comment). `1.0` everywhere
+            // outside the authored Cromatolis region, so this is a no-op for
+            // every other world using this manifest.
+            let cromatolis_boost = cromatolis_wildlife_boost(
+                chunk.authored_region_id,
+                is_underwater,
+                matches!(col_sample.chunk.get_biome(), BiomeKind::Ocean),
+                cromatolis_density_boost,
+            );
+
             let entity_group = scatter
                 .iter()
                 .filter_map(|(entry, get_density)| {
-                    let density = get_density(chunk, col_sample) * wildlife_density_modifier;
+                    let density =
+                        get_density(chunk, col_sample) * wildlife_density_modifier * cromatolis_boost;
                     (density > 0.0)
                         .then(|| {
                             entry
@@ -820,6 +905,75 @@ pub fn apply_wildlife_supplement<'a, R: Rng>(
 mod tests {
     use super::*;
     use hashbrown::HashMap;
+
+    // Regression: `cromatolis_wildlife_boost` must be a strict no-op
+    // (`1.0`) for every chunk outside the authored Cromatolis region, for
+    // every combination of land/underwater and ocean/non-ocean -- i.e. a
+    // non-Cromatolis world's wildlife density is numerically unchanged by
+    // the boost this function applies. Exhaustive over the function's whole
+    // (tiny) input space, so this can't miss a case.
+    #[test]
+    fn cromatolis_wildlife_boost_is_noop_outside_cromatolis() {
+        // Deliberately not `1.0`/`1.0` -- if the region check were ever
+        // accidentally dropped or inverted, a boost this far from identity
+        // would make the assertions below fail loudly instead of by luck.
+        let boost = CromatolisWildlifeDensityBoost {
+            land: 24.0,
+            ocean: 3.2,
+        };
+        for authored_region_id in [None, Some("some_other_future_region")] {
+            for is_underwater in [false, true] {
+                for is_ocean in [false, true] {
+                    assert_eq!(
+                        cromatolis_wildlife_boost(
+                            authored_region_id,
+                            is_underwater,
+                            is_ocean,
+                            boost
+                        ),
+                        1.0,
+                        "authored_region_id={authored_region_id:?} is_underwater={is_underwater} \
+                         is_ocean={is_ocean} must not be boosted outside Cromatolis"
+                    );
+                }
+            }
+        }
+    }
+
+    // Regression: inside Cromatolis, land and open-ocean columns get the
+    // passed-in boost, and lake/river columns (underwater, not ocean) are
+    // deliberately left at `1.0` -- see `cromatolis_wildlife_boost`'s doc
+    // comment for why.
+    #[test]
+    fn cromatolis_wildlife_boost_applies_inside_cromatolis() {
+        let region = Some(CROMATOLIS_V0_REGION_ID);
+        let boost = CromatolisWildlifeDensityBoost {
+            land: 24.0,
+            ocean: 3.2,
+        };
+        assert_eq!(
+            cromatolis_wildlife_boost(region, false, false, boost),
+            boost.land
+        );
+        assert_eq!(
+            cromatolis_wildlife_boost(region, true, true, boost),
+            boost.ocean
+        );
+        assert_eq!(
+            cromatolis_wildlife_boost(region, true, false, boost),
+            1.0,
+            "lake/river columns must stay unboosted"
+        );
+    }
+
+    // Checks that the real Cromatolis wildlife-density boost asset loads
+    // and parses.
+    #[test]
+    fn cromatolis_wildlife_density_boost_asset_loads() {
+        let boost = CromatolisWildlifeDensityBoost::load();
+        assert!(boost.land > 0.0);
+        assert!(boost.ocean > 0.0);
+    }
 
     // Checks that each entry in spawn manifest is loadable
     #[test]
