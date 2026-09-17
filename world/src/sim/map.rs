@@ -1,7 +1,7 @@
 use crate::{
     CONFIG, IndexRef,
     column::ColumnSample,
-    sim::{AuthoredGroundCoverProfile, GroundCoverBand, RiverKind, WorldSim},
+    sim::{AuthoredGroundCoverProfile, GroundCoverBand, GroundSubstrate, RiverKind, WorldSim},
     site::SiteKind,
 };
 use common::{
@@ -49,18 +49,23 @@ fn authored_map_post_processing_applies(
 
 /// Applies the authored ground-cover band's map-preview tint. Physical map
 /// layers deliberately bypass this stage: their water/mountain rendering is
-/// applied by `sample_pos` and must not inherit a vegetation tint.
+/// applied by `sample_pos` and must not inherit a vegetation tint. An explicit
+/// substrate zone then wins over the continuous cover band on remaining land.
 pub(super) fn authored_ground_cover_preview_tint(
     base: Rgb<u8>,
     profile: Option<&AuthoredGroundCoverProfile>,
-    density: f32,
+    ground_cover: f32,
+    ground_substrate: Option<GroundSubstrate>,
     is_water: bool,
     is_physical_mountain: bool,
 ) -> (Option<GroundCoverBand>, Rgb<u8>) {
     let Some(profile) = profile.filter(|_| !is_water && !is_physical_mountain) else {
         return (None, base);
     };
-    let band = profile.classify(density);
+    if ground_substrate == Some(GroundSubstrate::Sand) {
+        return (None, Rgb::new(0xbd, 0xad, 0x5a));
+    }
+    let band = profile.classify(ground_cover);
     let definition = profile
         .bands
         .iter()
@@ -345,7 +350,8 @@ pub fn sample_pos(
             (_, out) = authored_ground_cover_preview_tint(
                 out,
                 profile,
-                sample.tree_density,
+                sample.ground_cover,
+                sample.ground_substrate,
                 is_physical_water,
                 altitude > 0.28,
             );
@@ -462,7 +468,7 @@ mod tests {
         let dry_beige = Rgb::new(0xbd, 0xad, 0x5a);
 
         let (band, color) =
-            authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, false, false);
+            authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, None, false, false);
 
         assert_eq!(band, Some(GroundCoverBand::Forest));
         assert_eq!(color, Rgb::new(0x1e, 0x61, 0x32));
@@ -475,7 +481,7 @@ mod tests {
         let original = Rgb::new(0x51, 0x62, 0x73);
 
         let (band, _) =
-            authored_ground_cover_preview_tint(original, Some(&profile), 0.60, false, false);
+            authored_ground_cover_preview_tint(original, Some(&profile), 0.60, None, false, false);
         assert_eq!(band, Some(profile.classify(0.60)));
         assert_eq!(band, Some(GroundCoverBand::Jungle));
 
@@ -485,6 +491,7 @@ mod tests {
                     original,
                     Some(&profile),
                     0.90,
+                    None,
                     is_water,
                     is_physical_mountain,
                 ),
@@ -494,9 +501,38 @@ mod tests {
         }
 
         assert_eq!(
-            authored_ground_cover_preview_tint(original, None, 0.90, false, false),
+            authored_ground_cover_preview_tint(original, None, 0.90, None, false, false),
             (None, original),
             "procedural maps stay on the legacy rendering path",
+        );
+    }
+
+    #[test]
+    fn explicit_sand_substrate_wins_over_green_cover_on_land_only() {
+        let profile = cromatolis_profile();
+        let original = Rgb::new(0x51, 0x62, 0x73);
+        assert_eq!(
+            authored_ground_cover_preview_tint(
+                original,
+                Some(&profile),
+                0.9,
+                Some(GroundSubstrate::Sand),
+                false,
+                false,
+            ),
+            (None, Rgb::new(0xbd, 0xad, 0x5a)),
+        );
+        assert_eq!(
+            authored_ground_cover_preview_tint(
+                original,
+                Some(&profile),
+                0.9,
+                Some(GroundSubstrate::Sand),
+                true,
+                false,
+            ),
+            (None, original),
+            "water remains more authoritative than an authored sand zone",
         );
     }
 
