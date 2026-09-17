@@ -68,6 +68,10 @@ pub struct PersistedComponents {
     /// Per-`MagicSource` mastery progress. No load-time transform needed --
     /// unlike `trigger_slots` it carries no wall-clock state.
     pub spell_mastery: comp::SpellMastery,
+    /// Sparse narrative state: only the variables this character has deviated
+    /// from their manifest default on. Empty for a brand-new character, and
+    /// empty is a fully valid state -- every read falls back to the manifest.
+    pub narrative_state: comp::NarrativeState,
 }
 
 pub type EditableComponents = (comp::Body,);

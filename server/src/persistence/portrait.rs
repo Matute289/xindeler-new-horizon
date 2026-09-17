@@ -281,6 +281,7 @@ mod tests {
             pact: comp::Pact::default(),
             trigger_slots: comp::TriggerSlots::default(),
             spell_mastery: comp::SpellMastery::default(),
+            narrative_state: comp::NarrativeState::default(),
         }
     }
 

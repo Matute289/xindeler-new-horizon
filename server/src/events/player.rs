@@ -1,7 +1,10 @@
 use super::Event;
 use crate::{
-    BattleModeBuffer, Server, client::Client, metrics::PlayerMetrics,
-    persistence::character_updater::CharacterUpdater, settings::banlist::NormalizedIpAddr,
+    BattleModeBuffer, Server,
+    client::Client,
+    metrics::PlayerMetrics,
+    persistence::character_updater::{CharacterUpdateData, CharacterUpdater},
+    settings::banlist::NormalizedIpAddr,
     state_ext::StateExt,
 };
 use common::{
@@ -470,13 +473,20 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         .copied()
                         .unwrap_or_default();
 
-                    character_updater.add_pending_logout_update((
-                        char_id,
-                        skill_set.clone(),
-                        inventory.clone(),
+                    let narrative_state = state
+                        .ecs()
+                        .read_storage::<comp::NarrativeState>()
+                        .get(entity)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    character_updater.add_pending_logout_update(CharacterUpdateData {
+                        character_id: char_id,
+                        skill_set: skill_set.clone(),
+                        inventory: inventory.clone(),
                         pets,
                         waypoint,
-                        active_abilities.clone(),
+                        active_abilities: active_abilities.clone(),
                         ability_pool,
                         map_marker,
                         character_class,
@@ -485,7 +495,8 @@ pub(super) fn persist_entity(state: &mut State, entity: EcsEntity) -> EcsEntity 
                         pact,
                         trigger_slots,
                         spell_mastery,
-                    ));
+                        narrative_state,
+                    });
                 }
             },
             PresenceKind::Spectator => { /* Do nothing, spectators do not need persisting */ },

@@ -580,6 +580,19 @@ impl Server {
         );
         state.ecs_mut().insert(ability_map);
 
+        // Force the narrative manifest to load (and validate) here, at boot,
+        // where a failure is a refusal to start.
+        //
+        // 🔴 This is load-bearing, not a warm-up. Its only other caller is the
+        // character load path, which runs on the `persistence_loader` thread:
+        // a panic there unwinds that thread's receive loop and kills it, and
+        // because `CharacterLoader` still holds the sender, every subsequent
+        // login is then queued to a channel with no consumer -- players hang
+        // on the character screen forever while the server keeps running and
+        // logs nothing. A malformed manifest must stop the server instead.
+        let narrative_vars = comp::narrative_manifest().len();
+        debug!(narrative_vars, "Narrative manifest loaded and validated");
+
         let msm = comp::inventory::item::MaterialStatManifest::load().cloned();
         state.ecs_mut().insert(msm);
 
@@ -1346,6 +1359,7 @@ impl Server {
                                         pact,
                                         trigger_slots,
                                         spell_mastery,
+                                        narrative_state,
                                     } = character_data;
                                     let character_data = (
                                         body,
@@ -1363,6 +1377,7 @@ impl Server {
                                         pact,
                                         trigger_slots,
                                         spell_mastery,
+                                        narrative_state,
                                     );
                                     // TODO: Does this need to be a server event? E.g. we could
                                     // just handle it here.

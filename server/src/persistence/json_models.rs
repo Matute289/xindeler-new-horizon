@@ -495,6 +495,149 @@ pub fn db_string_to_spell_mastery(payload: Option<&str>) -> comp::SpellMastery {
     mastery
 }
 
+/// On-disk form of `comp::NarrativeState`: a version tag plus the sparse map
+/// of variable id -> value.
+///
+/// The ids are the manifest's own stable dotted strings, never a positional
+/// index into it -- the manifest is reorderable content, and this is the same
+/// lesson the `Innate:key:` hotbar encoding above already learned. `v` exists
+/// so a future payload reshape can be recognised rather than guessed at; it is
+/// not the manifest's version and does not move when content changes.
+#[derive(Serialize, Deserialize)]
+struct DatabaseNarrativeState {
+    v: u32,
+    vars: std::collections::BTreeMap<String, i32>,
+}
+
+/// The only `DatabaseNarrativeState::v` ever written. A payload carrying a
+/// higher one was written by a newer server than this, so it is not safely
+/// interpretable here and degrades to "no narrative state" rather than being
+/// read as though the fields still meant the same thing.
+const NARRATIVE_STATE_VERSION: u32 = 1;
+
+/// Serialise a character's narrative state for the `character.narrative_state`
+/// column. `None` (a SQL NULL) when nothing deviates from the manifest
+/// defaults, so a character who has never made an authored choice costs
+/// nothing.
+pub fn narrative_state_to_db_string(state: &comp::NarrativeState) -> Option<String> {
+    // A payload this build declined to interpret is written back byte for
+    // byte. The read-side guard would otherwise be a delayed delete: the save
+    // tick rewrites this column from the component every few minutes, so
+    // "refuse to read it" plus "then serialise what we read" equals "erase it".
+    // A rollback deploy must cost players nothing.
+    if let Some(quarantined) = state.quarantined_payload() {
+        return Some(quarantined.to_owned());
+    }
+    if state.is_entirely_absent() {
+        return None;
+    }
+    // A `BTreeMap` rather than the component's own hash map: the column is
+    // rewritten on every save tick, and a stable key order keeps an unchanged
+    // state byte-identical instead of reshuffling the payload each time.
+    let mut vars: std::collections::BTreeMap<String, i32> = state
+        .iter()
+        .map(|(id, value)| (id.as_str().to_owned(), value))
+        .collect();
+    // Rows this build could not resolve ride along untouched, so a variable
+    // dropped from the manifest by mistake is recoverable by putting it back
+    // rather than gone from every character on the next save.
+    for (id, value) in state.unresolved() {
+        vars.entry(id.to_owned()).or_insert(value);
+    }
+    let db = DatabaseNarrativeState {
+        v: NARRATIVE_STATE_VERSION,
+        vars,
+    };
+    serde_json::to_string(&db)
+        .inspect_err(|err| {
+            tracing::error!(?err, "Failed to serialize narrative state; dropping it");
+        })
+        .ok()
+}
+
+/// Inverse of [`narrative_state_to_db_string`].
+///
+/// Degrades gracefully at every step rather than failing the load: a character
+/// must never be locked out of the game by a bad narrative payload, and the
+/// worst case -- playing with no narrative state -- is exactly what a
+/// brand-new character has.
+///
+/// 🔴 **Degrading is never the same as discarding.** The save tick rewrites
+/// this column from the component every few minutes, so anything dropped here
+/// is erased from the database shortly afterwards. A payload that cannot be
+/// interpreted is therefore quarantined on the component and re-emitted
+/// verbatim by [`narrative_state_to_db_string`], and a row whose id does not
+/// resolve is carried forward rather than pruned.
+///
+/// Per stored row, all driven by the manifest:
+/// - an id that has been **renamed** resolves through its `renamed_from` alias
+///   and is rewritten under the live id, so the next save migrates itself;
+/// - an id the manifest has **retired** is dropped, because that is what
+///   retiring it means;
+/// - any other unrecognised id is **kept** and written back unchanged, so one
+///   typo in the manifest cannot delete a variable for every character.
+///
+/// Values are clamped to the variable's declared bounds on the way in, so a
+/// hand-edited or out-of-date payload cannot smuggle an out-of-range value
+/// past the write path's own clamping.
+pub fn db_string_to_narrative_state(
+    payload: Option<&str>,
+    manifest: &comp::NarrativeManifest,
+) -> comp::NarrativeState {
+    let mut state = comp::NarrativeState::default();
+    let Some(payload) = payload else {
+        return state;
+    };
+    let db: DatabaseNarrativeState = match serde_json::from_str(payload) {
+        Ok(db) => db,
+        Err(err) => {
+            tracing::error!(
+                ?err,
+                "Unreadable narrative state in database; this character plays with none, and the \
+                 stored payload is preserved untouched rather than overwritten"
+            );
+            state.quarantine_payload(payload.to_owned());
+            return state;
+        },
+    };
+    if db.v > NARRATIVE_STATE_VERSION {
+        tracing::error!(
+            version = db.v,
+            "Narrative state was written by a newer server than this one; preserving it verbatim \
+             and playing this character with none rather than overwriting what cannot be read"
+        );
+        state.quarantine_payload(payload.to_owned());
+        return state;
+    }
+
+    let mut carried = 0usize;
+    for (id, value) in db.vars {
+        let Some(def) = manifest.resolve(&id) else {
+            // Deliberately retired: dropping it is the point of retiring it.
+            // Anything else is a variable removed or renamed WITHOUT being
+            // declared, so it rides along untouched -- the save tick would
+            // otherwise erase it from every character within minutes, turning
+            // one manifest typo into permanent, silent data loss.
+            if !manifest.is_retired(&id) {
+                state.carry_unresolved(id, value);
+                carried += 1;
+            }
+            continue;
+        };
+        // Written back under `def.id`, not `id`: that is what makes a rename a
+        // manifest edit rather than a data migration.
+        state.insert_raw(def.id.clone(), def.kind.clamp(value));
+    }
+    if carried > 0 {
+        tracing::warn!(
+            carried,
+            "Narrative variables no longer resolve against the manifest; carrying them forward \
+             unchanged. Declare them in `retired:` to drop them deliberately."
+        );
+    }
+    state
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct DatabaseAbilitySet {
     mainhand: String,
@@ -1370,6 +1513,164 @@ pub mod tests {
             let loaded = super::super::db_string_to_spell_mastery(Some(payload));
             assert_eq!(loaded.source_xp(MagicSource::Divine), 42);
             assert_eq!(loaded.source_xp(MagicSource::Primordial), 0);
+        }
+    }
+
+    mod narrative_state {
+        use common::comp::{
+            NarrativeEffect, NarrativeManifest, NarrativeState, NarrativeVarId, narrative_manifest,
+        };
+
+        use super::super::{db_string_to_narrative_state, narrative_state_to_db_string};
+
+        /// A real, shipped `Tally` id, so these exercise the manifest content
+        /// actually ships rather than a fixture that could drift from it.
+        const COMMISSIONS: &str = "quest.the_kind_work.commissions";
+        /// A shipped `Flag` id.
+        const CREDIT: &str = "quest.the_kind_work.credit_refused";
+
+        fn manifest() -> common::assets::AssetReadGuard<NarrativeManifest> { narrative_manifest() }
+
+        #[test]
+        fn a_fresh_character_writes_no_column() {
+            assert_eq!(
+                narrative_state_to_db_string(&NarrativeState::default()),
+                None
+            );
+        }
+
+        /// The pre-existing-character case: a `NULL` column is not an error
+        /// state, it is the same state a brand-new character has, and every
+        /// read falls back to the manifest default.
+        #[test]
+        fn a_null_column_loads_as_an_empty_state_reading_manifest_defaults() {
+            let m = manifest();
+            let loaded = db_string_to_narrative_state(None, &m);
+            assert!(loaded.is_empty());
+            assert_eq!(
+                loaded.get(&m, COMMISSIONS),
+                m.get(COMMISSIONS)
+                    .expect("a shipped tally")
+                    .kind
+                    .default_value(),
+            );
+            assert!(!loaded.is_set(CREDIT));
+        }
+
+        #[test]
+        fn a_sparse_state_round_trips_through_the_column() {
+            let m = manifest();
+            let mut before = NarrativeState::default();
+            before.apply(
+                &m,
+                &NarrativeEffect::SetValue(NarrativeVarId::new(COMMISSIONS), 3),
+            );
+            before.apply(&m, &NarrativeEffect::Set(NarrativeVarId::new(CREDIT)));
+
+            let column = narrative_state_to_db_string(&before).expect("a column");
+            let after = db_string_to_narrative_state(Some(&column), &m);
+
+            assert_eq!(after, before);
+            assert_eq!(after.get(&m, COMMISSIONS), 3);
+            assert!(after.is_set(CREDIT));
+            assert_eq!(after.len(), 2, "only deviations are stored");
+        }
+
+        /// The column is rewritten on every save tick, so an unchanged state
+        /// must serialise byte-identically rather than reshuffling its keys.
+        #[test]
+        fn an_unchanged_state_serialises_identically_every_time() {
+            let m = manifest();
+            let mut state = NarrativeState::default();
+            state.apply(
+                &m,
+                &NarrativeEffect::SetValue(NarrativeVarId::new(COMMISSIONS), 1),
+            );
+            state.apply(&m, &NarrativeEffect::Set(NarrativeVarId::new(CREDIT)));
+            let first = narrative_state_to_db_string(&state).expect("a column");
+            let second = narrative_state_to_db_string(&state).expect("a column");
+            assert_eq!(first, second);
+        }
+
+        /// A corrupt payload must never lock a character out of the game --
+        /// and must never be erased by the next save tick either, which is
+        /// what "load as empty, then serialise what we loaded" would do.
+        #[test]
+        fn an_unreadable_column_is_preserved_rather_than_overwritten() {
+            let corrupt = "{not json";
+            let loaded = db_string_to_narrative_state(Some(corrupt), &manifest());
+            assert!(loaded.is_empty(), "the character plays with no state");
+            assert_eq!(
+                narrative_state_to_db_string(&loaded).as_deref(),
+                Some(corrupt),
+                "the unreadable payload must be written back byte for byte"
+            );
+        }
+
+        /// Written by a newer server than this one: the fields cannot be
+        /// assumed to still mean the same thing, so this build refuses to
+        /// interpret it -- and therefore must also refuse to replace it. A
+        /// rollback deploy must not destroy narrative records.
+        #[test]
+        fn a_payload_from_a_future_version_is_preserved_rather_than_overwritten() {
+            let payload = r#"{"v":99,"vars":{"quest.the_kind_work.commissions":2}}"#;
+            let loaded = db_string_to_narrative_state(Some(payload), &manifest());
+            assert!(loaded.is_empty());
+            assert_eq!(
+                narrative_state_to_db_string(&loaded).as_deref(),
+                Some(payload)
+            );
+        }
+
+        /// A variable the manifest no longer declares must not fail the load,
+        /// and must not be deleted either: one typo would otherwise wipe it
+        /// from every character on the next save tick. Only an explicitly
+        /// retired id is dropped.
+        #[test]
+        fn an_unknown_variable_is_carried_forward_rather_than_dropped() {
+            let m = manifest();
+            let payload =
+                r#"{"v":1,"vars":{"quest.the_kind_work.commissions":2,"quest.gone.away":7}}"#;
+            let loaded = db_string_to_narrative_state(Some(payload), &m);
+            assert_eq!(loaded.get(&m, COMMISSIONS), 2);
+            assert_eq!(loaded.len(), 1, "the unknown id is not a live value");
+
+            let rewritten = narrative_state_to_db_string(&loaded).expect("a column");
+            assert!(
+                rewritten.contains("quest.gone.away"),
+                "an unresolved variable must survive the round trip: {rewritten}"
+            );
+            // And it round-trips again, so repeated save ticks do not erode it.
+            let again = db_string_to_narrative_state(Some(&rewritten), &m);
+            assert_eq!(again.get(&m, COMMISSIONS), 2);
+            assert!(
+                narrative_state_to_db_string(&again)
+                    .expect("a column")
+                    .contains("quest.gone.away")
+            );
+        }
+
+        /// A hand-edited or out-of-date payload must not smuggle a value past
+        /// the bounds the write path enforces.
+        #[test]
+        fn an_out_of_range_value_is_clamped_on_the_way_in() {
+            let m = manifest();
+            let payload = r#"{"v":1,"vars":{"quest.the_kind_work.commissions":9999}}"#;
+            let loaded = db_string_to_narrative_state(Some(payload), &m);
+            // The expected bound is read from the manifest rather than written
+            // out, so retuning the tally's cap -- a pure content edit, the
+            // thing this whole layer exists to make cheap -- does not break a
+            // persistence test.
+            let capped = m
+                .get(COMMISSIONS)
+                .expect("a shipped tally")
+                .kind
+                .clamp(9999);
+            assert_eq!(loaded.get(&m, COMMISSIONS), capped);
+            assert!(
+                capped < 9999,
+                "{COMMISSIONS} must actually be bounded for this test to prove anything"
+            );
         }
     }
 }

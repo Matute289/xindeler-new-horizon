@@ -432,6 +432,16 @@ impl NetSync for SpellMastery {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
 
+// 🔴 `NarrativeState` is deliberately ABSENT from this file, and adding it
+// wholesale would be a bug, not a feature. It holds authored narrative
+// variables whose manifest entries carry a `visibility:` of `Hidden` or
+// `Journal`: a `Hidden` one is both a spoiler (it records what a later chapter
+// will branch on) and an exploit surface (dialogue options are gated on it,
+// and a client that can read the gate can farm it). If a quest journal ever
+// needs this on the client, it must ship as its own message carrying ONLY the
+// `Journal`-visible entries, never as a synced component that would send the
+// whole map.
+
 impl NetSync for AttunedItems {
     const SYNC_FROM: SyncFrom = SyncFrom::ClientEntity;
 }
