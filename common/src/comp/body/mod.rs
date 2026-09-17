@@ -999,13 +999,23 @@ impl Body {
             },
 
             // ── BipedLarge ────────────────────────────────────────────────
-            // Ordinary elites T3; hard bosses T4.
+            // Ordinary elites T3; hard bosses T4. Cyclops (1000 HP,
+            // base_poise 300 -- the same standard poise every other T3
+            // entry here carries) sits below several T3 mobs on this same
+            // body (Harvester 1300, AdletElder 1500, Tidalwarrior 1600,
+            // Yeti 1800), while every real T4 boss clears at least 2000 HP
+            // (Mindflayer) up to 30000 (Gigasfrost) and the three whose
+            // poise departs from the 300 standard (Mindflayer 777,
+            // Minotaur 340, Gigas 990) all do so alongside that much
+            // higher HP. Cyclops has neither the HP nor the poise to back
+            // a T4 accuracy/evasion/crit baseline, so it moves to T3.
             Body::BipedLarge(b) => match b.species {
                 biped_large::Species::AdletElder
                 | biped_large::Species::Blueoni
                 | biped_large::Species::Cavetroll
                 | biped_large::Species::Cultistwarlock
                 | biped_large::Species::Cultistwarlord
+                | biped_large::Species::Cyclops
                 | biped_large::Species::Dullahan
                 | biped_large::Species::Executioner
                 | biped_large::Species::HaniwaGeneral
@@ -1030,7 +1040,6 @@ impl Body {
                 | biped_large::Species::Werewolf
                 | biped_large::Species::Yeti => 3,
                 biped_large::Species::Cursekeeper
-                | biped_large::Species::Cyclops
                 | biped_large::Species::Forgemaster
                 | biped_large::Species::Gigasfire
                 | biped_large::Species::Gigasfrost
@@ -1039,16 +1048,25 @@ impl Body {
             },
 
             // ── BipedSmall ────────────────────────────────────────────────
-            // T1 across the board; Jiangshi → T2 (notably tougher undead).
+            // Species/HP-aware, matching `assets/common/body_stats.ron`:
+            // ordinary trash humanoids (<=150 HP: Legooms 25, Goblins 30,
+            // Gnome 60, Bushly 60, TreasureEgg 60, Kappa 60, Gnoll 60,
+            // Gnarling 50, Husk 50, Cactid 50, Adlet 65, Mandragora 65,
+            // Sahagin 85, Haniwa/Myrmidon/Irrwurz 100, GnarlingChieftain
+            // 150) → T1. IronDwarf/Jiangshi/ShamanicSpirit (240-250 HP) and
+            // Ashen/Bloodservant (300 HP) are all notably tougher undead
+            // or construct territory, comparable in HP to QuadrupedMedium's
+            // T2 apex predators (Bear 240, Yak 215) → T2. Harlequin (500),
+            // Boreal (800) and the two 2000 HP dungeon bosses
+            // (BloodmoonHeiress, Flamekeeper) sit alongside
+            // Golem::IronGolem (2500, T3) and Crustacean::Karkatha (2000,
+            // T3) → T3, extending this body kind past its old flat T1/T2
+            // ceiling the same species/HP-aware way other bodies already
+            // are here.
             Body::BipedSmall(b) => match b.species {
                 biped_small::Species::Adlet
-                | biped_small::Species::Ashen
-                | biped_small::Species::BloodmoonHeiress
-                | biped_small::Species::Bloodservant
-                | biped_small::Species::Boreal
                 | biped_small::Species::Bushly
                 | biped_small::Species::Cactid
-                | biped_small::Species::Flamekeeper
                 | biped_small::Species::Gnarling
                 | biped_small::Species::GnarlingChieftain
                 | biped_small::Species::Gnoll
@@ -1058,9 +1076,7 @@ impl Body {
                 | biped_small::Species::GoblinThug
                 | biped_small::Species::GreenLegoom
                 | biped_small::Species::Haniwa
-                | biped_small::Species::Harlequin
                 | biped_small::Species::Husk
-                | biped_small::Species::IronDwarf
                 | biped_small::Species::Irrwurz
                 | biped_small::Species::Kappa
                 | biped_small::Species::Mandragora
@@ -1069,43 +1085,73 @@ impl Body {
                 | biped_small::Species::PurpleLegoom
                 | biped_small::Species::RedLegoom
                 | biped_small::Species::Sahagin
-                | biped_small::Species::ShamanicSpirit
                 | biped_small::Species::TreasureEgg
                 | biped_small::Species::UmberLegoom => 1,
-                biped_small::Species::Jiangshi => 2,
+                biped_small::Species::Ashen
+                | biped_small::Species::Bloodservant
+                | biped_small::Species::IronDwarf
+                | biped_small::Species::Jiangshi
+                | biped_small::Species::ShamanicSpirit => 2,
+                biped_small::Species::BloodmoonHeiress
+                | biped_small::Species::Boreal
+                | biped_small::Species::Flamekeeper
+                | biped_small::Species::Harlequin => 3,
             },
 
             // ── Golem ─────────────────────────────────────────────────────
-            // T2; heavy/boss golems → T3.
+            // T2 up to 550 HP (WoodGolem 120, AncientEffigy 250, ClayGolem
+            // 350, Mogwai 500, CoralGolem 550); T3 from 1000 HP up
+            // (StoneGolem/Treant/Gravewarden all 1000, IronGolem 2500).
+            // AncientEffigy moved down from T3 (it was 250 HP, below even
+            // T2's ClayGolem at 350) and StoneGolem/Treant moved up from T2
+            // (both 1000 HP, identical to Gravewarden which was already
+            // T3) so the split tracks HP instead of contradicting it.
             Body::Golem(b) => match b.species {
-                golem::Species::ClayGolem
+                golem::Species::AncientEffigy
+                | golem::Species::ClayGolem
                 | golem::Species::CoralGolem
                 | golem::Species::Mogwai
-                | golem::Species::StoneGolem
-                | golem::Species::Treant
                 | golem::Species::WoodGolem => 2,
-                golem::Species::AncientEffigy
-                | golem::Species::Gravewarden
-                | golem::Species::IronGolem => 3,
+                golem::Species::Gravewarden
+                | golem::Species::IronGolem
+                | golem::Species::StoneGolem
+                | golem::Species::Treant => 3,
             },
 
             // ── Theropod ─────────────────────────────────────────────────
-            // Large predators T3; small raptors → T1.
+            // Large predators T3 (275-1320 HP); small raptors T1 (110 HP).
+            // Sunlizard (110 HP, byte-for-byte identical to the three
+            // raptors) moves down from T3 to T1 to match them. Dodarock
+            // (20 HP -- lower than every T1 mob in the game, let alone its
+            // former T3 tier-mates at 275-1320) moves down to T0: `Batfox`
+            // (QuadrupedSmall, 40 HP) is `aggressive` too and already sits
+            // at T0, so being a genuine combatant does not by itself
+            // require a T1 floor -- and at less than half Batfox's HP,
+            // Dodarock has even less claim to one.
             Body::Theropod(b) => match b.species {
+                theropod::Species::Dodarock => 0,
                 theropod::Species::Sandraptor
                 | theropod::Species::Snowraptor
+                | theropod::Species::Sunlizard
                 | theropod::Species::Woodraptor => 1,
                 theropod::Species::Archaeos
                 | theropod::Species::Axebeak
-                | theropod::Species::Dodarock
                 | theropod::Species::Ntouka
                 | theropod::Species::Odonto
-                | theropod::Species::Sunlizard
                 | theropod::Species::Yale => 3,
             },
 
             // ── QuadrupedLow ──────────────────────────────────────────────
-            // T2; small/passive → T1; big drakes/bosses → T3.
+            // T2; small/passive → T1; big drakes/bosses → T3. Icedrake and
+            // Mossdrake moved up from T2 to join Lavadrake: all three are
+            // byte-for-byte identical in mass/HP/poise/energy
+            // (700 kg / 340 HP / 205 poise / 100 energy) in
+            // `assets/common/body_stats.ron`, so three reskins of the same
+            // stat block now share one tier instead of splitting across
+            // two. 340 HP also sits far closer to this tier's low end
+            // (Reefsnapper/Rocksnapper/Rootsnapper at 400) than to T2's
+            // high end (Asp at 175), which independently supports T3 over
+            // T2 for the drakes.
             Body::QuadrupedLow(b) => match b.species {
                 quadruped_low::Species::Driggle
                 | quadruped_low::Species::Pangolin
@@ -1116,16 +1162,16 @@ impl Body {
                 | quadruped_low::Species::Deadwood
                 | quadruped_low::Species::Elbst
                 | quadruped_low::Species::Hakulaq
-                | quadruped_low::Species::Icedrake
                 | quadruped_low::Species::Monitor
-                | quadruped_low::Species::Mossdrake
                 | quadruped_low::Species::Salamander
                 | quadruped_low::Species::SeaCrocodile => 2,
                 quadruped_low::Species::Basilisk
                 | quadruped_low::Species::Dagon
                 | quadruped_low::Species::Hydra
+                | quadruped_low::Species::Icedrake
                 | quadruped_low::Species::Lavadrake
                 | quadruped_low::Species::Maneater
+                | quadruped_low::Species::Mossdrake
                 | quadruped_low::Species::Reefsnapper
                 | quadruped_low::Species::Rocksnapper
                 | quadruped_low::Species::Rootsnapper
@@ -1248,6 +1294,13 @@ impl Body {
                 object::Body::Crossbow => 80,
                 object::Body::Flamethrower => 80,
                 object::Body::Lavathrower => 80,
+                // A stationary single-arrow turret, the same archetype as
+                // Crossbow/Flamethrower/Lavathrower (also 80) rather than
+                // the heavier BarrelOrgan (500) or TerracottaStatue (600):
+                // no reason for it to be tougher than its own family, so it
+                // gets the same explicit value instead of silently
+                // inheriting the 1000 HP flat-neutral fallback below.
+                object::Body::ArrowTurret => 80,
                 object::Body::BarrelOrgan => 500,
                 object::Body::HaniwaSentry => 60,
                 object::Body::SeaLantern => 100,
@@ -2447,7 +2500,9 @@ mod undead_creature_kind_tests {
 #[cfg(test)]
 mod threat_tier_boss_tests {
     use super::*;
-    use crate::comp::body::{biped_large, bird_medium, crustacean, golem};
+    use crate::comp::body::{
+        biped_large, biped_small, bird_medium, crustacean, golem, quadruped_low, theropod,
+    };
 
     fn crustacean_body(species: crustacean::Species) -> Body {
         Body::Crustacean(crustacean::Body {
@@ -2474,6 +2529,27 @@ mod threat_tier_boss_tests {
         Body::BipedLarge(biped_large::Body {
             species,
             body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn biped_small_body(species: biped_small::Species) -> Body {
+        Body::BipedSmall(biped_small::Body {
+            species,
+            body_type: biped_small::BodyType::Male,
+        })
+    }
+
+    fn theropod_body(species: theropod::Species) -> Body {
+        Body::Theropod(theropod::Body {
+            species,
+            body_type: theropod::BodyType::Male,
+        })
+    }
+
+    fn quadruped_low_body(species: quadruped_low::Species) -> Body {
+        Body::QuadrupedLow(quadruped_low::Body {
+            species,
+            body_type: quadruped_low::BodyType::Male,
         })
     }
 
@@ -2536,5 +2612,138 @@ mod threat_tier_boss_tests {
             vampire_bat.threat_tier() < bloodmoon_bat.threat_tier(),
             "trash-swarm VampireBat must not match the Bloodmoon Bat boss's tier"
         );
+    }
+
+    /// BloodmoonHeiress and Flamekeeper (both 2000 HP `BipedSmall` dungeon
+    /// bosses) must not be lumped into the same T1 band as trash mobs like
+    /// GoblinThug (30 HP). They belong at T3, alongside comparable-HP
+    /// bosses on other bodies (`Golem::IronGolem` 2500 HP,
+    /// `Crustacean::Karkatha` 2000 HP).
+    #[test]
+    fn biped_small_high_hp_bosses_are_not_lumped_with_trash_tier() {
+        let bloodmoon_heiress = biped_small_body(biped_small::Species::BloodmoonHeiress);
+        let flamekeeper = biped_small_body(biped_small::Species::Flamekeeper);
+        let goblin_thug = biped_small_body(biped_small::Species::GoblinThug);
+        let karkatha = crustacean_body(crustacean::Species::Karkatha);
+
+        assert_eq!(goblin_thug.threat_tier(), 1);
+        assert_eq!(bloodmoon_heiress.threat_tier(), 3);
+        assert_eq!(flamekeeper.threat_tier(), 3);
+        assert_eq!(bloodmoon_heiress.threat_tier(), karkatha.threat_tier());
+    }
+
+    /// Boreal (800 HP) and Harlequin (500 HP) must also clear the old flat
+    /// T1 ceiling, and Jiangshi/IronDwarf/ShamanicSpirit/Ashen/Bloodservant
+    /// (240-300 HP, "notably tougher" than trash but far below the 2000 HP
+    /// bosses) must land at T2, strictly between the two.
+    #[test]
+    fn biped_small_mid_tier_species_sit_strictly_between_trash_and_bosses() {
+        let goblin_thug = biped_small_body(biped_small::Species::GoblinThug);
+        let jiangshi = biped_small_body(biped_small::Species::Jiangshi);
+        let iron_dwarf = biped_small_body(biped_small::Species::IronDwarf);
+        let shamanic_spirit = biped_small_body(biped_small::Species::ShamanicSpirit);
+        let ashen = biped_small_body(biped_small::Species::Ashen);
+        let bloodservant = biped_small_body(biped_small::Species::Bloodservant);
+        let harlequin = biped_small_body(biped_small::Species::Harlequin);
+        let boreal = biped_small_body(biped_small::Species::Boreal);
+
+        for t2 in [jiangshi, iron_dwarf, shamanic_spirit, ashen, bloodservant] {
+            assert_eq!(t2.threat_tier(), 2);
+            assert!(t2.threat_tier() > goblin_thug.threat_tier());
+        }
+        for t3 in [harlequin, boreal] {
+            assert_eq!(t3.threat_tier(), 3);
+        }
+    }
+
+    /// StoneGolem and Treant (both 1000 HP) must match Gravewarden (also
+    /// 1000 HP) at T3 rather than sitting a tier below it, and
+    /// AncientEffigy (250 HP -- less than even T2's ClayGolem at 350) must
+    /// move down to T2 instead of outranking it at T3.
+    #[test]
+    fn golem_tiers_track_hp_not_the_stale_split() {
+        let stone_golem = golem_body(golem::Species::StoneGolem);
+        let treant = golem_body(golem::Species::Treant);
+        let gravewarden = golem_body(golem::Species::Gravewarden);
+        let ancient_effigy = golem_body(golem::Species::AncientEffigy);
+        let clay_golem = golem_body(golem::Species::ClayGolem);
+
+        assert_eq!(stone_golem.threat_tier(), 3);
+        assert_eq!(treant.threat_tier(), 3);
+        assert_eq!(stone_golem.threat_tier(), gravewarden.threat_tier());
+        assert_eq!(ancient_effigy.threat_tier(), 2);
+        assert_eq!(ancient_effigy.threat_tier(), clay_golem.threat_tier());
+    }
+
+    /// Icedrake, Mossdrake and Lavadrake are byte-for-byte identical in
+    /// `assets/common/body_stats.ron` (700 kg / 340 HP / 205 poise / 100
+    /// energy), so three reskins of the same stat block must share one
+    /// threat tier instead of splitting T2/T3.
+    #[test]
+    fn quadruped_low_identical_drakes_share_one_tier() {
+        let icedrake = quadruped_low_body(quadruped_low::Species::Icedrake);
+        let mossdrake = quadruped_low_body(quadruped_low::Species::Mossdrake);
+        let lavadrake = quadruped_low_body(quadruped_low::Species::Lavadrake);
+
+        assert_eq!(icedrake.threat_tier(), 3);
+        assert_eq!(icedrake.threat_tier(), mossdrake.threat_tier());
+        assert_eq!(icedrake.threat_tier(), lavadrake.threat_tier());
+    }
+
+    /// Sunlizard (110 HP) must match the three raptors it is stat-for-stat
+    /// identical to (also 110 HP, T1), not sit two tiers above them.
+    /// Dodarock (20 HP, lower than every T1 mob in the game) must drop out
+    /// of T3 -- which requires 275+ HP everywhere else on this body -- all
+    /// the way to T0, the same floor `QuadrupedSmall::Batfox` (40 HP, also
+    /// `aggressive`) already sits at: being a genuine combatant does not
+    /// by itself earn a body a T1+ baseline it has no HP to back.
+    #[test]
+    fn theropod_low_hp_species_no_longer_outrank_their_own_hp_band() {
+        let sunlizard = theropod_body(theropod::Species::Sunlizard);
+        let sand_raptor = theropod_body(theropod::Species::Sandraptor);
+        let dodarock = theropod_body(theropod::Species::Dodarock);
+        let axebeak = theropod_body(theropod::Species::Axebeak);
+
+        assert_eq!(sunlizard.threat_tier(), 1);
+        assert_eq!(sunlizard.threat_tier(), sand_raptor.threat_tier());
+        assert_eq!(dodarock.threat_tier(), 0);
+        assert!(dodarock.threat_tier() < axebeak.threat_tier());
+    }
+
+    /// Cyclops (1000 HP, standard 300 poise) must not share T4 with real
+    /// 2000+ HP raid bosses (Mindflayer 2000, Minotaur 3000, Forgemaster
+    /// 10000). It moves to T3, alongside other biped-large elites in its
+    /// own HP band (Harvester 1300, AdletElder 1500).
+    #[test]
+    fn cyclops_moves_down_to_match_its_actual_hp_band() {
+        let cyclops = biped_large_body(biped_large::Species::Cyclops);
+        let mindflayer = biped_large_body(biped_large::Species::Mindflayer);
+        let harvester = biped_large_body(biped_large::Species::Harvester);
+
+        assert_eq!(cyclops.threat_tier(), 3);
+        assert_eq!(cyclops.threat_tier(), harvester.threat_tier());
+        assert!(cyclops.threat_tier() < mindflayer.threat_tier());
+    }
+}
+
+#[cfg(test)]
+mod arrow_turret_base_health_tests {
+    use super::*;
+    use crate::comp::body::object;
+
+    /// ArrowTurret must no longer silently inherit the flat 1000 HP
+    /// fallback meant for props and projectiles: it is a combat-capable
+    /// `MagicalMachine` construct (per `creature_type.rs`) in the same
+    /// family as Crossbow/Flamethrower/Lavathrower, and should share their
+    /// value rather than outrank BarrelOrgan/TerracottaStatue by accident.
+    #[test]
+    fn arrow_turret_has_an_explicit_value_matching_its_turret_family() {
+        let arrow_turret = Body::Object(object::Body::ArrowTurret);
+        let crossbow = Body::Object(object::Body::Crossbow);
+        let barrel_organ = Body::Object(object::Body::BarrelOrgan);
+
+        assert_eq!(arrow_turret.base_health(), 80);
+        assert_eq!(arrow_turret.base_health(), crossbow.base_health());
+        assert!(arrow_turret.base_health() < barrel_organ.base_health());
     }
 }
