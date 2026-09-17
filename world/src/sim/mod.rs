@@ -982,6 +982,7 @@ struct AuthoredRegion {
     /// Which authored layers this region ships.
     layers: &'static [AuthoredLayerKind],
     ground_cover_profile: &'static str,
+    map_ecology_profile: &'static str,
     ground_substrate_zones: &'static str,
     fortifications: &'static str,
     tree_candidate_policy: &'static str,
@@ -1017,6 +1018,7 @@ const AUTHORED_REGIONS: &[AuthoredRegion] = &[AuthoredRegion {
     id: CROMATOLIS_V0_REGION_ID,
     layers: &AuthoredLayerKind::ALL,
     ground_cover_profile: "world.map.cromatolis_v0_ground_cover",
+    map_ecology_profile: "world.map.cromatolis_v0_map_ecology",
     ground_substrate_zones: "world.map.cromatolis_v0_ground_substrate_zones",
     fortifications: "world.map.cromatolis_v0_fortifications",
     tree_candidate_policy: "world.map.cromatolis_v0_tree_candidate_policy",
@@ -1194,6 +1196,81 @@ impl AuthoredGroundCoverProfile {
 }
 
 impl FileAsset for AuthoredGroundCoverProfile {
+    const EXTENSION: &'static str = "ron";
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
+        let profile: Self = load_ron(&bytes)?;
+        profile.validate().map_err(Into::into).map(|_| profile)
+    }
+}
+
+/// Data-owned visual language for an authored region's map and minimap. The
+/// engine resolves the biome; content decides how strongly that fact reads on
+/// the cartographic surface.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct MapEcologyZoneDefinition {
+    pub biome: BiomeKind,
+    pub map_tint: (f32, f32, f32),
+    pub base_blend: f32,
+    pub tree_density_blend: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct AuthoredMapEcologyProfile {
+    /// Alpha of the local voxel overlay above this region's authored map.
+    /// `255` is opaque; lower values deliberately preserve the cartographic
+    /// hillshade and zone information below nearby loaded chunks.
+    pub voxel_minimap_overlay_alpha: u8,
+    pub zones: Vec<MapEcologyZoneDefinition>,
+}
+
+impl AuthoredMapEcologyProfile {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.zones.is_empty() {
+            return Err("map ecology profile must define at least one zone".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for zone in &self.zones {
+            if !seen.insert(zone.biome) {
+                return Err(format!("map ecology has duplicate biome {:?}", zone.biome));
+            }
+            let tint = zone.map_tint;
+            if !tint.0.is_finite()
+                || !tint.1.is_finite()
+                || !tint.2.is_finite()
+                || !(0.0..=1.0).contains(&tint.0)
+                || !(0.0..=1.0).contains(&tint.1)
+                || !(0.0..=1.0).contains(&tint.2)
+            {
+                return Err(format!("map ecology tint for {:?} is invalid", zone.biome));
+            }
+            for (name, value) in [
+                ("base_blend", zone.base_blend),
+                ("tree_density_blend", zone.tree_density_blend),
+            ] {
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err(format!(
+                        "map ecology {name} for {:?} is outside 0..=1: {value}",
+                        zone.biome
+                    ));
+                }
+            }
+            if zone.base_blend + zone.tree_density_blend > 1.0 {
+                return Err(format!(
+                    "map ecology blends for {:?} exceed 1.0: {} + {}",
+                    zone.biome, zone.base_blend, zone.tree_density_blend
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn zone_for(&self, biome: BiomeKind) -> Option<&MapEcologyZoneDefinition> {
+        self.zones.iter().find(|zone| zone.biome == biome)
+    }
+}
+
+impl FileAsset for AuthoredMapEcologyProfile {
     const EXTENSION: &'static str = "ron";
 
     fn from_bytes(bytes: Cow<[u8]>) -> Result<Self, BoxedError> {
@@ -1625,6 +1702,9 @@ pub struct WorldSim {
     /// `None` for procedural worlds or when the configured profile is invalid.
     #[allow(dead_code)]
     pub(crate) authored_ground_cover_profile: Option<AuthoredGroundCoverProfile>,
+    /// Cartographic ecology profile for the loaded authored region. This is
+    /// intentionally separate from ground cover and tree-density contracts.
+    pub(crate) authored_map_ecology_profile: Option<AuthoredMapEcologyProfile>,
     /// Additional tree-root lattices supplied by a loaded authored region.
     /// Procedural worlds intentionally leave this empty and retain the exact
     /// upstream `StructureGen2d` candidate sequence.
@@ -1726,6 +1806,7 @@ impl WorldSim {
             calendar: None,
             authored_procedural_layers: None,
             authored_ground_cover_profile: None,
+            authored_map_ecology_profile: None,
             authored_tree_candidate_policy: None,
         }
     }
@@ -1853,6 +1934,16 @@ impl WorldSim {
                             )
                         })
                 });
+        let authored_map_ecology_profile = authored_region.map(|region| {
+            AuthoredMapEcologyProfile::load_owned(region.map_ecology_profile).unwrap_or_else(
+                |err| {
+                    panic!(
+                        "authored region '{}' requires valid map ecology profile '{}': {err:?}",
+                        region.id, region.map_ecology_profile
+                    )
+                },
+            )
+        });
         let authored_ground_substrate_zones = authored_region
             .filter(|_| ground_cover_available)
             .map(|region| {
@@ -2956,6 +3047,7 @@ impl WorldSim {
             calendar,
             authored_procedural_layers,
             authored_ground_cover_profile,
+            authored_map_ecology_profile,
             authored_tree_candidate_policy,
         };
 
@@ -3176,6 +3268,10 @@ impl WorldSim {
         WorldMapMsg {
             dimensions_lg: self.map_size_lg().vec(),
             max_height: self.max_height,
+            minimap_voxel_overlay_alpha: self
+                .authored_map_ecology_profile
+                .as_ref()
+                .map_or(u8::MAX, |profile| profile.voxel_minimap_overlay_alpha),
             rgba: Grid::from_raw(self.get_size().map(|e| e as i32), v),
             alt: Grid::from_raw(self.get_size().map(|e| e as i32), alts),
             horizons,

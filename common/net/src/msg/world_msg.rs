@@ -28,6 +28,10 @@ pub struct WorldMapMsg {
     pub dimensions_lg: Vec2<u32>,
     /// Max height (used to scale altitudes).
     pub max_height: f32,
+    /// Opacity of the local voxel minimap layer. `255` preserves the legacy
+    /// opaque overlay; authored regions may opt into showing their static map
+    /// relief and ecological zones through nearby voxel detail.
+    pub minimap_voxel_overlay_alpha: u8,
     /// RGB+A; the alpha channel is currently unused, but will be used in the
     /// future. Entries are in the usual chunk order.
     pub rgba: Grid<u32>,

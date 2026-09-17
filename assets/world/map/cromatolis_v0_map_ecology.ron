@@ -1,0 +1,16 @@
+(
+    schema: "xindeler_open_world.map_ecology.v1",
+    // Map-only visual language. These values never affect SimChunk biome
+    // classification, the ground-cover raster, terrain blocks, or tree
+    // placement. They make the resolved ecological zones readable while the
+    // base map keeps hillshade, contours and altitude texture.
+    voxel_minimap_overlay_alpha: 112,
+    zones: [
+        (biome: Grassland, map_tint: (0.41176471, 0.53725490, 0.24705882), base_blend: 0.06, tree_density_blend: 0.00),
+        (biome: Savannah, map_tint: (0.56862745, 0.55294118, 0.27058824), base_blend: 0.07, tree_density_blend: 0.00),
+        (biome: Forest, map_tint: (0.18431373, 0.43921569, 0.21960784), base_blend: 0.08, tree_density_blend: 0.10),
+        (biome: Jungle, map_tint: (0.10588235, 0.36862745, 0.23137255), base_blend: 0.24, tree_density_blend: 0.00),
+        (biome: Swamp, map_tint: (0.23921569, 0.43529412, 0.36078431), base_blend: 0.27, tree_density_blend: 0.00),
+        (biome: Taiga, map_tint: (0.21176471, 0.38431373, 0.29803922), base_blend: 0.12, tree_density_blend: 0.00),
+    ],
+)

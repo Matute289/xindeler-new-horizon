@@ -1,12 +1,15 @@
 use crate::{
     CONFIG, IndexRef,
     column::ColumnSample,
-    sim::{AuthoredGroundCoverProfile, GroundCoverBand, GroundSubstrate, RiverKind, WorldSim},
+    sim::{
+        AuthoredGroundCoverProfile, AuthoredMapEcologyProfile, GroundCoverBand, GroundSubstrate,
+        RiverKind, WorldSim,
+    },
     site::SiteKind,
 };
 use common::{
     terrain::{
-        CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
+        BiomeKind, CoordinateConversions, NEIGHBOR_DELTA, TerrainChunkSize,
         map::{Connection, ConnectionKind, MapConfig, MapSample},
         vec2_as_uniform_idx,
     },
@@ -79,6 +82,36 @@ pub(super) fn authored_ground_cover_preview_tint(
     (
         Some(band),
         blend_rgb(base, tint, definition.map_blend as f64),
+    )
+}
+
+/// Adds a restrained ecological cue to the authored map after the soil
+/// treatment. This is deliberately a map-only consumer of the **resolved**
+/// biome: it makes forests, swamps, and jungles readable without changing
+/// terrain blocks, authored vegetation density, or placement rules.
+fn authored_ecology_preview_tint(
+    base: Rgb<u8>,
+    profile: Option<&AuthoredMapEcologyProfile>,
+    biome: BiomeKind,
+    tree_density: f64,
+    is_water: bool,
+    is_physical_mountain: bool,
+) -> Rgb<u8> {
+    if is_water || is_physical_mountain {
+        return base;
+    }
+    let Some(zone) = profile.and_then(|profile| profile.zone_for(biome)) else {
+        return base;
+    };
+    let tint = Rgb::new(
+        (zone.map_tint.0 * 255.0) as u8,
+        (zone.map_tint.1 * 255.0) as u8,
+        (zone.map_tint.2 * 255.0) as u8,
+    );
+    blend_rgb(
+        base,
+        tint,
+        f64::from(zone.base_blend) + tree_density * f64::from(zone.tree_density_blend),
     )
 }
 
@@ -355,6 +388,14 @@ pub fn sample_pos(
                 is_physical_water,
                 altitude > 0.28,
             );
+            out = authored_ecology_preview_tint(
+                out,
+                sampler.authored_map_ecology_profile.as_ref(),
+                sample.get_biome(),
+                vegetation,
+                is_physical_water,
+                altitude > 0.28,
+            );
             if !is_physical_water && altitude > 0.28 {
                 let mountain_t = ((altitude - 0.28) / 0.46).clamp(0.0, 1.0);
                 let mountain = if mountain_t > 0.6 {
@@ -471,8 +512,60 @@ mod tests {
             authored_ground_cover_preview_tint(dry_beige, Some(&profile), 0.50, None, false, false);
 
         assert_eq!(band, Some(GroundCoverBand::Forest));
-        assert_eq!(color, Rgb::new(0x1e, 0x61, 0x32));
+        assert_eq!(color, Rgb::new(0x63, 0x82, 0x43));
         assert_ne!(color, dry_beige);
+    }
+
+    #[test]
+    fn ecology_preview_keeps_relief_base_but_makes_authored_zones_distinct() {
+        let base = Rgb::new(0x69, 0x7d, 0x43);
+        let profile = AuthoredMapEcologyProfile::load_owned("world.map.cromatolis_v0_map_ecology")
+            .expect("the shipped Cromatolis map ecology profile must load");
+        let forest = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            BiomeKind::Forest,
+            0.9,
+            false,
+            false,
+        );
+        let swamp = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            BiomeKind::Swamp,
+            0.9,
+            false,
+            false,
+        );
+        let jungle = authored_ecology_preview_tint(
+            base,
+            Some(&profile),
+            BiomeKind::Jungle,
+            0.9,
+            false,
+            false,
+        );
+
+        assert_ne!(forest, base);
+        assert_ne!(swamp, forest);
+        assert_ne!(jungle, forest);
+        assert_eq!(
+            authored_ecology_preview_tint(base, Some(&profile), BiomeKind::Swamp, 1.0, true, false),
+            base,
+            "water keeps its physical map treatment",
+        );
+        assert_eq!(
+            authored_ecology_preview_tint(
+                base,
+                Some(&profile),
+                BiomeKind::Forest,
+                1.0,
+                false,
+                true
+            ),
+            base,
+            "mountains keep their physical map treatment",
+        );
     }
 
     #[test]
