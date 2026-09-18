@@ -677,3 +677,156 @@ fn test_spot_configs() {
         // here.
     }
 }
+
+/// Full-world smoke test for COW-16 (the "no monsters outside settlements"
+/// bug report): confirms that enabling `spots: true` for Cromatolis in
+/// `assets/world/map/cromatolis_v0_procedural_layers.ron` actually places
+/// spot markers on the real generated map, that none of them land on a
+/// chunk claimed by a registered `Site` (settlements, landmarks, bridges and
+/// fortifications are all registered as `Site`s with a real footprint
+/// radius -- see `civ::Civs::establish_site`'s "Place sites in world" pass --
+/// so `is_valid`'s `c.sites.is_empty()` check is real collision protection,
+/// not just a procedural-world nicety), and that a healthy share of the
+/// placed spots are creature-cluster variants (a non-empty `entities` list
+/// in `spot_config`), not just structure-only decoration.
+///
+/// Requires the real Cromatolis LFS assets pulled locally, same precedent as
+/// `cromatolis_cave_features.rs`'s and `cromatolis_interior.rs`'s own
+/// ignored full-world tests.
+/// `cargo test -p xindeler-world layer::spot:: -- --ignored`
+#[cfg(test)]
+mod cromatolis_real_world {
+    use super::*;
+
+    fn generate_cromatolis_world() -> (crate::World, crate::IndexOwned) {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        crate::World::generate(
+            0,
+            crate::sim::WorldOpts {
+                seed_elements: true,
+                world_file: crate::sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        )
+    }
+
+    #[test]
+    #[ignore]
+    fn cromatolis_spots_enabled_places_collision_free_creature_clusters_against_real_lfs_assets() {
+        let (world, _index) = generate_cromatolis_world();
+        let sim = world.sim();
+
+        assert!(
+            sim.authored_procedural_layers()
+                .is_some_and(|layers| layers.spots),
+            "this test measures the real effect of `spots: true` -- if \
+             `cromatolis_v0_procedural_layers.ron` has `spots: false` again, this assertion is \
+             the tripwire that catches it, since every count below would silently go back to zero \
+             for an unrelated reason"
+        );
+
+        let dims = sim.map_size_lg().chunks().map(i32::from);
+        let mut land_chunks = 0usize;
+        let mut spot_chunks = 0usize;
+        let mut creature_cluster_chunks = 0usize;
+        let mut collisions_with_registered_sites = 0usize;
+
+        for y in 0..dims.y {
+            for x in 0..dims.x {
+                let Some(chunk) = sim.get(Vec2::new(x, y)) else {
+                    continue;
+                };
+                if chunk.is_underwater() {
+                    continue;
+                }
+                land_chunks += 1;
+                let Some(spot) = chunk.spot else { continue };
+                spot_chunks += 1;
+                if !chunk.sites.is_empty() {
+                    collisions_with_registered_sites += 1;
+                }
+                if !spot_config(&spot).entities.is_empty() {
+                    creature_cluster_chunks += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            collisions_with_registered_sites, 0,
+            "found {collisions_with_registered_sites} spot(s) placed on a chunk already claimed \
+             by a registered Site (settlement/landmark/bridge/fortification) -- the \
+             `c.sites.is_empty()` guard in `is_valid` should make this structurally impossible"
+        );
+
+        // Measured on the real map (COW-16): land=681560, spot=7630 (~1.12% of
+        // land), creature_cluster=7075 (~92.7% of spots). Generous ranges
+        // around the measured baseline: tight enough to catch a regression
+        // back to `spots: false` (which would zero both), loose enough to
+        // tolerate a future freq-tuning pass.
+        let spot_fraction = spot_chunks as f64 / land_chunks as f64;
+        assert!(
+            (0.003..0.05).contains(&spot_fraction),
+            "expected spot coverage in 0.3%..5% of land chunks, got {spot_fraction:.6} \
+             ({spot_chunks}/{land_chunks})"
+        );
+        let creature_cluster_fraction = creature_cluster_chunks as f64 / spot_chunks as f64;
+        assert!(
+            (0.5..1.0).contains(&creature_cluster_fraction),
+            "expected the majority of placed spots to carry a real entity list (a monster \
+             cluster, e.g. WolfBurrow/LionRock/DesertBones), got {creature_cluster_fraction:.6} \
+             ({creature_cluster_chunks}/{spot_chunks})"
+        );
+    }
+
+    /// End-to-end companion to the marker-count test above: finds a real
+    /// creature-cluster spot on the map and actually generates that chunk
+    /// (`World::generate_chunk`, the same call the server makes when a
+    /// player approaches), confirming the monster entities described by
+    /// `spot_config` are really queued in the chunk's `ChunkSupplement` --
+    /// not just that a marker byte got set on `SimChunk`.
+    /// `cargo test -p xindeler-world layer::spot:: -- --ignored`
+    #[test]
+    #[ignore]
+    fn cromatolis_spot_chunk_generation_spawns_real_entities_against_real_lfs_assets() {
+        let (world, index) = generate_cromatolis_world();
+        let sim = world.sim();
+        let dims = sim.map_size_lg().chunks().map(i32::from);
+
+        // Require at least one entity range with a strictly-positive lower
+        // bound, so the random spawn count for that entry can't roll to
+        // zero (e.g. WolfBurrow's `5..8`, not a `0..3` that could legally
+        // spawn nothing this seed) -- otherwise this test would be flaky by
+        // construction. Also stay comfortably inside the map (not chunk 0
+        // or the outermost ring), since the canvas/area clipping near the
+        // world edge is a separate concern from what this test checks.
+        let chunk_pos = (16..dims.y - 16)
+            .flat_map(|y| (16..dims.x - 16).map(move |x| Vec2::new(x, y)))
+            .find(|&pos| {
+                sim.get(pos).is_some_and(|chunk| {
+                    chunk.spot.is_some_and(|spot| {
+                        spot_config(&spot)
+                            .entities
+                            .iter()
+                            .any(|(range, _)| range.start > 0)
+                    })
+                })
+            })
+            .expect(
+                "expected at least one creature-cluster spot with a guaranteed non-zero spawn \
+                 count on the real Cromatolis map with spots enabled",
+            );
+
+        let index_ref = index.as_index_ref();
+        let (_chunk, supplement) = world
+            .generate_chunk(index_ref, chunk_pos, None, || false, None, None)
+            .expect("chunk generation must not fail for a real, in-bounds Cromatolis chunk");
+
+        assert!(
+            !supplement.entity_spawns.is_empty(),
+            "chunk {chunk_pos:?} has a creature-cluster spot but generating it produced no entity \
+             spawns"
+        );
+    }
+}

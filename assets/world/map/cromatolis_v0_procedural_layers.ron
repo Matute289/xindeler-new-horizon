@@ -7,10 +7,13 @@
     // `AuthoredProceduralLayers` in world/src/sim/mod.rs -- not repeated
     // here, so the two can't drift.
     //
-    // All four off: Cromatolis is hand-authored, and each of these passes
-    // stamps hash-derived geometry into its block volumes without reading
-    // any authored data. Two consequences are gameplay-visible rather than
-    // cosmetic, and are tracked as an open decision in COW-15:
+    // Cromatolis is hand-authored, and each of these passes stamps
+    // hash-derived geometry into its block volumes without reading any
+    // authored data -- so whether a given layer runs here is a content
+    // decision made one layer at a time, not an all-or-nothing switch.
+    // `caverns`/`caves`/`rocks` are still off; their consequences are
+    // gameplay-visible rather than cosmetic, and are tracked as an open
+    // decision in COW-15:
     //   - `caves: false` removes the region's entire *procedural*
     //     underground -- cave biomes, cave fauna, cave loot, and nearly
     //     all mineral wealth. `world/src/layer/cave.rs` is the only place
@@ -28,13 +31,32 @@
     //   - `caves: false` also means the world map shows no cave markers at
     //     all here: the authored cave catalogue has no marker emitter yet,
     //     so the map's "show caves" filter is inert on this region.
-    //   - `spots: false` means GnarlingCarving courier quests can never
-    //     roll here, since they target a procedural spot.
-    // Flipping either back on is a one-line change with no recompile; the
+    // `spots: true` (flipped 2026-09-17, COW-16 -- see
+    // `world/src/layer/spot.rs`'s `cromatolis_real_world` tests for the
+    // measured before/after): `Spot::generate`'s early return on
+    // `spots: false` meant Cromatolis had ZERO of the engine's localised
+    // creature-cluster structures -- WolfBurrow, LionRock, DesertBones,
+    // GnarlingTotem, SaurokAltar/Totem, MyrmidonTemple, WitchHouse, Igloo,
+    // JungleTemple/Outpost and friends (`common::spot::Spot`, each with its
+    // own `SpotConfig` entity list in `world/src/layer/spot.rs`) -- outside
+    // settlements, on top of ambient wildlife already being sparse
+    // (COW-16's other half, `cromatolis_wildlife_boost` /
+    // `cromatolis_v0_density_boost.ron`). This is the actual root cause
+    // behind the "1 gecko every 200m, no monsters anywhere" bug report:
+    // GnarlingCarving courier-quest availability (the only consequence this
+    // comment used to mention) was a minor side effect next to removing
+    // every procedural monster camp region-wide. `is_valid`'s
+    // `c.sites.is_empty()` check keeps every placed spot off any chunk a
+    // registered Site (settlement/landmark/bridge/fortification) already
+    // claims -- verified with zero collisions on the real map -- so
+    // enabling this does not require its own exclusion guard. Measured on
+    // the real map: 7630 spot markers across 681560 land chunks (~1.1%),
+    // 7075 of them (~93%) carrying a non-empty entity list.
+    // Flipping any of these is a one-line change with no recompile; the
     // engine keeps the world-map cave markers and the tree/shrub
     // tunnel-avoidance consistent with whichever way these point.
     caverns: false,  // no-op today: features.ron has caverns off globally
     caves: false,
     rocks: false,
-    spots: false,
+    spots: true,
 )

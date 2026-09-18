@@ -4862,7 +4862,7 @@ mod tests {
                         caverns: false,
                         caves: false,
                         rocks: false,
-                        spots: false,
+                        spots: true,
                     },
                     "{specifier} has changed Cromatolis's procedural-layer policy. That is a real \
                      content decision (notably, `caves` gates the region's entire procedural \
