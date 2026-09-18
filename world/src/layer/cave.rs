@@ -1,5 +1,9 @@
 use crate::{
     Canvas, CanvasInfo, ColumnSample, IndexRef, Land,
+    layer::{
+        authored_regions::authored_voids,
+        authored_voids::{AuthoredVoids, ProceduralContact},
+    },
     site::SiteKind,
     util::{
         FastNoise2d, LOCALITY, RandomField, RandomPerm, SQUARE_4, SmallCache, StructureGen2d,
@@ -390,17 +394,34 @@ fn all_tunnels_at<'a>(
     })
 }
 
-fn tunnel_bounds_at_from<'a>(
+/// The single function every consumer reads a tunnel's per-column z-range
+/// through: `apply_caves_to` carves from it, and `tree.rs`/`shrub.rs` suppress
+/// planting from it (via [`tunnel_bounds_at`]).
+///
+/// XINDELER: that makes it the only correct home for the authored-void guard
+/// (`voids`) -- filtering in `apply_caves_to`'s column loop instead would leave
+/// vegetation suppressed over tunnels that were never carved. The guard is a
+/// *parameter* rather than something this function looks up, so the test-only
+/// [`tunnel_bounds_at_unguarded`] can measure the "before" side without adding
+/// a branch to the production path. See [`crate::layer::authored_voids`].
+fn tunnel_bounds_at_from_guarded_by<'a>(
     wpos2d: Vec2<i32>,
     info: &'a CanvasInfo,
     _land: &'a Land,
     tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
+    voids: Option<&'a AuthoredVoids>,
 ) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
     let wposf = wpos2d.map(|e| e as f64 + 0.5);
     info.col_or_gen(wpos2d)
         .map(move |col| {
             let col_alt = col.alt;
             let col_water_dist = col.water_dist;
+            // Resolved once per column rather than once per candidate tunnel:
+            // the bucket lookup is the only hash this guard ever pays, and in
+            // a world with no authored region there is nothing here at all.
+            let voids = voids
+                .map(|voids| voids.in_chunk(wpos2d))
+                .filter(|voids| !voids.is_empty());
             tunnels.filter_map(move |(level, tunnel)| {
                 let (z_range, horizontal, vertical, dist) = tunnel.z_range_at(wposf, *info)?;
                 // Avoid cave entrances intersecting water
@@ -412,6 +433,34 @@ fn tunnel_bounds_at_from<'a>(
                             .clamped(0.0, 1.0))
                         * (1.0 - ((col_alt - z_range.end as f32 - 4.0) / 8.0).clamped(0.0, 1.0)),
                 )..z_range.end;
+                // An authored void claiming this column decides whether this
+                // tunnel exists here at all.
+                //
+                // `Seal`: drop the whole entry for this column rather than
+                // splitting the range. Splitting would leave a thin rock slab
+                // *inside* the protected volume; dropping leaves a clean solid
+                // plug where the tunnel meets the authored feature, which is
+                // the seal being asked for.
+                //
+                // `Connect` (and "no authored shape here") falls through
+                // completely untouched -- not a wider range, not a narrower
+                // one, not a second entry. That no-op looks unfinished and is
+                // not: the authored carve runs *after* this layer and
+                // unconditionally overwrites every block in its own footprint,
+                // so the join the player sees is produced by pass ordering
+                // alone. What survives inside the authored footprint is
+                // authored geometry; what survives outside it is ordinary
+                // dressed tunnel; and the opening between them is the tunnel's
+                // own cross-section, which tapers to zero at its lateral edge
+                // and so always reads as a lens-shaped mouth rather than a
+                // rectangular punch. Blending or join code here would be a
+                // second system with an opinion about the same voxels.
+                if voids.is_some_and(|voids| {
+                    voids.contact_at_column(wpos2d, col_alt, &z_range)
+                        == Some(ProceduralContact::Seal)
+                }) {
+                    return None;
+                }
                 if z_range.end - z_range.start > 0 {
                     Some((level, z_range, horizontal, vertical, dist, tunnel))
                 } else {
@@ -421,6 +470,26 @@ fn tunnel_bounds_at_from<'a>(
         })
         .into_iter()
         .flatten()
+}
+
+fn tunnel_bounds_at_from<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    land: &'a Land,
+    tunnels: impl Iterator<Item = (u32, Tunnel)> + 'a,
+) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
+    tunnel_bounds_at_from_guarded_by(wpos2d, info, land, tunnels, authored_voids(info))
+}
+
+/// [`tunnel_bounds_at`] as it would behave in a world with no authored region
+/// loaded at all -- the "before" side of the authored-void measurements.
+#[cfg(test)]
+pub(crate) fn tunnel_bounds_at_unguarded<'a>(
+    wpos2d: Vec2<i32>,
+    info: &'a CanvasInfo,
+    land: &'a Land,
+) -> impl Iterator<Item = (u32, Range<i32>, f32, f32, f32, Tunnel)> + 'a {
+    tunnel_bounds_at_from_guarded_by(wpos2d, info, land, all_tunnels_at(wpos2d, info, land), None)
 }
 
 pub fn tunnel_bounds_at<'a>(
