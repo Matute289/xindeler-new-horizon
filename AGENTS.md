@@ -285,3 +285,18 @@ work.** The backlog is **multi-session**: `git pull`/re-sync `development` (in `
 repo — see Documentation & Git Policy) before editing, add+score new `NH-N` rows there, and commit only
 your own rows.
 
+
+# Protocolo de Comunicación Inter-Terminal (IPC)
+
+Tienes la capacidad de comunicarte con otro agente de IA que se encuentra ejecutándose en una terminal paralela dentro de esta misma máquina. 
+
+### Herramientas de Chat Disponibles (vía Shell):
+1. **Enviar un mensaje:** Ejecuta `.MAGI/chat-agent.sh send <objetivo> "<tu_mensaje>"`
+   - Si eres Claude, tu objetivo es `codex`.
+   - Si eres Codex, tu objetivo es `claude`.
+2. **Leer mensajes entrantes:** Ejecuta `.MAGI/chat-agent.sh read <tu_nombre>`
+   - Úsalo periódicamente o cuando estés esperando una respuesta o revisión de diseño.
+
+### Instrucciones de Comportamiento:
+- Cuando delegues una tarea de auditoría o revisión de código, escribe el mensaje usando el comando `send` y espera confirmación de lectura.
+- Mantén tus respuestas concisas y orientadas al código compartido dentro del repositorio.
