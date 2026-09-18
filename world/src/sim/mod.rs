@@ -5776,7 +5776,7 @@ mod tests {
     /// reviewed package. Belletoile is a dry authored lowland: the v21
     /// terrain master samples it at about 92.94 m above the external sea
     /// level. The real WorldSim interpolation yields about 96.82 m at the
-    /// matching chunk, while the paired river raster retains all 33,127
+    /// matching chunk, while the paired river raster retains all 33,566
     /// binary corridor cells.
     ///
     /// ⚠️ The cell count was **28,200** until COW-22 `[OQ3]`
@@ -5790,6 +5790,15 @@ mod tests {
     /// 4,563 shipped cells moved out to standing water and 9,490 below-sea-
     /// level corridor cells moved in. `28_200` must never come back — it is
     /// the pre-COW-22 raster, exactly as `1_876` was the pre-COW-17 one.
+    ///
+    /// ⚠️ The count moved again, 33,127 → 33,566, with COW-22 `[C22-3]`
+    /// (`xindeler-open-world#31`), and this is expected rather than a drift:
+    /// `classify_authored_water()` reads *elevation*, so reshaping the seabed
+    /// necessarily re-votes cells near the coast. `C22-3` raised the marine
+    /// shelf, which moves some shallow river-mouth water across the
+    /// ocean/inland boundary the classifier draws at `alt <= 0`. Belletoile is
+    /// inland and its relief is bit-identical before and after (96.817 m), so
+    /// this assertion still pins the terrain package as tightly as it did.
     ///
     /// Requires the real LFS assets, so CI without the VPS asset store skips
     /// it just like the other real-Cromatolis regressions in this module.
@@ -5831,9 +5840,9 @@ mod tests {
                 .iter()
                 .filter(|value| **value == 1.0)
                 .count(),
-            33_127,
-            "v21 terrain must never be paired with the obsolete 1,876-cell or 28,200-cell river \
-             raster"
+            33_566,
+            "v22 terrain must never be paired with the obsolete 1,876-cell, 28,200-cell or \
+             33,127-cell river raster"
         );
 
         // The contract `authored_river_kind_override`'s priority chain depends
