@@ -178,6 +178,10 @@ struct InteriorGraph {
     /// reachability is confirmed as this module's geometry is built.
     #[serde(default)]
     adventure_start_level_id: Option<String>,
+    /// Opt-in escape-compass configuration. Absent (the default) means this
+    /// interior has no navigation graph built for it at all.
+    #[serde(default)]
+    escape_guidance: Option<EscapeGuidanceCfg>,
     levels: Vec<Level>,
     connections: Vec<Connection>,
     #[serde(default)]
@@ -189,6 +193,40 @@ struct SurfaceAccess {
     #[serde(default)]
     source_pixel: Option<PixelPos>,
     entry_level_id: String,
+    /// A capability the player must have to use this access at all (e.g.
+    /// `"underwater_breathing_or_short_dive"` on a submerged one). Escape
+    /// guidance excludes a gated access from its exit set unless the
+    /// interior sets [`EscapeGuidanceCfg::allow_gated_exits`].
+    #[serde(default)]
+    required_capability: Option<String>,
+}
+
+/// How, and whether, escape guidance activates inside one interior.
+///
+/// `activation_kind` follows this module's standing convention for every
+/// categorical field (see the RON data-model comment above): a plain quoted
+/// string classified by an explicit [`EscapeActivation::parse`] that errors
+/// on anything unrecognized, **not** a RON enum literal. The flag list is a
+/// separate field for the same reason -- it keeps the authored form a plain
+/// string plus a plain list, with no enum-variant syntax anywhere.
+#[derive(Debug, Deserialize)]
+struct EscapeGuidanceCfg {
+    /// `"manual"` | `"always"` | `"narrative_flags"`.
+    activation_kind: String,
+    /// Only meaningful for `"narrative_flags"`: the narrative variable ids
+    /// that activate guidance while any one of them is non-zero.
+    #[serde(default)]
+    activation_flags: Vec<String>,
+    /// Override the exit set with an explicit list of level ids. Default
+    /// (`None`) = every level named by a `surface_accesses` entry, subject
+    /// to `allow_gated_exits`.
+    #[serde(default)]
+    exits: Option<Vec<String>>,
+    /// Whether a `surface_access` carrying a `required_capability` may be
+    /// routed to. Defaults to `false`, so guidance never steers a player
+    /// toward an exit they may be unable to survive.
+    #[serde(default)]
+    allow_gated_exits: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -557,6 +595,445 @@ pub(crate) struct InteriorLayout {
     /// Rough bounding circle (center, radius) covering every carved shape,
     /// used to cheaply skip chunks nowhere near this interior.
     bounds: Option<(Vec2<i32>, f32)>,
+    /// Read-only navigation view of this same geometry, built only when the
+    /// interior authored an `escape_guidance` block. `None` for every
+    /// interior that did not opt in, which is why no cost is paid for one.
+    pub(crate) nav: Option<InteriorNavGraph>,
+}
+
+// ---------------------------------------------------------------------
+// Navigation view.
+//
+// A read-only projection of an already-resolved `InteriorLayout` into a
+// small node/edge graph, plus a precomputed "cost to the nearest exit"
+// label per node. Built at most once per world alongside the layout it
+// projects, and thereafter read (never rebuilt) by low-cadence server code
+// that needs to answer "which way is out from here" for one position.
+//
+// Nothing here is authored: every position comes from the same anchors and
+// connection splines world-gen already carved, so the graph can never
+// describe a route the geometry does not actually contain.
+// ---------------------------------------------------------------------
+
+/// Upper bound on nodes in a single interior's navigation graph. Locating a
+/// position in the graph is a linear scan over nodes, so this bounds that
+/// scan's cost; it is validated at load so no interior can silently grow
+/// past it.
+const MAX_NAV_NODES: usize = 256;
+
+/// Extra multiplier applied to a connection's length when it is traversed
+/// *upward*, so a long climb is not treated as equivalent to the same
+/// distance of level walking. Scaled by the connection's own authored
+/// traversal style (a gentler `slope` spreads the same drop over a longer,
+/// easier run), never a bare per-connection constant.
+const CLIMB_PENALTY: f32 = 1.35;
+
+/// What decides whether escape guidance is active for a given player inside
+/// one interior. Classified from [`EscapeGuidanceCfg::activation_kind`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EscapeActivation {
+    /// Never active on its own; only an explicit per-player grant turns it
+    /// on. The default for an interior that wants guidance to exist but be
+    /// driven entirely by gameplay code.
+    Manual,
+    /// Active for anyone inside the interior.
+    Always,
+    /// Active while any one of these narrative variable ids is non-zero.
+    /// The ids are *not* resolved here -- this crate has no business
+    /// loading a gameplay manifest, and this loader runs long before any
+    /// character exists. They are checked against the real manifest by the
+    /// consumer, at a point where both are in hand.
+    NarrativeFlags(Vec<String>),
+}
+
+impl EscapeActivation {
+    fn parse(cfg: &EscapeGuidanceCfg) -> Result<Self, String> {
+        match cfg.activation_kind.as_str() {
+            "manual" => Ok(Self::Manual),
+            "always" => Ok(Self::Always),
+            "narrative_flags" => {
+                if cfg.activation_flags.is_empty() {
+                    return Err("activation_kind \"narrative_flags\" needs a non-empty \
+                                activation_flags list"
+                        .to_string());
+                }
+                if let Some(bad) = cfg
+                    .activation_flags
+                    .iter()
+                    .find(|id| id.trim().is_empty() || id.trim() != id.as_str())
+                {
+                    return Err(format!("malformed activation flag id {bad:?}"));
+                }
+                Ok(Self::NarrativeFlags(cfg.activation_flags.clone()))
+            },
+            other => Err(format!("unknown escape activation_kind {other:?}")),
+        }
+    }
+}
+
+/// One room in the navigation graph.
+#[derive(Debug)]
+pub struct NavNode {
+    /// The authored level id (e.g. `level.kharvun_mycelial_basin`).
+    pub level_id: String,
+    /// The room's own resolved centre, at floor height.
+    pub centre: Vec3<i32>,
+    pub floor_z: i32,
+    pub ceiling_z: i32,
+    pub radius: f32,
+    /// Indices into [`InteriorNavGraph::edges`] for every edge touching
+    /// this node.
+    pub incident: Vec<u16>,
+    /// Whether a surface access reaches the world from this room.
+    pub is_exit: bool,
+    /// Traversal cost to the nearest reachable exit. `None` when no exit is
+    /// reachable from here at all.
+    pub cost_to_exit: Option<f32>,
+    /// Edge count along that same route, for callers that want a coarse
+    /// "how much further" figure without re-deriving it.
+    pub hops_to_exit: Option<u8>,
+}
+
+/// One tunnel in the navigation graph.
+#[derive(Debug)]
+pub struct NavEdge {
+    /// The authored connection id (e.g.
+    /// `connection.kharvun_ash_forks_to_prison`).
+    pub connection_id: String,
+    pub a: u16,
+    pub b: u16,
+    /// Where this tunnel meets node `a`'s room wall, and node `b`'s. A
+    /// connection's carved endpoints both sit on their rooms' centres, so
+    /// steering toward a centre would point at the middle of the room the
+    /// player is already standing in; these perimeter points are where the
+    /// tunnel physically leaves each room.
+    pub portal_a: Vec3<f32>,
+    pub portal_b: Vec3<f32>,
+    /// Traversal cost from `a` to `b`.
+    pub cost_ab: f32,
+    /// Traversal cost from `b` to `a`. Differs from `cost_ab` whenever the
+    /// two rooms are at different heights, since climbing costs more than
+    /// descending.
+    pub cost_ba: f32,
+    /// A sealed gate: real, carved, and impassable until whatever governs
+    /// it is satisfied.
+    pub sealed: bool,
+}
+
+impl NavEdge {
+    /// The far node from `node`, or `None` if `node` is not an endpoint.
+    pub fn other(&self, node: u16) -> Option<u16> {
+        if node == self.a {
+            Some(self.b)
+        } else if node == self.b {
+            Some(self.a)
+        } else {
+            None
+        }
+    }
+
+    /// Where this tunnel leaves `node`'s room, or `None` if `node` is not an
+    /// endpoint.
+    pub fn portal_at(&self, node: u16) -> Option<Vec3<f32>> {
+        if node == self.a {
+            Some(self.portal_a)
+        } else if node == self.b {
+            Some(self.portal_b)
+        } else {
+            None
+        }
+    }
+
+    /// Cost of traversing this edge starting from `node`.
+    pub fn cost_from(&self, node: u16) -> Option<f32> {
+        if node == self.a {
+            Some(self.cost_ab)
+        } else if node == self.b {
+            Some(self.cost_ba)
+        } else {
+            None
+        }
+    }
+}
+
+/// A whole interior's navigation graph.
+#[derive(Debug)]
+pub struct InteriorNavGraph {
+    /// The authored interior id (e.g. `interior.kharvun_reach`).
+    pub interior_id: String,
+    pub nodes: Vec<NavNode>,
+    pub edges: Vec<NavEdge>,
+    /// What turns guidance on inside this interior.
+    pub activation: EscapeActivation,
+    /// Bounding circle covering every carved shape -- the cheapest possible
+    /// first rejection for "is this position even in here".
+    pub bounds: (Vec2<i32>, f32),
+}
+
+impl InteriorNavGraph {
+    /// The node whose room contains `wpos`, if any. `slack` widens the test
+    /// so a player pressed against a wall, or standing on the floor of a
+    /// room whose carved surface sits a little below `floor_z`, still
+    /// resolves to that room.
+    pub fn node_containing(&self, wpos: Vec3<f32>, slack: f32) -> Option<u16> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| {
+                wpos.z >= n.floor_z as f32 - slack && wpos.z <= n.ceiling_z as f32 + slack
+            })
+            .filter_map(|(i, n)| {
+                let d = wpos.xy().distance(n.centre.xy().map(|e| e as f32));
+                (d <= n.radius + slack).then_some((i as u16, d))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// Whether `wpos` is inside this interior's bounding circle at all.
+    pub fn within_bounds(&self, wpos: Vec3<f32>) -> bool {
+        let (centre, radius) = self.bounds;
+        wpos.xy().distance_squared(centre.map(|e| e as f32)) <= radius * radius
+    }
+}
+
+/// Builds the navigation view for one interior, given the geometry already
+/// resolved for it.
+///
+/// `positions` is the same level-id -> anchor map the layout was built from;
+/// `levels_by_id` the same authored level table. Returns `Err` on an
+/// authoring mistake that would make guidance meaningless (an unknown exit
+/// id, no reachable exit at all, or more nodes than the linear-scan lookup
+/// is sized for), so a bad edit fails loudly at load instead of producing an
+/// arrow that points nowhere.
+fn build_nav_graph(
+    graph: &InteriorGraph,
+    cfg: &EscapeGuidanceCfg,
+    levels: &[LevelGeom],
+    bounds: (Vec2<i32>, f32),
+) -> Result<InteriorNavGraph, String> {
+    if levels.len() > MAX_NAV_NODES {
+        return Err(format!(
+            "interior has {} navigable levels, over the {MAX_NAV_NODES} supported",
+            levels.len()
+        ));
+    }
+
+    let activation = EscapeActivation::parse(cfg)?;
+
+    let index_of: HashMap<&str, u16> = levels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.id.as_str(), i as u16))
+        .collect();
+
+    // Exits: either the authored override, or every level a surface access
+    // reaches -- minus capability-gated ones unless the interior opts in.
+    let mut exits: Vec<u16> = Vec::new();
+    match &cfg.exits {
+        Some(ids) => {
+            for id in ids {
+                let i = *index_of.get(id.as_str()).ok_or_else(|| {
+                    format!("escape_guidance exits names unknown or unreachable level {id}")
+                })?;
+                if !exits.contains(&i) {
+                    exits.push(i);
+                }
+            }
+        },
+        None => {
+            for access in &graph.surface_accesses {
+                if access.required_capability.is_some() && !cfg.allow_gated_exits {
+                    continue;
+                }
+                // A surface access pointing at a level the layout could not
+                // place is skipped rather than fatal: `build_layout` already
+                // warned about that level, and the remaining exits are still
+                // usable.
+                if let Some(&i) = index_of.get(access.entry_level_id.as_str())
+                    && !exits.contains(&i)
+                {
+                    exits.push(i);
+                }
+            }
+        },
+    }
+    if exits.is_empty() {
+        return Err(
+            "escape_guidance is authored but no exit level resolved (check surface_accesses, \
+             allow_gated_exits, or the exits override)"
+                .to_string(),
+        );
+    }
+
+    let mut nodes: Vec<NavNode> = levels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| NavNode {
+            level_id: l.id.clone(),
+            centre: l.anchor2d.with_z(l.floor_z),
+            floor_z: l.floor_z,
+            ceiling_z: l.ceiling_z,
+            radius: l.radius,
+            incident: Vec::new(),
+            is_exit: exits.contains(&(i as u16)),
+            cost_to_exit: None,
+            hops_to_exit: None,
+        })
+        .collect();
+
+    let mut edges: Vec<NavEdge> = Vec::new();
+    for conn in &graph.connections {
+        let (Some(&a), Some(&b)) = (
+            index_of.get(conn.from_level_id.as_str()),
+            index_of.get(conn.to_level_id.as_str()),
+        ) else {
+            // Same tolerance `build_layout` applies: a connection touching a
+            // level that could not be placed is skipped, not fatal.
+            continue;
+        };
+        if a == b {
+            continue;
+        }
+        let traversal = Traversal::parse(&conn.traversal)?;
+        let style = traversal.style();
+        let portal_a = portal_between(&nodes[a as usize], &nodes[b as usize]);
+        let portal_b = portal_between(&nodes[b as usize], &nodes[a as usize]);
+        let length = portal_a.distance(portal_b).max(1.0);
+        // A gentler authored slope means the same drop is spread over a
+        // longer, easier run, so it should feel *less* punishing per metre
+        // of climb, not more.
+        let climb = 1.0 + (CLIMB_PENALTY - 1.0) / style.slope.max(1.0);
+        let a_is_lower = nodes[a as usize].floor_z < nodes[b as usize].floor_z;
+        let idx = edges.len() as u16;
+        edges.push(NavEdge {
+            connection_id: conn.id.clone(),
+            a,
+            b,
+            portal_a,
+            portal_b,
+            cost_ab: length * if a_is_lower { climb } else { 1.0 },
+            cost_ba: length * if a_is_lower { 1.0 } else { climb },
+            sealed: traversal == Traversal::SealedStoneGate,
+        });
+        nodes[a as usize].incident.push(idx);
+        nodes[b as usize].incident.push(idx);
+    }
+
+    label_cost_to_exit(&mut nodes, &edges, &exits);
+
+    if nodes.iter().all(|n| n.cost_to_exit.is_none()) {
+        return Err("escape_guidance is authored but no node can reach an exit".to_string());
+    }
+
+    Ok(InteriorNavGraph {
+        interior_id: graph.id.clone(),
+        nodes,
+        edges,
+        activation,
+        bounds,
+    })
+}
+
+/// Where the tunnel joining `from` and `to` meets `from`'s room wall.
+///
+/// Derived from the two resolved anchors rather than from the placement
+/// angle `layout_levels` used, because that angle only exists for the one
+/// connection that placed a level -- a connection joining two levels that
+/// were each placed via some other route has no such angle, and must still
+/// get a sensible portal.
+fn portal_between(from: &NavNode, to: &NavNode) -> Vec3<f32> {
+    let a = from.centre.xy().map(|e| e as f32);
+    let b = to.centre.xy().map(|e| e as f32);
+    let dir = b - a;
+    let len = dir.magnitude();
+    // Two rooms sharing an xy position (only reachable from malformed data)
+    // have no meaningful bearing; fall back to the room's own centre, which
+    // is always inside the room and so never steers anyone into rock.
+    if len < f32::EPSILON {
+        return from.centre.map(|e| e as f32);
+    }
+    let offset = dir / len * from.radius.min(len);
+    (a + offset).with_z(from.floor_z as f32)
+}
+
+/// Labels every node with its cost, and hop count, to the nearest reachable
+/// exit.
+///
+/// A multi-source relaxation seeded with every exit at zero. The graph is
+/// undirected, so the distance found from an exit outward is also the
+/// distance inward to it -- but the per-direction costs are not symmetric
+/// (climbing costs more than descending), so the relaxation walks each edge
+/// in the direction the *player* would travel it: outward from the exit
+/// means the player is coming the other way.
+fn label_cost_to_exit(nodes: &mut [NavNode], edges: &[NavEdge], exits: &[u16]) {
+    // Small graphs (a couple of dozen nodes at most, validated by
+    // `MAX_NAV_NODES`), so an O(V^2) scan beats the bookkeeping of a heap
+    // and avoids needing a total order on f32.
+    let mut best: Vec<Option<(f32, u8)>> = vec![None; nodes.len()];
+    let mut settled = vec![false; nodes.len()];
+    for &e in exits {
+        best[e as usize] = Some((0.0, 0));
+    }
+
+    while let Some(current) = best
+        .iter()
+        .enumerate()
+        .filter(|(i, b)| !settled[*i] && b.is_some())
+        .min_by(|a, b| a.1.unwrap().0.total_cmp(&b.1.unwrap().0))
+        .map(|(i, _)| i)
+    {
+        settled[current] = true;
+        let (cost, hops) = best[current].expect("selected node has a cost");
+
+        for &edge_idx in &nodes[current].incident {
+            let edge = &edges[edge_idx as usize];
+            if edge.sealed {
+                continue;
+            }
+            let Some(next) = edge.other(current as u16) else {
+                continue;
+            };
+            if settled[next as usize] {
+                continue;
+            }
+            // Walking *from* `next` *to* `current` is the direction a player
+            // escaping through `current` would actually travel.
+            let Some(step) = edge.cost_from(next) else {
+                continue;
+            };
+            let candidate = (cost + step, hops.saturating_add(1));
+            if best[next as usize].is_none_or(|(c, _)| candidate.0 < c) {
+                best[next as usize] = Some(candidate);
+            }
+        }
+    }
+
+    for (node, label) in nodes.iter_mut().zip(best) {
+        if let Some((cost, hops)) = label {
+            node.cost_to_exit = Some(cost);
+            node.hops_to_exit = Some(hops);
+        }
+    }
+}
+
+/// Every interior that authored escape guidance, resolved from the same
+/// per-`Index` cache world-gen already populates.
+///
+/// Mirrors [`undercompact_gate_antechamber_world_geometry`]'s contract: by
+/// the time any runtime consumer has a reason to call this, the relevant
+/// chunk has been generated once through the ordinary pipeline, so the
+/// cache is warm and this is a cheap read. Intended for low-cadence server
+/// code only -- never a per-column path.
+pub fn interior_nav_graphs<'a>(index: IndexRef<'a>, sim: &WorldSim) -> Vec<&'a InteriorNavGraph> {
+    let map_size = sim.map_size_lg();
+    index
+        .index
+        .cromatolis_interiors
+        .get_or_init(|| build_all_layouts_for_map_size(map_size))
+        .iter()
+        .filter_map(|layout| layout.nav.as_ref())
+        .collect()
 }
 
 pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
@@ -796,6 +1273,16 @@ fn build_layout(
 
     let bounds = compute_bounds(&levels, &connections, &water);
 
+    // Only interiors that opted in get a navigation view, and only if the
+    // geometry actually produced a bounding circle to scope it to.
+    let nav = match (&graph.escape_guidance, bounds) {
+        (Some(cfg), Some(bounds)) => Some(build_nav_graph(graph, cfg, &levels, bounds)?),
+        (Some(_), None) => {
+            return Err("escape_guidance is authored but the interior carved no geometry".into());
+        },
+        (None, _) => None,
+    };
+
     Ok(InteriorLayout {
         // Set by the caller (`build_all_layouts_for_map_size`), which knows
         // the graph's own `id` -- this function only builds the geometry.
@@ -804,6 +1291,7 @@ fn build_layout(
         connections,
         water,
         bounds,
+        nav,
     })
 }
 
@@ -1423,8 +1911,10 @@ mod tests {
             surface_accesses: vec![SurfaceAccess {
                 source_pixel: None,
                 entry_level_id: "level.a".to_string(),
+                required_capability: None,
             }],
             adventure_start_level_id: Some("level.gated".to_string()),
+            escape_guidance: None,
             levels: vec![
                 Level {
                     id: "level.a".to_string(),
@@ -2045,5 +2535,388 @@ mod tests {
         // surface anchor via many chained connection offsets, so this also
         // confirms the layout stays in-bounds for a real, large map.
         assert_level_carved("interior.kharvun_reach", "level.kharvun_prison_depths");
+    }
+
+    // -----------------------------------------------------------------
+    // Navigation view.
+    // -----------------------------------------------------------------
+
+    fn guidance(kind: &str, flags: &[&str]) -> EscapeGuidanceCfg {
+        EscapeGuidanceCfg {
+            activation_kind: kind.to_string(),
+            activation_flags: flags.iter().map(|s| s.to_string()).collect(),
+            exits: None,
+            allow_gated_exits: false,
+        }
+    }
+
+    /// The sample graph with guidance authored on it, plus a second,
+    /// capability-gated surface access so the default exit policy is
+    /// actually exercised.
+    fn sample_guided_graph(cfg: EscapeGuidanceCfg) -> InteriorGraph {
+        let mut graph = sample_graph();
+        graph.surface_accesses.push(SurfaceAccess {
+            source_pixel: None,
+            entry_level_id: "level.gated".to_string(),
+            required_capability: Some("underwater_breathing_or_short_dive".to_string()),
+        });
+        graph.escape_guidance = Some(cfg);
+        graph
+    }
+
+    fn nav_of(graph: &InteriorGraph) -> Result<InteriorNavGraph, String> {
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let world_size =
+            TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
+        build_layout(graph, map_size, world_size).map(|l| {
+            l.nav
+                .expect("a graph with escape_guidance authored should build a nav view")
+        })
+    }
+
+    fn node<'a>(nav: &'a InteriorNavGraph, id: &str) -> &'a NavNode {
+        nav.nodes
+            .iter()
+            .find(|n| n.level_id == id)
+            .unwrap_or_else(|| panic!("no nav node for {id}"))
+    }
+
+    #[test]
+    fn no_escape_guidance_authored_means_no_nav_view_is_built() {
+        let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
+        let world_size =
+            TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
+        let layout = build_layout(&sample_graph(), map_size, world_size).unwrap();
+        assert!(
+            layout.nav.is_none(),
+            "an interior that did not opt in must pay nothing for the navigation view"
+        );
+    }
+
+    #[test]
+    fn every_activation_kind_round_trips_and_unknown_kinds_are_rejected() {
+        assert_eq!(
+            nav_of(&sample_guided_graph(guidance("manual", &[])))
+                .unwrap()
+                .activation,
+            EscapeActivation::Manual
+        );
+        assert_eq!(
+            nav_of(&sample_guided_graph(guidance("always", &[])))
+                .unwrap()
+                .activation,
+            EscapeActivation::Always
+        );
+        assert_eq!(
+            nav_of(&sample_guided_graph(guidance("narrative_flags", &[
+                "quest.test.escaping"
+            ])))
+            .unwrap()
+            .activation,
+            EscapeActivation::NarrativeFlags(vec!["quest.test.escaping".to_string()])
+        );
+
+        let err = nav_of(&sample_guided_graph(guidance("sometimes", &[]))).unwrap_err();
+        assert!(
+            err.contains("sometimes"),
+            "the error should name the offending kind, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn narrative_flags_activation_requires_a_non_empty_well_formed_flag_list() {
+        let err = nav_of(&sample_guided_graph(guidance("narrative_flags", &[]))).unwrap_err();
+        assert!(
+            err.contains("activation_flags"),
+            "an empty flag list should be rejected by name, got {err:?}"
+        );
+
+        let err = nav_of(&sample_guided_graph(guidance("narrative_flags", &[
+            " padded",
+        ])))
+        .unwrap_err();
+        assert!(
+            err.contains("malformed"),
+            "a malformed flag id should be rejected, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_capability_gated_surface_access_is_not_an_exit_unless_the_interior_opts_in() {
+        // `level.gated`'s access carries a `required_capability`, so by
+        // default it must not be treated as a way out.
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        assert!(node(&nav, "level.a").is_exit, "level.a is the free exit");
+        assert!(
+            !node(&nav, "level.gated").is_exit,
+            "a capability-gated access must not become an exit by default"
+        );
+
+        let mut cfg = guidance("always", &[]);
+        cfg.allow_gated_exits = true;
+        let nav = nav_of(&sample_guided_graph(cfg)).unwrap();
+        assert!(
+            node(&nav, "level.gated").is_exit,
+            "allow_gated_exits must actually be wired, not decorative"
+        );
+        assert_eq!(node(&nav, "level.gated").hops_to_exit, Some(0));
+    }
+
+    #[test]
+    fn an_exits_override_naming_an_unknown_level_is_rejected_by_name() {
+        let mut cfg = guidance("always", &[]);
+        cfg.exits = Some(vec!["level.nowhere".to_string()]);
+        let err = nav_of(&sample_guided_graph(cfg)).unwrap_err();
+        assert!(
+            err.contains("level.nowhere"),
+            "the error should name the unknown level, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn guidance_with_no_resolvable_exit_is_rejected_rather_than_pointing_nowhere() {
+        let mut graph = sample_graph();
+        // Only a gated access exists, and gated exits are not allowed.
+        graph.surface_accesses = vec![SurfaceAccess {
+            source_pixel: None,
+            entry_level_id: "level.a".to_string(),
+            required_capability: Some("flight".to_string()),
+        }];
+        graph.escape_guidance = Some(guidance("always", &[]));
+        let err = nav_of(&graph).unwrap_err();
+        assert!(
+            err.contains("no exit level resolved"),
+            "an unsatisfiable exit policy must fail loudly, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn portals_sit_on_the_room_perimeter_and_differ_per_neighbour() {
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        for edge in &nav.edges {
+            for (idx, portal) in [(edge.a, edge.portal_a), (edge.b, edge.portal_b)] {
+                let n = &nav.nodes[idx as usize];
+                let d = portal.xy().distance(n.centre.xy().map(|e| e as f32));
+                assert!(
+                    (d - n.radius).abs() < 1.0,
+                    "portal for {} should sit on {}'s perimeter (r={}), was {d}",
+                    edge.connection_id,
+                    n.level_id,
+                    n.radius
+                );
+                assert_ne!(
+                    portal.xy().map(|e| e as i32),
+                    n.centre.xy(),
+                    "a portal must never collapse onto the room centre -- that is the degeneracy \
+                     this whole mechanism exists to avoid"
+                );
+            }
+        }
+
+        // `level.b` is joined to two different neighbours, so its two
+        // portals must be distinguishable points.
+        let b = nav
+            .nodes
+            .iter()
+            .position(|n| n.level_id == "level.b")
+            .unwrap() as u16;
+        let portals: Vec<_> = nav.nodes[b as usize]
+            .incident
+            .iter()
+            .map(|&e| nav.edges[e as usize].portal_at(b).unwrap())
+            .collect();
+        assert_eq!(portals.len(), 2);
+        assert!(
+            portals[0].distance(portals[1]) > 1.0,
+            "two tunnels out of the same room must leave through different walls"
+        );
+    }
+
+    #[test]
+    fn climbing_an_edge_costs_more_than_descending_the_same_edge() {
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        let edge = nav
+            .edges
+            .iter()
+            .find(|e| e.connection_id == "connection.a_b")
+            .unwrap();
+        // `level.a` (floor 100) is above `level.b` (floor 40), so a -> b
+        // descends and b -> a climbs.
+        assert!(
+            edge.cost_ba > edge.cost_ab,
+            "climbing should cost more than descending: ab={} ba={}",
+            edge.cost_ab,
+            edge.cost_ba
+        );
+    }
+
+    #[test]
+    fn a_sealed_connection_is_never_used_to_reach_an_exit() {
+        // `connection.b_gated` is a sealed stone gate, and `level.gated`
+        // hangs off it, so `level.gated` has no unsealed route out at all.
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        assert_eq!(node(&nav, "level.a").hops_to_exit, Some(0));
+        assert_eq!(node(&nav, "level.b").hops_to_exit, Some(1));
+        assert_eq!(
+            node(&nav, "level.gated").cost_to_exit,
+            None,
+            "a node reachable only through a sealed gate must have no route out"
+        );
+    }
+
+    #[test]
+    fn node_containing_and_within_bounds_resolve_a_position() {
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        let a = node(&nav, "level.a");
+        let inside = a.centre.map(|e| e as f32) + Vec3::new(1.0, 1.0, 1.0);
+        assert!(nav.within_bounds(inside));
+        assert_eq!(
+            nav.node_containing(inside, 2.0)
+                .map(|i| nav.nodes[i as usize].level_id.as_str()),
+            Some("level.a")
+        );
+
+        // Far outside the bounding circle: rejected before any room test.
+        let far = Vec3::new(1.0e6, 1.0e6, 0.0);
+        assert!(!nav.within_bounds(far));
+        assert!(nav.node_containing(far, 2.0).is_none());
+
+        // Inside the circle horizontally but far above every ceiling.
+        let high = a.centre.map(|e| e as f32).with_z(100_000.0);
+        assert!(nav.node_containing(high, 2.0).is_none());
+    }
+
+    #[test]
+    fn a_skip_edge_strictly_lowers_the_cost_to_exit_it_bypasses() {
+        let baseline = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        let before = node(&baseline, "level.gated").hops_to_exit;
+        assert_eq!(
+            before, None,
+            "baseline: level.gated is only reachable through the sealed gate"
+        );
+
+        // Author a diagonal that skips `level.b` entirely, joining the
+        // deepest level straight to the exit level.
+        let mut graph = sample_guided_graph(guidance("always", &[]));
+        graph.connections.push(Connection {
+            id: "connection.a_gated_skip".to_string(),
+            from_level_id: "level.a".to_string(),
+            to_level_id: "level.gated".to_string(),
+            traversal: "walk_descend".to_string(),
+            bidirectional: true,
+            condition: None,
+        });
+        let nav = nav_of(&graph).unwrap();
+        assert_eq!(
+            node(&nav, "level.gated").hops_to_exit,
+            Some(1),
+            "a skip edge must give the bypassed node a real, shorter route out"
+        );
+    }
+
+    #[test]
+    fn real_kharvun_reach_nav_graph_labels_every_level_and_keeps_the_prison_deepest() {
+        let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).unwrap();
+        let mut graph = graphs
+            .interiors
+            .into_iter()
+            .find(|g| g.id == "interior.kharvun_reach")
+            .expect("interior.kharvun_reach should be present in the authored data");
+        // The real asset has not opted in yet (that is authored content, and
+        // lands separately); opt in here so the projection is exercised
+        // against real geometry rather than a synthetic stand-in.
+        graph.escape_guidance = Some(guidance("narrative_flags", &[
+            "quest.abyssal_awakening.escaping"
+        ]));
+
+        let nav = nav_of(&graph).unwrap();
+        assert_eq!(nav.nodes.len(), 13, "kharvun_reach has 13 authored levels");
+        assert_eq!(
+            nav.edges.len(),
+            12,
+            "kharvun_reach has 12 authored connections"
+        );
+
+        // Only the dry hidden vent is an exit; the submerged respiradero
+        // carries a required_capability and is excluded by default.
+        let exits: Vec<&str> = nav
+            .nodes
+            .iter()
+            .filter(|n| n.is_exit)
+            .map(|n| n.level_id.as_str())
+            .collect();
+        assert_eq!(exits, vec!["level.kharvun_secret_shelf"]);
+
+        assert!(
+            nav.nodes.iter().all(|n| n.cost_to_exit.is_some()),
+            "every level of the real Reach should be able to reach the vent"
+        );
+
+        let prison = node(&nav, "level.kharvun_prison_depths");
+        let deepest = nav
+            .nodes
+            .iter()
+            .max_by(|a, b| a.cost_to_exit.unwrap().total_cmp(&b.cost_to_exit.unwrap()))
+            .unwrap();
+        assert_eq!(
+            deepest.level_id, prison.level_id,
+            "the prison the escape starts from should be the furthest point from the vent"
+        );
+        assert_eq!(
+            node(&nav, "level.kharvun_secret_shelf").hops_to_exit,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn the_breathing_throat_is_a_dead_end_branch_not_a_second_exit() {
+        // Regression guard: `level.kharvun_breathing_throat` sits between the
+        // exit shelf and the submerged respiradero. If the gated access were
+        // ever treated as an exit by default, the throat would label as 0 and
+        // the compass would route an escaping party down into a flooded
+        // 1.5 m hole instead of out through the dry vent.
+        let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).unwrap();
+        let mut graph = graphs
+            .interiors
+            .into_iter()
+            .find(|g| g.id == "interior.kharvun_reach")
+            .unwrap();
+        graph.escape_guidance = Some(guidance("manual", &[]));
+        let nav = nav_of(&graph).unwrap();
+
+        let throat = node(&nav, "level.kharvun_breathing_throat");
+        assert!(!throat.is_exit);
+        assert_eq!(
+            throat.hops_to_exit,
+            Some(1),
+            "the throat is one hop from the shelf, not an exit in its own right"
+        );
+        assert!(
+            !node(&nav, "level.kharvun_polder_respiradero").is_exit,
+            "the submerged respiradero must stay out of the exit set by default"
+        );
+    }
+
+    #[test]
+    fn opting_the_real_reach_into_gated_exits_changes_the_labelling() {
+        let graphs = InteriorGraphsAsset::load_owned(INTERIOR_GRAPHS_ASSET).unwrap();
+        let mut graph = graphs
+            .interiors
+            .into_iter()
+            .find(|g| g.id == "interior.kharvun_reach")
+            .unwrap();
+        let mut cfg = guidance("always", &[]);
+        cfg.allow_gated_exits = true;
+        graph.escape_guidance = Some(cfg);
+        let nav = nav_of(&graph).unwrap();
+
+        assert!(
+            node(&nav, "level.kharvun_polder_respiradero").is_exit,
+            "with gated exits allowed the respiradero becomes a way out"
+        );
+        assert_eq!(
+            node(&nav, "level.kharvun_polder_respiradero").hops_to_exit,
+            Some(0)
+        );
     }
 }
