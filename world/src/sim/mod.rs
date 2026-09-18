@@ -7903,14 +7903,15 @@ mod tests {
     // These numbers and the exporter constants above this block
     // (`EXPORTED_RIVER_CELLS` and friends) describe the same rasters and move
     // together: both are counts over `cromatolis_v0.bin` and
-    // `cromatolis_v0_river_channels.f32le`. They were measured at different
-    // times, against different revisions of those two files, so they do not
-    // currently agree -- corridor 33,127 -> 33,566, marine 317,160 -> 316,682,
-    // lagoon 2,776 -> 2,815, lake unchanged. Reconciling them means
-    // re-measuring the whole set in one pass, including the biome histogram in
-    // `cromatolis_inland_water_is_no_longer_ocean_against_real_lfs_assets`,
-    // which is COW-22 `C22-6`'s audit rerun rather than a constant to nudge
-    // here.
+    // `cromatolis_v0_river_channels.f32le`. A prior revision of this comment
+    // noted they were out of sync (measured against different revisions of
+    // those two files after `C22-3` regenerated them) -- reconciled in a
+    // follow-up (corridor 33,566, marine 316,682, lagoon 2,815, lake
+    // unchanged at 13,872, all re-confirmed against the `xindeler-open-world`
+    // exporter's own independent measurement, not just this engine's). The
+    // biome histogram in
+    // `cromatolis_inland_water_is_no_longer_ocean_against_real_lfs_assets`
+    // was reconciled in the same pass.
 
     /// Corridor chunks a component needs before it counts as a river *system*
     /// rather than a puddle or a one-chunk artefact of the raster. At this
