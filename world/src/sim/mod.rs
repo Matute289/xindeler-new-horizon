@@ -5776,8 +5776,20 @@ mod tests {
     /// reviewed package. Belletoile is a dry authored lowland: the v21
     /// terrain master samples it at about 92.94 m above the external sea
     /// level. The real WorldSim interpolation yields about 96.82 m at the
-    /// matching chunk, while the paired river raster retains all 28,200
-    /// binary channel cells.
+    /// matching chunk, while the paired river raster retains all 33,127
+    /// binary corridor cells.
+    ///
+    /// ⚠️ The cell count was **28,200** until COW-22 `[OQ3]`
+    /// (`xindeler-open-world#30`) rebuilt the classification. The old raster
+    /// was "painted water above sea level that is not a closed, non-boundary-
+    /// touching basin", which could never type an outflowing lake as a lake
+    /// (every Cromatolis river reaches the sea, so every such lake shares a
+    /// connected component with the boundary-touching ocean) and split any
+    /// body whose bed is painted below sea level into an "ocean" core and a
+    /// "channel" rim. The layer is now a shape-derived corridor mask:
+    /// 4,563 shipped cells moved out to standing water and 9,490 below-sea-
+    /// level corridor cells moved in. `28_200` must never come back — it is
+    /// the pre-COW-22 raster, exactly as `1_876` was the pre-COW-17 one.
     ///
     /// Requires the real LFS assets, so CI without the VPS asset store skips
     /// it just like the other real-Cromatolis regressions in this module.
@@ -5819,8 +5831,27 @@ mod tests {
                 .iter()
                 .filter(|value| **value == 1.0)
                 .count(),
-            28_200,
-            "v21 terrain must never be paired with the obsolete 1,876-cell river raster"
+            33_127,
+            "v21 terrain must never be paired with the obsolete 1,876-cell or 28,200-cell river \
+             raster"
+        );
+
+        // The contract `authored_river_kind_override`'s priority chain depends
+        // on, and the reason a bare mask-priority swap is not the fix for
+        // COW-22 `[OQ3]`: every corridor cell is also a water-mask cell, so the
+        // `is_water_body` arm always fires first and the `is_river_channel` arm
+        // stays unreachable until that function is taught the distinction.
+        let water = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_water")
+            .expect("real Cromatolis LFS assets must include the water raster");
+        assert_eq!(water.values.len(), river_channels.values.len());
+        assert!(
+            river_channels
+                .values
+                .iter()
+                .zip(water.values.iter())
+                .all(|(channel, water)| *channel < AUTHORED_WATER_THRESHOLD
+                    || *water >= AUTHORED_WATER_THRESHOLD),
+            "every authored river-corridor cell must also be inside the authored water mask"
         );
     }
 
