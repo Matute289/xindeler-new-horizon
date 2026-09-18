@@ -121,6 +121,7 @@ impl<'a> CanvasInfo<'a> {
             authored_cromatolis_v0: false,
             authored_region_id: None,
             authored_near_water: false,
+            water_body: None,
             chaos: 0.0,
             alt: 0.0,
             basement: 0.0,

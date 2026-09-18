@@ -5588,7 +5588,13 @@ mod tests {
         assert_fraction_in("Gnarling", gnarling, 0.00015..0.0004);
         assert_fraction_in("ChapelSite", chapel_site, 0.00005..0.0006);
         assert_fraction_in("Adlet", adlet, 0.005..0.03);
-        assert_fraction_in("Sahagin", sahagin, 0.0003..0.003);
+        // Re-baselined by COW-22 `C22-1c`. `Sahagin` is `BiomeKind::Ocean` at
+        // 40-45 m below sea level, and until that row every inland water body
+        // whose authored bed is painted below sea level reported `Ocean` --
+        // which is exactly where a 40-45 m depth band lives. 550 suitable
+        // chunks before, 285 after: the 265 that dropped out were the deep
+        // middles of lakes, not sea, and a sahuagin lair belongs in the latter.
+        assert_fraction_in("Sahagin", sahagin, 0.0002..0.003);
         assert_fraction_in("VampireCastle", vampire_castle, 0.00002..0.0005);
         assert_fraction_in("Cultist", cultist, 0.05..0.2);
         assert_fraction_in("DwarvenMine", dwarven_mine, 0.05..0.15);
