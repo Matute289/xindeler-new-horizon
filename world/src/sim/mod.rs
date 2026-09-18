@@ -5773,10 +5773,10 @@ mod tests {
     }
 
     /// COW-17 binds the terrain `.bin` and river-channel raster into one
-    /// reviewed package. Belletoile is a dry authored lowland: the v21
+    /// reviewed package. Belletoile is a dry authored lowland: the v22
     /// terrain master samples it at about 92.94 m above the external sea
     /// level. The real WorldSim interpolation yields about 96.82 m at the
-    /// matching chunk, while the paired river raster retains all 33,127
+    /// matching chunk, while the paired river raster retains all 33,566
     /// binary corridor cells.
     ///
     /// ⚠️ The cell count was **28,200** until COW-22 `[OQ3]`
@@ -5791,11 +5791,28 @@ mod tests {
     /// level corridor cells moved in. `28_200` must never come back — it is
     /// the pre-COW-22 raster, exactly as `1_876` was the pre-COW-17 one.
     ///
+    /// ⚠️ The count moved again, 33,127 → 33,566 (net +439), with COW-22
+    /// `[C22-3]` (`xindeler-open-world#31`), and this is expected rather than
+    /// a drift: `classify_authored_water()` reads *elevation*, so reshaping
+    /// the seabed necessarily re-votes cells near the coast. `C22-3` raised
+    /// the marine shelf, which moves some shallow river-mouth water across
+    /// the ocean/inland boundary the classifier draws at `alt <= 0` (note:
+    /// the exporter's boundary is `<=`, unlike the in-engine
+    /// `alt_below_sea_level` check a few hundred lines up, which is strict
+    /// `<` — two different functions in two different codebases, not a typo
+    /// in either). Only the net delta was measured for this revision, not a
+    /// full in/out cell-migration breakdown like the `[OQ3]` paragraph above
+    /// gives — if a future revision needs to re-verify this number, re-run
+    /// the classifier before/after and diff the raw cell sets rather than
+    /// trusting the net alone. Belletoile is inland and its relief is
+    /// bit-identical before and after (96.817 m), so this assertion still
+    /// pins the terrain package as tightly as it did.
+    ///
     /// Requires the real LFS assets, so CI without the VPS asset store skips
     /// it just like the other real-Cromatolis regressions in this module.
     #[test]
     #[ignore]
-    fn cromatolis_v21_relief_and_river_package_regression_against_real_lfs_assets() {
+    fn cromatolis_v22_relief_and_river_package_regression_against_real_lfs_assets() {
         let sim = generate_cromatolis_world();
         let map_size_lg = sim.map_size_lg();
         let source_x = 499;
@@ -5807,7 +5824,7 @@ mod tests {
 
         assert!(
             (95.5..=98.0).contains(&alt_pre),
-            "Belletoile relief must come from the v21 terrain package; expected ~96.817 m above \
+            "Belletoile relief must come from the v22 terrain package; expected ~96.817 m above \
              sea level after WorldSim interpolation, got {alt_pre:.3} m"
         );
         assert!(
@@ -5831,9 +5848,9 @@ mod tests {
                 .iter()
                 .filter(|value| **value == 1.0)
                 .count(),
-            33_127,
-            "v21 terrain must never be paired with the obsolete 1,876-cell or 28,200-cell river \
-             raster"
+            33_566,
+            "v22 terrain must never be paired with the obsolete 1,876-cell, 28,200-cell or \
+             33,127-cell river raster"
         );
 
         // The contract `authored_river_kind_override`'s priority chain depends
