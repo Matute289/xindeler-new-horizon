@@ -2831,6 +2831,7 @@ impl WorldSim {
                     }
                 } else {
                     authored_river_kind_override(AuthoredRiverKindInputs {
+                        region_id: authored_region_id,
                         is_elevated_lake,
                         is_water_body,
                         is_river_channel,
@@ -4160,6 +4161,10 @@ fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Op
 /// Inputs to [`authored_river_kind_override`], grouped into a struct rather
 /// than several positional `bool` parameters.
 struct AuthoredRiverKindInputs {
+    /// Stable id of the authored region this chunk belongs to. Only used to
+    /// scope the `alt_below_sea_level` disjunct out for Cromatolis
+    /// specifically -- see the comment on that branch.
+    region_id: Option<&'static str>,
     is_elevated_lake: bool,
     is_water_body: bool,
     is_river_channel: bool,
@@ -4181,6 +4186,7 @@ struct AuthoredRiverKindInputs {
 /// `authored_river_cross_section`.
 fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<RiverKind> {
     let AuthoredRiverKindInputs {
+        region_id,
         is_elevated_lake,
         is_water_body,
         is_river_channel,
@@ -4194,7 +4200,22 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
     if is_elevated_lake {
         Some(RiverKind::Lake { neighbor_pass_pos })
     } else if is_water_body {
-        if is_ocean || alt_below_sea_level {
+        // `is_ocean` (the `get_oceans` border flood fill over `alt <= 0`) is
+        // already the complete answer to "is this chunk connected to the sea".
+        // The extra `alt_below_sea_level` disjunct additionally claimed every
+        // *inland* body whose authored bed happens to be painted below sea
+        // level -- 14,665 chunks across 327 bodies on the shipped Cromatolis
+        // rasters, including the deep middle of Sapphire Loch (bed at
+        // -139.7 m) whose shallow rim stayed `Lake`, i.e. one lake split into
+        // two `RiverKind`s along the sea-level contour (COW-22 `C22-1c`).
+        // Scoped off for Cromatolis specifically rather than for every
+        // authored region, following the same precedent (and the same COW-2
+        // debt note) as `SimChunk::get_biome`'s `Snowland`/`Desert` checks: a
+        // future authored region shouldn't silently inherit a Cromatolis
+        // decision it was never measured against.
+        let below_sea_level_counts_as_ocean =
+            region_id != Some(CROMATOLIS_V0_REGION_ID) && alt_below_sea_level;
+        if is_ocean || below_sea_level_counts_as_ocean {
             Some(RiverKind::Ocean)
         } else {
             // Flagged as water but neither below sea level nor tagged
@@ -5259,6 +5280,7 @@ mod tests {
 
     fn river_kind_inputs() -> AuthoredRiverKindInputs {
         AuthoredRiverKindInputs {
+            region_id: Some(CROMATOLIS_V0_REGION_ID),
             is_elevated_lake: false,
             is_water_body: false,
             is_river_channel: false,
@@ -5289,20 +5311,49 @@ mod tests {
     }
 
     #[test]
-    fn water_mask_below_sea_level_or_ocean_becomes_ocean() {
-        let below_sea_level = authored_river_kind_override(AuthoredRiverKindInputs {
-            is_water_body: true,
-            alt_below_sea_level: true,
-            ..river_kind_inputs()
-        });
-        assert_eq!(below_sea_level, Some(RiverKind::Ocean));
-
+    fn water_mask_connected_to_the_sea_becomes_ocean() {
         let ocean_connected = authored_river_kind_override(AuthoredRiverKindInputs {
             is_water_body: true,
             is_ocean: true,
             ..river_kind_inputs()
         });
         assert_eq!(ocean_connected, Some(RiverKind::Ocean));
+    }
+
+    /// COW-22 `C22-1c`: an inland body whose authored bed is painted below sea
+    /// level but which the `get_oceans` flood fill never reaches is a lake,
+    /// not ocean. Before this fix the deep middle of such a body came back
+    /// `Ocean` while its shallower rim came back `Lake`.
+    #[test]
+    fn inland_water_below_sea_level_is_a_lake_not_ocean_in_cromatolis() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_water_body: true,
+            is_ocean: false,
+            alt_below_sea_level: true,
+            ..river_kind_inputs()
+        });
+        assert_eq!(
+            kind,
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::new(3, 4)
+            })
+        );
+    }
+
+    /// ...but the fix is scoped to Cromatolis, so any other authored region
+    /// keeps the previous altitude-based behaviour until it is measured on its
+    /// own data (same COW-2 debt scoping as `get_biome`'s `Snowland`/`Desert`
+    /// checks).
+    #[test]
+    fn inland_water_below_sea_level_still_becomes_ocean_for_other_regions() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            region_id: Some("some_other_region"),
+            is_water_body: true,
+            is_ocean: false,
+            alt_below_sea_level: true,
+            ..river_kind_inputs()
+        });
+        assert_eq!(kind, Some(RiverKind::Ocean));
     }
 
     #[test]
