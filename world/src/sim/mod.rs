@@ -53,7 +53,7 @@ use common::{
     store::{Id, Store},
     terrain::{
         BiomeKind, CoordinateConversions, MapSizeLg, TerrainChunk, TerrainChunkSize,
-        map::MapConfig, uniform_idx_as_vec2, vec2_as_uniform_idx,
+        map::MapConfig, neighbors, uniform_idx_as_vec2, vec2_as_uniform_idx,
     },
     vol::RectVolSize,
 };
@@ -70,6 +70,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
+    collections::VecDeque,
     f32,
     fs::File,
     io::{BufReader, BufWriter},
@@ -123,6 +124,9 @@ struct GenCdf {
     /// `SimChunk::water_body`. `None` for dry chunks and everywhere outside an
     /// authored region.
     authored_water_body: Box<[Option<WaterBodyKind>]>,
+    /// Per-chunk water salinity, see `SimChunk::salinity`. `None` wherever
+    /// `authored_water_body` is `None`.
+    authored_salinity: Box<[Option<Salinity>]>,
     humid_base: InverseCdf,
     temp_base: InverseCdf,
     chaos: InverseCdf,
@@ -1781,6 +1785,7 @@ impl WorldSim {
                 authored_region_id: None,
                 authored_near_water: false,
                 water_body: None,
+                salinity: None,
                 chaos: 0.0,
                 alt: 0.0,
                 basement: 0.0,
@@ -2904,12 +2909,8 @@ impl WorldSim {
         // landlocked lake is whether it touches marine water -- so both come
         // out of one pass rather than two.
         let (authored_near_water, authored_water_body) = if authored_cromatolis_v0 {
-            let mask_hit = |layer: &Option<Box<[f32]>>, idx: usize| {
-                layer.as_ref().is_some_and(|values| {
-                    authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values)
-                        >= AUTHORED_WATER_THRESHOLD
-                })
-            };
+            let mask_hit =
+                |layer: &Option<Box<[f32]>>, idx: usize| authored_mask_hit(map_size_lg, layer, idx);
             // Marine water: inside the authored `water` mask *and* reached by
             // the `get_oceans` border flood fill. Deliberately not "alt below
             // sea level" -- see `authored_river_kind_override` (COW-22
@@ -2962,6 +2963,20 @@ impl WorldSim {
                 vec![false; map_size_lg.chunks_len()].into_boxed_slice(),
                 vec![None; map_size_lg.chunks_len()].into_boxed_slice(),
             )
+        };
+
+        // Salinity is the second, independent classification axis: a body can
+        // be a river *and* salt. It is derived from the topology of the bodies
+        // classified above and never authored as its own raster (COW-22
+        // `C22-4`), so it needs nothing the block above did not already
+        // produce -- only the `elevated_lakes` decree, which it treats exactly
+        // as `promote_lagoon_basins` does.
+        let authored_salinity = if authored_cromatolis_v0 {
+            derive_salinity(map_size_lg, &authored_water_body, &alt, |idx| {
+                authored_mask_hit(map_size_lg, &authored_elevated_lakes_layer, idx)
+            })
+        } else {
+            vec![None; map_size_lg.chunks_len()].into_boxed_slice()
         };
 
         let water_alt = indirection
@@ -3091,6 +3106,7 @@ impl WorldSim {
             cromatolis_climate,
             authored_near_water,
             authored_water_body,
+            authored_salinity,
             humid_base,
             temp_base,
             chaos,
@@ -4039,6 +4055,34 @@ pub struct SimChunk {
     /// comes from) and is upstream Veloren code shared with the procedural
     /// world. The two are allowed to disagree -- see [`WaterBodyKind`].
     pub(crate) water_body: Option<WaterBodyKind>,
+    /// How salty this chunk's water is (COW-22 `C22-4`), if it is water at all.
+    /// `None` exactly where `water_body` is `None`.
+    ///
+    /// Type and salinity are deliberately separate axes rather than one fused
+    /// enum, because a body can be a river *and* salty; fusing them would mean
+    /// mirroring a `SaltRiver`-style variant of [`WaterBodyKind`] for every
+    /// kind that can be salty. Derived from the topology of the classified
+    /// bodies -- see [`derive_salinity`] -- never from an authored raster.
+    ///
+    /// A field rather than a side table on `WorldSim` because the eventual
+    /// consumers are the `SPAWN_RULES` closures in `layer::wildlife`, typed
+    /// `|&SimChunk, &ColumnSample|` -- they have no handle on `WorldSim` to
+    /// look anything up in.
+    ///
+    /// Free, today: `Option<Salinity>` is one byte and lands in what was
+    /// already `SimChunk`'s end padding, so the struct stays 224 bytes and the
+    /// 1,048,576-chunk map costs nothing extra. One padding byte is left after
+    /// it; the field after *that* one takes `SimChunk` to 232 bytes, i.e. 8 MB.
+    ///
+    /// Carried but not yet consumed: the aquatic-ecology asset that selects a
+    /// fauna/flora profile by water kind *and* salinity is COW-22's `C22-5`,
+    /// which also replaces the two Cromatolis wildlife manifest entries that
+    /// currently gate on `water_body` alone. `expect` rather than `allow` so
+    /// the attribute cannot outlive the first real read, and `not(test)`
+    /// because the regressions below do read the field, which would
+    /// otherwise leave the expectation unfulfilled in the test build.
+    #[cfg_attr(not(test), expect(dead_code))]
+    pub(crate) salinity: Option<Salinity>,
     pub chaos: f32,
     pub alt: f32,
     pub basement: f32,
@@ -4108,6 +4152,19 @@ fn authored_layer_value_for_cromatolis_v0(
         .copied()
         .unwrap_or_default()
         .clamp(0.0, 1.0)
+}
+
+/// Whether one authored binary mask claims a chunk. `false` for a layer that
+/// failed to load, which is how every authored-layer consumer degrades.
+///
+/// A named function rather than a closure per call site so the threshold test
+/// is spelled once: the water-body sweep and the salinity derivation both ask
+/// it of the same `elevated_lakes` layer, and two spellings of one predicate
+/// can drift apart.
+fn authored_mask_hit(map_size_lg: MapSizeLg, layer: &Option<Box<[f32]>>, idx: usize) -> bool {
+    layer.as_ref().is_some_and(|values| {
+        authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values) >= AUTHORED_WATER_THRESHOLD
+    })
 }
 
 /// Applies Cromatolis's authored biome-mask contract to a sampled mask value.
@@ -4435,6 +4492,421 @@ fn promote_lagoon_basins(
             });
         }
     }
+}
+
+/// How salty a water chunk's water is.
+///
+/// A second classification axis, orthogonal to [`WaterBodyKind`]: every
+/// combination of the two is legal, including the salt *river* that both rises
+/// in and returns to the sea. Fusing the two into one enum would mean mirroring
+/// a `SaltRiver`-style variant for every kind that can be salty, so they stay
+/// apart -- one answers "what body is this", the other "what is in the water".
+///
+/// Scoped `pub(crate)` for the same reason [`WaterBodyKind`] is: every consumer
+/// lives inside `world` today, and widening it later is a one-line change where
+/// narrowing it again would not be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Salinity {
+    /// Inland water: a river above its estuary, and standing water with a way
+    /// out.
+    Fresh,
+    /// Mixing water: the estuary reach of a river mouth, and a lagoon fed by
+    /// both the sea and a freshwater channel.
+    Brackish,
+    /// The sea, and the water that behaves like it: the seaward end of an
+    /// estuary, a closed basin at or below sea level, and a river whose own
+    /// source is marine.
+    Saline,
+}
+
+/// Chunks from a river's marine mouth over which its water is still fully
+/// [`Salinity::Saline`], and the further reach over which it is
+/// [`Salinity::Brackish`] before turning fresh.
+///
+/// A judgement call rather than a measured constant, so the reasoning matters
+/// more than the exact figures. A real estuary's salt wedge runs for
+/// kilometres, which at this map's 32 m chunks would be a hundred chunks or
+/// more -- a large fraction of an average Cromatolis river -- and the map would
+/// then read as "most river water is salty" rather than "rivers meet the sea at
+/// an estuary". These two keep the gradient where it is legible and where it
+/// changes what lives there: roughly 96 m of fully marine water at the mouth,
+/// then roughly 256 m of mixing, then fresh. Roughly, because the distance is
+/// counted in 8-connected steps along the channel, so a diagonal reach is the
+/// same number of chunks over √2 times the ground.
+///
+/// What they buy on the shipped raster, so the number is not a surprise later:
+/// 15,134 fresh / 5,471 brackish / 12,961 salt corridor chunks. That "most
+/// river water is not fresh after all" is not the gradient overreaching -- it
+/// is Cromatolis's rivers being wide and their deltas meeting the sea along a
+/// long waterline, so the mouth seeds are many rather than deep. Worth
+/// revisiting with the aquatic-ecology profiles that will select on the result
+/// (COW-22 `C22-5`), and `cromatolis_salinity_histogram_regression_against_
+/// real_lfs_assets` is the test to re-measure when either constant moves.
+///
+/// Authored tuning for a region belongs in that region's RON, the way
+/// [`AuthoredCromatolisClimate`] does, and these two are authored tuning: the
+/// person who wants to move "where does brackish start" is the same person
+/// editing the aquatic-ecology profiles that select on the result. They stay
+/// here only because there is no hydrology asset to put them in yet and
+/// inventing one for two integers -- with its own loader, schema and
+/// whole-asset failure mode -- costs more than it buys. The aquatic-ecology
+/// asset (COW-22 `C22-5`) is the right home: express them there in *metres*
+/// (96 m and 256 m) and divide by `TerrainChunkSize::RECT_SIZE` here, so the
+/// authored number survives a chunk-size change, and have `derive_salinity`
+/// take them as parameters.
+const RIVER_SALINE_MOUTH_CHUNKS: u32 = 3;
+/// See [`RIVER_SALINE_MOUTH_CHUNKS`].
+const RIVER_BRACKISH_MOUTH_CHUNKS: u32 = 8;
+
+/// Sentinel for "this chunk belongs to no river component" in the label map
+/// [`label_river_components`] returns. A raw `u32` rather than `Option<u32>`
+/// because the map has one entry per chunk and `Option<u32>` is eight bytes
+/// wide, not four.
+const NO_RIVER_COMPONENT: u32 = u32::MAX;
+
+/// One 8-connected component of the authored river network, reduced to the
+/// facts salinity needs from it.
+#[derive(Clone, Debug, PartialEq)]
+struct RiverComponent {
+    /// Corridor chunks in the component.
+    len: usize,
+    /// The component's highest chunk: its source.
+    source: usize,
+    /// `alt` at [`RiverComponent::source`], in metres.
+    source_alt: f32,
+    /// Whether the component never rises out of the sea: its highest chunk is
+    /// at or below sea level *and* it reaches marine water. Such a river has no
+    /// freshwater head to dilute anything, so it is salt along its whole length
+    /// however far inland it then runs.
+    ///
+    /// Deliberately not "the source chunk touches the sea": on this map most
+    /// corridor components are a handful of chunks long and sit on the coast,
+    /// so their highest chunk is marine-adjacent by accident of being short.
+    /// That reading marked 362 of 434 components salt-sourced -- the opposite
+    /// of the rare exception this is meant to capture.
+    source_is_marine: bool,
+    /// Chunks of the component adjacent to marine water: its mouths, and the
+    /// seeds the estuary gradient is measured from. Empty for a system that
+    /// never reaches the sea.
+    mouths: Vec<usize>,
+}
+
+/// Labels the 8-connected components of the authored river network, and
+/// summarises each one into a [`RiverComponent`].
+///
+/// One pass over the map, not a search per chunk: the per-chunk questions
+/// salinity asks ("how far is my mouth", "did my river start in the sea") are
+/// properties of the whole component, and answering them per chunk would be
+/// quadratic.
+///
+/// Returns the per-chunk component label ([`NO_RIVER_COMPONENT`] for every
+/// chunk that is not a river) alongside the components themselves, indexed by
+/// that label.
+fn label_river_components(
+    map_size_lg: MapSizeLg,
+    is_river: impl Fn(usize) -> bool,
+    is_marine: impl Fn(usize) -> bool,
+    alt: &[Alt],
+) -> (Box<[u32]>, Vec<RiverComponent>) {
+    let len = map_size_lg.chunks_len();
+    let mut label = vec![NO_RIVER_COMPONENT; len].into_boxed_slice();
+    let mut components: Vec<RiverComponent> = Vec::new();
+    let mut stack = Vec::new();
+
+    for start in 0..len {
+        if label[start] != NO_RIVER_COMPONENT || !is_river(start) {
+            continue;
+        }
+        let id = components.len() as u32;
+        label[start] = id;
+        stack.clear();
+        stack.push(start);
+        let mut component = RiverComponent {
+            len: 0,
+            source: start,
+            source_alt: f32::NEG_INFINITY,
+            source_is_marine: false,
+            mouths: Vec::new(),
+        };
+
+        while let Some(idx) = stack.pop() {
+            component.len += 1;
+            let mut adjacent_to_marine = false;
+            for nidx in neighbors(map_size_lg, idx) {
+                adjacent_to_marine |= is_marine(nidx);
+                if label[nidx] == NO_RIVER_COMPONENT && is_river(nidx) {
+                    label[nidx] = id;
+                    stack.push(nidx);
+                }
+            }
+            if adjacent_to_marine {
+                component.mouths.push(idx);
+            }
+            let chunk_alt = alt[idx] as f32;
+            if chunk_alt > component.source_alt {
+                component.source = idx;
+                component.source_alt = chunk_alt;
+            }
+        }
+
+        component.source_is_marine = component.source_alt <= 0.0 && !component.mouths.is_empty();
+        components.push(component);
+    }
+
+    (label, components)
+}
+
+/// Salinity of one river chunk from its distance, in chunks along the channel,
+/// to the nearest marine mouth of its own component.
+///
+/// [`u32::MAX`] means "no mouth in this component at all", which grades to
+/// fresh like any other faraway chunk.
+fn river_salinity_from_mouth_distance(chunks_from_mouth: u32) -> Salinity {
+    if chunks_from_mouth <= RIVER_SALINE_MOUTH_CHUNKS {
+        Salinity::Saline
+    } else if chunks_from_mouth <= RIVER_BRACKISH_MOUTH_CHUNKS {
+        Salinity::Brackish
+    } else {
+        Salinity::Fresh
+    }
+}
+
+/// Derives a [`Salinity`] for every chunk an already-classified
+/// `water_body` map calls water.
+///
+/// Salinity is never authored. A per-chunk salinity raster would need a new
+/// asset, would have to be repainted every time the river or water mask moved,
+/// and would encode a fact the topology already determines, so this derives it
+/// instead, from the same masks that produced `water_body`:
+///
+/// - Marine water (`Ocean`/`Sea`) is salt by definition.
+/// - A river is fresh at its head and grades through [`Salinity::Brackish`] to
+///   [`Salinity::Saline`] within [`RIVER_SALINE_MOUTH_CHUNKS`] /
+///   [`RIVER_BRACKISH_MOUTH_CHUNKS`] of a marine mouth -- unless its own source
+///   is marine, in which case the whole channel is salt.
+/// - A lagoon is brackish, or salt when it touches the sea and every channel it
+///   connects to is itself salt (nothing fresh reaches it). The marine clause
+///   is redundant on any map [`promote_lagoon_basins`] produced -- a lagoon is
+///   marine-adjacent by definition there -- and is kept so this function still
+///   answers sensibly for a `water_body` map built some other way.
+/// - A lake is fresh, or salt when it is endorheic: no water leaves it for the
+///   sea and it sits at or below sea level, so what evaporation leaves behind
+///   stays.
+///
+/// The passes are ordered, not independent: the lagoon rule reads the salinity
+/// the river pass assigned to the channels touching it.
+///
+/// `alt` is the generation-time altitude, in the sea-level-is-zero space
+/// `WorldSim::generate` works in -- not `SimChunk::alt`, which is that value
+/// plus `CONFIG.sea_level` and, for a lake-carved chunk, already lowered to its
+/// bed. Running before that lowering is what keeps the endorheic rule's floor
+/// test meaningful.
+///
+/// The connectivity this works from is undirected: any contiguous run of water
+/// counts as a path to the sea, so a lake whose only marine link is an
+/// *inflowing* river reads as draining. The authored raster carries no flow
+/// direction, and every basin that is not an elevated lake is pinned to sea
+/// level anyway, so there is little for a direction to disagree with.
+///
+/// `is_elevated_lake` identifies chunks the authored elevated-lake decree
+/// claims; they are excluded from the basin flood fill for the same reason
+/// [`promote_lagoon_basins`] excludes them (the decree is about standing water
+/// *above* sea level, so such a chunk is neither salt itself nor a valid bridge
+/// between a coastal basin and an inland one), and come out fresh.
+///
+/// Guarantees `salinity[i].is_some() == water_body[i].is_some()` for every
+/// chunk.
+fn derive_salinity(
+    map_size_lg: MapSizeLg,
+    water_body: &[Option<WaterBodyKind>],
+    alt: &[Alt],
+    is_elevated_lake: impl Fn(usize) -> bool,
+) -> Box<[Option<Salinity>]> {
+    let len = water_body.len();
+    let is_marine = |idx: usize| {
+        matches!(
+            water_body[idx],
+            Some(WaterBodyKind::Ocean | WaterBodyKind::Sea)
+        )
+    };
+    let is_river = |idx: usize| water_body[idx] == Some(WaterBodyKind::River);
+    let mut salinity = vec![None; len].into_boxed_slice();
+
+    // 1. The sea.
+    for (idx, salinity) in salinity.iter_mut().enumerate() {
+        if is_marine(idx) {
+            *salinity = Some(Salinity::Saline);
+        }
+    }
+
+    // 2. Rivers. One multi-source breadth-first search seeded with every mouth on
+    //    the map at once, rather than one search per component: the search only
+    //    ever steps onto river chunks, so it cannot leak between components, and
+    //    each chunk is settled once.
+    let (label, components) = label_river_components(map_size_lg, is_river, is_marine, alt);
+    let mut mouth_distance = vec![u32::MAX; len].into_boxed_slice();
+    let mut frontier = VecDeque::new();
+    for component in &components {
+        if component.source_is_marine {
+            // Salt from end to end; no gradient to measure.
+            continue;
+        }
+        for &mouth in &component.mouths {
+            mouth_distance[mouth] = 0;
+            frontier.push_back(mouth);
+        }
+    }
+    while let Some(idx) = frontier.pop_front() {
+        let distance = mouth_distance[idx];
+        if distance >= RIVER_BRACKISH_MOUTH_CHUNKS {
+            // Everything beyond this is fresh regardless, so there is nothing
+            // left to learn from walking further up the channel.
+            continue;
+        }
+        for nidx in neighbors(map_size_lg, idx) {
+            if is_river(nidx) && mouth_distance[nidx] == u32::MAX {
+                mouth_distance[nidx] = distance + 1;
+                frontier.push_back(nidx);
+            }
+        }
+    }
+    for idx in 0..len {
+        if !is_river(idx) {
+            continue;
+        }
+        salinity[idx] = Some(if components[label[idx] as usize].source_is_marine {
+            Salinity::Saline
+        } else {
+            river_salinity_from_mouth_distance(mouth_distance[idx])
+        });
+    }
+
+    // 3. Which water chunks are connected to the sea at all, across every kind of
+    //    water body. "Has an outflow" is not a question about a basin's own rim: a
+    //    lake that drains into a channel which itself dead-ends in another closed
+    //    basin has no more of a way out than one with no channel at all, and on
+    //    this map that is the common shape (the authored raster paints whole inland
+    //    systems below sea level). One breadth-first search from every marine chunk
+    //    at once answers it for the whole map.
+    //
+    //    Elevated-lake chunks are not crossed, the same exclusion pass 4 makes
+    //    below and for the same reason: the decree marks standing water *above*
+    //    sea level, so a basin on the far side of one is not connected to the sea
+    //    through it -- reaching the sea that way would mean running uphill and
+    //    back down.
+    let mut reaches_sea = vec![false; len];
+    frontier.clear();
+    for (idx, reaches_sea) in reaches_sea.iter_mut().enumerate() {
+        if is_marine(idx) {
+            *reaches_sea = true;
+            frontier.push_back(idx);
+        }
+    }
+    while let Some(idx) = frontier.pop_front() {
+        for nidx in neighbors(map_size_lg, idx) {
+            if water_body[nidx].is_some() && !reaches_sea[nidx] && !is_elevated_lake(nidx) {
+                reaches_sea[nidx] = true;
+                frontier.push_back(nidx);
+            }
+        }
+    }
+
+    // 4. Standing water, one basin at a time -- whether a body is endorheic, or
+    //    whether anything fresh reaches it, is a property of the body and not of
+    //    the individual chunk, exactly as its lagoon/lake type is.
+    let is_standing = |idx: usize| {
+        matches!(
+            water_body[idx],
+            Some(WaterBodyKind::Lake | WaterBodyKind::Lagoon)
+        ) && !is_elevated_lake(idx)
+    };
+    let mut visited = vec![false; len];
+    let mut basin = Vec::new();
+    let mut stack = Vec::new();
+
+    for start in 0..len {
+        if visited[start] || !is_standing(start) {
+            continue;
+        }
+        basin.clear();
+        stack.clear();
+        stack.push(start);
+        visited[start] = true;
+        let mut is_lagoon = false;
+        let mut touches_marine = false;
+        let mut touches_fresh_channel = false;
+        let mut has_outflow = false;
+        // The basin *floor*: its deepest chunk. Deliberately not its water
+        // surface, which would be a vacuous test -- `cromatolis_forces_sea_
+        // level` pins every basin that is not an authored elevated lake to
+        // exactly sea level, so every one of them would pass. The floor
+        // answers the question the rule is actually asking: is this a real
+        // depression, where water collects and only evaporation takes it away.
+        let mut floor_alt = f32::INFINITY;
+
+        while let Some(idx) = stack.pop() {
+            basin.push(idx);
+            is_lagoon |= water_body[idx] == Some(WaterBodyKind::Lagoon);
+            has_outflow |= reaches_sea[idx];
+            floor_alt = floor_alt.min(alt[idx] as f32);
+            for nidx in neighbors(map_size_lg, idx) {
+                touches_marine |= is_marine(nidx);
+                touches_fresh_channel |= is_river(nidx) && salinity[nidx] != Some(Salinity::Saline);
+                if !visited[nidx] && is_standing(nidx) {
+                    visited[nidx] = true;
+                    stack.push(nidx);
+                }
+            }
+        }
+
+        let basin_salinity = if is_lagoon {
+            if touches_marine && !touches_fresh_channel {
+                Salinity::Saline
+            } else {
+                Salinity::Brackish
+            }
+        } else if !has_outflow && floor_alt <= 0.0 {
+            Salinity::Saline
+        } else {
+            Salinity::Fresh
+        };
+        for &idx in &basin {
+            salinity[idx] = Some(basin_salinity);
+        }
+    }
+
+    // 5. Whatever the passes above did not claim -- in practice the elevated-lake
+    //    chunks the basin fill deliberately skipped, which the decree puts above
+    //    sea level and therefore beyond the reach of any of the salt rules.
+    //
+    //    Spelled as a wildcard-free `match` rather than a blanket "anything left
+    //    is fresh": a new `WaterBodyKind` (the taxonomy still names a `Swamp` case
+    //    -- see that enum's closing note) must fail to compile here and be routed
+    //    deliberately, not slip through as fresh water.
+    for idx in 0..len {
+        let Some(kind) = water_body[idx] else {
+            continue;
+        };
+        if salinity[idx].is_some() {
+            continue;
+        }
+        salinity[idx] = Some(match kind {
+            // Settled by pass 1 and pass 2 respectively, so a chunk of either
+            // kind reaching this point means the map contradicts itself. Answer
+            // in character rather than panicking halfway through world
+            // generation.
+            WaterBodyKind::Ocean | WaterBodyKind::Sea => Salinity::Saline,
+            WaterBodyKind::River => Salinity::Fresh,
+            // The elevated-lake decree: standing water above sea level.
+            WaterBodyKind::Lake | WaterBodyKind::Lagoon => Salinity::Fresh,
+        });
+    }
+
+    debug_assert!(
+        (0..len).all(|idx| water_body[idx].is_some() == salinity[idx].is_some()),
+        "every classified water chunk carries a salinity, and nothing else does"
+    );
+    salinity
 }
 
 /// Widest channel, in metres, the engine will carve as a real
@@ -4933,6 +5405,7 @@ impl SimChunk {
             authored_region_id: gen_cdf.authored_region_id,
             authored_near_water: gen_cdf.authored_near_water[posi],
             water_body: gen_cdf.authored_water_body[posi],
+            salinity: gen_cdf.authored_salinity[posi],
             chaos,
             flux,
             alt,
@@ -7028,6 +7501,619 @@ mod tests {
             double_covered, 0,
             "{double_covered} water chunks are claimed by both Cromatolis wildlife entries, \
              double-counting their density"
+        );
+    }
+
+    // ---- Salinity (COW-22 `C22-4`) ----
+
+    /// A hand-drawn 8x8 water map for the salinity rules.
+    struct SalinityFixture {
+        map_size_lg: MapSizeLg,
+        water_body: Vec<Option<WaterBodyKind>>,
+        alt: Vec<Alt>,
+        elevated: Vec<bool>,
+    }
+
+    impl SalinityFixture {
+        /// One character per chunk, row 0 at `y == 0`:
+        ///
+        /// - `.` dry land
+        /// - `O` marine water
+        /// - `r` river corridor
+        /// - `L` lake
+        /// - `G` lagoon
+        /// - `E` a lake the authored elevated-lake decree claims
+        ///
+        /// `alt_of` gives each chunk its altitude from its character and
+        /// position, in the same sea-level-is-zero space `WorldSim::generate`
+        /// works in.
+        fn new(rows: &[&str; 8], alt_of: impl Fn(char, Vec2<i32>) -> Alt) -> Self {
+            let map_size_lg = MapSizeLg::new(Vec2 { x: 3, y: 3 }).expect("valid map size");
+            let mut water_body = vec![None; map_size_lg.chunks_len()];
+            let mut alt = vec![0.0; map_size_lg.chunks_len()];
+            let mut elevated = vec![false; map_size_lg.chunks_len()];
+            for (y, row) in rows.iter().enumerate() {
+                assert_eq!(row.chars().count(), 8, "every fixture row is 8 chunks wide");
+                for (x, symbol) in row.chars().enumerate() {
+                    let pos = Vec2::new(x as i32, y as i32);
+                    let idx = vec2_as_uniform_idx(map_size_lg, pos);
+                    water_body[idx] = match symbol {
+                        '.' => None,
+                        'O' => Some(WaterBodyKind::Ocean),
+                        'r' => Some(WaterBodyKind::River),
+                        'L' | 'E' => Some(WaterBodyKind::Lake),
+                        'G' => Some(WaterBodyKind::Lagoon),
+                        other => panic!("unknown fixture symbol {other:?}"),
+                    };
+                    elevated[idx] = symbol == 'E';
+                    alt[idx] = alt_of(symbol, pos);
+                }
+            }
+            Self {
+                map_size_lg,
+                water_body,
+                alt,
+                elevated,
+            }
+        }
+
+        fn idx(&self, x: i32, y: i32) -> usize {
+            vec2_as_uniform_idx(self.map_size_lg, Vec2::new(x, y))
+        }
+
+        fn salinity(&self) -> Box<[Option<Salinity>]> {
+            derive_salinity(self.map_size_lg, &self.water_body, &self.alt, |idx| {
+                self.elevated[idx]
+            })
+        }
+
+        fn river_components(&self) -> (Box<[u32]>, Vec<RiverComponent>) {
+            label_river_components(
+                self.map_size_lg,
+                |idx| self.water_body[idx] == Some(WaterBodyKind::River),
+                |idx| {
+                    matches!(
+                        self.water_body[idx],
+                        Some(WaterBodyKind::Ocean | WaterBodyKind::Sea)
+                    )
+                },
+                &self.alt,
+            )
+        }
+    }
+
+    /// Land at +10 m, every kind of water at -1 m. The default for a fixture
+    /// whose point is topology rather than height.
+    fn flat_alt(symbol: char, _pos: Vec2<i32>) -> Alt { if symbol == '.' { 10.0 } else { -1.0 } }
+
+    /// Land at +10 m, water descending northwards so a channel's head is its
+    /// southernmost chunk. The default for a fixture about river gradients.
+    fn sloping_alt(symbol: char, pos: Vec2<i32>) -> Alt {
+        if symbol == '.' {
+            10.0
+        } else {
+            20.0 - pos.y as Alt
+        }
+    }
+
+    #[test]
+    fn marine_water_is_saline() {
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "OOOOOOOO", "OOOOOOOO", "OOOOOOOO", "........", "........", "........",
+                "........",
+            ],
+            flat_alt,
+        );
+        let salinity = fixture.salinity();
+        for (idx, kind) in fixture.water_body.iter().enumerate() {
+            assert_eq!(
+                salinity[idx],
+                kind.map(|_| Salinity::Saline),
+                "every marine chunk is salt and no dry chunk has a salinity"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lagoon_fed_by_a_freshwater_channel_is_brackish() {
+        // A coastal basin with the sea on one side and a river arriving from
+        // inland on the other -- the textbook lagoon.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "OOOOOOOO", "...GG...", "...GG...", "....r...", "....r...", "....r...",
+                "....r...",
+            ],
+            flat_alt,
+        );
+        let salinity = fixture.salinity();
+        assert_eq!(salinity[fixture.idx(3, 2)], Some(Salinity::Brackish));
+        assert_eq!(
+            salinity[fixture.idx(4, 3)],
+            Some(Salinity::Brackish),
+            "the whole basin agrees, not just the chunk the channel touches"
+        );
+    }
+
+    #[test]
+    fn a_lagoon_whose_every_endpoint_is_marine_is_saline() {
+        // The same basin with the river taken away: nothing fresh reaches it,
+        // so it is simply a pocket of the sea.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "OOOOOOOO", "...GG...", "...GG...", "........", "........", "........",
+                "........",
+            ],
+            flat_alt,
+        );
+        let salinity = fixture.salinity();
+        assert_eq!(salinity[fixture.idx(3, 2)], Some(Salinity::Saline));
+        assert_eq!(salinity[fixture.idx(4, 3)], Some(Salinity::Saline));
+    }
+
+    #[test]
+    fn a_lake_that_drains_to_the_sea_is_fresh() {
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "....r...", "....r...", "...LL...", "...LL...", "........", "........",
+                "........",
+            ],
+            flat_alt,
+        );
+        let salinity = fixture.salinity();
+        assert_eq!(salinity[fixture.idx(3, 3)], Some(Salinity::Fresh));
+        assert_eq!(salinity[fixture.idx(4, 4)], Some(Salinity::Fresh));
+    }
+
+    #[test]
+    fn an_endorheic_lake_below_sea_level_is_saline() {
+        // A closed depression: a channel leaves it, but that channel dead-ends
+        // inland instead of reaching the sea, which is no way out at all.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "........", "........", "...LL...", "...LL...", "....r...", "....r...",
+                "........",
+            ],
+            flat_alt,
+        );
+        let salinity = fixture.salinity();
+        assert_eq!(salinity[fixture.idx(3, 3)], Some(Salinity::Saline));
+        assert_eq!(
+            salinity[fixture.idx(4, 6)],
+            Some(Salinity::Fresh),
+            "the dead-end channel itself never meets the sea, so it stays fresh"
+        );
+    }
+
+    #[test]
+    fn an_endorheic_lake_above_sea_level_is_fresh() {
+        // Same closed basin, lifted onto a plateau: nothing drains out of it
+        // either, but it is not the depression the salt rule is about.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "........", "........", "...LL...", "...LL...", "........", "........",
+                "........",
+            ],
+            |symbol, _| if symbol == '.' { 60.0 } else { 50.0 },
+        );
+        let salinity = fixture.salinity();
+        assert_eq!(salinity[fixture.idx(3, 3)], Some(Salinity::Fresh));
+    }
+
+    #[test]
+    fn a_river_is_fresh_at_its_head_and_grades_to_salt_at_its_mouth() {
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOO....", "...r....", "...r....", "...r....", "...r....", "...r....", "...r....",
+                "...r....",
+            ],
+            sloping_alt,
+        );
+        let salinity = fixture.salinity();
+        // `y == 1` is the mouth, so a chunk's distance from it is `y - 1`.
+        // Expressed against the constants rather than against the numbers they
+        // happen to hold: retuning the estuary is not supposed to break a test
+        // about the shape of the gradient.
+        let mouth_y = 1;
+        let last_salt_y = mouth_y + RIVER_SALINE_MOUTH_CHUNKS as i32;
+        assert!(
+            last_salt_y < 7,
+            "the fixture channel has to outlast the salt reach for this test to say anything"
+        );
+        for y in mouth_y..=last_salt_y {
+            assert_eq!(
+                salinity[fixture.idx(3, y)],
+                Some(Salinity::Saline),
+                "chunk (3, {y}) is within {RIVER_SALINE_MOUTH_CHUNKS} of the mouth"
+            );
+        }
+        for y in last_salt_y + 1..=7 {
+            assert_eq!(
+                salinity[fixture.idx(3, y)],
+                Some(Salinity::Brackish),
+                "chunk (3, {y}) is past the salt reach but still inside the \
+                 {RIVER_BRACKISH_MOUTH_CHUNKS}-chunk mixing reach"
+            );
+        }
+    }
+
+    #[test]
+    fn a_river_that_never_reaches_the_sea_is_fresh_along_its_whole_length() {
+        let fixture = SalinityFixture::new(
+            &[
+                "........", "...r....", "...r....", "...r....", "...r....", "...r....", "...r....",
+                "...r....",
+            ],
+            sloping_alt,
+        );
+        let salinity = fixture.salinity();
+        for y in 1..=7 {
+            assert_eq!(salinity[fixture.idx(3, y)], Some(Salinity::Fresh));
+        }
+    }
+
+    #[test]
+    fn a_river_whose_source_is_marine_is_salt_along_its_whole_length() {
+        // A channel that rises in the sea and returns to it: it never climbs
+        // above sea level, so there is no freshwater head anywhere on it -- not
+        // even at the far end, which the mouth gradient alone would call fresh.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOO....", "...r....", "...r....", "...r....", "...r....", "...r....", "...r....",
+                "...r....",
+            ],
+            |symbol, _| if symbol == '.' { 10.0 } else { -1.0 },
+        );
+        let salinity = fixture.salinity();
+        for y in 1..=7 {
+            assert_eq!(
+                salinity[fixture.idx(3, y)],
+                Some(Salinity::Saline),
+                "chunk (3, {y}) belongs to a channel with no freshwater head"
+            );
+        }
+    }
+
+    #[test]
+    fn a_marine_source_needs_the_channel_to_actually_reach_the_sea() {
+        // The same below-sea-level channel with no marine connection is a
+        // sunken inland corridor, not an arm of the sea.
+        let fixture = SalinityFixture::new(
+            &[
+                "........", "...r....", "...r....", "...r....", "...r....", "...r....", "...r....",
+                "...r....",
+            ],
+            |symbol, _| if symbol == '.' { 10.0 } else { -1.0 },
+        );
+        let (_, components) = fixture.river_components();
+        assert_eq!(components.len(), 1);
+        assert!(components[0].mouths.is_empty());
+        assert!(!components[0].source_is_marine);
+    }
+
+    #[test]
+    fn an_authored_elevated_lake_is_fresh_and_does_not_bridge_two_basins() {
+        // The elevated-lake decree marks standing water above sea level: a
+        // pond on a shelf at +40 m, with the sea on one side of it and a
+        // sunken basin at -1 m on the other. It must not act as a bridge in
+        // either direction -- neither making the basin behind it a lagoon, nor
+        // giving that basin a way out to the sea, which would mean water
+        // running 41 m uphill.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "...GG...", "...EE...", "...LL...", "........", "........", "........",
+                "........",
+            ],
+            |symbol, _| match symbol {
+                '.' => 10.0,
+                'E' => 40.0,
+                _ => -1.0,
+            },
+        );
+        let salinity = fixture.salinity();
+        assert_eq!(
+            salinity[fixture.idx(3, 1)],
+            Some(Salinity::Saline),
+            "the coastal basin has no fresh endpoint of its own"
+        );
+        assert_eq!(
+            salinity[fixture.idx(3, 2)],
+            Some(Salinity::Fresh),
+            "the elevated lake itself"
+        );
+        assert_eq!(
+            salinity[fixture.idx(3, 3)],
+            Some(Salinity::Saline),
+            "and the basin behind it is a closed depression, because the elevated lake does not \
+             connect it to the sea"
+        );
+    }
+
+    #[test]
+    fn river_salinity_grades_by_distance_from_the_mouth() {
+        assert_eq!(
+            river_salinity_from_mouth_distance(0),
+            Salinity::Saline,
+            "the mouth itself"
+        );
+        assert_eq!(
+            river_salinity_from_mouth_distance(RIVER_SALINE_MOUTH_CHUNKS),
+            Salinity::Saline
+        );
+        assert_eq!(
+            river_salinity_from_mouth_distance(RIVER_SALINE_MOUTH_CHUNKS + 1),
+            Salinity::Brackish
+        );
+        assert_eq!(
+            river_salinity_from_mouth_distance(RIVER_BRACKISH_MOUTH_CHUNKS),
+            Salinity::Brackish
+        );
+        assert_eq!(
+            river_salinity_from_mouth_distance(RIVER_BRACKISH_MOUTH_CHUNKS + 1),
+            Salinity::Fresh
+        );
+        assert_eq!(
+            river_salinity_from_mouth_distance(u32::MAX),
+            Salinity::Fresh,
+            "a component with no mouth at all"
+        );
+        const {
+            assert!(RIVER_SALINE_MOUTH_CHUNKS < RIVER_BRACKISH_MOUTH_CHUNKS);
+        }
+    }
+
+    #[test]
+    fn river_components_are_separated_and_summarised() {
+        // Two channels that never touch, one reaching the sea and one not.
+        let fixture = SalinityFixture::new(
+            &[
+                "OOOOOOOO", "..r..r..", "..r..r..", "..r..r..", "..r.....", "..r.....", "........",
+                "........",
+            ],
+            sloping_alt,
+        );
+        let (label, components) = fixture.river_components();
+        assert_eq!(components.len(), 2, "two disjoint channels");
+        assert_ne!(
+            label[fixture.idx(2, 1)],
+            label[fixture.idx(5, 1)],
+            "and the labelling keeps them apart"
+        );
+        let left = &components[label[fixture.idx(2, 1)] as usize];
+        let right = &components[label[fixture.idx(5, 1)] as usize];
+        assert_eq!(left.len, 5);
+        assert_eq!(right.len, 3);
+        // The source is the highest chunk, which `sloping_alt` puts closest to
+        // the sea in this fixture.
+        assert_eq!(left.source, fixture.idx(2, 1));
+        assert_eq!(left.source_alt, 19.0);
+        assert_eq!(left.mouths, vec![fixture.idx(2, 1)]);
+        assert!(!left.source_is_marine, "its head is well above sea level");
+        // Every chunk that is not a river is unlabelled.
+        for (idx, kind) in fixture.water_body.iter().enumerate() {
+            assert_eq!(
+                label[idx] == NO_RIVER_COMPONENT,
+                *kind != Some(WaterBodyKind::River)
+            );
+        }
+    }
+
+    // ---- Real-LFS-asset regressions for COW-22 `C22-4` ----
+    //
+    // These numbers and the exporter constants above this block
+    // (`EXPORTED_RIVER_CELLS` and friends) describe the same rasters and move
+    // together: both are counts over `cromatolis_v0.bin` and
+    // `cromatolis_v0_river_channels.f32le`. A prior revision of this comment
+    // noted they were out of sync (measured against different revisions of
+    // those two files after `C22-3` regenerated them) -- reconciled in a
+    // follow-up (corridor 33,566, marine 316,682, lagoon 2,815, lake
+    // unchanged at 13,872, all re-confirmed against the `xindeler-open-world`
+    // exporter's own independent measurement, not just this engine's). The
+    // biome histogram in
+    // `cromatolis_inland_water_is_no_longer_ocean_against_real_lfs_assets`
+    // was reconciled in the same pass.
+
+    /// Corridor chunks a component needs before it counts as a river *system*
+    /// rather than a puddle or a one-chunk artefact of the raster. At this
+    /// threshold the engine's own component labelling finds 72 systems, which
+    /// is exactly the count the open-world exporter measured independently.
+    const SUBSTANTIAL_RIVER_COMPONENT_CHUNKS: usize = 20;
+
+    /// Every `Salinity` across the real Cromatolis map.
+    ///
+    /// The partition assertions matter more than any individual count: every
+    /// chunk the classification calls water must get exactly one salinity, and
+    /// no dry chunk may get one, whatever the rules decide.
+    #[test]
+    #[ignore]
+    fn cromatolis_salinity_histogram_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let count = |salinity: Salinity| {
+            sim.chunks
+                .iter()
+                .filter(|chunk| chunk.salinity == Some(salinity))
+                .count()
+        };
+        let cross = |kind: WaterBodyKind, salinity: Salinity| {
+            sim.chunks
+                .iter()
+                .filter(|chunk| chunk.water_body == Some(kind) && chunk.salinity == Some(salinity))
+                .count()
+        };
+
+        assert_eq!(count(Salinity::Fresh), 24_526);
+        assert_eq!(count(Salinity::Brackish), 7_624);
+        assert_eq!(count(Salinity::Saline), 334_787);
+
+        // Per kind, which is where a rule change actually shows up.
+        assert_eq!(cross(WaterBodyKind::Ocean, Salinity::Saline), 316_682);
+        assert_eq!(cross(WaterBodyKind::Ocean, Salinity::Brackish), 0);
+        assert_eq!(cross(WaterBodyKind::Ocean, Salinity::Fresh), 0);
+        // The estuary gradient: fresh above it, salt at the waterline.
+        assert_eq!(cross(WaterBodyKind::River, Salinity::Fresh), 15_134);
+        assert_eq!(cross(WaterBodyKind::River, Salinity::Brackish), 5_471);
+        assert_eq!(cross(WaterBodyKind::River, Salinity::Saline), 12_961);
+        // Two of the map's fourteen lake basins are closed depressions below
+        // sea level; the other twelve drain to the sea.
+        assert_eq!(cross(WaterBodyKind::Lake, Salinity::Fresh), 9_392);
+        assert_eq!(cross(WaterBodyKind::Lake, Salinity::Saline), 4_482);
+        assert_eq!(cross(WaterBodyKind::Lake, Salinity::Brackish), 0);
+        // Eleven of the twenty-four lagoon basins have no freshwater channel
+        // reaching them at all, so they are simply pockets of the sea.
+        assert_eq!(cross(WaterBodyKind::Lagoon, Salinity::Brackish), 2_153);
+        assert_eq!(cross(WaterBodyKind::Lagoon, Salinity::Saline), 662);
+        assert_eq!(cross(WaterBodyKind::Lagoon, Salinity::Fresh), 0);
+
+        // The partition: exactly the classified water chunks, no more and no
+        // fewer.
+        let salted = sim
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.salinity.is_some())
+            .count();
+        let classified = sim
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.water_body.is_some())
+            .count();
+        assert_eq!(salted, classified);
+        assert_eq!(
+            salted,
+            count(Salinity::Fresh) + count(Salinity::Brackish) + count(Salinity::Saline)
+        );
+        for chunk in sim.chunks.iter() {
+            assert_eq!(
+                chunk.water_body.is_some(),
+                chunk.salinity.is_some(),
+                "{:?} water carries {:?} salinity",
+                chunk.water_body,
+                chunk.salinity
+            );
+        }
+    }
+
+    /// The baseline that keeps the salt-river exception honest.
+    ///
+    /// The open-world exporter measured, independently and on the source
+    /// raster, that **93 of 93 substantial river systems reach the sea, with
+    /// source altitudes of 94-1,095 m**. The engine does not reproduce those
+    /// figures exactly and is not expected to: it labels components on the
+    /// chunk grid after erosion has reshaped `alt`, and its "the sea" is the
+    /// `get_oceans` border flood fill rather than "painted below sea level"
+    /// (COW-22 `C22-1c`), so a corridor that ends in an inland basin the
+    /// raster painted below sea level counts as landlocked here and as
+    /// sea-reaching there. What carries over is the *claim*: a river that is
+    /// salt from its own source is a rare exception, not the common case. That
+    /// is what the last assertion pins.
+    ///
+    /// The altitudes here are a re-derivation, not the ones the classifier saw:
+    /// `WorldSim` keeps `SimChunk::alt`, which `SimChunk::generate` has already
+    /// lowered to the bed for every lake-carved chunk, and a wide corridor is
+    /// lake-carved while still being a `WaterBodyKind::River`. So the counts
+    /// and the component shapes below are exact -- connectivity and mouths do
+    /// not depend on altitude at all -- while the source altitudes and the
+    /// marine-sourced count are read off a systematically *lower* altitude
+    /// field than production used. That skews in the safe direction: a lower
+    /// source can only make `source_is_marine` more likely, so three
+    /// marine-sourced components is an upper bound on the figure production
+    /// actually derived, and the rarity claim holds a fortiori.
+    #[test]
+    #[ignore]
+    fn cromatolis_river_components_reach_the_sea_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        // `SimChunk::alt` carries `CONFIG.sea_level`; the classification works
+        // in the sea-level-is-zero space `WorldSim::generate` uses.
+        let alt = sim
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.alt - CONFIG.sea_level) as Alt)
+            .collect::<Vec<_>>();
+        let (_, components) = label_river_components(
+            map_size_lg,
+            |idx| sim.chunks[idx].water_body == Some(WaterBodyKind::River),
+            |idx| {
+                matches!(
+                    sim.chunks[idx].water_body,
+                    Some(WaterBodyKind::Ocean | WaterBodyKind::Sea)
+                )
+            },
+            &alt,
+        );
+
+        assert_eq!(components.len(), 434, "components of the corridor network");
+        assert_eq!(
+            components
+                .iter()
+                .map(|component| component.len)
+                .sum::<usize>(),
+            sim.chunks
+                .iter()
+                .filter(|chunk| chunk.water_body == Some(WaterBodyKind::River))
+                .count(),
+            "the components partition the corridor chunks"
+        );
+
+        let substantial = components
+            .iter()
+            .filter(|component| component.len >= SUBSTANTIAL_RIVER_COMPONENT_CHUNKS)
+            .collect::<Vec<_>>();
+        assert_eq!(substantial.len(), 72, "substantial river systems");
+        assert_eq!(
+            substantial
+                .iter()
+                .filter(|component| !component.mouths.is_empty())
+                .count(),
+            64,
+            "substantial systems reaching the sea; the other eight end in inland water the \
+             classification calls a lake"
+        );
+
+        let source_alts = substantial
+            .iter()
+            .map(|component| component.source_alt)
+            .collect::<Vec<_>>();
+        let lowest = source_alts.iter().copied().fold(f32::INFINITY, f32::min);
+        let highest = source_alts
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            (lowest - -3.4).abs() < 0.1,
+            "lowest substantial source sits at {lowest} m"
+        );
+        assert!(
+            (highest - 1034.5).abs() < 0.1,
+            "highest substantial source sits at {highest} m"
+        );
+
+        // The claim the exporter's baseline is really about: a river that is
+        // salt from its own source stays a rare exception.
+        let marine_sourced = components
+            .iter()
+            .filter(|component| component.source_is_marine)
+            .collect::<Vec<_>>();
+        assert_eq!(marine_sourced.len(), 3);
+        assert_eq!(
+            marine_sourced
+                .iter()
+                .filter(|component| component.len >= SUBSTANTIAL_RIVER_COMPONENT_CHUNKS)
+                .count(),
+            1,
+            "exactly one substantial system rises in the sea"
+        );
+        let marine_sourced_chunks = marine_sourced
+            .iter()
+            .map(|component| component.len)
+            .sum::<usize>();
+        let corridor_chunks = components
+            .iter()
+            .map(|component| component.len)
+            .sum::<usize>();
+        assert!(
+            (marine_sourced_chunks as f64) / (corridor_chunks as f64) < 0.01,
+            "{marine_sourced_chunks} of {corridor_chunks} corridor chunks belong to a \
+             marine-sourced system, which is no longer the rare exception the rule assumes"
         );
     }
 }
