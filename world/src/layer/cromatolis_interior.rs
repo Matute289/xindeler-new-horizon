@@ -222,11 +222,16 @@ struct EscapeGuidanceCfg {
     /// to `allow_gated_exits`.
     #[serde(default)]
     exits: Option<Vec<String>>,
-    /// Whether a `surface_access` carrying a `required_capability` may be
-    /// routed to. Defaults to `false`, so guidance never steers a player
-    /// toward an exit they may be unable to survive.
+    /// Whether guidance may use a route that demands something of the
+    /// player: a `surface_access` carrying a `required_capability`, or a
+    /// `connection` carrying a `condition`.
+    ///
+    /// Defaults to `false`. Gating only the exit would be a half-measure --
+    /// the capability an exit demands is typically demanded again by the
+    /// connection leading to it, so excluding the exit while still routing
+    /// through the gated tunnel just moves the hazard one edge inward.
     #[serde(default)]
-    allow_gated_exits: bool,
+    allow_gated_routes: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -252,10 +257,10 @@ struct Connection {
     traversal: String,
     #[serde(default = "default_true")]
     bidirectional: bool,
-    /// Puzzle/interaction condition attached to this connection (if any);
-    /// parsed for validation coverage, not yet consumed by any interaction
-    /// logic.
-    #[expect(dead_code, reason = "parsed for validation coverage, not yet consumed")]
+    /// Puzzle/interaction condition attached to this connection (if any).
+    /// Its *presence* marks the connection as one that demands something of
+    /// the player, which routing honours; the condition's own `kind` is
+    /// still not interpreted by any interaction logic here.
     #[serde(default)]
     condition: Option<ConnectionCondition>,
 }
@@ -621,6 +626,11 @@ pub(crate) struct InteriorLayout {
 /// past it.
 const MAX_NAV_NODES: usize = 256;
 
+/// `NavNode::hops_to_exit` is a `u8`, and the longest possible route
+/// through `MAX_NAV_NODES` rooms has one fewer hop than there are rooms, so
+/// raising the node cap past this point requires widening that field too.
+const _: () = assert!(MAX_NAV_NODES - 1 <= u8::MAX as usize);
+
 /// Extra multiplier applied to a connection's length when it is traversed
 /// *upward*, so a long climb is not treated as equivalent to the same
 /// distance of level walking. Scaled by the connection's own authored
@@ -647,24 +657,40 @@ pub enum EscapeActivation {
 }
 
 impl EscapeActivation {
-    fn parse(cfg: &EscapeGuidanceCfg) -> Result<Self, String> {
-        match cfg.activation_kind.as_str() {
-            "manual" => Ok(Self::Manual),
-            "always" => Ok(Self::Always),
+    /// Same `parse(&str, ..)` shape as [`Medium::parse`],
+    /// [`Traversal::parse`] and [`Generation::parse`]: classify the authored
+    /// string and error on anything unrecognized.
+    fn parse(kind: &str, flags: &[String]) -> Result<Self, String> {
+        match kind {
+            "manual" | "always" => {
+                // Silently ignoring a filled-in list would let an author who
+                // forgot to change the kind ship guidance that is
+                // permanently on, or permanently off, with no complaint.
+                if !flags.is_empty() {
+                    return Err(format!(
+                        "activation_kind {kind:?} takes no activation_flags, but {} were given",
+                        flags.len()
+                    ));
+                }
+                Ok(if kind == "manual" {
+                    Self::Manual
+                } else {
+                    Self::Always
+                })
+            },
             "narrative_flags" => {
-                if cfg.activation_flags.is_empty() {
+                if flags.is_empty() {
                     return Err("activation_kind \"narrative_flags\" needs a non-empty \
                                 activation_flags list"
                         .to_string());
                 }
-                if let Some(bad) = cfg
-                    .activation_flags
+                if let Some(bad) = flags
                     .iter()
                     .find(|id| id.trim().is_empty() || id.trim() != id.as_str())
                 {
                     return Err(format!("malformed activation flag id {bad:?}"));
                 }
-                Ok(Self::NarrativeFlags(cfg.activation_flags.clone()))
+                Ok(Self::NarrativeFlags(flags.to_vec()))
             },
             other => Err(format!("unknown escape activation_kind {other:?}")),
         }
@@ -709,6 +735,15 @@ pub struct NavEdge {
     /// tunnel physically leaves each room.
     pub portal_a: Vec3<f32>,
     pub portal_b: Vec3<f32>,
+    /// The carved tunnel's own half-width, so a consumer can tell whether a
+    /// position is inside this tunnel rather than merely near its line.
+    pub tunnel_radius: f32,
+    /// The authored bow of this tunnel, and its two carved endpoints --
+    /// exactly the inputs `carve_connection` used, kept so a consumer can
+    /// locate a position against the real centreline instead of a chord.
+    pub curve: f32,
+    pub end_a: Vec3<i32>,
+    pub end_b: Vec3<i32>,
     /// Traversal cost from `a` to `b`.
     pub cost_ab: f32,
     /// Traversal cost from `b` to `a`. Differs from `cost_ab` whenever the
@@ -718,6 +753,15 @@ pub struct NavEdge {
     /// A sealed gate: real, carved, and impassable until whatever governs
     /// it is satisfied.
     pub sealed: bool,
+    /// Whether this tunnel can be traversed `b` -> `a` as well as
+    /// `a` -> `b`. Mirrors the authored `bidirectional` flag, which the
+    /// sibling level-placement walk also honours -- a one-way drop must
+    /// never be offered as a way back up.
+    pub bidirectional: bool,
+    /// Whether this tunnel carries an authored `condition` (a capability
+    /// check, a puzzle). Excluded from routing unless the interior sets
+    /// `allow_gated_routes`.
+    pub conditional: bool,
 }
 
 impl NavEdge {
@@ -744,15 +788,23 @@ impl NavEdge {
         }
     }
 
-    /// Cost of traversing this edge starting from `node`.
+    /// Cost of traversing this edge starting from `node`, or `None` when
+    /// `node` is not an endpoint **or** the edge cannot be walked in that
+    /// direction.
     pub fn cost_from(&self, node: u16) -> Option<f32> {
         if node == self.a {
             Some(self.cost_ab)
-        } else if node == self.b {
+        } else if node == self.b && self.bidirectional {
             Some(self.cost_ba)
         } else {
             None
         }
+    }
+
+    /// Whether routing may use this edge at all. `allow_gated` mirrors the
+    /// interior's `allow_gated_routes`.
+    pub fn is_routable(&self, allow_gated: bool) -> bool {
+        !self.sealed && (allow_gated || !self.conditional)
     }
 }
 
@@ -790,6 +842,33 @@ impl InteriorNavGraph {
             .map(|(i, _)| i)
     }
 
+    /// The tunnel containing `wpos`, with how far along it the position
+    /// sits (`0.0` at `edge.a`, `1.0` at `edge.b`).
+    ///
+    /// Rooms are tens of blocks across while tunnels run for hundreds, so a
+    /// player inside an interior is usually in a tunnel, not a room; a
+    /// consumer that only resolved rooms would lose track of them for most
+    /// of a traversal. Measured against the same spline `carve_connection`
+    /// carved, via the same helper.
+    pub fn edge_containing(&self, wpos: Vec3<f32>, slack: f32) -> Option<(u16, f64)> {
+        let point = wpos.xy().map(|e| e as f64);
+        self.edges
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| {
+                let a2 = e.end_a.xy().map(|c| c as f64 + 0.5);
+                let b2 = e.end_b.xy().map(|c| c as f64 + 0.5);
+                let (t, dist) = spline_sample(a2, b2, e.curve, point)?;
+                // Vertically, the tunnel runs between its two endpoints.
+                let z = e.end_a.z as f32 + (e.end_b.z - e.end_a.z) as f32 * t as f32;
+                ((dist <= (e.tunnel_radius + slack) as f64)
+                    && (wpos.z - z).abs() <= e.tunnel_radius + slack)
+                    .then_some((i as u16, t, dist))
+            })
+            .min_by(|x, y| x.2.total_cmp(&y.2))
+            .map(|(i, t, _)| (i, t))
+    }
+
     /// Whether `wpos` is inside this interior's bounding circle at all.
     pub fn within_bounds(&self, wpos: Vec3<f32>) -> bool {
         let (centre, radius) = self.bounds;
@@ -810,6 +889,7 @@ fn build_nav_graph(
     graph: &InteriorGraph,
     cfg: &EscapeGuidanceCfg,
     levels: &[LevelGeom],
+    segments: &[ConnectionSeg],
     bounds: (Vec2<i32>, f32),
 ) -> Result<InteriorNavGraph, String> {
     if levels.len() > MAX_NAV_NODES {
@@ -819,7 +899,7 @@ fn build_nav_graph(
         ));
     }
 
-    let activation = EscapeActivation::parse(cfg)?;
+    let activation = EscapeActivation::parse(&cfg.activation_kind, &cfg.activation_flags)?;
 
     let index_of: HashMap<&str, u16> = levels
         .iter()
@@ -843,7 +923,7 @@ fn build_nav_graph(
         },
         None => {
             for access in &graph.surface_accesses {
-                if access.required_capability.is_some() && !cfg.allow_gated_exits {
+                if access.required_capability.is_some() && !cfg.allow_gated_routes {
                     continue;
                 }
                 // A surface access pointing at a level the layout could not
@@ -882,7 +962,10 @@ fn build_nav_graph(
         })
         .collect();
 
-    let mut edges: Vec<NavEdge> = Vec::new();
+    let segment_of: HashMap<&str, &ConnectionSeg> =
+        segments.iter().map(|s| (s.id.as_str(), s)).collect();
+
+    let mut edges: Vec<NavEdge> = Vec::with_capacity(graph.connections.len());
     for conn in &graph.connections {
         let (Some(&a), Some(&b)) = (
             index_of.get(conn.from_level_id.as_str()),
@@ -895,35 +978,85 @@ fn build_nav_graph(
         if a == b {
             continue;
         }
-        let traversal = Traversal::parse(&conn.traversal)?;
-        let style = traversal.style();
-        let portal_a = portal_between(&nodes[a as usize], &nodes[b as usize]);
-        let portal_b = portal_between(&nodes[b as usize], &nodes[a as usize]);
-        let length = portal_a.distance(portal_b).max(1.0);
+        // The carved segment is the source of truth for this tunnel's real
+        // shape; a connection with no segment was skipped by the geometry
+        // pass, so there is nothing to navigate.
+        let Some(seg) = segment_of.get(conn.id.as_str()) else {
+            continue;
+        };
+        if edges.len() >= u16::MAX as usize {
+            return Err(format!(
+                "interior has more than {} navigable connections",
+                u16::MAX
+            ));
+        }
+
+        let length = connection_length(seg);
         // A gentler authored slope means the same drop is spread over a
         // longer, easier run, so it should feel *less* punishing per metre
         // of climb, not more.
-        let climb = 1.0 + (CLIMB_PENALTY - 1.0) / style.slope.max(1.0);
-        let a_is_lower = nodes[a as usize].floor_z < nodes[b as usize].floor_z;
+        let climb = 1.0 + (CLIMB_PENALTY - 1.0) / seg.style.slope.max(1.0);
+        let dz = nodes[b as usize].floor_z - nodes[a as usize].floor_z;
+        // A level tunnel is symmetric; only a real rise is penalised, and
+        // only in the direction that actually climbs it.
+        let (cost_ab, cost_ba) = match dz.signum() {
+            1 => (length * climb, length),
+            -1 => (length, length * climb),
+            _ => (length, length),
+        };
+
         let idx = edges.len() as u16;
         edges.push(NavEdge {
             connection_id: conn.id.clone(),
             a,
             b,
-            portal_a,
-            portal_b,
-            cost_ab: length * if a_is_lower { climb } else { 1.0 },
-            cost_ba: length * if a_is_lower { 1.0 } else { climb },
-            sealed: traversal == Traversal::SealedStoneGate,
+            portal_a: portal_on_connection(seg, true, nodes[a as usize].radius),
+            portal_b: portal_on_connection(seg, false, nodes[b as usize].radius),
+            tunnel_radius: seg.style.radius,
+            curve: seg.curve,
+            end_a: seg.a,
+            end_b: seg.b,
+            cost_ab,
+            cost_ba,
+            sealed: seg.sealed,
+            bidirectional: conn.bidirectional,
+            conditional: conn.condition.is_some(),
         });
         nodes[a as usize].incident.push(idx);
         nodes[b as usize].incident.push(idx);
     }
 
-    label_cost_to_exit(&mut nodes, &edges, &exits);
+    // Labels are computed once per world, but a sealed gate can be opened at
+    // runtime, and nothing here would notice. No opted-in interior has one
+    // today; say so loudly if that ever changes rather than shipping a
+    // silently stale label.
+    if let Some(sealed) = edges.iter().find(|e| e.sealed) {
+        warn!(
+            interior_id = %graph.id,
+            connection_id = %sealed.connection_id,
+            "Escape guidance in an interior with a sealed connection: its route labels are \
+             computed once and will not reflect the gate being opened"
+        );
+    }
 
-    if nodes.iter().all(|n| n.cost_to_exit.is_none()) {
-        return Err("escape_guidance is authored but no node can reach an exit".to_string());
+    label_cost_to_exit(&mut nodes, &edges, &exits, cfg.allow_gated_routes);
+
+    // A pocket of levels with no routable way out is a real authoring
+    // outcome, not an impossible one (the sealed-gate branch in this
+    // module's own tests is exactly that), so it is reported rather than
+    // rejected: guidance still works everywhere else, and a player inside
+    // the pocket simply gets no arrow instead of a wrong one.
+    let stranded: Vec<&str> = nodes
+        .iter()
+        .filter(|n| n.cost_to_exit.is_none())
+        .map(|n| n.level_id.as_str())
+        .collect();
+    if !stranded.is_empty() {
+        warn!(
+            interior_id = %graph.id,
+            levels = ?stranded,
+            "Levels have no routable path to any escape exit"
+        );
     }
 
     Ok(InteriorNavGraph {
@@ -942,19 +1075,79 @@ fn build_nav_graph(
 /// connection that placed a level -- a connection joining two levels that
 /// were each placed via some other route has no such angle, and must still
 /// get a sensible portal.
-fn portal_between(from: &NavNode, to: &NavNode) -> Vec3<f32> {
-    let a = from.centre.xy().map(|e| e as f32);
-    let b = to.centre.xy().map(|e| e as f32);
-    let dir = b - a;
-    let len = dir.magnitude();
-    // Two rooms sharing an xy position (only reachable from malformed data)
-    // have no meaningful bearing; fall back to the room's own centre, which
-    // is always inside the room and so never steers anyone into rock.
-    if len < f32::EPSILON {
-        return from.centre.map(|e| e as f32);
+/// The quadratic the carved tunnel actually follows, in the exact form
+/// [`carve_connection`] evaluates via [`spline_sample`]. Returned as
+/// `(a_coef, b_coef, c)` for `P(t) = a t^2 + b t + c`.
+///
+/// This is read from the already-built [`ConnectionSeg`] rather than
+/// re-derived from the two room centres. The distinction is load-bearing:
+/// `river_spline_coeffs` puts the control offset in the *derivative* slot,
+/// so the tunnel leaves its room along `ctrl_offset`, which the authored
+/// per-connection `curve` bows away from the straight chord by up to
+/// `atan(6 * 0.3)`, about 60 degrees. A portal placed on the chord bearing
+/// would sit on the wrong arc of the room wall and point a player into
+/// rock.
+fn connection_spline(seg: &ConnectionSeg) -> (Vec2<f64>, Vec2<f64>, Vec2<f64>) {
+    let a2 = seg.a.xy().map(|e| e as f64 + 0.5);
+    let b2 = seg.b.xy().map(|e| e as f64 + 0.5);
+    let ctrl_offset = ((b2 - a2) * 0.5
+        + ((b2 - a2) * 0.5).rotated_z(std::f64::consts::FRAC_PI_2) * 6.0 * seg.curve as f64)
+        .map(|e| e as f32);
+    let spline = river_spline_coeffs(a2, ctrl_offset, b2);
+    (spline.x, spline.y, spline.z)
+}
+
+fn spline_at(coeffs: (Vec2<f64>, Vec2<f64>, Vec2<f64>), t: f64) -> Vec2<f64> {
+    coeffs.0 * t * t + coeffs.1 * t + coeffs.2
+}
+
+/// How far along a connection's own centreline its two ends are sampled
+/// when measuring arc length and locating portals. The tunnels are single
+/// quadratic arcs, so a modest fixed subdivision is well within a block.
+const SPLINE_SAMPLES: usize = 64;
+
+/// Where the carved tunnel leaves one of its rooms: the first point along
+/// the real centreline that is at least `radius` from that room's centre.
+///
+/// `from_a` picks which end to march from. The search is capped at the
+/// midpoint so the two portals of one tunnel can never cross, even where
+/// two rooms sit closer together than their own radii.
+fn portal_on_connection(seg: &ConnectionSeg, from_a: bool, radius: f32) -> Vec3<f32> {
+    let coeffs = connection_spline(seg);
+    let origin = spline_at(coeffs, if from_a { 0.0 } else { 1.0 });
+    let radius = radius as f64;
+
+    // Capped at the midpoint, from whichever end we are marching.
+    let mut t_hit = 0.5;
+    for i in 1..=SPLINE_SAMPLES {
+        let f = (i as f64 / SPLINE_SAMPLES as f64) * 0.5;
+        let t = if from_a { f } else { 1.0 - f };
+        t_hit = t;
+        if spline_at(coeffs, t).distance(origin) >= radius {
+            break;
+        }
     }
-    let offset = dir / len * from.radius.min(len);
-    (a + offset).with_z(from.floor_z as f32)
+
+    let p = spline_at(coeffs, t_hit);
+    let z = seg.a.z as f32 + (seg.b.z - seg.a.z) as f32 * t_hit as f32;
+    Vec3::new(p.x as f32, p.y as f32, z)
+}
+
+/// Arc length of a connection's carved centreline, including its vertical
+/// run. The straight chord between two room centres under-measures every
+/// bowed tunnel, which would make curved routes look cheaper than they are.
+fn connection_length(seg: &ConnectionSeg) -> f32 {
+    let coeffs = connection_spline(seg);
+    let mut horizontal = 0.0;
+    let mut prev = spline_at(coeffs, 0.0);
+    for i in 1..=SPLINE_SAMPLES {
+        let t = i as f64 / SPLINE_SAMPLES as f64;
+        let p = spline_at(coeffs, t);
+        horizontal += p.distance(prev);
+        prev = p;
+    }
+    let dz = (seg.b.z - seg.a.z) as f64;
+    ((horizontal * horizontal + dz * dz).sqrt() as f32).max(1.0)
 }
 
 /// Labels every node with its cost, and hop count, to the nearest reachable
@@ -966,7 +1159,7 @@ fn portal_between(from: &NavNode, to: &NavNode) -> Vec3<f32> {
 /// (climbing costs more than descending), so the relaxation walks each edge
 /// in the direction the *player* would travel it: outward from the exit
 /// means the player is coming the other way.
-fn label_cost_to_exit(nodes: &mut [NavNode], edges: &[NavEdge], exits: &[u16]) {
+fn label_cost_to_exit(nodes: &mut [NavNode], edges: &[NavEdge], exits: &[u16], allow_gated: bool) {
     // Small graphs (a couple of dozen nodes at most, validated by
     // `MAX_NAV_NODES`), so an O(V^2) scan beats the bookkeeping of a heap
     // and avoids needing a total order on f32.
@@ -988,7 +1181,7 @@ fn label_cost_to_exit(nodes: &mut [NavNode], edges: &[NavEdge], exits: &[u16]) {
 
         for &edge_idx in &nodes[current].incident {
             let edge = &edges[edge_idx as usize];
-            if edge.sealed {
+            if !edge.is_routable(allow_gated) {
                 continue;
             }
             let Some(next) = edge.other(current as u16) else {
@@ -1025,15 +1218,21 @@ fn label_cost_to_exit(nodes: &mut [NavNode], edges: &[NavEdge], exits: &[u16]) {
 /// chunk has been generated once through the ordinary pipeline, so the
 /// cache is warm and this is a cheap read. Intended for low-cadence server
 /// code only -- never a per-column path.
-pub fn interior_nav_graphs<'a>(index: IndexRef<'a>, sim: &WorldSim) -> Vec<&'a InteriorNavGraph> {
+pub fn interior_nav_graphs<'a>(
+    index: IndexRef<'a>,
+    sim: &WorldSim,
+) -> impl Iterator<Item = &'a InteriorNavGraph> + 'a {
     let map_size = sim.map_size_lg();
+    // `index.index`, not `index.cromatolis_interiors` via `Deref`: the
+    // deref borrows the local `IndexRef` value, so the returned iterator
+    // would not live for `'a`. The sibling accessor below can use the
+    // deref only because it returns an owned value rather than borrowing.
     index
         .index
         .cromatolis_interiors
         .get_or_init(|| build_all_layouts_for_map_size(map_size))
         .iter()
         .filter_map(|layout| layout.nav.as_ref())
-        .collect()
 }
 
 pub(crate) fn build_all_layouts(info: &CanvasInfo) -> Vec<InteriorLayout> {
@@ -1275,10 +1474,34 @@ fn build_layout(
 
     // Only interiors that opted in get a navigation view, and only if the
     // geometry actually produced a bounding circle to scope it to.
+    //
+    // A broken `escape_guidance` block must never cost this interior its
+    // geometry. Guidance is an optional, additive overlay; the caller's
+    // error path (`build_all_layouts_for_map_size`) drops the whole
+    // interior on `Err`, which would leave solid rock where the rooms and
+    // tunnels should be. So the overlay degrades to "absent" and says so,
+    // and the authoring mistake is caught loudly where that is safe to do:
+    // by the tests that build every opted-in interior from the real asset.
     let nav = match (&graph.escape_guidance, bounds) {
-        (Some(cfg), Some(bounds)) => Some(build_nav_graph(graph, cfg, &levels, bounds)?),
+        (Some(cfg), Some(bounds)) => {
+            match build_nav_graph(graph, cfg, &levels, &connections, bounds) {
+                Ok(nav) => Some(nav),
+                Err(err) => {
+                    warn!(
+                        interior_id = %graph.id, %err,
+                        "Invalid escape_guidance; guidance disabled, geometry unaffected"
+                    );
+                    None
+                },
+            }
+        },
         (Some(_), None) => {
-            return Err("escape_guidance is authored but the interior carved no geometry".into());
+            warn!(
+                interior_id = %graph.id,
+                "escape_guidance is authored but the interior carved no geometry; guidance \
+                 disabled"
+            );
+            None
         },
         (None, _) => None,
     };
@@ -2546,7 +2769,7 @@ mod tests {
             activation_kind: kind.to_string(),
             activation_flags: flags.iter().map(|s| s.to_string()).collect(),
             exits: None,
-            allow_gated_exits: false,
+            allow_gated_routes: false,
         }
     }
 
@@ -2564,14 +2787,25 @@ mod tests {
         graph
     }
 
-    fn nav_of(graph: &InteriorGraph) -> Result<InteriorNavGraph, String> {
+    fn layout_of(graph: &InteriorGraph) -> InteriorLayout {
         let map_size = MapSizeLg::new(Vec2::new(10, 10)).unwrap();
         let world_size =
             TerrainChunkSize::RECT_SIZE.map(|e| e as f32) * map_size.chunks().map(|e| e as f32);
-        build_layout(graph, map_size, world_size).map(|l| {
-            l.nav
-                .expect("a graph with escape_guidance authored should build a nav view")
-        })
+        build_layout(graph, map_size, world_size).expect("geometry should build")
+    }
+
+    /// `build_layout` deliberately swallows a guidance error so a bad
+    /// `escape_guidance` block can never un-carve an interior, so tests that
+    /// want the error call the builder directly, on the very same geometry
+    /// `build_layout` just produced.
+    fn nav_of(graph: &InteriorGraph) -> Result<InteriorNavGraph, String> {
+        let layout = layout_of(graph);
+        let cfg = graph
+            .escape_guidance
+            .as_ref()
+            .expect("this helper is for graphs that authored escape_guidance");
+        let bounds = layout.bounds.expect("geometry should have bounds");
+        build_nav_graph(graph, cfg, &layout.levels, &layout.connections, bounds)
     }
 
     fn node<'a>(nav: &'a InteriorNavGraph, id: &str) -> &'a NavNode {
@@ -2653,7 +2887,7 @@ mod tests {
         );
 
         let mut cfg = guidance("always", &[]);
-        cfg.allow_gated_exits = true;
+        cfg.allow_gated_routes = true;
         let nav = nav_of(&sample_guided_graph(cfg)).unwrap();
         assert!(
             node(&nav, "level.gated").is_exit,
@@ -2691,30 +2925,33 @@ mod tests {
     }
 
     #[test]
-    fn portals_sit_on_the_room_perimeter_and_differ_per_neighbour() {
+    fn portals_sit_on_the_carved_tunnel_not_on_the_straight_chord() {
+        // The regression this test exists for: deriving a portal from the
+        // bearing between two room centres puts it on the wrong arc of the
+        // wall, because `river_spline_coeffs` takes the control offset as
+        // the *derivative*, so the tunnel leaves its room along a vector the
+        // authored `curve` bows up to ~60 degrees off the chord.
         let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        assert!(!nav.edges.is_empty());
         for edge in &nav.edges {
-            for (idx, portal) in [(edge.a, edge.portal_a), (edge.b, edge.portal_b)] {
-                let n = &nav.nodes[idx as usize];
-                let d = portal.xy().distance(n.centre.xy().map(|e| e as f32));
+            let a2 = edge.end_a.xy().map(|e| e as f64 + 0.5);
+            let b2 = edge.end_b.xy().map(|e| e as f64 + 0.5);
+            for portal in [edge.portal_a, edge.portal_b] {
+                let (_, dist) = spline_sample(a2, b2, edge.curve, portal.xy().map(|e| e as f64))
+                    .expect("a portal must lie within its own tunnel's span");
                 assert!(
-                    (d - n.radius).abs() < 1.0,
-                    "portal for {} should sit on {}'s perimeter (r={}), was {d}",
+                    dist <= edge.tunnel_radius as f64,
+                    "portal for {} is {dist} blocks off a tunnel only {} wide",
                     edge.connection_id,
-                    n.level_id,
-                    n.radius
-                );
-                assert_ne!(
-                    portal.xy().map(|e| e as i32),
-                    n.centre.xy(),
-                    "a portal must never collapse onto the room centre -- that is the degeneracy \
-                     this whole mechanism exists to avoid"
+                    edge.tunnel_radius
                 );
             }
         }
+    }
 
-        // `level.b` is joined to two different neighbours, so its two
-        // portals must be distinguishable points.
+    #[test]
+    fn two_tunnels_out_of_one_room_leave_through_different_walls() {
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
         let b = nav
             .nodes
             .iter()
@@ -2729,6 +2966,54 @@ mod tests {
         assert!(
             portals[0].distance(portals[1]) > 1.0,
             "two tunnels out of the same room must leave through different walls"
+        );
+        for (i, portal) in portals.iter().enumerate() {
+            let centre = nav.nodes[b as usize].centre.xy().map(|e| e as f32);
+            assert!(
+                portal.xy().distance(centre) > 1.0,
+                "portal {i} collapsed onto the room centre -- the degeneracy this whole mechanism \
+                 exists to avoid"
+            );
+        }
+    }
+
+    #[test]
+    fn a_position_inside_a_tunnel_localises_to_that_tunnel() {
+        // Rooms are tens of blocks across and tunnels run for hundreds, so a
+        // consumer that could only resolve rooms would lose the player for
+        // most of a traversal.
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        let edge = &nav.edges[0];
+        let a2 = edge.end_a.xy().map(|e| e as f64 + 0.5);
+        let b2 = edge.end_b.xy().map(|e| e as f64 + 0.5);
+        let coeffs = connection_spline(&ConnectionSeg {
+            id: edge.connection_id.clone(),
+            a: edge.end_a,
+            b: edge.end_b,
+            a_ceiling: 0,
+            b_ceiling: 0,
+            curve: edge.curve,
+            style: Traversal::WalkDescend.style(),
+            sealed: false,
+        });
+        let mid = spline_at(coeffs, 0.5);
+        let z = edge.end_a.z as f32 + (edge.end_b.z - edge.end_a.z) as f32 * 0.5;
+        let probe = Vec3::new(mid.x as f32, mid.y as f32, z);
+
+        let (found, t) = nav
+            .edge_containing(probe, 1.0)
+            .expect("a point on the tunnel centreline is inside the tunnel");
+        assert_eq!(found, 0);
+        assert!(
+            (t - 0.5).abs() < 0.05,
+            "t should be near the middle, was {t}"
+        );
+        let _ = (a2, b2);
+
+        // Well away from every tunnel, nothing matches.
+        assert!(
+            nav.edge_containing(Vec3::new(1.0e6, 1.0e6, 0.0), 1.0)
+                .is_none()
         );
     }
 
@@ -2847,15 +3132,23 @@ mod tests {
             .collect();
         assert_eq!(exits, vec!["level.kharvun_secret_shelf"]);
 
-        assert!(
-            nav.nodes.iter().all(|n| n.cost_to_exit.is_some()),
-            "every level of the real Reach should be able to reach the vent"
-        );
+        // Every level reaches the vent *except* the submerged respiradero,
+        // whose only tunnel demands a capability. Excluding it is the point:
+        // the safety policy has to hold along the route, not just at the
+        // exit, or it merely moves the hazard one edge inward.
+        let stranded: Vec<&str> = nav
+            .nodes
+            .iter()
+            .filter(|n| n.cost_to_exit.is_none())
+            .map(|n| n.level_id.as_str())
+            .collect();
+        assert_eq!(stranded, vec!["level.kharvun_polder_respiradero"]);
 
         let prison = node(&nav, "level.kharvun_prison_depths");
         let deepest = nav
             .nodes
             .iter()
+            .filter(|n| n.cost_to_exit.is_some())
             .max_by(|a, b| a.cost_to_exit.unwrap().total_cmp(&b.cost_to_exit.unwrap()))
             .unwrap();
         assert_eq!(
@@ -2906,7 +3199,7 @@ mod tests {
             .find(|g| g.id == "interior.kharvun_reach")
             .unwrap();
         let mut cfg = guidance("always", &[]);
-        cfg.allow_gated_exits = true;
+        cfg.allow_gated_routes = true;
         graph.escape_guidance = Some(cfg);
         let nav = nav_of(&graph).unwrap();
 
@@ -2918,5 +3211,106 @@ mod tests {
             node(&nav, "level.kharvun_polder_respiradero").hops_to_exit,
             Some(0)
         );
+    }
+
+    #[test]
+    fn a_broken_escape_guidance_block_never_uncarves_the_interior() {
+        // Guidance is an optional overlay. The caller's error path drops a
+        // whole interior on `Err`, so a typo in this block must not be able
+        // to reach it -- otherwise one bad character leaves solid rock where
+        // 13 rooms and 12 tunnels should be.
+        let good = layout_of(&sample_guided_graph(guidance("always", &[])));
+        assert!(good.nav.is_some());
+
+        for bad in [
+            guidance("alway", &[]),              // typo'd kind
+            guidance("narrative_flags", &[]),    // empty flag list
+            guidance("always", &["stray.flag"]), // flags on the wrong kind
+        ] {
+            let graph = sample_guided_graph(bad);
+            let layout = layout_of(&graph);
+            assert!(
+                layout.nav.is_none(),
+                "a bad guidance block should disable guidance"
+            );
+            assert_eq!(
+                layout.levels.len(),
+                good.levels.len(),
+                "geometry must survive a bad guidance block"
+            );
+            assert_eq!(layout.connections.len(), good.connections.len());
+            assert!(layout.bounds.is_some());
+        }
+    }
+
+    #[test]
+    fn a_one_way_connection_is_never_offered_as_a_route_back_up() {
+        let mut graph = sample_guided_graph(guidance("always", &[]));
+        // `level.a` is the exit; make the tunnel down to `level.b` one-way,
+        // so `level.b` has no way back up to it.
+        graph.connections[0].bidirectional = false;
+        let nav = nav_of(&graph).unwrap();
+
+        let edge = &nav.edges[0];
+        assert!(edge.cost_from(edge.a).is_some());
+        assert!(
+            edge.cost_from(edge.b).is_none(),
+            "a one-way drop must not be walkable in reverse"
+        );
+        assert_eq!(
+            node(&nav, "level.b").cost_to_exit,
+            None,
+            "the compass must never route a player up a chute they cannot climb"
+        );
+
+        // Same graph, two-way: now it is a route.
+        let nav = nav_of(&sample_guided_graph(guidance("always", &[]))).unwrap();
+        assert_eq!(node(&nav, "level.b").hops_to_exit, Some(1));
+    }
+
+    #[test]
+    fn a_conditional_tunnel_is_excluded_unless_gated_routes_are_allowed() {
+        let mut graph = sample_guided_graph(guidance("always", &[]));
+        graph.connections[0].condition = Some(ConnectionCondition {
+            kind: "underwater_breathing_or_short_dive".to_string(),
+        });
+        let nav = nav_of(&graph).unwrap();
+        assert!(nav.edges[0].conditional);
+        assert_eq!(
+            node(&nav, "level.b").cost_to_exit,
+            None,
+            "gating the exit but not the tunnel to it just moves the hazard one edge inward"
+        );
+
+        let mut cfg = guidance("always", &[]);
+        cfg.allow_gated_routes = true;
+        let mut graph = sample_guided_graph(cfg);
+        graph.connections[0].condition = Some(ConnectionCondition {
+            kind: "underwater_breathing_or_short_dive".to_string(),
+        });
+        let nav = nav_of(&graph).unwrap();
+        assert_eq!(node(&nav, "level.b").hops_to_exit, Some(1));
+    }
+
+    #[test]
+    fn escape_activation_parse_classifies_and_rejects() {
+        let none: [String; 0] = [];
+        assert_eq!(
+            EscapeActivation::parse("manual", &none).unwrap(),
+            EscapeActivation::Manual
+        );
+        assert_eq!(
+            EscapeActivation::parse("always", &none).unwrap(),
+            EscapeActivation::Always
+        );
+        let flags = ["quest.a".to_string()];
+        assert_eq!(
+            EscapeActivation::parse("narrative_flags", &flags).unwrap(),
+            EscapeActivation::NarrativeFlags(vec!["quest.a".to_string()])
+        );
+        assert!(EscapeActivation::parse("nope", &none).is_err());
+        assert!(EscapeActivation::parse("narrative_flags", &none).is_err());
+        assert!(EscapeActivation::parse("always", &flags).is_err());
+        assert!(EscapeActivation::parse("narrative_flags", &[" pad".to_string()]).is_err());
     }
 }
