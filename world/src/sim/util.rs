@@ -514,9 +514,11 @@ fn squared_distance_to_unset_chunks(
 /// channel here" means, and the difference is not academic. A chunk's own
 /// distance to the bank is small on *both* banks of a wide body, so
 /// thresholding it directly selects the body's one-chunk-thick rim and leaves
-/// the interior below the threshold: on the shipped Cromatolis corridor raster
-/// that classified 11,650 rim chunks of 82 wide bodies as narrow channels
-/// wrapped around 20,182 "wide" interior chunks. This function instead reports
+/// the interior below the threshold: on the Cromatolis corridor raster that
+/// classified 11,650 rim chunks of 82 wide bodies as narrow channels wrapped
+/// around 20,182 "wide" interior chunks. (Measured on the raster that preceded
+/// the marine-shelf terrain package; nothing computes that counterfactual now,
+/// so it has not been re-measured since.) This function instead reports
 /// the width of the channel the chunk *sits in*, so a whole body is uniformly
 /// wide and only a genuinely narrow corridor comes out narrow -- while a river
 /// that widens into a delta still transitions along its length, which a

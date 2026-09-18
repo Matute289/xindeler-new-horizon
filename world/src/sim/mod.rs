@@ -2944,9 +2944,11 @@ impl WorldSim {
                         is_river_channel: mask_hit(&authored_river_channels_layer, posi),
                         is_marine: is_marine(posi),
                         is_adjacent_to_marine: adjacent_to_marine,
-                        // COW-22 `C22-3` (bathymetry) computes the offshore
-                        // band that splits `Sea` from `Ocean`; until it lands
-                        // every marine chunk is open ocean.
+                        // Nothing computes the offshore band that splits
+                        // `Sea` from `Ocean` yet, so every marine chunk is open
+                        // ocean. COW-22 `C22-3` reshaped the seabed either side
+                        // of the waterline but derived no engine-side shelf
+                        // classification from it.
                         is_shelf_sea: false,
                     });
                     (near_water, water_body)
@@ -4264,16 +4266,17 @@ fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Op
 pub(crate) enum WaterBodyKind {
     /// Open marine water.
     Ocean,
-    /// Marine water over the near-shore shelf. Not produced yet: the
-    /// offshore-distance/bathymetry band that separates `Sea` from `Ocean` is
-    /// COW-22's `C22-3`, which runs in parallel with this row. The variant is
-    /// part of the taxonomy now so `C22-3` only has to compute the band and
-    /// flip `AuthoredWaterBodyInputs::is_shelf_sea`, not re-shape everything
-    /// that reads this enum.
+    /// Marine water over the near-shore shelf. Not produced yet: nothing
+    /// computes the offshore-distance/bathymetry band that separates `Sea`
+    /// from `Ocean`. COW-22's `C22-3` reshaped the seabed either side of the
+    /// waterline -- a shelf now exists in the terrain -- but derived no
+    /// engine-side classification from it, so whoever does has only to compute
+    /// the band and flip `AuthoredWaterBodyInputs::is_shelf_sea`, not re-shape
+    /// everything that reads this enum.
     ///
-    /// If `C22-3` is ever descoped, this variant and
+    /// If the shelf classification is ever descoped, this variant and
     /// `AuthoredWaterBodyInputs::is_shelf_sea` come out with it -- they exist
-    /// only as that row's landing seam, and
+    /// only as its landing seam, and
     /// `cromatolis_water_body_histogram_regression_against_real_lfs_assets`
     /// asserts the count is still zero precisely so the decision has to be
     /// made rather than drifting.
@@ -4606,8 +4609,8 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
         // already the complete answer to "is this chunk connected to the sea".
         // The extra `alt_below_sea_level` disjunct additionally claimed every
         // *inland* body whose authored bed happens to be painted below sea
-        // level -- 14,665 chunks across 327 bodies on the shipped Cromatolis
-        // rasters, including the deep middle of Sapphire Loch (bed at
+        // level -- 14,665 chunks across 327 bodies as the exporter measured the
+        // v21 master, including the deep middle of Sapphire Loch (bed at
         // -139.7 m) whose shallow rim stayed `Lake`, i.e. one lake split into
         // two `RiverKind`s along the sea-level contour (COW-22 `C22-1c`).
         // Scoped off for Cromatolis specifically rather than for every
@@ -6436,7 +6439,7 @@ mod tests {
     }
 
     /// The corridor mask is a subset of the broader `water` mask, so it has to
-    /// outrank it (and marine connectivity at a river mouth) or the 33,127
+    /// outrank it (and marine connectivity at a river mouth) or the 33,566
     /// authored corridor chunks would all classify as something else.
     #[test]
     fn a_river_channel_outranks_the_water_and_marine_masks() {
@@ -6459,8 +6462,8 @@ mod tests {
         });
         assert_eq!(open, Some(WaterBodyKind::Ocean));
 
-        // COW-22 `C22-3` is what will actually set this; the taxonomy is
-        // wired for it now so that row only has to compute the band.
+        // Nothing sets this yet; the taxonomy is wired for it so that
+        // computing the offshore band is all it takes to produce a `Sea`.
         let shelf = authored_water_body_kind(AuthoredWaterBodyInputs {
             is_water_body: true,
             is_marine: true,
@@ -6684,18 +6687,35 @@ mod tests {
     // `[OQ3]`, stated once so the tests below derive from it instead of
     // restating it. A raster change means re-measuring *these*, not chasing
     // the same number through four assertions.
+    //
+    // Re-measured against the marine-shelf-and-beach terrain package: these are
+    // the exporter's own `classify_authored_water` re-run over the current
+    // masters it keeps (`heightmap_manual_l16.png`, `water_mask_manual.png`
+    // and `elevated_lake_mask_manual.png`, none of which live in this repo),
+    // not the engine's own numbers copied across -- which would have retired
+    // the assertion rather than fixed it.
+    //
+    // How independent each one actually is, since it varies: the corridor mask
+    // the exporter recomputes is byte-identical to the
+    // `cromatolis_v0_river_channels.f32le` this crate loads, so
+    // `EXPORTED_RIVER_CELLS` is one artifact counted twice -- it catches the
+    // engine mis-reading the raster, not the two sides disagreeing about what
+    // a river is. The marine/lagoon/lake split is the genuinely independent
+    // part: two separate implementations of "which water is the sea, and which
+    // standing water touches it", which is exactly the drift that would
+    // silently mis-paint a coastline.
 
     /// Cells in the authored `water` mask.
     const AUTHORED_WATER_MASK_CELLS: usize = 366_935;
     /// Corridor cells, across 72 substantial river systems.
-    const EXPORTED_RIVER_CELLS: usize = 33_127;
-    /// Standing-water cells in the 27 basins that touch marine water.
-    const EXPORTED_LAGOON_CELLS: usize = 2_776;
+    const EXPORTED_RIVER_CELLS: usize = 33_566;
+    /// Standing-water cells in the 24 basins that touch marine water.
+    const EXPORTED_LAGOON_CELLS: usize = 2_815;
     /// Standing-water cells in the 14 landlocked basins.
     const EXPORTED_LAKE_CELLS: usize = 13_872;
     /// Marine cells: `water` mask ∧ the `get_oceans` flood fill, minus the
     /// corridor cells the river mask claims first.
-    const EXPORTED_MARINE_CELLS: usize = 317_160;
+    const EXPORTED_MARINE_CELLS: usize = 316_682;
     /// The `elevated_lakes` raster marks 267 cells but only 265 of them are
     /// inside the `water` mask. The elevated-lake decree claims the other two
     /// anyway, so the engine's classified total is two above the exporter's.
@@ -6704,10 +6724,16 @@ mod tests {
     const STRAY_ELEVATED_LAKE_CELLS: usize = 2;
     /// Corridor cells sitting in a channel narrow enough to carve as a real
     /// `RiverKind::River` (local channel width within
-    /// `CROMATOLIS_MAX_RIVER_WIDTH`): 12.0% of them. Cromatolis genuinely has
+    /// `CROMATOLIS_MAX_RIVER_WIDTH`): 12.4% of them. Cromatolis genuinely has
     /// wide rivers, and this counts *channels*, not chunks near a bank -- see
     /// `cromatolis_wide_water_bodies_are_not_carved_as_rivers_against_real_lfs_assets`.
-    const CARVEABLE_RIVER_CELLS: usize = 3_974;
+    ///
+    /// Unlike the `EXPORTED_*` constants this is the engine's own quantity --
+    /// the exporter does not compute a carve width -- so it is measured here.
+    /// It moves with the corridor raster (the width transform runs over that
+    /// mask) and with relief (carving also needs a downhill neighbour), so the
+    /// marine-shelf terrain package moved it on both counts.
+    const CARVEABLE_RIVER_CELLS: usize = 4_151;
 
     /// Counts every `WaterBodyKind` across the real Cromatolis map and
     /// reconciles it against the numbers the open-world exporter measured
@@ -6726,9 +6752,9 @@ mod tests {
                 .count()
         };
 
-        // Exporter: 33,127 corridor cells across 72 substantial systems.
+        // Exporter: 33,566 corridor cells across 72 substantial systems.
         assert_eq!(count(WaterBodyKind::River), EXPORTED_RIVER_CELLS);
-        // Exporter: 27 lagoon basins, 2,776 cells.
+        // Exporter: 24 lagoon basins, 2,815 cells.
         assert_eq!(count(WaterBodyKind::Lagoon), EXPORTED_LAGOON_CELLS);
         // Exporter: 14 lake basins, 13,872 cells, plus the stray
         // `elevated_lakes` cells (see `STRAY_ELEVATED_LAKE_CELLS`).
@@ -6736,10 +6762,10 @@ mod tests {
             count(WaterBodyKind::Lake),
             EXPORTED_LAKE_CELLS + STRAY_ELEVATED_LAKE_CELLS
         );
-        // Exporter: ~317,160 marine cells.
+        // Exporter: 316,682 marine cells.
         assert_eq!(count(WaterBodyKind::Ocean), EXPORTED_MARINE_CELLS);
-        // `Sea` needs the offshore band from COW-22 `C22-3`, which has not
-        // landed.
+        // `Sea` needs an offshore band nothing computes yet -- COW-22
+        // `C22-3` shipped the bathymetry but no classification from it.
         assert_eq!(count(WaterBodyKind::Sea), 0);
 
         // And the partition is exactly the authored water footprint: the
@@ -6827,8 +6853,10 @@ mod tests {
     /// *rim* of every wide body -- a rim chunk is one chunk from the bank
     /// however wide the body behind it is -- leaving a 64 m wide, 8 m deep
     /// channel ringing flat lake water, which is precisely the water-wall
-    /// geometry the width cap exists to prevent. On the shipped raster that
-    /// was 11,650 rim chunks around 82 wide bodies.
+    /// geometry the width cap exists to prevent. That counterfactual was
+    /// 11,650 rim chunks around 82 wide bodies when it was measured, on the
+    /// raster that preceded the marine-shelf terrain package; nothing computes
+    /// it today, so it has not been re-measured against the current one.
     ///
     /// Probe: the widest authored water body on the map, centred 17 chunks
     /// from its nearest bank. Not one chunk of it, rim included, may be
@@ -6839,7 +6867,7 @@ mod tests {
         let sim = generate_cromatolis_world();
         let map_size_lg = sim.map_size_lg();
         // Source-raster coordinates, y-flipped into engine space the same way
-        // `cromatolis_v21_relief_and_river_package_regression_against_real_lfs_assets`
+        // `cromatolis_v22_relief_and_river_package_regression_against_real_lfs_assets`
         // does.
         let source = Vec2::new(449, 904);
         let radius = 17;
@@ -6900,9 +6928,18 @@ mod tests {
         );
     }
 
-    /// COW-22 `C22-1c`, measured end to end: the biome histogram the
-    /// `alt < 0` disjunct used to produce (`Ocean` 331,778 / `Lake` 35,159)
-    /// against the one `is_ocean` alone produces.
+    /// COW-22 `C22-1c`, measured end to end: what the biome histogram looks
+    /// like once `is_ocean` alone decides what the sea is, rather than the old
+    /// `alt < 0` disjunct that also swallowed every inland body with a bed
+    /// painted below sea level.
+    ///
+    /// The before/after pair this row was originally written against
+    /// (`Ocean` 331,778 -> 317,160) was measured on the raster that preceded
+    /// the marine-shelf terrain package, and there is no way to re-measure the
+    /// "before" half now -- it needed code this row deleted. So the assertions
+    /// below state the property instead of the delta: marine biome chunks are
+    /// exactly the exporter's marine cells, and `Lake` is exactly every other
+    /// classified water chunk.
     ///
     /// Also pins the `get_biome` consequence of `C22-1b`: with
     /// `RiverKind::River` finally reachable and no `BiomeKind::River` to
@@ -6919,52 +6956,81 @@ mod tests {
                 .count()
         };
 
-        // 331,778 - 14,618 inland chunks that were only "ocean" because their
-        // authored bed is painted below sea level (of the 14,665 the exporter
-        // counted; the rest were already `Lake` for other reasons).
+        // Marine biome chunks are the marine cells and nothing else: no inland
+        // body gets in on the strength of a bed painted below sea level.
         assert_eq!(biome_count(BiomeKind::Ocean), EXPORTED_MARINE_CELLS);
-        // ...which land in `Lake` instead: 35,159 + 14,618 -- i.e. every
-        // classified water chunk that is not marine.
+        // ...and every classified water chunk that is not marine lands in
+        // `Lake`, the inland bodies that used to read as ocean included.
         assert_eq!(
             biome_count(BiomeKind::Lake),
             AUTHORED_WATER_MASK_CELLS + STRAY_ELEVATED_LAKE_CELLS - EXPORTED_MARINE_CELLS
         );
 
-        // A small, deliberate knock-on of `C22-1b` rather than of `C22-1c`:
-        // `pure_water` (which decides whether a chunk takes part in the
-        // land-uniform noise CDFs for humidity/flux/temperature) treats
-        // `RiverKind::River` as *not* pure water, matching its own stated
-        // intent of covering "non-water or land-adjacent water" chunks. The
-        // 3,974 newly-carveable river chunks therefore join those CDFs and
-        // shift every land chunk's humidity rank by ~0.001, which moves
-        // exactly 11 chunks of 1,048,576 across a biome boundary
-        // (Savannah 189,359 -> 189,348, Grassland 42,462 -> 42,473). The same
-        // chunks also flip from "underwater" to "dry" for
-        // `cromatolis_authored_tree_density`, so they pick up the painted
-        // vegetation density and the humidity bump that comes with it -- the
-        // banded control assertions below are what bound that second
-        // mechanism. Pinned so the next person to see a land-biome count move
-        // knows it was measured and expected, not a stray.
-        assert_eq!(biome_count(BiomeKind::Savannah), 189_348);
-        assert_eq!(biome_count(BiomeKind::Grassland), 42_473);
-        assert_eq!(biome_count(BiomeKind::Taiga), 4_119);
-        // The land biomes neither row moved. Banded rather than pinned
-        // exactly: these are chaotic derived quantities (the humidity rank
-        // shift above is what makes them so), and an unrelated CDF change
-        // should read as one signal, not as four simultaneous "failures".
+        // Two mechanisms move the land biomes, and they differ by two orders of
+        // magnitude, so keep them apart when reading a failure here.
+        //
+        // The small one is a CDF knock-on: `pure_water` (which decides whether
+        // a chunk takes part in the land-uniform noise CDFs for
+        // humidity/flux/temperature) treats `RiverKind::River` as not pure
+        // water, so every carveable river chunk joins those CDFs and shifts
+        // each land chunk's humidity rank by ~0.001. On its own that moved
+        // *eleven* chunks of 1,048,576 across a biome boundary when
+        // `RiverKind::River` first became reachable.
+        //
+        // The large one is the relief itself. Reshaping the seabed and the
+        // beach rim re-ranks coastal altitude wholesale, and on the
+        // marine-shelf terrain package it moved `Mountain` by 2,526 chunks
+        // (-5.7%) and `Savannah` by 4,539 (+2.4%) -- hundreds of times the CDF
+        // term. That is why these numbers were re-measured with that package
+        // rather than carried over, and why a failure here is far more likely
+        // to mean "the relief changed" than "the CDFs drifted".
+        //
+        // Pinned exactly, deliberately *not* because these four are the steady
+        // ones -- on that package they were the most volatile of the seven
+        // (Taiga -9.9%, Mountain -5.7%, Grassland -4.9%, Savannah +2.4%). An
+        // exact number is what makes a re-measure unmissable.
+        assert_eq!(biome_count(BiomeKind::Savannah), 193_887);
+        assert_eq!(biome_count(BiomeKind::Grassland), 40_378);
+        assert_eq!(biome_count(BiomeKind::Taiga), 3_710);
+        assert_eq!(biome_count(BiomeKind::Mountain), 41_790);
+        // Banded instead: the three biomes the same package barely touched
+        // (Jungle +0.03%, Forest +0.25%, Swamp -0.05%), i.e. the ones where a
+        // move really would be CDF noise, and where an unrelated CDF change
+        // should read as one signal rather than three simultaneous "failures".
         for (biome, measured) in [
-            (BiomeKind::Jungle, 215_671.0),
-            (BiomeKind::Forest, 173_245.0),
-            (BiomeKind::Swamp, 12_467.0),
-            (BiomeKind::Mountain, 44_316.0),
+            (BiomeKind::Jungle, 215_727.0),
+            (BiomeKind::Forest, 173_686.0),
+            (BiomeKind::Swamp, 12_461.0),
         ] {
             let counted = biome_count(biome) as f64;
             assert!(
                 (counted - measured).abs() / measured < 0.005,
                 "{biome:?} moved from the measured {measured} to {counted}, more than the 0.5% \
-                 band this row's own knock-on accounts for"
+                 band the CDF knock-on accounts for -- check whether the corridor raster or the \
+                 relief moved"
             );
         }
+
+        // The nine biomes above account for the whole map, with nothing in
+        // `Desert`, `Snowland` or any other variant. Two things fall out of
+        // this for free: a transcription slip in any of the pinned counts above
+        // cannot balance, and the ~2,200 chunks of slack the three bands carry
+        // cannot quietly hide a tenth biome appearing.
+        let partitioned: usize = [
+            BiomeKind::Ocean,
+            BiomeKind::Lake,
+            BiomeKind::Savannah,
+            BiomeKind::Grassland,
+            BiomeKind::Taiga,
+            BiomeKind::Mountain,
+            BiomeKind::Jungle,
+            BiomeKind::Forest,
+            BiomeKind::Swamp,
+        ]
+        .into_iter()
+        .map(biome_count)
+        .sum();
+        assert_eq!(partitioned, sim.chunks.len());
 
         // No water chunk reports a land biome.
         for chunk in sim.chunks.iter() {
@@ -6979,8 +7045,9 @@ mod tests {
         }
     }
 
-    /// The two downstream consequences of retyping 14,665 inland chunks and
-    /// making `RiverKind::River` reachable, checked rather than assumed.
+    /// The two downstream consequences of retyping the inland water that used
+    /// to read as ocean, and of making `RiverKind::River` reachable, checked
+    /// rather than assumed.
     ///
     /// 1. The 13 `is_ocean()`-gated scatter configs (coral, seagrass, sea
     ///    urchins, ...) must stop growing marine flora in the reclassified
@@ -6997,14 +7064,15 @@ mod tests {
     fn cromatolis_water_reclassification_keeps_its_consumers_covered_against_real_lfs_assets() {
         let sim = generate_cromatolis_world();
 
-        // 331,778 before COW-22 `C22-1c`; the 14,618-chunk difference is
-        // inland water that no longer grows coral.
+        // Exactly the marine cells: the inland water that used to read as ocean
+        // no longer grows coral. Derived from the constant rather than restated
+        // as a literal, so the two cannot drift apart.
         let marine_scatter_chunks = sim
             .chunks
             .iter()
             .filter(|chunk| chunk.river.is_ocean())
             .count();
-        assert_eq!(marine_scatter_chunks, 317_160);
+        assert_eq!(marine_scatter_chunks, EXPORTED_MARINE_CELLS);
 
         let mut uncovered = 0;
         let mut double_covered = 0;
