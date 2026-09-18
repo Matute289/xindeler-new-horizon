@@ -1,7 +1,7 @@
 use crate::{
     CONFIG, IndexRef,
     column::ColumnSample,
-    sim::{CROMATOLIS_V0_REGION_ID, SimChunk},
+    sim::{CROMATOLIS_V0_REGION_ID, SimChunk, WaterBodyKind},
     util::close,
 };
 use common::{
@@ -536,10 +536,15 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
         //    lake columns (0.63%), matching the pre-fix nonzero-density count almost exactly and
         //    confirming it was the actual bottleneck, not temperature. Uses `river.is_lake()`
         //    directly instead (precise, and doesn't need an altitude proxy at all).
+        // 3) COW-22 `C22-1b` made `RiverKind::River` reachable on this map for the first time, so
+        //    the gate is `cromatolis_freshwater` (lake *or* river) rather than `is_lake()` -- see
+        //    that function's doc comment.
         ("world.wildlife.spawn.cromatolis.lake", |c, col| {
             f32::from(c.authored_region_id == Some(CROMATOLIS_V0_REGION_ID))
                 * close(col.temp, CONFIG.desert_temp + 0.1, 0.2)
-                * if col.water_dist.map(|d| d < 1.0).unwrap_or(false) && col.chunk.river.is_lake() {
+                * if col.water_dist.map(|d| d < 1.0).unwrap_or(false)
+                    && cromatolis_freshwater(col.chunk)
+                {
                     0.001
                 } else {
                     0.0
@@ -641,6 +646,26 @@ pub fn spawn_manifest() -> Vec<(&'static str, DensityFn)> {
 /// formulas need it.
 pub(crate) fn not_cromatolis(c: &SimChunk) -> f32 {
     f32::from(c.authored_region_id != Some(CROMATOLIS_V0_REGION_ID))
+}
+
+/// Chunk-level gate for the `cromatolis.lake` spawn entry: the authored map's
+/// *freshwater* -- everything that is water but not sea.
+///
+/// Deliberately reads `SimChunk::water_body` rather than `river.is_lake()`.
+/// Until COW-22 `C22-1b` no chunk on the Cromatolis map could be
+/// `RiverKind::River` at all (every authored river corridor lost to the
+/// broader `water` mask and came out `RiverKind::Lake`), so `is_lake()` alone
+/// happened to cover the whole freshwater network. With `RiverKind::River`
+/// reachable it no longer does, and the carveable river chunks would silently
+/// drop to *zero* wildlife density -- every generic `*.river` manifest entry
+/// is `not_cromatolis`-gated, so nothing else would pick them up. Asking the
+/// ecological classification directly also survives the next change to how
+/// wide corridors are carved, which the physical `RiverKind` would not.
+pub(crate) fn cromatolis_freshwater(c: &SimChunk) -> bool {
+    matches!(
+        c.water_body,
+        Some(WaterBodyKind::River | WaterBodyKind::Lake | WaterBodyKind::Lagoon)
+    )
 }
 
 /// Cromatolis-only density multiplier, loaded from `cromatolis_v0_density_

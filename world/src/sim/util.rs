@@ -366,6 +366,214 @@ pub fn get_oceans<F: Float>(map_size_lg: MapSizeLg, oldh: impl Fn(usize) -> F + 
     is_ocean
 }
 
+/// Squared distance written into cells that are (so far) known to be inside
+/// the mask. Any value comfortably larger than the largest squared distance a
+/// real map can produce (`2 * 2^15 ^ 2` even at the maximum supported map
+/// size) works; a *finite* sentinel rather than `f64::INFINITY` keeps the
+/// lower-envelope intersection below from evaluating `inf - inf`. It also has
+/// to stay small enough that adding a real squared distance to it is not lost
+/// to `f64` rounding, which rules out something like `1e300`.
+const DISTANCE_TRANSFORM_UNREACHED: f64 = 1.0e10;
+
+/// One axis of Felzenszwalb & Huttenlocher's exact distance transform: given
+/// the sampled function `f`, write `min_q ((p - q)^2 + f[q])` into `d`.
+///
+/// `v` (`n` entries) and `z` (`n + 1` entries) are the algorithm's scratch
+/// buffers -- the indices of the parabolas currently in the lower envelope and
+/// the boundaries between them -- taken as parameters so the caller can reuse
+/// one allocation across every row/column instead of allocating per line.
+fn distance_transform_axis(f: &[f64], d: &mut [f64], v: &mut [usize], z: &mut [f64]) {
+    let n = f.len();
+    debug_assert!(n > 0);
+    debug_assert_eq!(d.len(), n);
+    debug_assert_eq!(v.len(), n);
+    debug_assert_eq!(z.len(), n + 1);
+
+    // Build the lower envelope of the parabolas rooted at each sample.
+    let mut k = 0;
+    v[0] = 0;
+    z[0] = f64::NEG_INFINITY;
+    z[1] = f64::INFINITY;
+    for q in 1..n {
+        let qf = q as f64;
+        let mut s;
+        loop {
+            let vk = v[k] as f64;
+            s = ((f[q] + qf * qf) - (f[v[k]] + vk * vk)) / (2.0 * qf - 2.0 * vk);
+            // `z[0]` is -inf, so a finite `s` can never fall through at `k ==
+            // 0`; the explicit guard is only there so a non-finite input can't
+            // underflow the index.
+            if s <= z[k] && k > 0 {
+                k -= 1;
+            } else {
+                break;
+            }
+        }
+        k += 1;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = f64::INFINITY;
+    }
+
+    // Walk the envelope once more to sample it.
+    k = 0;
+    for (q, d) in d.iter_mut().enumerate() {
+        while z[k + 1] < q as f64 {
+            k += 1;
+        }
+        let dq = q as f64 - v[k] as f64;
+        *d = dq * dq + f[v[k]];
+    }
+}
+
+/// Exact Euclidean distance transform of a binary mask: for every chunk
+/// *inside* the mask, the distance (in chunks, not metres) to the nearest
+/// chunk *outside* it; `0.0` for chunks that are themselves outside.
+///
+/// Returned *squared*, which on a lattice is always an exact integer and
+/// therefore exactly comparable against another squared lattice distance.
+/// Callers asking "is this chunk within distance `d` of that one" stay in this
+/// space rather than taking two square roots and comparing the results, where
+/// `sqrt(2) * sqrt(2)` lands on either side of `2` depending on the rounding.
+///
+/// NOTE: this is the distance to the nearest bank *from that chunk*, which is
+/// only the half-width of the channel for a chunk sitting on the channel's
+/// centre line. It is not a width signal -- see
+/// [`local_channel_radius_chunks`], which is what "how wide is the channel
+/// here" actually means.
+///
+/// Chunks outside the grid count as inside the mask (the transform only ever
+/// finds banks that exist in the grid), so a region running off the map edge
+/// over-reports its distance there. Immaterial for a mask that does not reach
+/// the border; worth remembering for one that does.
+///
+/// This is Felzenszwalb & Huttenlocher's O(n) algorithm (one
+/// [`distance_transform_axis`] pass per axis), so it is exact rather than a
+/// chamfer approximation, and linear in the number of chunks. A mask with no
+/// unset chunk at all saturates at `DISTANCE_TRANSFORM_UNREACHED` rather than
+/// diverging.
+fn squared_distance_to_unset_chunks(
+    map_size_lg: MapSizeLg,
+    is_set: impl Fn(usize) -> bool,
+) -> Box<[f64]> {
+    prof_span!("squared_distance_to_unset_chunks");
+    let width = usize::from(map_size_lg.chunks().x);
+    let height = usize::from(map_size_lg.chunks().y);
+
+    let mut squared = (0..map_size_lg.chunks_len())
+        .map(|posi| {
+            if is_set(posi) {
+                DISTANCE_TRANSFORM_UNREACHED
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let axis_len = width.max(height);
+    let mut line = vec![0.0; axis_len];
+    let mut out = vec![0.0; axis_len];
+    let mut v = vec![0usize; axis_len];
+    let mut z = vec![0.0; axis_len + 1];
+
+    // Rows first, then columns; the two passes compose into the exact 2D
+    // transform (this is the separability property the algorithm relies on).
+    for row in squared.chunks_exact_mut(width) {
+        line[..width].copy_from_slice(row);
+        distance_transform_axis(
+            &line[..width],
+            &mut out[..width],
+            &mut v[..width],
+            &mut z[..width + 1],
+        );
+        row.copy_from_slice(&out[..width]);
+    }
+    for x in 0..width {
+        for y in 0..height {
+            line[y] = squared[y * width + x];
+        }
+        distance_transform_axis(
+            &line[..height],
+            &mut out[..height],
+            &mut v[..height],
+            &mut z[..height + 1],
+        );
+        for y in 0..height {
+            squared[y * width + x] = out[y];
+        }
+    }
+
+    squared.into_boxed_slice()
+}
+
+/// Local channel radius: for every chunk inside the mask, the radius (in
+/// chunks) of the *largest disc that fits inside the mask and covers this
+/// chunk*. `0.0` outside the mask.
+///
+/// This -- not [`distance_to_unset_chunks`] -- is what "how wide is the
+/// channel here" means, and the difference is not academic. A chunk's own
+/// distance to the bank is small on *both* banks of a wide body, so
+/// thresholding it directly selects the body's one-chunk-thick rim and leaves
+/// the interior below the threshold: on the shipped Cromatolis corridor raster
+/// that classified 11,650 rim chunks of 82 wide bodies as narrow channels
+/// wrapped around 20,182 "wide" interior chunks. This function instead reports
+/// the width of the channel the chunk *sits in*, so a whole body is uniformly
+/// wide and only a genuinely narrow corridor comes out narrow -- while a river
+/// that widens into a delta still transitions along its length, which a
+/// per-connected-component maximum would not allow.
+///
+/// (Morphologically: `local_channel_radius(p) = max { d(q) : |p - q| <=
+/// d(q) }`, the opening function of the mask.)
+///
+/// Cost is `O(sum of d(q)^2)` -- 1.9M chunk visits for the 33k-chunk Cromatolis
+/// corridor raster, a few ms, once per worldgen. That bound is proportional to
+/// the *area* of the widest region in the mask, so this is meant for corridor-
+/// shaped masks, not for something like the full ocean.
+pub fn local_channel_radius_chunks(
+    map_size_lg: MapSizeLg,
+    is_set: impl Fn(usize) -> bool,
+) -> Box<[f32]> {
+    prof_span!("local_channel_radius_chunks");
+    // Worked in *squared* distances throughout, so "is this chunk inside that
+    // disc" is an exact comparison of two integers rather than of two rounded
+    // square roots.
+    let squared_distance = squared_distance_to_unset_chunks(map_size_lg, is_set);
+    let chunks = map_size_lg.chunks().map(i32::from);
+    let mut squared_radius = vec![0.0f64; squared_distance.len()];
+
+    // `max` is order-independent, so no sorting is needed: every chunk of the
+    // mask is the centre of a fitting disc of its own radius, and each such
+    // disc claims every chunk it covers.
+    for (centre, &squared_r) in squared_distance.iter().enumerate() {
+        if squared_r <= 0.0 {
+            continue;
+        }
+        let centre_pos = uniform_idx_as_vec2(map_size_lg, centre);
+        let reach = squared_r.sqrt() as i32;
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                if f64::from(dx * dx + dy * dy) > squared_r {
+                    continue;
+                }
+                let pos = centre_pos + Vec2::new(dx, dy);
+                if pos.x < 0 || pos.y < 0 || pos.x >= chunks.x || pos.y >= chunks.y {
+                    continue;
+                }
+                let covered = &mut squared_radius[vec2_as_uniform_idx(map_size_lg, pos)];
+                if *covered < squared_r {
+                    *covered = squared_r;
+                }
+            }
+        }
+    }
+
+    squared_radius
+        .into_iter()
+        .map(|r| r.max(0.0).sqrt() as f32)
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
+}
+
 /// Finds the horizon map for sunlight for the given chunks.
 #[expect(clippy::result_unit_err)]
 pub fn get_horizon_map<F: Float + Sync, A: Send, H: Send>(
@@ -938,5 +1146,156 @@ impl NoiseFn<f64, 4> for Worley {
             self.return_type,
             Vector4::from(point) * self.frequency,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 8 x 8 chunks -- small enough to spell out by hand, big enough to fit a
+    /// multi-chunk-wide corridor with clearance on both sides.
+    fn tiny_map() -> MapSizeLg { MapSizeLg::new(Vec2 { x: 3, y: 3 }).expect("valid map size") }
+
+    fn distances(set: &[(i32, i32)]) -> Vec<f32> {
+        let map_size_lg = tiny_map();
+        let set = set
+            .iter()
+            .map(|&(x, y)| vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y)))
+            .collect::<Vec<_>>();
+        squared_distance_to_unset_chunks(map_size_lg, |posi| set.contains(&posi))
+            .iter()
+            .map(|d| d.sqrt() as f32)
+            .collect()
+    }
+
+    fn at(distances: &[f32], x: i32, y: i32) -> f32 {
+        distances[vec2_as_uniform_idx(tiny_map(), Vec2::new(x, y))]
+    }
+
+    #[test]
+    fn distance_transform_is_zero_outside_the_mask() {
+        let d = distances(&[(4, 4)]);
+        assert_eq!(at(&d, 0, 0), 0.0);
+        assert_eq!(at(&d, 4, 5), 0.0);
+    }
+
+    #[test]
+    fn an_isolated_chunk_is_one_chunk_from_the_outside() {
+        let d = distances(&[(4, 4)]);
+        assert_eq!(at(&d, 4, 4), 1.0);
+    }
+
+    #[test]
+    fn a_one_chunk_wide_corridor_stays_one_chunk_from_the_outside() {
+        let corridor = (0..8).map(|y| (4, y)).collect::<Vec<_>>();
+        let d = distances(&corridor);
+        for y in 0..8 {
+            assert_eq!(at(&d, 4, y), 1.0, "corridor chunk (4, {y})");
+        }
+    }
+
+    #[test]
+    fn a_three_chunk_wide_corridor_is_two_chunks_deep_at_its_centre() {
+        let corridor = (0..8)
+            .flat_map(|y| [(3, y), (4, y), (5, y)])
+            .collect::<Vec<_>>();
+        let d = distances(&corridor);
+        assert_eq!(at(&d, 4, 3), 2.0, "centre of the corridor");
+        assert_eq!(at(&d, 3, 3), 1.0, "corridor edge");
+        assert_eq!(at(&d, 5, 3), 1.0, "corridor edge");
+    }
+
+    /// Diagonals are exactly what a cheap chamfer approximation gets wrong, so
+    /// pin one: a plus-shaped blob's centre is `sqrt(2)` from the nearest unset
+    /// chunk (diagonally out through a corner), not `2`.
+    #[test]
+    fn distance_transform_is_exactly_euclidean_on_diagonals() {
+        let d = distances(&[(4, 4), (3, 4), (5, 4), (4, 3), (4, 5)]);
+        assert!(
+            (at(&d, 4, 4) - 2.0f32.sqrt()).abs() < 1e-5,
+            "expected sqrt(2), got {}",
+            at(&d, 4, 4)
+        );
+    }
+
+    #[test]
+    fn an_empty_mask_is_all_zero() {
+        assert!(distances(&[]).iter().all(|d| *d == 0.0));
+    }
+
+    #[test]
+    fn a_fully_set_mask_saturates_instead_of_diverging() {
+        let d = squared_distance_to_unset_chunks(tiny_map(), |_| true);
+        assert!(
+            d.iter().all(|d| *d == DISTANCE_TRANSFORM_UNREACHED),
+            "{:?}",
+            &d[..4]
+        );
+    }
+
+    fn radii(set: &[(i32, i32)]) -> Vec<f32> {
+        let map_size_lg = tiny_map();
+        let set = set
+            .iter()
+            .map(|&(x, y)| vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y)))
+            .collect::<Vec<_>>();
+        local_channel_radius_chunks(map_size_lg, |posi| set.contains(&posi)).into_vec()
+    }
+
+    #[test]
+    fn a_narrow_corridor_has_radius_one_everywhere() {
+        let corridor = (0..8).map(|y| (4, y)).collect::<Vec<_>>();
+        let r = radii(&corridor);
+        for y in 0..8 {
+            assert_eq!(at(&r, 4, y), 1.0, "corridor chunk (4, {y})");
+        }
+    }
+
+    /// The regression this function exists for: a wide body's *rim* chunks are
+    /// one chunk from the bank, but they sit inside a wide channel, so their
+    /// channel radius is the body's, not 1. Thresholding
+    /// `distance_to_unset_chunks` directly would call the rim narrow and the
+    /// interior wide -- a carved ring around flat water.
+    #[test]
+    fn a_wide_body_reports_its_own_width_on_its_rim_too() {
+        let body = (2..7)
+            .flat_map(|y| (2..7).map(move |x| (x, y)))
+            .collect::<Vec<_>>();
+        let r = radii(&body);
+        assert_eq!(at(&r, 4, 4), 3.0, "centre of the body");
+        for (x, y) in [(2, 4), (6, 4), (4, 2), (4, 6)] {
+            assert_eq!(
+                at(&r, x, y),
+                3.0,
+                "rim chunk ({x}, {y}) must report the body's width, not its own distance to the \
+                 bank"
+            );
+            assert_eq!(
+                distances(&body)[vec2_as_uniform_idx(tiny_map(), Vec2::new(x, y))],
+                1.0,
+                "...even though its own distance to the bank is 1"
+            );
+        }
+    }
+
+    /// A corridor that widens along its length still transitions, which is why
+    /// this is an opening rather than a per-connected-component maximum.
+    #[test]
+    fn a_corridor_that_widens_still_transitions_along_its_length() {
+        let mut mask = (0..4).map(|y| (4, y)).collect::<Vec<_>>();
+        mask.extend((4..8).flat_map(|y| (2..7).map(move |x| (x, y))));
+        let r = radii(&mask);
+        assert_eq!(at(&r, 4, 0), 1.0, "the narrow head stays narrow");
+        assert!(
+            at(&r, 4, 6) > 1.0,
+            "the wide tail is wide: {}",
+            at(&r, 4, 6)
+        );
+    }
+
+    #[test]
+    fn local_channel_radius_is_zero_outside_the_mask() {
+        assert_eq!(at(&radii(&[(4, 4)]), 0, 0), 0.0);
     }
 }

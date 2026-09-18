@@ -20,8 +20,8 @@ pub(crate) use self::{
         get_multi_rec, get_rivers,
     },
     util::{
-        InverseCdf, cdf_irwin_hall, downhill, get_oceans, local_cells, map_edge_factor,
-        uniform_noise, uphill,
+        InverseCdf, cdf_irwin_hall, downhill, get_oceans, local_cells, local_channel_radius_chunks,
+        map_edge_factor, uniform_noise, uphill,
     },
 };
 
@@ -119,6 +119,10 @@ struct GenCdf {
     /// Per-chunk "adjacent to authored water" signal, see
     /// `SimChunk::authored_near_water`.
     authored_near_water: Box<[bool]>,
+    /// Per-chunk ecological water-body classification, see
+    /// `SimChunk::water_body`. `None` for dry chunks and everywhere outside an
+    /// authored region.
+    authored_water_body: Box<[Option<WaterBodyKind>]>,
     humid_base: InverseCdf,
     temp_base: InverseCdf,
     chaos: InverseCdf,
@@ -1776,6 +1780,7 @@ impl WorldSim {
                 authored_cromatolis_v0: false,
                 authored_region_id: None,
                 authored_near_water: false,
+                water_body: None,
                 chaos: 0.0,
                 alt: 0.0,
                 basement: 0.0,
@@ -2793,14 +2798,27 @@ impl WorldSim {
             // corridors. Priority follows specificity: an elevated lake wins over the
             // broader water mask, which wins over a river channel, which wins over
             // nothing.
-            // Only used when the erosion sim didn't already detect a river at a
-            // river-channel-masked tile. Matches `CONFIG.river_min_height` so
-            // `river.near_water()`/biome logic treats authored rivers consistently
-            // with procedurally-detected ones.
-            let authored_river_cross_section = Vec2::new(
-                TerrainChunkSize::RECT_SIZE.x as f32 * 0.1,
-                CONFIG.river_min_height,
-            );
+            // COW-22 `C22-1b`: the width of the channel each corridor chunk sits in,
+            // precomputed once for the whole map rather than searched per chunk
+            // (which would be O(n^2)). Feeds both the "can this be carved as a real
+            // river at all" test and the river's cross-section, which used to be a
+            // flat 3.2 m x 0.25 m ditch for every river on the map.
+            //
+            // `local_channel_radius_chunks`, not a bare distance transform: a chunk's
+            // own distance to the bank is small on *both* banks of a wide body, so
+            // thresholding that directly carves the body's rim and leaves its
+            // interior flat -- the water walls this is supposed to avoid. See that
+            // function's doc comment for the measured numbers.
+            let authored_channel_width = authored_river_channels_layer.as_ref().map(|values| {
+                local_channel_radius_chunks(map_size_lg, |idx| {
+                    authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values)
+                        >= AUTHORED_WATER_THRESHOLD
+                })
+                .iter()
+                .map(|channel_radius| cromatolis_channel_width(*channel_radius))
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+            });
             let mask_value = |layer: &Option<Box<[f32]>>, idx: usize| {
                 layer
                     .as_ref()
@@ -2819,6 +2837,11 @@ impl WorldSim {
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
                 let is_river_channel = mask_value(&authored_river_channels_layer, idx)
                     .is_some_and(|v| v >= AUTHORED_WATER_THRESHOLD);
+                let channel_width = authored_channel_width
+                    .as_ref()
+                    .map_or(0.0, |widths| widths[idx]);
+                let authored_river_cross_section =
+                    cromatolis_authored_river_cross_section(channel_width);
 
                 let neighbor_pass_pos = uniform_idx_as_vec2(map_size_lg, idx);
                 river.river_kind = if !masks_loaded && alt[idx] < 0.0 {
@@ -2835,13 +2858,31 @@ impl WorldSim {
                         is_elevated_lake,
                         is_water_body,
                         is_river_channel,
+                        channel_fits_max_river_width: channel_width <= CROMATOLIS_MAX_RIVER_WIDTH,
+                        // `SimChunk::generate` maps `dh == -2` (an ocean
+                        // boundary node) to `downhill: None`, which `column.rs`
+                        // refuses to see on a river.
+                        has_downhill: dh[idx] >= 0,
                         is_ocean: is_ocean[idx],
                         alt_below_sea_level: alt[idx] < 0.0,
-                        existing_river_kind: river.river_kind,
                         neighbor_pass_pos,
                         authored_river_cross_section,
                     })
                 };
+
+                // An authored river gets its cross-section from the corridor mask
+                // (see `authored_river_kind_override`), so its velocity has to be
+                // re-derived to match -- `get_rivers`' own velocity, where it
+                // produced one at all, belongs to a cross-section we just replaced.
+                if matches!(river.river_kind, Some(RiverKind::River { .. })) {
+                    river.velocity = cromatolis_authored_river_velocity(
+                        map_size_lg,
+                        idx,
+                        dh[idx],
+                        &alt,
+                        authored_river_cross_section.y,
+                    );
+                }
             }
         }
 
@@ -2856,17 +2897,31 @@ impl WorldSim {
         // per-chunk gradient to threshold against directly -- proximity has
         // to come from a neighbor check instead, same 3x3-neighborhood
         // pattern `pure_water` below uses.
-        let authored_near_water: Box<[bool]> = if authored_cromatolis_v0 {
+        //
+        // The same sweep also derives `authored_water_body` (COW-22 `C22-1b`):
+        // the ecological classification of the chunks that *are* water. It
+        // needs a 3x3 neighborhood too -- what separates a lagoon from a
+        // landlocked lake is whether it touches marine water -- so both come
+        // out of one pass rather than two.
+        let (authored_near_water, authored_water_body) = if authored_cromatolis_v0 {
             let mask_hit = |layer: &Option<Box<[f32]>>, idx: usize| {
                 layer.as_ref().is_some_and(|values| {
                     authored_layer_value_for_cromatolis_v0(map_size_lg, idx, values)
                         >= AUTHORED_WATER_THRESHOLD
                 })
             };
-            (0..map_size_lg.chunks_len())
+            // Marine water: inside the authored `water` mask *and* reached by
+            // the `get_oceans` border flood fill. Deliberately not "alt below
+            // sea level" -- see `authored_river_kind_override` (COW-22
+            // `C22-1c`).
+            let is_marine = |idx: usize| mask_hit(&authored_water_layer, idx) && is_ocean[idx];
+            let (near_water, water_body): (Vec<bool>, Vec<Option<WaterBodyKind>>) = (0
+                ..map_size_lg.chunks_len())
                 .into_par_iter()
                 .map(|posi| {
                     let pos = uniform_idx_as_vec2(map_size_lg, posi);
+                    let mut near_water = false;
+                    let mut adjacent_to_marine = false;
                     for x in pos.x - 1..=pos.x + 1 {
                         for y in pos.y - 1..=pos.y + 1 {
                             if x < 0
@@ -2877,20 +2932,36 @@ impl WorldSim {
                                 continue;
                             }
                             let nidx = vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y));
-                            if mask_hit(&authored_water_layer, nidx)
+                            near_water |= mask_hit(&authored_water_layer, nidx)
                                 || mask_hit(&authored_elevated_lakes_layer, nidx)
-                                || mask_hit(&authored_river_channels_layer, nidx)
-                            {
-                                return true;
-                            }
+                                || mask_hit(&authored_river_channels_layer, nidx);
+                            adjacent_to_marine |= nidx != posi && is_marine(nidx);
                         }
                     }
-                    false
+                    let water_body = authored_water_body_kind(AuthoredWaterBodyInputs {
+                        is_elevated_lake: mask_hit(&authored_elevated_lakes_layer, posi),
+                        is_water_body: mask_hit(&authored_water_layer, posi),
+                        is_river_channel: mask_hit(&authored_river_channels_layer, posi),
+                        is_marine: is_marine(posi),
+                        is_adjacent_to_marine: adjacent_to_marine,
+                        // COW-22 `C22-3` (bathymetry) computes the offshore
+                        // band that splits `Sea` from `Ocean`; until it lands
+                        // every marine chunk is open ocean.
+                        is_shelf_sea: false,
+                    });
+                    (near_water, water_body)
                 })
-                .collect::<Vec<_>>()
-                .into_boxed_slice()
+                .unzip();
+            let mut water_body = water_body.into_boxed_slice();
+            promote_lagoon_basins(map_size_lg, &mut water_body, |idx| {
+                mask_hit(&authored_elevated_lakes_layer, idx)
+            });
+            (near_water.into_boxed_slice(), water_body)
         } else {
-            vec![false; map_size_lg.chunks_len()].into_boxed_slice()
+            (
+                vec![false; map_size_lg.chunks_len()].into_boxed_slice(),
+                vec![None; map_size_lg.chunks_len()].into_boxed_slice(),
+            )
         };
 
         let water_alt = indirection
@@ -3019,6 +3090,7 @@ impl WorldSim {
             authored_ground_substrate_zones,
             cromatolis_climate,
             authored_near_water,
+            authored_water_body,
             humid_base,
             temp_base,
             chaos,
@@ -3958,6 +4030,15 @@ pub struct SimChunk {
     /// COW-3, not humidity/altitude heuristics). Always `false` outside an
     /// authored region. Consumed by `get_biome`'s `Swamp` branch.
     pub(crate) authored_near_water: bool,
+    /// What kind of water body this chunk ecologically *is*, if it is water at
+    /// all (COW-22 `C22-1b`). `None` for dry land and for every chunk outside
+    /// an authored region.
+    ///
+    /// Deliberately separate from `river.river_kind`, which answers the
+    /// *physical* question (how the chunk is carved, and where its water level
+    /// comes from) and is upstream Veloren code shared with the procedural
+    /// world. The two are allowed to disagree -- see [`WaterBodyKind`].
+    pub(crate) water_body: Option<WaterBodyKind>,
     pub chaos: f32,
     pub alt: f32,
     pub basement: f32,
@@ -4158,6 +4239,284 @@ fn authored_route_way(map_size_lg: MapSizeLg, posi: usize, routes: &[f32]) -> Op
     way.is_way().then_some(way)
 }
 
+/// Ecological classification of an authored water chunk.
+///
+/// This is deliberately *parallel* to `RiverKind` rather than an extension of
+/// it. `RiverKind` is upstream Veloren code consumed across `column.rs`,
+/// `map.rs`, `civ/mod.rs`, `site/mod.rs`, `lib.rs` and all of `voxygen/`, and
+/// it answers a *physical* question (how is this chunk carved, and where does
+/// its water level come from). Widening it to carry ecology would widen the
+/// upstream-merge surface forever for no benefit here, so the two stay
+/// separate: `RiverKind` keeps deciding carving and water level, and
+/// `WaterBodyKind` says what kind of water body a chunk ecologically *is*.
+///
+/// The two can legitimately disagree. A Cromatolis river corridor wider than
+/// `CONFIG.river_max_width` stays `RiverKind::Lake` physically (carving a
+/// wider-than-max river would leave water walls, see `erosion.rs`'s
+/// `max_width` handling) while still being `WaterBodyKind::River`
+/// ecologically.
+///
+/// Scoped `pub(crate)` for now: every consumer this row and the rest of COW-22
+/// add lives inside `world` (`sim`, `layer`). Widen it the day something in
+/// `server`/`voxygen` needs it -- that is a one-line change, where narrowing it
+/// again would not be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaterBodyKind {
+    /// Open marine water.
+    Ocean,
+    /// Marine water over the near-shore shelf. Not produced yet: the
+    /// offshore-distance/bathymetry band that separates `Sea` from `Ocean` is
+    /// COW-22's `C22-3`, which runs in parallel with this row. The variant is
+    /// part of the taxonomy now so `C22-3` only has to compute the band and
+    /// flip `AuthoredWaterBodyInputs::is_shelf_sea`, not re-shape everything
+    /// that reads this enum.
+    ///
+    /// If `C22-3` is ever descoped, this variant and
+    /// `AuthoredWaterBodyInputs::is_shelf_sea` come out with it -- they exist
+    /// only as that row's landing seam, and
+    /// `cromatolis_water_body_histogram_regression_against_real_lfs_assets`
+    /// asserts the count is still zero precisely so the decision has to be
+    /// made rather than drifting.
+    Sea,
+    /// Flowing water: an authored river corridor.
+    River,
+    /// Inland standing water not adjacent to marine water.
+    Lake,
+    /// Inland standing water adjacent to marine water.
+    Lagoon,
+    // NOTE: COW-22's taxonomy also names a `Swamp` case -- standing water
+    // inside a swamp -- which this enum deliberately does *not* carry yet,
+    // because nothing can produce it. The rule it specifies is "standing water
+    // whose `get_biome` resolves to `BiomeKind::Swamp`", and `get_biome`
+    // answers `Ocean`/`Lake` for any chunk that *is* water (its second branch)
+    // long before its `Swamp` branch is reached, so that promotion is
+    // unreachable by construction rather than merely unused on today's data.
+    // Deriving it instead from the inputs that branch uses
+    // (`authored_near_water` and `SWAMP_HUMIDITY_THRESHOLD`) *would* fire, but
+    // it would reclassify real lakes and break the exporter reconciliation
+    // `C22-1b` is measured against -- so it belongs to a row that can
+    // re-measure the histogram, which is also the row that should add the
+    // variant.
+}
+
+/// Inputs to [`authored_water_body_kind`], grouped into a struct rather than
+/// several positional `bool` parameters (same shape as
+/// [`AuthoredRiverKindInputs`]).
+struct AuthoredWaterBodyInputs {
+    is_elevated_lake: bool,
+    is_water_body: bool,
+    is_river_channel: bool,
+    /// `water` mask ∧ the `get_oceans` border flood fill -- i.e. this chunk's
+    /// water is connected to the sea.
+    is_marine: bool,
+    /// 8-adjacent to a marine chunk (`is_marine` above), which is what
+    /// separates a lagoon from a landlocked lake.
+    is_adjacent_to_marine: bool,
+    /// Whether this marine chunk sits on the near-shore shelf rather than in
+    /// open ocean. Always `false` today -- see [`WaterBodyKind::Sea`].
+    is_shelf_sea: bool,
+}
+
+/// Classifies one authored water chunk into a [`WaterBodyKind`] from its
+/// (already mask-value-thresholded) authored flags.
+///
+/// Priority, highest first:
+/// 1. `elevated_lakes` -- an authored decree that bypasses the shape test
+///    entirely (it is how the map says "standing water above sea level here",
+///    including the two cells that sit outside the `water` mask).
+/// 2. `river_channels` -- the authored decision about what is a river,
+///    unconditional. Every corridor cell is also inside the broader `water`
+///    mask, so this has to outrank it or no chunk is ever a river.
+/// 3. marine water -- `water` ∧ the `get_oceans` flood fill.
+/// 4. remaining standing water -- `Lagoon` when it touches marine water, `Lake`
+///    otherwise.
+///
+/// COW-22's taxonomy also names a `Swamp` case, which this does not produce --
+/// see the note at the end of [`WaterBodyKind`] for why, and for what a later
+/// row would have to do to change that.
+fn authored_water_body_kind(inputs: AuthoredWaterBodyInputs) -> Option<WaterBodyKind> {
+    let AuthoredWaterBodyInputs {
+        is_elevated_lake,
+        is_water_body,
+        is_river_channel,
+        is_marine,
+        is_adjacent_to_marine,
+        is_shelf_sea,
+    } = inputs;
+
+    if is_elevated_lake {
+        Some(WaterBodyKind::Lake)
+    } else if is_river_channel {
+        Some(WaterBodyKind::River)
+    } else if is_water_body && is_marine {
+        Some(if is_shelf_sea {
+            WaterBodyKind::Sea
+        } else {
+            WaterBodyKind::Ocean
+        })
+    } else if is_water_body {
+        Some(if is_adjacent_to_marine {
+            WaterBodyKind::Lagoon
+        } else {
+            WaterBodyKind::Lake
+        })
+    } else {
+        None
+    }
+}
+
+/// Resolves [`WaterBodyKind::Lagoon`] from a per-chunk rim marking into a
+/// per-*basin* one.
+///
+/// Whether standing water is a lagoon or a landlocked lake is a property of the
+/// body, not of the individual chunk: the middle of a lagoon is no less lagoon
+/// for sitting a few chunks away from the sea, and the rim of a landlocked lake
+/// does not become one by touching a river mouth. [`authored_water_body_kind`]
+/// only sees one chunk's own 3x3 neighbourhood, so it can only mark the rim;
+/// this pass floods each basin (8-connectivity, the same neighbourhood) and
+/// makes the whole basin agree with its rim.
+///
+/// Chunks the authored `elevated_lakes` mask claims are excluded from the flood
+/// fill entirely, not merely exempted from the promotion at the end: that mask
+/// is a decree about standing water *above sea level*, so such a chunk is
+/// neither a lagoon itself nor a valid bridge between a coastal rim and an
+/// inland basin behind it.
+fn promote_lagoon_basins(
+    map_size_lg: MapSizeLg,
+    water_body: &mut [Option<WaterBodyKind>],
+    is_elevated_lake: impl Fn(usize) -> bool,
+) {
+    let is_standing = |idx: usize, kind: Option<WaterBodyKind>| {
+        matches!(kind, Some(WaterBodyKind::Lake | WaterBodyKind::Lagoon)) && !is_elevated_lake(idx)
+    };
+    let chunks = map_size_lg.chunks().map(i32::from);
+    let mut visited = vec![false; water_body.len()];
+    let mut basin = Vec::new();
+    let mut stack = Vec::new();
+
+    for start in 0..water_body.len() {
+        if visited[start] || !is_standing(start, water_body[start]) {
+            continue;
+        }
+        basin.clear();
+        stack.clear();
+        stack.push(start);
+        visited[start] = true;
+        let mut basin_touches_marine = false;
+
+        while let Some(idx) = stack.pop() {
+            basin_touches_marine |= water_body[idx] == Some(WaterBodyKind::Lagoon);
+            basin.push(idx);
+            let pos = uniform_idx_as_vec2(map_size_lg, idx);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let neighbor = pos + Vec2::new(dx, dy);
+                    if neighbor.x < 0
+                        || neighbor.y < 0
+                        || neighbor.x >= chunks.x
+                        || neighbor.y >= chunks.y
+                    {
+                        continue;
+                    }
+                    let nidx = vec2_as_uniform_idx(map_size_lg, neighbor);
+                    if !visited[nidx] && is_standing(nidx, water_body[nidx]) {
+                        visited[nidx] = true;
+                        stack.push(nidx);
+                    }
+                }
+            }
+        }
+
+        for &idx in &basin {
+            water_body[idx] = Some(if basin_touches_marine {
+                WaterBodyKind::Lagoon
+            } else {
+                WaterBodyKind::Lake
+            });
+        }
+    }
+}
+
+/// Widest channel, in metres, the engine will carve as a real
+/// `RiverKind::River`. `CONFIG.river_max_width` is a multiplier on the chunk
+/// size, exactly as `erosion.rs`'s `get_rivers` uses it, so this is the same
+/// 64 m ceiling the procedural path already enforces. Wider authored corridors
+/// stay `RiverKind::Lake` physically (carving past this leaves water walls)
+/// while still being `WaterBodyKind::River`.
+const CROMATOLIS_MAX_RIVER_WIDTH: f32 =
+    TerrainChunkSize::RECT_SIZE.x as f32 * CONFIG.river_max_width;
+
+/// Local channel width in metres for one authored river-corridor chunk, from
+/// the radius (in chunks) of the widest channel it sits in -- i.e. from
+/// `local_channel_radius_chunks`, *not* from a bare distance transform.
+///
+/// A channel of radius `r` chunks is `2 * r` chunks across; multiplying by the
+/// chunk size turns that into metres. Exact for even-chunk-count channels and
+/// one chunk generous for odd ones, which is the right way to round here --
+/// the alternative under-reports every single-chunk corridor to nothing.
+fn cromatolis_channel_width(channel_radius: f32) -> f32 {
+    2.0 * channel_radius * TerrainChunkSize::RECT_SIZE.x as f32
+}
+
+/// Cross-section (width × depth, in metres) for an authored river chunk of the
+/// given local channel width.
+///
+/// Replaces the flat `3.2 m × 0.25 m` ditch every authored river used to get:
+/// the authored map skips erosion entirely, so `get_rivers`' physical
+/// derivation never runs on it and the fallback constant was the *only* answer
+/// any Cromatolis river ever had. Depth follows `CONFIG.river_width_to_depth`
+/// (the same ratio the procedural path assumes) with `CONFIG.river_min_height`
+/// as a floor, so the shape of an authored river matches a procedural one of
+/// the same width.
+fn cromatolis_authored_river_cross_section(channel_width: f32) -> Vec2<f32> {
+    let width = channel_width.clamp(0.0, CROMATOLIS_MAX_RIVER_WIDTH);
+    let depth = (width / CONFIG.river_width_to_depth).max(CONFIG.river_min_height);
+    Vec2::new(width, depth)
+}
+
+/// Flow velocity for an authored river chunk, derived from the authored
+/// heightmap's own downhill slope with the same Gauckler–Manning–Strickler
+/// formula `erosion.rs`'s `get_rivers` uses for procedural rivers, so authored
+/// and procedural rivers animate and spline identically.
+///
+/// Slope comes from `alt` (the authored bed) rather than the water surface
+/// `get_rivers` uses. On an authored map the water surface is flattened to sea
+/// level almost everywhere (see `cromatolis_forces_sea_level`), so it carries
+/// no usable gradient; `alt` is also what `downhill` was computed from, which
+/// guarantees the step is genuinely downhill.
+///
+/// Returns a zero vector for a chunk with no downhill neighbour (a boundary or
+/// sink node) or a flat one, matching `get_rivers`' own "this is not a river"
+/// handling of a zero slope.
+fn cromatolis_authored_river_velocity(
+    map_size_lg: MapSizeLg,
+    posi: usize,
+    downhill_idx: isize,
+    alt: &[Alt],
+    depth: f32,
+) -> Vec3<f32> {
+    if downhill_idx < 0 {
+        return Vec3::zero();
+    }
+    let downhill_idx = downhill_idx as usize;
+    let neighbor_dim = (uniform_idx_as_vec2(map_size_lg, downhill_idx)
+        - uniform_idx_as_vec2(map_size_lg, posi))
+    .map2(TerrainChunkSize::RECT_SIZE, |e, sz| e as f64 * sz as f64);
+    let neighbor_distance = neighbor_dim.magnitude();
+    let dz = alt[downhill_idx] - alt[posi];
+    let slope = dz.abs() / neighbor_distance;
+    if neighbor_distance == 0.0 || !slope.is_normal() {
+        return Vec3::zero();
+    }
+    let velocity_magnitude =
+        1.0 / CONFIG.river_roughness as f64 * (depth as f64).powf(2.0 / 3.0) * slope.sqrt();
+    // NOTE: the z component is `|dz|`, not `dz`, matching `get_rivers`'
+    // `dz.signum() * dz`.
+    let mut velocity = Vec3::new(neighbor_dim.x, neighbor_dim.y, dz.abs());
+    velocity.normalize();
+    (velocity * velocity_magnitude).map(|e| e as f32)
+}
+
 /// Inputs to [`authored_river_kind_override`], grouped into a struct rather
 /// than several positional `bool` parameters.
 struct AuthoredRiverKindInputs {
@@ -4168,9 +4527,19 @@ struct AuthoredRiverKindInputs {
     is_elevated_lake: bool,
     is_water_body: bool,
     is_river_channel: bool,
+    /// Whether this corridor chunk's precomputed local channel width is within
+    /// [`CROMATOLIS_MAX_RIVER_WIDTH`], i.e. whether it can be carved as a real
+    /// river at all. Meaningless unless `is_river_channel`.
+    channel_fits_max_river_width: bool,
+    /// Whether this chunk has a downhill neighbour at all. A chunk the
+    /// `get_oceans` flood fill reached is a boundary node with none, and
+    /// `column.rs`'s neighbour-river sampling *panics* ("How can a river have
+    /// no downhill?") on a `RiverKind::River` chunk whose `SimChunk::downhill`
+    /// is `None`, so such a chunk must never be typed as a river however the
+    /// authored masks paint it.
+    has_downhill: bool,
     is_ocean: bool,
     alt_below_sea_level: bool,
-    existing_river_kind: Option<RiverKind>,
     neighbor_pass_pos: Vec2<i32>,
     authored_river_cross_section: Vec2<f32>,
 }
@@ -4178,27 +4547,60 @@ struct AuthoredRiverKindInputs {
 /// Decides the authored `RiverKind` for one chunk from its (already
 /// mask-value-thresholded) authored water flags. Each authored mask keeps
 /// its own semantics instead of being collapsed into one generic "is wet"
-/// check: an elevated lake wins over the broader water-body mask, which
-/// wins over a river channel, which wins over leaving the tile dry. A river
-/// channel tile keeps the erosion sim's own `RiverKind::River` (with its
-/// physically-derived cross-section) when the sim already computed one;
-/// only chunks the sim didn't already flag as a river fall back to
-/// `authored_river_cross_section`.
+/// check: an elevated lake wins over a river channel, which wins over the
+/// broader water-body mask it is a subset of, which wins over leaving the tile
+/// dry.
+///
+/// A corridor chunk always takes `authored_river_cross_section`, even where
+/// the erosion sim happened to produce a `RiverKind::River` of its own (which
+/// this function used to keep). The authored map skips erosion entirely, so a
+/// sim-derived cross-section there is computed from a flux field that never
+/// shaped the terrain: measured on the shipped rasters those come out as
+/// little as 0.48 m wide and 4 mm deep -- not a river, and far below
+/// `CONFIG.river_min_height`. The authored width is the better answer
+/// everywhere on this map.
+///
+/// This mirrors [`authored_water_body_kind`]'s priority order on purpose: the
+/// two functions answer different questions (physical carving vs. ecology) but
+/// must agree about *which authored mask owns a chunk*, or the map ends up
+/// with, say, a `WaterBodyKind::River` chunk carved as ocean.
 fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<RiverKind> {
     let AuthoredRiverKindInputs {
         region_id,
         is_elevated_lake,
         is_water_body,
         is_river_channel,
+        channel_fits_max_river_width,
+        has_downhill,
         is_ocean,
         alt_below_sea_level,
-        existing_river_kind,
         neighbor_pass_pos,
         authored_river_cross_section,
     } = inputs;
 
     if is_elevated_lake {
         Some(RiverKind::Lake { neighbor_pass_pos })
+    } else if is_river_channel {
+        // COW-22 `C22-1b`: checked *before* the water mask (it used to be
+        // checked after). Every authored corridor cell also sits inside the
+        // broader `water` mask, so while the water arm ran first no chunk on
+        // the map could ever resolve to `RiverKind::River` -- the authored
+        // river network existed in the data and nowhere in the simulation.
+        if channel_fits_max_river_width && has_downhill {
+            Some(RiverKind::River {
+                cross_section: authored_river_cross_section,
+            })
+        } else {
+            // Either wider than `CROMATOLIS_MAX_RIVER_WIDTH` -- carving it as a
+            // river would overflow the chunks either side of the channel and
+            // leave water walls (see `erosion.rs`'s `max_width` handling) -- or
+            // a boundary node with nowhere to flow, which `column.rs` would
+            // panic on (see `has_downhill`). Either way it stays a lake
+            // *physically*: flat water at a consistent level.
+            // `WaterBodyKind::River` still calls it a river ecologically; see
+            // that enum's doc comment for why the two are allowed to disagree.
+            Some(RiverKind::Lake { neighbor_pass_pos })
+        }
     } else if is_water_body {
         // `is_ocean` (the `get_oceans` border flood fill over `alt <= 0`) is
         // already the complete answer to "is this chunk connected to the sea".
@@ -4218,16 +4620,9 @@ fn authored_river_kind_override(inputs: AuthoredRiverKindInputs) -> Option<River
         if is_ocean || below_sea_level_counts_as_ocean {
             Some(RiverKind::Ocean)
         } else {
-            // Flagged as water but neither below sea level nor tagged
+            // Flagged as water but neither connected to the sea nor tagged
             // `elevated_lakes` -- still real standing water.
             Some(RiverKind::Lake { neighbor_pass_pos })
-        }
-    } else if is_river_channel {
-        match existing_river_kind {
-            Some(RiverKind::River { .. }) => existing_river_kind,
-            _ => Some(RiverKind::River {
-                cross_section: authored_river_cross_section,
-            }),
         }
     } else {
         None
@@ -4537,6 +4932,7 @@ impl SimChunk {
             authored_cromatolis_v0: gen_cdf.authored_cromatolis_v0,
             authored_region_id: gen_cdf.authored_region_id,
             authored_near_water: gen_cdf.authored_near_water[posi],
+            water_body: gen_cdf.authored_water_body[posi],
             chaos,
             flux,
             alt,
@@ -4600,6 +4996,22 @@ impl SimChunk {
             BiomeKind::Ocean
         } else if self.river.is_lake() {
             BiomeKind::Lake
+        } else if self.authored_region_id == Some(CROMATOLIS_V0_REGION_ID) && self.river.is_river()
+        {
+            // COW-22 `C22-1b`: `RiverKind::River` only became reachable at all
+            // with that row, and there is no `BiomeKind::River` -- without
+            // this branch a river chunk would fall through the whole chain
+            // below and report Jungle/Savannah/Forest/Grassland, i.e. a river
+            // claiming to be a land biome.
+            //
+            // Answering `Lake` (what every one of these chunks already
+            // reported while they were typed `RiverKind::Lake`) keeps every
+            // existing consumer -- wildlife manifests, scatter configs, site
+            // predicates, the map legend -- behaving exactly as before.
+            // Adding a `BiomeKind::River` variant instead would widen a
+            // wire-synced, upstream-shared enum for a distinction
+            // `SimChunk::water_body` already carries losslessly.
+            BiomeKind::Lake
         } else if self.authored_region_id != Some(CROMATOLIS_V0_REGION_ID)
             && self.temp < CONFIG.snow_temp
         {
@@ -4632,16 +5044,17 @@ impl SimChunk {
             // not just any humid open area (that's Jungle/Savannah/
             // Grassland's territory). Uses the authored water/elevated-lake/
             // river-channel masks directly (`authored_near_water`) rather
-            // than `RiverData::near_water`: real Cromatolis LFS data shows
-            // every authored river-channel pixel also sits inside the
-            // broader `water` mask, so `authored_river_kind_override`'s
-            // elevated-lake > water-body > river-channel priority order
-            // means no chunk ever actually resolves to `RiverKind::River`
-            // there today (COW-3 behavior, out of this row's scope to
-            // change) -- `RiverData::near_water` would therefore never see a
-            // land tile as "near" anything, only chunks that are themselves
-            // Ocean/Lake (and those are already claimed by the branches
-            // above, before this one runs). Checked *before* Jungle/Forest
+            // than `RiverData::near_water`. The original COW-4 reason was
+            // that no chunk could resolve to `RiverKind::River` at all, so
+            // `near_water` never saw a land tile as "near" anything; COW-22
+            // `C22-1b` made rivers reachable, so that specific reason is
+            // gone. The choice stands on its own though: `near_water` is
+            // `is_river || !neighbor_rivers.is_empty() || is_lake ||
+            // is_ocean`, and `neighbor_rivers` comes from the erosion sim's
+            // river network, which the authored map never runs -- so it
+            // still would not see authored water next door.
+            // `authored_near_water` reads the masks themselves. Checked
+            // *before* Jungle/Forest
             // rather than after (unlike the original pre-disable ordering):
             // real swamps are frequently wooded (mangroves, cypress) and,
             // for Cromatolis specifically, the authored vegetation layer
@@ -5284,9 +5697,10 @@ mod tests {
             is_elevated_lake: false,
             is_water_body: false,
             is_river_channel: false,
+            channel_fits_max_river_width: true,
+            has_downhill: true,
             is_ocean: false,
             alt_below_sea_level: false,
-            existing_river_kind: None,
             neighbor_pass_pos: Vec2::new(3, 4),
             authored_river_cross_section: Vec2::new(1.0, 2.0),
         }
@@ -5372,26 +5786,15 @@ mod tests {
         );
     }
 
+    /// COW-22 `C22-1b`: the corridor mask is checked before the broader `water`
+    /// mask it is a subset of. While the order was the other way round, no
+    /// chunk on an authored map could resolve to `RiverKind::River` at all.
     #[test]
-    fn river_channel_mask_preserves_an_already_computed_river() {
-        let existing = Some(RiverKind::River {
-            cross_section: Vec2::new(9.0, 9.0),
-        });
+    fn a_narrow_river_channel_outranks_the_water_mask_it_sits_inside() {
         let kind = authored_river_kind_override(AuthoredRiverKindInputs {
             is_river_channel: true,
-            existing_river_kind: existing,
-            ..river_kind_inputs()
-        });
-        // Not replaced with the default cross-section -- the erosion sim's
-        // physically-derived one wins.
-        assert_eq!(kind, existing);
-    }
-
-    #[test]
-    fn river_channel_mask_falls_back_to_the_default_cross_section() {
-        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
-            is_river_channel: true,
-            existing_river_kind: None,
+            is_water_body: true,
+            channel_fits_max_river_width: true,
             ..river_kind_inputs()
         });
         assert_eq!(
@@ -5402,15 +5805,65 @@ mod tests {
         );
     }
 
+    /// ...but only where the channel is narrow enough to carve. A wider
+    /// corridor stays a lake physically (no water walls); `WaterBodyKind` is
+    /// what still calls it a river.
     #[test]
-    fn no_mask_flagged_clears_any_previous_river_kind() {
+    fn a_wide_river_channel_stays_a_lake_physically() {
         let kind = authored_river_kind_override(AuthoredRiverKindInputs {
-            // Nothing flagged, even though this chunk previously computed as
-            // ocean -- the authored masks are authoritative for the region.
-            existing_river_kind: Some(RiverKind::Ocean),
+            is_river_channel: true,
+            is_water_body: true,
+            channel_fits_max_river_width: false,
             ..river_kind_inputs()
         });
-        assert_eq!(kind, None);
+        assert_eq!(
+            kind,
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::new(3, 4)
+            })
+        );
+    }
+
+    /// A corridor chunk the `get_oceans` flood fill reaches is still a river
+    /// rather than ocean -- otherwise `WaterBodyKind::River` and `RiverKind`
+    /// would disagree about the river mouth in a way nothing downstream
+    /// expects -- as long as it has somewhere to flow.
+    #[test]
+    fn a_river_channel_outranks_ocean_connectivity() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_river_channel: true,
+            is_water_body: true,
+            is_ocean: true,
+            ..river_kind_inputs()
+        });
+        assert!(matches!(kind, Some(RiverKind::River { .. })), "{kind:?}");
+    }
+
+    /// ...but a corridor chunk with *no* downhill neighbour must never be
+    /// typed as a river: `column.rs` panics outright ("How can a river have no
+    /// downhill?") when it samples one. No chunk on the shipped raster is in
+    /// that state, so this guards against a future river-mouth authoring edit
+    /// crashing terrain generation rather than failing a test.
+    #[test]
+    fn a_river_channel_with_no_downhill_is_not_carved_as_a_river() {
+        let kind = authored_river_kind_override(AuthoredRiverKindInputs {
+            is_river_channel: true,
+            is_water_body: true,
+            is_ocean: true,
+            has_downhill: false,
+            ..river_kind_inputs()
+        });
+        assert_eq!(
+            kind,
+            Some(RiverKind::Lake {
+                neighbor_pass_pos: Vec2::new(3, 4)
+            })
+        );
+    }
+
+    #[test]
+    fn no_mask_flagged_leaves_the_chunk_dry() {
+        assert_eq!(authored_river_kind_override(river_kind_inputs()), None);
     }
 
     // ---- Smoke test: instantiate the Cromatolis world from scratch ----
@@ -5887,11 +6340,14 @@ mod tests {
              raster"
         );
 
-        // The contract `authored_river_kind_override`'s priority chain depends
-        // on, and the reason a bare mask-priority swap is not the fix for
-        // COW-22 `[OQ3]`: every corridor cell is also a water-mask cell, so the
-        // `is_water_body` arm always fires first and the `is_river_channel` arm
-        // stays unreachable until that function is taught the distinction.
+        // The containment `authored_river_kind_override`'s and
+        // `authored_water_body_kind`'s priority chains both depend on: every
+        // corridor cell is also a water-mask cell. That is why COW-22 `C22-1b`
+        // had to check the corridor mask *before* the water mask -- while the
+        // water arm ran first it swallowed every corridor cell and the
+        // `is_river_channel` arm was unreachable. If a future raster ever
+        // paints a corridor outside the water mask, both chains need
+        // re-checking rather than silently taking the corridor branch.
         let water = AuthoredF32Layer::load_owned("world.map.cromatolis_v0_water")
             .expect("real Cromatolis LFS assets must include the water raster");
         assert_eq!(water.values.len(), river_channels.values.len());
@@ -5928,6 +6384,633 @@ mod tests {
             (0.001..0.05).contains(&swamp_fraction),
             "unexpected Swamp coverage fraction: {swamp_fraction:.4} (expected a rare but present \
              biome, not ~0% or a large chunk of the map)"
+        );
+    }
+
+    // ---- COW-22 `C22-1b`: authored water-body classification ----
+
+    fn water_body_inputs() -> AuthoredWaterBodyInputs {
+        AuthoredWaterBodyInputs {
+            is_elevated_lake: false,
+            is_water_body: false,
+            is_river_channel: false,
+            is_marine: false,
+            is_adjacent_to_marine: false,
+            is_shelf_sea: false,
+        }
+    }
+
+    #[test]
+    fn a_dry_chunk_has_no_water_body() {
+        assert_eq!(authored_water_body_kind(water_body_inputs()), None);
+    }
+
+    #[test]
+    fn the_elevated_lake_decree_outranks_every_shape_test() {
+        let kind = authored_water_body_kind(AuthoredWaterBodyInputs {
+            is_elevated_lake: true,
+            is_water_body: true,
+            is_river_channel: true,
+            is_marine: true,
+            is_adjacent_to_marine: true,
+            ..water_body_inputs()
+        });
+        assert_eq!(kind, Some(WaterBodyKind::Lake));
+    }
+
+    /// The corridor mask is a subset of the broader `water` mask, so it has to
+    /// outrank it (and marine connectivity at a river mouth) or the 33,127
+    /// authored corridor chunks would all classify as something else.
+    #[test]
+    fn a_river_channel_outranks_the_water_and_marine_masks() {
+        let kind = authored_water_body_kind(AuthoredWaterBodyInputs {
+            is_river_channel: true,
+            is_water_body: true,
+            is_marine: true,
+            is_adjacent_to_marine: true,
+            ..water_body_inputs()
+        });
+        assert_eq!(kind, Some(WaterBodyKind::River));
+    }
+
+    #[test]
+    fn marine_water_is_ocean_until_the_shelf_band_exists() {
+        let open = authored_water_body_kind(AuthoredWaterBodyInputs {
+            is_water_body: true,
+            is_marine: true,
+            ..water_body_inputs()
+        });
+        assert_eq!(open, Some(WaterBodyKind::Ocean));
+
+        // COW-22 `C22-3` is what will actually set this; the taxonomy is
+        // wired for it now so that row only has to compute the band.
+        let shelf = authored_water_body_kind(AuthoredWaterBodyInputs {
+            is_water_body: true,
+            is_marine: true,
+            is_shelf_sea: true,
+            ..water_body_inputs()
+        });
+        assert_eq!(shelf, Some(WaterBodyKind::Sea));
+    }
+
+    #[test]
+    fn standing_water_is_a_lagoon_when_it_touches_marine_water() {
+        let lagoon = authored_water_body_kind(AuthoredWaterBodyInputs {
+            is_water_body: true,
+            is_adjacent_to_marine: true,
+            ..water_body_inputs()
+        });
+        assert_eq!(lagoon, Some(WaterBodyKind::Lagoon));
+
+        let lake = authored_water_body_kind(AuthoredWaterBodyInputs {
+            is_water_body: true,
+            ..water_body_inputs()
+        });
+        assert_eq!(lake, Some(WaterBodyKind::Lake));
+    }
+
+    // ---- Lagoon resolution is per-basin, not per-chunk ----
+
+    /// Builds a 8 x 8 `water_body` grid from a picture: `.` dry, `L` standing
+    /// water, `~` standing water the per-chunk sweep marked as touching marine
+    /// water, `E` an elevated-lake chunk.
+    fn water_body_grid(rows: [&str; 8]) -> (MapSizeLg, Vec<Option<WaterBodyKind>>, Vec<bool>) {
+        let map_size_lg = MapSizeLg::new(Vec2 { x: 3, y: 3 }).expect("valid map size");
+        let mut water_body = vec![None; map_size_lg.chunks_len()];
+        let mut elevated = vec![false; map_size_lg.chunks_len()];
+        for (y, row) in rows.iter().enumerate() {
+            for (x, cell) in row.chars().enumerate() {
+                let idx = vec2_as_uniform_idx(map_size_lg, Vec2::new(x as i32, y as i32));
+                match cell {
+                    '.' => {},
+                    'L' => water_body[idx] = Some(WaterBodyKind::Lake),
+                    '~' => water_body[idx] = Some(WaterBodyKind::Lagoon),
+                    'E' => {
+                        water_body[idx] = Some(WaterBodyKind::Lake);
+                        elevated[idx] = true;
+                    },
+                    other => panic!("unexpected cell {other:?}"),
+                }
+            }
+        }
+        (map_size_lg, water_body, elevated)
+    }
+
+    fn resolved(rows: [&str; 8]) -> Vec<Option<WaterBodyKind>> {
+        let (map_size_lg, mut water_body, elevated) = water_body_grid(rows);
+        promote_lagoon_basins(map_size_lg, &mut water_body, |idx| elevated[idx]);
+        water_body
+    }
+
+    fn cell(water_body: &[Option<WaterBodyKind>], x: i32, y: i32) -> Option<WaterBodyKind> {
+        let map_size_lg = MapSizeLg::new(Vec2 { x: 3, y: 3 }).expect("valid map size");
+        water_body[vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y))]
+    }
+
+    /// The middle of a lagoon is no less a lagoon for sitting a few chunks from
+    /// the sea -- without this pass only the rim chunk the per-chunk sweep
+    /// could see would be classified `Lagoon`.
+    #[test]
+    fn a_basin_touching_marine_water_is_a_lagoon_all_the_way_through() {
+        let water_body = resolved([
+            "........", "..~LLL..", "..LLLL..", "..LLLL..", "........", "........", "........",
+            "........",
+        ]);
+        for (x, y) in [(2, 1), (5, 1), (2, 3), (5, 3)] {
+            assert_eq!(
+                cell(&water_body, x, y),
+                Some(WaterBodyKind::Lagoon),
+                "({x}, {y})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_landlocked_basin_stays_a_lake() {
+        let water_body = resolved([
+            "........", "..LLL...", "..LLL...", "........", "........", "........", "........",
+            "........",
+        ]);
+        assert_eq!(cell(&water_body, 3, 2), Some(WaterBodyKind::Lake));
+    }
+
+    /// Two basins in the same map are classified independently -- a lagoon
+    /// elsewhere on the coast must not drag a landlocked lake with it.
+    #[test]
+    fn separate_basins_are_classified_independently() {
+        let water_body = resolved([
+            "........", "~L....LL", ".L....LL", "........", "........", "........", "........",
+            "........",
+        ]);
+        assert_eq!(cell(&water_body, 1, 2), Some(WaterBodyKind::Lagoon));
+        assert_eq!(cell(&water_body, 6, 1), Some(WaterBodyKind::Lake));
+    }
+
+    /// Diagonal contact still makes one basin (8-connectivity, matching the
+    /// neighbourhood the per-chunk adjacency test uses).
+    #[test]
+    fn basins_are_connected_diagonally() {
+        let water_body = resolved([
+            "........", "..~.....", "...L....", "........", "........", "........", "........",
+            "........",
+        ]);
+        assert_eq!(cell(&water_body, 3, 2), Some(WaterBodyKind::Lagoon));
+    }
+
+    #[test]
+    fn an_elevated_lake_chunk_is_never_promoted_to_a_lagoon() {
+        let water_body = resolved([
+            "........", "..~LE...", "........", "........", "........", "........", "........",
+            "........",
+        ]);
+        assert_eq!(cell(&water_body, 3, 1), Some(WaterBodyKind::Lagoon));
+        assert_eq!(cell(&water_body, 4, 1), Some(WaterBodyKind::Lake));
+    }
+
+    /// An elevated lake is water *above sea level*, so it is not a valid bridge
+    /// either: the basin behind it stays landlocked rather than inheriting the
+    /// coastal rim's lagoon-ness through it.
+    #[test]
+    fn an_elevated_lake_chunk_does_not_bridge_two_basins() {
+        let water_body = resolved([
+            "........", ".~LEL...", "........", "........", "........", "........", "........",
+            "........",
+        ]);
+        assert_eq!(cell(&water_body, 2, 1), Some(WaterBodyKind::Lagoon));
+        assert_eq!(cell(&water_body, 3, 1), Some(WaterBodyKind::Lake));
+        assert_eq!(
+            cell(&water_body, 4, 1),
+            Some(WaterBodyKind::Lake),
+            "the basin behind the elevated lake must stay landlocked"
+        );
+    }
+
+    // ---- Authored river geometry ----
+
+    #[test]
+    fn channel_width_is_twice_the_distance_to_the_nearest_bank() {
+        let chunk = TerrainChunkSize::RECT_SIZE.x as f32;
+        assert_eq!(cromatolis_channel_width(1.0), 2.0 * chunk);
+        assert_eq!(cromatolis_channel_width(3.0), 6.0 * chunk);
+        assert_eq!(cromatolis_channel_width(0.0), 0.0);
+    }
+
+    #[test]
+    fn river_cross_section_follows_the_configured_width_to_depth_ratio() {
+        let cross_section = cromatolis_authored_river_cross_section(48.0);
+        assert_eq!(cross_section.x, 48.0);
+        assert_eq!(cross_section.y, 48.0 / CONFIG.river_width_to_depth);
+    }
+
+    #[test]
+    fn river_cross_section_caps_at_the_max_river_width() {
+        // Anything past the cap would overflow the chunks either side of the
+        // channel and leave water walls, exactly as `get_rivers` guards
+        // against for procedural rivers.
+        let cross_section = cromatolis_authored_river_cross_section(4096.0);
+        assert_eq!(cross_section.x, CROMATOLIS_MAX_RIVER_WIDTH);
+        assert_eq!(
+            cross_section.y,
+            CROMATOLIS_MAX_RIVER_WIDTH / CONFIG.river_width_to_depth
+        );
+    }
+
+    #[test]
+    fn river_cross_section_never_goes_below_the_minimum_river_height() {
+        let cross_section = cromatolis_authored_river_cross_section(0.0);
+        assert_eq!(cross_section.y, CONFIG.river_min_height);
+    }
+
+    fn velocity_on_a_slope(drop: Alt, downhill: Option<(i32, i32)>) -> Vec3<f32> {
+        let map_size_lg = MapSizeLg::new(Vec2 { x: 3, y: 3 }).expect("valid map size");
+        let mut alt = vec![100.0; map_size_lg.chunks_len()];
+        let posi = vec2_as_uniform_idx(map_size_lg, Vec2::new(4, 4));
+        let downhill_idx = downhill.map_or(-1, |(x, y)| {
+            let idx = vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y));
+            alt[idx] = 100.0 - drop;
+            idx as isize
+        });
+        cromatolis_authored_river_velocity(map_size_lg, posi, downhill_idx, &alt, 2.0)
+    }
+
+    #[test]
+    fn an_authored_river_with_no_downhill_neighbour_does_not_flow() {
+        assert_eq!(velocity_on_a_slope(10.0, None), Vec3::zero());
+    }
+
+    #[test]
+    fn an_authored_river_on_flat_ground_does_not_flow() {
+        assert_eq!(velocity_on_a_slope(0.0, Some((5, 4))), Vec3::zero());
+    }
+
+    #[test]
+    fn an_authored_river_flows_downhill_at_the_manning_velocity() {
+        let drop = 8.0;
+        let velocity = velocity_on_a_slope(drop, Some((5, 4)));
+        // Same formula as `erosion.rs`'s `get_rivers`: (1 / roughness) *
+        // depth^(2/3) * sqrt(slope), over a one-chunk step.
+        let slope = drop / TerrainChunkSize::RECT_SIZE.x as Alt;
+        let expected =
+            1.0 / CONFIG.river_roughness as Alt * (2.0 as Alt).powf(2.0 / 3.0) * slope.sqrt();
+        assert!(
+            (velocity.magnitude() as Alt - expected).abs() < 1e-3,
+            "expected |v| ~ {expected}, got {}",
+            velocity.magnitude()
+        );
+        assert!(velocity.x > 0.0, "should flow towards +x: {velocity:?}");
+        assert_eq!(velocity.y, 0.0);
+    }
+
+    // ---- Real-LFS-asset regressions for COW-22 `C22-1b` / `C22-1c` ----
+    //
+    // The baseline the open-world exporter measured independently for COW-22
+    // `[OQ3]`, stated once so the tests below derive from it instead of
+    // restating it. A raster change means re-measuring *these*, not chasing
+    // the same number through four assertions.
+
+    /// Cells in the authored `water` mask.
+    const AUTHORED_WATER_MASK_CELLS: usize = 366_935;
+    /// Corridor cells, across 72 substantial river systems.
+    const EXPORTED_RIVER_CELLS: usize = 33_127;
+    /// Standing-water cells in the 27 basins that touch marine water.
+    const EXPORTED_LAGOON_CELLS: usize = 2_776;
+    /// Standing-water cells in the 14 landlocked basins.
+    const EXPORTED_LAKE_CELLS: usize = 13_872;
+    /// Marine cells: `water` mask ∧ the `get_oceans` flood fill, minus the
+    /// corridor cells the river mask claims first.
+    const EXPORTED_MARINE_CELLS: usize = 317_160;
+    /// The `elevated_lakes` raster marks 267 cells but only 265 of them are
+    /// inside the `water` mask. The elevated-lake decree claims the other two
+    /// anyway, so the engine's classified total is two above the exporter's.
+    /// A known authoring inconsistency, tracked separately -- *not*
+    /// engine/exporter drift.
+    const STRAY_ELEVATED_LAKE_CELLS: usize = 2;
+    /// Corridor cells sitting in a channel narrow enough to carve as a real
+    /// `RiverKind::River` (local channel width within
+    /// `CROMATOLIS_MAX_RIVER_WIDTH`): 12.0% of them. Cromatolis genuinely has
+    /// wide rivers, and this counts *channels*, not chunks near a bank -- see
+    /// `cromatolis_wide_water_bodies_are_not_carved_as_rivers_against_real_lfs_assets`.
+    const CARVEABLE_RIVER_CELLS: usize = 3_974;
+
+    /// Counts every `WaterBodyKind` across the real Cromatolis map and
+    /// reconciles it against the numbers the open-world exporter measured
+    /// independently for COW-22 `[OQ3]`. A disagreement here means the engine
+    /// and the exporter have drifted on what "ocean" (or "river", or
+    /// "standing water") means, which is exactly the kind of drift that
+    /// silently mis-paints a whole coastline.
+    #[test]
+    #[ignore]
+    fn cromatolis_water_body_histogram_regression_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let count = |kind: WaterBodyKind| {
+            sim.chunks
+                .iter()
+                .filter(|chunk| chunk.water_body == Some(kind))
+                .count()
+        };
+
+        // Exporter: 33,127 corridor cells across 72 substantial systems.
+        assert_eq!(count(WaterBodyKind::River), EXPORTED_RIVER_CELLS);
+        // Exporter: 27 lagoon basins, 2,776 cells.
+        assert_eq!(count(WaterBodyKind::Lagoon), EXPORTED_LAGOON_CELLS);
+        // Exporter: 14 lake basins, 13,872 cells, plus the stray
+        // `elevated_lakes` cells (see `STRAY_ELEVATED_LAKE_CELLS`).
+        assert_eq!(
+            count(WaterBodyKind::Lake),
+            EXPORTED_LAKE_CELLS + STRAY_ELEVATED_LAKE_CELLS
+        );
+        // Exporter: ~317,160 marine cells.
+        assert_eq!(count(WaterBodyKind::Ocean), EXPORTED_MARINE_CELLS);
+        // `Sea` needs the offshore band from COW-22 `C22-3`, which has not
+        // landed.
+        assert_eq!(count(WaterBodyKind::Sea), 0);
+
+        // And the partition is exactly the authored water footprint: the
+        // `water`-mask cells plus the stray `elevated_lakes` ones, with no
+        // chunk counted twice and none left over.
+        let classified = sim
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.water_body.is_some())
+            .count();
+        assert_eq!(
+            classified,
+            AUTHORED_WATER_MASK_CELLS + STRAY_ELEVATED_LAKE_CELLS
+        );
+        assert_eq!(
+            classified,
+            EXPORTED_RIVER_CELLS
+                + EXPORTED_LAGOON_CELLS
+                + EXPORTED_LAKE_CELLS
+                + EXPORTED_MARINE_CELLS
+                + STRAY_ELEVATED_LAKE_CELLS
+        );
+    }
+
+    /// The sharpest single assertion in COW-22 `C22-1b`: before it, *no* chunk
+    /// on the Cromatolis map was `RiverKind::River` -- every authored corridor
+    /// cell lost to the broader `water` mask it sits inside, so the authored
+    /// river network existed in the data and nowhere in the simulation.
+    #[test]
+    #[ignore]
+    fn cromatolis_rivers_are_carveable_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let rivers = sim
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.river.river_kind.is_some_and(|kind| kind.is_river()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(rivers.len(), CARVEABLE_RIVER_CELLS);
+
+        for chunk in &rivers {
+            let Some(RiverKind::River { cross_section }) = chunk.river.river_kind else {
+                unreachable!()
+            };
+            assert!(
+                cross_section.x <= CROMATOLIS_MAX_RIVER_WIDTH,
+                "cross-section {cross_section:?} exceeds the max river width"
+            );
+            assert!(
+                cross_section.y >= CONFIG.river_min_height,
+                "cross-section {cross_section:?} is shallower than the minimum river height"
+            );
+            assert!(
+                cross_section.y <= CROMATOLIS_MAX_RIVER_WIDTH / CONFIG.river_width_to_depth,
+                "cross-section {cross_section:?} is deeper than the width-to-depth ratio allows"
+            );
+            // No river should still be carrying the old flat 3.2 m x 0.25 m
+            // ditch the authored map used to give every river on the map.
+            assert!(
+                cross_section.x > TerrainChunkSize::RECT_SIZE.x as f32 * 0.1,
+                "cross-section {cross_section:?} is still the pre-COW-22 ditch"
+            );
+        }
+
+        // Every carved river flows, and every one has somewhere to flow *to*:
+        // `column.rs` panics outright ("How can a river have no downhill?")
+        // when it samples a `RiverKind::River` chunk whose `downhill` is
+        // `None`, so this is a crash guard, not a tidiness check.
+        for chunk in &rivers {
+            assert!(
+                chunk.downhill.is_some(),
+                "a carved river with no downhill neighbour would panic terrain generation"
+            );
+            assert!(
+                chunk.river.velocity.magnitude() > 0.0,
+                "a carved river with no velocity: {:?}",
+                chunk.river.velocity
+            );
+        }
+    }
+
+    /// The regression that made `local_channel_radius_chunks` necessary.
+    ///
+    /// Thresholding each chunk's own distance to the nearest bank carves the
+    /// *rim* of every wide body -- a rim chunk is one chunk from the bank
+    /// however wide the body behind it is -- leaving a 64 m wide, 8 m deep
+    /// channel ringing flat lake water, which is precisely the water-wall
+    /// geometry the width cap exists to prevent. On the shipped raster that
+    /// was 11,650 rim chunks around 82 wide bodies.
+    ///
+    /// Probe: the widest authored water body on the map, centred 17 chunks
+    /// from its nearest bank. Not one chunk of it, rim included, may be
+    /// carved.
+    #[test]
+    #[ignore]
+    fn cromatolis_wide_water_bodies_are_not_carved_as_rivers_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let map_size_lg = sim.map_size_lg();
+        // Source-raster coordinates, y-flipped into engine space the same way
+        // `cromatolis_v21_relief_and_river_package_regression_against_real_lfs_assets`
+        // does.
+        let source = Vec2::new(449, 904);
+        let radius = 17;
+        let centre = Vec2::new(source.x, i32::from(map_size_lg.chunks().y) - 1 - source.y);
+
+        let mut inspected = 0;
+        for y in centre.y - radius..=centre.y + radius {
+            for x in centre.x - radius..=centre.x + radius {
+                if (x - centre.x).pow(2) + (y - centre.y).pow(2) > radius * radius {
+                    continue;
+                }
+                let chunk = &sim.chunks[vec2_as_uniform_idx(map_size_lg, Vec2::new(x, y))];
+                inspected += 1;
+                assert!(
+                    !chunk.river.river_kind.is_some_and(|kind| kind.is_river()),
+                    "chunk ({x}, {y}) inside the map's widest water body was carved as a river"
+                );
+            }
+        }
+        assert!(
+            inspected > 900,
+            "the probe disc should cover the whole body"
+        );
+    }
+
+    /// `WaterBodyKind` and `RiverKind` are allowed to disagree in exactly one
+    /// way -- a corridor too wide to carve -- and in no other. Anything else
+    /// means the two priority chains have drifted apart.
+    #[test]
+    #[ignore]
+    fn cromatolis_water_body_and_river_kind_agree_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let mut wide_rivers_typed_as_lakes = 0;
+        for chunk in sim.chunks.iter() {
+            match (chunk.water_body, chunk.river.river_kind) {
+                (Some(WaterBodyKind::Ocean | WaterBodyKind::Sea), Some(RiverKind::Ocean)) => {},
+                (
+                    Some(WaterBodyKind::Lake | WaterBodyKind::Lagoon),
+                    Some(RiverKind::Lake { .. }),
+                ) => {},
+                (Some(WaterBodyKind::River), Some(RiverKind::River { .. })) => {},
+                // The one documented disagreement: wider than
+                // `CROMATOLIS_MAX_RIVER_WIDTH`, so it is a river ecologically
+                // but a flat lake physically.
+                (Some(WaterBodyKind::River), Some(RiverKind::Lake { .. })) => {
+                    wide_rivers_typed_as_lakes += 1
+                },
+                (None, None) => {},
+                (water_body, river_kind) => panic!(
+                    "inconsistent water classification: {water_body:?} vs {river_kind:?} at a \
+                     chunk"
+                ),
+            }
+        }
+        assert_eq!(
+            wide_rivers_typed_as_lakes,
+            EXPORTED_RIVER_CELLS - CARVEABLE_RIVER_CELLS
+        );
+    }
+
+    /// COW-22 `C22-1c`, measured end to end: the biome histogram the
+    /// `alt < 0` disjunct used to produce (`Ocean` 331,778 / `Lake` 35,159)
+    /// against the one `is_ocean` alone produces.
+    ///
+    /// Also pins the `get_biome` consequence of `C22-1b`: with
+    /// `RiverKind::River` finally reachable and no `BiomeKind::River` to
+    /// answer with, a river chunk must still report `Lake` rather than falling
+    /// through to a land biome.
+    #[test]
+    #[ignore]
+    fn cromatolis_inland_water_is_no_longer_ocean_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+        let biome_count = |biome: BiomeKind| {
+            sim.chunks
+                .iter()
+                .filter(|chunk| chunk.get_biome() == biome)
+                .count()
+        };
+
+        // 331,778 - 14,618 inland chunks that were only "ocean" because their
+        // authored bed is painted below sea level (of the 14,665 the exporter
+        // counted; the rest were already `Lake` for other reasons).
+        assert_eq!(biome_count(BiomeKind::Ocean), EXPORTED_MARINE_CELLS);
+        // ...which land in `Lake` instead: 35,159 + 14,618 -- i.e. every
+        // classified water chunk that is not marine.
+        assert_eq!(
+            biome_count(BiomeKind::Lake),
+            AUTHORED_WATER_MASK_CELLS + STRAY_ELEVATED_LAKE_CELLS - EXPORTED_MARINE_CELLS
+        );
+
+        // A small, deliberate knock-on of `C22-1b` rather than of `C22-1c`:
+        // `pure_water` (which decides whether a chunk takes part in the
+        // land-uniform noise CDFs for humidity/flux/temperature) treats
+        // `RiverKind::River` as *not* pure water, matching its own stated
+        // intent of covering "non-water or land-adjacent water" chunks. The
+        // 3,974 newly-carveable river chunks therefore join those CDFs and
+        // shift every land chunk's humidity rank by ~0.001, which moves
+        // exactly 11 chunks of 1,048,576 across a biome boundary
+        // (Savannah 189,359 -> 189,348, Grassland 42,462 -> 42,473). The same
+        // chunks also flip from "underwater" to "dry" for
+        // `cromatolis_authored_tree_density`, so they pick up the painted
+        // vegetation density and the humidity bump that comes with it -- the
+        // banded control assertions below are what bound that second
+        // mechanism. Pinned so the next person to see a land-biome count move
+        // knows it was measured and expected, not a stray.
+        assert_eq!(biome_count(BiomeKind::Savannah), 189_348);
+        assert_eq!(biome_count(BiomeKind::Grassland), 42_473);
+        assert_eq!(biome_count(BiomeKind::Taiga), 4_119);
+        // The land biomes neither row moved. Banded rather than pinned
+        // exactly: these are chaotic derived quantities (the humidity rank
+        // shift above is what makes them so), and an unrelated CDF change
+        // should read as one signal, not as four simultaneous "failures".
+        for (biome, measured) in [
+            (BiomeKind::Jungle, 215_671.0),
+            (BiomeKind::Forest, 173_245.0),
+            (BiomeKind::Swamp, 12_467.0),
+            (BiomeKind::Mountain, 44_316.0),
+        ] {
+            let counted = biome_count(biome) as f64;
+            assert!(
+                (counted - measured).abs() / measured < 0.005,
+                "{biome:?} moved from the measured {measured} to {counted}, more than the 0.5% \
+                 band this row's own knock-on accounts for"
+            );
+        }
+
+        // No water chunk reports a land biome.
+        for chunk in sim.chunks.iter() {
+            if chunk.water_body.is_some() {
+                assert!(
+                    matches!(chunk.get_biome(), BiomeKind::Ocean | BiomeKind::Lake),
+                    "{:?} water chunk reports {:?}",
+                    chunk.water_body,
+                    chunk.get_biome()
+                );
+            }
+        }
+    }
+
+    /// The two downstream consequences of retyping 14,665 inland chunks and
+    /// making `RiverKind::River` reachable, checked rather than assumed.
+    ///
+    /// 1. The 13 `is_ocean()`-gated scatter configs (coral, seagrass, sea
+    ///    urchins, ...) must stop growing marine flora in the reclassified
+    ///    inland chunks. Their gate is `col.chunk.river.is_ocean()`, so this
+    ///    pins the size of that set.
+    /// 2. Every water chunk must still be claimed by one of the two Cromatolis
+    ///    wildlife manifest entries. Their chunk-level gates are
+    ///    `BiomeKind::Ocean` (`cromatolis.ocean`) and `cromatolis_freshwater`
+    ///    (`cromatolis.lake`); every generic `*.river`/`*.lake` entry is
+    ///    `not_cromatolis`-gated, so a chunk neither entry claims gets *no*
+    ///    wildlife at all.
+    #[test]
+    #[ignore]
+    fn cromatolis_water_reclassification_keeps_its_consumers_covered_against_real_lfs_assets() {
+        let sim = generate_cromatolis_world();
+
+        // 331,778 before COW-22 `C22-1c`; the 14,618-chunk difference is
+        // inland water that no longer grows coral.
+        let marine_scatter_chunks = sim
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.river.is_ocean())
+            .count();
+        assert_eq!(marine_scatter_chunks, 317_160);
+
+        let mut uncovered = 0;
+        let mut double_covered = 0;
+        for chunk in sim.chunks.iter() {
+            if chunk.water_body.is_none() {
+                continue;
+            }
+            let ocean_entry = chunk.get_biome() == BiomeKind::Ocean;
+            let lake_entry = crate::layer::wildlife::cromatolis_freshwater(chunk);
+            match (ocean_entry, lake_entry) {
+                (false, false) => uncovered += 1,
+                (true, true) => double_covered += 1,
+                _ => {},
+            }
+        }
+        assert_eq!(
+            uncovered, 0,
+            "{uncovered} water chunks are claimed by neither Cromatolis wildlife entry"
+        );
+        assert_eq!(
+            double_covered, 0,
+            "{double_covered} water chunks are claimed by both Cromatolis wildlife entries, \
+             double-counting their density"
         );
     }
 }
