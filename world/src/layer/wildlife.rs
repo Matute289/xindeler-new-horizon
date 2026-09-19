@@ -660,6 +660,18 @@ pub(crate) fn not_cromatolis(c: &SimChunk) -> f32 {
 /// because the alternative -- a narrow window tuned to today's numbers -- is
 /// exactly what broke last time.
 ///
+/// # Deletion trigger
+///
+/// **COW-22 `C22-5`** (`cromatolis_v0_aquatic_ecology.ron` and its two
+/// consumers, tracked in the `COW-22` row of
+/// `docs/design/backlog/cromatolis-open-world.md`) replaces this function and
+/// both of its callers -- `world.wildlife.spawn.cromatolis.ocean` and
+/// `.lake` -- with a single manifest entry driven by that asset's profile
+/// table. Removing all three is part of that task, not a follow-up to it.
+/// This function exists only because the climate rework landed first and, on
+/// its own, would have zeroed both entries; it is a bridge with a named end,
+/// not an accepted design.
+///
 /// The two entries previously used `close(col.temp, CONFIG.desert_temp + 0.1,
 /// 0.2)`, i.e. a window of `[0.7, 1.1]`. That fitted a map whose every water
 /// column sat at a flat, artificially hot sea-level baseline. Measured against

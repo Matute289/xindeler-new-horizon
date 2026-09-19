@@ -119,9 +119,10 @@ struct GenCdf {
     /// raster because "bare" never implicitly means "sand".
     authored_ground_substrate_zones: Option<ResolvedGroundSubstrateZones>,
     /// Authored baseline-temperature-curve tuning for the loaded region (if
-    /// any), or `AuthoredCromatolisClimate::default()` if none is loaded /
-    /// the asset failed to parse. See `cromatolis_baseline_temp`.
-    pub(crate) cromatolis_climate: AuthoredCromatolisClimate,
+    /// any), or the default curve if none is loaded / the asset failed to
+    /// parse. Already resolved into chunk space, so per-chunk generation only
+    /// reads it. See `cromatolis_baseline_temp`.
+    pub(crate) cromatolis_climate: ResolvedCromatolisClimate,
     authored_alpine_policy: Option<(&'static str, AuthoredAlpinePolicy)>,
     /// Per-chunk "adjacent to authored water" signal, see
     /// `SimChunk::authored_near_water`.
@@ -664,20 +665,32 @@ impl AuthoredTreeCandidateZone {
     }
 }
 
-fn point_in_normalized_top_left_polygon(
-    point: NormalizedTopLeftPoint,
-    polygon: &[NormalizedTopLeftPoint],
-) -> bool {
-    if polygon.len() < 3 {
+/// Even-odd ray cast, with a point lying *on* an edge counted as inside.
+///
+/// The one point-in-polygon primitive for authored zones. It is deliberately
+/// space-agnostic — callers hand it whatever 2D space their polygon is already
+/// expressed in (normalized for tree-candidate zones, chunk space for
+/// microclimates) — because the containment test is identical in every space
+/// and two copies of it drift: the first pair of these that existed disagreed
+/// on the on-edge case, which is exactly the case a hand-authored polygon
+/// snapped to a round coordinate lands on.
+///
+/// Takes an iterator rather than a slice so a caller whose vertices are stored
+/// as some other point type can map into it without allocating. `Clone` is
+/// required because the edge walk pairs the sequence with itself.
+fn point_in_polygon<I>(point: Vec2<f32>, vertices: I) -> bool
+where
+    I: IntoIterator<Item = Vec2<f32>>,
+    I::IntoIter: Clone + ExactSizeIterator,
+{
+    let vertices = vertices.into_iter();
+    let len = vertices.len();
+    if len < 3 {
         return false;
     }
 
     let mut inside = false;
-    for (start, end) in polygon
-        .iter()
-        .zip(polygon.iter().cycle().skip(1))
-        .take(polygon.len())
-    {
+    for (start, end) in vertices.clone().zip(vertices.cycle().skip(1)).take(len) {
         let cross =
             (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
         let on_segment = cross.abs() <= f32::EPSILON
@@ -696,6 +709,20 @@ fn point_in_normalized_top_left_polygon(
         }
     }
     inside
+}
+
+/// [`point_in_polygon`] for a polygon still in its authored
+/// `polygon_normalized_top_left` form. The name describes where the *polygon*
+/// came from, not the test: callers have already put `point` in the same space
+/// as `polygon`, whichever that is.
+fn point_in_normalized_top_left_polygon(
+    point: NormalizedTopLeftPoint,
+    polygon: &[NormalizedTopLeftPoint],
+) -> bool {
+    point_in_polygon(
+        Vec2::new(point.x, point.y),
+        polygon.iter().map(|vertex| Vec2::new(vertex.x, vertex.y)),
+    )
 }
 
 /// Data-owned, region-scoped supplement to the normal tree-root lattice.
@@ -1140,6 +1167,25 @@ fn authored_region_for_map_asset(specifier: &str) -> Option<&'static AuthoredReg
 /// the scale complete means a region that does reach them needs no new class
 /// ids, and a mask that accidentally carries one decodes to something named
 /// rather than to whichever neighbour happened to be nearest.
+///
+/// # Where the raster comes from
+///
+/// **The producer lives in another repository.** The class ids below are one
+/// end of a contract whose other end is the sibling `xindeler-open-world`
+/// repo: a hand-painted TIFF under `~/MyXindeler/OpenWorld/Cromatolis/l16-v10/`
+/// goes through its `tools/import_l16_v10_manual_masks.py` (majority vote,
+/// 16×16 → 2048×1536) and `tools/export_v0_terrain_bundle.py` (nearest
+/// neighbour, → 1024×1024), and `open_world_cli export-new-horizon` stages the
+/// `.f32le` this crate then loads. Nothing in *this* repository produces it,
+/// so a change here that assumes a different gray ramp, a different class
+/// count or an interpolable value will not fail to build -- it will just
+/// disagree with the exporter.
+///
+/// Both of those resample steps are chosen specifically because this layer is
+/// categorical, and neither matches what the other authored masks use.
+/// Averaging two class ids yields the id of a third, real class; LANCZOS
+/// yields values that are no class at all. See
+/// `assets/world/map/cromatolis_v0_climate.ron`'s header for the full chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClimateZone {
     Polar,
@@ -1248,51 +1294,63 @@ struct AuthoredMicroclimateZone {
 }
 
 impl AuthoredMicroclimateZone {
+    /// Projects the authored polygon into chunk space once, at load time.
+    /// Returns `None` for a polygon too degenerate to contain anything --
+    /// `validate` already rejects those, so this only covers a hand-built
+    /// value that never went through the asset loader.
+    fn resolve(&self, map_chunks: Vec2<u16>) -> Option<ResolvedMicroclimateZone> {
+        (self.polygon_normalized_top_left.len() >= 3).then(|| ResolvedMicroclimateZone {
+            forced_sea_level_temp_c: self.forced_sea_level_temp_c,
+            falloff_chunks: self.falloff_chunks,
+            vertices: self
+                .polygon_normalized_top_left
+                .iter()
+                .map(|point| {
+                    Vec2::new(
+                        point.x * map_chunks.x as f32,
+                        // Normalized space is top-left origin, chunk space is
+                        // bottom-left. Flip once, here, rather than at every
+                        // geometry call site.
+                        (1.0 - point.y) * map_chunks.y as f32,
+                    )
+                })
+                .collect(),
+        })
+    }
+}
+
+/// One [`AuthoredMicroclimateZone`] with its polygon already in chunk space.
+///
+/// Split out for cost, not tidiness: `weight_at` runs once per zone per chunk
+/// inside `SimChunk::generate`'s parallel loop -- ~1M times per world at the
+/// current map size -- and the projection it used to do there is invariant
+/// across every one of those calls. Same reason (and the same shape) as
+/// [`ResolvedGroundSubstrateZones`], the sibling zone type that solved this
+/// first. Today's single zone would not notice; the mechanism exists to hold
+/// more.
+#[derive(Debug)]
+struct ResolvedMicroclimateZone {
+    forced_sea_level_temp_c: f32,
+    falloff_chunks: f32,
+    /// Polygon in chunk space, `y` already flipped out of the authoring
+    /// convention.
+    vertices: Vec<Vec2<f32>>,
+}
+
+impl ResolvedMicroclimateZone {
     /// Blend weight at `chunk_pos`: `1.0` inside the polygon, falling
     /// linearly to `0.0` at `falloff_chunks` outside it.
-    fn weight_at(&self, chunk_pos: Vec2<i32>, map_chunks: Vec2<u16>) -> f32 {
-        if self.polygon_normalized_top_left.len() < 3 {
-            return 0.0;
-        }
-        let vertices: Vec<Vec2<f32>> = self
-            .polygon_normalized_top_left
-            .iter()
-            .map(|point| {
-                Vec2::new(
-                    point.x * map_chunks.x as f32,
-                    // Normalized space is top-left origin, chunk space is
-                    // bottom-left. Flip once here rather than at each
-                    // geometry call site below.
-                    (1.0 - point.y) * map_chunks.y as f32,
-                )
-            })
-            .collect();
+    fn weight_at(&self, chunk_pos: Vec2<i32>) -> f32 {
         let point = chunk_pos.map(|e| e as f32) + 0.5;
-        if point_in_polygon(point, &vertices) {
+        if point_in_polygon(point, self.vertices.iter().copied()) {
             return 1.0;
         }
         if self.falloff_chunks <= 0.0 {
             return 0.0;
         }
-        let distance = distance_to_polygon_edge(point, &vertices);
+        let distance = distance_to_polygon_edge(point, &self.vertices);
         (1.0 - distance / self.falloff_chunks).clamp(0.0, 1.0)
     }
-}
-
-/// Even-odd ray cast. `vertices` must have at least 3 entries.
-fn point_in_polygon(point: Vec2<f32>, vertices: &[Vec2<f32>]) -> bool {
-    let mut inside = false;
-    let mut j = vertices.len() - 1;
-    for i in 0..vertices.len() {
-        let (a, b) = (vertices[i], vertices[j]);
-        if (a.y > point.y) != (b.y > point.y)
-            && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x
-        {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 /// Shortest distance from `point` to the polygon's boundary (not its
@@ -1416,6 +1474,39 @@ impl AuthoredCromatolisClimate {
         Ok(())
     }
 
+    /// Projects every microclimate polygon into chunk space once, producing
+    /// the form `SimChunk::generate` actually queries.
+    fn resolve(&self, map_chunks: Vec2<u16>) -> ResolvedCromatolisClimate {
+        ResolvedCromatolisClimate {
+            zone_anchors: self.zone_anchors,
+            fallback_sea_level_temp_c: self.fallback_sea_level_temp_c,
+            microclimate_zones: self
+                .microclimate_zones
+                .iter()
+                .filter_map(|zone| zone.resolve(map_chunks))
+                .collect(),
+            lapse_rate_c_per_m: self.lapse_rate_c_per_m,
+            tree_min_temp: self.tree_min_temp,
+            max_tree_altitude_m: self.max_tree_altitude_m,
+        }
+    }
+}
+
+/// [`AuthoredCromatolisClimate`] in the form worldgen reads it: identical
+/// scalars, with each microclimate polygon already projected into chunk space
+/// (see [`ResolvedMicroclimateZone`]). Built once per world, then borrowed by
+/// every chunk.
+#[derive(Debug)]
+struct ResolvedCromatolisClimate {
+    zone_anchors: AuthoredClimateZoneAnchors,
+    fallback_sea_level_temp_c: f32,
+    microclimate_zones: Vec<ResolvedMicroclimateZone>,
+    lapse_rate_c_per_m: f32,
+    tree_min_temp: f32,
+    max_tree_altitude_m: f32,
+}
+
+impl ResolvedCromatolisClimate {
     /// Sea-level temperature for one chunk, in real degrees Celsius: the
     /// anchor for whatever class the authored raster painted there, then any
     /// microclimate override blended over it.
@@ -1428,12 +1519,7 @@ impl AuthoredCromatolisClimate {
     /// one and win where it is closer to its own polygon. Ties keep the
     /// earlier declaration, so the asset's order is the tiebreak and the
     /// result does not depend on iteration order.
-    fn resolve_sea_level_temp_c(
-        &self,
-        chunk_pos: Vec2<i32>,
-        map_chunks: Vec2<u16>,
-        zone_value: Option<f32>,
-    ) -> f32 {
+    fn resolve_sea_level_temp_c(&self, chunk_pos: Vec2<i32>, zone_value: Option<f32>) -> f32 {
         let base = zone_value.map_or(self.fallback_sea_level_temp_c, |value| {
             self.zone_anchors
                 .sea_level_temp_c(ClimateZone::from_layer_value(value))
@@ -1443,7 +1529,7 @@ impl AuthoredCromatolisClimate {
         }
         let mut best: Option<(f32, f32)> = None;
         for zone in &self.microclimate_zones {
-            let weight = zone.weight_at(chunk_pos, map_chunks);
+            let weight = zone.weight_at(chunk_pos);
             if weight > 0.0 && best.is_none_or(|(best_weight, _)| weight > best_weight) {
                 best = Some((weight, zone.forced_sea_level_temp_c));
             }
@@ -1453,6 +1539,10 @@ impl AuthoredCromatolisClimate {
             None => base,
         }
     }
+}
+
+impl Default for ResolvedCromatolisClimate {
+    fn default() -> Self { AuthoredCromatolisClimate::default().resolve(Vec2::broadcast(1)) }
 }
 
 impl FileAsset for AuthoredCromatolisClimate {
@@ -2323,13 +2413,15 @@ impl WorldSim {
         // `load_authored_layer` has already emitted the diagnostic warning.
         let ground_cover_available = authored_ground_cover_layer.is_some();
         // Not a raster layer (`AuthoredLayerKind`), so loaded separately: a
-        // couple of scalar tuning values, not a per-chunk array.
+        // handful of scalar tuning values plus the microclimate polygons, not
+        // a per-chunk array. Resolved into chunk space here, once, rather than
+        // per chunk -- see `ResolvedMicroclimateZone`.
         let cromatolis_climate = authored_region
             .filter(|region| region.id == CROMATOLIS_V0_REGION_ID)
             .and_then(|region| {
                 let specifier = format!("{}_climate", region.map_asset);
                 match AuthoredCromatolisClimate::load_owned(&specifier) {
-                    Ok(climate) => Some(climate),
+                    Ok(climate) => Some(climate.resolve(map_size_lg.chunks())),
                     Err(err) => {
                         warn!(
                             ?err,
@@ -2341,7 +2433,7 @@ impl WorldSim {
                     },
                 }
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| AuthoredCromatolisClimate::default().resolve(map_size_lg.chunks()));
         // Never apply an authored terrain policy to the procedural fallback
         // produced when its binary map cannot load.
         let authored_alpine_policy = authored_region
@@ -4655,7 +4747,7 @@ fn cromatolis_authored_tree_density(
     is_underwater: bool,
     temp: f32,
     alt_pre: f32,
-    climate: &AuthoredCromatolisClimate,
+    climate: &ResolvedCromatolisClimate,
     alpine_policy: Option<AuthoredAlpinePolicy>,
 ) -> f32 {
     let tree_line = alpine_policy.map_or(climate.max_tree_altitude_m, |p| p.tree_line_altitude_m);
@@ -5701,11 +5793,9 @@ impl SimChunk {
                 .authored_climate_zone_layer
                 .as_ref()
                 .map(|zones| authored_layer_value_for_cromatolis_v0(map_size_lg, posi, zones));
-            let sea_level_temp_c = gen_cdf.cromatolis_climate.resolve_sea_level_temp_c(
-                pos,
-                map_size_lg.chunks(),
-                zone_value,
-            );
+            let sea_level_temp_c = gen_cdf
+                .cromatolis_climate
+                .resolve_sea_level_temp_c(pos, zone_value);
             temp = cromatolis_baseline_temp(
                 alt_pre,
                 sea_level_temp_c,
@@ -6181,21 +6271,21 @@ mod tests {
 
     #[test]
     fn resolving_sea_level_temp_reads_the_zone_raster_and_degrades_to_the_fallback() {
-        let climate = AuthoredCromatolisClimate::default();
+        let climate = AuthoredCromatolisClimate::default().resolve(TEST_MAP_CHUNKS);
         let anywhere = Vec2::new(50, 50);
 
         assert_eq!(
-            climate.resolve_sea_level_temp_c(anywhere, TEST_MAP_CHUNKS, Some(0.4)),
+            climate.resolve_sea_level_temp_c(anywhere, Some(0.4)),
             climate.zone_anchors.temperate_c
         );
         assert_eq!(
-            climate.resolve_sea_level_temp_c(anywhere, TEST_MAP_CHUNKS, Some(0.8)),
+            climate.resolve_sea_level_temp_c(anywhere, Some(0.8)),
             climate.zone_anchors.tropical_c
         );
         // A missing layer must not read as class 0 (Polar), which is what
         // defaulting the sampled value to 0.0 would do.
         assert_eq!(
-            climate.resolve_sea_level_temp_c(anywhere, TEST_MAP_CHUNKS, None),
+            climate.resolve_sea_level_temp_c(anywhere, None),
             climate.fallback_sea_level_temp_c
         );
     }
@@ -6205,11 +6295,11 @@ mod tests {
         let climate = AuthoredCromatolisClimate {
             microclimate_zones: vec![microclimate("cold.vault", 1.0, 10.0)],
             ..AuthoredCromatolisClimate::default()
-        };
+        }
+        .resolve(TEST_MAP_CHUNKS);
         let temperate = climate.zone_anchors.temperate_c;
         let zone_value = Some(0.4);
-        let at =
-            |x, y| climate.resolve_sea_level_temp_c(Vec2::new(x, y), TEST_MAP_CHUNKS, zone_value);
+        let at = |x, y| climate.resolve_sea_level_temp_c(Vec2::new(x, y), zone_value);
 
         // Fully inside: the override wins outright, cold against a warm region.
         assert_eq!(at(15, 15), 1.0);
@@ -6236,9 +6326,10 @@ mod tests {
                 microclimate("hot", 40.0, 10.0),
             ],
             ..AuthoredCromatolisClimate::default()
-        };
+        }
+        .resolve(TEST_MAP_CHUNKS);
         assert_eq!(
-            cold_first.resolve_sea_level_temp_c(Vec2::new(15, 15), TEST_MAP_CHUNKS, Some(0.4)),
+            cold_first.resolve_sea_level_temp_c(Vec2::new(15, 15), Some(0.4)),
             1.0,
             "equal weight must keep the earlier declaration, not the warmer one"
         );
@@ -6250,12 +6341,92 @@ mod tests {
                 microclimate("wide", 40.0, 20.0),
             ],
             ..AuthoredCromatolisClimate::default()
-        };
-        let outside = reach.resolve_sea_level_temp_c(Vec2::new(15, 4), TEST_MAP_CHUNKS, Some(0.4));
+        }
+        .resolve(TEST_MAP_CHUNKS);
+        let outside = reach.resolve_sea_level_temp_c(Vec2::new(15, 4), Some(0.4));
         assert!(
             outside > reach.zone_anchors.temperate_c,
             "outside the narrow zone's reach the wider (hot) zone must be the one still blending, \
              got {outside}"
+        );
+    }
+
+    /// Both authored zone kinds share one containment primitive, so the
+    /// on-edge case has to agree between them. It used to not: the
+    /// tree-candidate polygon counted a point lying exactly on an edge as
+    /// inside, the microclimate polygon did not, and a hand-authored polygon
+    /// snapped to round coordinates lands on that case constantly.
+    #[test]
+    fn both_authored_zone_kinds_agree_that_a_point_on_an_edge_is_inside() {
+        let square = [
+            Vec2::new(10.0, 10.0),
+            Vec2::new(20.0, 10.0),
+            Vec2::new(20.0, 20.0),
+            Vec2::new(10.0, 20.0),
+        ];
+        assert!(point_in_polygon(Vec2::new(15.0, 15.0), square));
+        assert!(point_in_polygon(Vec2::new(10.0, 15.0), square), "left edge");
+        assert!(
+            point_in_polygon(Vec2::new(20.0, 15.0), square),
+            "right edge"
+        );
+        assert!(point_in_polygon(Vec2::new(10.0, 10.0), square), "corner");
+        assert!(!point_in_polygon(Vec2::new(9.9, 15.0), square));
+        // Fewer than three vertices cannot contain anything.
+        assert!(!point_in_polygon(Vec2::new(15.0, 15.0), [
+            Vec2::new(10.0, 10.0),
+            Vec2::new(20.0, 20.0),
+        ]));
+
+        // The normalized wrapper must be the same test, not a second one.
+        let normalized: Vec<NormalizedTopLeftPoint> = square
+            .iter()
+            .map(|v| NormalizedTopLeftPoint {
+                x: v.x / 100.0,
+                y: v.y / 100.0,
+            })
+            .collect();
+        assert!(point_in_normalized_top_left_polygon(
+            NormalizedTopLeftPoint { x: 0.10, y: 0.15 },
+            &normalized
+        ));
+    }
+
+    /// The resolved form must place the polygon exactly where the authored
+    /// normalized coordinates say, including the top-left -> bottom-left `y`
+    /// flip, and must do so without re-projecting per query.
+    #[test]
+    fn resolving_a_microclimate_projects_its_polygon_into_chunk_space_once() {
+        let zone = microclimate("probe", 30.0, 0.0)
+            .resolve(TEST_MAP_CHUNKS)
+            .expect("a 4-point polygon resolves");
+
+        // Authored x 0.10..0.21 over 100 chunks -> 10..21.
+        // Authored y 0.79..0.90 top-left -> chunk y 10..21 after the flip.
+        assert_eq!(zone.vertices.len(), 4);
+        // Approximate: the flip is `(1.0 - y) * chunks`, so an authored 0.79
+        // lands on 20.999998 rather than exactly 21.
+        let near = |got: Vec2<f32>, want: Vec2<f32>| {
+            assert!(
+                got.distance(want) < 1e-4,
+                "expected {want:?} in chunk space, got {got:?}"
+            );
+        };
+        near(zone.vertices[0], Vec2::new(10.0, 21.0));
+        near(zone.vertices[2], Vec2::new(21.0, 10.0));
+        assert_eq!(zone.weight_at(Vec2::new(15, 15)), 1.0);
+        // Zero falloff means the override stops dead at the boundary.
+        assert_eq!(zone.weight_at(Vec2::new(30, 30)), 0.0);
+
+        // A polygon too degenerate to contain anything never becomes a
+        // resolved zone at all.
+        assert!(
+            AuthoredMicroclimateZone {
+                polygon_normalized_top_left: vec![NormalizedTopLeftPoint { x: 0.1, y: 0.1 }],
+                ..microclimate("degenerate", 30.0, 4.0)
+            }
+            .resolve(TEST_MAP_CHUNKS)
+            .is_none()
         );
     }
 
@@ -6819,7 +6990,7 @@ mod tests {
 
     #[test]
     fn cromatolis_biome_mask_density_is_linear_except_for_physical_exclusions() {
-        let climate = AuthoredCromatolisClimate::default();
+        let climate = AuthoredCromatolisClimate::default().resolve(TEST_MAP_CHUNKS);
         // Matías's authored table is expressed as blackness: 100% black is
         // bare terrain and 0% black (white) is maximum vegetation. The
         // runtime input is the inverse grayscale intensity, which must pass
@@ -6934,8 +7105,9 @@ mod tests {
         let permissive_climate = AuthoredCromatolisClimate {
             tree_min_temp: -0.5,
             max_tree_altitude_m: 1_200.0,
-            ..climate.clone()
-        };
+            ..AuthoredCromatolisClimate::default()
+        }
+        .resolve(TEST_MAP_CHUNKS);
         assert_eq!(
             cromatolis_authored_tree_density(
                 0.50,

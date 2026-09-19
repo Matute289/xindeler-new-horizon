@@ -1,4 +1,26 @@
 (
+    // WHERE THIS FILE'S COMPANION DATA COMES FROM
+    //
+    // The zone raster this file's anchors are keyed to is NOT produced in this
+    // repository. It is authored and exported in the sibling `xindeler-open-world`
+    // repo, and arrives here as a generated binary that must never be hand-edited:
+    //
+    //   ~/MyXindeler/OpenWorld/Cromatolis/l16-v10/climate_zone_mask_manual_v<N>.tif
+    //     |  xindeler-open-world: tools/import_l16_v10_manual_masks.py   (16x16 -> 2048x1536, "mode")
+    //     v
+    //   worlds/cromatolis/terrain/v0/climate_zone_mask_manual.png
+    //     |  xindeler-open-world: tools/export_v0_terrain_bundle.py      (-> 1024x1024, NEAREST)
+    //     v
+    //   worlds/cromatolis/terrain/v0/export/terrain_bundle_v0/climate_zone.f32le
+    //     |  xindeler-open-world: cargo run -p open_world_cli -- export-new-horizon cromatolis
+    //     v
+    //   assets/world/map/cromatolis_v0_climate_zone.f32le   (this repo, Git LFS)
+    //
+    // Both resample steps are chosen for a CATEGORICAL layer and are not the
+    // defaults the other masks use. Averaging two class ids produces the id of a
+    // third, real zone along every band edge; LANCZOS produces values that are no
+    // zone at all. Changing either one silently corrupts this file's meaning
+    // without changing this file. See `world/src/sim/mod.rs`'s `ClimateZone`.
     schema: "xindeler_open_world.authored_climate.v3",
 
     // Sea-level temperature per authored climate class, in real degrees
