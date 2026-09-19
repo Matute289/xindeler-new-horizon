@@ -57,6 +57,7 @@ use common::{
     vol::RectVolSize,
 };
 use hashbrown::HashMap;
+use itertools::Either;
 use serde::Deserialize;
 use std::ops::{Range, RangeInclusive};
 use vek::*;
@@ -253,6 +254,15 @@ struct VoidShape {
     /// authored value -- the per-shape split is capability, not a decision
     /// anyone has to make now.
     contact: ProceduralContact,
+    /// Which authored feature this shape came from, as an index into
+    /// [`AuthoredVoids::features`]. Diagnostics only -- nothing in the query
+    /// path reads it.
+    ///
+    /// An index rather than the name itself for two reasons: one authored
+    /// feature contributes many shapes, so the name would be duplicated across
+    /// all of them; and "same feature" becomes an integer compare, which is
+    /// exactly the grouping every per-feature diagnostic needs.
+    feature: u16,
 }
 
 impl VoidShape {
@@ -291,6 +301,9 @@ fn margin_for(contact: ProceduralContact) -> f32 {
 /// read-only.
 pub(crate) struct AuthoredVoids {
     shapes: Vec<VoidShape>,
+    /// The authored feature each shape belongs to, indexed by
+    /// [`VoidShape::feature`]. Diagnostics only.
+    features: Vec<String>,
     /// Chunk-granular bucket grid over `shapes`, keyed by chunk position, so
     /// the per-chunk lookup is one hash instead of a scan over every shape.
     /// Buckets are `Vec<u32>` (indices into `shapes`) rather than inline
@@ -320,11 +333,46 @@ impl ChunkVoids<'_> {
     /// when no authored shape claims this column at this z-band.
     ///
     /// When several shapes claim it, the **strongest** policy wins:
-    /// [`ProceduralContact::Seal`] beats [`ProceduralContact::Connect`]. That
-    /// tie-break is deliberate -- `Seal` is a promise ("this authored volume
-    /// is never breached") and `Connect` is only a permission, and a
-    /// permission must never override a promise. So a column claimed by both a
-    /// `Connect` cave and a neighbouring `Seal` cave's protection shell seals.
+    /// [`ProceduralContact::Seal`] beats [`ProceduralContact::Connect`]. So a
+    /// column claimed by both a `Connect` void and a neighbouring `Seal` void's
+    /// protection shell seals.
+    ///
+    /// # Why that is the correct rule, not merely a safe one
+    ///
+    /// `Seal` is a safety property and `Connect` is a permission, and the two
+    /// failure modes cost wildly different amounts. Resolving a contested
+    /// column the wrong way toward `Seal` costs a breach that does not happen:
+    /// the authored void is still there, still explorable, still reachable by
+    /// its own authored entrance -- accessibility was deliberately decoupled
+    /// from this policy precisely so that a hash-placed tunnel is never what
+    /// makes a feature reachable -- and a player can still mine through.
+    /// Resolving it the wrong way toward `Connect` costs a procedural tunnel
+    /// opening into a hand-authored vault that the author said must never be
+    /// breached, which is lore-breaking, seed-dependent, and invisible until
+    /// someone walks into it. Asymmetric costs justify an asymmetric default.
+    ///
+    /// There is a second reason the asymmetry is cheap right now: the only
+    /// production consumer acts on `Seal` and treats `Connect` and `None`
+    /// identically, so a `Connect` resolved to `Seal` is *behaviourally*
+    /// indistinguishable from one that was never claimed. Today the tie-break
+    /// costs fidelity to what the catalog says and nothing else.
+    ///
+    /// The tempting refinement -- prefer `Connect` where the column lies inside
+    /// a `Connect` void's *carved* volume, on the grounds that the sealed
+    /// neighbour's rock slab is already hollowed out there by another authored
+    /// feature -- is **not** an improvement **while the clip's unit is a whole
+    /// `(column, tunnel)` entry**. Keeping the tunnel keeps its entire z-range,
+    /// including the part that lies in the sealed neighbour's shell and not in
+    /// the connected void at all, so it trades a visible, diagnosable failure
+    /// (a breach that did not happen, reported by
+    /// [`AuthoredVoids::inert_connect_features`]) for a silent one (rock
+    /// removed from around a sealed vault).
+    ///
+    /// That is a property of today's clip, not a law. A clip that split the
+    /// z-range instead of dropping the entry could honour both, and the
+    /// refinement would be worth revisiting then -- it was rejected here for
+    /// its own reason (a split leaves a thin rock slab *inside* the protected
+    /// volume), so the two would have to be reconsidered together.
     ///
     /// Note that the only production consumer today acts on `Seal` and treats
     /// `Connect` and `None` alike -- `Connect`'s whole behaviour *is* doing
@@ -376,10 +424,11 @@ impl ChunkVoids<'_> {
 #[derive(Default)]
 pub(crate) struct AuthoredVoidsBuilder {
     shapes: Vec<VoidShape>,
+    features: Vec<String>,
 }
 
 impl AuthoredVoidsBuilder {
-    pub(crate) fn push_disc(&mut self, disc: DiscShape, contact: ProceduralContact) {
+    pub(crate) fn push_disc(&mut self, disc: DiscShape, contact: ProceduralContact, label: &str) {
         self.push(
             VoidGeom::Disc {
                 centre: disc.centre,
@@ -388,10 +437,16 @@ impl AuthoredVoidsBuilder {
                 ceiling_z: disc.ceiling_z,
             },
             contact,
+            label,
         );
     }
 
-    pub(crate) fn push_capsule(&mut self, capsule: CapsuleShape, contact: ProceduralContact) {
+    pub(crate) fn push_capsule(
+        &mut self,
+        capsule: CapsuleShape,
+        contact: ProceduralContact,
+        label: &str,
+    ) {
         self.push(
             VoidGeom::Capsule {
                 a: capsule.a,
@@ -402,15 +457,26 @@ impl AuthoredVoidsBuilder {
                 span: capsule.span,
             },
             contact,
+            label,
         );
     }
 
-    fn push(&mut self, geom: VoidGeom, contact: ProceduralContact) {
+    fn push(&mut self, geom: VoidGeom, contact: ProceduralContact, label: &str) {
         let aabr = shape_aabr(&geom, margin_for(contact));
+        // Shapes of one feature are registered consecutively, so checking the
+        // last entry interns them without a map.
+        let feature = match self.features.last() {
+            Some(last) if last == label => self.features.len() - 1,
+            _ => {
+                self.features.push(label.to_string());
+                self.features.len() - 1
+            },
+        };
         self.shapes.push(VoidShape {
             geom,
             aabr,
             contact,
+            feature: feature as u16,
         });
     }
 
@@ -418,12 +484,12 @@ impl AuthoredVoidsBuilder {
     /// what makes every consumer a no-op, and generation bit-identical, for a
     /// world with no authored region.
     pub(crate) fn finish(self) -> Option<AuthoredVoids> {
-        (!self.shapes.is_empty()).then(|| AuthoredVoids::from_shapes(self.shapes))
+        (!self.shapes.is_empty()).then(|| AuthoredVoids::from_shapes(self.shapes, self.features))
     }
 }
 
 impl AuthoredVoids {
-    fn from_shapes(shapes: Vec<VoidShape>) -> Self {
+    fn from_shapes(shapes: Vec<VoidShape>, features: Vec<String>) -> Self {
         let mut grid: HashMap<Vec2<i32>, Vec<u32>> = HashMap::new();
         for (idx, shape) in shapes.iter().enumerate() {
             let min = wpos_to_cpos(shape.aabr.min);
@@ -434,7 +500,11 @@ impl AuthoredVoids {
                 }
             }
         }
-        Self { shapes, grid }
+        Self {
+            shapes,
+            features,
+            grid,
+        }
     }
 
     /// The shapes that could claim any column of the chunk containing
@@ -451,12 +521,10 @@ impl AuthoredVoids {
 
     /// One-shot form of [`ChunkVoids::contact_at_column`], for callers that
     /// query a single column and have nothing to amortise the bucket lookup
-    /// over.
+    /// over -- the diagnostic below, and the tests.
     ///
-    /// Test-gated today: every production consumer reads many candidate
-    /// features at one column, so it resolves [`Self::in_chunk`] once and
-    /// reuses it. Widening this is a one-line attribute change.
-    #[cfg(test)]
+    /// Every *production* consumer reads many candidate features at one column
+    /// instead, so it resolves [`Self::in_chunk`] once and reuses it.
     pub(crate) fn contact_at_column(
         &self,
         wpos2d: Vec2<i32>,
@@ -511,6 +579,73 @@ impl AuthoredVoids {
                 band_dilated_by(&shape.geom, 0.0, wpos2d, col_alt).map(|band| (band, shape.contact))
             })
             .collect()
+    }
+
+    /// Names every authored feature whose `Connect` policy the `Seal`
+    /// tie-break has made completely inert.
+    ///
+    /// # Why this exists
+    ///
+    /// [`ChunkVoids::contact_at_column`] resolves a contested column to `Seal`,
+    /// including when the only `Seal` claim comes from a *neighbour's*
+    /// protection shell rather than from anything that neighbour actually
+    /// carved. That is the intended rule and it is the right one (see the
+    /// tie-break's own doc), but it has one failure mode worth catching: an
+    /// authored feature marked `Connect` can sit entirely inside some `Seal`
+    /// feature's shell, in which case its authored policy does nothing at all
+    /// and **the author has no way to find out**. The rule is safe; the silence
+    /// is not, and the silence is what this removes.
+    ///
+    /// # What "inert" means here
+    ///
+    /// Every sampled point of **every** shape the feature contributes resolves
+    /// to `Seal`. Per feature, not per shape, and the distinction matters: a
+    /// cave contributes a chamber and several tunnels, and a sealed neighbour
+    /// swallowing one tunnel is not the same as swallowing the cave -- the rest
+    /// of it still gets its breach. Reporting a feature that keeps any of its
+    /// footprint would train people to ignore the warning.
+    ///
+    /// The sampling is coarse on purpose -- this is a diagnostic, not a
+    /// guarantee -- but every sample goes through the production query, so it
+    /// can never disagree with what the guard will actually do.
+    ///
+    /// `alt_at` supplies terrain altitude, because the carved band depends on
+    /// the surface cap. Passed in rather than looked up so this module stays
+    /// free of any dependency on the terrain sampler; reporting is likewise
+    /// left to the caller, so the index itself stays a pure query.
+    pub(crate) fn inert_connect_features(&self, alt_at: impl Fn(Vec2<i32>) -> f32) -> Vec<&str> {
+        let mut tally = vec![(0_u32, 0_u32); self.features.len()];
+        for shape in self.shapes.iter() {
+            if shape.contact != ProceduralContact::Connect {
+                continue;
+            }
+            let (sampled, sealed) = &mut tally[shape.feature as usize];
+            for wpos2d in sample_columns(&shape.geom) {
+                let col_alt = alt_at(wpos2d);
+                // The shape's own carved volume -- what the author asked to be
+                // breachable. If the shape carves nothing at this column there
+                // is nothing to shadow.
+                let Some(band) = band_dilated_by(&shape.geom, 0.0, wpos2d, col_alt) else {
+                    continue;
+                };
+                *sampled += 1;
+                let z = band.start().floor() as i32..band.end().ceil() as i32 + 1;
+                if self.contact_at_column(wpos2d, col_alt, &z) == Some(ProceduralContact::Seal) {
+                    *sealed += 1;
+                }
+            }
+        }
+
+        let mut inert: Vec<&str> = tally
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, (sampled, sealed))| sampled > 0 && sampled == sealed)
+            .map(|(feature, _)| self.features[feature].as_str())
+            .collect();
+        // Sorted so the answer depends on the geometry and not on the order the
+        // catalog happens to list its features in.
+        inert.sort_unstable();
+        inert
     }
 
     /// `(chunk buckets, total bucket entries, largest bucket)`.
@@ -634,6 +769,68 @@ fn band_dilated_by(
 /// protected band.
 fn band_overlaps(band: &RangeInclusive<f32>, z: &Range<i32>) -> bool {
     z.start as f32 <= *band.end() && z.end as f32 >= *band.start()
+}
+
+/// Columns spread over a shape's own footprint, for diagnostics.
+///
+/// Deliberately coarse -- this is a diagnostic, not a guarantee -- but
+/// deliberately **not inner-biased**, which is the trap. Sampling only a
+/// shape's middle makes a shape whose core is shadowed but whose rim is clear
+/// read as entirely shadowed, and a sealed neighbour's margin is 19 blocks, so
+/// the rim is exactly where the difference lives. A disc is therefore sampled
+/// at its centre and on two rings, at 60 % and 95 % of its radius; a capsule
+/// along its real bowed centreline *and* at 90 % of its radius to either side
+/// of it.
+fn sample_columns(geom: &VoidGeom) -> impl Iterator<Item = Vec2<i32>> {
+    const RING: usize = 8;
+    const RING_FRACTIONS: [f32; 2] = [0.6, 0.95];
+    const ALONG: usize = 9;
+    /// Centreline, then one flank, then the other.
+    const ACROSS: [f64; 3] = [0.0, 0.9, -0.9];
+
+    match *geom {
+        VoidGeom::Disc { centre, radius, .. } => {
+            Either::Left((0..=RING * RING_FRACTIONS.len()).map(move |i| {
+                if i == 0 {
+                    return centre;
+                }
+                let fraction = RING_FRACTIONS[(i - 1) / RING];
+                let angle = ((i - 1) % RING) as f32 / RING as f32 * std::f32::consts::TAU;
+                centre
+                    + (Vec2::new(angle.cos(), angle.sin()) * (radius * fraction)).map(|e| e as i32)
+            }))
+        },
+        VoidGeom::Capsule {
+            a,
+            b,
+            r_a,
+            r_b,
+            curve,
+            ..
+        } => Either::Right((0..ALONG * ACROSS.len()).map(move |i| {
+            let a2 = a.xy().map(|e| e as f64 + 0.5);
+            let b2 = b.xy().map(|e| e as f64 + 0.5);
+            let t = (i % ALONG) as f64 / (ALONG - 1) as f64;
+            // The real bowed centreline, not the chord -- the same quadratic
+            // `spline_sample` inverts.
+            let spline = river_spline_coeffs(a2, spline_ctrl_offset(a2, b2, curve), b2);
+            let point = spline.x * t * t + spline.y * t + spline.z;
+            let across = ACROSS[i / ALONG];
+            if across == 0.0 {
+                return point.map(|e| e.round() as i32);
+            }
+            // Perpendicular to the curve's own tangent, so a bowed capsule's
+            // flanks are sampled where they actually are.
+            let tangent = spline.x * 2.0 * t + spline.y;
+            let radius = Lerp::lerp_unclamped(r_a as f64, r_b as f64, t);
+            let offset = if tangent.magnitude_squared() > f64::EPSILON {
+                tangent.normalized().rotated_z(std::f64::consts::FRAC_PI_2) * radius * across
+            } else {
+                Vec2::zero()
+            };
+            (point + offset).map(|e| e.round() as i32)
+        })),
+    }
 }
 
 /// Whether a column falls inside a shape's dilated bounding box.
@@ -784,8 +981,10 @@ mod tests {
         let mut builder = AuthoredVoidsBuilder::default();
         for shape in shapes {
             match shape {
-                TestShape::Disc(disc, contact) => builder.push_disc(disc, contact),
-                TestShape::Capsule(capsule, contact) => builder.push_capsule(capsule, contact),
+                TestShape::Disc(disc, contact) => builder.push_disc(disc, contact, "test"),
+                TestShape::Capsule(capsule, contact) => {
+                    builder.push_capsule(capsule, contact, "test")
+                },
             }
         }
         builder.finish().expect("the fixture registered no shapes")
@@ -1042,7 +1241,7 @@ mod tests {
     #[test]
     #[ignore]
     fn the_real_index_mirrors_the_authored_geometry_one_shape_at_a_time() {
-        use crate::{CanvasInfo, layer::authored_regions::authored_voids};
+        use crate::{CanvasInfo, layer::authored_regions::authored_voids_for as authored_voids};
 
         let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
         let (world, index) = crate::World::generate(
@@ -1072,7 +1271,11 @@ mod tests {
                 caves.iter().map(|cave| 1 + cave.branch_count()).sum();
             let expected_interior_shapes: usize = interiors
                 .iter()
-                .map(|i| i.void_discs().count() + i.void_capsules().count())
+                .map(|i| {
+                    i.void_discs().count()
+                        + i.void_capsules().count()
+                        + i.void_waterfall_discs().count()
+                })
                 .sum();
             assert_eq!(
                 voids.len(),
@@ -1237,7 +1440,7 @@ mod tests {
         use crate::{
             CanvasInfo,
             layer::{
-                authored_regions::authored_voids,
+                authored_regions::authored_voids_for as authored_voids,
                 cave::{tunnel_bounds_at, tunnel_bounds_at_unguarded},
             },
         };
@@ -1278,6 +1481,206 @@ mod tests {
                 "the comparison is worthless if no sampled column had a tunnel"
             );
         });
+    }
+
+    /// The `Seal` tie-break can make an authored `Connect` completely inert if
+    /// a sealed neighbour's shell swallows it whole. The rule stays -- see the
+    /// tie-break's own doc for why it is right -- but it must never be
+    /// *silent*, because the author would otherwise have no way to discover
+    /// that the policy they wrote does nothing.
+    #[test]
+    fn a_connect_shape_swallowed_by_a_seal_shell_is_reported() {
+        // The Connect disc is at the origin with radius 20, so its sampled rim
+        // sits 19 out. The Seal disc is 10 away with radius 20, so its
+        // 39-block shell reaches every one of those columns (the furthest is
+        // 29 from its centre).
+        let mut builder = AuthoredVoidsBuilder::default();
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(0, 0),
+                radius: 20.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Connect,
+            "feature.swallowed",
+        );
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(10, 0),
+                radius: 20.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Seal,
+            "feature.the_sealed_neighbour",
+        );
+        let voids = builder.finish().unwrap();
+        assert_eq!(
+            voids.inert_connect_features(|_| HIGH_ABOVE),
+            vec!["feature.swallowed"],
+            "a Connect shape entirely inside a Seal shell must be reported, by name"
+        );
+    }
+
+    /// ... and a `Connect` shape that keeps its own footprint must *not* be
+    /// reported, or the diagnostic trains people to ignore it.
+    #[test]
+    fn a_connect_shape_that_keeps_its_footprint_is_not_reported() {
+        let mut builder = AuthoredVoidsBuilder::default();
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(0, 0),
+                radius: 20.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Connect,
+            "feature.independent",
+        );
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(4_000, 0),
+                radius: 20.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Seal,
+            "feature.far_away",
+        );
+        let voids = builder.finish().unwrap();
+        assert!(voids.inert_connect_features(|_| HIGH_ABOVE).is_empty());
+
+        // Nor when a sealed neighbour only shadows part of it.
+        let mut builder = AuthoredVoidsBuilder::default();
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(0, 0),
+                radius: 20.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Connect,
+            "feature.partly_shadowed",
+        );
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(55, 0),
+                radius: 20.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Seal,
+            "feature.near_neighbour",
+        );
+        let voids = builder.finish().unwrap();
+        assert_eq!(
+            voids.inert_connect_features(|_| HIGH_ABOVE),
+            Vec::<String>::new(),
+            "a partly-shadowed Connect shape still gets its breach and must stay quiet"
+        );
+    }
+
+    /// The tally is per *feature*, and a feature is many shapes. One authored
+    /// cave contributes a chamber and several tunnels under a single name, so a
+    /// sealed neighbour swallowing exactly one of them must not condemn the
+    /// whole cave -- the rest of it still gets its breach.
+    #[test]
+    fn a_feature_is_only_inert_when_every_one_of_its_shapes_is() {
+        let mut builder = AuthoredVoidsBuilder::default();
+        // The chamber sits inside the sealed neighbour's shell...
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(0, 0),
+                radius: 12.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Connect,
+            "feature.one_cave",
+        );
+        // ... while one of its tunnels runs well clear of it.
+        builder.push_capsule(
+            CapsuleShape {
+                a: Vec3::new(0, 0, 0),
+                b: Vec3::new(1_200, 0, 0),
+                r_a: 10.0,
+                r_b: 10.0,
+                curve: 0.0,
+                span: CapsuleSpan::AboveFloor { headroom: 8.0 },
+            },
+            ProceduralContact::Connect,
+            "feature.one_cave",
+        );
+        builder.push_disc(
+            DiscShape {
+                centre: Vec2::new(0, 0),
+                radius: 30.0,
+                floor_z: 0,
+                ceiling_z: 12,
+            },
+            ProceduralContact::Seal,
+            "feature.the_sealed_neighbour",
+        );
+        let voids = builder.finish().unwrap();
+        assert_eq!(
+            voids.inert_connect_features(|_| HIGH_ABOVE),
+            Vec::<String>::new(),
+            "a cave keeping any of its footprint is not inert, however thoroughly its chamber is \
+             shadowed"
+        );
+    }
+
+    /// The index must be resolved by the time world generation returns, not
+    /// left for whichever chunk-generation worker queries it first -- the
+    /// query runs per column on every generated chunk, so a lazy build would
+    /// make the whole first wave of workers block on one `OnceLock` instead of
+    /// stealing work.
+    #[test]
+    #[ignore]
+    fn world_generation_leaves_the_index_already_warm() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (_world, index) = crate::World::generate(
+            0,
+            crate::sim::WorldOpts {
+                seed_elements: true,
+                world_file: crate::sim::FileOpts::LoadAsset("world.map.cromatolis_v0".to_string()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+        assert!(
+            index.authored_voids.get().is_some(),
+            "World::generate must resolve the authored-void index eagerly"
+        );
+        assert!(
+            index.authored_voids.get().unwrap().is_some(),
+            "the authored region must have produced an index"
+        );
+    }
+
+    /// The same eager warm must stay a no-op for a world with no authored
+    /// region: the cache is resolved, and resolves to nothing.
+    #[test]
+    #[ignore]
+    fn world_generation_warms_a_procedural_world_to_nothing() {
+        let threadpool = rayon::ThreadPoolBuilder::new().build().unwrap();
+        let (_world, index) = crate::World::generate(
+            0,
+            crate::sim::WorldOpts {
+                seed_elements: true,
+                world_file: crate::sim::FileOpts::Generate(Default::default()),
+                calendar: None,
+            },
+            &threadpool,
+            &|_| {},
+        );
+        assert_eq!(
+            index.authored_voids.get().map(Option::is_none),
+            Some(true),
+            "a procedural world must resolve its cache to None, not leave it unresolved"
+        );
     }
 
     #[test]

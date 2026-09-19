@@ -161,6 +161,10 @@ impl World {
             report_stage(WorldGenerateStage::SpotGeneration);
             Spot::generate(&mut sim);
 
+            // XINDELER: resolve the authored-void index here rather than from
+            // the first chunk that queries it. See `layer::authored_regions`.
+            layer::authored_regions::warm(&index, &sim);
+
             (Self { sim, civs }, IndexOwned::new(index))
         })
     }
