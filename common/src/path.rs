@@ -1,5 +1,6 @@
 use crate::{
     astar::{Astar, PathResult},
+    comp::TERRAIN_CYLINDER_MAX_HEIGHT,
     resources::Time,
     terrain::Block,
     vol::{BaseVol, ReadVol},
@@ -103,6 +104,72 @@ pub struct TraversalConfig {
     pub vectored_propulsion: bool,
     /// Whether chunk containing target position is currently loaded
     pub is_target_loaded: bool,
+    /// How much clearance this agent actually needs, derived from the same
+    /// cylinder the physics uses against terrain. See [`TraversalDims`].
+    pub dims: TraversalDims,
+}
+
+/// The clearance an agent needs to fit somewhere, in whole blocks.
+///
+/// Before this existed, `walkable` asked for exactly two blocks of headroom for
+/// every agent in the game. That happens to be right for every shipped body *at
+/// default scale*: [`Collider::terrain_cylinder`] clamps every collider into
+/// one envelope, so a rat and a cyclops present the same 2-blocks-tall box to
+/// the world. It stops being right the moment an entity carries a `Scale` above
+/// ~1.03, which `/scale`, `EntityInfo::with_scale` and `basic_summon` all
+/// produce.
+///
+/// ## Why there is no lateral term
+///
+/// Requiring a clear column on each side once the cylinder passes half a block
+/// wide is *stricter than the physics*: `box_voxel_collision` resolves a
+/// fraction-of-a-block intrusion by pushing the agent out, so a scale-1.5 body
+/// does not actually need three clear columns to walk a corridor. It also fails
+/// in the wrong direction — when an agent's own start column cannot be
+/// certified, `find_path` returns [`PathResult::None`] and [`Chaser`] falls
+/// back to a **straight-line bearing at full speed**. An oversized NPC would
+/// not get a longer route, it would silently lose pathfinding altogether and
+/// beeline through walls. Width belongs in the cost function, not in a hard
+/// reject.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct TraversalDims {
+    /// Blocks of vertical clearance needed to stand at a node. Never zero.
+    pub height: u32,
+}
+
+impl Default for TraversalDims {
+    /// The fallback for an agent whose body is unknown: the tallest body the
+    /// terrain envelope will represent, so the guess is never optimistic.
+    ///
+    /// 🔴 **Keep this hand-written. `#[derive(Default)]` would give
+    /// `height: 0`, and a zero-height agent treats solid rock as walkable** —
+    /// `column_clear` over an empty range is vacuously true, so NPCs would
+    /// path through walls.
+    fn default() -> Self { Self::from_terrain_cylinder(TERRAIN_CYLINDER_MAX_HEIGHT) }
+}
+
+impl TraversalDims {
+    /// Build from [`Collider::terrain_cylinder`]'s `z_max` — the single
+    /// definition of the cylinder `common_systems::phys` collides against
+    /// terrain with, so the pathfinder and the physics cannot disagree about
+    /// how tall an agent is.
+    ///
+    /// Takes the already-clamped, already-scaled value, so no copy of the
+    /// envelope lives here.
+    ///
+    /// ⚠️ Anything that wants an agent to fit somewhere shorter — a crouching
+    /// or prone posture, say — must lower [`Collider::terrain_cylinder`]
+    /// itself, not just this. Terrain collision applies
+    /// [`TERRAIN_CYLINDER_MIN_HEIGHT`] unconditionally and never reads
+    /// `CharacterState`, so lowering the pathfinder's number alone produces
+    /// exactly the disagreement this function exists to prevent: routes the
+    /// agent is then too tall to walk.
+    #[inline]
+    pub fn from_terrain_cylinder(z_max: f32) -> Self {
+        Self {
+            height: (z_max.max(0.0).ceil() as u32).max(1),
+        }
+    }
 }
 
 const DIAGONALS: [Vec2<i32>; 8] = [
@@ -148,9 +215,17 @@ impl Route {
             let next1 = self.next(1).unwrap_or(next0);
 
             // Stop using obstructed paths
-            if !walkable(vol, next0, traversal_cfg.is_target_loaded)
-                || !walkable(vol, next1, traversal_cfg.is_target_loaded)
-            {
+            if !walkable(
+                vol,
+                next0,
+                traversal_cfg.is_target_loaded,
+                traversal_cfg.dims,
+            ) || !walkable(
+                vol,
+                next1,
+                traversal_cfg.is_target_loaded,
+                traversal_cfg.dims,
+            ) {
                 return Err(TraverseStop::InvalidPath);
             }
 
@@ -752,7 +827,30 @@ impl Chaser {
     }
 }
 
-fn walkable<V>(vol: &V, pos: Vec3<i32>, is_target_loaded: bool) -> bool
+/// Are the blocks `pos + from*z .. pos + to*z` all non-solid?
+///
+/// Split out of `walkable` so that the step-up/jump headroom filters in
+/// `find_path` can ask the same question about a partial column.
+///
+/// ⚠️ `missing_is_clear` exists because the two callers disagree, and did
+/// before this refactor: `walkable` treated an absent block as
+/// `Block::empty()` — unconditionally clear — while `find_path`'s headroom
+/// filters treat it as clear only when the target chunk is loaded. Preserved
+/// verbatim rather than unified, because unifying them would change pathing in
+/// unloaded terrain for reasons that have nothing to do with this change.
+#[inline]
+fn column_clear<V>(vol: &V, pos: Vec3<i32>, from: u32, to: u32, missing_is_clear: bool) -> bool
+where
+    V: BaseVol<Vox = Block> + ReadVol,
+{
+    (from..to).all(|z| {
+        vol.get(pos + Vec3::unit_z() * z as i32)
+            .map(|b| !b.is_solid())
+            .unwrap_or(missing_is_clear)
+    })
+}
+
+fn walkable<V>(vol: &V, pos: Vec3<i32>, is_target_loaded: bool, dims: TraversalDims) -> bool
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
@@ -778,11 +876,6 @@ where
     };
 
     let a = vol.get(pos).ok().copied().unwrap_or_else(Block::empty);
-    let b = vol
-        .get(pos + Vec3::unit_z())
-        .ok()
-        .copied()
-        .unwrap_or_else(Block::empty);
 
     let on_ground = (below_z == 1 && below.is_filled())
         || below.get_sprite().is_some_and(|sprite| {
@@ -791,7 +884,15 @@ where
                 .is_some_and(|h| ((below_z - 1) as f32) < h && h <= below_z as f32)
         });
     let in_liquid = a.is_liquid();
-    (on_ground || in_liquid) && !a.is_solid() && !b.is_solid()
+
+    // `dims` replaces what used to be a hardcoded two-block check on `pos` and
+    // `pos + 1z`. At the default dims (height 2, radius 0) this performs the
+    // same two lookups as before and in the same order: `a` is reused rather
+    // than re-read, so the own-column scan starts at `z = 1`. Keep that reuse —
+    // `walkable` is called ~30 times per expanded A* node and every `vol.get`
+    // is a chunk hash lookup, so one redundant read here is thousands per
+    // agent per path poll.
+    (on_ground || in_liquid) && !a.is_solid() && column_clear(vol, pos, 1, dims.height, true)
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -818,7 +919,14 @@ fn find_path<V>(
 where
     V: BaseVol<Vox = Block> + ReadVol,
 {
-    let is_walkable = |pos: &Vec3<i32>| walkable(vol, *pos, traversal_cfg.is_target_loaded);
+    let is_walkable = |pos: &Vec3<i32>| {
+        walkable(
+            vol,
+            *pos,
+            traversal_cfg.is_target_loaded,
+            traversal_cfg.dims,
+        )
+    };
     let get_walkable_z = |pos| {
         let mut z_incr = 0;
         for _ in 0..32 {
@@ -898,6 +1006,10 @@ where
         /// The cost of falling a block.
         const FALL_COST: f32 = 1.5;
 
+        // Whether this node is somewhere the agent can stand at all. Shared by
+        // every direction below instead of being recomputed 13 times.
+        let here_ok = traversal_cfg.can_fly || is_walkable(&pos);
+
         let walkable = [
             (is_walkable(&(pos + Vec3::new(1, 0, 0))), Vec3::new(1, 0, 0)),
             (
@@ -940,22 +1052,32 @@ where
             )
             .map(move |dir| (pos, dir))
             .filter(move |(pos, dir)| {
-                (traversal_cfg.can_fly || is_walkable(pos) && is_walkable(&(*pos + **dir)))
-                    && ((dir.z < 1
-                        || vol
-                            .get(pos + Vec3::unit_z() * 2)
-                            .map(|b| !b.is_solid())
-                            .unwrap_or(traversal_cfg.is_target_loaded))
-                        && (dir.z < 2
-                            || vol
-                                .get(pos + Vec3::unit_z() * 3)
-                                .map(|b| !b.is_solid())
-                                .unwrap_or(traversal_cfg.is_target_loaded))
-                        && (dir.z >= 0
-                            || vol
-                                .get(pos + *dir + Vec3::unit_z() * 2)
-                                .map(|b| !b.is_solid())
-                                .unwrap_or(traversal_cfg.is_target_loaded)))
+                let h = traversal_cfg.dims.height;
+                let loaded = traversal_cfg.is_target_loaded;
+
+                // Hoisted out of the per-direction test: `pos` is the same node
+                // for all 13 directions, so this used to be 13 identical
+                // `walkable` calls (~13 chunk lookups) per expanded node.
+                // `can_fly || (W(pos) && W(pos+dir))` distributes into
+                // `(can_fly || W(pos)) && (can_fly || W(pos+dir))`, so this is
+                // the same predicate, evaluated once.
+                here_ok
+                    && (traversal_cfg.can_fly || is_walkable(&(*pos + **dir)))
+                    // Rising by `dir.z` sweeps the origin column up to
+                    // `h - 1 + dir.z`; `walkable` already cleared `0..h`, so
+                    // only `h .. h + dir.z` is left. At the default height of 2
+                    // these are the old literal `pos + 2z` / `pos + 3z` tests.
+                    //
+                    // 🔴 These stay inside the `&&` chain rather than becoming
+                    // `let` bindings: they must not be evaluated when the
+                    // destination is unwalkable, which is the common case when
+                    // pathing against a wall — exactly where the A* burns the
+                    // most nodes.
+                    && (dir.z < 1 || column_clear(vol, *pos, h, h + dir.z as u32, loaded))
+                    // Dropping means the *destination* column must stay clear
+                    // up through where the body still is at the start of the
+                    // step.
+                    && (dir.z >= 0 || column_clear(vol, *pos + **dir, h, h + 1, loaded))
             })
             .map(move |(pos, dir)| {
                 let next_node = Node {
@@ -1452,4 +1574,190 @@ pub fn point_on_prolate_spheroid(
     // rot_z_mat is unneeded due to the random rotation defined by lambda
     // let global_coords = midpoint + rot_2_mat * (rot_z_mat * point);
     midpoint + rot_2_mat * point
+}
+
+#[cfg(test)]
+mod traversal_dims_tests {
+    use super::*;
+    use crate::comp::{Body, TERRAIN_CYLINDER_MIN_HEIGHT, biped_large, humanoid, quadruped_small};
+
+    /// The cylinder `common_systems::phys` builds for terrain collision. Kept
+    /// here in the same shape as the real one so that a change to either side
+    /// shows up as a failing expectation rather than as silent disagreement.
+    fn dims_of(body: &Body, scale: f32) -> TraversalDims {
+        let (_, _, z_max) = body.collider().terrain_cylinder(scale);
+        TraversalDims::from_terrain_cylinder(z_max)
+    }
+
+    fn humanoid() -> Body {
+        Body::Humanoid(humanoid::Body::random_with(
+            &mut rand::rng(),
+            &humanoid::Species::Human,
+        ))
+    }
+
+    fn cyclops() -> Body {
+        Body::BipedLarge(biped_large::Body {
+            species: biped_large::Species::Cyclops,
+            body_type: biped_large::BodyType::Male,
+        })
+    }
+
+    fn rat() -> Body {
+        Body::QuadrupedSmall(quadruped_small::Body {
+            species: quadruped_small::Species::Rat,
+            body_type: quadruped_small::BodyType::Male,
+        })
+    }
+
+    /// The load-bearing compatibility claim: at default scale the derived dims
+    /// are the constants the pathfinder used to hardcode, for every body kind.
+    /// If this ever fails, existing NPC pathing has changed and the change was
+    /// not deliberate.
+    #[test]
+    fn default_scale_reproduces_the_historical_constants() {
+        for body in Body::iter() {
+            // Ships and items don't pathfind (their collider takes a different
+            // arm in `phys` entirely), and `Body::Plugin` cannot be inspected
+            // without a loaded plugin registry — `plugin.rs` indexes straight
+            // into an empty table.
+            if matches!(body, Body::Ship(_) | Body::Item(_) | Body::Plugin(_)) {
+                continue;
+            }
+            let dims = dims_of(&body, 1.0);
+            assert_eq!(
+                dims,
+                TraversalDims::default(),
+                "{body:?} changed pathfinding clearance at default scale",
+            );
+        }
+    }
+
+    /// Why the clamp makes a rat and a cyclops identical to the pathfinder: it
+    /// is not an oversight being fixed here, it is the shipped physics.
+    #[test]
+    fn the_terrain_clamp_flattens_every_body_at_default_scale() {
+        assert_eq!(dims_of(&rat(), 1.0), dims_of(&cyclops(), 1.0));
+        assert_eq!(dims_of(&humanoid(), 1.0), dims_of(&cyclops(), 1.0));
+    }
+
+    /// …and where that stops being true. A scaled-up entity really is taller
+    /// than two blocks, and until now the pathfinder routed it through gaps it
+    /// cannot enter.
+    #[test]
+    fn scaled_up_bodies_need_more_headroom() {
+        // 1.95 * 1.1 = 2.145 -> three blocks of headroom.
+        assert_eq!(dims_of(&cyclops(), 1.1).height, 3);
+        // Just below the threshold, still two.
+        assert_eq!(dims_of(&cyclops(), 1.02).height, 2);
+    }
+
+    /// Scaling *down* must never let an agent claim it needs no room at all —
+    /// a zero height would make every solid block walkable.
+    #[test]
+    fn scaled_down_bodies_still_need_a_block() {
+        assert_eq!(dims_of(&rat(), 0.2).height, 1);
+        assert_eq!(dims_of(&rat(), 0.01).height, 1);
+    }
+
+    /// The channel this type exists to open: once a body is allowed below the
+    /// standing envelope's floor — by lying down, say — `TraversalDims` carries
+    /// that to the pathfinder with no further plumbing.
+    #[test]
+    fn a_sub_floor_height_reduces_to_one_block() {
+        // A human lying down: 1.75 standing x 0.30.
+        assert_eq!(TraversalDims::from_terrain_cylinder(1.75 * 0.30).height, 1);
+        // …and the same body standing still needs two, via the envelope floor.
+        assert_eq!(
+            TraversalDims::from_terrain_cylinder(TERRAIN_CYLINDER_MIN_HEIGHT).height,
+            2
+        );
+    }
+}
+
+#[cfg(test)]
+mod walkable_cost_tests {
+    use super::*;
+    use crate::{
+        comp::TERRAIN_CYLINDER_MIN_HEIGHT,
+        terrain::{Block, BlockKind},
+        vol::{BaseVol, ReadVol},
+    };
+    use std::cell::Cell;
+
+    /// A flat world of solid ground at `z < 0` and air above, which counts how
+    /// many block reads it is asked for.
+    struct CountingVol {
+        reads: Cell<usize>,
+        air: Block,
+        ground: Block,
+    }
+
+    impl CountingVol {
+        fn new() -> Self {
+            Self {
+                reads: Cell::new(0),
+                air: Block::empty(),
+                ground: Block::new(BlockKind::Rock, Rgb::new(0, 0, 0)),
+            }
+        }
+    }
+
+    impl BaseVol for CountingVol {
+        type Error = ();
+        type Vox = Block;
+    }
+
+    impl ReadVol for CountingVol {
+        fn get(&self, pos: Vec3<i32>) -> Result<&Block, ()> {
+            self.reads.set(self.reads.get() + 1);
+            Ok(if pos.z < 0 { &self.ground } else { &self.air })
+        }
+    }
+
+    /// `walkable` is called roughly 30 times per expanded A* node, and every
+    /// read is a chunk hash lookup, so its lookup count is a performance
+    /// contract and not an implementation detail.
+    ///
+    /// Two reads: the ground block below, and the one block of headroom above
+    /// the standing block (whose own block is reused from the ground scan).
+    /// This is what it cost before clearance was parameterised, and the first
+    /// attempt at that parameterisation silently made it three.
+    #[test]
+    fn walkable_costs_no_more_reads_than_it_used_to() {
+        let vol = CountingVol::new();
+        assert!(walkable(
+            &vol,
+            Vec3::new(0, 0, 0),
+            true,
+            TraversalDims::default()
+        ));
+        assert_eq!(
+            vol.reads.get(),
+            3,
+            "walkable at default dims must read the block below, the standing block, and one \
+             block of headroom — no more",
+        );
+    }
+
+    /// Four shipped entity configs run below default scale (the April-Fools
+    /// rats, 0.2-0.69). They are the only shipped content whose pathing this
+    /// change alters at all, and the change is deliberate: their real cylinder
+    /// is 0.24-0.83 blocks tall, so one block of headroom genuinely is enough
+    /// and they can now plan routes through gaps they used to refuse.
+    #[test]
+    fn shipped_small_scales_need_only_one_block() {
+        for scale in [0.2, 0.328, 0.476, 0.69] {
+            assert_eq!(
+                TraversalDims::from_terrain_cylinder(TERRAIN_CYLINDER_MIN_HEIGHT * scale).height,
+                1,
+                "scale {scale} should need one block of headroom",
+            );
+        }
+        // The first scale at which a body stops fitting a two-block corridor.
+        assert_eq!(
+            TraversalDims::from_terrain_cylinder(TERRAIN_CYLINDER_MAX_HEIGHT * 1.03).height,
+            3
+        );
+    }
 }
